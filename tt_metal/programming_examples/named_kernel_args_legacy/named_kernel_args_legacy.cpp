@@ -54,10 +54,22 @@ int main() {
             .compile_args = {4, 2, 1},  // block_h, block_w, untilize
         });
 
+    // The same schema on the compute (TRISC) path: ComputeConfig.compile_args are the CTAs, read
+    // by index with get_compile_time_arg_val. Positional throughout, exactly like the DM kernel.
+    KernelHandle compute_kernel = CreateKernel(
+        program,
+        OVERRIDE_KERNEL_PREFIX "named_kernel_args_legacy/kernels/compute/named_kernel_args_legacy_compute_kernel.cpp",
+        core,
+        ComputeConfig{
+            .compile_args = {4, 2, 1},  // block_h, block_w, untilize
+        });
+
     // RTAs (per-core) and CRTAs (common), both positional — order must match the kernel's
-    // get_arg_val / get_common_arg_val indices.
+    // get_arg_val / get_common_arg_val indices. The DM and compute kernels take the same schema.
     SetRuntimeArgs(program, kernel, core, {0x10000, 0x20000, 64});  // src_addr, dst_addr, num_tiles
     SetCommonRuntimeArgs(program, kernel, {0x3f800000, 0x30000});   // scaler, sem_addr
+    SetRuntimeArgs(program, compute_kernel, core, {0x10000, 0x20000, 64});  // src_addr, dst_addr, num_tiles
+    SetCommonRuntimeArgs(program, compute_kernel, {0x3f800000, 0x30000});   // scaler, sem_addr
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);

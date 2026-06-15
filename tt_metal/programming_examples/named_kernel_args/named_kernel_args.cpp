@@ -45,6 +45,7 @@ int main() {
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
 
     const experimental::KernelSpecName KERNEL{"named_kernel_args"};
+    const experimental::KernelSpecName KERNEL_COMPUTE{"named_kernel_args_compute"};
     const experimental::NodeCoord node{0, 0};
 
     // §2 worked-example schema: 3 CTAs, 3 RTAs, 2 CRTAs. uint32_t-only (Phase 1).
@@ -66,18 +67,41 @@ int main() {
                 .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
+    // Same TT_KERNEL named-arg schema, but authored on the compute (TRISC) path. The signature
+    // parser + genfiles generate kernel_main() for the compute path just as for data movement, so
+    // the two kernels share an identical authoring style; only hw_config differs. Both run on the
+    // same node/core and DPRINT their args.
+    experimental::KernelSpec compute_spec{
+        .unique_id = KERNEL_COMPUTE,
+        .source = OVERRIDE_KERNEL_PREFIX "named_kernel_args/kernels/compute/named_kernel_args_compute_kernel.cpp",
+        .num_threads = 1,  // Gen1 (Wormhole/Blackhole) supports a single compute thread.
+        .compile_time_args = {{"block_h", 4}, {"block_w", 2}, {"untilize", 1}},  // 3 CTAs
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"src_addr", "dst_addr", "num_tiles"},  // 3 RTAs
+                .common_runtime_arg_names = {"scaler", "sem_addr"},          // 2 CRTAs
+            },
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+
     experimental::ProgramSpec spec{
         .name = "named_kernel_args",
-        .kernels = {kernel_spec},
-        .work_units = {{.name = "wu", .kernels = {KERNEL}, .target_nodes = node}},
+        .kernels = {kernel_spec, compute_spec},
+        .work_units = {{.name = "wu", .kernels = {KERNEL, KERNEL_COMPUTE}, .target_nodes = node}},
     };
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Set the runtime-arg values by name. CTAs were already baked in at MakeProgramFromSpec.
+    // Both the DM and compute kernels take the same schema, so each gets the same values by name.
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL,
+            .runtime_arg_values = {{node, {{"src_addr", 0x10000}, {"dst_addr", 0x20000}, {"num_tiles", 64}}}},
+            .common_runtime_arg_values = {{"scaler", 0x3f800000}, {"sem_addr", 0x30000}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = KERNEL_COMPUTE,
             .runtime_arg_values = {{node, {{"src_addr", 0x10000}, {"dst_addr", 0x20000}, {"num_tiles", 64}}}},
             .common_runtime_arg_values = {{"scaler", 0x3f800000}, {"sem_addr", 0x30000}},
         },
