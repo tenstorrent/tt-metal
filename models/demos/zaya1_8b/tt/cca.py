@@ -15,6 +15,7 @@ Pipeline (mirrors HF CCA.forward, no-cache prefill path):
   v1=val_proj1(h); v2=val_proj2(shift1(h)); value=cat(v1,v2)
 Then ZayaAttention: partial RoPE(64) -> GQA SDPA(causal) -> o_proj.
 """
+import os
 import torch
 import ttnn
 
@@ -23,6 +24,11 @@ from .standard import to_dev
 
 C = ZayaConfig
 SQRT_HD = float(C.head_dim ** 0.5)
+
+# Long-context prefill: FlashAttention-2 (ttnn SDPA) avoids materializing the [S,S]
+# causal mask + [.,.,S,S] scores (68GB at 128K) and supports GQA (pass 2 kv-heads, no
+# repeat_interleave). ZAYA_FLASH_PREFILL=0 falls back to the manual fp32-softmax path.
+_FLASH_PREFILL = os.environ.get("ZAYA_FLASH_PREFILL", "0") == "1"
 
 
 # ----------------------------------------------------------------------------
@@ -213,16 +219,23 @@ class CCAAttention:
         self.inv_sqrt_hd = 1.0 / SQRT_HD
         self._seqcache = {}
 
-    def _seq(self, S):
-        if S not in self._seqcache:
+    def _cossin(self, S):
+        """Per-position rope cos/sin [1,1,S,rotary] (cached). Cheap, scales to long S."""
+        key = ("cs", S)
+        if key not in self._seqcache:
             from .standard import compute_cos_sin
             cos, sin = compute_cos_sin(S)
-            cos_t = to_dev(cos.reshape(1, 1, S, C.rotary_dim), self.device, dtype=ttnn.bfloat16)
-            sin_t = to_dev(sin.reshape(1, 1, S, C.rotary_dim), self.device, dtype=ttnn.bfloat16)
+            self._seqcache[key] = (to_dev(cos.reshape(1, 1, S, C.rotary_dim), self.device, dtype=ttnn.bfloat16),
+                                   to_dev(sin.reshape(1, 1, S, C.rotary_dim), self.device, dtype=ttnn.bfloat16))
+        return self._seqcache[key]
+
+    def _mask(self, S):
+        """[1,1,S,S] causal mask (manual-softmax fallback only; O(S^2) — short S only)."""
+        key = ("m", S)
+        if key not in self._seqcache:
             m = torch.triu(torch.ones(S, S), diagonal=1) * (-1e30)
-            mask = to_dev(m.reshape(1, 1, S, S), self.device, dtype=ttnn.float32)
-            self._seqcache[S] = (cos_t, sin_t, mask)
-        return self._seqcache[S]
+            self._seqcache[key] = to_dev(m.reshape(1, 1, S, S), self.device, dtype=ttnn.float32)
+        return self._seqcache[key]
 
     def _apply_rope(self, x, n_heads, cos, sin):
         """x [B,n_heads,S,128] -> partial rope on first 64 dims (cos/sin broadcast over B)."""
@@ -249,26 +262,31 @@ class CCAAttention:
 
     def forward(self, hidden, cache=None, layer=None):
         S = hidden.shape[1]
-        cos, sin, causal_mask = self._seq(S)
+        cos, sin = self._cossin(S)
         qpre, kpre, value, qk = self.qkv.forward(hidden)                   # pre-L2 [1,S,1024],[1,S,256],value[1,S,256]
         q = self._apply_rope(self.qkv._l2_h(to_heads(qpre, C.cca_q_heads)), C.cca_q_heads, cos, sin)  # [1,8,S,128]
         k = ttnn.mul(self.qkv._l2_h(to_heads(kpre, C.n_kv_heads)), self.qkv.temp_heads)
         v = to_heads(value, C.n_kv_heads)
-        k = self._apply_rope(k, C.n_kv_heads, cos, sin)                    # roped K (stored in cache)
+        k = self._apply_rope(k, C.n_kv_heads, cos, sin)                    # roped K (stored in cache) [1,2,S,128]
         if cache is not None:                                              # populate decode cache from prefill
             cache.conv_state[layer] = (ttnn.slice(qk, [0, S - 2, 0], [1, S - 1, C.cca_in_out_ch]),
                                        ttnn.slice(qk, [0, S - 1, 0], [1, S, C.cca_in_out_ch]))
             cache.prev_hs[layer] = ttnn.slice(hidden, [0, S - 1, 0], [1, S, C.dim])
             cache.k[layer] = k                                             # [1,2,S,128] roped
             cache.v[layer] = v
-        groups = C.cca_q_heads // C.n_kv_heads
-        kk = ttnn.repeat_interleave(k, groups, dim=1)
-        vv = ttnn.repeat_interleave(v, groups, dim=1)
-        scores = ttnn.matmul(q, ttnn.transpose(kk, -2, -1), compute_kernel_config=self.ckc)  # [1,8,S,S]
-        scores = ttnn.multiply(ttnn.typecast(scores, ttnn.float32), self.inv_sqrt_hd)
-        scores = ttnn.add(scores, causal_mask)
-        probs = ttnn.typecast(ttnn.softmax(scores, dim=-1), ttnn.bfloat16)
-        attn = ttnn.matmul(probs, vv, compute_kernel_config=self.ckc)                        # [1,8,S,128]
+        if _FLASH_PREFILL:
+            # FlashAttention-2 (GQA: 2 kv-heads, no repeat) — no [S,S] mask, scales to 128K.
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q, k, v, is_causal=True, scale=self.inv_sqrt_hd, compute_kernel_config=self.ckc)  # [1,8,S,128]
+        else:
+            groups = C.cca_q_heads // C.n_kv_heads
+            kk = ttnn.repeat_interleave(k, groups, dim=1)
+            vv = ttnn.repeat_interleave(v, groups, dim=1)
+            scores = ttnn.matmul(q, ttnn.transpose(kk, -2, -1), compute_kernel_config=self.ckc)  # [1,8,S,S]
+            scores = ttnn.multiply(ttnn.typecast(scores, ttnn.float32), self.inv_sqrt_hd)
+            scores = ttnn.add(scores, self._mask(S))
+            probs = ttnn.typecast(ttnn.softmax(scores, dim=-1), ttnn.bfloat16)
+            attn = ttnn.matmul(probs, vv, compute_kernel_config=self.ckc)                        # [1,8,S,128]
         attn = from_heads(attn, C.cca_q_heads)                             # [1,S,1024]
         return ttnn.linear(attn, self.o_proj, compute_kernel_config=self.ckc)          # [1,S,2048]
 
