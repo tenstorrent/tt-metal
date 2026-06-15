@@ -49,3 +49,21 @@ def per_op_noc_bw_pct(events, durations_ns, peak_gbps, op_key="run_host_id"):
     """Per-op NoC BW % = Σbytes over the op's cores / (duration × peak)."""
     agg = aggregate_noc_bytes_per_op(events, op_key=op_key)
     return {op_id: noc_bw_util_pct(b["total"], durations_ns.get(op_id), peak_gbps) for op_id, b in agg.items()}
+
+
+def noc_bytes_from_trace_dir(log_folder, op_key="run_host_id"):
+    """Aggregate per-op NoC bytes from every noc_trace*.json in a .logs dir.
+
+    Independent of tt-npe: reads the profiler's own noc-trace JSON (flat lists
+    of events + zone endpoints) and sums num_bytes per op. Returns the same
+    shape as aggregate_noc_bytes_per_op.
+    """
+    import glob
+    import json
+    import os
+
+    events = []
+    for path in sorted(glob.glob(os.path.join(str(log_folder), "noc_trace*.json"))):
+        with open(path) as f:
+            events.extend(json.load(f))
+    return aggregate_noc_bytes_per_op(events, op_key=op_key)
