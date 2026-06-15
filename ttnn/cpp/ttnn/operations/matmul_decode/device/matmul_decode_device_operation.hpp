@@ -37,6 +37,23 @@ struct MatmulDecodeDeviceOperation {
         // both K and N with a cross-core K-reduction). When false, the factory is chosen
         // automatically from the input layouts.
         bool partial_width_sharded = false;
+        // deep-plan_13: explicit fat-fill override (sweep tunable). When unset the
+        // program factory auto-derives (out_subblock_h, out_subblock_w) from the per-core
+        // M/N tile counts via the ported native get_subblock_sizes, bounded by the DST cap.
+        // out_subblock_h>1 (M-fill) is P0-A gated (factory MMD_ENABLE_M_FILL); v1 default
+        // is out_w-only (out_subblock_h=1).
+        std::optional<uint32_t> out_subblock_h = std::nullopt;
+        std::optional<uint32_t> out_subblock_w = std::nullopt;
+        // deep-plan_14 Lever 0: end-to-end knob plumbing. in0_block_w is a genuinely-new
+        // attribute (the compute kernel hardcoded constexpr in0_block_w=1). Larger in0_block_w
+        // reduces matmul_block invocations / improves K-reuse on large-K shapes. Default 1
+        // (byte-identical to today). k_stream + k_slice_tiles carry the (Phase-B, gated)
+        // WIDTH-temporal streaming knobs; default off (one-shot path unchanged). They are
+        // threaded NOW so the nanobind docstring can advertise "stream_k" (the blocked wrapper
+        // flips _MATMUL_DECODE_HAS_STREAM_K on that substring) even before the kernel bodies land.
+        uint32_t in0_block_w = 1;
+        bool k_stream = false;
+        uint32_t k_slice_tiles = 0;  // 0 == auto/unused (full-K one-shot)
         // Fully-resolved compute kernel config (math fidelity / fp32 dest acc / etc.)
         // threaded down to the program factories. Resolved at op-invocation time in
         // ttnn::prim::matmul_decode via init_device_compute_kernel_config so that the
@@ -112,5 +129,11 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    // deep-plan_14 Lever 0: settable fat-fill + temporal knobs (defaults preserve today).
+    std::optional<uint32_t> out_subblock_h = std::nullopt,
+    std::optional<uint32_t> out_subblock_w = std::nullopt,
+    uint32_t in0_block_w = 1,
+    bool k_stream = false,
+    uint32_t k_slice_tiles = 0);
 }  // namespace ttnn::prim

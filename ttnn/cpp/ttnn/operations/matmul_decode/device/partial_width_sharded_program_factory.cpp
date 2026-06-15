@@ -414,6 +414,23 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     }
 
     // ---- Compute kernel (partial matmul + base-core reduction) ----
+    // deep-plan_13 Phase 3: out_w fat-fill on the phase-1 partial matmul (out_h clamped to 1;
+    // M-fill P0-A gated). Derive the largest out_subblock_w that divides Nc_tiles, bounded by
+    // the DST cap (4 fp32 / 8 bf16). Phase-2 reduce stays 1-DST eltwise (unaffected).
+    auto [_mf, _approx, _fp32_acc, _l1_acc, _dst_full_sync] =
+        ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    uint32_t out_subblock_w_partial = 1;
+    if (operation_attributes.out_subblock_w.has_value()) {
+        out_subblock_w_partial = *operation_attributes.out_subblock_w;
+    } else {
+        const uint32_t max_w = _fp32_acc ? 4u : 8u;
+        for (uint32_t w = max_w; w >= 1; --w) {
+            if (Nc_tiles % w == 0) {
+                out_subblock_w_partial = w;
+                break;
+            }
+        }
+    }
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/compute/compute_partial_width_sharded.cpp";
@@ -426,6 +443,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Nc_tiles,
         K_blocks,
         inA_K_tiles_per_core,  // needed to translate global K-tile -> sender-major full_in0 slot (M_tiles>1)
+        out_subblock_w_partial,  // arg 6: out_w fat-fill (deep-plan_13 Phase 3)
     };
     log_debug(
         tt::LogOp,
@@ -442,11 +460,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     // ~0.007 reduction-order drift on the deep pi0.5 path. It is NO LONGER hardcoded -- it
     // is now driven by the resolved compute_kernel_config threaded through the device op
     // (default OFF; opt in via a DeviceComputeKernelConfig with fp32_dest_acc_en=true).
-    // BLACKHOLE DST-CAPACITY NOTE: both phases hold at most 1 DST tile per
-    // tile_regs_acquire block (pack slot 0), so the fp32-dest-acc DST-capacity halving
-    // (8->4) is satisfied with no tiling change.
-    auto [_mf, _approx, _fp32_acc, _l1_acc, _dst_full_sync] =
-        ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    // BLACKHOLE DST-CAPACITY NOTE (deep-plan_13): phase-1 now holds out_subblock_w DST tiles
+    // per acquire (<=4 fp32 / <=8 bf16, bounded above); phase-2 reduce holds 1. DST cap OK.
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = _mf,
         .fp32_dest_acc_en = _fp32_acc,

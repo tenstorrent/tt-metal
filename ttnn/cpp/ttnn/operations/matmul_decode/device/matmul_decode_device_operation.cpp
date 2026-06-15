@@ -90,28 +90,44 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.logical_shape()[-2] == operation_attributes.M,
         "Input tensor A must have the same M dimension as the operation attributes");
 
-    // const auto partial = detect_partial_width_sharded(input_tensor_a, input_tensor_b);
     if (operation_attributes.partial_width_sharded) {
-        // Partial width-sharded B: validate the recovered 2D (K x N) block sharding.
-        // TT_FATAL(
-        //     operation_attributes.M <= tt::constants::TILE_HEIGHT,
-        //     "partial_width_sharded matmul_decode currently supports a single M tile (decode), but got M={}",
-        //     operation_attributes.M);
-        // TT_FATAL(
-        //     partial->K_blocks % 2 == 0,
-        //     "partial_width_sharded matmul_decode requires an even number of K-blocks (cross-core reduction is done "
-        //     "pairwise), but got K_blocks={}",
-        //     partial->K_blocks);
-        // TT_FATAL(
-        //     partial->Kc % tt::constants::TILE_WIDTH == 0 && partial->Nc % tt::constants::TILE_WIDTH == 0,
-        //     "partial_width_sharded matmul_decode requires B shard dims [{}, {}] to be tile-aligned",
-        //     partial->Kc,
-        //     partial->Nc);
-        // TT_FATAL(
-        //     partial->N == operation_attributes.N,
-        //     "partial_width_sharded matmul_decode recovered N={} does not match operation attribute N={}",
-        //     partial->N,
-        //     operation_attributes.N);
+        // deep-plan_13 Phase 3/4: AUTHOR the HEIGHT/BLOCK validator (was a no-op stub).
+        // Recover the 2D (K x N) block geometry from the reshaped/permuted B shard spec and
+        // validate tile-alignment + N recovery. The phase-2 reduce now handles ARBITRARY
+        // K_blocks (sec 6.4 fix), so even-K is NO LONGER a hard op-side FATAL -- the wrapper
+        // still PREFERS even K_blocks (kb%2==0) as a perf/selector choice. HEIGHT = N_blocks==1.
+        const auto& b_shard = input_tensor_b.memory_config().shard_spec();
+        TT_FATAL(b_shard.has_value(), "partial_width_sharded matmul_decode requires a B shard spec");
+        const uint32_t Kc = b_shard->shape[0];
+        const uint32_t Nc = b_shard->shape[1];
+        TT_FATAL(
+            Kc % tt::constants::TILE_HEIGHT == 0 && Nc % tt::constants::TILE_WIDTH == 0,
+            "partial_width_sharded B shard dims [{}, {}] must be tile-aligned",
+            Kc,
+            Nc);
+        const uint32_t K_tiles = tt::div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
+        const uint32_t Kc_tiles = Kc / tt::constants::TILE_HEIGHT;
+        TT_FATAL(
+            Kc_tiles > 0 && K_tiles % Kc_tiles == 0,
+            "partial_width_sharded: Kc_tiles {} must evenly divide K_tiles {}",
+            Kc_tiles,
+            K_tiles);
+        const uint32_t K_blocks = K_tiles / Kc_tiles;
+        const uint32_t num_B_cores = b_shard->grid.num_cores();
+        TT_FATAL(
+            num_B_cores % K_blocks == 0,
+            "partial_width_sharded: num_B_cores {} must be divisible by K_blocks {}",
+            num_B_cores,
+            K_blocks);
+        const uint32_t N_blocks = num_B_cores / K_blocks;
+        const uint32_t recovered_N = N_blocks * Nc;
+        TT_FATAL(
+            recovered_N == static_cast<uint32_t>(operation_attributes.N),
+            "partial_width_sharded recovered N={} (N_blocks {} * Nc {}) does not match attribute N={}",
+            recovered_N,
+            N_blocks,
+            Nc,
+            operation_attributes.N);
         return;
     }
 
@@ -146,10 +162,48 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     output_shape[-1] = operation_attributes.N;
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
-    int output_num_cores = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+    int n_tiles = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+    int output_num_cores;
+    int per_core_output_width;
+    if (operation_attributes.partial_width_sharded) {
+        // deep-plan_13 sec 7: HEIGHT/BLOCK output is sharded over EXACTLY N_blocks cores
+        // (each holding Nc = N / N_blocks width). The partial factory recovers N_blocks from
+        // the B shard geometry and FATALs unless output_core_range_set.num_cores() == N_blocks.
+        // Recover it identically here: K_blocks = K_tiles / Kc_tiles, N_blocks = num_B_cores /
+        // K_blocks. (HEIGHT => N_blocks==1 => the whole [M,N] output lands on one base core.)
+        const auto& input_tensor_b = tensor_args.input_tensor_b;
+        const auto& b_shard = input_tensor_b.memory_config().shard_spec().value();
+        const uint32_t Kc_tiles = b_shard.shape[0] / tt::constants::TILE_WIDTH;
+        const uint32_t Nc_tiles = b_shard.shape[1] / tt::constants::TILE_WIDTH;
+        const uint32_t K_tiles = tt::div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
+        const uint32_t K_blocks = K_tiles / Kc_tiles;
+        const uint32_t num_B_cores = b_shard.grid.num_cores();
+        const uint32_t N_blocks = num_B_cores / K_blocks;
+        output_num_cores = static_cast<int>(N_blocks);
+        per_core_output_width = static_cast<int>(Nc_tiles) * tt::constants::TILE_WIDTH;
+    } else {
+        // deep-plan_13 sec 4.6: wide-N output-core cap (recovered reverted feature). The bare
+        // div_up(N,32) yields 512 cores for N=16384 -> FATALs past the ~110-core live grid AND
+        // makes wide-N fat-fill (npc>1) impossible. Cap to the LARGEST DIVISOR of N_tiles that
+        // is <= CORE_CAP (104) so the B shard grid == output grid (the full-WS inputB==output
+        // FATAL), giving npc = N_tiles/out_cores N-tiles per core (which also feeds the fat
+        // out_w fill). For N_tiles <= cap this is N_tiles cores @ npc=1 (byte-identical to the
+        // pre-cap spec). Identical rule to the wrapper's _wide_n_out_cores.
+        constexpr int CORE_CAP = 104;
+        output_num_cores = n_tiles;
+        if (n_tiles > CORE_CAP) {
+            int chosen = 1;
+            for (int c = 1; c <= CORE_CAP && c <= n_tiles; ++c) {
+                if (n_tiles % c == 0) {
+                    chosen = c;
+                }
+            }
+            output_num_cores = chosen;
+        }
+        per_core_output_width = (n_tiles / output_num_cores) * tt::constants::TILE_WIDTH;
+    }
     CoreRangeSet output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
         output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
-    int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
     std::array<uint32_t, 2> shard_shape = {operation_attributes.M, per_core_output_width};
     auto shard_spec =
         tt::tt_metal::ShardSpec(output_core_range_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -174,7 +228,12 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_b,
     bool partial_width_sharded,
     std::optional<const DataType> dtype,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<uint32_t> out_subblock_h,
+    std::optional<uint32_t> out_subblock_w,
+    uint32_t in0_block_w,
+    bool k_stream,
+    uint32_t k_slice_tiles) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -217,6 +276,14 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         input_tensor_a.memory_config(),
         dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
         partial_width_sharded,
+        // deep-plan_14 Lever 0: thread the explicit knobs from the entry instead of
+        // hardcoding nullopt. Defaults (nullopt/1/false/0) keep the auto-derived,
+        // out_w-only, one-shot path byte-identical to deep-plan_13.
+        out_subblock_h,
+        out_subblock_w,
+        in0_block_w,
+        k_stream,
+        k_slice_tiles,
         resolved_compute_kernel_config,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};

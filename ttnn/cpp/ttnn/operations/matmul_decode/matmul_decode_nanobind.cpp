@@ -4,6 +4,8 @@
 
 #include "matmul_decode_nanobind.hpp"
 
+#include <cstdint>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
@@ -36,6 +38,21 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 None, which resolves to math_fidelity=HiFi4 and fp32_dest_acc_en=False (fp32 DST
                 accumulation is OPT-IN: pass a config with fp32_dest_acc_en=True to enable the
                 higher-precision K-reduction at the cost of device time).
+            out_subblock_h (int, optional): explicit fat-fill M-rows per matmul_block (the systolic
+                rt_dim). When None the factory auto-derives via the ported native get_subblock_sizes
+                (out_w-only unless M-fill is enabled). out_subblock_h>1 (M-fill) requires the
+                A-relayout. Defaults to None (auto).
+            out_subblock_w (int, optional): explicit fat-fill N-cols per matmul_block (ct_dim).
+                Defaults to None (auto).
+            in0_block_w (int, optional): K-tiles per inner matmul_block step (K-reuse / fewer
+                invocations on large-K shapes). Defaults to 1 (byte-identical to the shipped path).
+            k_stream (bool, optional): enable the WIDTH-temporal stream_k codepath (double-buffered
+                per-K-slice gather + on-core fp32 K-accumulation) for large-K shapes that bust the
+                one-shot full-A gather. When False the full-K one-shot path runs. Defaults to False.
+                NOTE: the substring stream_k in this docstring is the capability probe the blocked
+                wrapper uses to detect temporal support.
+            k_slice_tiles (int, optional): K-tiles per temporal slice when k_stream is True (0 ==
+                auto-derive the largest CBCAP-fitting divisor of K_tiles). Defaults to 0.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -46,7 +63,14 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("partial_width_sharded") = false,
         nb::arg("dtype") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("out_subblock_h") = nb::none(),
+        nb::arg("out_subblock_w") = nb::none(),
+        nb::arg("in0_block_w") = static_cast<uint32_t>(1),
+        // Python-facing kwarg is "stream_k" (matches the blocked wrapper's call site +
+        // the docstring capability probe). Internally threaded as the k_stream attr.
+        nb::arg("stream_k") = false,
+        nb::arg("k_slice_tiles") = static_cast<uint32_t>(0));
 }
 
 }  // namespace ttnn::operations::matmul_decode

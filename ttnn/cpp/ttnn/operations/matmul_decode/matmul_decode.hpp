@@ -23,6 +23,13 @@ Tensor matmul_decode(
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    // deep-plan_14 Lever 0: settable fat-fill (out_subblock_h/w, in0_block_w) + temporal
+    // (k_stream / k_slice_tiles) knobs. Defaults preserve deep-plan_13 behavior exactly.
+    std::optional<uint32_t> out_subblock_h = std::nullopt,
+    std::optional<uint32_t> out_subblock_w = std::nullopt,
+    uint32_t in0_block_w = 1,
+    bool k_stream = false,
+    uint32_t k_slice_tiles = 0);
 
 }  // namespace ttnn
