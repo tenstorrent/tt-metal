@@ -217,6 +217,8 @@ class TtSam3ImagePipeline:
         self._text_cache = {}
         sam3_model.backbone.forward_text = self._cached_forward_text
 
+        sam3_model.requires_grad_(False)
+
     def _patched_vit_forward(self, x):
         return self._tt_vit_backbone(x, self.backbone_params, self.device)
 
@@ -235,7 +237,7 @@ class TtSam3ImagePipeline:
         self.vit_backbone.forward = self._orig_vit_forward
         self.sam3_model.backbone.forward_text = self._orig_forward_text
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def forward(self, input_batch):
         """Run the full SAM3 forward pass with ttnn ViT backbone.
 
@@ -247,7 +249,7 @@ class TtSam3ImagePipeline:
         """
         return self.sam3_model(input_batch)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def forward_image(self, pixel_values, text_prompts=None):
         """Convenience: preprocess + forward + extract predictions.
 

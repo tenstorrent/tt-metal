@@ -79,12 +79,13 @@ def run_benchmark(device_id=0, use_pretrained=True, num_warmup=2, num_runs=5):
     # Re-patch ViT and text cache for ttnn
     pipeline.vit_backbone.forward = pipeline._patched_vit_forward
     model.backbone.forward_text = pipeline._cached_forward_text
+    model.requires_grad_(False)
 
     # Warmup
     print(f"[5/6] Warmup ({num_warmup} runs)...")
     for _ in range(num_warmup):
         input_batch = make_batched_datapoint(pixel_values, text_prompts)
-        with torch.no_grad():
+        with torch.inference_mode():
             _ = model(input_batch)
 
     # Timed runs
@@ -94,7 +95,7 @@ def run_benchmark(device_id=0, use_pretrained=True, num_warmup=2, num_runs=5):
     for i in range(num_runs):
         input_batch = make_batched_datapoint(pixel_values, text_prompts)
         t0 = time.perf_counter()
-        with torch.no_grad():
+        with torch.inference_mode():
             tt_output = model(input_batch)
         t1 = time.perf_counter()
         times.append(t1 - t0)
