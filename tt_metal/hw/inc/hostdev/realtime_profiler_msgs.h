@@ -37,7 +37,7 @@ struct realtime_profiler_msg_t {
     struct realtime_profiler_timestamp_t kernel_end_b;
     volatile uint32_t sync_request;
     volatile uint32_t sync_host_timestamp;
-    volatile uint32_t program_id_fifo[32];
-    volatile uint32_t program_id_fifo_start;
-    volatile uint32_t program_id_fifo_end;
+    volatile uint32_t runtime_id_fifo[32];
+    volatile uint32_t runtime_id_fifo_start;
+    volatile uint32_t runtime_id_fifo_end;
 };

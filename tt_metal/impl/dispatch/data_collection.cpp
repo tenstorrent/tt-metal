@@ -70,7 +70,7 @@ void TieRuntimeIdToProgramId(ProgramImpl& program) {
     tt::tt_metal::MetalContext::instance().data_collector()->TieRuntimeIdToProgramId(program);
 }
 
-std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) {
+std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint32_t runtime_id) {
     return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
 }
 

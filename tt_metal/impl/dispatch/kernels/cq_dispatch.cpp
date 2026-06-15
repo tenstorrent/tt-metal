@@ -152,7 +152,7 @@ constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb
 // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address is supplied by host through
 // the REALTIME_PROFILER_MSG_ADDR compile-time define; the same value is wired into the
 // co-located cq_dispatch_subordinate kernel and the reserved RT-profiler tensix core, so
-// all three view the same physical L1. The embedded program_id_fifo is the BRISC
+// all three view the same physical L1. The embedded runtime_id_fifo is the BRISC
 // (producer) / dispatch_s NCRISC (consumer) handoff.
 volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
@@ -1321,11 +1321,11 @@ re_run_command:
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: {
             // DPRINT("write offset: {} {} {} host id {}\n", cmd->set_write_offset.offset0,
             // cmd->set_write_offset.offset1,
-            //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
-            DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
+            //              cmd->set_write_offset.offset2, cmd->set_write_offset.runtime_host_id);
+            DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.runtime_host_id);
             if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
-                cmd->set_write_offset.program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
-                while (!program_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.program_host_id)) {
+                cmd->set_write_offset.runtime_host_id != REALTIME_PROFILER_UNPROFILED_RUNTIME_HOST_ID) {
+                while (!runtime_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.runtime_host_id)) {
                     invalidate_l1_cache();
                 }
             }

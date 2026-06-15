@@ -13,8 +13,7 @@ namespace tt::tt_metal::experimental {
 
 // Record passed to registered callbacks when real-time profiler data arrives from a device.
 struct ProgramRealtimeRecord {
-    uint32_t runtime_id;                               // Runtime ID. Currently truncated to 16 bits;
-                                                       // widening tracked in #46103.
+    uint32_t runtime_id;                               // Program runtime ID
     uint32_t chip_id;                                  // Device chip ID
     uint64_t start_timestamp;                          // Device start timestamp (raw ticks)
     uint64_t end_timestamp;                            // Device end timestamp (raw ticks)

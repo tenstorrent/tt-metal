@@ -132,8 +132,7 @@ void DataCollector::RecordKernelGroup(
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
 void DataCollector::TieRuntimeIdToProgramId(ProgramImpl& program) {
-    // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
-    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
+    uint32_t runtime_id = static_cast<uint32_t>(program.get_runtime_id());
     uint64_t program_id = program.get_id();
     std::lock_guard<std::mutex> lock(kernel_source_mutex_);
     runtime_id_to_program_id_[runtime_id] = program_id;
@@ -158,7 +157,7 @@ void DataCollector::RecordKernelSourceMap(ProgramImpl& program) {
     program_id_to_kernel_sources_.emplace(program_id, std::move(kernel_sources));
 }
 
-std::span<const std::string_view> DataCollector::GetKernelSourcesForRuntimeId(uint16_t runtime_id) const {
+std::span<const std::string_view> DataCollector::GetKernelSourcesForRuntimeId(uint32_t runtime_id) const {
     std::lock_guard<std::mutex> lock(kernel_source_mutex_);
     auto rid_it = runtime_id_to_program_id_.find(runtime_id);
     if (rid_it == runtime_id_to_program_id_.end()) {
