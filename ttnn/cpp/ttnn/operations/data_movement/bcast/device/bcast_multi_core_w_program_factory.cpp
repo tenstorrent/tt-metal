@@ -233,10 +233,9 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreWProgramFactory::create_descriptor
 
     // ---- Per-core runtime args ----
     // Single source of truth: compute_bcast_w_per_core_args() derives every per-core arg the same way
-    // for both this cache-miss build and the cache-hit re-apply in get_dynamic_runtime_args(). Reader
-    // args 0/4 (src0/src1) and writer arg 0 (dst) are tensor ADDRESSES, bound here as patchable Buffer*
-    // (the framework re-patches them on a cache hit); the remaining shape/geometry-derived slots are
-    // NOT covered by the program hash (padded_shape is excluded), so they are re-applied on every hit.
+    // for both this cache-miss build and the cache-hit re-apply in get_dynamic_runtime_args(). Avoids
+    // the #46506 slow-path rebuild on a cache hit; re-applying every core also covers work-core-set
+    // changes across a shared cache entry.
     const auto per_core = compute_bcast_w_per_core_args(operation_attributes, a, b, output);
 
     for (uint32_t i = 0; i < per_core.cores.size(); i++) {

@@ -16,11 +16,9 @@ struct BcastMultiCoreHProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const BcastParams& operation_attributes, const BcastInputs& tensor_args, Tensor& tensor_return_value);
 
-    // Re-applies the COMPLETE per-core runtime-arg state on a program-cache hit. The work-split tile
-    // counts / start ids are derived from the (padded) SHAPE, which the default program hash does NOT
-    // include (TensorSpec hashes logical_shape, not padded_shape). Two differently-padded calls share
-    // one cache entry, so create_descriptor() is not re-run and these args would stay frozen at the
-    // first shape's values. Single source of truth shared with create_descriptor().
+    // Re-applies the COMPLETE per-core runtime-arg state on a program-cache hit so the op fast-paths
+    // instead of rebuilding create_descriptor() every hit (#46506 host-perf regression). Single source
+    // of truth shared with create_descriptor(); re-applying every core also covers work-core-set changes.
     static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
         const BcastParams& operation_attributes, const BcastInputs& tensor_args, Tensor& tensor_return_value);
 };

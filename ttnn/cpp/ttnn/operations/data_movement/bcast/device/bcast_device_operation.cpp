@@ -251,13 +251,10 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> BcastDeviceOperation::get_dynamic_r
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // The work-split per-core tile counts / start ids and the shard/geometry args (Ht, Wt, offsets,
-    // batch sizes, ...) are derived from the (padded) tensor SHAPE. The default program hash hashes
-    // each Tensor's TensorSpec, which only includes logical_shape (padded_shape is excluded), so two
-    // differently-padded calls share one cache entry. On a cache hit create_descriptor() is NOT re-run,
-    // so those args would stay frozen at the first shape's values and corrupt the result. Dispatch to
-    // the selected factory's get_dynamic_runtime_args(), which re-derives them from the SAME code path
-    // create_descriptor() uses (single source of truth) and re-applies the COMPLETE per-core state.
+    // On main this op has no Buffer*/get_dynamic, so it slow-path rebuilds create_descriptor() on every
+    // cache hit (#46506 host-perf regression). Dispatch to the selected factory's get_dynamic, which
+    // re-derives the per-core args from the live tensors (shared single-source helper) so the op
+    // fast-paths instead; re-applying every core also covers work-core-set changes across a shared entry.
     const program_factory_t factory = select_program_factory(operation_attributes, tensor_args);
     return std::visit(
         [&](const auto& f) -> std::vector<tt::tt_metal::DynamicRuntimeArg> {

@@ -248,9 +248,8 @@ tt::tt_metal::ProgramDescriptor BcastShardedHProgramFactory::create_descriptor(
     // Single source of truth: compute_bcast_sharded_h_per_core_args() derives every per-core arg the
     // same way for both this cache-miss build and the cache-hit re-apply in get_dynamic_runtime_args().
     // Reader arg0 is src1 (b)'s address; src0/output are CB `.buffer`-bound, but src1's CB (c_1) is a
-    // staging buffer, so its address is re-patched via the buffer binding (cache miss) and rewritten in
-    // get_dynamic (cache hit). The remaining shard-geometry slots are NOT covered by the program hash
-    // (padded_shape is excluded), so they are re-applied on every hit.
+    // staging buffer, so its address is rewritten in get_dynamic. Avoids the #46506 slow-path rebuild on
+    // a cache hit; re-applying every core also covers work-core-set changes across a shared cache entry.
     const auto per_core = compute_bcast_sharded_h_per_core_args(operation_attributes, a, b, output);
 
     for (uint32_t i = 0; i < per_core.cores.size(); i++) {

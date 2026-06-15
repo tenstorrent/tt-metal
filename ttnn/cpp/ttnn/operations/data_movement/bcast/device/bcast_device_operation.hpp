@@ -51,14 +51,10 @@ struct BcastDeviceOperation {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    // Opts the op into the descriptor fast-path (no create_descriptor() rebuild on a cache hit) and
-    // re-applies the COMPLETE per-core runtime-arg state for the selected factory. Tensor addresses are
-    // bound as CB `.buffer` / Buffer* rt-args (the framework re-patches them), but the work-split tile
-    // counts / start ids / geometry args are derived from the (padded) SHAPE, which the default program
-    // hash does NOT include (TensorSpec hashes logical_shape only). Two differently-padded calls share a
-    // cache entry, so those args would otherwise stay frozen at the first shape's values. Dispatches to
-    // the selected factory's get_dynamic_runtime_args(), which is the single source of truth shared with
-    // create_descriptor().
+    // Opts the op into the descriptor fast-path: without this it slow-path rebuilds create_descriptor()
+    // on every cache hit (#46506 host-perf regression). Dispatches to the selected factory's
+    // get_dynamic, which re-derives the per-core args from the live tensors (shared single-source helper);
+    // re-applying every core also covers work-core-set changes across a shared cache entry.
     static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
         const operation_attributes_t&,
         const tensor_args_t&,

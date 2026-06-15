@@ -315,14 +315,21 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SliceDeviceOperation::get_dynamic_r
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
 
     // Only SliceRmProgramFactory bakes address-derived rt-args. Every other factory already fast-paths
-    // via Buffer*/CB bindings, so return {} and let the framework patch their bindings.
+    // via Buffer*/CB bindings, so return {} and let the framework patch their bindings. Mirror exactly
+    // select_program_factory()'s SliceRmProgramFactory predicate (incl. width/block-sharded RM, which
+    // also routes here) — re-apply iff that factory is selected, return {} otherwise.
     const auto& input = tensor_args.input;
-    if (args.use_tensor_args) {
-        return dynamic_args;  // SliceTileTensorArgsProgramFactory
+    if (args.use_tensor_args || input.layout() != Layout::ROW_MAJOR) {
+        return dynamic_args;  // tensor-args / tile
     }
     const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
-    if (input.layout() != Layout::ROW_MAJOR || input.is_sharded() || has_step) {
-        return dynamic_args;  // tile / rm_sharded / rm_stride (all already bound)
+    const bool height_sharded_in_out_no_step =
+        input.is_sharded() &&
+        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+        args.output_mem_config.is_sharded() &&
+        args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step;
+    if (height_sharded_in_out_no_step || has_step) {
+        return dynamic_args;  // rm_sharded / rm_stride (all already bound)
     }
 
     // SliceRmProgramFactory: re-derive the buffer-address slots from the CURRENT buffers via the SAME
