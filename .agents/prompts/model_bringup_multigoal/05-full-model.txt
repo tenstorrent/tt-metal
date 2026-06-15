@@ -11,10 +11,11 @@ Goal completion requirements:
 - run_prefill_check and run_teacher_forcing report top-1/top-5/top-100 for prefill and decode. The expected bar is top-5 >= 98% and top-100 = 100%.
 - run_autoregressive produces HF and TT completions, and the outputs are read for coherence, repetition, wrong-language drift, and early divergence.
 - Decode satisfies the $full-model/$tt-enable-tracing split-sampling contract, including greedy and top-k/top-p-capable sampling. Greedy decode stays on device and uses the fastest correct on-device sampling strategy measured for this mesh. There is no host argmax, full-logits readback, untraced model-trace sampling, or Python token-feedback loop.
+- The greedy split-sampling comparison must be semantically greedy. Do not accept force-argmax because a generic top-k/top-p-capable sampled path is slower. If split greedy fails because of sampler shape, layout, or tiling requirements, fix that contract or leave the stage incomplete with a minimal repro.
 - Trace evidence proves sampled-token feedback, current-position coherence, and changed/unchanged page-table handling. Decode does not rebuild or copy token inputs, position/RoPE state, masks, or page tables on the host for each generated token.
 - Top of README.md reports full-model TTFT and trace-verified batch-1 decode t/s/u, separating teacher-forcing and token-out decode when they differ.
 - Runtime fallback audit covers model/generator paths, cache ownership, host-logit boundaries, sampling, and reset behavior.
 - models/autoports/<model>/doc/full_model/README.md and work_log.md record commands, top-k accuracy, qualitative verdict, perf, limitations, and exact artifacts.
-- Canonical split sampling is required for completion. If force-argmax, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampler op dominates token-out decode, benchmark the alternate on-device sampler strategy before completing the goal.
+- Canonical split sampling is required for completion. If force-argmax, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampler op dominates token-out decode, fix the LM-head/sampling contract before completing the goal.
 
 Do not mark this goal complete while any completion requirement is unmet.

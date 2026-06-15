@@ -162,7 +162,7 @@ Measure the reported batch-1 TTFT and trace-verified decode t/s/u with the same 
 
 If performance regresses badly from block-level evidence, inspect data movement between embeddings, blocks, final norm, LM head, and sampling before changing precision.
 
-For greedy decode, the perf report must not show avoidable sampler work as the dominant token-out cost. If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampling op dominates token-out decode, benchmark the alternate on-device sampler strategy before treating dtype, CCL, or LM-head tuning as the primary optimization target.
+For greedy decode, the perf report must not show avoidable sampler work as the dominant token-out cost. If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampling op dominates token-out decode, fix the LM-head/sampling contract before treating dtype, CCL, or LM-head tuning as the primary optimization target. The alternate benchmark must be a semantically equivalent greedy split-sampling path, not a slower generic sampled mode that does extra work.
 
 Compare full-model decode against the best decoder-layer stack lower bound before declaring the result good enough:
 
