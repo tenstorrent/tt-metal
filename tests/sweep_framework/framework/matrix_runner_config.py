@@ -204,10 +204,14 @@ MODEL_TRACED_BATCH_POLICY = {
 # g04glx03/g14glx04 (~3.3% vector); g14glx03/g04glx01/OM1-01A02-STGWH02 broken
 # (29-92%). g04glx03 (3.29% vector, 0 infra) is the best add if more parallelism
 # is needed.
+# NOTE: OM1-01A02-STGWH02 added by explicit request despite a 92% historical
+# vector fail rate (pass=42/fail=501) + 3 board-reset failures in the analysis —
+# included on the assumption it has since been repaired; re-check its results.
 GALAXY_RUNNER_POOL = (
     "OM1-01A04-STGWH02",
     "OM1-01A04-STGWH01",
     "OM1-01A03-STGWH02",
+    "OM1-01A02-STGWH02",
 )
 
 # Logical galaxy test groups whose batches route to GALAXY_RUNNER_POOL.
