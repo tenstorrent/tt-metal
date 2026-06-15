@@ -54,6 +54,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_replicated_ids_to_torch_long,
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
+    tt_warmup_decode_trace_path,
 )
 from models.experimental.devstarl2_small.tt.pipeline.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
@@ -747,6 +748,13 @@ def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos
         return rt.decode_trace_ctx
     decode_buffers = tt_alloc_decode_input_buffers(rt.mesh_device)
     tt_update_decode_input_buffers(rt.mesh_device, decode_buffers, int(seed_token_id), int(seed_decode_pos))
+    tt_warmup_decode_trace_path(
+        rt.mesh_device,
+        rt.tt_language_model,
+        rt.model_args,
+        decode_buffers,
+        tt_lm_head=None if rt.cfg.lm_head_cpu else rt.tt_lm_head,
+    )
     rt.decode_trace_ctx = tt_capture_decode_trace(
         rt.mesh_device,
         rt.tt_language_model,
@@ -754,6 +762,7 @@ def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos
         decode_buffers,
         tt_lm_head=None if rt.cfg.lm_head_cpu else rt.tt_lm_head,
         sampling=rt.sampling,
+        prewarmed=True,
     )
     return rt.decode_trace_ctx
 

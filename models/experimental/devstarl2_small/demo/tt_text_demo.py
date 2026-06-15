@@ -50,6 +50,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_release_decode_trace,
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
+    tt_warmup_decode_trace_path,
 )
 from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -686,6 +687,14 @@ def main(argv: list[str] | None = None):
 
                         decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
                         tt_update_decode_input_buffers(mesh_device, decode_buffers, int(next_scalar), gen_sl - 1)
+                        tt_warmup_decode_trace_path(
+                            mesh_device,
+                            tt_model,
+                            model_args,
+                            decode_buffers,
+                            tt_lm_head=None if args.lm_head_cpu else tt_lm_head,
+                            page_table=page_table_tt,
+                        )
                         t_capture = time.perf_counter()
                         decode_trace_ctx = tt_capture_decode_trace(
                             mesh_device,
@@ -695,6 +704,7 @@ def main(argv: list[str] | None = None):
                             tt_lm_head=None if args.lm_head_cpu else tt_lm_head,
                             sampling=sampling,
                             page_table=page_table_tt,
+                            prewarmed=True,
                         )
                         stats["trace_capture_s"] = time.perf_counter() - t_capture
 

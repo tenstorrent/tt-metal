@@ -54,6 +54,7 @@ from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers 
     tt_sampling_output_token_id,
     tt_sequence_last_uint32_token_id,
     tt_update_decode_input_buffers,
+    tt_warmup_decode_trace_path,
 )
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import pixtral_vision_seq_chunk_len
 
@@ -105,6 +106,7 @@ __all__ = (
     "tt_sampling_output_token_id",
     "tt_sequence_last_uint32_token_id",
     "tt_update_decode_input_buffers",
+    "tt_warmup_decode_trace_path",
     "width_sharded_l1_linear_reuse_multicast",
     "width_sharded_l1_memcfg",
 )

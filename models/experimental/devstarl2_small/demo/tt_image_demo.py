@@ -40,6 +40,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_release_decode_trace,
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
+    tt_warmup_decode_trace_path,
 )
 from models.experimental.devstarl2_small.tt.pipeline.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -751,6 +752,14 @@ def run_tt(
         if max_new_tokens > 1 and next_id_scalar not in eos_set:
             decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
             tt_update_decode_input_buffers(mesh_device, decode_buffers, next_id_scalar, decode_pos)
+            tt_warmup_decode_trace_path(
+                mesh_device,
+                tt_lm,
+                model_args,
+                decode_buffers,
+                tt_lm_head=None if lm_head_cpu else tt_lm_head,
+                page_table=page_table_tt,
+            )
             _profiler_signpost("trace-capture-start")
             t_capture = time.perf_counter()
             decode_trace_ctx = tt_capture_decode_trace(
@@ -761,6 +770,7 @@ def run_tt(
                 tt_lm_head=None if lm_head_cpu else tt_lm_head,
                 sampling=sampling,
                 page_table=page_table_tt,
+                prewarmed=True,
             )
             stats["trace_capture_s"] = time.perf_counter() - t_capture
             _profiler_signpost("trace-capture-end")

@@ -577,6 +577,26 @@ def _tt_decode_lm_head_logits(
     return ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def tt_warmup_decode_trace_path(
+    mesh_device,
+    tt_lm,
+    model_args: ModelArgs,
+    buffers: TtDecodeInputBuffers,
+    *,
+    tt_lm_head: Optional[LMHead] = None,
+    page_table: Optional[ttnn.Tensor] = None,
+) -> None:
+    """Run the exact decode/LM-head path once outside trace capture to JIT compile kernels."""
+    warm_hidden = tt_lm.forward_decode_from_device_tensors(
+        buffers.token_ids, buffers.pos_uint32, buffers.pos_int32, page_table=page_table
+    )
+    if tt_lm_head is not None:
+        warm_logits = _tt_decode_lm_head_logits(warm_hidden, model_args, tt_lm_head)
+        ttnn.deallocate(warm_logits)
+    ttnn.deallocate(warm_hidden)
+    ttnn.synchronize_device(mesh_device)
+
+
 def tt_capture_decode_trace(
     mesh_device,
     tt_lm,
@@ -586,20 +606,34 @@ def tt_capture_decode_trace(
     tt_lm_head: Optional[LMHead] = None,
     sampling: Optional[SamplingGenerator] = None,
     page_table: Optional[ttnn.Tensor] = None,
+    prewarmed: bool = False,
 ) -> TtDecodeTraceContext:
     """Capture decode (+ optional LM head / sampling trace); prime buffers first.
 
     ``page_table`` (constant for the run) routes decode through the paged KV cache; it is captured
     into the trace as a fixed input (only the per-step token/position buffers are updated).
     """
-    _warm_hidden = tt_lm.forward_decode_from_device_tensors(
-        buffers.token_ids, buffers.pos_uint32, buffers.pos_int32, page_table=page_table
-    )
-    if tt_lm_head is not None:
-        _warm_logits = _tt_decode_lm_head_logits(_warm_hidden, model_args, tt_lm_head)
-        ttnn.deallocate(_warm_logits)
-    ttnn.deallocate(_warm_hidden)
-    ttnn.synchronize_device(mesh_device)
+    tokens_out_prealloc = None
+    if sampling is not None and tt_lm_head is not None:
+        sampling_batch = int(sampling.tt_sampling.max_batch_size)
+        tokens_out_prealloc = ttnn.from_torch(
+            torch.zeros((1, 1, 1, sampling_batch), dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    if not prewarmed:
+        tt_warmup_decode_trace_path(
+            mesh_device,
+            tt_lm,
+            model_args,
+            buffers,
+            tt_lm_head=tt_lm_head,
+            page_table=page_table,
+        )
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     hidden = tt_lm.forward_decode_from_device_tensors(
@@ -614,16 +648,6 @@ def tt_capture_decode_trace(
 
     if sampling is None:
         return TtDecodeTraceContext(trace_id=trace_id, buffers=buffers, output_logits=logits)
-
-    sampling_batch = int(sampling.tt_sampling.max_batch_size)
-    tokens_out_prealloc = ttnn.from_torch(
-        torch.zeros((1, 1, 1, sampling_batch), dtype=torch.int32),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
 
     sampling.capture_trace(logits, tt_out_tok=tokens_out_prealloc)
 
