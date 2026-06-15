@@ -283,6 +283,10 @@ class LTXPipeline:
         # ``_prepare_transformer(idx)``.
         self.transformer: LTXTransformerModel | None = None
         self.transformer_states: list[TransformerState] = []
+        # LoRA adaptors fused into variant 0 at runtime via ``load_lora_weights()``.
+        # Empty means the unmodified base is loaded (non-LoRA path untouched). The active
+        # specs drive every ``_prepare_transformer(0)`` so dynamic_load evictions re-fuse.
+        self._active_lora_specs: list[LoraSpec] = []
         self.vae_decoder = None
         self.upsampler: LTXLatentUpsampler | None = None
         # On-device audio decode chain (Stage A mel-VAE + Stage B/C vocoder+BWE).
@@ -630,16 +634,91 @@ class LTXPipeline:
 
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
+        # Variant 0 is the runtime-swappable base: it honours any LoRA loaded post-init via
+        # load_lora_weights() (``self._active_lora_specs``). Because every reload of variant 0
+        # — including the ones forced by dynamic_load eviction — goes through here, the active
+        # LoRA is automatically re-fused. Extra variants (idx>0) keep their construction-time
+        # specs. The cache name is LoRA-tagged so fused weights cache separately from the base.
+        if idx == 0:
+            specs = self._active_lora_specs
+            cache_name = self._build_transformer_cache_name(self.checkpoint_name, specs)
+            provider = lambda: self._build_transformer_state_dict(self.checkpoint_name, specs)  # noqa: E731
+        else:
+            cache_name = state.cache_name
+            provider = state.state_dict_provider
         cache_module.load_model(
             state.model,
-            model_name=state.cache_name,
+            model_name=cache_name,
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
-            get_torch_state_dict=state.state_dict_provider,
+            get_torch_state_dict=provider,
         )
         self.transformer = state.model
+
+    @staticmethod
+    def _coerce_lora_specs(lora: str | LoraSpec | list[str | LoraSpec] | None, strength: float) -> list[LoraSpec]:
+        """Normalise a LoRA argument (path, ``LoraSpec``, or list of either) to ``list[LoraSpec]``.
+        A bare path/ref uses ``strength``; an explicit ``LoraSpec`` keeps its own strength."""
+        if lora is None:
+            return []
+        items = lora if isinstance(lora, (list, tuple)) else [lora]
+        specs: list[LoraSpec] = []
+        for item in items:
+            if isinstance(item, LoraSpec):
+                specs.append(item)
+            else:
+                specs.append(LoraSpec(path=LTXPipeline._resolve_checkpoint_file(item), strength=strength))
+        return specs
+
+    def load_lora_weights(
+        self,
+        lora: str | LoraSpec | list[str | LoraSpec],
+        *,
+        strength: float = 1.0,
+    ) -> None:
+        """Load + fuse one or more LoRA adaptors into the base transformer at runtime.
+
+        Works after pipeline construction — no need to pre-declare the LoRA via
+        ``extra_transformer_variants``. The transformer Module object is reused, so subsequent
+        ``generate()`` / ``forward()`` calls run with the LoRA fused in without tearing the model
+        down. Call again to switch adaptors, or ``unload_lora_weights()`` to restore the base.
+
+        Fusion happens host-side (``fuse_loras_into``: ``W += Σ strengthᵢ·(Bᵢ@Aᵢ)``) and the fused
+        weights are re-uploaded through the normal sharded load path, so TP/FSDP sharding and the
+        per-device QKV interleave are handled correctly. Fused weights are disk-cached under a
+        LoRA-tagged name for fast warm reloads. There are no performance guarantees on the
+        load/fuse path itself; the non-LoRA path is unaffected (with no LoRA active, variant 0
+        loads the unmodified base).
+
+        Args:
+            lora: A LoRA safetensors path / HF ref, a ``LoraSpec``, or a list of either.
+            strength: Fuse strength applied to bare paths/refs (ignored for explicit ``LoraSpec``).
+        """
+        assert self.checkpoint_name is not None, "no transformer to fuse LoRA into"
+        specs = self._coerce_lora_specs(lora, strength)
+        if not specs:
+            self.unload_lora_weights()
+            return
+        if specs == self._active_lora_specs:
+            logger.info("Requested LoRA already active; skipping reload.")
+            return
+        self._active_lora_specs = specs
+        # Drop current weights so load_model re-fuses from the LoRA-tagged cache / fused state
+        # dict instead of early-returning on is_loaded().
+        self.transformer_states[0].model.deallocate_weights()
+        self._prepare_transformer(0)
+        logger.info("Loaded LoRA into transformer: " f"{[(os.path.basename(s.path), s.strength) for s in specs]}")
+
+    def unload_lora_weights(self) -> None:
+        """Remove any runtime-loaded LoRA, restoring the unmodified base transformer weights."""
+        if not self._active_lora_specs:
+            return
+        self._active_lora_specs = []
+        self.transformer_states[0].model.deallocate_weights()
+        self._prepare_transformer(0)
+        logger.info("Unloaded LoRA; restored base transformer weights.")
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
         """Disk-cache path for on-device prompt embeddings. Separate namespace from the
