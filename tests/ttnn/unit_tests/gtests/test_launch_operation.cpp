@@ -156,7 +156,9 @@ struct MissingPerEnqueueFactory {
         return {};
     }
 };
-struct MissingInvariantArgsFactory {
+// The minimal valid spec factory: just create_program_spec + create_per_enqueue_args. create_invariant_run_args
+// is optional, so omitting it (meaning "no enqueue-invariant run-args") is well-formed, not a missing method.
+struct MinimalSpecFactory {
     static tt::tt_metal::experimental::ProgramSpec create_program_spec(
         const OperationAttributes&, const Tensor&, Tensor&) {
         return {};
@@ -167,10 +169,30 @@ struct MissingInvariantArgsFactory {
     }
 };
 
+// A spec factory MAY additionally define the optional create_owned_tensors (op-allocated internal tensors).
+struct OwnedTensorsFactory {
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+        const OperationAttributes&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, Tensor>
+    create_owned_tensors(const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+};
+
 namespace concepts = ttnn::device_operation;
 
-// Each factory satisfies exactly one spec-factory concept, distinguished by the cache key; both carry all
-// three mandatory build methods.
+// Each factory satisfies exactly one spec-factory concept, distinguished by the cache key; both carry the two
+// mandatory build methods (create_program_spec + create_per_enqueue_args).
 static_assert(concepts::ProgramSpecFactoryConcept<SpecKeyedFactory>);
 static_assert(!concepts::AdvancedProgramSpecFactoryConcept<SpecKeyedFactory>);
 static_assert(!concepts::HasImmutableInfoExtraction<SpecKeyedFactory>);
@@ -180,11 +202,21 @@ static_assert(concepts::HasImmutableInfoExtraction<ImmutableInfoFactory>);
 static_assert(concepts::MetalV2SpecFactoryConcept<SpecKeyedFactory>);
 static_assert(concepts::MetalV2SpecFactoryConcept<ImmutableInfoFactory>);
 
-// All three build methods are required — missing any one means it is not a MetalV2 spec factory.
+// create_program_spec and create_per_enqueue_args are required — missing create_per_enqueue_args means it is
+// not a MetalV2 spec factory.
 static_assert(!concepts::MetalV2SpecFactoryConcept<MissingPerEnqueueFactory>);
-static_assert(!concepts::MetalV2SpecFactoryConcept<MissingInvariantArgsFactory>);
 static_assert(!concepts::HasCreatePerEnqueueArgs<MissingPerEnqueueFactory>);
-static_assert(!concepts::HasCreateInvariantRunArgs<MissingInvariantArgsFactory>);
+
+// create_invariant_run_args is OPTIONAL: a factory with only spec + per-enqueue is the minimal valid shape.
+static_assert(concepts::ProgramSpecFactoryConcept<MinimalSpecFactory>);
+static_assert(concepts::MetalV2SpecFactoryConcept<MinimalSpecFactory>);
+static_assert(!concepts::HasCreateInvariantRunArgs<MinimalSpecFactory>);
+
+// create_owned_tensors is OPTIONAL: a factory that defines it is still a valid base spec factory, and one
+// that omits it (SpecKeyedFactory) is equally valid — the spec concepts do not require it.
+static_assert(concepts::ProgramSpecFactoryConcept<OwnedTensorsFactory>);
+static_assert(concepts::HasCreateOwnedTensors<OwnedTensorsFactory>);
+static_assert(!concepts::HasCreateOwnedTensors<SpecKeyedFactory>);
 
 // A spec factory is none of the prior factory shapes (and vice versa).
 static_assert(!concepts::ProgramFactoryConcept<SpecKeyedFactory>);

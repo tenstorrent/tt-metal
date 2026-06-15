@@ -76,21 +76,33 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 //  MetalV2 ProgramSpec factory concepts
 // ============================================================================
 //
-// A MetalV2 op factory is built from three methods, each with a single job:
+// A MetalV2 op factory is built from two required methods plus two optional ones, each with a single job:
 //
 //   - create_program_spec       -> ProgramSpec     : the immutable blueprint (kernels, DFBs, work-units,
 //                                                     argument schemas). Built once, on a cache miss.
-//   - create_invariant_run_args -> ProgramRunArgs  : the enqueue-invariant run-args (work splits, shape
-//                                                     scalars). Set once on a miss and retained across hits.
 //   - create_per_enqueue_args   -> ProgramRunArgs  : the per-enqueue run-args (tensor addresses, seeds).
 //                                                     Rebuilt on EVERY dispatch and re-applied via
 //                                                     UpdateProgramRunArgs.
+//   - create_invariant_run_args -> ProgramRunArgs  (OPTIONAL): the enqueue-invariant run-args (work splits,
+//                                                     shape scalars). Set once on a miss and retained across
+//                                                     hits. Omitting it means "no invariant run-args" — the
+//                                                     simplest functional-and-correct factory is just
+//                                                     create_program_spec + create_per_enqueue_args. Add this
+//                                                     method as a perf step, when some args can move out of
+//                                                     the per-enqueue bucket. (Optional, not a stub, so that
+//                                                     "haven't gotten to it" stays distinct from "considered
+//                                                     it; nothing is invariant".)
+//   - create_owned_tensors      -> Table<name,Tensor> (OPTIONAL): device tensors the op allocates for its
+//                                                     own internal use (config / lookup tables not passed
+//                                                     by the caller), keyed by the TensorParameter each
+//                                                     binds to. Built once on a miss; the framework keeps
+//                                                     them alive for the cached program's lifetime and
+//                                                     binds them enqueue-invariant. Most ops omit it.
 //
-// On a miss the framework merges the invariant + per-enqueue sets for the initial SetProgramRunArgs. On a
-// hit it rebuilds neither the spec nor the invariant args — it re-runs only create_per_enqueue_args and
-// re-applies it. Splitting the run-args across two methods is what forces the author to decide, per arg,
-// what is enqueue-invariant vs per-enqueue; the metal runtime then validates that every arg omitted from
-// the per-enqueue set was declared enqueue_invariant in the spec — a forgotten per-enqueue value is a hard
+// On a miss the framework merges the invariant (if present) + per-enqueue sets for the initial
+// SetProgramRunArgs. On a hit it rebuilds neither the spec nor the invariant args — it re-runs only
+// create_per_enqueue_args and re-applies it. The metal runtime validates that every arg omitted from the
+// per-enqueue set was declared enqueue_invariant in the spec — a forgotten per-enqueue value is a hard
 // error, not silently-stale data.
 //
 // There are exactly TWO concepts, distinguished by ONE thing — the cache key:
@@ -106,10 +118,16 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // --- method-surface building blocks ---
 template <typename T>
 concept HasCreateProgramSpec = requires { &T::create_program_spec; };
+// Optional — a factory may omit it to mean "no enqueue-invariant run-args"; the spec-factory concepts below
+// do NOT require it.
 template <typename T>
 concept HasCreateInvariantRunArgs = requires { &T::create_invariant_run_args; };
 template <typename T>
 concept HasCreatePerEnqueueArgs = requires { &T::create_per_enqueue_args; };
+// Optional — only ops that allocate internal device tensors define it; the spec-factory concepts below do
+// NOT require it.
+template <typename T>
+concept HasCreateOwnedTensors = requires { &T::create_owned_tensors; };
 template <typename T>
 concept HasImmutableInfoExtraction = requires { &T::extract_immutable_info; };
 // Shared exclusion: a MetalV2 spec factory is none of the legacy factory shapes.
@@ -117,19 +135,17 @@ template <typename T>
 concept NotALegacyFactory =
     !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
-// All three build methods are mandatory; the cache key is the default reflection hash
-// (op type + attributes + tensor args).
+// create_program_spec and create_per_enqueue_args are mandatory; create_invariant_run_args is optional. The
+// cache key is the default reflection hash (op type + attributes + tensor args).
 template <typename T>
-concept ProgramSpecFactoryConcept =
-    HasCreateProgramSpec<T> && HasCreateInvariantRunArgs<T> && HasCreatePerEnqueueArgs<T> &&
-    !HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
+concept ProgramSpecFactoryConcept = HasCreateProgramSpec<T> && HasCreatePerEnqueueArgs<T> &&
+                                    !HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
 
 // ImmutableInfo-keyed factory: extract_immutable_info -> ImmutableInfo is BOTH the cache key and the sole
 // input to create_program_spec, so a mutable value (e.g. an RNG seed) cannot leak into the key or the spec.
 template <typename T>
-concept AdvancedProgramSpecFactoryConcept =
-    HasCreateProgramSpec<T> && HasCreateInvariantRunArgs<T> && HasCreatePerEnqueueArgs<T> &&
-    HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
+concept AdvancedProgramSpecFactoryConcept = HasCreateProgramSpec<T> && HasCreatePerEnqueueArgs<T> &&
+                                            HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
 
 // Umbrella: either MetalV2 spec factory shape (exactly one is satisfied by construction).
 template <typename T>
