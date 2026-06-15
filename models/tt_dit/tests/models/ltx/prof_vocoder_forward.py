@@ -246,6 +246,10 @@ def test_prof_vocoder_devicetime(mesh_device, mesh_shape, t_factor, t_axis, c_fa
     # is the run-phase pathology. Set LTX_PROF_NOFLUSH=1 (with a buffer big enough via
     # TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT) to capture everything in ONE end-of-run readback.
     _noflush = os.environ.get("LTX_PROF_NOFLUSH") == "1"
+    # With perf counters (~5 markers/zone) even one AMPBlock1 overflows the per-RISC marker
+    # buffer. LTX_PROF_PERCONV=1 drains after every leaf conv so a single conv is the bounded
+    # capture window — small enough to stay under the buffer with counters on.
+    _perconv = os.environ.get("LTX_PROF_PERCONV") == "1"
 
     def _walk(m):
         yield m
@@ -253,8 +257,9 @@ def test_prof_vocoder_devicetime(mesh_device, mesh_shape, t_factor, t_axis, c_fa
             yield from _walk(c)
 
     if not _noflush:
+        _flush_cls = (Conv1dViaConv3d, _AlignedOutConv1d) if _perconv else (AMPBlock1,)
         for mod in _walk(tt_voc):
-            if isinstance(mod, AMPBlock1):
+            if isinstance(mod, _flush_cls):
                 orig = mod.forward
 
                 def timed(*a, _orig=orig, **k):
@@ -279,6 +284,87 @@ def test_prof_vocoder_devicetime(mesh_device, mesh_shape, t_factor, t_axis, c_fa
     host_wall = (time.perf_counter() - t0) * 1000
     ttnn.ReadDeviceProfiler(mesh)
     print(f"\nSINGLE_FORWARD_HOST_WALL_MS={host_wall:.2f}", flush=True)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis",
+    [
+        [(2, 4), (2, 4), 4, 1, 2, 0],
+        [(4, 8), (4, 8), 8, 1, 4, 0],
+    ],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_prof_single_ampblock(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
+    # Deliverable-scoped counter capture: profile exactly ONE AMPBlock1 (resblocks[0]) with the
+    # real sharded stage-0 input. Everything before the block is drained/discarded so only one
+    # block's markers reach teardown processing — small enough that the perf-counter capture
+    # neither overflows the device buffer nor OOMs the host post-process (the whole-vocoder
+    # counter capture does both). Run under:
+    #   TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 pytest <this>::test_prof_single_ampblock -k bh_4x8
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
+    pc = AudioTCParallelConfig(
+        time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+        channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
+    )
+    ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
+    torch_voc = _build_torch_stage_b(seed=42)
+    tt_voc = Vocoder(
+        mesh_device=mesh,
+        dtype=ttnn.float32,
+        in_channels=128,
+        out_channels=2,
+        parallel_config=pc,
+        ccl_manager=ccl,
+        **_tt_vocoder_cfg(_MAIN_VOCODER_CFG),
+    )
+    tt_voc.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
+
+    mel = _vocoder_mel()
+
+    # Capture the REAL stage-0 block input + set_tail/x_rep by intercepting resblocks[0].forward
+    # inside a genuine vocoder forward (no hand-reconstruction of the sharded prefix). The first
+    # call drains the profiler, runs the block, drains again, then raises _Stop to abort the rest
+    # of the forward so only this one block's zones reach teardown processing.
+    block = tt_voc.resblocks[0]
+    orig_forward = block.forward
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _run_to_block(measure):
+        # Run the forward only up to (and including) resblocks[0], draining the prefix zones, then
+        # abort. Never executes the rest of the vocoder, so the overflowing full-forward markers
+        # never accumulate -> the device log stays bounded to one block.
+        def _intercept(x_BTC, *a, **k):
+            ttnn.synchronize_device(mesh)
+            ttnn.ReadDeviceProfiler(mesh)  # discard conv_pre + ups[0] prefix zones
+            t0 = time.perf_counter()
+            orig_forward(x_BTC, *a, **k)
+            ttnn.synchronize_device(mesh)
+            if measure:
+                captured["ms"] = (time.perf_counter() - t0) * 1000
+                ttnn.ReadDeviceProfiler(mesh)  # flush exactly this block's zones
+            raise _Stop()
+
+        block.forward = _intercept
+        try:
+            tt_voc(mel)
+        except _Stop:
+            pass
+        finally:
+            block.forward = orig_forward
+        ttnn.synchronize_device(mesh)
+        ttnn.ReadDeviceProfiler(mesh)
+
+    _run_to_block(measure=False)  # warmup: program-cache prefix+block, drained
+    _run_to_block(measure=True)  # measured: one block's zones only
+    print(f"\nSINGLE_AMPBLOCK_HOST_WALL_MS={captured.get('ms', -1):.2f}", flush=True)
 
 
 @pytest.mark.parametrize(
