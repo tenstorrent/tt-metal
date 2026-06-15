@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Movement Web Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.3/plotly.min.js"></script>
+</head>
+<body>
+    <header>
+        <h1>Data Movement Web Viewer</h1>
+    </header>
+
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="search-container">
+                <input type="text" id="search-input" placeholder="Search tests...">
+            </div>
+
+            <div class="tags-container">
+                <h3>Filter by Tag</h3>
+                <div id="tag-chips"></div>
+            </div>
+
+            <div class="test-list-container">
+                <h3>Tests</h3>
+                <ul id="test-list"></ul>
+            </div>
+        </aside>
+
+        <main class="content">
+            <div id="empty-state" class="empty-state">
+                <p>Select a test from the sidebar to view performance data.</p>
+            </div>
+
+            <div id="test-view" class="test-view" style="display: none;">
+                <div class="test-header">
+                    <h2 id="test-name"></h2>
+                    <a id="readme-link" href="#" target="_blank" rel="noopener noreferrer">View README on GitHub</a>
+                </div>
+
+                <div id="test-info" class="test-info"></div>
+
+                <div id="arch-selector" class="arch-selector">
+                    <span class="label">Architecture:</span>
+                    <div id="arch-chips"></div>
+                </div>
+
+                <div class="chart-controls">
+                    <div class="y-axis-toggle">
+                        <span class="label">Y-Axis:</span>
+                        <label><input type="radio" name="y-axis" value="bandwidth" checked> Bandwidth (bytes/cycle)</label>
+                        <label><input type="radio" name="y-axis" value="latency"> Latency (cycles)</label>
+                    </div>
+
+                    <div class="series-controls">
+                        <span class="label">Number of Transactions:</span>
+                        <div id="series-checkboxes"></div>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <div id="chart"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
