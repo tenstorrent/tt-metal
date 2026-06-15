@@ -15,6 +15,7 @@ from models.common.sampling._utils import is_default_value, is_llama33_70b_model
 from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
 from models.common.sampling._utils import upper_power_of_2
 from models.common.sampling.tt_log_probs import LogProbsCalculator
+from models.common.sampling.vocab_padding import build_invalid_vocab_mask, get_vocab_shard_dims
 
 
 class TTSampling(LightweightModule):
@@ -223,6 +224,7 @@ class TTSampling(LightweightModule):
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
+        self._create_invalid_vocab_mask()
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
         self.log_probs_calculator = LogProbsCalculator(
@@ -254,23 +256,21 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _get_num_sampling_shards(self):
+        if self.multi_step_reduction:
+            return 2
+        if 1 in self.cluster_shape:
+            return max(self.cluster_shape[0], self.cluster_shape[1])
+
+        assert self.sampling_all_gather_axis in (
+            0,
+            1,
+        ), f"sampling_all_gather_axis must be 0 or 1 for 2D meshes, got {self.sampling_all_gather_axis}"
+        return self.cluster_shape[self.sampling_all_gather_axis]
+
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
-        # Create indices tensor for device offsets
-        # For multi-step reduction, we use reduce over 2 steps in a single device
-        if self.multi_step_reduction:
-            num_devices_in_mesh = 2
-        else:
-            # If the mesh is effectively 1D, use the non-singleton dimension.
-            # If the mesh is 2D, use the configured gather axis.
-            if 1 in self.cluster_shape:
-                num_devices_in_mesh = max(self.cluster_shape[0], self.cluster_shape[1])
-            else:
-                assert self.sampling_all_gather_axis in (
-                    0,
-                    1,
-                ), f"sampling_all_gather_axis must be 0 or 1 for 2D meshes, got {self.sampling_all_gather_axis}"
-                num_devices_in_mesh = self.cluster_shape[self.sampling_all_gather_axis]
+        num_devices_in_mesh = self._get_num_sampling_shards()
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
@@ -314,6 +314,35 @@ class TTSampling(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def _create_invalid_vocab_mask(self):
+        invalid_vocab_mask = build_invalid_vocab_mask(
+            self.vocab_size,
+            self.padded_vocab_size,
+            self.max_batch_size,
+        )
+        if invalid_vocab_mask is None:
+            self.tt_invalid_vocab_mask = None
+            return
+
+        vocab_shard_dims = get_vocab_shard_dims(self.cluster_shape, self.sampling_all_gather_axis)
+        self.tt_invalid_vocab_mask = ttnn.from_torch(
+            invalid_vocab_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=vocab_shard_dims,
+                mesh_shape=self.cluster_shape,
+            ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _mask_invalid_vocab_logits(self, logits):
+        if self.tt_invalid_vocab_mask is None:
+            return logits
+        return ttnn.add(logits, self.tt_invalid_vocab_mask, memory_config=logits.memory_config())
 
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
         """
@@ -460,6 +489,7 @@ class TTSampling(LightweightModule):
         )
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
+            x = self._mask_invalid_vocab_logits(x)
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
@@ -497,6 +527,7 @@ class TTSampling(LightweightModule):
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         if self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
