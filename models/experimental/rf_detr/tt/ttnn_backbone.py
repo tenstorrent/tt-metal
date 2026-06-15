@@ -38,8 +38,11 @@ def _vec(t, device):
 
 
 class TtDinoBackbone:
-    def __init__(self, ref_model, device):
+    def __init__(self, ref_model, device, weight_dtype=WEIGHT_DTYPE, math_fidelity=None, fp32_acc=False, l1=False):
         self.device = device
+        # L1 placement knob: keep matmul/op outputs in on-chip L1 (numerically neutral) to
+        # avoid DRAM round-trips of the layer's working set. None => ttnn default (DRAM interleaved).
+        self.mem = ttnn.L1_MEMORY_CONFIG if l1 else None
         wb = ref_model.backbone[0].encoder.encoder  # WindowedDinoBackbone
         self.wb = wb  # kept for host-side embeddings + feature shaping
         self.cfg = wb.cfg
@@ -48,6 +51,15 @@ class TtDinoBackbone:
         self.eps = self.cfg.layer_norm_eps
         self.num_windows = self.cfg.num_windows
         self.nw2 = self.num_windows ** 2
+        # Precision knob: compute_kernel_config controls matmul math fidelity + fp32 accumulation.
+        # None => ttnn default. Passed to every backbone matmul.
+        self.compute_config = (
+            ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=math_fidelity, fp32_dest_acc_en=fp32_acc, packer_l1_acc=True
+            )
+            if math_fidelity is not None or fp32_acc
+            else None
+        )
 
         self.layers = []
         for layer in wb.encoder.layer:
@@ -55,14 +67,14 @@ class TtDinoBackbone:
             qkv_w = torch.cat([att.query.weight, att.key.weight, att.value.weight], dim=0)  # [3*384,384]
             qkv_b = torch.cat([att.query.bias, att.key.bias, att.value.bias], dim=0)
             qkv_w_tt = ttnn.from_torch(
-                qkv_w.detach().t().contiguous(), dtype=WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
+                qkv_w.detach().t().contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
             )
             qkv_b_tt = ttnn.from_torch(
                 qkv_b.detach().reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
             )
-            proj_w, proj_b = _lin(layer.attention.output.dense, device)
-            fc1_w, fc1_b = _lin(layer.mlp.fc1, device)
-            fc2_w, fc2_b = _lin(layer.mlp.fc2, device)
+            proj_w, proj_b = _lin(layer.attention.output.dense, device, dtype=weight_dtype)
+            fc1_w, fc1_b = _lin(layer.mlp.fc1, device, dtype=weight_dtype)
+            fc2_w, fc2_b = _lin(layer.mlp.fc2, device, dtype=weight_dtype)
             self.layers.append(
                 {
                     "global": layer.global_attention,
@@ -89,31 +101,33 @@ class TtDinoBackbone:
         if p["global"]:
             b, s, c = x.shape
             x = ttnn.reshape(x, (b // self.nw2, self.nw2 * s, c))
-        normed = ttnn.layer_norm(x, weight=p["norm1_w"], bias=p["norm1_b"], epsilon=self.eps)
-        qkv = ttnn.linear(normed, p["qkv_w"], bias=p["qkv_b"])
+        cc = self.compute_config
+        mc = self.mem  # None => DRAM default; L1_MEMORY_CONFIG keeps the working set on-chip
+        normed = ttnn.layer_norm(x, weight=p["norm1_w"], bias=p["norm1_b"], epsilon=self.eps, memory_config=mc)
+        qkv = ttnn.linear(normed, p["qkv_w"], bias=p["qkv_b"], compute_kernel_config=cc, memory_config=mc)
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv, num_heads=self.num_heads, transpose_key=True
         )
-        scores = ttnn.matmul(q, k)
-        scores = ttnn.multiply(scores, self.head_dim ** -0.5)
-        probs = ttnn.softmax(scores, dim=-1)
-        ctx = ttnn.matmul(probs, v)  # [b,h,s,d]
+        scores = ttnn.matmul(q, k, compute_kernel_config=cc, memory_config=mc)
+        scores = ttnn.multiply(scores, self.head_dim ** -0.5, memory_config=mc)
+        probs = ttnn.softmax(scores, dim=-1, memory_config=mc)
+        ctx = ttnn.matmul(probs, v, compute_kernel_config=cc, memory_config=mc)  # [b,h,s,d]
         ctx = ttnn.transformer.concatenate_heads(ctx)  # [b,s,384]
         ttnn.deallocate(qkv)
-        attn_out = ttnn.linear(ctx, p["proj_w"], bias=p["proj_b"])
+        attn_out = ttnn.linear(ctx, p["proj_w"], bias=p["proj_b"], compute_kernel_config=cc, memory_config=mc)
         if p["global"]:
             attn_out = ttnn.reshape(attn_out, (residual.shape[0], residual.shape[1], residual.shape[2]))
-        attn_out = ttnn.multiply(attn_out, p["ls1"])
-        x = ttnn.add(attn_out, residual)
+        attn_out = ttnn.multiply(attn_out, p["ls1"], memory_config=mc)
+        x = ttnn.add(attn_out, residual, memory_config=mc)
 
         # ---- mlp (norm2 -> fc1 -> gelu -> fc2 -> layerscale2 -> residual) ----
         residual = x
-        h = ttnn.layer_norm(x, weight=p["norm2_w"], bias=p["norm2_b"], epsilon=self.eps)
-        h = ttnn.linear(h, p["fc1_w"], bias=p["fc1_b"])
-        h = ttnn.gelu(h, fast_and_approximate_mode=False)
-        h = ttnn.linear(h, p["fc2_w"], bias=p["fc2_b"])
-        h = ttnn.multiply(h, p["ls2"])
-        x = ttnn.add(h, residual)
+        h = ttnn.layer_norm(x, weight=p["norm2_w"], bias=p["norm2_b"], epsilon=self.eps, memory_config=mc)
+        h = ttnn.linear(h, p["fc1_w"], bias=p["fc1_b"], compute_kernel_config=cc, memory_config=mc)
+        h = ttnn.gelu(h, fast_and_approximate_mode=False, memory_config=mc)
+        h = ttnn.linear(h, p["fc2_w"], bias=p["fc2_b"], compute_kernel_config=cc, memory_config=mc)
+        h = ttnn.multiply(h, p["ls2"], memory_config=mc)
+        x = ttnn.add(h, residual, memory_config=mc)
         return x
 
     def run_layers(self, embed_windowed_torch):

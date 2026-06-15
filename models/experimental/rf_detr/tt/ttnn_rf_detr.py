@@ -20,6 +20,8 @@ synchronized (no cross-inference pipelining to overlap), so the event sync only
 adds overhead. It was therefore reverted and the device stays on a single CQ.
 """
 
+import os
+
 import ttnn
 from models.experimental.rf_detr.reference.modeling_rf_detr import RfDetrOutput
 from models.experimental.rf_detr.tt.ttnn_backbone import TtDinoBackbone
@@ -34,7 +36,13 @@ class TtRfDetr:
     def __init__(self, ref_model, device):
         self.ref = ref_model.eval()
         self.device = device
-        self.backbone = TtDinoBackbone(ref_model, device)
+        # Backbone precision is env-tunable (defaults = current behavior when unset):
+        #   RFDETR_BB_FIDELITY = LoFi|HiFi2|HiFi4 ; RFDETR_BB_FP32ACC = 1
+        _fid = os.environ.get("RFDETR_BB_FIDELITY")
+        _mf = getattr(ttnn.MathFidelity, _fid) if _fid else None
+        _fp32 = os.environ.get("RFDETR_BB_FP32ACC", "0") == "1"
+        _l1 = os.environ.get("RFDETR_BB_L1", "0") == "1"
+        self.backbone = TtDinoBackbone(ref_model, device, math_fidelity=_mf, fp32_acc=_fp32, l1=_l1)
         self.projector = TtProjector(ref_model, device)
         self.transformer = TtTransformer(ref_model, device)
 
