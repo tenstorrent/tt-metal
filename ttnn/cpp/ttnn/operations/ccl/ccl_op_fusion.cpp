@@ -42,6 +42,33 @@ void AllGatherFusedOpSignaler::init_all_gather(
     initialized_all_gather = true;
 }
 
+// ProgramDescriptor overload of init_all_gather: same semantics as the Program& version,
+// but allocates the sync semaphore by appending a SemaphoreDescriptor to desc.semaphores.
+// The semaphore ID is the index of the new entry in desc.semaphores.
+void AllGatherFusedOpSignaler::init_all_gather(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+
+    const CoreRangeSet& all_gather_workers,
+    std::vector<CoreCoord>& all_gather_worker_cores) {
+    // Create the sync semaphore for the all gather workers
+    if (all_gather_worker_cores.size() > 1) {
+        this->all_gather_worker_sync_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = this->all_gather_worker_sync_semaphore,
+            .core_ranges = all_gather_workers,
+            .initial_value = 0,
+        });
+    }
+
+    // Get the noc coords for the all gather workers
+    this->all_gather_worker_cores_noc.clear();
+    for (const auto& core : all_gather_worker_cores) {
+        this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+    }
+    initialized_all_gather = true;
+}
+
 void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     std::vector<uint32_t>& out_rt_args,
 
@@ -95,6 +122,33 @@ void StridedAllGatherFusedOpSignaler::init_all_gather(
     // Create the sync semaphore for the all gather workers
     if (all_gather_worker_cores.size() > 1) {
         this->all_gather_worker_sync_semaphore = CreateSemaphore(program, all_gather_workers, 0);
+    }
+
+    // Get the noc coords for the all gather workers
+    this->all_gather_worker_cores_noc.clear();
+    for (const auto& core : all_gather_worker_cores) {
+        this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+    }
+    initialized_all_gather = true;
+}
+
+// ProgramDescriptor overload of init_all_gather: same semantics as the Program& version,
+// but allocates the sync semaphore by appending a SemaphoreDescriptor to desc.semaphores.
+// The semaphore ID is the index of the new entry in desc.semaphores.
+void StridedAllGatherFusedOpSignaler::init_all_gather(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+
+    const CoreRangeSet& all_gather_workers,
+    std::vector<CoreCoord>& all_gather_worker_cores) {
+    // Create the sync semaphore for the all gather workers
+    if (all_gather_worker_cores.size() > 1) {
+        this->all_gather_worker_sync_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = this->all_gather_worker_sync_semaphore,
+            .core_ranges = all_gather_workers,
+            .initial_value = 0,
+        });
     }
 
     // Get the noc coords for the all gather workers
@@ -179,6 +233,61 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
     initialized_reduce_scatter = true;
 }
 
+// ProgramDescriptor overload of init_reduce_scatter: same semantics as the Program& version,
+// but allocates the signal semaphore by appending a SemaphoreDescriptor to desc.semaphores.
+// The semaphore ID is the index of the new entry in desc.semaphores.
+void ReduceScatterFusedOpSignaler::init_reduce_scatter(
+    ProgramDescriptor& desc, const IDevice* device, const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
+    // Clear the existing receiver cores
+    this->fused_op_receiver_cores_noc.clear();
+
+    // Normalize the variant to a CoreRangeSet for the SemaphoreDescriptor while
+    // also computing the per-core noc receiver coords.
+    CoreRangeSet signal_cores;
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                // Handle CoreRange
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+                signal_cores = CoreRangeSet(arg);
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                // Handle CoreRangeSet
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+                signal_cores = arg;
+            }
+        },
+        core_range_to_signal);
+    // Create the semaphores
+    const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = sem_id,
+        .core_ranges = signal_cores,
+        .initial_value = 0,
+    });
+    this->fused_op_receiver_signal_semaphores.push_back(sem_id);
+
+    // Set the number of fused op cores to signal
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+
+    if (this->num_fused_op_cores_to_signal > 1) {
+        this->fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
+    } else {
+        this->fused_op_signaler_mode = FusedOpSignalerMode::SINGLE;
+    }
+
+    initialized_reduce_scatter = true;
+}
+
 void ReduceScatterFusedOpSignaler::init_fused_op() { initialized_fused_op = true; }
 
 void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) {
@@ -212,6 +321,47 @@ void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
         core_range_to_signal);
 
     this->fused_op_receiver_signal_semaphore = CreateSemaphore(program, core_range_to_signal, 0);
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+    this->initialized = true;
+}
+
+// ProgramDescriptor overload of init_strided_reduce_scatter: same semantics as the Program& version,
+// but allocates the signal semaphore by appending a SemaphoreDescriptor to desc.semaphores.
+// The semaphore ID is the index of the new entry in desc.semaphores.
+void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
+    ProgramDescriptor& desc, const IDevice* device, const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
+    this->fused_op_receiver_cores_noc.clear();
+
+    // Normalize the variant to a CoreRangeSet for the SemaphoreDescriptor while
+    // also computing the per-core noc receiver coords.
+    CoreRangeSet signal_cores;
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+                signal_cores = CoreRangeSet(arg);
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+                signal_cores = arg;
+            }
+        },
+        core_range_to_signal);
+
+    this->fused_op_receiver_signal_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = this->fused_op_receiver_signal_semaphore,
+        .core_ranges = signal_cores,
+        .initial_value = 0,
+    });
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
     this->initialized = true;
 }
@@ -295,6 +445,34 @@ void MatmulFusedOpSignaler::init_fused_op(
     initialized_fused_op = true;
 }
 
+// ProgramDescriptor overload of init_fused_op: same semantics as the Program& version,
+// but allocates the sync semaphore by appending a SemaphoreDescriptor to desc.semaphores.
+// The semaphore ID is the index of the new entry in desc.semaphores.
+void MatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const CoreRange& matmul_workers,
+    const std::vector<CoreCoord>& matmul_worker_cores) {
+    // Create the sync semaphore for the matmul workers
+    if (matmul_worker_cores.size() > 1) {
+        this->matmul_worker_sync_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = this->matmul_worker_sync_semaphore,
+            .core_ranges = CoreRangeSet(matmul_workers),
+            .initial_value = 0,
+        });
+    }
+
+    // Get the noc coords for the matmul workers
+    this->matmul_worker_cores_noc.clear();
+    this->matmul_worker_cores.clear();
+    for (const auto& core : matmul_worker_cores) {
+        this->matmul_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        this->matmul_worker_cores.push_back(core);
+    }
+    initialized_fused_op = true;
+}
+
 void MatmulFusedOpSignaler::init_fused_op(
     Program& program,
     const IDevice* device,
@@ -335,6 +513,70 @@ void MatmulFusedOpSignaler::init_fused_op(
     } else {
         this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
         this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+    }
+
+    // Set the number of fused op cores to signal
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+
+    initialized_fused_op = true;
+}
+
+// ProgramDescriptor overload of init_fused_op: same semantics as the Program& version,
+// but allocates the signal semaphores by appending SemaphoreDescriptors to desc.semaphores.
+// Semaphore IDs are the indices of the new entries in desc.semaphores.
+void MatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+    FusedOpSignalerMode fused_op_signaler_mode) {
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
+
+    // Clear the existing receiver cores
+    this->fused_op_receiver_cores_noc.clear();
+
+    // Normalize the variant to a CoreRangeSet for the SemaphoreDescriptor while
+    // also computing the per-core noc receiver coords.
+    CoreRangeSet signal_cores;
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                // Handle CoreRange
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+                signal_cores = CoreRangeSet(arg);
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                // Handle CoreRangeSet
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+                signal_cores = arg;
+            }
+        },
+        core_range_to_signal);
+    // Create the semaphores
+    auto push_signal_sem = [&]() {
+        const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sem_id,
+            .core_ranges = signal_cores,
+            .initial_value = 0,
+        });
+        this->fused_op_receiver_signal_semaphores.push_back(sem_id);
+    };
+    if (fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER) {
+        for (uint32_t i = 0; i < ring_size; i++) {
+            push_signal_sem();
+        }
+    } else {
+        push_signal_sem();
+        push_signal_sem();
     }
 
     // Set the number of fused op cores to signal
@@ -424,6 +666,47 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
     this->privilaged_core = cores.at(privilaged_index);
     this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
     this->matmul_privilaged_semaphore = tt::tt_metal::CreateSemaphore(program, privilaged_core, 0);
+    this->matmul_semaphore_target = cores.size() - 1;
+}
+
+// ProgramDescriptor overload of init_llama_rs_cores_rs: same semantics as the Program& version,
+// but allocates the rs semaphore by appending a SemaphoreDescriptor to desc.semaphores.
+void MatmulFusedOpSignaler::init_llama_rs_cores_rs(
+    const CoreRangeSet& rs_cores, tt::tt_metal::ProgramDescriptor& desc) {
+    // Copy the cores and create the semaphore and set the signaler type
+    TT_FATAL(
+        this->fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER,
+        "attempted to initialize signaler to llama rs which has a different type");
+    this->initialized_llama_reduce_scatter_part1 = true;
+    this->rs_cores = rs_cores;
+    auto rs_cores_superset = rs_cores.bounding_box();
+    this->rs_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = this->rs_semaphore,
+        .core_ranges = CoreRangeSet(rs_cores_superset),
+        .initial_value = INVALID,
+    });
+}
+
+// ProgramDescriptor overload of init_llama_rs_cores_mm: same semantics as the Program& version,
+// but allocates the privileged semaphore by appending a SemaphoreDescriptor to desc.semaphores.
+void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
+    const CoreRangeSet& matmul_cores,
+    tt::tt_metal::ProgramDescriptor& desc,
+    const tt::tt_metal::IDevice* device,
+    int privilaged_index) {
+    // pick the privileged core, record the number of matmul cores
+    TT_FATAL(initialized_llama_reduce_scatter_part1, "reduce scatter half needs to be initialized first");
+    auto cores = corerange_to_cores(matmul_cores);
+    TT_FATAL(cores.size() > privilaged_index, "Privileged index is out of range of the matmul cores");
+    this->privilaged_core = cores.at(privilaged_index);
+    this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
+    this->matmul_privilaged_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = this->matmul_privilaged_semaphore,
+        .core_ranges = CoreRangeSet(CoreRange(this->privilaged_core)),
+        .initial_value = 0,
+    });
     this->matmul_semaphore_target = cores.size() - 1;
 }
 
@@ -536,6 +819,62 @@ void MinimalMatmulFusedOpSignaler::init_fused_op(
     this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
     this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
     this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+
+    // Set the number of fused op cores to signal
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+
+    initialized_fused_op = true;
+}
+
+// ProgramDescriptor overload of init_fused_op: same semantics as the Program& version,
+// but allocates the signal semaphores by appending SemaphoreDescriptors to desc.semaphores.
+// Semaphore IDs are the indices of the new entries in desc.semaphores.
+void MinimalMatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+    FusedOpSignalerMode fused_op_signaler_mode) {
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
+
+    // Clear the existing receiver cores
+    this->fused_op_receiver_cores_noc.clear();
+
+    // Normalize the variant to a CoreRangeSet for the SemaphoreDescriptor while
+    // also computing the per-core noc receiver coords.
+    CoreRangeSet signal_cores;
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                // Handle CoreRange
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+                signal_cores = CoreRangeSet(arg);
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                // Handle CoreRangeSet
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+                signal_cores = arg;
+            }
+        },
+        core_range_to_signal);
+    // Create the semaphores
+    for (uint32_t i = 0; i < 3; i++) {
+        const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sem_id,
+            .core_ranges = signal_cores,
+            .initial_value = 0,
+        });
+        this->fused_op_receiver_signal_semaphores.push_back(sem_id);
+    }
 
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
