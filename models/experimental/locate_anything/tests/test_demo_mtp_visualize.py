@@ -59,6 +59,14 @@ def test_demo_mtp_visualize(mesh_device):
     out_path = os.environ.get("LA_OUT", os.path.join(repo_parent, "image_result_mtp.png"))
     in_token_limit = int(os.environ.get("LA_IN_TOKEN_LIMIT", "1024"))
     max_new = int(os.environ.get("LA_MAX_NEW", "128"))
+    # Sampling params: greedy by default (temp 0). Set LA_TEMP=0.7 LA_TOP_P=0.9 LA_REP_PEN=1.1
+    # for the model's intended hybrid-MTP sampling (suppresses greedy degeneration).
+    gen_kwargs = {
+        "temperature": float(os.environ.get("LA_TEMP", "0")),
+        "top_p": float(os.environ.get("LA_TOP_P", "1.0")),
+        "repetition_penalty": float(os.environ.get("LA_REP_PEN", "1.0")),
+    }
+    torch.manual_seed(int(os.environ.get("LA_SEED", "0")))
     hf_model_dir = os.environ["HF_MODEL"]
     assert os.path.isfile(image_path), f"image not found: {image_path}"
 
@@ -162,7 +170,7 @@ def test_demo_mtp_visualize(mesh_device):
             forward_passes += 1
             logits6 = logits[-n_future:].unsqueeze(0)
             _, _, x0, box_avg = sample_tokens(
-                logits6, torch.tensor([full_ids]), token_ids, keep_k=5, generation_mode="hybrid"
+                logits6, torch.tensor([full_ids]), token_ids, keep_k=5, generation_mode="hybrid", **gen_kwargs
             )
             nt = x0[0] if bool((box_avg[0] == 0).all()) else box_avg[0]
             op = handle_pattern(nt, token_ids, "hybrid")
@@ -179,7 +187,7 @@ def test_demo_mtp_visualize(mesh_device):
             logits = mtp.mtp_step_ar(embed(uncached), list(range(cached_len, cur_len)))
             forward_passes += 1
             _, _, x0, _ = sample_tokens(
-                logits[-1:].unsqueeze(0), torch.tensor([full_ids]), token_ids, generation_mode="hybrid"
+                logits[-1:].unsqueeze(0), torch.tensor([full_ids]), token_ids, generation_mode="hybrid", **gen_kwargs
             )
             tv = int(x0[0, 0].item())
             cached_len = cur_len
