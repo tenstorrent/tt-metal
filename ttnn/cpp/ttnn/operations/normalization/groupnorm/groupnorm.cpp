@@ -183,19 +183,14 @@ Tensor group_norm(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
-    // The non-sharded (interleaved) group_norm only has a correct TILE-input /
-    // TILE-output compute path. See #47972 and #48142
-    if (!input_tensor.is_sharded()) {
+    const bool rm_interleaved_input = !input_tensor.is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR;
+    const bool rm_interleaved_output =
+        !input_tensor.is_sharded() && output_layout.value_or(input_tensor.layout()) == Layout::ROW_MAJOR;
+    if (rm_interleaved_input || rm_interleaved_output) {
         TT_FATAL(
-            input_tensor.layout() == Layout::TILE,
-            "group_norm: interleaved (non-sharded) input must be in TILE layout, got ROW_MAJOR. "
-            "Convert the input with ttnn.to_layout(input, ttnn.TILE_LAYOUT) before calling group_norm. "
-            "ROW_MAJOR is supported only for sharded inputs.");
-        TT_FATAL(
-            output_layout.value_or(Layout::TILE) == Layout::TILE,
-            "group_norm: interleaved (non-sharded) output must be in TILE layout, got ROW_MAJOR output_layout. "
-            "Request TILE output and convert it yourself with ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT). "
-            "ROW_MAJOR output is supported only for sharded inputs.");
+            !use_welford,
+            "group_norm: ROW_MAJOR interleaved (non-sharded) input and/or output is not supported with "
+            "use_welford=true yet. Use use_welford=false, provide TILE layout, or use a sharded input.");
     }
 
     const auto& input_shape = input_tensor.logical_shape();

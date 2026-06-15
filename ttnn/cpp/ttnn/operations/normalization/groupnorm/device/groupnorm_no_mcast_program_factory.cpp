@@ -743,12 +743,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
 
+    std::map<std::string, std::string> writer_defines;
+    if (untilize_out) {
+        writer_defines["UNTILIZE_OUT"] = "1";
+    }
+
     KernelDescriptor writer_desc_g1;
     writer_desc_g1.kernel_source = writer_kernel;
     writer_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc_g1.core_ranges = all_cores_group_1;
     writer_desc_g1.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
     writer_desc_g1.named_compile_time_args = to_named_args_no_mcast(writer_named_compile_time_args_group_1);
+    writer_desc_g1.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc_g1.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = writer_noc,
@@ -762,6 +768,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         writer_desc_g2.core_ranges = all_cores_group_2;
         writer_desc_g2.compile_time_args = writer_mcast_sender_compile_time_args_group_2;
         writer_desc_g2.named_compile_time_args = to_named_args_no_mcast(writer_named_compile_time_args_group_2);
+        writer_desc_g2.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
         writer_desc_g2.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
@@ -1031,6 +1038,26 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             .core_ranges = all_cores_group_2,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
+
+        constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_CB_size_group_2,
+            .core_ranges = all_cores_group_2,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
                 .data_format = in_data_format,
                 .page_size = in_single_tile_size,
             }}},
