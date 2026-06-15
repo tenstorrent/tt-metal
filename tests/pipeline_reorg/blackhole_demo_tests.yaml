@@ -45,6 +45,7 @@
 - name: mistral-small-4-119b text correctness + serving tests
   cmd: |
     set -e
+    uv pip install -r models/demos/mistral4/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=mistralai/Mistral-Small-4-119B-2603
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-4-119B-2603
