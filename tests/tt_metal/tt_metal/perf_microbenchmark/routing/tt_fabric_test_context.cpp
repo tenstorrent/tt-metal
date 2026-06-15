@@ -5,8 +5,10 @@
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <thread>
+#include <unistd.h>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_constants.hpp"
@@ -325,6 +327,24 @@ void TestContext::setup_devices() {
     for (const auto& coord : available_coords) {
         test_devices_.emplace(
             coord, TestDevice(coord, this->fixture_, this->fixture_, &sender_memory_map_, &receiver_memory_map_));
+    }
+
+    // When TT_FABRIC_DUMP_DIR is set, capture the live PSD and routing tables so a
+    // CPU-only test can replay routing-table generation against the same inputs.
+    if (const char* dump_dir = std::getenv("TT_FABRIC_DUMP_DIR")) {
+        std::filesystem::create_directories(dump_dir);
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        int rank = *(distributed_context->rank());
+
+        char host_buf[256] = {0};
+        gethostname(host_buf, sizeof(host_buf) - 1);
+
+        std::string prefix = std::string(dump_dir) + "/rank" + std::to_string(rank) + "_" + host_buf;
+        control_plane.get_physical_system_descriptor().emit_to_text_proto(prefix + "_psd.textproto");
+        control_plane.get_physical_system_descriptor().dump_to_yaml(prefix + "_psd.yaml");
+        control_plane.print_routing_tables();
+        log_info(tt::LogTest, "Dumped fabric state to {}_psd.{{textproto,yaml}}", prefix);
     }
 }
 

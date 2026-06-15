@@ -57,6 +57,12 @@ Optional:
                                         <N>x32x4). Use this when the serpentine r<rack>u<unit>
                                         ordering does not match your hosts' physical cabling and you
                                         want to pass them in your own ring order.
+    --dump-fabric-state                 Capture PhysicalSystemDescriptor (textproto + YAML) and the
+                                        mesh graph descriptor under <output>/fabric_state_<ts>/,
+                                        and enable fabric debug logging so ControlPlane's routing
+                                        tables land in the log file. Inputs for CPU-only routing
+                                        replays. Output dir must be under TT_METAL_HOME for the
+                                        docker path (it relies on the existing TT_METAL_HOME mount).
     --help                              Display this help message and exit
 
 Example:
@@ -98,6 +104,7 @@ FILTER=""
 MPI_IF="ens5f0np0"
 MPI_EXTRA_ARGS=()
 SKIP_REORDER=false
+DUMP_FABRIC_STATE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -193,6 +200,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-reorder)
             SKIP_REORDER=true
+            shift
+            ;;
+        --dump-fabric-state)
+            DUMP_FABRIC_STATE=true
             shift
             ;;
         --help)
@@ -374,6 +385,25 @@ RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="$OUTPUT_DIR/fabric_tests_${RUN_TIMESTAMP}.log"
 Z_RANKFILE=""   # 4x32z OpenMPI rankfile; set below when CONFIG=4x32z
 
+# --dump-fabric-state: per-rank PSD textproto/YAML + fabric debug logging so the
+# live routing tables land in $LOG_FILE. Each rank emits files to $DUMP_DIR
+# (under $OUTPUT_DIR so the docker path's TT_METAL_HOME mount picks it up).
+# Inputs for CPU-only routing-table-generator replays.
+DUMP_DIR=""
+DUMP_FABRIC_STATE_ENV=()
+if [[ "$DUMP_FABRIC_STATE" == true ]]; then
+    DUMP_DIR="$OUTPUT_DIR/fabric_state_${RUN_TIMESTAMP}"
+    mkdir -p "$DUMP_DIR"
+    # TT_LOGGER_TYPES is a whitelist, so include both Fabric (routing tables) and
+    # Test (keeps existing test progress output that downstream regex scanners
+    # rely on). TT_LOGGER_LEVEL=Debug enables print_routing_tables() output.
+    DUMP_FABRIC_STATE_ENV=(
+        -x TT_FABRIC_DUMP_DIR="$DUMP_DIR"
+        -x TT_LOGGER_TYPES=Fabric,Test,Always
+        -x TT_LOGGER_LEVEL=Debug
+    )
+fi
+
 echo "=========================================="
 echo "Running fabric tests..."
 echo "Using hosts: $HOSTS"
@@ -433,6 +463,7 @@ for ((i = 0; i < NONZ_NUM_RANKS; i++)); do
     NONZ_SEGMENTS+=(-np 1)
     NONZ_SEGMENTS+=(-x TT_MESH_ID=0)
     NONZ_SEGMENTS+=(-x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH")
+    NONZ_SEGMENTS+=("${DUMP_FABRIC_STATE_ENV[@]}")
     NONZ_SEGMENTS+=("$TEST_BINARY" --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}")
 done
 
@@ -909,6 +940,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
         fi
         Z_SEGMENTS+=(-x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH")
         Z_SEGMENTS+=(-x TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=1000000)
+        Z_SEGMENTS+=("${DUMP_FABRIC_STATE_ENV[@]}")
         Z_SEGMENTS+=("$TEST_BINARY" --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}")
     done
 
@@ -956,6 +988,7 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             -np 1 \
             -x TT_MESH_ID=0 \
             -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+            "${DUMP_FABRIC_STATE_ENV[@]}" \
             "$TEST_BINARY" \
             --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     else
@@ -985,6 +1018,7 @@ elif [[ "$CONFIG" == "4x8" ]]; then
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        "${DUMP_FABRIC_STATE_ENV[@]}" \
         "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
 else
@@ -1017,6 +1051,18 @@ for report in pairwise_validation_summary.log pairwise_validation_detailed.log; 
         echo "Copied report: $OUTPUT_DIR/$report"
     fi
 done
+
+if [[ "$DUMP_FABRIC_STATE" == true ]]; then
+    if [[ -f "$MESH_GRAPH_DESC_PATH" ]]; then
+        cp "$MESH_GRAPH_DESC_PATH" "$DUMP_DIR/mesh_graph_descriptor.textproto"
+    elif [[ -f "${TT_METAL_HOME:-.}/$MESH_GRAPH_DESC_PATH" ]]; then
+        cp "${TT_METAL_HOME:-.}/$MESH_GRAPH_DESC_PATH" "$DUMP_DIR/mesh_graph_descriptor.textproto"
+    fi
+    echo "Fabric state artifacts in: $DUMP_DIR"
+    echo "  Per-rank PSDs:           rank<N>_<host>_psd.{textproto,yaml}"
+    echo "  Routing tables:          grep '\\bFabric\\b.*routing' $LOG_FILE"
+    echo "  Mesh graph descriptor:   $DUMP_DIR/mesh_graph_descriptor.textproto"
+fi
 
 print_fabric_final_summary "$LOG_FILE"
 echo "=========================================="
