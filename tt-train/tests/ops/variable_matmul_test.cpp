@@ -8,6 +8,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul.hpp"
@@ -51,9 +52,10 @@ ttnn::Tensor minimal_matmul_hifi4(
         /*compute_kernel_config=*/ttml::core::ComputeKernelConfig::matmul());
 }
 
-ttnn::Tensor create_random_device_tensor(uint32_t M, uint32_t K, ttnn::distributed::MeshDevice* device) {
-    xt::xarray<float> xt = xt::random::randn<float>({1U, 1U, M, K});
-    return ttml::core::from_xtensor(xt, device);
+ttnn::Tensor create_random_device_tensor(uint32_t M, uint32_t K, ttnn::distributed::MeshDevice* device, uint32_t seed) {
+    const auto data =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1U, 1U, M, K}, -1.0F, 1.0F, seed);
+    return ttml::core::from_xtensor(data, device);
 }
 
 const VariableMatmulConfig kConfig{
@@ -93,8 +95,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     const uint32_t K_parent_in0 = 512, M = 128, K_parent_in1 = 512, N = 256;
     auto* device = &ttml::autograd::ctx().get_device();
 
-    auto in0_km = create_random_device_tensor(K_parent_in0, M, device);
-    auto in1 = create_random_device_tensor(K_parent_in1, N, device);
+    auto in0_km = create_random_device_tensor(K_parent_in0, M, device, /*seed=*/42U);
+    auto in1 = create_random_device_tensor(K_parent_in1, N, device, /*seed=*/43U);
 
     const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
     auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
@@ -143,8 +145,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
     auto* device = &ttml::autograd::ctx().get_device();
 
     // in0 stored [K_parent, M=176]; physical [K_parent, 192] in TILE layout.
-    auto in0_km = create_random_device_tensor(K_parent_in0, M, device);
-    auto in1 = create_random_device_tensor(K_parent_in1, N, device);
+    auto in0_km = create_random_device_tensor(K_parent_in0, M, device, /*seed=*/44U);
+    auto in1 = create_random_device_tensor(K_parent_in1, N, device, /*seed=*/45U);
 
     const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
     auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
@@ -217,10 +219,10 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     const uint32_t M_parent = 320, K = 128, N = 64;
     auto* device = &ttml::autograd::ctx().get_device();
 
-    auto input = create_random_device_tensor(M_parent, K, device);
-    auto weight = create_random_device_tensor(K, N, device);
+    auto input = create_random_device_tensor(M_parent, K, device, /*seed=*/46U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/47U);
     // Output parent is same shape as input M-axis (shared-tensor design).
-    auto parent_out = create_random_device_tensor(M_parent, N, device);
+    auto parent_out = create_random_device_tensor(M_parent, N, device, /*seed=*/48U);
     const auto parent_orig_vec = ttml::core::to_vector<float>(parent_out);
 
     // start_index=2 → rows [96, 160) → actual_M = 64.
@@ -290,8 +292,8 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
     const uint32_t H_tiles = 48, I_tiles = 24, T_cap_tiles = 64;
     const uint32_t H = H_tiles * 32, I = I_tiles * 32, T_cap = T_cap_tiles * 32;
 
-    auto dY = create_random_device_tensor(T_cap, H, device);
-    auto act = create_random_device_tensor(T_cap, I, device);
+    auto dY = create_random_device_tensor(T_cap, H, device, /*seed=*/49U);
+    auto act = create_random_device_tensor(T_cap, I, device, /*seed=*/50U);
 
     // offsets where index 1 → count=0 (offsets[1]==offsets[2]).
     std::vector<uint32_t> offsets_host = {0U, 128U, 128U, 256U};
