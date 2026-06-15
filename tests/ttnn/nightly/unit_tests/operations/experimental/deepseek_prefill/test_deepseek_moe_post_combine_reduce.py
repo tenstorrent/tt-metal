@@ -19,7 +19,10 @@ import ttnn
 from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 
 NUM_TOKENS = 3200
@@ -29,11 +32,15 @@ PCC_THRESHOLD = 0.999
 # NUM_ROUTED_EXPERTS is 256 for DeepSeek V3, GLM 5.1, and MiniMax M2.7; only emb_dim differs.
 NUM_ROUTED_EXPERTS = DeepSeekV3Config.NUM_ROUTED_EXPERTS
 
-# emb_dim is parametrized per model: DeepSeek V3 = 7168, GLM 5.1 = 6144, MiniMax M2.7 = 3072.
+# emb_dim is parametrized per model: DeepSeek V3 = 7168, GLM 5.1 = 6144, MiniMax M2.7 = 3072,
+# DeepSeek V4 Pro = 7168, DeepSeek V4 Flash = 4096, GPT-OSS 120B = 2880.
 EMB_DIM_PARAMS = [
     pytest.param(DeepSeekV3Config.EMB_SIZE, id="ds"),
     pytest.param(GLM51Config.EMB_SIZE, id="glm"),
     pytest.param(MiniMaxM27Config.EMB_SIZE, id="minimax"),
+    pytest.param(DeepSeekV4ProConfig.EMB_SIZE, id="v4_pro"),
+    pytest.param(DeepSeekV4FlashConfig.EMB_SIZE, id="v4_flash"),
+    pytest.param(GptOss120BConfig.EMB_SIZE, id="gpt_oss"),
 ]
 
 

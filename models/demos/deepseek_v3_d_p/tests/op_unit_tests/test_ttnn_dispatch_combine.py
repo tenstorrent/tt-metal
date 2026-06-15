@@ -17,7 +17,10 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
@@ -463,6 +466,135 @@ def test_ttnn_dispatch_combine_glm(
     ids=["dispatched_buffer_tile"],
 )
 def test_ttnn_dispatch_combine_minimax(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    dispatched_buffer_layout,
+):
+    run_dispatch_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        dispatched_buffer_layout,
+    )
+
+
+# DeepSeek V4 Pro round-trip shape (emb 7168).
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
+    [(3200, DeepSeekV4ProConfig.EMB_SIZE, DeepSeekV4ProConfig.NUM_ROUTED_EXPERTS // 4, 2, 2)],
+    ids=["3200-avg"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT],
+    ids=["dispatched_buffer_tile"],
+)
+def test_ttnn_dispatch_combine_v4_pro(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    dispatched_buffer_layout,
+):
+    run_dispatch_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        dispatched_buffer_layout,
+    )
+
+
+# DeepSeek V4 Flash round-trip shape (emb 4096).
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
+    [(3200, DeepSeekV4FlashConfig.EMB_SIZE, DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS // 4, 2, 2)],
+    ids=["3200-avg"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT],
+    ids=["dispatched_buffer_tile"],
+)
+def test_ttnn_dispatch_combine_v4_flash(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    dispatched_buffer_layout,
+):
+    run_dispatch_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        dispatched_buffer_layout,
+    )
+
+
+# GPT-OSS 120B round-trip shape (emb 2880).
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
+    [(3200, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.NUM_ROUTED_EXPERTS // 4, 2, 2)],
+    ids=["3200-avg"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT],
+    ids=["dispatched_buffer_tile"],
+)
+def test_ttnn_dispatch_combine_gpt_oss(
     mesh_device,
     seq_len_per_chip,
     emb_dim,

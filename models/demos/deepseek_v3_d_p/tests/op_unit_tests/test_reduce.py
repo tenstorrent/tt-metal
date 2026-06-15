@@ -18,7 +18,10 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -242,4 +245,40 @@ def test_ttnn_reduce_glm(mesh_device, seq_len, emb_dim, topk, use_weights):
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
 def test_ttnn_reduce_minimax(mesh_device, seq_len, emb_dim, topk, use_weights):
+    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+
+
+# DeepSeek V4 Pro reduce shape (emb 7168, topk = num_experts_per_tok).
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(3200, DeepSeekV4ProConfig.EMB_SIZE, DeepSeekV4ProConfig.NUM_EXPERTS_PER_TOKEN)],
+    ids=["v4_pro"],
+)
+@pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+def test_ttnn_reduce_v4_pro(mesh_device, seq_len, emb_dim, topk, use_weights):
+    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+
+
+# DeepSeek V4 Flash reduce shape (emb 4096, topk = num_experts_per_tok).
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(3200, DeepSeekV4FlashConfig.EMB_SIZE, DeepSeekV4FlashConfig.NUM_EXPERTS_PER_TOKEN)],
+    ids=["v4_flash"],
+)
+@pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+def test_ttnn_reduce_v4_flash(mesh_device, seq_len, emb_dim, topk, use_weights):
+    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+
+
+# GPT-OSS 120B reduce shape (emb 2880, topk = num_experts_per_tok).
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(3200, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.NUM_EXPERTS_PER_TOKEN)],
+    ids=["gpt_oss"],
+)
+@pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+def test_ttnn_reduce_gpt_oss(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)

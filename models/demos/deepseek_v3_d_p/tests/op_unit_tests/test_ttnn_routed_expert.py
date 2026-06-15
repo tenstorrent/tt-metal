@@ -18,7 +18,10 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -590,6 +593,144 @@ def test_ttnn_routed_expert_glm(
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 def test_ttnn_routed_expert_minimax(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+):
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )
+
+
+# DeepSeek V4 Pro dims (emb 7168, hidden = MOE_INTERMEDIATE_SIZE 3072), PCC skipped.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        (
+            3200,
+            DeepSeekV4ProConfig.EMB_SIZE,
+            DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
+            DeepSeekV4ProConfig.NUM_ROUTED_EXPERTS // 4,
+            2,
+            3,
+            False,
+        )
+    ],
+    ids=["v4_pro-dims-skip-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert_v4_pro(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+):
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )
+
+
+# DeepSeek V4 Flash dims (emb 4096, hidden = MOE_INTERMEDIATE_SIZE 2048), PCC skipped.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        (
+            3200,
+            DeepSeekV4FlashConfig.EMB_SIZE,
+            DeepSeekV4FlashConfig.MOE_INTERMEDIATE_SIZE,
+            DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS // 4,
+            2,
+            3,
+            False,
+        )
+    ],
+    ids=["v4_flash-dims-skip-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert_v4_flash(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+):
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )
+
+
+# GPT-OSS 120B dims (emb 2880, hidden = MOE_INTERMEDIATE_SIZE 2880), PCC skipped.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        (
+            3200,
+            GptOss120BConfig.EMB_SIZE,
+            GptOss120BConfig.MOE_INTERMEDIATE_SIZE,
+            GptOss120BConfig.NUM_ROUTED_EXPERTS // 4,
+            2,
+            3,
+            False,
+        )
+    ],
+    ids=["gpt_oss-dims-skip-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert_gpt_oss(
     mesh_device,
     device_params,
     seq_len_per_chip,
