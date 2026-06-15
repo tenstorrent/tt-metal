@@ -51,6 +51,7 @@ import shutil
 import threading
 from time import time
 import traceback
+import sys
 import utils
 from collections.abc import Iterable
 from pathlib import Path
@@ -756,7 +757,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         else:
             print("Module 'tt-exalens' not found. Please install tt-exalens by running:")
             print(f"  {install_cmd}")
-        exit(1)
+        sys.exit(1)
 
     # Check if installed version satisfies the requirement
     if installed_version not in tt_exalens_req.specifier:
@@ -771,13 +772,13 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             console.print("Please install tt-exalens by running:")
             console.print(f"  [command]{install_cmd}[/]")
             console.print("Or disable this check by running with [command]--skip-version-check[/] argument.")
-            exit(1)
+            sys.exit(1)
         else:
             print(message)
             print("Please install tt-exalens by running:")
             print(f"  {install_cmd}")
             print("Or disable this check by running with --skip-version-check argument.")
-            exit(1)
+            sys.exit(1)
 
 
 def _patch_risc_debug() -> None:
