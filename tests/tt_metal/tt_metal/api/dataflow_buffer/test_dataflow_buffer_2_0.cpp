@@ -622,7 +622,8 @@ static void run_a1_fanout_blocked_pipeline(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t C,
     uint32_t block_size,
-    uint32_t num_entries) {
+    uint32_t num_entries,
+    bool implicit = false) {
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
@@ -663,7 +664,7 @@ static void run_a1_fanout_blocked_pipeline(
          .block_size = block_size}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
     producer.compile_time_args = {
-        {"num_entries_per_producer", num_entries}, {"block_size", block_size}, {"implicit_sync", 0u}};
+        {"num_entries_per_producer", num_entries}, {"block_size", block_size}, {"implicit_sync", implicit ? 1u : 0u}};
     producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto compute = make_compute_kernel(
@@ -690,11 +691,17 @@ static void run_a1_fanout_blocked_pipeline(
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
     consumer.compile_time_args = {
-        {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
+        {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", implicit ? 1u : 0u}};
     consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
-    disable_implicit_sync_for(producer, DFB_IN);
-    disable_implicit_sync_for(consumer, DFB_OUT);
+    // DFB_IN is BLOCKED with C>1 Tensix consumers (C>P=1, so the DM producer is the wider-fan-out side with
+    // num_producer_tcs=C>1). An IMPLICIT DM producer here is the suspected hole: commit_implicit_read
+    // advances tc_idx per-entry, scattering a block across sub-rings. (DFB_OUT is STRIDED, where per-entry
+    // round-robin is correct, so its DM consumer may be implicit safely.)
+    if (!implicit) {
+        disable_implicit_sync_for(producer, DFB_IN);
+        disable_implicit_sync_for(consumer, DFB_OUT);
+    }
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
     m2::ProgramSpec spec{
@@ -764,6 +771,11 @@ static void run_a1_fanout_blocked_pipeline(
 TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4) {
     run_a1_fanout_blocked_pipeline(this->devices_.at(0), 2, 4, 16);
 }
+// VERIFIED (do not re-add as a passing test): implicit DM PRODUCER + fan-out (C>P) BLOCKED produces a clean
+// per-entry IDENTITY, NOT the per-block fan-out result — i.e. it loses block-granularity (the implicit
+// commit_implicit_read advances tc_idx per-entry). It is now FATAL'd by the device guard (the wider-fan-out
+// side must be explicit). Not garbage/corruption — a different, well-defined routing → fixable via a
+// block-aware tc_idx advance, after which this could be re-enabled.
 TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx4_blk4) {
     run_a1_fanout_blocked_pipeline(this->devices_.at(0), 4, 4, 16);
 }
