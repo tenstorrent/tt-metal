@@ -483,6 +483,17 @@ class _Qwen3_6VLForConditionalGenerationBase(Generator, _SupportsMultiModal):
         image_grid_thw = self._stack_grid(image_grids) if image_grids else None
         video_grid_thw = self._stack_grid(video_grids) if video_grids else None
 
+        # --- Per-request reset of the vision encoder's CCL state (cross-request fix) ---
+        # The vision encoder uses a SEPARATE CCLManager from the text model's tt_ccl.
+        # The intervening text decode (its own tt_ccl + sub-devices + decode trace) leaves
+        # this vision CCL's global semaphores stale, so on a 2nd+ request the vision
+        # seq-parallel all-gather deadlocks (TT_THROW "fetch queue wait" timeout — observed
+        # as the video-after-image hang; video as the FIRST request does not hang). Reset the
+        # vision CCL semaphores per request, mirroring molmo2's per-request reset_kv_cache.
+        if (image_grid_thw is not None or video_grid_thw is not None) and self._ccl_manager is not None:
+            if hasattr(self._ccl_manager, "reset_global_semaphores"):
+                self._ccl_manager.reset_global_semaphores()
+
         image_features = None
         if pixel_values:
             pv = torch.cat([torch.as_tensor(p).reshape(-1, torch.as_tensor(p).shape[-1]) for p in pixel_values], dim=0)
