@@ -344,6 +344,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/kv_cache_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/loss/loss_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/matmul/matmul_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/matmul_decode/matmul_decode_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/moreh_adam_nanobind.cpp
@@ -739,6 +740,7 @@ target_link_libraries(
         TTNN::Ops::KvCache
         TTNN::Ops::Loss
         TTNN::Ops::Matmul
+        TTNN::Ops::MatmulDecode
         TTNN::Ops::Moreh
         TTNN::Ops::Prefetcher
         TTNN::Ops::Reduction
@@ -996,6 +998,7 @@ add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/loss)
 add_subdirectory(cpp/ttnn/operations/matmul)
+add_subdirectory(cpp/ttnn/operations/matmul_decode)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/point_to_point)
