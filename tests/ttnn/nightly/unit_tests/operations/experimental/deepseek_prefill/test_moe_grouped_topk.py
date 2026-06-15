@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import calculate_average_recall
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -46,19 +47,46 @@ TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, 3200)]
 
 TEST_PARAM_IDS = ["minimal", "just_over_one_tile", "four_tiles", "realistic"]
 
+# (total_experts, n_groups, summed_experts_per_group, topk_groups, n_activated_experts, route_scale)
+GATE_CONFIGS = [
+    pytest.param(256, 8, 2, 4, 8, 0.5, id="deepseek_v3"),
+    # Kimi K2.6 gate: 384 experts, top-8, but a SINGLE expert group (n_group=1, topk_group=1) and
+    # route_scale 2.827. Group-limited gating collapses to plain top-8 over all 384 experts — the
+    # routing configuration where Kimi diverges from DeepSeek-V3's 8-group / top-4-group selection.
+    # summed_experts_per_group is irrelevant with one group (the lone group is always selected).
+    pytest.param(
+        KimiK26Config.NUM_ROUTED_EXPERTS,
+        KimiK26Config.NUM_EXPERT_GROUPS,
+        2,
+        KimiK26Config.NUM_LIMITED_GROUPS,
+        KimiK26Config.NUM_EXPERTS_PER_TOKEN,
+        KimiK26Config.ROUTE_SCALE,
+        id="kimi_k2_6",
+    ),
+]
 
+
+@pytest.mark.parametrize(
+    "total_experts, n_groups, summed_experts_per_group, topk_groups, n_activated_experts, route_scale",
+    GATE_CONFIGS,
+)
 @pytest.mark.parametrize("num_batches,batch_size,seq_len", TEST_PARAMS, ids=TEST_PARAM_IDS)
-def test_moe_grouped_topk(device, num_batches, batch_size, seq_len):
+def test_moe_grouped_topk(
+    device,
+    num_batches,
+    batch_size,
+    seq_len,
+    total_experts,
+    n_groups,
+    summed_experts_per_group,
+    topk_groups,
+    n_activated_experts,
+    route_scale,
+):
     """Verify moe_grouped_topk matches the PyTorch golden reference using recall and PCC."""
     torch.manual_seed(42)
 
-    total_experts = 256
-    n_groups = 8
-    summed_experts_per_group = 2
-    topk_groups = 4
-    n_activated_experts = 8
     epsilon = 1e-20
-    route_scale = 0.5
 
     config = DeepseekV3Config(
         hidden_size=64,

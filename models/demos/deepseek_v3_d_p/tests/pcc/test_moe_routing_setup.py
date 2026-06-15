@@ -15,6 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -45,6 +46,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
         (3200, 7168, 64, 2, 2),
+        # Kimi K2.6: 384 routed experts, top-8, emb 7168. Routing setup (masked_bincount +
+        # offset_cumsum) sizes its histogram/offset tables on the expert count; capacity_factor=8
+        # =top-8 covers the worst-case dispatch offsets. 384 divides evenly across every mesh here.
+        (3200, KimiK26Config.EMB_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 8),
+        (640, KimiK26Config.EMB_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 8),
     ],
 )
 @pytest.mark.parametrize(

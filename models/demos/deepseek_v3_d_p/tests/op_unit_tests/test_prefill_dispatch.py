@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -490,6 +491,79 @@ def test_ttnn_dispatch_ds(
 @pytest.mark.parametrize("verbose", [False])
 @pytest.mark.extended_model
 def test_ttnn_dispatch_glm(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    input_layout,
+    use_fp8_output,
+    verbose,
+    run_pcc_check,
+):
+    run_dispatch(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        input_layout,
+        use_fp8_output,
+        verbose,
+        run_pcc_check,
+    )
+
+
+# Kimi K2.6 dispatch shapes (emb 7168). Kimi K2.6 deploys 384 routed experts; this op test runs on
+# at most 8 chips, so the perf param scales experts down (// 4) and the PCC param shrinks further
+# (// 16, half experts/token) to keep the full comparison cheap. Single expert group, top-8; only
+# MoE shape is exercised here.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        pytest.param(
+            32,
+            KimiK26Config.EMB_SIZE,
+            KimiK26Config.NUM_ROUTED_EXPERTS // 16,
+            4,
+            4,
+            True,
+            id="pcc",
+        ),
+        pytest.param(
+            3200,
+            KimiK26Config.EMB_SIZE,
+            KimiK26Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            8,
+            False,
+            id="perf_no_pcc",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.TILE_LAYOUT],
+    ids=["tile"],
+)
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+@pytest.mark.parametrize("verbose", [False])
+@pytest.mark.extended_model
+def test_ttnn_dispatch_kimi(
     mesh_device,
     seq_len_per_chip,
     emb_dim,

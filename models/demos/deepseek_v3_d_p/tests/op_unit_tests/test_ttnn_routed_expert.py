@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -548,6 +549,53 @@ def test_ttnn_routed_expert_ds(
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.extended_model
 def test_ttnn_routed_expert_glm(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+):
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )
+
+
+# Kimi K2.6 dims (emb 7168, hidden = MOE_INTERMEDIATE_SIZE 2048), PCC skipped.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        (
+            3200,
+            KimiK26Config.EMB_SIZE,
+            KimiK26Config.MOE_INTERMEDIATE_SIZE,
+            KimiK26Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            3,
+            False,
+        )
+    ],
+    ids=["kimi-dims-skip-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.extended_model
+def test_ttnn_routed_expert_kimi(
     mesh_device,
     device_params,
     seq_len_per_chip,

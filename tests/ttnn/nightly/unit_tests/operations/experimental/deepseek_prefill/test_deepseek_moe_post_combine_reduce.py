@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 
 NUM_TOKENS = 3200
@@ -64,10 +65,10 @@ def make_dispatch_table_all_local(device):
     return ttnn.from_torch(table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def make_indices(num_tokens, num_experts, device):
+def make_indices(num_tokens, num_experts, device, num_routed_experts=NUM_ROUTED_EXPERTS):
     """Create indices tensor with random global expert IDs."""
-    # Each token routes to num_experts random experts out of NUM_ROUTED_EXPERTS
-    indices = torch.stack([torch.randperm(NUM_ROUTED_EXPERTS)[:num_experts] for _ in range(num_tokens)])
+    # Each token routes to num_experts random experts out of num_routed_experts
+    indices = torch.stack([torch.randperm(num_routed_experts)[:num_experts] for _ in range(num_tokens)])
     indices = indices.unsqueeze(0).to(torch.uint16)  # [1, num_tokens, num_experts]
     return indices, ttnn.from_torch(
         indices, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint16, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -221,18 +222,28 @@ def test_sparse_weights(device, k_active, emb_dim):
 # ============================================================================
 
 
+# Kimi K2.6 deploys 384 routed experts vs 256 for the other models; the routed-expert count drives
+# how many of a token's picks are marked non-local, so it is parametrized here on top of emb_dim.
+@pytest.mark.parametrize(
+    "num_routed_experts",
+    [
+        pytest.param(DeepSeekV3Config.NUM_ROUTED_EXPERTS, id="routed-256"),
+        pytest.param(KimiK26Config.NUM_ROUTED_EXPERTS, id="kimi-routed-384", marks=pytest.mark.extended_model),
+    ],
+)
 @pytest.mark.parametrize("emb_dim", EMB_DIM_PARAMS)
-def test_skip_nonlocal_experts(device, emb_dim):
+def test_skip_nonlocal_experts(device, emb_dim, num_routed_experts):
     """Verify that marking experts as non-local (-1 in dispatch table) produces
-    the same result when those experts' combine_output is zero (as in real MoE)."""
+    the same result when those experts' combine_output is zero (as in real MoE).
+    Kimi K2.6's 384 routed experts exercise more non-local skips than the 256-expert models."""
     torch.manual_seed(42)
 
     # Create indices: each token routes to 8 random experts
-    indices_torch, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+    indices_torch, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device, num_routed_experts=num_routed_experts)
 
     # Build dispatch table where only experts 0-63 are local (column 0 of TP4)
     local_expert_end = 64
-    table = torch.full((NUM_ROUTED_EXPERTS,), -1, dtype=torch.int32)
+    table = torch.full((num_routed_experts,), -1, dtype=torch.int32)
     for i in range(local_expert_end):
         table[i] = i // 8  # map to chip within dispatch group
     dispatch_table_tt = ttnn.from_torch(
