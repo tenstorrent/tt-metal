@@ -9,41 +9,204 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-logger/tt-logger.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
 #include "ttnn/operations/data_movement/common/common.hpp"
+
+#include <bit>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace ttnn::prim {
 
-namespace {
+ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFactory::create_program_spec(
+    const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
+    const DFBSpecName CB_IN0{"cb_in0"};          // legacy c_0: tile stream (reader produces, writer consumes)
+    const DFBSpecName CB_PADDING{"cb_padding"};  // legacy c_1: pad-tile scratchpad (reader produces, writer consumes)
 
-// Per-core runtime args for the reader + writer kernels. The work split uses
-// two parallel partitions (unpadded vs padded tile counts) so each core needs a
-// (start, end) pair from both. Writer also tracks the padded range; reader only
-// the unpadded count.
-void emit_runtime_args_hc_tiled_interleaved(
-    KernelDescriptor& reader_desc,
-    KernelDescriptor& writer_desc,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    const CoreRange& total_cores) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
 
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const KernelSpecName READER_KERNEL{"reader"};
+    const KernelSpecName WRITER_KERNEL{"writer"};
+
+    constexpr const char* READER_PATH =
+        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "reader_unary_transpose_hc_interleaved_tiled_padding_aware_metal2.cpp";
+    constexpr const char* WRITER_PATH =
+        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp";
+
+    const auto& input_tensor = tensor_args.input;
+    // pad_value is always defined at API level; padding is decided purely by shape.
+    const float pad_value = operation_attributes.pad_value;
+
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+
+    auto tile = input_tensor.tensor_spec().tile();
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
+    const uint32_t C = input_tensor.logical_shape()[1];
+    const bool needs_padding = (C % tile_shape[1] != 0);
+
+    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const uint32_t element_size = input_tensor.element_size();
+    const uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
+
+    log_debug(tt::LogOp, "transpose_hc_tiled_interleaved");
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "needs_padding: {}", needs_padding);
+
+    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
+    // ------------------------------------------------------------------------
+    // Pad-value packing, preserved exactly from the legacy factory.
+    // ------------------------------------------------------------------------
+    const auto max_padding_write = face_shape[0] * face_shape[1];
+    uint32_t padding_val_packed = 0;
+    uint32_t num_writes = 0;
+    if (needs_padding) {
+        uint32_t num_packed_values = sizeof(uint32_t) / element_size;
+        num_writes = max_padding_write / num_packed_values;
+        switch (input_tensor.dtype()) {
+            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
+            case DataType::UINT32: padding_val_packed = pad_value; break;
+            case DataType::BFLOAT16:
+                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+                break;
+            case DataType::UINT16:
+                padding_val_packed =
+                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+                break;
+            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
+            default:
+                padding_val_packed = 0;
+                TT_ASSERT(
+                    false,
+                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
+                    "FLOAT32");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // DataflowBufferSpecs. cb_in0 (c_0) is the main tile FIFO. cb_padding (c_1) is the pad-tile
+    // scratchpad: legacy only allocated it when needs_padding, but both kernels construct the
+    // handle unconditionally, so under the Metal 2.0 binding model it is always declared (a single
+    // face-sized entry, never touched when needs_padding is false).
+    // ------------------------------------------------------------------------
+    const uint32_t num_input_tiles = 2;
+    DataflowBufferSpec cb_in0_spec{
+        .unique_id = CB_IN0,
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = cb_data_format,
+    };
+    DataflowBufferSpec cb_padding_spec{
+        .unique_id = CB_PADDING,
+        .entry_size = max_padding_write * element_size,
+        .num_entries = 1,
+        .data_format_metadata = cb_data_format,
+    };
+
+    // ------------------------------------------------------------------------
+    // Tensor parameters. Both carried RuntimeTensorShape on the legacy accessors,
+    // which maps to dynamic_tensor_shape = true.
+    // ------------------------------------------------------------------------
+    TensorParameter input_param{
+        .unique_id = INPUT_TENSOR,
+        .spec = input_tensor.tensor_spec(),
+        .advanced_options = {.dynamic_tensor_shape = true},
+    };
+    TensorParameter output_param{
+        .unique_id = OUTPUT_TENSOR,
+        .spec = output_tensor.tensor_spec(),
+        .advanced_options = {.dynamic_tensor_shape = true},
+    };
+
+    // ------------------------------------------------------------------------
+    // Reader: streams input tiles linearly into cb_in0, then optionally fills one pad tile into
+    // cb_padding. The legacy H/W/swap_hw/etc. named CTAs are dummies (swap_hw=0) for this caller
+    // but preserved verbatim since the shared kernel reads them.
+    // ------------------------------------------------------------------------
+    KernelSpec reader_spec{
+        .unique_id = READER_KERNEL,
+        .source = std::filesystem::path{READER_PATH},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = CB_IN0, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = CB_PADDING,
+                 .accessor_name = "cb_padding",
+                 .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
+        .compile_time_args =
+            {{"num_writes", num_writes},
+             {"padding_val_packed", padding_val_packed},
+             {"needs_padding", static_cast<uint32_t>(needs_padding)},
+             {"swap_hw", 0u},
+             {"H", 1u},
+             {"W", 1u},
+             {"accumulated_outer_dims", 1u},
+             {"tile_height", 1u},
+             {"tile_width", 1u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+    };
+
+    // ------------------------------------------------------------------------
+    // Writer: consumes cb_in0 (legacy cb_id_out0 == c_0) and writes transposed sub-tile lines,
+    // then consumes cb_padding to write the channel-padding region (Case-1 page access).
+    // ------------------------------------------------------------------------
+    KernelSpec writer_spec{
+        .unique_id = WRITER_KERNEL,
+        .source = std::filesystem::path{WRITER_PATH},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = CB_IN0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = CB_PADDING,
+                 .accessor_name = "cb_padding",
+                 .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
+        .compile_time_args =
+            {{"element_size", element_size},
+             {"C", C},
+             {"H", H},
+             {"W", W},
+             {"tile_height", tile_shape[0]},
+             {"tile_width", tile_shape[1]},
+             {"face_height", face_shape[0]},
+             {"face_width", face_shape[1]},
+             {"needs_padding", static_cast<uint32_t>(needs_padding)}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"start_tile_idx", "end_tile_idx", "start_padding_tile_idx", "end_padding_tile_idx"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+    };
+
+    // ------------------------------------------------------------------------
+    // Per-core runtime args. Two parallel work splits (unpadded vs padded tile counts) over the
+    // full grid; idle cores carry zero counts. Walk preserved exactly from the legacy factory.
+    // ------------------------------------------------------------------------
     auto tile_hw = tile_shape[0] * tile_shape[1];
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
     uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
-    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] /
-                                                           tile_shape[0]);  // only last row of Ct should have padding
+    uint32_t padded_num_tensor_tiles =
+        num_output_tiles / (output_tensor.padded_shape()[2] / tile_shape[0]);  // only last row of Ct has padding
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
     auto
@@ -55,12 +218,11 @@ void emit_runtime_args_hc_tiled_interleaved(
          padded_num_tiles_per_core_group_2] =
             split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
 
-    all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
-    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    KernelRunArgs reader_run{.kernel = READER_KERNEL};
+    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
 
     uint32_t start_idx = 0;
     uint32_t padded_start_idx = 0;
-    // Need to set runtime args for all cores, not just the ones doing work.
     for (const auto& core : total_cores) {
         uint32_t num_tiles_per_core;
         uint32_t padded_tiles_per_core;
@@ -84,157 +246,40 @@ void emit_runtime_args_hc_tiled_interleaved(
         uint32_t end_idx = start_idx + num_tiles_per_core;
         uint32_t padded_end_idx = padded_start_idx + padded_tiles_per_core;
 
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{input_buffer->address(), num_tiles_per_core, start_idx});
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{output_buffer->address(), start_idx, end_idx, padded_start_idx, padded_end_idx});
+        const NodeCoord node = core;
+        reader_run.runtime_arg_values.push_back({node, {{"num_tiles", num_tiles_per_core}, {"start_id", start_idx}}});
+        writer_run.runtime_arg_values.push_back(
+            {node,
+             {{"start_tile_idx", start_idx},
+              {"end_tile_idx", end_idx},
+              {"start_padding_tile_idx", padded_start_idx},
+              {"end_padding_tile_idx", padded_end_idx}}});
 
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;
     }
-}
 
-}  // namespace
-
-tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::create_descriptor(
-    const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
-    // pad_value is always defined at API level; padding is decided purely by shape
-    const float pad_value = operation_attributes.pad_value;
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
-
-    ProgramDescriptor desc;
-    auto tile = input_tensor.tensor_spec().tile();
-    auto tile_shape = tile.get_tile_shape();
-    auto face_shape = tile.get_face_shape();
-    uint32_t C = input_tensor.logical_shape()[1];
-    bool needs_padding = (C % tile_shape[1] != 0);
-
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t padding_cb_index = tt::CBIndex::c_1;
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * single_tile_size,
-        .core_ranges = total_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-
-    auto max_padding_write = face_shape[0] * face_shape[1];
-    if (needs_padding) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = max_padding_write * input_tensor.element_size(),
-            .core_ranges = total_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(padding_cb_index),
-                .data_format = cb_data_format,
-                .page_size = max_padding_write * input_tensor.element_size(),
-            }}},
-        });
-    }
-
-    Buffer* src_buffer = input_tensor.buffer();
-    uint32_t element_size = input_tensor.element_size();
-    uint32_t padding_val_packed = 0;
-    uint32_t num_writes = 0;
-    uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
-
-    if (C % tile_shape[1] != 0) {
-        uint32_t num_packed_values = sizeof(uint32_t) / element_size;
-        num_writes = max_padding_write / num_packed_values;
-        switch (input_tensor.dtype()) {
-            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            case DataType::UINT32: padding_val_packed = pad_value; break;
-            case DataType::BFLOAT16:
-                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-                break;
-            case DataType::UINT16:
-                padding_val_packed =
-                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-                break;
-            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            default:
-                padding_val_packed = 0;
-                TT_ASSERT(
-                    false,
-                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
-                    "FLOAT32");
-        }
-    }
-
-    std::vector<uint32_t> reader_compile_time_args = {};
-    std::vector<uint32_t> reader_common_runtime_args;
-    KernelDescriptor::NamedCompileTimeArgs reader_named_compile_time_args = {
-        {"num_writes", num_writes},
-        {"padding_val_packed", padding_val_packed},
-        {"needs_padding", needs_padding},
-        {"swap_hw", 0u},
-        {"H", 1u},
-        {"W", 1u},
-        {"accumulated_outer_dims", 1u},
-        {"tile_height", 1u},
-        {"tile_width", 1u},
+    WorkUnitSpec wu{
+        .name = "transpose_hc_tiled_interleaved",
+        .kernels = {READER_KERNEL, WRITER_KERNEL},
+        .target_nodes = total_cores,
     };
-    TensorAccessorArgs(*src_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
+    ProgramSpec spec{
+        .name = "transpose_hc_tiled_interleaved",
+        .kernels = {reader_spec, writer_spec},
+        .dataflow_buffers = {cb_in0_spec, cb_padding_spec},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {wu},
+    };
 
-    Buffer* dst_buffer = output_tensor.buffer();
-    std::vector<uint32_t> writer_compile_time_args = {
-        element_size,
-        tt::CBIndex::c_0,
-        C,
-        H,
-        W,
-        tile_shape[0],
-        tile_shape[1],
-        face_shape[0],
-        face_shape[1],
-        static_cast<uint32_t>(needs_padding)};
-    std::vector<uint32_t> writer_common_runtime_args;
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(writer_compile_time_args, writer_common_runtime_args);
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {reader_run, writer_run};
+    run_args.tensor_args = {
+        {INPUT_TENSOR, TensorArgument{std::cref(input_tensor.mesh_tensor())}},
+        {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensor.mesh_tensor())}}};
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
-
-    emit_runtime_args_hc_tiled_interleaved(reader_desc, writer_desc, input_tensor, output_tensor, total_cores);
-
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim
