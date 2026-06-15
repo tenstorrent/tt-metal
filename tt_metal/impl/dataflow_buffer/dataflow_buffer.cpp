@@ -1196,6 +1196,19 @@ void ProgramImpl::finalize_single_dfb_config(
             dfb->id);
     }
 
+    // The device config blob stores each side's BLOCKED block_size in a uint8_t (dfb_initializer_t::
+    // producer/consumer_block_size; serialize_for_core casts the uint32_t config value to it). A block_size
+    // >= 256 would truncate silently (256 -> 0 -> read as "not BLOCKED" -> per-entry tc_idx advance; 257 -> 1),
+    // corrupting the credit cadence. block_size is tiles-per-block and must tile a sub-ring of capacity
+    // num_entries/threads, so it is small in practice, but guard the lossy cast explicitly rather than corrupt.
+    TT_FATAL(
+        config.producer_block_size <= 0xFFu && config.consumer_block_size <= 0xFFu,
+        "DFB {}: block_size must be <= 255 to fit the device config blob (uint8_t); got producer_block_size={}, "
+        "consumer_block_size={}.",
+        dfb->id,
+        config.producer_block_size,
+        config.consumer_block_size);
+
     // TRISC pack/unpack store ring extent in uint16_t L1-aligned units; host must reject oversized rings.
     validate_ring_extent(*dfb);
 
