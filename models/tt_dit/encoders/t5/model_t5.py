@@ -156,7 +156,10 @@ class T5Stack(Module):
 
         position_bias = None
         if attention_mask is not None:
-            attention_mask = (attention_mask - 1.0) * float("inf")
+            # Convert 0/1 mask to 0/-inf additive bias for attention.
+            # Use large finite negative instead of -inf to avoid NaN from
+            # IEEE 754 0.0 * inf when mask contains 1s (valid tokens).
+            attention_mask = (attention_mask - 1.0) * 1e9
             # reshape attention mask to b x 1 x 1 x seq_len to make compatible with relative position bias
             if len(attention_mask.shape) == 2:
                 attention_mask = ttnn.reshape(attention_mask, (attention_mask.shape[0], 1, 1, -1))
@@ -171,7 +174,10 @@ class T5Stack(Module):
                 position_bias = layer.self_attn.relative_attention_bias(hidden_states.shape[-2])  # seq_length
 
                 if attention_mask is not None:
-                    position_bias += attention_mask
+                    # Use non-in-place add to avoid mutating the cached
+                    # relative_bias_cache tensor.  In-place += would bake the
+                    # mask into the cache, corrupting subsequent inference calls.
+                    position_bias = position_bias + attention_mask
 
             if position_bias is None:
                 raise ValueError("Position bias cannot be None. Please check if the model is configured correctly.")
@@ -195,16 +201,23 @@ class T5RMSNorm(RMSNorm):
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return super().forward(x, compute_kernel_config=self.compute_kernel_config)
-
-    def reference(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        variance = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
-        x_normed = x * ttnn.rsqrt(variance + self.norm_eps)
-        return self.weight.data * x_normed
+        # Decomposed RMSNorm matching GPU's T5LayerNorm precision profile:
+        #   GPU does: x * rsqrt(x.float().pow(2).mean(-1) + eps)
+        #   then:     x.type_as(weight)   [cast to bf16 BEFORE weight mul]
+        #   then:     weight * x           [bf16 * bf16]
+        #
+        # The fused kernel with bf16 input squares in bf16 (losing precision)
+        # before fp32 accumulation.  GPU squares in fp32 (exact products).
+        # Over 4096 dims × 49 norms × 24 layers this difference compounds.
+        x_f32 = ttnn.typecast(x, ttnn.float32)
+        variance = ttnn.mean(ttnn.pow(x_f32, 2), dim=-1, keepdim=True, compute_kernel_config=self.compute_kernel_config)
+        x_normed = x_f32 * ttnn.rsqrt(variance + self.norm_eps)
+        x_normed = ttnn.typecast(x_normed, ttnn.bfloat16)  # cast BEFORE weight mul
+        return self.weight.data * x_normed  # bf16 * bf16, matching GPU
 
 
 class T5FF(Module):
@@ -253,14 +266,29 @@ class T5DenseGatedActDense(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
+        # HiFi4 compute config for FFN matmuls (matches GPU cuBLAS fp32-accumulated precision).
+        self.hifi4_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
         self.wi0 = ColParallelLinear(
             in_features=self.config.embed_dim,
             out_features=self.config.ff_dim,
             bias=False,
-            activation_fn="gelu",
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
+        # GPU reference uses a decomposed tanh-GELU (custom GELU class in
+        # t5.py) under torch.autocast(bf16).  CUDA's tanh/pow kernels compute
+        # internally in fp32, so gelu_tanh_f32 (f32 intermediates, single bf16
+        # round-trip at the end) is a closer match than the bf16-decomposed
+        # gelu_tanh which has ~7 bf16 materialization points.
+        self.wi0.fused_activation_fn = None
+        self.wi0.activation_fn = "gelu_tanh_f32"
         self.wi1 = ColParallelLinear(
             in_features=self.config.embed_dim,
             out_features=self.config.ff_dim,
@@ -283,10 +311,10 @@ class T5DenseGatedActDense(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # TODO: Consider fusing the wi0 and wi1 calls with a single linear layer.
-        gelu = self.wi0(x)
-        linear = self.wi1(x)
+        gelu = self.wi0(x, compute_kernel_config=self.hifi4_compute_config)
+        linear = self.wi1(x, compute_kernel_config=self.hifi4_compute_config)
         x = gelu * linear
-        hidden_states = self.wo(x)
+        hidden_states = self.wo(x, compute_kernel_config=self.hifi4_compute_config)
         hidden_states = ttnn.unsqueeze(hidden_states, 0)
 
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -349,6 +377,17 @@ class T5Attention(Module):
         self.head_dim = config.embed_dim // self.num_heads
         self.use_relative_position_bias = use_relative_position_bias
 
+        # HiFi4 compute config for attention matmuls to reduce error
+        # accumulation over 24 layers.  The default HiFi2 from the linear
+        # layer truncates mantissa bits, which compounds across layers.
+        self.hifi4_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
         self.q_proj = ColParallelLinear(
             in_features=self.embed_dim,
             out_features=self.embed_dim,
@@ -407,9 +446,9 @@ class T5Attention(Module):
         hidden_states_ = hidden_states
         hidden_states = self.layer_norm(hidden_states)
 
-        q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
+        q = self.q_proj(hidden_states, compute_kernel_config=self.hifi4_compute_config)
+        k = self.k_proj(hidden_states, compute_kernel_config=self.hifi4_compute_config)
+        v = self.v_proj(hidden_states, compute_kernel_config=self.hifi4_compute_config)
 
         qkv = ttnn.concat([q, k, v], dim=-1)
 
@@ -420,11 +459,16 @@ class T5Attention(Module):
             qkv, num_heads=num_local_heads, transpose_key=True
         )
 
-        scores = ttnn.matmul(q, k)
+        scores = ttnn.matmul(q, k, compute_kernel_config=self.hifi4_compute_config)
 
         scores = scores + position_bias
-        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
-        attn_output = ttnn.matmul(attn_weights, v)
+        # GPU reference does F.softmax(attn.float(), dim=-1).type_as(attn)
+        # i.e. full fp32 softmax.  T5 has no 1/sqrt(d_k) scaling so logits
+        # are large, making exp() very sensitive to bf16 truncation.
+        scores = ttnn.typecast(scores, ttnn.float32)
+        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.hifi4_compute_config)
+        attn_weights = ttnn.typecast(attn_weights, ttnn.bfloat16)
+        attn_output = ttnn.matmul(attn_weights, v, compute_kernel_config=self.hifi4_compute_config)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
         attn_output = ttnn.unsqueeze(attn_output, 0)  # unsqueeze for all gather
@@ -438,7 +482,7 @@ class T5Attention(Module):
                 use_persistent_buffer=True,
             )
 
-        dense_out = self.o_proj(attn_output)
+        dense_out = self.o_proj(attn_output, compute_kernel_config=self.hifi4_compute_config)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = self.ccl_manager.all_gather(
