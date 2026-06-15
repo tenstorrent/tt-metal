@@ -362,7 +362,10 @@ def test_llama32_3b(test_config, mesh_device, optimizations):
         elif test_config == "batch-1":
             _run_perf_benchmark(model, mesh_device, expected, batch_size=1, case_name=f"{optimizations}/batch-1")
         elif test_config == "batch-32":
-            _run_perf_benchmark(model, mesh_device, expected, batch_size=32, case_name=f"{optimizations}/batch-32")
+            # PERF.md Short-Context Batch-32 row is a 128-token prefill (matches TTTv1's traced-prefill seq len).
+            _run_perf_benchmark(
+                model, mesh_device, expected, batch_size=32, case_name=f"{optimizations}/batch-32", prefill_len=128
+            )
     finally:
         cleanup_model_case(model, mesh_device)
 
@@ -446,10 +449,13 @@ def _run_perf_benchmark(
     expected,
     batch_size: int,
     case_name: str,
+    prefill_len: int = _PERF_PREFILL_LEN,
 ):
     """Timed prefill + decode (``TracedLlama32_3BExecutor``).
 
-    Prefill is 512 tokens (PERF.md workload), decode runs for 200 steps.
+    Prefill is ``prefill_len`` tokens, decode runs for 200 steps. PERF.md uses 512 for the
+    batch-1 row and 128 for the Short-Context Batch-32 row; the batch-32 caller passes 128 so
+    the workload (and the traced-prefill path, which TTTv1 enables at 128) matches TTTv1.
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
     tokenizer = AutoTokenizer.from_pretrained(hf_model)
@@ -470,8 +476,8 @@ def _run_perf_benchmark(
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
         prompts = load_input_prompts(batch_size)
-        # Pad/truncate to _PERF_PREFILL_LEN for PERF.md workload alignment.
-        input_tokens, prompt_lens = pad_prompts_to_len(prompts, tokenizer, target_len=_PERF_PREFILL_LEN)
+        # Pad/truncate to prefill_len for PERF.md workload alignment (512 batch-1 / 128 batch-32).
+        input_tokens, prompt_lens = pad_prompts_to_len(prompts, tokenizer, target_len=prefill_len)
 
         # On-device sampling toggle for N150/N300/T3K evidence-gathering (see sampling handoff docs):
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
