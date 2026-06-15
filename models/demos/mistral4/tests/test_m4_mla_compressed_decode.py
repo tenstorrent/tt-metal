@@ -34,16 +34,6 @@ def _pos(p, mesh):
     )
 
 
-@pytest.mark.xfail(
-    reason="A6 WIP: forward_decode_mla pipeline runs end-to-end; PCC ~0.03 (step-0 ~0.018). Bug "
-    "LOCALIZED to the flash-op feed/output path: the cache WRITE round-trips PCC 1.0 "
-    "(test_m4_mla_cache_rt), the absorption math is CPU-PCC-1.0 (test_m4_mla_absorb_cpu), and the op "
-    "runs (test_m4_flash_mla_probe) — so it is a subtle paged_flash_multi_latent_attention_decode "
-    "q-sharding-to-cache-user / layout contract detail, needing op-only isolation or the op's exact "
-    "spec. Expanded-kv decode is the verified default (forward_decode_mla not wired in). See "
-    "MISTRAL4_DESIGN.md (A6 STEP 2b).",
-    strict=False,
-)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",

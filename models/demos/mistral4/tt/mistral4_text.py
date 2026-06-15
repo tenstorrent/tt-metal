@@ -189,18 +189,20 @@ class TtMistral4MLA(LightweightModule):
         return ttnn.linear(attn, self.w_o)
 
     # ---- A6: compressed-latent paged MLA decode (12.8x smaller KV cache) ----
-    def init_compressed_cache(self, batch, max_seq, block=32):
-        """Paged compressed-latent KV cache [num_blocks,1,block,kvl+rope] + page_table [batch,blocks/user]."""
-        bpu = max_seq // block
-        nb = batch * bpu
+    def init_compressed_cache(self, batch, max_seq):
+        """Compressed-latent KV cache [batch,1,block,kvl+rope] + page_table [batch,1]. One block per
+        user sized to max_seq (tile-aligned) — the layout the flash-MLA decode op reads correctly. The
+        12.8x compression comes from the latent dim (kvl+rope=320 vs expanded n_heads*qk=4096); finer
+        block-paging granularity is a separate memory-management follow-up."""
+        block = ((max_seq + 31) // 32) * 32
         cache = ttnn.from_torch(
-            torch.zeros(nb, 1, block, self.kvl + self.rope, dtype=torch.bfloat16),
+            torch.zeros(batch, 1, block, self.kvl + self.rope, dtype=torch.bfloat16),
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
         pt = ttnn.from_torch(
-            torch.arange(nb, dtype=torch.int32).reshape(batch, bpu),
+            torch.arange(batch, dtype=torch.int32).reshape(batch, 1),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.int32,
             device=self.mesh,
