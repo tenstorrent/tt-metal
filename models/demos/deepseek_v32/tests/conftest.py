@@ -44,6 +44,14 @@ def pytest_addoption(parser):
         help="Path to a .pt file with the MLA/indexer input hidden states [..., seq, hidden]; "
         "default is deterministic randn(seed).",
     )
+    g.addoption(
+        "--ds-kpe-layout",
+        choices=["interleaved", "vllm"],
+        default="interleaved",
+        help="k_pe RoPE layout for the KV-cache reference comparison (test_vs_gpu_ref.py). "
+        "'interleaved' (default): our/official layout — assert latent PCC + frame-invariant k_pe L2. "
+        "'vllm': reindex our k_pe to vLLM's half-split layout and assert element-wise PCC (cross-stack).",
+    )
 
 
 @pytest.fixture
@@ -68,3 +76,8 @@ def ds_repo(request):
 @pytest.fixture
 def ds_input(request):
     return request.config.getoption("--ds-input")
+
+
+@pytest.fixture
+def ds_kpe_layout(request):
+    return request.config.getoption("--ds-kpe-layout")

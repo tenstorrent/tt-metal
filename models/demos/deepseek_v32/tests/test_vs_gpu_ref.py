@@ -32,6 +32,10 @@ frame (rotate_half vs our interleaved). This is harmless — RoPE preserves the
 per-row L2 norm (matches to ~0.4%) and q·k is frame-invariant, so the MLA output
 matches at ~0.9998. The KV tests therefore assert the latent slice + a
 frame-invariant L2 check on k_pe, and log the raw k_pe PCC as a diagnostic only.
+For cross-stack interop (a vLLM-written cache consumed by our kernel, or vice versa)
+the layout DOES matter: pass --ds-kpe-layout vllm to reindex our k_pe to vLLM's
+half-split layout (interleaved_to_halfsplit_perm in tt/mla/mla.py) and assert a hard
+element-wise k_pe PCC (~0.99997) instead of the frame-invariant L2.
 
 Runtime (Blackhole 1x4, layer shard already downloaded — measured layer 0):
   host_*  (CPU only)            ~25 s for all 3 (shared module fixture: weight load +
@@ -60,7 +64,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v32.reference_cpu.utils import precompute_freqs_cis
 from models.demos.deepseek_v32.tests.test_mla import assert_config_matches, build_cpu_reference
 from models.demos.deepseek_v32.tt import ops
-from models.demos.deepseek_v32.tt.mla import ttMLA
+from models.demos.deepseek_v32.tt.mla import interleaved_to_halfsplit_perm, ttMLA
 
 pytestmark = pytest.mark.gate
 
@@ -74,6 +78,7 @@ TOPK_OVERLAP_MEAN = 0.95
 TOPK_OVERLAP_ROW_MIN = 0.85
 KV_LATENT_PCC = 0.99
 KV_PE_L2_RELERR_MAX = 0.05  # frame-invariant: per-row ||k_pe|| must match
+KV_PE_VLLM_PCC = 0.999  # element-wise, once our k_pe is reindexed to vLLM's half-split layout
 OUTPUT_PCC = 0.98
 
 
@@ -168,10 +173,10 @@ def test_indexer_host_vs_reference(_host):
 
 
 @pytest.mark.parametrize("_host", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS], indirect=True)
-def test_kv_cache_host_vs_reference(_host):
-    """Host KV cache vs the official capture: latent PCC + frame-invariant k_pe. ~1-2 min."""
+def test_kv_cache_host_vs_reference(_host, ds_kpe_layout):
+    """Host KV cache vs the official capture: latent PCC + k_pe (--ds-kpe-layout). ~1-2 min."""
     ref_kv, kvpe = _host["ref"]["kv"], _host["kvpe"]
-    _assert_kv(ref_kv, kvpe, tag="host")
+    _assert_kv(ref_kv, kvpe, tag="host", kpe_layout=ds_kpe_layout)
 
 
 @pytest.mark.parametrize("_host", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS], indirect=True)
@@ -182,17 +187,30 @@ def test_mla_output_host_vs_reference(_host):
     assert pcc >= OUTPUT_PCC, f"MLA output PCC {pcc} < {OUTPUT_PCC}"
 
 
-def _assert_kv(ref_kv: torch.Tensor, kvpe: torch.Tensor, tag: str):
-    """Shared KV-cache assertion: latent-512 PCC + frame-invariant k_pe L2.
-    Raw k_pe PCC is logged as a RoPE-frame diagnostic only (see module docstring)."""
+def _assert_kv(ref_kv: torch.Tensor, kvpe: torch.Tensor, tag: str, kpe_layout: str = "interleaved"):
+    """Shared KV-cache assertion. Always asserts the latent-512 PCC. For the k_pe
+    rope half (last 64) the check depends on kpe_layout (--ds-kpe-layout):
+
+      "interleaved" (default): our/official layout differs from vLLM's only by a
+        RoPE-frame permutation, so a raw element-wise PCC is meaningless. Assert a
+        frame-INVARIANT per-row L2 match; log raw k_pe PCC as a diagnostic.
+      "vllm": reindex our k_pe to vLLM's half-split layout via
+        interleaved_to_halfsplit_perm() (see mla.py) and assert element-wise PCC —
+        the hard check for cross-stack KV-cache interop."""
     kv = 512
     _, lat = comp_pcc(ref_kv[:, :kv].float(), kvpe[:, :kv].float(), 0)
-    _, pe_pcc = comp_pcc(ref_kv[:, kv:].float(), kvpe[:, kv:].float(), 0)
-    rn, fn = kvpe[:, kv:].float().norm(dim=1), ref_kv[:, kv:].float().norm(dim=1)
-    pe_l2_relerr = ((rn - fn).abs() / (fn + 1e-3)).mean().item()
-    logger.info(f"[{tag}] KV latent PCC={lat}  k_pe PCC={pe_pcc} (frame diag)  k_pe L2 rel-err={pe_l2_relerr:.4f}")
     assert lat >= KV_LATENT_PCC, f"KV latent PCC {lat} < {KV_LATENT_PCC}"
-    assert pe_l2_relerr <= KV_PE_L2_RELERR_MAX, f"k_pe L2 rel-err {pe_l2_relerr} > {KV_PE_L2_RELERR_MAX}"
+    pe_ref, pe_got = ref_kv[:, kv:].float(), kvpe[:, kv:].float()
+    if kpe_layout == "vllm":
+        pe_got = pe_got[:, interleaved_to_halfsplit_perm(pe_got.shape[1])]
+        _, pe_pcc = comp_pcc(pe_ref, pe_got, 0)
+        logger.info(f"[{tag}] KV latent PCC={lat}  k_pe PCC (vLLM half-split layout)={pe_pcc}")
+        assert pe_pcc >= KV_PE_VLLM_PCC, f"k_pe (vLLM-layout) PCC {pe_pcc} < {KV_PE_VLLM_PCC}"
+    else:
+        _, pe_pcc = comp_pcc(pe_ref, pe_got, 0)
+        pe_l2_relerr = ((pe_got.norm(dim=1) - pe_ref.norm(dim=1)).abs() / (pe_ref.norm(dim=1) + 1e-3)).mean().item()
+        logger.info(f"[{tag}] KV latent PCC={lat}  k_pe PCC={pe_pcc} (frame diag)  k_pe L2 rel-err={pe_l2_relerr:.4f}")
+        assert pe_l2_relerr <= KV_PE_L2_RELERR_MAX, f"k_pe L2 rel-err {pe_l2_relerr} > {KV_PE_L2_RELERR_MAX}"
 
 
 # ----------------------------------------------------------------------------
@@ -303,10 +321,10 @@ def _run_device_forward(config, layer, mesh_device):
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
 @pytest.mark.timeout(0)
-def test_kv_cache_device_vs_reference(mesh_device, layer, device_params, variant, config_only):
-    """Device KV cache vs the official capture: latent PCC + frame-invariant k_pe. ~4-7 min."""
+def test_kv_cache_device_vs_reference(mesh_device, layer, device_params, variant, config_only, ds_kpe_layout):
+    """Device KV cache vs the official capture: latent PCC + k_pe (--ds-kpe-layout). ~4-7 min."""
     ref, _, kvpe = _run_device_forward(config_only, layer, mesh_device)
-    _assert_kv(ref["kv"], kvpe, tag="device")
+    _assert_kv(ref["kv"], kvpe, tag="device", kpe_layout=ds_kpe_layout)
     ttnn.synchronize_device(mesh_device)
 
 
