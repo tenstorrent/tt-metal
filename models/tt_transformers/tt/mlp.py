@@ -176,7 +176,7 @@ class MLP(LightweightModule):
     ) -> None:
         """In-place replace the on-device MLP weights via ``ttnn.copy``.
 
-        HF-format input contract (see ``HF_LLAMA_FORMAT.md``):
+        HF-format input contract (see ``LLAMA_WEIGHT_TRANSFER.md``):
 
         * keys      -- HF ``mlp.gate_proj.weight`` / ``mlp.up_proj.weight``
                        / ``mlp.down_proj.weight``.
