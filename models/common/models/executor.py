@@ -74,6 +74,63 @@ def make_contiguous_page_table(
     return page_table
 
 
+def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size, allow_force_argmax=True):
+    """Build replicated (k, p, temp) device tensors for ``Sampling1D``'s top-k path.
+
+    Reuses ``format_sampling_params`` (so temperature inversion, top-p clamping and the
+    ``temp==0 -> k=1`` rewrite match TTTv1 / PERF.md exactly), then mirrors TTSampling's
+    1D layout: ROW_MAJOR, uint32 k / bfloat16 p / bfloat16 temp, replicated across the mesh.
+
+    Returns ``None`` **only when force-argmax is allowed** and the formatted params reduce to
+    greedy (all k==1, p==0, temp==1) — the caller then uses the cheaper full-vocab argmax path.
+    When ``allow_force_argmax`` is False the model has no argmax path, so greedy params must
+    still build real tensors and route through the top-k op (k=1 top-k == argmax-via-topk),
+    exactly as TTTv1 does for the ``temp=0`` PERF.md recipe — never returning ``None``.
+
+    Note: ``format_sampling_params`` rewrites every ``temp==0`` row to ``(temp=1, k=1, p=0)``
+    (generator.py:512-517) — top_p is zeroed too — so the PERF.md ``temp=0, top_k=32, top_p=0.08``
+    recipe reduces to the greedy representation, not ``k=1/p=0.08/temp=1``.
+    """
+    from models.common.sampling import format_sampling_params
+
+    # format_sampling_params asserts the batch is a multiple of 32; round up for the call (the
+    # greedy params are uniform/broadcast) then slice back to batch_size. This lets the argmax
+    # reduction below return None for batch_size < 32 (argmax works at any batch) instead of
+    # tripping that assert before we ever reach the check.
+    fmt_len = ((batch_size + 31) // 32) * 32
+    fmt = format_sampling_params(sampling_params, fmt_len)
+    k = list(fmt.top_k)[:batch_size]
+    p = list(fmt.top_p)[:batch_size]
+    temp = list(fmt.temperature)[:batch_size]
+
+    if allow_force_argmax and all(kk == 1 for kk in k) and all(pp == 0 for pp in p) and all(tt == 1 for tt in temp):
+        return None
+
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    k_tt = ttnn.from_torch(
+        torch.tensor(k, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=mapper,
+    )
+    p_tt = ttnn.from_torch(
+        torch.tensor(p, dtype=torch.float32),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=mapper,
+    )
+    temp_tt = ttnn.from_torch(
+        torch.tensor(temp, dtype=torch.float32),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=mapper,
+    )
+    return k_tt, p_tt, temp_tt
+
+
 # =============================================================================
 # Protocol: LLMModel
 # =============================================================================
@@ -223,6 +280,46 @@ class EagerLLMExecutor:
         self._kv_cache = kv_cache
         self.model.set_kv_cache(kv_cache)
         return kv_cache
+
+    # =========================================================================
+    # On-device sampling routing (argmax vs top-k op path)
+    # =========================================================================
+
+    def _sampling_decode_forward(self, logits, sampling_params, tt_out_tok=None):
+        """Run ``model.sampling`` on device, choosing the path that matches PERF.md.
+
+        Routing depends on the model's ``allow_force_argmax``:
+          * ``allow_force_argmax=True``  — greedy params reducing to (k==1, p==0, temp==1) take
+            the force-argmax full-vocab all-gather path (``decode_forward`` with no k/p/temp).
+          * ``allow_force_argmax=False`` (the 1B/7B recipe) — there is no argmax path, so *every*
+            recipe, greedy included, builds k/p/temp tensors and takes the **top-k op path**:
+            per-device ``ttnn.topk`` → barrier-free all-gather of the ``[*,32]`` tuples →
+            ``ttnn.sampling``. This mirrors TTTv1, whose ``temp=0`` PERF.md recipe always runs
+            ``ttnn.topk`` (``format_sampling_params`` rewrites ``temp=0`` to the greedy k=1/p=0/temp=1
+            representation, so k=1 top-k == argmax-via-topk).
+
+        The k/p/temp tensors are built once and cached so the *same* persistent device
+        tensors are referenced during trace warmup, capture and replay (greedy decode
+        keeps them constant, so no per-step update is needed).
+        """
+        kpt = self._get_decode_sampling_kpt(sampling_params)
+        if kpt is None:
+            return self.model.sampling.decode_forward(logits, tt_out_tok=tt_out_tok)
+        k_tt, p_tt, temp_tt = kpt
+        return self.model.sampling.decode_forward(logits, k=k_tt, p=p_tt, temp=temp_tt, tt_out_tok=tt_out_tok)
+
+    def _get_decode_sampling_kpt(self, sampling_params):
+        """Lazily build + cache (k, p, temp) device tensors, or None for force-argmax."""
+        if getattr(self, "_decode_sampling_kpt_built", False):
+            return self._decode_sampling_kpt
+        self._decode_sampling_kpt = _build_decode_topk_param_tensors(
+            self.mesh_device,
+            sampling_params,
+            self.model.sampling.config.max_batch_size,
+            allow_force_argmax=self.model.sampling.config.allow_force_argmax,
+        )
+        self._decode_sampling_kpt_built = True
+        return self._decode_sampling_kpt
 
     def _assert_kv_cache_identity(self, kv_cache):
         """Verify kv_cache passed to forward is the same object bound at allocation."""
@@ -687,8 +784,14 @@ class EagerLLMExecutor:
 
         sampling_on_device = sampling_params is not None
 
-        if sampling_on_device and self.model.sampling is not None:
-            # todo)) move this import to the top of the file? --> TTTv2 sampling does not have this?
+        if (
+            sampling_on_device
+            and self.model.sampling is not None
+            and hasattr(self.model.sampling, "apply_decode_state")
+        ):
+            # TTTv1 SamplingGenerator pushes per-request k/p/temp into persistent device buffers
+            # via apply_decode_state + seed_manager. The TTTv2 Sampling1D module holds no mutable
+            # state (k/p/temp are per-call args; greedy/argmax needs none), so skip when absent.
             from models.common.sampling import broadcast_sampling_params, format_sampling_params
 
             per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
@@ -714,8 +817,12 @@ class EagerLLMExecutor:
         )
 
         if sampling_on_device and self.model.sampling is not None:
-            self.model.increment_positions(tt_current_pos, tt_rot_mat_idxs)
-            tt_toks, tt_log_probs = self.model.sampling.decode_forward(logits, tt_out_tok=tt_tokens)
+            # increment_positions omitted: positions are re-supplied from host each decode step
+            # (see TracedLLMExecutor._capture_decode_trace for the trace-capture rationale).
+            # tt_out_tok=None: let sampling allocate its own correctly-shaped output token tensor.
+            # Reusing the [1,1,1,32] input-token buffer as the argmax output ([1,1,32]) is a shape
+            # mismatch that forces a realloc — fatal during trace capture.
+            tt_toks, tt_log_probs = self._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
             if read_from_device:
                 ttnn.synchronize_device(self.mesh_device)
                 toks = _process_output_decode_tokens(tt_toks.cpu(), B, cluster_shape)
@@ -1253,7 +1360,13 @@ class TracedLLMExecutor:
         num_devices = self.model.num_devices
         cluster_shape = self.model_args.cluster_shape if self.model_args else [1, 1]
 
-        if sampling_on_device and self.model.sampling is not None:
+        if (
+            sampling_on_device
+            and self.model.sampling is not None
+            and hasattr(self.model.sampling, "apply_decode_state")
+        ):
+            # TTTv1-only: push per-request k/p/temp into persistent device buffers before replay.
+            # TTTv2 Sampling1D has no such state (greedy/argmax needs none) — skip when absent.
             from models.common.sampling import broadcast_sampling_params, format_sampling_params
 
             per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
@@ -1264,7 +1377,7 @@ class TracedLLMExecutor:
             self.model.sampling.seed_manager.get_new_values()
 
         if not self.trace_ids_decode[sampling_on_device]:
-            self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device)
+            self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params)
 
         host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
         copy_host_to_device(
@@ -1294,7 +1407,7 @@ class TracedLLMExecutor:
 
         return tt_output
 
-    def _capture_decode_trace(self, tokens, start_pos, page_table, kv_cache, sampling_on_device):
+    def _capture_decode_trace(self, tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params=None):
         """Compile + capture decode trace."""
         self._eager.decode_forward(
             tokens,
@@ -1309,6 +1422,31 @@ class TracedLLMExecutor:
 
         host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+
+        # On-device sampling: materialise sampling buffers AND JIT-compile the sampling program
+        # BEFORE trace capture. Both buffer materialisation (Sampling1D LazyBuffers + the
+        # LogProbsCalculator's ttnn.as_tensor scratch) and a first-run program compile issue device
+        # writes, which are illegal inside begin/end_trace_capture
+        # ("TT_FATAL: Writes are not supported during trace capture"). The eager warmup above runs
+        # the non-sampling path (sampling_params=None), so the argmax/all-gather sampling op is not
+        # yet compiled — warm it up here against real device logits.
+        if (
+            sampling_on_device
+            and self.model.sampling is not None
+            and hasattr(self.model.sampling, "load_device_buffers")
+        ):
+            self.model.sampling.load_device_buffers()
+            ttnn.synchronize_device(self.mesh_device)
+            with suspend_module_input_validation():
+                wu_tokens, wu_current_pos, wu_rot_mat_idxs, wu_page_table = device_inputs
+                wu_rot_mats = self.model.rope_setup.get_rot_mats(wu_rot_mat_idxs)
+                wu_embed = self.model.embed_decode(wu_tokens)
+                wu_logits = self.model.decode_forward(wu_embed, wu_current_pos, wu_rot_mats, page_table=wu_page_table)
+                wu_toks, _ = self._eager._sampling_decode_forward(wu_logits, sampling_params, tt_out_tok=None)
+            ttnn.synchronize_device(self.mesh_device)
+            cleanup_ttnn_value(wu_toks)
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info("Compiled on-device sampling")
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
@@ -1325,8 +1463,15 @@ class TracedLLMExecutor:
             )
 
             if sampling_on_device and self.model.sampling is not None:
-                self.model.increment_positions(tt_current_pos, tt_rot_mat_idxs)
-                tt_toks, tt_log_probs = self.model.sampling.decode_forward(logits, tt_out_tok=tt_tokens)
+                # NOTE: increment_positions (ttnn.plus_one) is intentionally NOT called inside the
+                # captured body. plus_one issues per-device host-assisted writes that are illegal
+                # during trace capture ("Writes are not supported during trace capture"), and it is
+                # redundant here: decode_forward re-supplies current_pos/rot_mat_idxs from the host
+                # via copy_host_to_device at the start of every step, so any in-trace increment is
+                # overwritten before the next replay. Host owns position bookkeeping.
+                # tt_out_tok=None: sampling allocates its own [1,1,32] argmax output captured in the
+                # trace (reusing the [1,1,1,32] input-token buffer is a shape mismatch -> realloc).
+                tt_toks, tt_log_probs = self._eager._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
                 output = (tt_toks, tt_log_probs)
             else:
                 logits = self.model.gather_and_untilize_logits(logits)
