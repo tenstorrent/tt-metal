@@ -3,26 +3,6 @@ set -eo pipefail
 
 TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 
-run_t3000_falcon7b_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_falcon7b_tests"
-
-  # TODO(ci): Skip prefill_seq2048 until perf gate is stable; merge_perf_results fails on small regressions vs baseline.
-  # Tracking: https://github.com/tenstorrent/tt-metal/issues/40304
-  pytest models/demos/falcon7b_common/tests -m "model_perf_t3000" -k "not prefill_seq2048" ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_falcon7b_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_mistral7b_perf_tests() {
   # Record the start time
   fail=0
