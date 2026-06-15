@@ -369,3 +369,43 @@ def test_delete_repoints_embed_to_newest_remaining_by_mtime(tmp_path):
     assert (
         os.readlink(embed_path) == "traces/a_new_2026_01_01_00_00_00.tracy"
     ), f"embed.tracy should repoint to the newest remaining trace, got {os.readlink(embed_path)!r}"
+
+
+@pytest.mark.timeout(120)
+def test_set_embed_atomically_replaces_embed_tracy(tmp_path):
+    """/set-embed-tracy must swap embed.tracy in atomically (temp + rename), not truncate in place.
+
+    A direct O_TRUNC write exposes a truncated/partial embed.tracy to the watcher and to clients
+    fetching it mid-copy. With a pre-existing *regular-file* embed.tracy, an atomic rename swaps in
+    a new inode while an in-place truncate keeps the same inode -- so the inode change is a
+    deterministic signal that the replace was atomic.
+    """
+    if not SERVE_WASM.is_file():
+        pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
+
+    wasm_dir = _make_wasm_serve_dir(tmp_path)
+    traces_dir = wasm_dir / "traces"
+    src_name = "pick_me_2026_01_01_00_00_00.tracy"
+    src_bytes = b"NEWtrace" * 40000  # ~312 KB, several copy chunks
+    (traces_dir / src_name).write_bytes(src_bytes)
+
+    # Pre-existing embed.tracy as a *regular file* with different (old) content.
+    embed_path = wasm_dir / "embed.tracy"
+    embed_path.write_bytes(b"OLD" * 10)
+    old_inode = embed_path.stat().st_ino
+
+    port = _find_free_port_pair()
+    proc = _spawn_serve_wasm(wasm_dir, tmp_path, port)
+    try:
+        _wait_http_ready_sock(port)
+        status, _, _ = _http_get(f"http://127.0.0.1:{port}/set-embed-tracy/{src_name}", timeout=30.0)
+        assert status == 200, status
+    finally:
+        _terminate_serve_wasm(proc)
+
+    assert embed_path.is_file() and not embed_path.is_symlink(), "embed.tracy should be a regular file"
+    assert embed_path.read_bytes() == src_bytes, "embed.tracy content must match the selected trace"
+    assert (
+        embed_path.stat().st_ino != old_inode
+    ), "embed.tracy kept its inode -> written in place (non-atomic); expected an atomic rename swap"
+    assert not (wasm_dir / "embed.tracy.partial").exists(), "temp file must not be left behind"

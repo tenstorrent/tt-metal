@@ -4,7 +4,6 @@
 import functools
 import os
 import shutil
-import stat
 import sys
 import subprocess
 from pathlib import Path
@@ -106,6 +105,11 @@ def _copy_validated_trace_to_embed(trace_filename: str) -> None:
     file descriptors for traces / WASM roots. Path-based SAST tools often flag ``open(abs_path)``
     when any predecessor value touched request input; relative opens under pinned directories avoid
     passing a tainted absolute path string into ``open``.
+
+    The copy lands in a sibling temp file that is then ``rename``\\d onto ``embed.tracy``. The
+    rename is atomic, so the mtime watcher and any client fetching ``embed.tracy`` always see a
+    complete file (a direct ``O_TRUNC`` write exposes a truncated/partial trace mid-copy). Rename
+    also replaces an existing symlink without following it, so no separate unlink step is needed.
     """
     traces_root = _resolve_under_root(Path(PROFILER_WASM_TRACES_DIR), strict=False)
     wasm_root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
@@ -131,21 +135,15 @@ def _copy_validated_trace_to_embed(trace_filename: str) -> None:
     wasm_base = os.path.abspath(str(wasm_root))
     embed_rel = PROFILER_WASM_TRACE_FILE_NAME
 
+    tmp_rel = embed_rel + ".partial"
     traces_dir_fd = os.open(traces_base, os.O_RDONLY | os.O_DIRECTORY)
     try:
         wasm_dir_fd = os.open(wasm_base, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            try:
-                st = os.stat(embed_rel, dir_fd=wasm_dir_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                st = None
-            if st is not None and stat.S_ISLNK(st.st_mode):
-                os.unlink(embed_rel, dir_fd=wasm_dir_fd)
-
             src_fd = os.open(safe_bn, os.O_RDONLY, dir_fd=traces_dir_fd)
             try:
                 dst_fd = os.open(
-                    embed_rel,
+                    tmp_rel,
                     os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
                     0o644,
                     dir_fd=wasm_dir_fd,
@@ -153,6 +151,17 @@ def _copy_validated_trace_to_embed(trace_filename: str) -> None:
                 try:
                     with os.fdopen(src_fd, "rb", closefd=False) as sf, os.fdopen(dst_fd, "wb", closefd=False) as df:
                         shutil.copyfileobj(sf, df)
+                        df.flush()
+                        os.fsync(dst_fd)
+                    # Atomic publish: swap the completed temp file onto embed.tracy in one step.
+                    os.rename(tmp_rel, embed_rel, src_dir_fd=wasm_dir_fd, dst_dir_fd=wasm_dir_fd)
+                except BaseException:
+                    # Never leave a partial temp behind on failure.
+                    try:
+                        os.unlink(tmp_rel, dir_fd=wasm_dir_fd)
+                    except FileNotFoundError:
+                        pass
+                    raise
                 finally:
                     os.close(dst_fd)
             finally:
