@@ -230,7 +230,7 @@ skus:
     allocation:
       type: MGD
       match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
+        exabox.tenstorrent.com/purpose: ci-reserved
       topologyKeys:
               - exabox.tenstorrent.com/quad
       mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
