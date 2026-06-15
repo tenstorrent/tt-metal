@@ -8,7 +8,7 @@
 #include "pad_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/full/device/full_device_operation.hpp"
+// --- NUKED OPS: full removed (unused include) ---
 #include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_program_factory.hpp"

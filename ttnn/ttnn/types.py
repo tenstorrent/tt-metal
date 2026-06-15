@@ -89,7 +89,7 @@ QueueId = ttnn._ttnn.types.QueueId
 
 UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
 UnaryOpType = ttnn._ttnn.activation.UnaryOpType
-BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
+# --- NUKED OPS: eltwise binary removed; BinaryOpType no longer available ---
 
 BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim

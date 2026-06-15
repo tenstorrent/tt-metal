@@ -13,7 +13,9 @@ def _golden_function(input_tensor, *args, **kwargs):
     return torch.exp(input_tensor)
 
 
-ttnn.attach_golden_function(ttnn.exp, _golden_function)
+# --- NUKED OPS: guard attaches for removed ops ---
+if hasattr(ttnn, "exp"):
+    ttnn.attach_golden_function(ttnn.exp, _golden_function)
 
 
 def _golden_function(
@@ -53,7 +55,8 @@ def _golden_function(
     return query, key, value
 
 
-ttnn.attach_golden_function(ttnn.experimental.create_qkv_heads_from_separate_tensors, _golden_function)
+if hasattr(ttnn, "experimental") and hasattr(ttnn.experimental, "create_qkv_heads_from_separate_tensors"):
+    ttnn.attach_golden_function(ttnn.experimental.create_qkv_heads_from_separate_tensors, _golden_function)
 
 
 def _golden_function(tensor, grid_size, shard_spec, num_slices, slice, *args, **kwargs):

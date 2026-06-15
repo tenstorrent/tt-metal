@@ -155,10 +155,6 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
-from ttnn._ttnn.operations.debug import (
-    apply_device_delay,
-)
-
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
@@ -265,7 +261,6 @@ from ttnn.types import (
     QueueId,
     UnaryWithParam,
     UnaryOpType,
-    BinaryOpType,
     BcastOpMath,
     BcastOpDim,
     DataMovementProcessor,
@@ -426,15 +421,7 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-from ttnn.operations.unary import SigmoidMode
-
-divide = ttnn.div
-sub = ttnn.subtract
-sub_ = ttnn.subtract_
-mul = ttnn.multiply
-mul_ = ttnn.multiply_
-div_ = ttnn.divide_
-
+# --- NUKED OPS: eltwise unary/binary aliases removed ---
 
 # TODO: nanobind the overloaded operators below
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
@@ -452,95 +439,8 @@ ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
 ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
 
-from ttnn.operations.matmul import (
-    MatmulMultiCoreReuseProgramConfig,
-    MatmulMultiCoreReuseMultiCastProgramConfig,
-    MatmulMultiCoreReuseMultiCast1DProgramConfig,
-    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
-    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
-    MatmulParams,
-    MatmulInputs,
-    MatmulDeviceOperation,
-    MatmulMultiCoreReuseOptimizedProgramFactory,
-    create_matmul_attributes,
-)
-
-from ttnn.operations.normalization import (
-    SoftmaxProgramConfig,
-    SoftmaxDefaultProgramConfig,
-    SoftmaxShardedMultiCoreProgramConfig,
-    LayerNormDefaultProgramConfig,
-    LayerNormShardedMultiCoreProgramConfig,
-    LayerNormType,
-    DistributedLayerNormStage,
-    LayerNormParams,
-    LayerNormInputs,
-    LayerNormDeviceOperation,
-    LayerNormMultiCoreProgramFactory,
-    LayerNormShardedProgramFactory,
-    create_group_norm_input_mask,
-    create_group_norm_input_negative_mask,
-    create_group_norm_weight_bias_rm,
-    create_group_norm_reciprocals,
-    create_layer_norm_reciprocals,
-    determine_expected_group_norm_sharded_config_and_grid_size,
-    determine_expected_group_norm_dram_grid_size,
-    get_group_norm_cores_across_channel,
-    dram_group_norm_params_from_torch,
-    layernorm_default_compute_config,
-    rmsnorm_default_compute_config,
-    create_layernorm_program_config,
-)
-
-from ttnn.operations.embedding import (
-    EmbeddingsType,
-)
-
-from ttnn.operations.losses import (
-    LossReductionMode,
-)
-
-from ttnn.operations.reduction import (
-    ReduceType,
-)
-
-from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
-
-from ttnn.operations.conv2d import (
-    Conv2dConfig,
-    PaddingMode,
-    get_conv_output_dim,
-    Conv2dSliceConfig,
-    Conv2dDRAMSliceHeight,
-    Conv2dDRAMSliceWidth,
-    Conv2dL1Full,
-    Conv2dL1FullSliceConfig,
-    prepare_conv_weights,
-    prepare_conv_bias,
-    prepare_conv_transpose2d_weights,
-    prepare_conv_transpose2d_bias,
-    SlidingWindowParallelConfig,
-    Op2DSliceConfig,
-    Op2DDRAMSliceHeight,
-    Op2DDRAMSliceWidth,
-    Op2DL1Full,
-    Op2DL1FullSliceConfig,
-)
-
-from ttnn.operations.pool import (
-    prepare_grid_sample_grid,
-)
-
-from ttnn._ttnn.operations.experimental import Conv3dConfig
-from ttnn._ttnn.operations.experimental import disaggregation
-from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
-
-# Expose disaggregation in experimental namespace
-experimental.disaggregation = disaggregation
-
-Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
-
-from ttnn.operations.transformer import SDPAProgramConfig
+# --- NUKED OPS: matmul / normalization / embedding / losses / reduction / ccl /
+# conv2d / pool / experimental / transformer config imports removed ---
 
 import ttnn.graph
 

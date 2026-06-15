@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/bidirectional_fabric_socket.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
+// --- NUKED OPS: experimental/ccl/send_recv_async removed; fabric send/recv stubbed ---
+#include <stdexcept>
 
 namespace ttnn::distributed {
 
@@ -13,11 +13,17 @@ BidirectionalFabricSocket::BidirectionalFabricSocket(
     const tt::tt_metal::distributed::MeshSocket& recv_socket) :
     send_socket_(send_socket), recv_socket_(recv_socket) {}
 
-void BidirectionalFabricSocket::send(const ttnn::Tensor& tensor) {
-    ttnn::experimental::send_async(tensor, send_socket_);
+void BidirectionalFabricSocket::send(const ttnn::Tensor& /*tensor*/) {
+    throw std::runtime_error(
+        "BidirectionalFabricSocket::send is unsupported in the nuked-ops build "
+        "(experimental/ccl/send_recv_async removed)");
 }
 
-void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) { ttnn::experimental::recv_async(tensor, recv_socket_); }
+void BidirectionalFabricSocket::recv(ttnn::Tensor& /*tensor*/) {
+    throw std::runtime_error(
+        "BidirectionalFabricSocket::recv is unsupported in the nuked-ops build "
+        "(experimental/ccl/send_recv_async removed)");
+}
 
 tt::tt_metal::distributed::multihost::Rank BidirectionalFabricSocket::get_rank() const {
     auto socket_config = send_socket_.get_config();

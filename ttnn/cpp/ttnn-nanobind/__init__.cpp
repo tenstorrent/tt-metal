@@ -14,7 +14,6 @@
 #include "ttnn-nanobind/device.hpp"
 #include "ttnn-nanobind/events.hpp"
 #include "ttnn-nanobind/fabric.hpp"
-#include "ttnn-nanobind/disaggregation.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
@@ -34,48 +33,11 @@
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/distributed_nanobind.hpp"
 #include "ttnn/graph/graph_nanobind.hpp"
-#include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
-#include "ttnn/operations/ccl/ccl_nanobind.hpp"
-#include "ttnn/operations/conv/conv_nanobind.hpp"
+// --- NUKED OPS: only keep-set category nanobind headers remain ---
 #include "ttnn/operations/creation/creation_nanobind.hpp"
-#include "ttnn/operations/debug/debug_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
-#include "ttnn/operations/eltwise/binary/binary_nanobind.hpp"
-#include "ttnn/operations/eltwise/binary_backward/binary_backward_nanobind.hpp"
-#include "ttnn/operations/eltwise/complex/complex_nanobind.hpp"
-#include "ttnn/operations/eltwise/complex_unary/complex_unary_nanobind.hpp"
-#include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_nanobind.hpp"
-#include "ttnn/operations/eltwise/quantization/quantization_nanobind.hpp"
-#include "ttnn/operations/eltwise/ternary/ternary_nanobind.hpp"
-#include "ttnn/operations/eltwise/ternary_backward/ternary_backward_nanobind.hpp"
-#include "ttnn/operations/eltwise/unary/unary_nanobind.hpp"
-#include "ttnn/operations/eltwise/unary_backward/unary_backward_nanobind.hpp"
-#include "ttnn/operations/embedding/embedding_nanobind.hpp"
-#include "ttnn/operations/embedding_backward/embedding_backward_nanobind.hpp"
 #include "ttnn/operations/examples/examples_nanobind.hpp"
-#include "ttnn/operations/experimental/experimental_nanobind.hpp"
-#include "ttnn/operations/full/full_nanobind.hpp"
-#include "ttnn/operations/full_like/full_like_nanobind.hpp"
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
-#include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
-#include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
-#include "ttnn/operations/loss/loss_nanobind.hpp"
-#include "ttnn/operations/matmul/matmul_nanobind.hpp"
-#include "ttnn/operations/moreh/moreh_nanobind.hpp"
-#include "ttnn/operations/normalization/normalization_nanobind.hpp"
-#include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
-#include "ttnn/operations/pool/generic/generic_pools_nanobind.hpp"
-#include "ttnn/operations/pool/rotate/rotate_nanobind.hpp"
-#include "ttnn/operations/pool/upsample/upsample_nanobind.hpp"
-#include "ttnn/operations/pool/grid_sample/grid_sample_nanobind.hpp"
-#include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
-#include "ttnn/operations/reduction/reduction_nanobind.hpp"
-#include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
-#include "ttnn/operations/transformer/transformer_nanobind.hpp"
-#include "ttnn/operations/uniform/uniform_nanobind.hpp"
-#include "ttnn/operations/rand/rand_nanobind.hpp"
-#include "ttnn/operations/randn/randn_nanobind.hpp"
-#include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 
 namespace nb = nanobind;
 
@@ -95,127 +57,18 @@ void py_module(nb::module_& mod) {
     auto m_examples = mod.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
 
-    //  Eltwise operations: unary, binary, ternary, backward, complex
-    auto m_unary = mod.def_submodule("unary", "unary operations");
-    unary::py_module(m_unary);
-
-    auto m_binary = mod.def_submodule("binary", "binary operations");
-    binary::py_module(m_binary);
-
-    auto m_quantization = mod.def_submodule("quantization", "quantization operations");
-    quantization::py_module(m_quantization);
-
-    auto m_ternary = mod.def_submodule("ternary", "ternary operations");
-    ternary::py_module(m_ternary);
-
-    auto m_unary_backward = mod.def_submodule("unary_backward", "unary_backward operations");
-    unary_backward::py_module(m_unary_backward);
-
-    auto m_binary_backward = mod.def_submodule("binary_backward", "binary_backward operations");
-    binary_backward::py_module(m_binary_backward);
-
-    auto m_ternary_backward = mod.def_submodule("ternary_backward", "ternary_backward operations");
-    ternary_backward::py_module(m_ternary_backward);
-
-    auto m_complex = mod.def_submodule("complex", "complex tensor creation");
-    complex::py_module(m_complex);
-
-    auto m_complex_unary = mod.def_submodule("complex_unary", "complex_unary operations");
-    complex_unary::py_module(m_complex_unary);
-
-    auto m_complex_unary_backward = mod.def_submodule("complex_unary_backward", "complex_unary_backward operations");
-    complex_unary_backward::py_module(m_complex_unary_backward);
-
-    auto m_ccl = mod.def_submodule("ccl", "collective communication operations");
-    ccl::py_module(m_ccl);
-
-    auto m_debug = mod.def_submodule("debug", "debug operations");
-    debug::py_module(m_debug);
-
+    // --- NUKED OPS: only keep-set categories registered below ---
     auto m_creation = mod.def_submodule("creation", "creation operations");
     creation::bind_creation_operations(m_creation);
-
-    auto m_embedding = mod.def_submodule("embedding", "embedding operations");
-    embedding::py_module(m_embedding);
-
-    auto m_embedding_backward = mod.def_submodule("embedding_backward", "embedding backward operations");
-    embedding_backward::bind_embedding_backward(m_embedding_backward);
-
-    auto m_full = mod.def_submodule("full", "full operation");
-    full::bind_full_operation(m_full);
-
-    auto m_loss = mod.def_submodule("loss", "loss operations");
-    loss::bind_loss_functions(m_loss);
-
-    auto m_matmul = mod.def_submodule("matmul", "matmul operations");
-    matmul::py_module(m_matmul);
 
     auto m_data_movement = mod.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
 
-    auto m_sliding_window = mod.def_submodule("sliding_window", "sliding_window operations");
-    sliding_window::bind_sliding_window(m_sliding_window);
-
-    auto m_conv2d = mod.def_submodule("conv", "Convolution operations");
-    conv::py_module(m_conv2d);
-
-    auto m_pool = mod.def_submodule("pool", "pooling  operations");
-    pool::py_module(m_pool);
-    rotate::py_module(m_pool);
-    upsample::py_module(m_pool);
-    grid_sample::bind_grid_sample(m_pool);
-
-    auto m_normalization = mod.def_submodule("normalization", "normalization operations");
-    normalization::py_module(m_normalization);
-
-    auto m_transformer = mod.def_submodule("transformer", "transformer operations");
-    transformer::py_module(m_transformer);
-
-    auto m_prefetcher = mod.def_submodule("prefetcher", "prefetcher operations");
-    prefetcher::py_module(m_prefetcher);
-
-    auto m_reduction = mod.def_submodule("reduction", "reduction operations");
-    reduction::py_module(m_reduction);
-
-    auto m_kv_cache = mod.def_submodule("kv_cache", "KV cache operations");
-    kv_cache::bind_kv_cache(m_kv_cache);
-
     auto m_copy = mod.def_submodule("copy", "copy operations");
     copy::py_module(m_copy);
 
-    auto m_experimental = mod.def_submodule("experimental", "experimental operations");
-    experimental::py_module(m_experimental);
-
-    auto m_disaggregation =
-        m_experimental.def_submodule("disaggregation", "Disaggregation APIs for KV cache management");
-    disaggregation::bind_disaggregation_api(m_disaggregation);
-
-    auto m_moreh = mod.def_submodule("moreh", "moreh operations");
-    moreh::bind_moreh_operations(m_moreh);
-
-    auto m_full_like = mod.def_submodule("full_like", "full_like operation");
-    full_like::bind_full_like_operation(m_full_like);
-
-    auto m_uniform = mod.def_submodule("uniform", "uniform operations");
-    uniform::bind_uniform_operation(m_uniform);
-
-    auto m_index_fill = mod.def_submodule("index_fill", "index_fill operation");
-    index_fill::bind_index_fill_operation(m_index_fill);
-
-    auto m_bernoulli = mod.def_submodule("bernoulli", "bernoulli operations");
-    bernoulli::bind_bernoulli_operation(m_bernoulli);
-
     auto m_generic = mod.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
-
-    auto m_rand = mod.def_submodule("rand", "ttnn rand operation");
-    rand::bind_rand_operation(m_rand);
-
-    auto m_randn = mod.def_submodule("randn", "ttnn randn operation");
-    randn::bind_randn_operation(m_randn);
-
-    auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
-    point_to_point::bind_point_to_point(m_point_to_point);
 }
 }  // namespace ttnn::operations
 

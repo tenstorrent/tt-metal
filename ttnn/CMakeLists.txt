@@ -238,83 +238,12 @@ target_link_libraries(
         xtensor
     PRIVATE
         TTNN::Core
-        TTNN::Ops::Bernoulli
-        TTNN::Ops::CCL
-        TTNN::Ops::Conv
+        # --- NUKED OPS: bare-minimum keep-set only ---
         TTNN::Ops::Core
         TTNN::Ops::Creation
         TTNN::Ops::DataMovement
-        TTNN::Ops::Eltwise::Binary
-        TTNN::Ops::Eltwise::Binary::Backward
-        TTNN::Ops::Eltwise::Binary::NG
-        TTNN::Ops::Eltwise::Complex
-        TTNN::Ops::Eltwise::Complex::Binary
-        TTNN::Ops::Eltwise::Complex::Unary
-        TTNN::Ops::Eltwise::Complex::Unary::Backward
-        TTNN::Ops::Eltwise::Quantization
-        TTNN::Ops::Eltwise::Ternary
-        TTNN::Ops::Eltwise::Ternary::Backward
-        TTNN::Ops::Eltwise::Unary
-        TTNN::Ops::Eltwise::Unary::Backward
-        TTNN::Ops::Embedding
-        TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
-        TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::BcastTo
-        TTNN::Ops::Experimental::MultiScaleDeformableAttn
-        TTNN::Ops::Experimental::CCL
-        TTNN::Ops::Experimental::CNN
-        TTNN::Ops::Experimental::Conv3d
-        TTNN::Ops::Experimental::Copy
-        TTNN::Ops::Experimental::DramCorePrefetcher
-        TTNN::Ops::Experimental::Dropout
-        TTNN::Ops::Experimental::IsIn
-        TTNN::Ops::Experimental::Matmul
-        TTNN::Ops::Experimental::PaddedSlice
-        TTNN::Ops::Experimental::MinimalMatmul
-        TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
-        TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
-        TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
-        TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
-        TTNN::Ops::Experimental::TopkRouterGpt
-        TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
-        TTNN::Ops::Experimental::MoEGPT
-        TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
-        TTNN::Ops::Experimental::DeepSeekPrefill::Combine
-        TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
-        TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
-        TTNN::Ops::Experimental::DeepSeekPrefill::Extract
-        TTNN::Ops::Experimental::DeepSeekPrefill::Insert
-        TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
-        TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
-        TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
-        TTNN::Ops::Experimental::PagedCache
-        TTNN::Ops::Experimental::PlusOne
-        TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::Reshape
-        TTNN::Ops::Experimental::SliceWrite
-        TTNN::Ops::Experimental::SSM
-        TTNN::Ops::Experimental::Transformer
-        TTNN::Ops::Experimental::UnaryBackward
-        TTNN::Ops::Experimental::Test
-        TTNN::Ops::Full
-        TTNN::Ops::FullLike
-        TTNN::Ops::IndexFill
-        TTNN::Ops::KvCache
-        TTNN::Ops::Loss
-        TTNN::Ops::Matmul
-        TTNN::Ops::Moreh
-        TTNN::Ops::Prefetcher
-        TTNN::Ops::Reduction
-        TTNN::Ops::SlidingWindow
-        TTNN::Ops::Transformer
-        TTNN::Ops::Uniform
-        TTNN::Ops::Debug
-        TTNN::Ops::PointToPoint
-        TTNN::Ops::Pool
-        TTNN::Ops::Normalization
-        TTNN::Ops::Rand
-        TTNN::Ops::Randn
 )
 if(TT_INSTALL)
     install(
@@ -497,83 +426,14 @@ set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
 )
 
-add_subdirectory(cpp/ttnn/operations/bernoulli)
-add_subdirectory(cpp/ttnn/operations/ccl)
-add_subdirectory(cpp/ttnn/operations/conv)
+# --- NUKED OPS: bare-minimum keep-set only (round-trip + toy/example ops) ---
+# Kept: creation, core, data_movement (pruned in Phase 2), examples (toy ops),
+# experimental/reshape (to_layout needs view), kernel_lib + kernel_helper_functions
+# (helper library). copy/typecast is compiled by the main ttnn lib (ttnn/sources.cmake).
 add_subdirectory(cpp/ttnn/operations/creation)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
-add_subdirectory(cpp/ttnn/operations/debug)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary_ng)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_binary)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary_backward)
-add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
-add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
-add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
-add_subdirectory(cpp/ttnn/operations/embedding)
-add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
-add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
-add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
-add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
-add_subdirectory(cpp/ttnn/operations/experimental/ccl)
-add_subdirectory(cpp/ttnn/operations/experimental/cnn)
-add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
-add_subdirectory(cpp/ttnn/operations/experimental/copy)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce)
-add_subdirectory(cpp/ttnn/operations/experimental/dram_core_prefetcher)
-add_subdirectory(cpp/ttnn/operations/experimental/dropout)
-add_subdirectory(cpp/ttnn/operations/experimental/isin)
-add_subdirectory(cpp/ttnn/operations/experimental/matmul)
-add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate)
-add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
-add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/extract)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/insert)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed)
-add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
-add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
-add_subdirectory(cpp/ttnn/operations/experimental/plusone)
-add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
-add_subdirectory(cpp/ttnn/operations/experimental/slice_write)
-add_subdirectory(cpp/ttnn/operations/experimental/ssm)
-add_subdirectory(cpp/ttnn/operations/experimental/test)
-add_subdirectory(cpp/ttnn/operations/experimental/transformer)
-add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
-add_subdirectory(cpp/ttnn/operations/full)
-add_subdirectory(cpp/ttnn/operations/full_like)
-add_subdirectory(cpp/ttnn/operations/index_fill)
 add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
-add_subdirectory(cpp/ttnn/operations/kv_cache)
-add_subdirectory(cpp/ttnn/operations/loss)
-add_subdirectory(cpp/ttnn/operations/matmul)
-add_subdirectory(cpp/ttnn/operations/moreh)
-add_subdirectory(cpp/ttnn/operations/normalization)
-add_subdirectory(cpp/ttnn/operations/point_to_point)
-add_subdirectory(cpp/ttnn/operations/pool)
-add_subdirectory(cpp/ttnn/operations/prefetcher)
-add_subdirectory(cpp/ttnn/operations/rand)
-add_subdirectory(cpp/ttnn/operations/randn)
-add_subdirectory(cpp/ttnn/operations/reduction)
-add_subdirectory(cpp/ttnn/operations/sliding_window)
-add_subdirectory(cpp/ttnn/operations/transformer)
-add_subdirectory(cpp/ttnn/operations/uniform)
-add_subdirectory(examples)
