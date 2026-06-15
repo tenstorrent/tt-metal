@@ -213,12 +213,27 @@ class TtSam3ImagePipeline:
         self._orig_vit_forward = vit_backbone.forward
         vit_backbone.forward = self._patched_vit_forward
 
+        self._orig_forward_text = sam3_model.backbone.forward_text
+        self._text_cache = {}
+        sam3_model.backbone.forward_text = self._cached_forward_text
+
     def _patched_vit_forward(self, x):
         return self._tt_vit_backbone(x, self.backbone_params, self.device)
 
+    def _cached_forward_text(self, captions, input_boxes=None, additional_text=None, device="cuda"):
+        cache_key = (tuple(captions), input_boxes is not None, additional_text is not None)
+        if cache_key in self._text_cache:
+            return self._text_cache[cache_key]
+        result = self._orig_forward_text(
+            captions, input_boxes=input_boxes, additional_text=additional_text, device=device
+        )
+        self._text_cache[cache_key] = result
+        return result
+
     def restore(self):
-        """Restore original ViT forward (for cleanup / PCC comparison)."""
+        """Restore original forwards (for cleanup / PCC comparison)."""
         self.vit_backbone.forward = self._orig_vit_forward
+        self.sam3_model.backbone.forward_text = self._orig_forward_text
 
     @torch.no_grad()
     def forward(self, input_batch):

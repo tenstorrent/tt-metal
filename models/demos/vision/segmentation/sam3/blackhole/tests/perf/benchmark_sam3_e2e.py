@@ -76,8 +76,9 @@ def run_benchmark(device_id=0, use_pretrained=True, num_warmup=2, num_runs=5):
     ref_logits = ref_preds["pred_logits"]
     print(f"      Masks: {ref_masks.shape}, Logits: {ref_logits.shape}")
 
-    # Re-patch ViT for ttnn
+    # Re-patch ViT and text cache for ttnn
     pipeline.vit_backbone.forward = pipeline._patched_vit_forward
+    model.backbone.forward_text = pipeline._cached_forward_text
 
     # Warmup
     print(f"[5/6] Warmup ({num_warmup} runs)...")
