@@ -3,23 +3,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Narrow per-RUN DISPATCH PROFILING harness for the MLA module (Kimi K2.6) with RANDOM weights,
-parametrized WITH and WITHOUT the H2D stream service.
+Narrow per-RUN DISPATCH PROFILING harness for the CHUNKED-PREFILL MLA module (Kimi K2.6) with RANDOM
+weights, parametrized WITH and WITHOUT the H2D stream service, and synced vs pipelined run modes.
 
-Runs ttMLA.forward `PREFILL_MLA_ITERS` + 1 times on the SAME random-weight MLA (iter 0 = cold/compile,
-iters 1.. = warm, reusing the program cache). Each iter is wrapped in `mla_run_{it}_start/_end`
-signposts so the device-profiler CSV can be segmented PER RUN, and the compile run (run 0) excluded.
-Captures per-run device-op KERNEL time and OP-TO-OP (dispatch) gap.
+Exercises the CHUNKED MLA path (update_padded_kv_cache + chunked ring_mla / SDPA). The MLA input is ONE
+chunk of `PREFILL_MLA_CHUNK` tokens; the KV cache holds `kv_actual + chunk` and the chunked ring_mla
+attends over logical_n = `PREFILL_MLA_KV` + chunk — so a deep, chunk-aligned `PREFILL_MLA_KV` profiles
+the long-KV chunked SDPA (at kv=0 the SDPA only sees the current chunk). Cache content is irrelevant to
+timing (no PCC, no prefix preload); only the cache SIZE and the `kv_actual` depth matter.
 
-The `service` variant BUILDS the (unused) H2D stream service before the loop — tokens/inputs are local
-random tensors, so the service's only effect is its per-op dispatch contention (same methodology as the
-runner-vs-test investigation). NOT a correctness test (no PCC).
+Runs ttMLA.forward `PREFILL_MLA_ITERS` + 1 times (iter 0 = cold/compile, iters 1.. = warm, reusing the
+program cache). Each iter is wrapped in `mla_run_{it}_start/_end` signposts so the device-profiler CSV
+can be segmented PER RUN, and the compile run (run 0) excluded. Captures per-run device-op KERNEL time
+and OP-TO-OP (dispatch) gap.
 
-Run under the device profiler + tracy via `kimi_perf_overnight/profile_mla_test.sh <noservice|service>`,
-or directly (see that script's header). Random weights => NO weight cache / HF download needed, only the
-mesh. Env:
-    PREFILL_MLA_ITERS    warm iters (default 10; total passes = ITERS + 1 compile)
-    PREFILL_MLA_SEQ_LEN  MLA sequence length (default 5120)
+The `service` variant BUILDS the (unused) H2D stream service before the loop — inputs are local random
+tensors, so the service's only effect is its per-op dispatch contention. NOT a correctness test (no PCC).
+
+Run under the device profiler + tracy via `kimi_perf_overnight/profile_mla_test.sh <noservice|service>
+[synced|pipelined]`, or directly (see that script's header). Random weights => NO weight cache / HF
+download needed, only the mesh. Env:
+    PREFILL_MLA_ITERS  warm iters (default 10; total passes = ITERS + 1 compile)
+    PREFILL_MLA_CHUNK  chunk size = MLA input length (default 5120)
+    PREFILL_MLA_KV     KV depth fed to chunked ring_mla; chunk-aligned (default 51200 -> logical_n 56320)
 """
 
 import gc
@@ -54,17 +60,28 @@ H2D_SERVICE_CHUNK = 5 * 1024  # service global tensor sized to one chunk (matche
 
 def run_mla_profile(config, weights, mesh_device, topology, build_service, run_mode):
     iters = int(os.environ.get("PREFILL_MLA_ITERS", "10"))
-    seq_len = int(os.environ.get("PREFILL_MLA_SEQ_LEN", str(5 * 1024)))
+    # CHUNKED PREFILL: the MLA input is ONE chunk (chunk tokens); the KV cache holds kv_actual + chunk,
+    # and kv_actual is the depth fed to the chunked ring_mla (SDPA reads logical_n = kv_actual + chunk
+    # from the cache). At kv_actual=0 the SDPA only sees the current chunk (small); a deep, chunk-aligned
+    # kv_actual exercises the long-KV chunked SDPA — the op we care about. Cache content is irrelevant
+    # to timing (no PCC, no preload); only the SIZE and kv_actual depth matter.
+    chunk = int(os.environ.get("PREFILL_MLA_CHUNK", str(5 * 1024)))
+    kv_actual = int(os.environ.get("PREFILL_MLA_KV", str(50 * 1024)))
     pipelined = run_mode == "pipelined"  # no synchronize_device between forwards, input pushed once
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
     sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
     assert (sp, tp) == (8, 4), f"this harness targets mesh-8x4, got {mesh_shape}"
-    config.max_seq_len = seq_len
+    assert chunk % sp == 0, f"chunk {chunk} must be divisible by sp {sp}"
+    assert kv_actual % chunk == 0, f"PREFILL_MLA_KV={kv_actual} must be chunk-aligned (multiple of {chunk})"
+    # KV-cache window: holds kv_actual + chunk, chunk-aligned, >= 2 chunks (ring_mla needs >= 2 slabs).
+    seq_len_cache = max(kv_actual + chunk, 2 * chunk)
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    config.max_seq_len = seq_len_cache
 
     logger.info(
-        f"[mla-profile] RANDOM weights; seq_len={seq_len} iters={iters} (+1 compile) "
+        f"[mla-profile] CHUNKED RANDOM weights; chunk={chunk} kv_actual={kv_actual} (logical_n="
+        f"{kv_actual + chunk}) cache={seq_len_cache} iters={iters} (+1 compile) "
         f"service={'YES' if build_service else 'no'} run_mode={run_mode} mesh={mesh_shape}"
     )
 
@@ -73,26 +90,30 @@ def run_mla_profile(config, weights, mesh_device, topology, build_service, run_m
         weights,
         mesh_device,
         layer_idx=0,
-        seq_len=seq_len,
+        seq_len=seq_len_cache,  # ttMLA seq_len = KV-cache window for the chunked path
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_balanced=False,
         topology=topology,
+        is_chunked=True,
+        slot_num=1,
+        layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
-    rope_tensors = rope_setup.get_rope_tensors(seq_len)
+    indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=chunk)
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
-        seq_len=seq_len,
+        seq_len=seq_len_cache,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        num_users=1,
     )
 
-    # Random input hidden states (sharded SP x TP). Content irrelevant to timing (no PCC).
+    # Random input hidden states for ONE chunk (sharded SP x TP). Content irrelevant to timing (no PCC).
     torch.manual_seed(42)
-    hidden_states = torch.randn(1, 1, seq_len, config.hidden_size).to(torch.bfloat16)
+    hidden_states = torch.randn(1, 1, chunk, config.hidden_size).to(torch.bfloat16)
     shard_dims = [None, None]
     shard_dims[tp_axis] = -1
     shard_dims[sp_axis] = -2
@@ -136,8 +157,10 @@ def run_mla_profile(config, weights, mesh_device, topology, build_service, run_m
         signpost(f"mla_run_{it}_start")
         tt_output = mla_tt.forward(
             hidden_states=tt_hidden_states,
-            rope_tensors=rope_tensors,
+            rope_tensors=indexed_rope,
             kvpe_cache=tt_kvpe_cache,
+            kv_actual_isl=kv_actual,
+            cache_user_id=0,
         )
         signpost(f"mla_run_{it}_end")
         if not pipelined:
@@ -156,7 +179,8 @@ def run_mla_profile(config, weights, mesh_device, topology, build_service, run_m
         ttnn.synchronize_device(mesh_device)
 
     logger.success(
-        f"[mla-profile] done: seq_len={seq_len} iters={iters} service={'YES' if build_service else 'no'}; "
+        f"[mla-profile] done: chunk={chunk} kv_actual={kv_actual} iters={iters} "
+        f"service={'YES' if build_service else 'no'} run_mode={run_mode}; "
         f"mla_forward={profiler.get('mla_forward') * 1000:.1f} ms total"
     )
 

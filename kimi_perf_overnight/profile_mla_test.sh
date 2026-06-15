@@ -11,12 +11,12 @@
 #                        each run's first-op op2op carries the inter-run sync/host-upload boundary).
 #   pipelined          : input pushed ONCE, NO synchronize between forwards -> back-to-back issue,
 #                        dispatcher runs ahead (true steady-state op2op, no boundary gap).
-# Env overrides: PREFILL_MLA_ITERS (default 10), PREFILL_MLA_SEQ_LEN (5120),
+# Env overrides: PREFILL_MLA_ITERS (default 10), PREFILL_MLA_CHUNK (5120), PREFILL_MLA_KV (51200),
 #                PSC (profiler program-support count, default 3000), PROFDIR (default /dev/shm/ttprofmla).
 #
 # Direct (no-script) equivalent:
 #   TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000 TT_METAL_PROFILER_DIR=/dev/shm/ttprofmla \
-#   KIMI_K2_6_HF_MODEL=/data/nbabin/Kimi-K2_6-dequantized PREFILL_MLA_ITERS=10 PREFILL_MLA_SEQ_LEN=5120 \
+#   KIMI_K2_6_HF_MODEL=/data/nbabin/Kimi-K2_6-dequantized PREFILL_MLA_ITERS=10 PREFILL_MLA_CHUNK=5120 PREFILL_MLA_KV=51200 \
 #   python -m tracy -r -p --disable-device-data-push-to-tracy -m pytest -svv \
 #     'models/demos/deepseek_v3_d_p/tests/test_mla_profile.py::test_kimi_mla_profile[blackhole-kimi-service-pipelined-mesh-8x4]'
 set -u
@@ -67,7 +67,8 @@ reap; purge_raw
   TT_DS_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill \
   TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/kimi-prefill-cache/golden \
   PREFILL_MLA_ITERS="${PREFILL_MLA_ITERS:-10}" \
-  PREFILL_MLA_SEQ_LEN="${PREFILL_MLA_SEQ_LEN:-5120}" \
+  PREFILL_MLA_CHUNK="${PREFILL_MLA_CHUNK:-5120}" \
+  PREFILL_MLA_KV="${PREFILL_MLA_KV:-51200}" \
   python -m tracy -r -p --disable-device-data-push-to-tracy -m pytest -svv \
     "models/demos/deepseek_v3_d_p/tests/test_mla_profile.py::test_kimi_mla_profile[${NODEID}]" \
 ) > "$INV/profile_${TAG}.runner.log" 2>&1
@@ -86,7 +87,7 @@ rep=$(ls "$latest"ops_perf_results_*.csv 2>/dev/null | head -1)
 if [ -n "$rep" ] && [ -f "$rep" ]; then
   cp -f "$rep" "$INV/ops_${TAG}.csv"; log "saved ops_${TAG}.csv ($(wc -l < "$INV/ops_${TAG}.csv") rows)"
   echo "------------------------------------------------------------" | tee -a "$LOG"
-  python3 "$INV/parse_runs.py" "$INV/ops_${TAG}.csv" "MLA $MODE/$RUNMODE (random weights, seq=${PREFILL_MLA_SEQ_LEN:-5120})" \
+  python3 "$INV/parse_runs.py" "$INV/ops_${TAG}.csv" "MLA $MODE/$RUNMODE (chunked, random weights, kv=${PREFILL_MLA_KV:-51200}+chunk)" \
     "$INV/mla_test_${MODE}_${RUNMODE}_log.new" 2>&1 | tee -a "$LOG"
   echo "------------------------------------------------------------" | tee -a "$LOG"
 else
