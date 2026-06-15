@@ -26,7 +26,7 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_speedup/boolq_training_example"
+EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/boolq"
 HOST_FILE="${EX_DIR}/configurations/local2/hosts.txt"
 RANK_BINDINGS_FILE="${EX_DIR}/configurations/local2/rank_bindings.yaml"
 SCRIPT="${EX_DIR}/boolq_training_example.py"
