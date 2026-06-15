@@ -30,8 +30,6 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
-#define HAS_TTNN
-#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
@@ -99,24 +97,18 @@ uint32_t get_input_channels_alignment(
     const std::optional<MemoryConfig>& input_memory_config) {
     if (!is_mm_conv && input_tensor_memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
         (input_tensor_layout == Layout::ROW_MAJOR || sliced_op)) {
-        py_log1_cout(input_memory_config);
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
-            py_log_here();
             // NOLINTNEXTLINE(bugprone-branch-clone)
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
-                py_log_here();
                 return tt::constants::TILE_WIDTH;
             }
             if (shard_width % 16 == 0) {
-                py_log_here();
                 return 16U;
             }
             if (shard_width % 8 == 0) {
-                py_log_here();
                 return 8U;
             }
-            py_log_here();
             return tt::constants::TILE_WIDTH;
         }
         // The minimum valid value for input channels alignment is 8.
@@ -125,10 +117,8 @@ uint32_t get_input_channels_alignment(
         // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
         // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
         // (Network on Chip) in a single, aligned operation.
-        py_log_here();
         return tt::tt_metal::hal::get_l1_alignment() / 2;
     }
-    py_log_here();
     return tt::constants::TILE_WIDTH;
 }
 
@@ -347,17 +337,13 @@ uint32_t get_num_cores_channels(
     auto grid_size = cores.bounding_box().grid_size();
     uint32_t num_cores_channels = 0;
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        py_log_here();
         num_cores_channels = 1;
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        py_log_here();
         num_cores_channels = cores.num_cores();
     } else if (shard_orientation == ShardOrientation::COL_MAJOR) {
-        py_log_here();
         num_cores_channels = grid_size.y;
     } else {
         TT_ASSERT(shard_orientation == ShardOrientation::ROW_MAJOR);
-        py_log_here();
         num_cores_channels = grid_size.x;
     }
     TT_ASSERT(num_cores_channels > 0);
@@ -384,12 +370,10 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     if (shard_scheme != TensorMemoryLayout::WIDTH_SHARDED) {
         nhw_padded = tt::round_up(nhw_shape, num_cores_nhw * tile_size);
     }
-    py_log_cout("num_cores_channels = {} channels = {}", num_cores_channels, channels);
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
-    py_log1_cout(shard_spec);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
@@ -625,7 +609,6 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     bool is_shard_width_tile_multiple) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
-    py_log1_cout(input_channels_alignment);
     ParallelConfig parallel_config;
     if (input_tensor_parallel_config.has_value()) {
         parallel_config = input_tensor_parallel_config.value();
@@ -658,18 +641,12 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     uint32_t input_tensor_width_snapped_to_channels_alignment =
         tt::round_up(input_tensor_shape[3], input_num_cores_c * input_channels_alignment);
 
-    py_log1_cout(input_tensor_width_snapped_to_channels_alignment);
-    py_log1_cout(input_tensor_height_snapped_to_tile);
-
     auto input_padded_shape =
         ttnn::Shape({1, 1, input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment});
-
-    py_log1_cout(input_padded_shape);
 
     MemoryConfig input_tensor_sharded_memory_config =
         create_sharded_memory_config_from_parallel_config(input_padded_shape, parallel_config, round_up_size);
 
-    py_log1_cout(input_tensor_sharded_memory_config);
     return {input_padded_shape, input_tensor_sharded_memory_config};
 };
 
@@ -701,7 +678,6 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
         shard_layout = conv_config.shard_layout.value();
     }
 
-    py_log_tensor(input_tensor_);
     const ttnn::MemoryConfig& input_memory_config = input_tensor_.memory_config();
     const tt::tt_metal::TensorMemoryLayout input_shard_scheme = input_memory_config.memory_layout();
     const uint32_t input_channels_alignment = get_input_channels_alignment(
@@ -922,9 +898,6 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 input_tensor = resharded_input_tensor;
             }
         } else {
-            py_log1_cout(input_tensor_sharded_memory_config);
-            py_log1_cout(input_tensor.tensor_spec());
-            py_log1_cout(input_tensor.host_tensor().tensor_spec());
             input_tensor = ttnn::to_device(
                 input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
         }
