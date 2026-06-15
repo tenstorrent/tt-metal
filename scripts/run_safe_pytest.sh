@@ -12,7 +12,7 @@
 #   Skips flock, device resets, and triage (these require real hardware).
 #   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--precompile] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -20,6 +20,9 @@
 #               on hang with full triage + watcher log dump.
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
+#   --precompile  Warm the JIT cache on the real device, in parallel, before the run, so kernels
+#               compile up-front instead of inline & serial. No env vars; always falls back to a
+#               cold run on any failure. Hardware only. --precompile-workers N (default: nproc).
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -30,11 +33,15 @@
 #   1 - Test failure (normal pytest failure, no hang)
 #   2 - Hang detected (dispatch timeout fired)
 #   3 - Setup error (missing args, etc.)
+#
+# Total runtime:
+#   SAFE_PYTEST_TOTAL_RUNTIME is printed last on every exit path — wall time from device-lock
+#   acquired (idle lock-wait excluded) to exit, covering reset + warmup + pytest. Sim: from start.
 
 set -o pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT=5
+DISPATCH_TIMEOUT="${SAFE_PYTEST_DISPATCH_TIMEOUT:-5}"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 LOCK_FILE="/tmp/tt-device.lock"
@@ -52,6 +59,8 @@ fi
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
+PRECOMPILE=false
+PRECOMPILE_WORKERS="${PRECOMPILE_WORKERS:-$(nproc 2>/dev/null || echo 8)}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -62,6 +71,16 @@ while [[ $# -gt 0 ]]; do
             FAIL_FAST=false
             shift
             ;;
+        --precompile)
+            # Warm the JIT cache (real device, parallel) before the real run. Internal only;
+            # always falls back to a cold run on failure (see precompile_warm). Hardware only.
+            PRECOMPILE=true
+            shift
+            ;;
+        --precompile-workers)
+            PRECOMPILE_WORKERS="$2"
+            shift 2
+            ;;
         *)
             break
             ;;
@@ -71,12 +90,62 @@ done
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--precompile] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
 TEST_PATH="$1"
 shift
+# Remaining args are extra pytest args — the precompile collect must use the SAME selection.
+EXTRA_ARGS=("$@")
+
+# Both the warmup and the real run inherit whatever TT_METAL_CACHE / ccache the user has (we never
+# override), so they share one cache and a pre-warmed one is reused.
+PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
+
+# Precompile (--precompile): warm the JIT cache on the SAME device the tests use (so the build_key
+# matches by construction), then let the normal run below hit it. Any failure degrades to a cold run.
+
+precompile_warm() {
+    [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
+    echo "PRECOMPILE: ===== warmup (collect + precompile, real device) =====" >&2
+    # Single-process by design: the heavy kernel COMPILE is parallelized in-process by
+    # up_front_compile's thread pool; xdist (-n) would only parallelize the cheap collect and
+    # measurably loses ~half the cache (concurrent writers + per-worker dedup). REAL_ALLOC gives real
+    # addresses so address-baked kernels (pool/move/conv) warm too. ccache state is inherited so it
+    # matches the real run — a mismatch would silently miss the cache.
+    local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
+    echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
+    t0=$(date +%s)
+    UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
+    LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
+        pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
+    cstatus=$?
+    t1=$(date +%s)
+    # A non-zero exit (collection error, plugin failure, OOM, pytest-5 "no tests") means nothing
+    # warmed -> say so; the real run still runs cold and correct, just without the speedup.
+    if [[ $cstatus -ne 0 ]]; then
+        echo "PRECOMPILE: ✗ warmup FAILED (pytest exit $cstatus) after $((t1-t0))s -> warmed NOTHING; running COLD." >&2
+        grep -iE "error|unrecognized|no tests ran|no tests collected" "$clog" 2>/dev/null | head -3 | sed 's/^/PRECOMPILE:   /' >&2
+        echo "PRECOMPILE:   (full collect log: $clog)" >&2
+        return 0
+    fi
+    echo "PRECOMPILE: ✓ warmup complete in $((t1-t0))s — the real run below reuses it. Log: $clog" >&2
+}
+
+# --- Total-run timer ---
+# EXIT trap so it always prints last on every path; the RUN_START guard suppresses it for exits
+# before testing begins (e.g. missing args).
+_print_total_runtime() {
+    [[ -z "${RUN_START:-}" ]] && return 0
+    local run_end elapsed
+    run_end=$(date +%s)
+    elapsed=$((run_end - RUN_START))
+    echo "========================================" >&2
+    printf 'SAFE_PYTEST_TOTAL_RUNTIME: %dm%02ds (%ds total, device-lock-acquired -> exit)\n' \
+        $((elapsed / 60)) $((elapsed % 60)) "$elapsed" >&2
+}
+trap _print_total_runtime EXIT
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
@@ -85,6 +154,9 @@ if [[ "$SIM_MODE" == false ]]; then
     echo "SAFE_PYTEST: Waiting for device lock..." >&2
     flock 9
     echo "SAFE_PYTEST: Device lock acquired" >&2
+
+    # Start the clock once we own the device; the idle lock-wait above is excluded.
+    RUN_START=$(date +%s)
 
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
@@ -96,6 +168,9 @@ if [[ "$SIM_MODE" == false ]]; then
         rm -f "$DIRTY_FLAG"
         echo "SAFE_PYTEST: Device reset complete" >&2
     fi
+else
+    # Simulator: no lock, so start the clock here.
+    RUN_START=$(date +%s)
 fi
 
 # --- Setup environment ---
@@ -106,6 +181,15 @@ if [[ -f python_env/bin/activate ]]; then
     fi
 else
     echo "SAFE_PYTEST: WARNING: python_env not found; using system Python" >&2
+fi
+
+# --- Precompile warm phase (opt-in, hardware only; never aborts the real run) ---
+if [[ "$PRECOMPILE" == true ]]; then
+    if [[ "$SIM_MODE" == true ]]; then
+        echo "PRECOMPILE: skipped under simulator (no warm benefit)" >&2
+    else
+        precompile_warm
+    fi
 fi
 
 # --- Hang detection setup (hardware only) ---
