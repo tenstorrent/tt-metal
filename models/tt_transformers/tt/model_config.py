@@ -3145,9 +3145,12 @@ class ModelArgs:
             self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.is_voxtral():
-            # Voxtral text decoder lives under language_model.* (a full LlamaForCausalLM); drop the
-            # audio tower + projector and unwrap to the plain text-decoder key layout so the standard
-            # text load path (standardize_hf_keys -> convert_hf_to_meta) handles it.
+            # Voxtral text decoder lives under language_model.* (a full LlamaForCausalLM). Stash the raw
+            # audio tower + projector weights (consumed by TtVoxtralAudioTower in the e2e model) and unwrap
+            # to the plain text-decoder key layout so the standard text load path handles the decoder.
+            self.voxtral_audio_state_dict = {
+                k: v for k, v in state_dict.items() if k.startswith(("audio_tower.", "multi_modal_projector."))
+            }
             state_dict = {
                 k[len("language_model.") :]: v for k, v in state_dict.items() if k.startswith("language_model.")
             }
