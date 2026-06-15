@@ -48,6 +48,11 @@ class TtDinoBackbone:
         self.eps = self.cfg.layer_norm_eps
         self.num_windows = self.cfg.num_windows
         self.nw2 = self.num_windows ** 2
+        # Backbone matmuls were running at default fidelity. LoFi = 1 fidelity phase
+        # (fastest) for the bf16 weight matmuls; gated on detection accuracy >= 98.5.
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
+        )
 
         self.layers = []
         for layer in wb.encoder.layer:
@@ -90,17 +95,17 @@ class TtDinoBackbone:
             b, s, c = x.shape
             x = ttnn.reshape(x, (b // self.nw2, self.nw2 * s, c))
         normed = ttnn.layer_norm(x, weight=p["norm1_w"], bias=p["norm1_b"], epsilon=self.eps)
-        qkv = ttnn.linear(normed, p["qkv_w"], bias=p["qkv_b"])
+        qkv = ttnn.linear(normed, p["qkv_w"], bias=p["qkv_b"], compute_kernel_config=self.compute_config)
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv, num_heads=self.num_heads, transpose_key=True
         )
-        scores = ttnn.matmul(q, k)
+        scores = ttnn.matmul(q, k, compute_kernel_config=self.compute_config)
         scores = ttnn.multiply(scores, self.head_dim ** -0.5)
         probs = ttnn.softmax(scores, dim=-1)
-        ctx = ttnn.matmul(probs, v)  # [b,h,s,d]
+        ctx = ttnn.matmul(probs, v, compute_kernel_config=self.compute_config)  # [b,h,s,d]
         ctx = ttnn.transformer.concatenate_heads(ctx)  # [b,s,384]
         ttnn.deallocate(qkv)
-        attn_out = ttnn.linear(ctx, p["proj_w"], bias=p["proj_b"])
+        attn_out = ttnn.linear(ctx, p["proj_w"], bias=p["proj_b"], compute_kernel_config=self.compute_config)
         if p["global"]:
             attn_out = ttnn.reshape(attn_out, (residual.shape[0], residual.shape[1], residual.shape[2]))
         attn_out = ttnn.multiply(attn_out, p["ls1"])
@@ -109,9 +114,9 @@ class TtDinoBackbone:
         # ---- mlp (norm2 -> fc1 -> gelu -> fc2 -> layerscale2 -> residual) ----
         residual = x
         h = ttnn.layer_norm(x, weight=p["norm2_w"], bias=p["norm2_b"], epsilon=self.eps)
-        h = ttnn.linear(h, p["fc1_w"], bias=p["fc1_b"])
+        h = ttnn.linear(h, p["fc1_w"], bias=p["fc1_b"], compute_kernel_config=self.compute_config)
         h = ttnn.gelu(h, fast_and_approximate_mode=False)
-        h = ttnn.linear(h, p["fc2_w"], bias=p["fc2_b"])
+        h = ttnn.linear(h, p["fc2_w"], bias=p["fc2_b"], compute_kernel_config=self.compute_config)
         h = ttnn.multiply(h, p["ls2"])
         x = ttnn.add(h, residual)
         return x
