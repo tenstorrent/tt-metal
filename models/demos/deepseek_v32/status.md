@@ -26,7 +26,7 @@ MLA layer.
 14. Scale bring-up order: small single-shot first (~4-8k tokens, cheap CPU reference); 50k cache + 5k chunk later as gating milestone with cached CPU outputs.
 15. Chunk size is a configurable test parameter, 1k for the dev loop (CPU truth fast enough for iteration); 5k once proper kernels (fused sparse attention) land. Same code path either way.
 
-## Status (updated 2026-06-11)
+## Status (updated 2026-06-15)
 
 ### ✅ Foundations (pre-port)
 - [x] CPU reference (reference_cpu) — MLA + Indexer, matches DeepSeek reference
@@ -82,13 +82,13 @@ MLA layer.
 | Stems wq_a/wkv_a + norms | input-sharded TP, RS/AG | = | = (SP just means fewer tokens/chip; TP RS/AG unchanged) |
 | wq_b/wkv_b heads | TP per-head, H/tp local | = | = |
 | MLA kvpe cache | SP-sharded seq, TP-replicated | sp=1 (no shard) | **= v3**: reuse init_kvpe_cache/fill/update, SP-shards at sp=2 |
-| Attention core | `ring_joint_sdpa` (ring over SP) | `ops.sparse_mla` (host) — Δ DSA needs index mask, no ring-SDPA mask hook (§3.3) | Δ host gather of full-T KVPE across SP, then local sparse attn |
+| Attention core | `ring_joint_sdpa` (ring over SP) | `ops.sparse_mla` → `ttnn.transformer.sparse_sdpa` **device op** (Step 6) — Δ DSA needs index mask, no ring-SDPA mask hook (§3.3) | Δ full-T KVPE gathered (replicated) per chip, then on-device sparse attn over q shard |
 | Indexer stems | n/a (no indexer in v3) | device, TP input-sharded + AG-reduce (backlog 6) | = TP; + SP |
 | Indexer K cache | n/a | host `_index_k_cache` flat | Δ keys are SP-local; gather across SP for scoring |
 | indexer_score+topk | n/a | device, full seq (sp=1) | Δ local-Q × full-T keys (after SP gather) → topk |
 | o_proj | row-parallel + RS | = | = |
 
-**The only thing 2x2 adds is SP communication on the key axis**, and v3 solves it with `ring_joint_sdpa`/`ring_mla` — which v3.2 can't use (no additive-mask hook for DSA, §3.3). So v3.2 substitutes **host SP-gathers** (functional, per "no ttnn op → CPU fallback"); device ring_sparse_attention is the documented follow-up (backlog 8/12).
+**The only thing 2x2 adds is SP communication on the key axis**, and v3 solves it with `ring_joint_sdpa`/`ring_mla` — which v3.2 can't use (no additive-mask hook for DSA, §3.3). v3.2 first substituted **host SP-gathers** (functional, per "no ttnn op → CPU fallback"); as of Step 6 (2026-06-15) the attention core is the `ttnn.transformer.sparse_sdpa` **device op** run SPMD per chip (no host SDPA). KVPE is still gathered full-T (replicated) rather than SP-ringed in-op — the fully-fused SP-ring sparse-attn (former backlog 12) remains the perf follow-up.
 
 **DECISION (2026-06-11, confirmed): replicate the indexer key cache, keep the MLA KVPE SP-sharded (v3).** Index key is tiny (single head, 128-wide) so full-T replication is cheap (~T·128·2B) and turns the read-time SP gather into a one-shot gather-at-write into the (host) cache — removes distributed-topk entirely. The big MLA KVPE latent stays SP-sharded per v3; sparse_mla gathers selected latents. Deviation from §3.6.1 (which SP-shards the index cache), justified for a functional port; documented per agreement 12.
 
@@ -103,11 +103,19 @@ MLA layer.
   **ROOT CAUSE (2026-06-11): the chunked KVPE cache is stored BLOCK-CYCLIC across SP** (update_padded_kv_cache distributes slabs over chips), not natural order. v3 handles it: ring_mla reads it in-op (native layout), and the v3 chunked test un-rotates with `blockcyclic_positions` (test_mla.py:741-748, `nat[p]=cache_sr`). My read fed block-cyclic latents to sparse_mla against natural-order indices → wrong selection (DSA chunks 0.73). **Does NOT repro in v3** — purely a v32 omission. Dense chunks passed because they use ring_mla.
   **FIX:** chunked `_dsa_forward` reads cache via `ConcatMesh2dToTensor(dims=(2,1))[:, :1]`, un-rotates with `blockcyclic_positions(sp, chunk_size_global, seq_len_cache)` (`deepseek_v3_d_p/tt/mla/utils.py:118`) → natural-order `kvpe_host[:end_pos]`. Indexer K-cache + single-shot unaffected (natural order already). Test kvpe diagnostic must also un-rotate when 2x2 chunked is re-enabled.
 
+### ✅ Step 6 — device sparse-attention op (2026-06-15, suite green; seq4k 1x4 sparse rows 0.990, out 0.9964)
+Merged `pjosipovic/sparse_mla_prefill_ref` → `ttnn.transformer.sparse_sdpa` (Blackhole sparse-MLA prefill kernel; PLAN/WORKLOG + torch ref `reference_cpu/sparse_sdpa_prefill.py`). **`ops.sparse_mla` is no longer a host fallback** — it's a thin wrapper over the op. This is the on-device sparse-attn path that was filed as backlog (8)/(12).
+- 🧩 Signature unchanged (drop-in body swap per ops.py contract) → `mla.py` untouched. Body: upload `kvpe_host`→replicated `[1,1,T,576]` device tensor; `q` TILE→ROW_MAJOR; SP-reshard `indices` to match q's seq shard (sp>1 only; sp=1 already aligned); pick a TOPK-dividing `k_chunk_size` (prod 2048→128); run op SPMD across SP×TP (each chip runs the single-chip kernel over its q shard → q's SP(seq)×TP(heads) distribution preserved end-to-end); output ROW_MAJOR→TILE for `wkv_b2`.
+- 🧩 **Masking is fully baked into `indices` via the 0xFFFFFFFF sentinel** (`indexer_score` -inf's future cols → `topk_indices` emits sentinel as a contiguous tail). The op does **no causal math**, so the old host fallback's `idx>q_pos` / `idx≥T` masks were redundant and were dropped; `start_pos` is now **vestigial** (signature parity only — matches the torch ref). Op preconditions met by the producer: per-chip H multiple of 32 (128 heads/tp=4=32), indices uint32, sentinels a contiguous tail, every row ≥1 valid key, all valid indices <T.
+- 🧪 Tests updated for the op contract: `test_ops_numerics::sparse_mla` h 8→128 (per-chip H≥32), PCC bar 0.999→0.99 (bf16 online-softmax); `test_ops_shapes::sparse_mla` indices→uint32. Validated on Blackhole: ops shapes+numerics (single-shot+chunked) green; `test_v32_mla_vs_cpu_reference[seq4k,1x4]` green (dense rows 0.998, **sparse rows 0.990**, out 0.9964, KVPE 0.9998).
+- ⚠️ **Perf debt (re-opens (9)):** the wrapper re-uploads `kvpe_host` to device, so the non-chunked path is again device→host (caller `_dsa_forward`) → host→device (op). Removing it needs a signature change to pass the already-replicated device KVPE tensor — follow-up. Chunked path genuinely needs the host hop (block-cyclic un-rotation).
+- ⚠️ 2x2 chunked still guarded to 1x4 (pre-existing 5.5 block-cyclic issue, unrelated to this op).
+
 ### CPU fallbacks (multichip) — running list
 | id | fallback | where | status / SP behavior |
 |---|---|---|---|
 | F-rope | non-interleaved RoPE on host (issue #4) | indexer pe slices | host; SP-agnostic (per-token) |
-| F-sparse | sparse_mla gather+SDPA on host (backlog 8) | `ops.sparse_mla` | host; **5.3 makes it SP-gather full-T KVPE** |
+| ~~F-sparse~~ | ~~sparse_mla gather+SDPA on host (backlog 8)~~ | `ops.sparse_mla` | **RESOLVED 2026-06-15 (Step 6): now `ttnn.transformer.sparse_sdpa` device op, no host SDPA** |
 | F-mla-prefix | MLA cache-slot prefix readback (backlog 9) | chunked `_dsa_forward` | host; reads slot — **5.3 gathers across SP** |
 | F-idx-key | indexer key SP-gather (new, 2x2) | `_indexer_topk` | **5.2**: host AG of index keys across SP for full-T scoring |
 
@@ -120,9 +128,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` open · ⏸️ postponed · 📌 re
 
 ### Recommended implementation order (open items, updated 2026-06-11)
 
-Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining open:
+Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (Step 6, 2026-06-15) — the host fallback retirement reasoning below is obsolete: `ttnn.transformer.sparse_sdpa` landed and `ops.sparse_mla` wraps it. **(12)** as originally scoped (per-query gather + SDPA + online-softmax, single chip) is now **delivered by that op**; what remains of (12) is the SP-ring + full device-residency (no host KVPE gather/re-upload). Remaining open:
 
-`18 → 14 → 13 → 16 → 19 → 3 → 12 → 15`
+`14 → 13 → 16 → 3 → 12(SP-ring/residency) → 15`
 
 | # | Item | Why here |
 |---|---|---|
@@ -132,10 +140,10 @@ Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining ope
 | 16 | multi-layer / multi-user cache | functional scope expansion toward the full model |
 | 19 | indexer key cache → device | perf; gated on device non-interleaved RoPE (**issue #4**) |
 | 3 ⏸️ | 50k scale gate | hardware-time gated; pre-cache truth on a big box |
-| 12 | **fused ring_sparse_attention** | the real on-device sparse-attn path (absorbs retired (8)); C++ kernel, out-of-scope follow-up |
+| 12 | **fused ring_sparse_attention** | per-query gather+SDPA **DONE** via `sparse_sdpa` (Step 6); only the SP-ring + full device-residency (drop host KVPE gather) remain — C++ follow-up |
 | 15 | decode path | beyond current prefill-only scope; largest expansion |
 
-**The MLA-layer milestone is essentially complete** (1x4+2x2, single-shot+chunked, random+pretrained). What remains is hygiene (18/14/13), scope expansion (16/15), and perf (19/12) — none blocking functional correctness.
+**The MLA-layer milestone is essentially complete** (1x4+2x2, single-shot+chunked, random+pretrained; sparse attention now a device op). What remains is hygiene (14/13), scope expansion (16/15), and perf (the SP-ring/residency tail of 12) — none blocking functional correctness.
 
 **Step 4 — chunked prefill**
 - [x] **(1)** MLACPU decode branch accepts intra-chunk causal mask (was mask=None → no within-chunk causality)
@@ -149,11 +157,11 @@ Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining ope
 - [x] 📌 **(7)** fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no matching fp8, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False
 
 **Host fallbacks → device ops (perf debt; contracts in tt/ops.py + Missing op APIs)**
-- [x] 📌 **(8)** sparse_mla gather+SDPA → device — **RETIRED 2026-06-11: don't compose it; host fallback stays the functional path, on-device path = fused (12).** Decision rationale:
+- [x] **(8)** sparse_mla gather+SDPA → device — **DONE 2026-06-15 via `ttnn.transformer.sparse_sdpa`** (merged `pjosipovic/sparse_mla_prefill_ref`; Step 6). The 2026-06-11 "RETIRED, don't compose it" decision below was correct *for a composed workaround* — the actual resolution is the fused C++ kernel (what (8) wanted all along, written directly rather than composed). `ops.sparse_mla` now wraps it; the host fallback is gone. Historical rationale kept for context:
   - A composed device version is *feasible* (query-tile to bound `sel=[Sq,k,576]`, ~9.6 GB full → ~0.6 GB at tile=256 via `ttnn.embedding` gather, verified), but **not worth it**: (a) no correctness gain (host fallback already PCC 0.997); (b) the real win is **fusion** (never materialize `sel`, stream over `k`) which a composed op *by definition cannot do*; (c) per-tile ROW_MAJOR↔TILE churn + many small batched matmuls over k=2048 may be net-slower than host; (d) perf is out of scope (spec §3, Approach §4).
   - SP only gives ~sp× (2×), already captured by query-sharding in (4). The order-of-magnitude relief is fusion, independent of SP — only the kernel delivers it. So there is **no composed workaround**; → folded into (12).
   - Probe kept as design input for (12): row-gather primitive = `ttnn.embedding` (weight [T,576] RM + flat idx → [Sq·k,576]); `ttnn.gather` needs prohibitive input expansion.
-- [x] **(9)** MLA cache-slot host readback — removed the device→host→device re-upload: `sparse_mla` now consumes the full-T KVPE **as host** (single-shot via SP all-gather→to_torch; chunked via v3 `kv_cache_to_host`). One download, no re-upload. (Full device-residency awaits (8).)
+- [~] **(9)** MLA cache-slot host readback — was DONE (host-resident KVPE, one download no re-upload), **partially re-opened 2026-06-15 by Step 6**: the `sparse_sdpa` op needs KVPE on device, so `ops.sparse_mla` now re-uploads `kvpe_host`→replicated device tensor. Non-chunked path is therefore device→host (caller all-gather→to_torch) → host→device (op) again. Fix = pass the already-replicated device KVPE tensor instead of `kvpe_host` (signature change; couples to the device-residency tail of (12)). Chunked path's host hop is irreducible (block-cyclic un-rotation).
 - [x] **(10)** ~~indexer host stems readback (full hidden concat per chunk)~~ — resolved by (6); only the pe-slice RoPE readback remains, folded into (6)'s F1 host-rope note (coupled to issue #4)
 - [x] **(19)** indexer key cache → device + on-device indexer RoPE — **DONE 2026-06-11. The indexer is now fully on-device: stems, RoPE, key cache, logits, topk — zero host.**
   - On-device RoPE: `_device_rope_pe` uses `rotary_embedding_hf` with precomputed device cos/sin (`_build_index_rope_tables`, halves-repeated, sliced per chunk to global positions). Replaces host `_host_rope_pe` — removes the q/k readbacks (the dominant indexer host transfer).
@@ -164,10 +172,10 @@ Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining ope
 **Fused C++ ops (out of scope per Approach §4, documented follow-ups)**
 - [x] **(11)** indexer_logits → **fused op landed 2026-06-12.** Merged `skrstic/dsa_indexer_score_op_2` (`ttnn.experimental.deepseek.indexer_score`) + `pjosipovic/topk_xl` (`ttnn.experimental.topk_large_indices`); `tt/ops.py` now wraps both instead of composing.
   - `indexer_score(q [1,Hi,Sq,D], k [1,1,T,D], weights [1,Hi,Sq,1], is_causal, chunk_start_idx)` → score [1,1,Sq,T] **bf16 ROW_MAJOR, causality FUSED** (future cols -inf from `chunk_start_idx`). So `_indexer_topk` dropped the host triu-mask add; `indexer_logits` permutes the `[1,1,Sq,Hi]` weights_proj output to the op's `[1,Hi,Sq,1]`.
-  - `topk_large_indices(logits, k)` (Blackhole-only) chains directly off the row-major bf16 score → ROW_MAJOR uint32 indices. k∈[16,2048], multiple of 16 (active path k=index_topk=2048). -inf columns survive as the **sentinel index 0xFFFFFFFF**; `sparse_mla` clamps the gather and drops them via its index>row_pos / index≥T mask (extends the line-200 per-row-length contract). bf16 (no fp8/Hadamard) still the contract.
+  - `topk_large_indices(logits, k)` (Blackhole-only) chains directly off the row-major bf16 score → ROW_MAJOR uint32 indices. k∈[16,2048], multiple of 16 (active path k=index_topk=2048). -inf columns survive as the **sentinel index 0xFFFFFFFF** (contiguous tail, descending sort). As of Step 6 the consumer is the `sparse_sdpa` device op, which masks those slots itself from the sentinel — `sparse_mla` no longer clamps/drops indices in Python (that host logic was removed). bf16 (no fp8/Hadamard) still the contract.
   - ✅ **topk_large_indices index-drop bug — DIAGNOSED then FIXED 2026-06-12.** Symptom: on inputs containing **+0.0** the op dropped genuine top-k indices and duplicated the window-base index 0. Isolation localized it to the LLK **index carry** (`_topk_xl_add_lsb_indices_`/compare-exchange), NOT the cross-window merge and NOT data movement — proven by: reproduces at minimal **1 row, n=k=512, single window** (merge never runs, output must be a permutation 0..511); 512 strictly-distinct shuffled values → perfect (not ordering); `ttnn.add(t,0)` bit-exact (not movement); all-equal/two-valued → perfect (the trigger is +0.0, which also ties). Repro `context/repro_topk_minimal.py` (BUG + negative control + torch/input self-check); writeup `context/BUG_topk_large_indices_dups.md`.
   - **Fix landed in `pjosipovic/topk_xl` (53144ada029 "Fix topk_large_indices zero tie indices"), merged here (f0067b3e91e).** Mechanism confirmed the diagnosis: the fused word packs the bf16 value in bits[31:16] and the index in bits[15:0]; for +0.0 that word is an FP32 **subnormal** which `SFPSWAP` canonicalizes back to +0.0, **erasing the index** → 0. Fix substitutes a tiny negative-normal surrogate for +0.0 internally (`_topk_xl_promote_positive_zero_for_fused_index_`). Rebuilt + verified: pjosipovic ties test PASSES; minimal repro 512/512 (was 506); **op dev suite 10/10 green incl. `test_topk_indices_match[k2048]`** (the former RED sentinel). The -inf→0xFFFFFFFF causal sentinel is a separate, still-valid feature; `sparse_mla`'s clamp + index≥T handling stays. (Prior to this, the 2026-06-12 force-push cd4ad317678 was a rebase + cosmetic cleanup that added the failing ties regression test but not the fix.)
-- [ ] **(12)** **fused `ring_sparse_attention`** — the on-device sparse-attn path (absorbs retired (8)). One kernel: per-query gather of k selected latents + SDPA + online-softmax (no `sel` materialization) + SP-ring over the latent cache + DSA causal/valid mask. Design inputs from (8) probe: gather via embedding-style row lookup; fusion is the win (vs ~9.6 GB `sel`); SP gives only ~2×. Siblings: v3 `ring_mla` (ring+latent), chunked SDPA plumbing. C++ kernel, out-of-scope follow-up.
+- [~] **(12)** **fused sparse attention** — single-chip core **DONE 2026-06-15: `ttnn.transformer.sparse_sdpa`** (merged `pjosipovic/sparse_mla_prefill_ref`). One kernel, per-query gather of k selected latents + flash/online-softmax SDPA (no `sel` materialization) + DSA mask baked into the 0xFFFFFFFF index sentinel; H any multiple of tile height, k_chunk-blocked over the key axis. Blackhole-only, fp32_dest_acc disabled. **Remaining:** SP-ring over the latent cache (today KVPE is gathered full-T / replicated per chip, not ringed) + full device-residency (drop the host KVPE gather+re-upload, see (9)). Siblings: v3 `ring_mla` (ring+latent). C++ follow-up.
 
 **Hygiene**
 - [ ] **(13)** upstream mla_class/block_class injection to v3 → delete the two copied files
@@ -185,7 +193,7 @@ Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining ope
 ## Issues
 1. ~~No fused indexing op in ttnn~~ RESOLVED 2026-06-12: `ttnn.experimental.deepseek.indexer_score` merged (fused causal mask, bf16; no fp8/Hadamard yet). tt/ops.py::indexer_logits now wraps it. See backlog (11).
 2. ~~ttnn.topk k=2048 untested~~ RESOLVED 2026-06-10 (worked at k=2048); SUPERSEDED 2026-06-12 by `ttnn.experimental.topk_large_indices` (Blackhole-only, ROW_MAJOR bf16 in, uint32 out, 0xFFFFFFFF sentinel for -inf). tt/ops.py::topk_indices wraps it.
-3. No sparse attention in ttnn — CPU fallback in tt/ops.py::sparse_mla carrying the agreed contract (TP-shard distribution, causality, start_pos); fused C++ op is follow-up. (Now sentinel-aware: clamps the gather + masks index≥T for topk's 0xFFFFFFFF.)
+3. ~~No sparse attention in ttnn — CPU fallback in tt/ops.py::sparse_mla~~ RESOLVED 2026-06-15: `ttnn.transformer.sparse_sdpa` merged (Blackhole sparse-MLA prefill; masking baked into the 0xFFFFFFFF index sentinel, no causal math in-op). tt/ops.py::sparse_mla now wraps it (signature unchanged; `start_pos` vestigial). See backlog (8)/(12) and Step 6.
 4. ~~Missing non-interleaved RoPE op~~ — **RESOLVED by investigation 2026-06-11: ttnn HAS native non-interleaved (rotate_half) RoPE ops.** No permutation wrapper and no kernel change needed (the earlier "bake P into the trans_mat" plan is moot).
    - **`ttnn.experimental.rotary_embedding_hf`** — dedicated HF-format (rotate_half) RoPE; caller-supplied cos/sin; `is_decode_mode` flag; TILE (decode also RM); head_dim 64 fits (two 32-tiles, split at 32). **Primary candidate.**
    - `ttnn.experimental.rotary_embedding` — also rotate_half, caller cos/sin, `token_index` for decode. Secondary.
@@ -201,7 +209,7 @@ ttnn-shaped equivalents of the fused references (DeepGEMM fp8_mqa_logits, FlashM
 
 1. `indexer_logits(q, k, w) -> logits` — q [1,B,Sq,H_idx*D_idx] (H=64, D=128), k [1,B,Skv,D_idx], w [1,B,Sq,H_idx] (fp32 weights_proj out). Out [1,B,Sq,Skv] bf16 (fp8 inputs later). Causal window per row (DeepGEMM ks/ke), no materialized mask. Workaround: per-head matmul + ReLU + weighted head-sum + causal mask add. CPU fallback for non-interleaved rope (F1).
 2. `topk_indices(logits, k=2048) -> indices` — TILE in (corrected agreement 4), out [1,B,Sq,k] uint32, padded with last valid where Skv<k. Workaround: ttnn.topk; host fallback. K cache format untouched (agreement 3).
-3. `sparse_mla(q, kvpe_cache, indices, scale) -> out` — q [1,H,Sq,576] absorbed; kvpe [1,1,Skv,576]; indices [1,B,Sq,2048]; out [1,H,Sq,512]; indices replace causal mask (FlashMLA contract). Workaround: gather (embedding-style) + chunked dense SDPA; stub: dense ring MLA (valid Sq≤2048). **API learning (e2e seq4k, PCC 0.20→fixed):** rows with <k causal keys receive arbitrary future indices from topk's -inf band and scores are recomputed from latents, so the op itself must drop index > row_pos (FlashMLA solves via per-row topk_length; fused op must too). Chunked prefill needs the start_pos offset here.
+3. `sparse_mla(q, kvpe_cache, indices, scale) -> out` — q [1,H,Sq,576] absorbed; kvpe [1,1,Skv,576]; indices [1,B,Sq,2048]; out [1,H,Sq,512]; indices replace causal mask (FlashMLA contract). **DELIVERED 2026-06-15 as `ttnn.transformer.sparse_sdpa(q, kv, indices, v_dim, scale, k_chunk_size)`** (ROW_MAJOR bf16/bf16/uint32 in, ROW_MAJOR bf16 out; per-chip H multiple of 32; k_chunk_size multiple of 32 dividing TOPK). **API learning (e2e seq4k, PCC 0.20→fixed):** rows with <k causal keys receive arbitrary future indices from topk's -inf band. **Resolution in the shipped op:** masking is the producer's job — `indexer_score` -inf's future cols and `topk_indices` emits the 0xFFFFFFFF sentinel (contiguous tail); the op masks those, does **no** position/causal math, and **ignores `start_pos`** (the old host fallback's index>row_pos drop is gone, was redundant). Producer preconditions: sentinels a contiguous tail, every row ≥1 valid key, valid indices <T.
 
 Shape tests are the first deliverable per op; numerics vs reference_cpu after.
 
@@ -231,7 +239,7 @@ The inner cycle = edit → run **one targeted test** → read PCC. Measured this
 | **targeted single case** | **~1–2 min** | **the dev-loop unit — iterate here** |
 | full suite (both meshes, all seqs) | ~10–15 min | commit gate, not per-edit |
 | pre-commit hooks (black/isort/EOF) | ~20–40 s, often 2× (reformat → re-commit) | keep index clean; expect one reformat re-run |
-| ttnn rebuild (after rebase/pull) | ~3 min | `ninja -C build ttnn`; copy `build/ttnn/_ttnn.so` |
+| ttnn rebuild (after rebase/pull or new C++ op) | ~1–3 min | **`./build_metal.sh`** — its `Install the project…` step refreshes the imported `ttnn/ttnn/_ttnn.so`. `cmake --build build --target ttnn` alone only updates `build_Release/ttnn/_ttnn.so` (NOT the source-tree copy Python loads) → new ops stay invisible |
 
 **Levers, in priority:** (1) cache CPU truth aggressively [done] + pre-cache 50k once; (2) iterate on ONE case (~1–2 min), suite only as gate; (3) keep the band/per-chunk PCC diagnostics — they cost ~nothing and localize bugs fast (they caught the head-shard + block-cyclic bugs); (4) untapped: session-scoped mesh to amortize the ~5–9s × N setup (couples to v3 conftest — defer).
 
@@ -242,7 +250,7 @@ Track every step that takes minutes — each is either a bug risk (silent hangs,
 |---|---|---|---|
 | First e2e MLA test run (mesh init + fabric + weight upload, no output until end) | every fresh pytest | measured: 472s seq2k (cold CPU ref incl.), ~40s seq256 | pytest -s for live progress; track time per stage; weight cache reuses v3 build_ttnn_cache |
 | CPU reference forward (uncached) | per (tag, seq, seed); 128 heads + 64-head indexer | measured: ~7 min seq2k, 48 min seq4k — quadratic; 50k+5k infeasible cold | disk cache /tmp/deepseek_v32_mla_ref_cache (env DEEPSEEK_V32_MLA_REF_CACHE) — keep tag/seed stable; 50k+5k truth must be cached once on a big box |
-| ttnn incremental rebuild after .so staleness | after rebase/pull | ~3 min observed | rebuild ninja -C build ttnn (target is "ttnn", not "_ttnn"); fresh lib lands in build/ttnn/_ttnn.so |
+| ttnn incremental rebuild after .so staleness / new C++ op | after rebase/pull or merging an op | ~1–3 min observed | run `./build_metal.sh` (Release/ninja) — the build target "ttnn" compiles+links into `build_Release/ttnn/_ttnn.so` but does NOT install; Python imports `ttnn/ttnn/_ttnn.so`, refreshed only by build_metal.sh's install step (or a manual copy). Symptom of skipping it: `AttributeError` on the new op |
 | HF config-only download | first run / new variant | seconds-min, network | already cached by v3 conftest |
 | Pre-commit hooks (isort/black, EOF fixer) | every commit | tens of sec | don't partial-stage — keep index clean or hooks loop on fix-rollback |
 
