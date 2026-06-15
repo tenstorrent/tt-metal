@@ -20,6 +20,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     MATH_TRANSPOSE_FACES,
+    NEEDS_INT_FPU,
     NUM_FACES,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -217,10 +218,17 @@ def transpose_dest_int8(
     else:
         golden_tensor = []
 
+    input_format_value = TestConfig.DATA_FORMAT_ENUM[formats.input_format]
+    int8_format_value = TestConfig.DATA_FORMAT_ENUM[DataFormat.Int8]
+    needs_int_fpu = (input_format_value & 0xF) == (int8_format_value & 0xF)
+
     configuration = TestConfig(
         "sources/transpose_wh_int8_test.cpp",
         formats,
-        templates=[MATH_TRANSPOSE_FACES(math_transpose_faces)],
+        templates=[
+            MATH_TRANSPOSE_FACES(math_transpose_faces),
+            NEEDS_INT_FPU(needs_int_fpu),
+        ],
         runtimes=[
             # The kernel hard-codes transpose_of_faces=1 (the haloize path); this
             # param is currently unused by transpose_wh_int8_test.cpp but is set to
