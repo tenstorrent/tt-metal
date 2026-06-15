@@ -174,12 +174,19 @@ def send_activation(runtime: TtPrefillRuntime, activation: ttnn.Tensor, subctx: 
     if _transport_mode() == "placeholder":
         ttnn.deallocate(activation)
         return
+    t0 = time.perf_counter()
     host = _gather_activation_to_host(runtime.mesh_device, activation)
     final = _act_path(subctx, chunk_idx, rank)
     tmp = f"{final}.tmp.{rank}"  # same dir -> rename is atomic on the target FS
     torch.save(host, tmp)
     os.rename(tmp, final)
     ttnn.deallocate(activation)
+    nbytes = host.element_size() * host.nelement()
+    logger.info(
+        f"[pp rank {rank}] SEND chunk={chunk_idx} -> {final} "
+        f"shape={tuple(host.shape)} dtype={host.dtype} bytes={nbytes} "
+        f"gather+write={(time.perf_counter() - t0) * 1000.0:.1f}ms"
+    )
 
 
 def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, producer_rank: int) -> ttnn.Tensor:
@@ -188,14 +195,14 @@ def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, prod
 
     The producer's rename is barrier-ordered before this read, but NFS can briefly serve a stale
     negative dentry, so retry the open a bounded number of times before giving up."""
-    import time as _time
-
     import torch
 
     if _transport_mode() == "placeholder":
         return runtime.make_placeholder_activation()
     path = _act_path(subctx, chunk_idx, producer_rank)
     attempts = int(os.environ.get("PREFILL_PP_RECV_RETRIES", "50"))
+    t0 = time.perf_counter()
+    waits = 0
     for attempt in range(attempts):
         try:
             host = torch.load(path)
@@ -203,9 +210,17 @@ def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, prod
         except FileNotFoundError:
             if attempt == attempts - 1:
                 raise
-            _time.sleep(0.1)  # absorb NFS negative-dentry cache; barrier already ordered the write
+            waits += 1  # file from the other host not visible yet -> cross-host propagation in flight
+            time.sleep(0.1)  # absorb NFS negative-dentry cache; barrier already ordered the write
     os.unlink(path)
-    return _reshard_activation_to_device(runtime.mesh_device, host, runtime.config.mesh_shape)
+    out = _reshard_activation_to_device(runtime.mesh_device, host, runtime.config.mesh_shape)
+    nbytes = host.element_size() * host.nelement()
+    logger.info(
+        f"[pp] RECV chunk={chunk_idx} <- {path} (from rank {producer_rank}) "
+        f"shape={tuple(host.shape)} bytes={nbytes} waits={waits} "
+        f"read+reshard={(time.perf_counter() - t0) * 1000.0:.1f}ms"
+    )
+    return out
 
 
 def _transport_mode() -> str:
