@@ -359,25 +359,32 @@ inline void _llk_pack_hw_configure_(
 }
 
 /**
- * @brief Initialize the packer (addrmod + MOP + strides) for a pack op.
+ * @brief Initialize the packer (addrmod + MOP) for a pack op.
  *
- * Programs the ADDR_MODs, the MOP template, and the packer L1 strides, then sets the final ADC X
- * counter. The skip_* template flags let a caller reuse state already established by a prior init or
- * hw-configure.
+ * Programs the ADDR_MODs, the MOP template, and the packer X (datum) counter. The skip_* template flags
+ * let a caller reuse state already established by a prior init or hw-configure.
  *
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  * @tparam zero_output: When true, packer emits zeros instead of dest data.
  * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
- * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @tparam skip_packer_strides: Deprecated no-op kept for API/ABI symmetry. Init no longer programs the
+ *         packer strides / L1 offset (those are owned by @ref configure_pack / @ref reconfig_packer_data_format),
+ *         so this flag has no effect; retained because existing callers (e.g. SDPA `compute_streaming.hpp`)
+ *         and shared tests still pass it.
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param num_tiles: Number of tiles processed per MOP run.
+ * @note Init programs ADDR_MOD + MOP + the packer X (datum) counter. The X counter is pack_mode-dependent
+ *       (Untilize packs a single face row, Default a full face), so it is per-op state owned here; the
+ *       format-level state (packer strides, L1 offset) is owned by @ref configure_pack
+ *       (@ref _llk_pack_hw_configure_) and @ref reconfig_packer_data_format
+ *       (@ref _llk_pack_reconfig_data_format_), one of which must run before this init.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  */
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, [[maybe_unused]] bool skip_packer_strides = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -395,10 +402,10 @@ inline void _llk_pack_init_(
     }
     _llk_pack_mop_config_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 
-    if constexpr (!skip_packer_strides)
-    {
-        set_packer_l1_offset(pack_dst_format, face_r_dim);
-    }
+    // Program the packer X (datum) counter. This value is pack_mode-dependent (Untilize packs a single
+    // face row, Default packs a full face), so it is per-op state that must be (re)established by init
+    // for the geometry/mode of this pack. configure_pack / reconfig_packer_data_format only ever run in
+    // PackMode::Default, so they cannot establish the Untilize value — init owns this counter.
     const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
     const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
