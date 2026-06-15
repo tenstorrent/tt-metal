@@ -70,16 +70,7 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-DEFAULT_HOST_REF_CACHE = "/tmp/prefill_ref_cache"
-
-# Default the variant's TTNN-cache env so resolve_weight_cache_path works
-# without the caller exporting anything. TtPrefillTransformer additionally
-# *guards* on TT_DS_PREFILL_{TTNN,HOST_REF}_CACHE being set (it only validates
-# they're non-None — the real weights come from `weight_cache_path`), so seed
-# those too. For DeepSeek the variant env IS TT_DS_PREFILL_TTNN_CACHE.
 os.environ.setdefault(VARIANT.ttnn_cache_env, VARIANT.ttnn_cache_default)
-os.environ.setdefault("TT_DS_PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)
-os.environ.setdefault("TT_DS_PREFILL_HOST_REF_CACHE", DEFAULT_HOST_REF_CACHE)
 
 
 def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:

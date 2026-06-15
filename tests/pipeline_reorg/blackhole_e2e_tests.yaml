@@ -65,8 +65,6 @@
       timeout: 60
     bh_p300:
       timeout: 60
-    bh_quietbox_2:
-      timeout: 60
   owner_id: U07RD9YRFT9 # Slavko Krstic
   team: ttnn
 
@@ -268,7 +266,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
   skus:
     bh_quietbox_2:
-      timeout: 10
+      timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 

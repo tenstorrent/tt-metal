@@ -61,6 +61,14 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
+inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+    uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
+    if (kernel_size == 0) {
+        return;
+    }
+    invalidate_l2_cache_range(kernel_lma, kernel_size);
+}
+
 void set_deassert_addresses() {
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
@@ -316,8 +324,8 @@ extern "C" uint32_t _start1() {
                     uintptr_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     // Invalidate the i$ now the kernels have loaded and before running
+                    invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
                     invalidate_l1_icache();
-                    uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);
                 } else {
@@ -391,7 +399,8 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
         int index = hartid;
 
-        uintptr_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+        uintptr_t kernel_lma =
+            kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
@@ -407,6 +416,7 @@ extern "C" uint32_t _start1() {
             asm("nop; nop; nop; nop; nop");
         }
         // Invalidate the i$ now the kernels have loaded and before running
+        invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
         invalidate_l1_icache();
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 

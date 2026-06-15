@@ -29,7 +29,9 @@ namespace {
 
 void validate_ring_joint_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& operation_attributes,
-    const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args) {
+    const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args,
+    // Single-slot gather writes one cache slot to gathered slot 0, so allow a batch-1 output.
+    bool allow_single_slot_output) {
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
@@ -106,6 +108,14 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
                         output_shape[d],
                         expected_output_shape[d],
                         operation_attributes.ring_size);
+                } else if (allow_single_slot_output && d == 0) {
+                    // Single-slot gather targets gathered slot 0: batch-1 expected, full-batch also ok.
+                    TT_FATAL(
+                        output_shape[d] == 1 || output_shape[d] == expected_output_shape[d],
+                        "Output tensor {} batch dim must be 1 (single-slot gather) or {}: got {}",
+                        i,
+                        expected_output_shape[d],
+                        output_shape[d]);
                 } else {
                     TT_FATAL(
                         output_shape[d] == expected_output_shape[d],
@@ -209,7 +219,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     validate_ring_joint_all_gather_on_program_cache_miss(
-        args.all_gather_operation_attributes, args.all_gather_tensor_args);
+        args.all_gather_operation_attributes, args.all_gather_tensor_args, args.has_indexed_kv_cache());
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -389,16 +399,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "mode requires Q batch size 1. Got Q batch size {}",
             B);
         // kv_cache_batch_idx bounds are value checks → validate_runtime_patched_scalars (runs on hits too).
+        // Single-slot gather writes cache slot kv_cache_batch_idx to gathered slot 0: a batch-1 buffer
+        // is the efficient shape; a full-batch buffer is also accepted (only slot 0 is used).
         TT_FATAL(
-            k_shape[0] == K_cache_batch,
-            "Gathered K cache batch must match input K cache batch. Got gathered K: {}, input K: {}",
-            k_shape[0],
-            K_cache_batch);
+            k_shape[0] == 1 || k_shape[0] == K_cache_batch,
+            "Gathered K batch must be 1 (single-slot gather) or match input K cache batch {}. Got gathered K: {}",
+            K_cache_batch,
+            k_shape[0]);
         TT_FATAL(
-            v_shape[0] == V_cache_batch,
-            "Gathered V cache batch must match input V cache batch. Got gathered V: {}, input V: {}",
-            v_shape[0],
-            V_cache_batch);
+            v_shape[0] == 1 || v_shape[0] == V_cache_batch,
+            "Gathered V batch must be 1 (single-slot gather) or match input V cache batch {}. Got gathered V: {}",
+            V_cache_batch,
+            v_shape[0]);
     } else {
         TT_FATAL(k_shape[0] == B, "K batch size must match Q. Got Q: {}, K: {}", B, k_shape[0]);
         TT_FATAL(v_shape[0] == B, "V batch size must match Q. Got Q: {}, V: {}", B, v_shape[0]);
