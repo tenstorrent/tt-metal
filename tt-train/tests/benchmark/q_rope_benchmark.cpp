@@ -22,6 +22,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "benchmark_utils.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/rope_op.hpp"
@@ -127,7 +128,13 @@ ttnn::Tensor composite_q_rope_fw(
         q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, qk_nope_dim}, ttsl::SmallVector<uint32_t>{B, H, S, qk_head}, step);
 
     auto q_pe_rot = ttnn::experimental::rotary_embedding_llama(
-        q_pe, params.cos_cache, params.sin_cache, params.trans_mat, /*is_decode_mode=*/false);
+        q_pe,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        ttml::core::ComputeKernelConfig::precise());
 
     return ttnn::concat(std::vector<ttnn::Tensor>{q_nope, q_pe_rot}, /*dim=*/3);
 }
@@ -276,7 +283,9 @@ int main(int argc, char** argv) {
             "measure={}\n",
             g_sweep_cfg.num_warmup,
             g_sweep_cfg.num_measure);
-        fmt::print("Composite: slice + rotary_embedding_llama + concat.\n");
+        fmt::print(
+            "Composite: slice + rotary_embedding_llama (ComputeKernelConfig::precise) + concat.\n"
+            "Fused: q_rope_fw with fp32_dest_acc_en=true.\n");
 
         benchmark::RegisterBenchmark("QRope", BM_QRope)
             ->DenseRange(0, static_cast<int>(g_cases.size()) - 1, 1)

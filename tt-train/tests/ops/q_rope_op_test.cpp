@@ -128,9 +128,16 @@ TEST_P(QRopeParamTest, FusedMatchesReference) {
     auto q_in = make_bf16_4d(shape.batch, shape.n_heads, shape.seq_len, qk_head, /*seed=*/7U);
     auto params = build_params(shape.seq_len, shape.qk_rope_dim);
 
+    const bool fp32_dest_acc_en = shape.qk_rope_dim <= 128U;
     const auto fused = ttml::metal::q_rope_fw(
-        q_in, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
-    const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
+        q_in,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim,
+        fp32_dest_acc_en);
+    const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim, fp32_dest_acc_en);
 
     expect_q_rope_matches_reference(fused, ref, shape, /*label_prefix=*/"");
 }
