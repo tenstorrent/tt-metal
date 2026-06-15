@@ -31,7 +31,38 @@ from models.experimental.locate_anything.tt.model_la import LATransformer
 from models.experimental.locate_anything.tt.vision import MoonViT
 from models.tt_transformers.tt.common import Mode, sample_host
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    ModelArgs,
+    ModelOptimizations,
+    OpGroup,
+)
+
+
+def _select_optimizations(model_args):
+    """LA_PREC selects the decoder precision preset (all keep BFP8 MLP for >=99% PCC):
+    accuracy  (default): BF16 attention (WQKV/WO/KV) + HiFi4  -> highest accuracy
+    bfp8attn:            all-BFP8 weights + KV  + HiFi4 attn  -> less bandwidth, faster
+    """
+    prec = os.environ.get("LA_PREC", "accuracy")
+    if prec == "bfp8attn":
+        hifi4 = MathFidelitySetting.HIFI4
+        mo = ModelOptimizations(
+            {
+                "OpFidelity": {
+                    OpGroup.LI_QKV_DECODE: hifi4,
+                    OpGroup.LI_QKV_PREFILL: hifi4,
+                    OpGroup.SDPA_DECODE: hifi4,
+                    OpGroup.SDPA_PREFILL: hifi4,
+                    OpGroup.LI_O_DECODE: hifi4,
+                    OpGroup.LI_O_PREFILL: hifi4,
+                }
+            }
+        )
+        return DecodersPrecision(model_args.n_layers, model_args.model_name, mo)
+    return DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name)
+
 
 # LocateAnything special token ids (from the extracted HF config).
 IMAGE_TOKEN_INDEX = 151665
@@ -124,8 +155,8 @@ def _peak_dram_bytes(mesh_device):
     # accuracy preset = BF16 attention + BFP8 MLP weights (>=99% prefill PCC).
     # Decode w1/w3 outputs are forced to BFP8 in mlp.py so the BFP8 weight-stream
     # CB fits L1 at decode on a single p150a.
-    [lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name)],
-    ids=["accuracy"],
+    [_select_optimizations],
+    ids=["prec"],
 )
 @pytest.mark.parametrize(
     "device_params",
