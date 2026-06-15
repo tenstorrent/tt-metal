@@ -13,6 +13,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
     create_gate_weights,
@@ -87,6 +89,15 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
 
 
 @pytest.mark.parametrize(
+    "model_cfg",
+    [
+        pytest.param(DeepSeekV3Config, id="deepseek_v3"),
+        # Kimi K2.6 gate: 384 experts, single group (n_group=1, topk_group=1), route_scale 2.827.
+        # from_model_cfg pulls these off the config class; only config.dim is mesh-scaled afterwards.
+        pytest.param(KimiK26Config, id="kimi_k2_6"),
+    ],
+)
+@pytest.mark.parametrize(
     "gate_fallback_mode",
     [GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32],
 )
@@ -145,12 +156,13 @@ def test_forward_pass(
     num_links,
     topology,
     gate_fallback_mode,
+    model_cfg,
 ):
     random.seed(42)
     torch.manual_seed(42)
 
     # Create reference gate
-    config = TtMoEGateConfig()
+    config = TtMoEGateConfig.from_model_cfg(model_cfg)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
@@ -167,7 +179,10 @@ def test_forward_pass(
     )
     reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=True)
 
-    gate_w = _try_load_real_gate_weights(config.n_routed_experts, config.dim)
+    # Published gate weights exist only for DeepSeek-V3's 256-expert layout; Kimi's 384 experts
+    # have none, so fall back to matched random weights. The test compares the TT gate against the
+    # torch reference fed the same weights, so random weights still validate the computation.
+    gate_w = None if model_cfg is KimiK26Config else _try_load_real_gate_weights(config.n_routed_experts, config.dim)
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
     reference_model.weight.data = gate_w["weight"]

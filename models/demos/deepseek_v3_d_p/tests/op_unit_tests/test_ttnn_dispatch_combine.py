@@ -16,6 +16,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -50,9 +51,28 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
-        (3200, 7168, 64, 2, 2),
+        pytest.param(3200, 7168, 64, 2, 2, id="3200-avg"),
+        # Kimi K2.6 MoE shape: emb 7168, 384 routed experts, top-8. seq 3200 ≈ 25k and 640 ≈ 5k
+        # tokens per 8-chip SP group. The round-trip reconstructs the input, so the buffer must
+        # hold every token: capacity_factor=8=num_experts_per_tok is the full worst case (all of a
+        # token's top-8 picks landing on one chip), which is what makes the reconstruction exact.
+        pytest.param(
+            3200,
+            KimiK26Config.EMB_SIZE,
+            KimiK26Config.NUM_ROUTED_EXPERTS,
+            KimiK26Config.NUM_EXPERTS_PER_TOKEN,
+            8,
+            id="kimi-25k",
+        ),
+        pytest.param(
+            640,
+            KimiK26Config.EMB_SIZE,
+            KimiK26Config.NUM_ROUTED_EXPERTS,
+            KimiK26Config.NUM_EXPERTS_PER_TOKEN,
+            8,
+            id="kimi-5k",
+        ),
     ],
-    ids=["3200-avg"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",

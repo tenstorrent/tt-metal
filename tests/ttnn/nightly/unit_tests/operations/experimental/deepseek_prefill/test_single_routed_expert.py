@@ -22,6 +22,8 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 @pytest.mark.parametrize(
     "num_tokens, emb_dim, hidden_dim",
+    # emb 7168 / MoE hidden 2048 are identical for DeepSeek-V3 and Kimi K2.6, so this single-expert
+    # FFN token sweep already covers Kimi's routed-expert shape; only the token count varies.
     [
         (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
         (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens

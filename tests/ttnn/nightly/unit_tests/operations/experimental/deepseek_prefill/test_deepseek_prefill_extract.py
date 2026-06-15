@@ -14,6 +14,7 @@ import pytest
 import torch
 import ttnn
 
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -394,7 +395,9 @@ def test_extract_2d_indices_matches_torch_slice(device):
 
 K = 1024
 STRESS_GLOBAL_ROWS = 2 * 25 * K  # 51200
-STRESS_HIDDEN_DIM = 7 * K  # 7168
+# Kimi K2.6 embedding width (7168 — same as DeepSeek-V3), so the stress test exercises extract
+# at the real per-token row width of the largest issue model.
+STRESS_HIDDEN_DIM = KimiK26Config.EMB_SIZE  # 7168
 STRESS_MAX_TOKENS = 25 * K  # 25600
 
 

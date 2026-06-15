@@ -16,6 +16,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -48,6 +49,36 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     [
         pytest.param(128, 7 * 1024, 16, 4, 4, True, id="pcc"),
         pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
+        # Kimi K2.6 MoE shape: emb 7168, 384 routed experts, top-8. seq 3200 ≈ 25k tokens
+        # and 640 ≈ 5k tokens per 8-chip SP group. capacity_factor=8=num_experts_per_tok is the
+        # full worst case (every top-8 pick of a token can target one chip's experts), so no
+        # token is silently dropped — required for a trustworthy PCC check. Independent of expert
+        # count, so 384 reuses the same factor as the 256-expert models. A 64-expert proxy gives
+        # the same routing at a fraction of the device-side FFN cost.
+        pytest.param(
+            3200,
+            KimiK26Config.EMB_SIZE,
+            KimiK26Config.NUM_ROUTED_EXPERTS,
+            KimiK26Config.NUM_EXPERTS_PER_TOKEN,
+            8,
+            True,
+            id="kimi-25k",
+        ),
+        pytest.param(
+            640,
+            KimiK26Config.EMB_SIZE,
+            KimiK26Config.NUM_ROUTED_EXPERTS,
+            KimiK26Config.NUM_EXPERTS_PER_TOKEN,
+            8,
+            True,
+            id="kimi-5k",
+        ),
+        pytest.param(
+            3200, KimiK26Config.EMB_SIZE, 64, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 8, True, id="kimi-25k-64experts"
+        ),
+        pytest.param(
+            640, KimiK26Config.EMB_SIZE, 64, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 8, True, id="kimi-5k-64experts"
+        ),
     ],
 )
 @pytest.mark.parametrize(

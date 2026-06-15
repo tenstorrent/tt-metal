@@ -15,6 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.tt_transformers.tt.ccl import get_num_links
@@ -24,8 +25,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim",
     [
-        (4096, 7 * 1024, 2 * 1024),
-        (3200, 7 * 1024, 2 * 1024),
+        # emb 7168 and shared-expert hidden 2048 (n_shared=1 × moe_intermediate 2048) are identical
+        # for DeepSeek-V3 and Kimi K2.6, so both rows already exercise Kimi's shared-expert shape.
+        (4096, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE),
+        (3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE),
     ],
     ids=["4K", "3.2K"],
 )

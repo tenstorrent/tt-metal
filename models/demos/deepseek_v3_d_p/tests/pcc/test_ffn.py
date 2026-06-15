@@ -59,6 +59,9 @@ def test_ffn_pcc(
         - hidden_dim: 18432
         - activations: bfloat16
         - weights bfloat8_b (explore bfp4 in future)
+
+    These are the dense (non-MoE) FFN dims; Kimi K2.6 shares them exactly (EMB_SIZE 7168,
+    INTERMEDIATE_SIZE 18432), so this test already covers Kimi's dense-layer FFN.
     """
 
     activations_dtype = ttnn.bfloat16

@@ -18,6 +18,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -104,9 +105,14 @@ def run_torch_routed_experts(
         # fmt: off
         (320, 1024, 512, 64, 2, 9, True),
         (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False),
+        # Kimi K2.6: emb 7168, MoE hidden 2048, 384 routed experts, top-8. capacity_factor=8=top-8
+        # is the worst-case dispatch buffer (every pick of a token landing on one chip's experts).
+        # On single-1 all 384 experts run sequentially on one chip — see the timeout below.
+        (3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 8, True),
+        (640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 8, True),
         # fmt: on
     ],
-    ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc"],
+    ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc", "kimi-25k-validate-pcc", "kimi-5k-validate-pcc"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -144,6 +150,9 @@ def run_torch_routed_experts(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+# single-chip configs run every routed expert sequentially on one device; at Kimi's 384 experts
+# this far exceeds the 300s default, so the whole test gets the same generous budget.
+@pytest.mark.timeout(1800)
 def test_ttnn_routed_expert(
     mesh_device,
     device_params,

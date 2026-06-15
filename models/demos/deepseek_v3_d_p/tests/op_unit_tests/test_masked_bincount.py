@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config, get_ep_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import compare_exact, validate_composed
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
@@ -41,7 +42,12 @@ def torch_masked_bincount(
 @pytest.mark.parametrize(
     "sp_dim, topk, n_routed_experts",
     [
-        (4096, 8, 256),
+        pytest.param(4096, 8, 256, id="experts-256"),
+        # Kimi K2.6: 384 routed experts, top-8. masked_bincount builds the per-expert histogram,
+        # so the expert count is the dimension under test — 384 is the largest of the issue models.
+        pytest.param(
+            4096, KimiK26Config.NUM_EXPERTS_PER_TOKEN, KimiK26Config.NUM_ROUTED_EXPERTS, id="kimi-experts-384"
+        ),
     ],
 )
 @pytest.mark.parametrize(

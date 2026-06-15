@@ -17,6 +17,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_sparse_combine_output,
@@ -30,10 +31,15 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
-    "seq_len, emb_dim, topk",
+    "seq_len, emb_dim, topk, num_routed_experts",
     [
-        (32, 2048, 8),
-        (3200, 7 * 1024, 8),  # DeepSeek values
+        (32, 2048, 8, 64),
+        (3200, 7 * 1024, 8, 64),  # DeepSeek values
+        # Kimi K2.6 MoE shape: emb 7168, top-8, 384 routed experts. num_routed_experts only
+        # sizes the indices / expert_dispatch_table here (the reduce itself sums over topk),
+        # so 384 vs 64 just widens the routing tensors. seq 3200 ≈ 25k tokens, 640 ≈ 5k.
+        (3200, KimiK26Config.EMB_SIZE, KimiK26Config.NUM_EXPERTS_PER_TOKEN, KimiK26Config.NUM_ROUTED_EXPERTS),
+        (640, KimiK26Config.EMB_SIZE, KimiK26Config.NUM_EXPERTS_PER_TOKEN, KimiK26Config.NUM_ROUTED_EXPERTS),
     ],
 )
 @pytest.mark.parametrize(
@@ -59,6 +65,7 @@ def test_ttnn_reduce(
     seq_len,
     emb_dim,
     topk,
+    num_routed_experts,
     use_weights,
 ):
     """Test TTNN reduce module in isolation using synthetic sparse inputs."""
@@ -88,8 +95,6 @@ def test_ttnn_reduce(
         sparsity=0.75,
     )
     logger.debug(f"Created sparse combine output: {torch_combine_output.shape}")
-
-    num_routed_experts = 64
 
     # Create random gate weights for weighted reduce (if enabled)
     torch_gate_weights = None

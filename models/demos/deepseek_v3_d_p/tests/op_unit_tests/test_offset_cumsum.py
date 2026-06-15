@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
     extract_mesh_config,
@@ -70,7 +71,13 @@ def torch_offset_cumsum(
 
 @pytest.mark.parametrize(
     "n_routed_experts",
-    [256],
+    [
+        pytest.param(256, id="experts-256"),
+        # Kimi K2.6: 384 routed experts. offset_cumsum turns per-device histograms into global
+        # dispatch offsets, so the expert count is the dimension under test. 384 divides evenly
+        # by every mesh here (experts_per_chip = 384 // num_dispatch_groups // dispatch_group_size).
+        pytest.param(KimiK26Config.NUM_ROUTED_EXPERTS, id="kimi-experts-384"),
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
