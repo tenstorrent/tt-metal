@@ -2050,14 +2050,18 @@ class TTNNDotsVisionAttention(TTNNModule):
             q_chunk = 128
             k_chunk = 512
         else:
-            # Large-S regime: q_chunk=256 overtakes 128 once S>=3072 (more outer
-            # Q passes amortize). k_chunk=512 (not 1024): under trace capture the
-            # generate pins extra persistent L1, so the q256/k1024 scores CB
-            # (~1 MB/core) no longer fits and clashes with this SDPA's static
-            # CBs. Halving k_chunk frees ~512 KB/core; minor perf cost vs k1024.
-            # Sweep S=3072,H=3: q256/k512 343 us vs q128/k512 355 us.
-            q_chunk = 256
-            k_chunk = 512
+            # Large-S regime: q_chunk=128, k_chunk=1024. The scores CB is
+            # q_chunk*k_chunk*4 B = 512 KB/core -- IDENTICAL to the old q256/k512,
+            # so it fits under trace just the same -- but k_chunk=1024 halves the
+            # outer-K passes (S/1024 vs S/512). The earlier note only compared
+            # q128/k512 vs q256/k512 (same k_chunk) and so picked q256; it never
+            # tried q128/k1024, which trades the extra Q passes for half the K
+            # passes and wins. Sweep 2026-06-15 (bench_sdpa_tp4.py, S=11264 H=3,
+            # K/V=bf4, no mask): q128/k1024 2960 us vs q256/k512 3437 us (-14%);
+            # q256/k1024 (1 MB CB) is both slower (3280) and trace-risky; q64/k2048
+            # regresses (3763, too many Q passes).
+            q_chunk = 128
+            k_chunk = 1024
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk,
@@ -2220,6 +2224,12 @@ class TTNNDotsVisionAttention(TTNNModule):
         # the isolated SDPA sweep measures ~5% per-call savings net of this
         # typecast.
         v = ttnn.typecast(v, ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # K -> BFP4 too: halves K's SDPA DRAM bandwidth. Sweep 2026-06-15
+        # (bench_sdpa_tp4.py, S=11264 H=3): K=bf4 cuts the SDPA op ~3% with PCC
+        # unchanged (0.99238 bf4 vs bf8 -- scores are dominated by the q*k tile
+        # accumulation, not K's mantissa). K is only consumed by SDPA, so the
+        # downcast is local.
+        k = ttnn.typecast(k, ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
         # sharded inputs) and at S=12288 the BFP8 Q+K+V (~46 MB) plus SDPA's static
