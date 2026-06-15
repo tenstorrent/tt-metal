@@ -89,7 +89,7 @@ const bool is_int_fpu_en = false;
 #include "experimental/ckernel_sfpu_abs.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -122,19 +122,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    // SFPU iterations per face. `_llk_math_eltwise_unary_sfpu_params_`
-    // processes one whole tile per call: for each face in the tile it invokes
-    // `_calculate_abs_(num_sfpu_iterations)`, which advances the Dest row
-    // cursor `num_sfpu_iterations` times (each step covers SFP_ROWS rows,
-    // so num_sfpu_iterations*SFP_ROWS == TEST_FACE_R_DIM rows per face).
-    //
-    // Note: Quasar SFPU only supports VectorMode::RC (the default and only
-    // mode), so iterating over a single face in the per-face loop inside
-    // `_llk_math_eltwise_unary_sfpu_params_` is equivalent to covering the
-    // whole tile. The outer `for (i < TILE_CNT)` below therefore iterates
-    // tile-by-tile, not face-by-face.
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-
     if (!unpack_to_dest)
     {
         // FPU path: datacopy tiles from SrcA to Dest via MOVA2D before SFPU can operate on them.
@@ -160,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // UNPACK-to-Dest), so it is offset by params.DST_INDEX.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_, params.DST_INDEX + i, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_<SFPU_ITERATIONS>, params.DST_INDEX + i);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

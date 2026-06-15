@@ -128,11 +128,11 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_in,
         cb_scaler,
         cb_ex_partial2,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(cb_in, cb_in);
@@ -173,13 +173,15 @@ void kernel_main() {
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    compute_kernel_lib::
-        reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
-            cb_x2,
-            cb_scaler,
-            cb_ex_partial2,
-            compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
-            compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    compute_kernel_lib::reduce<
+        PoolType::AVG,
+        ReduceDim::REDUCE_ROW,
+        cb_x2,
+        cb_scaler,
+        cb_ex_partial2,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(cb_x2, cb_scaler);
     cb_pop_front(cb_x2, num_tiles_per_block);
 
@@ -188,8 +190,8 @@ void kernel_main() {
         cb_scaler_global_obj.wait_front(1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         pack_reconfig_data_format(cb_reduction_out);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         CircularBuffer(cb_reduction_out)
             .reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 

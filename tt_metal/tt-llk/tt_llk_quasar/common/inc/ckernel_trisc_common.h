@@ -45,7 +45,7 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 // Uint8 requires special handling because when int8 is put into DEST, the sign bit actually gets put
 // to the MSB of the 32bit container, rather than to bit 8. So for int8 the packer will read the 7 LSBs + 1 MSB,
 // but for uint8 the packer will read the 8 LSBs.
-constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 4;
+constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
 

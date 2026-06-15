@@ -7,9 +7,11 @@
 #include <optional>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -19,6 +21,17 @@
 
 namespace ttnn::prim {
 
+namespace detail {
+
+struct RingJointSDPADescriptorAdapterOperation {
+    using operation_attributes_t = RingJointSDPAParams;
+    using tensor_args_t = RingJointSDPAInputs;
+    using spec_return_value_t = RingJointSDPAResultSpec;
+    using tensor_return_value_t = RingJointSDPAResult;
+};
+
+}  // namespace detail
+
 struct RingJointSDPAProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const RingJointSDPAParams& args,
@@ -26,5 +39,25 @@ struct RingJointSDPAProgramFactory {
         RingJointSDPAResult& output_tensors,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
+
+struct RingJointSDPAMeshWorkloadFactory {
+    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+        detail::RingJointSDPADescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<RingJointSDPAProgramFactory>;
+    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const RingJointSDPAParams& args,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const RingJointSDPAParams& args,
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors);
+};
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingJointSDPAMeshWorkloadFactory>);
 
 }  // namespace ttnn::prim

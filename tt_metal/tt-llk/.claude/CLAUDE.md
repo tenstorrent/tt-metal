@@ -55,7 +55,7 @@ Trigger examples for `arch-lookup`:
 
 ### Documentation
 
-We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@param`, `@tparam`, `@ref`, `@pre`, `@post`), with `@pre`/`@post`/`@ref` encoding the init/execute/uninit contract and pairing the per-thread (T0/T1/T2) halves of an op. Avoid bloat tags (`@details`, `@author`, `@date`, `@version`, `@todo`, `@remark`, and `@return` on void functions). Applies to LLK lib (`_llk_*`), LLK API (`llk_*`), and the Compute API (`tt_metal/hw/inc/api/compute/`) — the Compute API keeps its published prose+table format (it feeds the public Sphinx docs), not `@param` tags.
+We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@param`, `@tparam`, `@ref`, `@note`), with an imperative `@note` (plus `@ref`) encoding the init/execute/uninit contract and pairing the per-thread (T0/T1/T2) halves of an op. Do not use `@pre`/`@post` (they imply guarantees, but our contract is an imperative the caller must satisfy). Avoid bloat tags (`@details`, `@author`, `@date`, `@version`, `@todo`, `@remark`, and `@return` on void functions). Applies to LLK lib (`_llk_*`), LLK API (`llk_*`), and the Compute API (`tt_metal/hw/inc/api/compute/`) — the Compute API keeps its published prose+table format (it feeds the public Sphinx docs), not `@param` tags.
 
 **When writing or updating docstrings**, follow `.claude/references/doxygen-style.md`.
 

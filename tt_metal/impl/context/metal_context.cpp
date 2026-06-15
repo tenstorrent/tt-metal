@@ -18,6 +18,7 @@
 
 #include "metal_context.hpp"
 #include "context_types.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "dispatch_core_common.hpp"
@@ -213,9 +214,11 @@ void MetalContext::initialize(
     // Initialize inspector
     if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         std::optional<int> rank;
-        auto world_context = distributed::multihost::DistributedContext::get_world_context();
-        if (*(world_context->size()) > 1) {
-            rank = *world_context->rank();
+        if (distributed::multihost::DistributedContext::is_initialized()) {
+            auto world_context = distributed::multihost::DistributedContext::get_world_context();
+            if (*(world_context->size()) > 1) {
+                rank = *world_context->rank();
+            }
         }
         inspector_data_ = Inspector::initialize(rank);
         // Set fw_compile_hash for Inspector RPC build environment info
@@ -508,6 +511,9 @@ void MetalContext::teardown_dispatch_state() {
 MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env) :
     env_(&metal_env), context_id_(context_id) {
     check_context_id(context_id);
+    // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
+    // claimed service cores from the FD pool.
+    service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl());
     device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 
@@ -557,6 +563,11 @@ const Hal& MetalContext::hal() const {
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;
+}
+
+internal::ServiceCoreManager& MetalContext::get_service_core_manager() {
+    TT_FATAL(service_core_manager_, "Trying to get service_core_manager before initializing it.");
+    return *service_core_manager_;
 }
 
 DispatchQueryManager& MetalContext::get_dispatch_query_manager() {

@@ -373,7 +373,8 @@ jobs:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       timeout: 20
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      # CIv1 runners: cannot use harbor-prefix (resolve-docker-pull-refs)
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
@@ -443,7 +444,8 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      # CIv1 runners: cannot use harbor-prefix (resolve-docker-pull-refs)
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       fast-only: true

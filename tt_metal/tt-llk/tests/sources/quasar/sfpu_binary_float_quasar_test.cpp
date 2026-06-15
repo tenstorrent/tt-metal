@@ -74,11 +74,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* EN_INT32_MATH_FORMAT */>(src_format, src_format);
 
-    // Mirrors the original L5 invocation: SFP_ROWS = 2 on Quasar, so a full face
-    // (TEST_FACE_R_DIM = 16 rows) corresponds to 8 sfpi row-pairs (SFPU_ITERATIONS).
-    // The iteration count is passed as a runtime arg, matching the L4 function signature.
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-
     _llk_math_eltwise_sfpu_init_();
 
     // Programmable-constant init for the sfpi reciprocal helper. Sets
@@ -87,11 +82,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     sfpu_binary_init<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION>();
 
     // sfpi vFloat binary op: op selected at compile time via BINOP if constexpr inside
-    // calculate_sfpu_binary; runtime iterations mirrors the original L5 calling convention.
-    _llk_math_eltwise_sfpu_params_(
-        calculate_sfpu_binary<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, is_fp32_dest_acc_en>,
-        0 /* DST base tile index */,
-        num_sfpu_iterations,
+    // calculate_sfpu_binary. SFP_ROWS = 2 on Quasar, so a full face (TEST_FACE_R_DIM = 16
+    // rows) is SFPU_ITERATIONS (8) sfpi row-pairs, passed as the ITERATIONS template arg.
+    _llk_math_eltwise_binary_sfpu_params_(
+        calculate_sfpu_binary<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, is_fp32_dest_acc_en, SFPU_ITERATIONS>,
         params.SRC0_TILE_IDX,
         params.SRC1_TILE_IDX,
         params.DST_TILE_IDX);

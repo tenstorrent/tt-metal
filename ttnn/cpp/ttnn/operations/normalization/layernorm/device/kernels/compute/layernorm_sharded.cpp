@@ -167,11 +167,11 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_in,
         cb_scaler,
         cb_ex_partial,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(cb_ex_external, cb_scaler);
@@ -277,11 +277,11 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_xmm2,
         cb_scaler,
         cb_ex_partial2,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(cb_xmm2, cb_scaler);

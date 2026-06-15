@@ -1835,7 +1835,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
         max_batch_size=1,
         num_blocks=uniform_num_blocks,
         can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        greedy_only=True,
     )
 
     # vLLM warmup — replicate the bridge's pre-decode setup so the
@@ -1852,7 +1852,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             max_batch_size=1,
             num_blocks=warmup_num_blocks,
             can_sample_on_device=False,
-            non_greedy_decoding_on_device=False,
+            greedy_only=True,
         )
     finally:
         if hasattr(tt_model_vllm, "_active_page_tables_per_layer"):

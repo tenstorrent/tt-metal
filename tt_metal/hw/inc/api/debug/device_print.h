@@ -122,7 +122,7 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_DATA1(format, ...)
 #endif
 
-#if defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD) && !defined(ENV_LLK_INFRA)
 #define DEVICE_PRINT_IS_KERNEL 1
 #else
 #define DEVICE_PRINT_IS_KERNEL 0
@@ -197,7 +197,7 @@ struct dp_typed_array_t {
         device_print_detail::invoke_by_value(                                                                      \
             [_device_print_write_position](auto&&... args) __attribute__((always_inline)) {                        \
                 /* Get device_print buffer*/                                                                       \
-                volatile tt_l1_ptr DevicePrintMemoryLayout* _device_print_buffer = get_device_print_buffer();      \
+                volatile tt_l1_ptr DevicePrintBufferType* _device_print_buffer = get_device_print_buffer();        \
                 auto _device_print_buffer_ptr = &(_device_print_buffer->data[0]) + _device_print_write_position;   \
                 device_print_detail::serialization::serialize_arguments(_device_print_buffer_ptr, args...);        \
             },                                                                                                     \
@@ -931,6 +931,7 @@ struct device_print_type<TileSlice<128>> {
         }
     }
 };
+#endif  // defined(KERNEL_BUILD)
 
 // dp_typed_array_t: serialized as (len + 1) uint32_t elements: [(len << 16) | type, data[0..len-1]]
 template <uint16_t len>
@@ -945,7 +946,6 @@ struct device_print_type<dp_typed_array_t<len>> {
         }
     }
 };
-#endif
 
 // Enum types: serialized as their underlying type.
 template <typename T>
@@ -1332,7 +1332,7 @@ using arg_reorder_seq_t = typename arg_reorder_seq<Args...>::type;
 
 namespace locking {
 
-uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size);
+uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer, uint32_t message_size);
 void release_lock();
 
 #if !defined(ARCH_WORMHOLE)
@@ -1341,7 +1341,7 @@ volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
     return get_device_print_buffer()->aux.lock;
 #else
     // Atomics require the cached L1 alias.
-    return GET_MAILBOX_ADDRESS_DEV_CACHED(dprint_buf)->aux.lock;
+    return GET_MAILBOX_ADDRESS_DEV_CACHED(dprint_buf.buffer)->aux.lock;
 #endif
 }
 #endif
@@ -1349,7 +1349,7 @@ volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
 // Takes lock unconditionally. Prints kernel id message if needed.
 void acquire_lock() {
     // We need to acquire lock only if we have more than 1 processor, otherwise there is no contention.
-    if constexpr (DevicePrintMemoryLayout::PROCESSOR_COUNT > 1) {
+    if constexpr (DevicePrintBufferType::processor_count > 1) {
 #if defined(ARCH_WORMHOLE)
         volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
 
@@ -1366,7 +1366,7 @@ void acquire_lock() {
             // Write risc_id to lock to attempt to acquire it
             *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
 
-            for (uint32_t repeat = 0; repeat < DevicePrintMemoryLayout::PROCESSOR_COUNT; ++repeat) {
+            for (uint32_t repeat = 0; repeat < DevicePrintBufferType::processor_count; ++repeat) {
                 // Make sure the write has propagated and other riscs see the updated value.
                 invalidate_l1_cache();
                 if (*lock_ptr != PROCESSOR_INDEX + 1) {
@@ -1396,16 +1396,17 @@ void acquire_lock() {
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
 
-#if defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD) && !defined(ENV_LLK_INFRA)
     // Check if we should print kernel id
-    volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
+    volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
 #if PROCESSOR_INDEX_DEFINED
         constexpr auto processor_index = PROCESSOR_INDEX;
 #else
         auto processor_index = internal_::get_hw_thread_idx();
 #endif
-        auto risc_state = device_print_buffer->aux.risc_state[processor_index];
+        auto risc_state =
+            device_print_buffer->aux.risc_state[processor_index - DevicePrintBufferType::processor_offset];
         if (risc_state != DevicePrintRiscCoreState::PrintingDisabled) {
             if (risc_state == DevicePrintRiscCoreState::KernelNotPrinted) {
                 uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
@@ -1423,7 +1424,8 @@ void acquire_lock() {
                 formatting::device_print_type<decltype(header_value)>::serialize(
                     device_print_buffer_ptr, 0, header_value);
                 device_print_buffer->aux.wpos += sizeof(new_kernel_message);
-                device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelPrinted;
+                device_print_buffer->aux.risc_state[processor_index - DevicePrintBufferType::processor_offset] =
+                    DevicePrintRiscCoreState::KernelPrinted;
             }
         }
     }
@@ -1431,14 +1433,16 @@ void acquire_lock() {
 }
 
 void update_kernel_finished() {
-    volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
+    volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
 #if PROCESSOR_INDEX_DEFINED
     constexpr auto processor_index = PROCESSOR_INDEX;
 #else
     auto processor_index = internal_::get_hw_thread_idx();
 #endif
-    if (device_print_buffer->aux.risc_state[processor_index] != DevicePrintRiscCoreState::PrintingDisabled) {
-        device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelNotPrinted;
+    if (device_print_buffer->aux.risc_state[processor_index - DevicePrintBufferType::processor_offset] !=
+        DevicePrintRiscCoreState::PrintingDisabled) {
+        device_print_buffer->aux.risc_state[processor_index - DevicePrintBufferType::processor_offset] =
+            DevicePrintRiscCoreState::KernelNotPrinted;
     }
 }
 
@@ -1467,7 +1471,7 @@ void initialize_lock() {
 #endif
 }
 
-uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size) {
+uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer, uint32_t message_size) {
     // Read pointers
     auto write_position = device_print_buffer->aux.wpos;
     auto read_position = device_print_buffer->aux.rpos;
@@ -1677,7 +1681,7 @@ begin_message_write(structures::DevicePrintHeader header, std::uintptr_t string_
     locking::acquire_lock();
 
     // Check if we need to wrap buffer and wait for enough space in it
-    volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
+    volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
     uint32_t message_size = sizeof(header.value) + header.message_payload;
     auto write_position = locking::wait_for_space(device_print_buffer, message_size);
 
@@ -1712,7 +1716,7 @@ __attribute__((noinline)) void end_message_write() {
     // that argument (one more instruction). Here, since we don't care about code execution time, but code size, we read
     // the message header back from the buffer to get the message size, which allows us to avoid passing message size as
     // an argument and save some code size.
-    volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
+    volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
     auto write_position = device_print_buffer->aux.wpos;
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
         auto message_header_value =

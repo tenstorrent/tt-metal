@@ -840,7 +840,7 @@ struct FlashMLADecode {
                 pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);
                 cb_push_back(sdpa_ms_cb, Sq_chunk_t);
             } else {
-                compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16>(
+                compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16, output_granularity>(
                     cb_q_in, sum_dst_offset, corr_exp_dst_offset, mm2_dst_offset);
             }
             for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {

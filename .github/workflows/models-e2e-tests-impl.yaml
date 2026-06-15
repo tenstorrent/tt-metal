@@ -43,6 +43,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -57,7 +58,8 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "e2e"
+            "e2e" \
+            "${{ inputs.tier }}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -134,6 +136,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -147,6 +150,9 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports generated/test_logs
+          # Perf/accuracy are enforced by the "Validate perf and accuracy targets" step
+          # below; the in-test checks are warning-only, so the tests write complete
+          # benchmark JSON before validation runs.
 
           # Mirror the matrix command's combined stdout+stderr to a per-leg
           # log file so ai-summary can read it later. The brace group lets

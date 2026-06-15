@@ -30,6 +30,7 @@ from .llk_params import (
     StableSort,
     StochasticRounding,
     Tilize,
+    TilizeUnpackerSel,
     TopKSortDirection,
     Transpose,
     UnpackerEngine,
@@ -282,6 +283,24 @@ class IMPLIED_MATH_FORMAT(TemplateParameter):
 
 
 @dataclass
+class ENABLE_2X_FORMAT(TemplateParameter):
+    enable_2x_format: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool ENABLE_2X_FORMAT = {str(self.enable_2x_format).lower()};"
+        )
+
+
+@dataclass
+class ENABLE_DIRECT_INDEXING(TemplateParameter):
+    enable_direct_indexing: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool ENABLE_DIRECT_INDEXING = {str(self.enable_direct_indexing).lower()};"
+
+
+@dataclass
 class UNPACKER_ENGINE_SEL(TemplateParameter):
     unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
 
@@ -290,11 +309,19 @@ class UNPACKER_ENGINE_SEL(TemplateParameter):
 
 
 @dataclass
+class TILIZE_UNPACKER_SEL(TemplateParameter):
+    tilize_unp_sel: TilizeUnpackerSel = TilizeUnpackerSel.UnpA
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr TilizeUnpackerSel TILIZE_UNP_SEL = TilizeUnpackerSel::{self.tilize_unp_sel.value};"
+
+
+@dataclass
 class VECTOR_MODE(TemplateParameter):
     vector_mode: VectorMode = VectorMode.RC
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int VECTOR_MODE = static_cast<int>({self.vector_mode.cpp_enum_value});"
+        return f"constexpr auto VECTOR_MODE = {self.vector_mode.cpp_enum_value};"
 
 
 @dataclass

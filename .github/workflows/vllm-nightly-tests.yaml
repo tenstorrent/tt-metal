@@ -22,7 +22,7 @@ on:
           - google/gemma-3-27b-it
           - google/gemma-4
           - openai/gpt-oss-120b
-          - models/vllm_test_utils/t3000_multiproc_test
+          # - models/vllm_test_utils/t3000_multiproc_test
           - models/vllm_test_utils/no_op_test
       platform:
         required: false
@@ -76,7 +76,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/vllm-nightly-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       vllm-commit: ${{ inputs.vllm-commit || 'dev' }}

@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_moreh ${LIB_TYPE})
 add_library(TTNN::Ops::Moreh ALIAS ttnn_op_moreh)
 
-tt_reuse_precompile_headers(ttnn_op_moreh TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_moreh TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_moreh)
 set_target_properties(
     ttnn_op_moreh

@@ -4,10 +4,16 @@
 #         [0, 1]   row 0 (trays 1, 3)
 #         [2, 3]   row 1 (trays 4, 2)
 #     Z links follow bh_galaxy_split_4x2_multi_mesh: 0-1, 1-2, 2-3, 0-3
-#   - Each mesh is a 4x2 grid (8 chips) -> intra-mesh neighbor hops use the
-#     non-Z N/S/E/W routing directions.
+#   - Each mesh is a 2x4 grid (8 chips) -> intra-mesh neighbor hops use the
+#     non-Z N/S/E/W routing directions. NOTE: dims are [2,4] (not [4,2]) on
+#     purpose. control_plane.cpp (#43384) force-pins ANY Blackhole-Galaxy mesh
+#     shaped exactly [4,2]/8-chips to the blitz-decode tray-1+tray-4 layout
+#     (ignoring mesh_id), which collides all 4 Z meshes onto the same trays and
+#     makes inter-mesh mapping fail ("target nodes 1, 3 not mapped"). A 2x4 grid
+#     is isomorphic to 4x2 (still embeds on one tray) but does not match that
+#     trigger, so the mapper places the 4 meshes freely as it did before #43384.
 # Neighbor-exchange therefore exercises BOTH:
-#   - non-Z links: intra-mesh 4x2 adjacency (N/S/E/W)
+#   - non-Z links: intra-mesh 2x4 adjacency (N/S/E/W)
 #   - Z links:     inter-mesh ring connections (assign_z_direction)
 #
 # Launch: 4 MPI ranks on a single host, one per mesh (TT_MESH_ID 0..3), each
@@ -32,25 +38,25 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     assign_z_direction: true
   }
 }

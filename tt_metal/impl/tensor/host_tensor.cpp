@@ -14,8 +14,14 @@ HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopo
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+// Uses the nullptr-context overload so it never touches MetalContext/Cluster and works in
+// processes that haven't opened a device.
 DistributedHostBuffer create_unit_distributed_host_buffer(HostBuffer buffer) {
-    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
+    auto distributed_buffer = DistributedHostBuffer::create(
+        distributed::MeshShape(1, 1),
+        distributed::MeshShape(1, 1),
+        distributed::MeshCoordinate(0, 0),
+        /*context=*/nullptr);
     distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
     return distributed_buffer;
 }

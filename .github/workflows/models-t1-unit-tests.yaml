@@ -17,6 +17,7 @@ on:
           - qwen3-32b-galaxy
           - gpt-oss-120b
           - whisper
+          - dit-common
           # llama3.3-70b-galaxy: disabled — see #42139
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
@@ -117,7 +118,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}

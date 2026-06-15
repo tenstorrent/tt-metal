@@ -73,3 +73,6 @@ The semaphore-based tests use additional kernels for sender-receiver synchroniza
 - `receiver_sem.cpp`: Implements the receiver with semaphore synchronization using `noc_semaphore_inc` and `noc_semaphore_wait`
 
 Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new API.
+
+## Quasar Notes
+`TensixDataMovementOneToAllUnicastDirectedIdeal` includes a Quasar-specific code path inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).
