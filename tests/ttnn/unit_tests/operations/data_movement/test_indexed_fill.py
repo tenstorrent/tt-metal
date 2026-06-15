@@ -212,6 +212,65 @@ def test_indexed_fill_dim(device, shape_a, b, dim, layout):
     )
 
 
+@pytest.mark.parametrize(
+    "variant",
+    ["interleaved_tile", "height_sharded"],
+)
+def test_indexed_fill_program_cache(device, variant):
+    # Program-cache-hit correctness. The descriptor factory does not run create_descriptor()
+    # again on a cache hit: per-core buffer addresses are patched via Buffer* bindings, and
+    # the native/shard-local paths re-point the output-aliased CB (CBDescriptor::buffer) to
+    # the new output buffer. Run the op twice with freshly allocated tensors — kept alive in
+    # `held` so the allocator hands out DIFFERENT addresses on the second (cache-hit) run —
+    # and verify both results are numerically correct and that the hit reuses the cached
+    # program instead of building a new one. A stale-address bug would fail the second PCC.
+    B, b, D, dim = 8, 3, 32, 0
+    shape_a = (B, 1, 1, D)
+    shape_b = (b, 1, 1, D)
+    sharded = variant == "height_sharded"
+    interleaved_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    sharded_mem_config = (
+        ttnn.create_sharded_memory_config(
+            shape=shape_a, core_grid=ttnn.CoreGrid(y=1, x=B), strategy=ttnn.ShardStrategy.HEIGHT
+        )
+        if sharded
+        else None
+    )
+    layout = ttnn.ROW_MAJOR_LAYOUT if sharded else ttnn.TILE_LAYOUT
+
+    held = []  # keep prior-iteration tensors alive so the cache-hit run gets new addresses
+    entries = None
+    for i in range(2):
+        batch_id = torch.randint(0, B, (1, 1, 1, b))
+        batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(device, interleaved_l1)
+        torch_a = torch.rand(shape_a, dtype=torch.bfloat16)
+        torch_b = torch.rand(shape_b, dtype=torch.bfloat16)
+        if sharded:
+            input_a = ttnn.from_torch(
+                torch_a, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=sharded_mem_config
+            )
+            input_b = ttnn.from_torch(
+                torch_b, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=interleaved_l1
+            )
+            output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_a, input_b, memory_config=sharded_mem_config)
+        else:
+            input_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, device=device, layout=layout)
+            input_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, device=device, layout=layout)
+            output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_a, input_b)
+
+        golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=dim)
+        assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+        held.extend([batch_id_ttnn, input_a, input_b, output_tensor])
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries == 1, f"indexed_fill should cache exactly one program, got {entries}"
+        else:
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "cache-hit run created a new program entry instead of reusing the cached one"
+
+
 def test_indexed_fill_dim_out_of_bounds(device):
     # Verify that a dim outside [-rank, rank) raises a fatal error.
     input_tensor_a = ttnn.rand((4, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
