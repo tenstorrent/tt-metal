@@ -317,7 +317,7 @@ class ColParallelLinear(Module):
 
         return _apply_activation_fn(output, self.activation_fn)
 
-    def _to_out_fused_addcmul(
+    def forward_fused_addcmul(
         self,
         x: ttnn.Tensor,
         addcmul_residual: ttnn.Tensor,
@@ -370,8 +370,24 @@ class ColParallelLinear(Module):
                 addcmul_input_tensor2=addcmul_gate,
                 dtype=dtype,
             )[0]
+        else:
+            M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            matmul_config = get_matmul_config(M, K, N_out, core_grid)
 
-            return output
+            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                x,
+                weight,
+                1.0,  # scalar
+                addcmul_residual,
+                addcmul_gate,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+            )
+
+        return output
 
 
 class RowParallelLinear(Module):
