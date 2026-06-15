@@ -88,11 +88,13 @@ see status.
 - **Done:** full-depth logit correctness; e2e VLM correctness; on-device sampling; decode trace
   (replicated + sharded production mesh); fully on-device MoE; ISL perf sweep harness + measured
   full-depth numbers; **chunked prefill** (paged k/v, verified to 16K — lifts the single-shot ~4K cap);
-  sharded LM head.
-- **Remaining serving optimizations:** MoE **sparse dispatch** (top-4 compute instead of dense-local —
-  needs a 2×4 DP×EP mesh); chunked-prefill **generator integration + full-depth TTFT@16K + per-chunk
-  trace**; **paged compressed-latent KV** (12.8× smaller cache, op-execution-nondeterministic on this
-  BH build — see A6 below); **2CQ** (low value). CI registration done; rebase onto latest main.
+  sharded LM head; **MoE sparse dispatch** (`forward_decode(use_sparse=True)`: `mesh_partition` →
+  all-to-all dispatch → top-4 routed experts → combine → all_gather; full-model decode sparse == dense
+  logits PCC 0.9958; computes only the 4 routed experts/token vs all 16 local dense).
+- **Remaining (optimization/polish):** sparse-decode **tok/s measurement + trace-compat + generator
+  wiring**; chunked-prefill **generator integration + full-depth TTFT@16K + per-chunk trace**; **paged
+  compressed-latent KV** (12.8× smaller cache, op-execution-nondeterministic on this BH build — see A6);
+  **2CQ** (low value). CI registration done; rebase onto latest main.
 - **Dependency:** requires `transformers >= 5.10` (native `mistral4`/`mistral3`/`pixtral` + fp8 dequant).
 
 ## Reproduce
