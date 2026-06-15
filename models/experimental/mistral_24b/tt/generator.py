@@ -118,7 +118,12 @@ class MistralGenerator(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
+        # Per-step full device barrier: the post-#45166 self-feeding on-device decode lacks the
+        # implicit per-step drain the host-argmax path has, exposing a logits read-before-CCL-complete
+        # race that makes greedy decode non-deterministic. Draining each step restores determinism.
+        out = super().decode_forward(*args, **kwargs)
+        ttnn.synchronize_device(self.model_args[0].mesh_device)
+        return out
 
     def _capture_decode_trace_text(self, *args, **kwargs):
         return super()._capture_decode_trace_text(*args, **kwargs)
