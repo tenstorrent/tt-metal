@@ -10,6 +10,8 @@ Both device regions (encoder transformer, conv decoder) are captured as metal
 traces on the first call and replayed afterwards, collapsing per-op dispatch
 overhead. Set trace=False for the eager path. API mirrors MoGeModel.forward.
 """
+import os
+
 import torch
 import torch.nn.functional as F
 
@@ -29,6 +31,7 @@ class TtMoGe:
         self.ref = ref_moge_model
         self.device = device
         self.trace = trace
+        self.two_cq = bool(int(os.environ.get("MOGE_2CQ", "0")))
         self.encoder = TtMoGeEncoder(ref_moge_model, device)
         self.cc = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True)
@@ -96,11 +99,26 @@ class TtMoGe:
                 ttnn.end_trace_capture(self.device, self._dec_tid, cq_id=0)
                 self._dec_out = [t for (t, _h, _w) in out]
                 self._dec_hw = [(h, w) for (_t, h, w) in out]
+                ttnn.execute_trace(self.device, self._dec_tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(self.device)
+                dec_out = self._dec_out
+            elif self.two_cq:
+                # cq1 = data movement (input H2D / output D2H), cq0 = compute (traced)
+                q0, q1 = ttnn.QueueId(0), ttnn.QueueId(1)
+                ttnn.copy_host_to_device_tensor(host_l0, self._dec_in0, cq_id=q1)
+                ev_w = ttnn.record_event(self.device, q1)
+                ttnn.wait_for_event(q0, ev_w)
+                ttnn.execute_trace(self.device, self._dec_tid, cq_id=q0, blocking=False)
+                ev_c = ttnn.record_event(self.device, q0)
+                ttnn.wait_for_event(q1, ev_c)
+                dec_out = [ttnn.from_device(t, blocking=False, queue_id=q1) for t in self._dec_out]
+                ttnn.synchronize_device(self.device)
             else:
                 ttnn.copy_host_to_device_tensor(host_l0, self._dec_in0)
-            ttnn.execute_trace(self.device, self._dec_tid, cq_id=0, blocking=False)
-            ttnn.synchronize_device(self.device)
-            head_t = {n: _cl_to_nchw(t, h, w) for n, t, (h, w) in zip(self.heads, self._dec_out, self._dec_hw)}
+                ttnn.execute_trace(self.device, self._dec_tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(self.device)
+                dec_out = self._dec_out
+            head_t = {n: _cl_to_nchw(t, h, w) for n, t, (h, w) in zip(self.heads, dec_out, self._dec_hw)}
 
         points = head_t.get("points_head")
         normal = head_t.get("normal_head")

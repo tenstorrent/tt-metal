@@ -34,7 +34,8 @@ NUM_TOKENS = int(os.environ.get("MOGE_NUM_TOKENS", "1800"))
 
 # Device deployment config (not measurement logic). l1_small_size required by
 # ttnn.conv2d (future on-device decoder); trace_region_size enables metal-trace.
-DEVICE_PARAMS = dict(l1_small_size=32768, trace_region_size=1500000000, num_command_queues=1)
+DEVICE_PARAMS = dict(l1_small_size=32768, trace_region_size=1500000000,
+                     num_command_queues=2 if int(os.environ.get("MOGE_2CQ", "0")) else 1)
 
 
 def pcc(golden, calc):
