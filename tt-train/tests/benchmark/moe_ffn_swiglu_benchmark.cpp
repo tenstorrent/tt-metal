@@ -37,16 +37,9 @@ struct Case {
     uint32_t slack_tiles = 0U;
 };
 
-struct Stats {
-    double avg_us = 0.0;
-    double min_us = 0.0;
-    double max_us = 0.0;
-    double p50_us = 0.0;
-};
-
 struct CaseResult {
-    Stats forward;
-    Stats forward_backward;
+    double forward_us = 0.0;
+    double forward_backward_us = 0.0;
 };
 
 // ---------------------------------------------------------------------------
@@ -94,19 +87,21 @@ ttml::autograd::TensorPtr build_grouped_tensor(
     return ttml::autograd::create_tensor(ttml::core::from_xtensor(grouped, device), /*requires_grad=*/true);
 }
 
-[[maybe_unused]] Stats summarize(const std::vector<double>& times_us) {
-    Stats s;
-    if (times_us.empty()) {
-        return s;
+// Time `fn`: num_warmup unmeasured iterations, then num_measure iterations bracketed by one
+// device Synchronize on each side. Returns average microseconds per iteration.
+template <typename Fn>
+double time_avg_us(uint32_t num_warmup, uint32_t num_measure, ttnn::distributed::MeshDevice* device, Fn&& fn) {
+    for (uint32_t i = 0; i < num_warmup; ++i) {
+        fn();
     }
-    s.avg_us = ttml::benchmark_utils::average(times_us);
-    s.min_us = *std::min_element(times_us.begin(), times_us.end());
-    s.max_us = *std::max_element(times_us.begin(), times_us.end());
-    std::vector<double> sorted = times_us;
-    const auto mid = sorted.begin() + sorted.size() / 2;
-    std::nth_element(sorted.begin(), mid, sorted.end());
-    s.p50_us = *mid;
-    return s;
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    const auto t0 = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_measure; ++i) {
+        fn();
+    }
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    const auto t1 = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double, std::micro>(t1 - t0).count() / static_cast<double>(num_measure);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,23 +131,11 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     const auto grouped_fwd = build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng);
     const auto grouped_fb = build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng);
 
-    // Forward-only: warmup then a single timed batch of N iterations with one Synchronize.
+    // Forward-only.
     auto do_forward = [&]() {
         const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped_fwd, offsets_tensor, w_gate, w_up, w_down);
         ttml::autograd::ctx().reset_graph();
     };
-    for (uint32_t i = 0; i < num_warmup; ++i) {
-        do_forward();
-    }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-    const auto t0_fwd = std::chrono::high_resolution_clock::now();
-    for (uint32_t i = 0; i < num_measure; ++i) {
-        do_forward();
-    }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-    const auto t1_fwd = std::chrono::high_resolution_clock::now();
-    const double fwd_total_us = std::chrono::duration<double, std::micro>(t1_fwd - t0_fwd).count();
-    const double fwd_avg_us = fwd_total_us / static_cast<double>(num_measure);
 
     // Forward+backward. Clear grads each step: reset_graph() drops graph nodes but not the
     // persistent weight/input grads, so without this every add_grad after the first step would
@@ -177,22 +160,10 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
         out->backward();
         ttml::autograd::ctx().reset_graph();
     };
-    for (uint32_t i = 0; i < num_warmup; ++i) {
-        do_fwd_bwd();
-    }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-    const auto t0_fb = std::chrono::high_resolution_clock::now();
-    for (uint32_t i = 0; i < num_measure; ++i) {
-        do_fwd_bwd();
-    }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-    const auto t1_fb = std::chrono::high_resolution_clock::now();
-    const double fb_total_us = std::chrono::duration<double, std::micro>(t1_fb - t0_fb).count();
-    const double fb_avg_us = fb_total_us / static_cast<double>(num_measure);
 
     CaseResult r;
-    r.forward = Stats{.avg_us = fwd_avg_us, .min_us = fwd_avg_us, .max_us = fwd_avg_us, .p50_us = fwd_avg_us};
-    r.forward_backward = Stats{.avg_us = fb_avg_us, .min_us = fb_avg_us, .max_us = fb_avg_us, .p50_us = fb_avg_us};
+    r.forward_us = time_avg_us(num_warmup, num_measure, device, do_forward);
+    r.forward_backward_us = time_avg_us(num_warmup, num_measure, device, do_fwd_bwd);
     return r;
 }
 
@@ -242,26 +213,18 @@ std::vector<uint32_t> uniform_counts(uint32_t E, uint32_t tokens, uint32_t K) {
 
 void print_header() {
     fmt::print("\n");
-    fmt::print("+------------------------------------+--------+--------+--------+--------+--------+--------+\n");
-    fmt::print("| case                               | fwd    | fwd    | fwd    | fwd+bw | fwd+bw | fwd+bw |\n");
-    fmt::print("|                                    | avg µs | min µs | p50 µs | avg µs | min µs | p50 µs |\n");
-    fmt::print("+------------------------------------+--------+--------+--------+--------+--------+--------+\n");
+    fmt::print("+------------------------------------+--------+--------+\n");
+    fmt::print("| case                               | fwd    | fwd+bw |\n");
+    fmt::print("|                                    | avg µs | avg µs |\n");
+    fmt::print("+------------------------------------+--------+--------+\n");
 }
 
 void print_row(const std::string& name, const CaseResult& r) {
-    fmt::print(
-        "| {:<34} | {:>6.0f} | {:>6.0f} | {:>6.0f} | {:>6.0f} | {:>6.0f} | {:>6.0f} |\n",
-        name,
-        r.forward.avg_us,
-        r.forward.min_us,
-        r.forward.p50_us,
-        r.forward_backward.avg_us,
-        r.forward_backward.min_us,
-        r.forward_backward.p50_us);
+    fmt::print("| {:<34} | {:>6.0f} | {:>6.0f} |\n", name, r.forward_us, r.forward_backward_us);
 }
 
 void print_footer() {
-    fmt::print("+------------------------------------+--------+--------+--------+--------+--------+--------+\n");
+    fmt::print("+------------------------------------+--------+--------+\n");
 }
 
 // ---------------------------------------------------------------------------

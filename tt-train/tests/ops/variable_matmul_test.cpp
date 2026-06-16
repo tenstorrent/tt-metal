@@ -58,6 +58,36 @@ ttnn::Tensor create_random_device_tensor(uint32_t M, uint32_t K, ttnn::distribut
     return ttml::core::from_xtensor(data, device);
 }
 
+// Build the 1-D UINT32 ROW_MAJOR offsets tensor the EP path requires.
+ttnn::Tensor make_offsets(const std::vector<uint32_t>& offsets_host, ttnn::distributed::MeshDevice* device) {
+    return ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+}
+
+// Reference for the InputAndWeightK + transpose_a path: slice both operands to the K-range
+// [k_lo, k_lo + K_active), transpose in0 ([K, M] -> [M, K]), and minimal_matmul -> [M, N].
+ttnn::Tensor expert_k_reference(
+    const ttnn::Tensor& in0_km,
+    const ttnn::Tensor& in1,
+    uint32_t k_lo,
+    uint32_t K_active,
+    uint32_t M,
+    uint32_t N,
+    const VariableMatmulConfig& cfg) {
+    auto in0_sliced_km = ttnn::slice(
+        in0_km,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, M},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto in0_sliced_mk = ttnn::transpose(in0_sliced_km, -2, -1);
+    auto in1_sliced = ttnn::slice(
+        in1,
+        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, N},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    return minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, cfg);
+}
+
 const VariableMatmulConfig kConfig{
     .M_block_size = 2,
     .K_block_size = 4,
@@ -97,8 +127,7 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     auto in1 = create_random_device_tensor(K_parent_in1, N, device, /*seed=*/43U);
 
     const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
-    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    auto offsets = make_offsets(offsets_host, device);
     constexpr uint32_t kStart = 2U;
     constexpr uint32_t k_lo = 128;
     constexpr uint32_t K_active = 128;
@@ -116,18 +145,7 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
         /*output_tensor=*/std::nullopt,
         /*offsets_start_index=*/kStart);
 
-    auto in0_sliced_km = ttnn::slice(
-        in0_km,
-        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
-        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, M},
-        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-    auto in0_sliced_mk = ttnn::transpose(in0_sliced_km, -2, -1);
-    auto in1_sliced = ttnn::slice(
-        in1,
-        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
-        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, N},
-        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-    auto ref = minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, kConfig);
+    auto ref = expert_k_reference(in0_km, in1, k_lo, K_active, M, N, kConfig);
 
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA) vs minimal not bit-exact";
 }
@@ -144,8 +162,7 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
     auto in1 = create_random_device_tensor(K_parent_in1, N, device, /*seed=*/45U);
 
     const std::vector<uint32_t> offsets_host = {0U, 64U, 128U, 256U, 384U};
-    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    auto offsets = make_offsets(offsets_host, device);
     constexpr uint32_t kStart = 2U;
     constexpr uint32_t k_lo = 128;
     constexpr uint32_t K_active = 128;
@@ -163,18 +180,7 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
         /*output_tensor=*/std::nullopt,
         /*offsets_start_index=*/kStart);
 
-    auto in0_sliced_km = ttnn::slice(
-        in0_km,
-        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
-        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, M},
-        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-    auto in0_sliced_mk = ttnn::transpose(in0_sliced_km, -2, -1);
-    auto in1_sliced = ttnn::slice(
-        in1,
-        ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
-        ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, N},
-        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-    auto ref = minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, cfg);
+    auto ref = expert_k_reference(in0_km, in1, k_lo, K_active, M, N, cfg);
 
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA,M=176) vs minimal not bit-exact";
 }
@@ -220,8 +226,7 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
 
     // start_index=2 → rows [96, 160) → actual_M = 64.
     const std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 224U, 288U};
-    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    auto offsets = make_offsets(offsets_host, device);
     constexpr uint32_t kStart = 2U;
     constexpr uint32_t m_lo = 96U;
     constexpr uint32_t m_hi = 160U;
@@ -279,8 +284,7 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow_TransposeB) {
 
     // start_index=2 → rows [96, 160) → actual_M = 64.
     const std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 224U, 288U};
-    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    auto offsets = make_offsets(offsets_host, device);
     constexpr uint32_t kStart = 2U;
     constexpr uint32_t m_lo = 96U;
     constexpr uint32_t m_hi = 160U;
@@ -350,8 +354,7 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
 
     // offsets where index 1 → count=0 (offsets[1]==offsets[2]).
     std::vector<uint32_t> offsets_host = {0U, 128U, 128U, 256U};
-    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    auto offsets = make_offsets(offsets_host, device);
 
     auto result = ttml::metal::variable_matmul(
         /*input_tensor=*/dY,
@@ -399,8 +402,7 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndWeightK_VaryingK) {
 
     // Expert K-ranges of different sizes (all tile-aligned): 64, 128, 64, 256.
     const std::vector<uint32_t> offsets_host = {0U, 64U, 192U, 256U, 512U};
-    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    auto offsets = make_offsets(offsets_host, device);
     const uint32_t num_experts = static_cast<uint32_t>(offsets_host.size()) - 1U;
 
     auto cfg = kConfig;
@@ -432,18 +434,7 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndWeightK_VaryingK) {
                 << " (expected a cache hit through override_runtime_arguments)";
         }
 
-        auto in0_sliced_km = ttnn::slice(
-            in0_km,
-            ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
-            ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, M},
-            ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-        auto in0_sliced_mk = ttnn::transpose(in0_sliced_km, -2, -1);
-        auto in1_sliced = ttnn::slice(
-            in1,
-            ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
-            ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, N},
-            ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-        auto ref = minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, cfg);
+        auto ref = expert_k_reference(in0_km, in1, k_lo, K_active, M, N, cfg);
 
         EXPECT_EQ(max_abs_error(result, ref), 0.0F)
             << "variable(InputAndWeightK) cache-hit result wrong at offsets_start_index=" << s
@@ -462,8 +453,7 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndOutputRow_VaryingM) {
 
     // Expert M-ranges of different sizes (all tile-aligned), tiling [0, M_parent): 32, 64, 64, 160.
     const std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 320U};
-    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    auto offsets = make_offsets(offsets_host, device);
     const uint32_t num_experts = static_cast<uint32_t>(offsets_host.size()) - 1U;
 
     for (uint32_t s = 0; s < num_experts; ++s) {
