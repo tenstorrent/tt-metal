@@ -193,6 +193,11 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+      brain-fast-dispatch-only:
+        required: false
+        type: boolean
+        default: false
+        description: "[BrAIn] Run only the ttsim fast-dispatch async buffer repro job, skip everything else"
   push:
     branches: ["main"]
 
@@ -213,7 +218,7 @@ jobs:
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
     needs: check-harbor
-    if: ${{ inputs.dev-docker-image == '' }}
+    if: ${{ inputs.dev-docker-image == '' && !inputs.brain-fast-dispatch-only }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -441,3 +446,77 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: ${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}
       run-metal-cpp-unit-tests: true
+
+  # ── BrAIn investigation: GH #43725 ──────────────────────────────────────
+  # Standalone job — no dependency on build-artifact or hardware runners.
+  # Builds unit_tests_ttnn from source in CI Docker, runs
+  # TestAsyncRuntimeAllocatedBuffers under ttsim v1.8.4 wh_x2 (N300)
+  # WITHOUT TT_METAL_SLOW_DISPATCH_MODE so the fast-dispatch path is exercised.
+  brain-ttsim-fast-dispatch-async-repro:
+    name: "[BrAIn] TestAsyncRuntimeAllocatedBuffers — ttsim wh_x2 fast dispatch"
+    if: ${{ inputs.brain-fast-dispatch-only == true }}
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/ubuntu-22.04-amd64:34d2f91cc25df7cba3634c04d98d7c1758563b3a
+      volumes:
+        - ${{ github.workspace }}:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    env:
+      CC: clang-20
+      CXX: clang++-20
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: CMake configure (ttnn tests only)
+        run: |
+          ./build_metal.sh \
+            --build-dir build \
+            --build-type Release \
+            --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake \
+            --build-ttnn-tests \
+            --configure-only
+
+      - name: Build unit_tests_ttnn
+        run: cmake --build build --target unit_tests_ttnn -j$(nproc)
+
+      - name: Download ttsim v1.8.4 (wh_x2 = N300 / 2-chip WH)
+        run: |
+          mkdir -p sim
+          curl -fL --retry 5 --retry-delay 10 \
+            "https://github.com/tenstorrent/ttsim/releases/download/v1.8.4/libttsim_wh_x2.so" \
+            -o sim/libttsim.so
+          cp tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml sim/soc_descriptor.yaml
+          echo "ttsim: $(ls -lh sim/libttsim.so)"
+
+      - name: Run TestAsyncRuntimeAllocatedBuffers (fast dispatch — no slow-dispatch env)
+        env:
+          TT_METAL_SIMULATOR_HOME: /work/sim
+          TT_METAL_SIMULATOR: /work/sim/libttsim.so
+          TT_METAL_MOCK_CLUSTER_DESC_PATH: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/n300_cluster_desc.yaml
+          TT_METAL_DISABLE_SFPLOADMACRO: "1"
+          GTEST_COLOR: "yes"
+          TT_LOGGER_LEVEL: info
+          # TT_METAL_SLOW_DISPATCH_MODE intentionally absent —
+          # MultiCommandQueueSingleDeviceFixture skips when slow dispatch is set
+        run: |
+          mkdir -p test-results
+          ./build/test/ttnn/unit_tests_ttnn \
+            --gtest_filter="MultiCommandQueueSingleDeviceFixture.TestAsyncRuntimeAllocatedBuffers" \
+            --gtest_output=xml:/work/test-results/async-buffer-results.xml
+          echo "--- exit $? ---"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-async-buffer-test-results
+          path: /work/test-results/
+          retention-days: 7
