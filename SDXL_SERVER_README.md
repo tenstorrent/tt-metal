@@ -229,15 +229,24 @@ HTTP Request → FastAPI → Task Queue → Worker → TtSDXLPipeline → Result
 
 ## Dependencies
 
-All dependencies included in `/home/tt-admin/tt-metal/python_env`:
+Most dependencies come from tt-metal's `python_env`:
 - `diffusers` - SDXL pipeline
 - `transformers` - CLIP encoders
 - `torch` - PyTorch
-- `fastapi` - Web framework
-- `uvicorn` - ASGI server
 - `pydantic` - Validation
 - `scikit-image` - SSIM calculation
 - `Pillow` - Image processing
+
+Server-only dependencies live in `requirements-server.txt` (kept out of tt-metal's
+`requirements-dev.txt` so this server is a zero-edit overlay on the upstream env).
+The launch scripts install them automatically; to install manually:
+
+```bash
+pip install -r requirements-server.txt
+```
+
+- `fastapi` - Web framework
+- `uvicorn` - ASGI server
 
 ---
 

@@ -57,6 +57,15 @@ fi
 source "${TT_METAL_HOME}/python_env/bin/activate"
 
 # ---------------------------------------------------------------------------
+# Install server-only dependencies (kept out of tt-metal's requirements-dev.txt
+# so this server is a zero-edit overlay on the upstream environment)
+# ---------------------------------------------------------------------------
+if ! python -c "import fastapi, uvicorn" 2>/dev/null; then
+    echo "Installing server dependencies from requirements-server.txt..."
+    pip install -q -r "${TT_METAL_HOME}/requirements-server.txt"
+fi
+
+# ---------------------------------------------------------------------------
 # Common environment variables (both models)
 # ---------------------------------------------------------------------------
 export PYTHONPATH="${TT_METAL_HOME}"

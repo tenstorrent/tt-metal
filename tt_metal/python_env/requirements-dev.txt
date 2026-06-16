@@ -61,9 +61,6 @@ opencv-python-headless==4.8.1.78
 diffusers==0.35.1
 accelerate==1.7.0
 peft==0.18.1
-# For image generation HTTP server (server.py)
-fastapi==0.115.12
-uvicorn==0.34.0
 ftfy==6.1.1
 gitpython==3.1.50
 einops==0.6.1
