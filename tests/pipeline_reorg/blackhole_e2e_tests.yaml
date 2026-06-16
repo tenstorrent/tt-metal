@@ -262,8 +262,10 @@
   name: bh_qb_DeepSeek_PREFILL
   model-name: deepseek_prefill
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and (mesh-2x2 or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe))" --timeout 1800
-    pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and (mesh-2x2 or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe))" --timeout 1800 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short || exit_code=$?
+    exit $exit_code
   skus:
     bh_quietbox_2:
       timeout: 30
