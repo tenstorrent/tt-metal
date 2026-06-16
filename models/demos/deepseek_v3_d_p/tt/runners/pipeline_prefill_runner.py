@@ -12,13 +12,12 @@ wires rank topology and the per-chunk schedule; it does not reimplement embed /
 layers / forward.
 
 Cross-rank activation transport is a host round-trip stand-in until the D2D-socket
-sync ops land (PREFILL_PP_TRANSPORT, see the transport section): "host" gathers each
-rank's output activation to host, hands it to the next rank through a file under
-PREFILL_PP_DIR, and reshards it on the far side (bit-exact, so a 4-rank run
-PCC-matches single-rank); "placeholder" feeds zeros (compile/timing smoke only).
-PREFILL_PP_DIR is /dev/shm for single-host; for multi-host set it to a directory on a
-filesystem shared by all hosts (e.g. NFS) — /dev/shm is per-host and won't cross hosts.
-When the sync ops arrive, only send_activation / recv_activation change.
+sync ops land: each rank gathers its output activation to host, hands it to the next
+rank through a file under PREFILL_PP_DIR, and reshards it on the far side (bit-exact,
+so a multi-rank run PCC-matches single-rank). PREFILL_PP_DIR is /dev/shm for single-host;
+for multi-host set it to a directory on a filesystem shared by all hosts (e.g. NFS) —
+/dev/shm is per-host and won't cross hosts. When the sync ops arrive, only
+send_activation / recv_activation change.
 
 A chunk has a strict rank0->...->rankN-1 dependency, so ranks run as a barrier-ordered
 wavefront (one rank at a time, fully serialized). Combined with the host round-trip
@@ -104,17 +103,11 @@ def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]
 # Cross-rank activation transport
 # ---------------------------------------------------------------------------
 #
-# Two modes (PREFILL_PP_TRANSPORT):
-#   "host"        — gather the activation to host, hand it to the next rank through a file
-#                   under PREFILL_PP_DIR, reshard on the far side. Bit-exact (no precision
-#                   loss beyond the activation's own dtype) so a 4-rank run PCC-matches
-#                   single-rank. Fully serialized + host round-trip => very slow; a
-#                   correctness/PCC bring-up, not a perf path.
-#   "placeholder" — non-first ranks consume zeros; cross-rank output is meaningless.
-#                   Compile/timing smoke test only.
-#
-# Both are stand-ins until the D2D-socket sync ops land; "host" is the one that lets us
-# validate the rank-sliced model now. The transport touches only these helpers.
+# Gather the activation to host, hand it to the next rank through a file under PREFILL_PP_DIR,
+# reshard on the far side. Bit-exact (no precision loss beyond the activation's own dtype) so a
+# multi-rank run PCC-matches single-rank. Fully serialized + host round-trip => very slow; a
+# correctness/PCC bring-up, not a perf path. A stand-in until the D2D-socket sync ops land — when
+# they do, only send_activation / recv_activation change.
 #
 # PREFILL_PP_DIR is the handoff directory:
 #   - single host: /dev/shm (default) — per-host tmpfs, fast.
@@ -171,9 +164,6 @@ def send_activation(runtime: TtPrefillRuntime, activation: ttnn.Tensor, subctx: 
     barrier orders this rename before the consumer's read."""
     import torch
 
-    if _transport_mode() == "placeholder":
-        ttnn.deallocate(activation)
-        return
     t0 = time.perf_counter()
     host = _gather_activation_to_host(runtime.mesh_device, activation)
     final = _act_path(subctx, chunk_idx, rank)
@@ -191,14 +181,12 @@ def send_activation(runtime: TtPrefillRuntime, activation: ttnn.Tensor, subctx: 
 
 def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, producer_rank: int) -> ttnn.Tensor:
     """Receive the upstream rank's activation for this chunk and reshard it onto this rank's mesh.
-    In placeholder mode, returns zeros instead. runtime.prefill() deallocates the returned tensor.
+    runtime.prefill() deallocates the returned tensor.
 
     The producer's rename is barrier-ordered before this read, but NFS can briefly serve a stale
     negative dentry, so retry the open a bounded number of times before giving up."""
     import torch
 
-    if _transport_mode() == "placeholder":
-        return runtime.make_placeholder_activation()
     path = _act_path(subctx, chunk_idx, producer_rank)
     attempts = int(os.environ.get("PREFILL_PP_RECV_RETRIES", "50"))
     t0 = time.perf_counter()
@@ -227,13 +215,6 @@ def _subcontext_id() -> int:
     """0 when not launched under an MPI sub-context — subcontext_id() returns None there."""
     sub_id = ttnn.distributed_context_subcontext_id()
     return int(sub_id) if sub_id is not None else 0
-
-
-def _transport_mode() -> str:
-    mode = os.environ.get("PREFILL_PP_TRANSPORT", "host")
-    if mode not in ("host", "placeholder"):
-        raise ValueError(f"PREFILL_PP_TRANSPORT={mode!r} must be 'host' or 'placeholder'")
-    return mode
 
 
 # ---------------------------------------------------------------------------
@@ -293,10 +274,7 @@ def run_standalone_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int) ->
     token_ids = (token_ids + [1] * total_len)[:total_len]
 
     num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
-    logger.info(
-        f"[pp rank {rank}] transport={_transport_mode()} actual_isl={actual_isl} slot={slot_id} "
-        f"chunks={n_chunks} iters={num_iterations}"
-    )
+    logger.info(f"[pp rank {rank}] actual_isl={actual_isl} slot={slot_id} " f"chunks={n_chunks} iters={num_iterations}")
 
     iter_times_ms = []
     for it in range(num_iterations):
@@ -408,8 +386,7 @@ def main() -> None:
     ttnn.distributed_context_barrier()
 
     # The activation-handoff dir must exist before the first send (send_activation does not mkdir).
-    if _transport_mode() == "host":
-        os.makedirs(_act_dir(), exist_ok=True)
+    os.makedirs(_act_dir(), exist_ok=True)
 
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
     run_standalone_loop(runtime, rank, num_ranks)
