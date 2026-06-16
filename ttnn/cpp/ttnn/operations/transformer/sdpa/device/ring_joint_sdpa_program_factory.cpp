@@ -571,14 +571,20 @@ void apply_ring_joint_scalar_runtime_args(
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
+namespace {
+
+// Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
+// create_workload_descriptor() can loop coords and reuse this body verbatim. The
+// op-specific name suffix avoids Unity-build collisions with the sibling ring
+// sdpa factories that share the same helper signature.
+tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
-        "RingJointSDPAProgramFactory::create_descriptor requires mesh_dispatch_coordinate");
+        "build_ring_joint_sdpa_program_descriptor requires mesh_dispatch_coordinate");
     const auto& coord = mesh_dispatch_coordinate.value();
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
@@ -2178,6 +2184,29 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.kv_cache_batch_idx);
 
     return desc;
+}
+
+}  // namespace
+
+// Ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
+// device_index / forward_coord / backward_coord (used by the all-gather portion) all
+// depend on the mesh coordinate, so descriptors cannot be shared across coords. Returning
+// a WorkloadDescriptor (rather than a per-coord ProgramDescriptor) keeps the framework on
+// its no-rebuild cache-hit fast path; the dynamic scalar runtime args (indexed kv-cache /
+// kv-pad rotation) are still re-applied every dispatch by override_runtime_arguments below.
+tt::tt_metal::WorkloadDescriptor RingJointSDPAProgramFactory::create_workload_descriptor(
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc = build_ring_joint_sdpa_program_descriptor(args, tensor_args, output_tensors, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
 }
 
 RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorkloadFactory::create_mesh_workload(

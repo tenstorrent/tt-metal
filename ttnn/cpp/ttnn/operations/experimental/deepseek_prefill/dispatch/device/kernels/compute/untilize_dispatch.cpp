@@ -27,6 +27,7 @@ constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 //   2: cb_in_id        - CB for untilize input tile data (c_0)
 //   3: hidden_size     - hidden dimension (e.g., 7168)
 //   4: read_batch_size - number of rows per untilize batch (32)
+//   5: block_ct_dim    - tiles per pack call (largest divisor of full_ct_dim <= 8)
 
 void kernel_main() {
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(0);
@@ -34,8 +35,8 @@ void kernel_main() {
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(2);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(3);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(4);
+    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(5);
 
-    constexpr uint32_t block_ct_dim = 8;
     constexpr uint32_t full_ct_dim = hidden_size / 32;
     constexpr uint32_t num_blocks = full_ct_dim / block_ct_dim;
 
