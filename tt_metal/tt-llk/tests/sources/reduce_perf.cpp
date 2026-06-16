@@ -96,18 +96,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     constexpr MathFidelity MATH_FIDELITY = MathFidelity::HiFi4;
 
-    // todo: INT32 reduce is not supported yet
-    constexpr bool ENFORCE_FP32_ACC = false;
-    constexpr bool IS_INT_FPU       = false;
+    constexpr bool IS_INT_FPU = false;
 
-    // Create a default 32x32 tile with 4 faces of 16x16
     const ckernel::TensorShape DEFAULT_TENSOR_SHAPE = {FACE_R_DIM, FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, ENFORCE_FP32_ACC>();
+        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -132,8 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(
-                        block_tile, DEFAULT_TENSOR_SHAPE);
+                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU>(block_tile, DEFAULT_TENSOR_SHAPE);
                 }
             }
         }
@@ -149,8 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(
-                        block_tile, DEFAULT_TENSOR_SHAPE);
+                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU>(block_tile, DEFAULT_TENSOR_SHAPE);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
