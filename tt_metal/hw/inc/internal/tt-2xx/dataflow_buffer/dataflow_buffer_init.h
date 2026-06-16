@@ -448,6 +448,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
             last_pair_hw = pair_reg_hw;
             pairs_slots_written++;
             enable_remapper = true;
+            g_remapper_configurator.note_pair_configured(pair_idx);
         }
 
         dm1_blob_ptr += entry_bytes;
@@ -458,12 +459,12 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     }
 
     uint32_t enable_remapper_hw = 0;
-    if (enable_remapper) {
-        const uint32_t t_before_enable = rdcycle();
-        g_remapper_configurator.enable_remapper();
-        end_remapper_config_time = rdcycle();
-        enable_remapper_hw = end_remapper_config_time - t_before_enable;
-    }
+    // if (enable_remapper) {
+    //     const uint32_t t_before_enable = rdcycle();
+    //     g_remapper_configurator.enable_remapper();
+    //     end_remapper_config_time = rdcycle();
+    //     enable_remapper_hw = end_remapper_config_time - t_before_enable;
+    // }
 
 #if DFB_DM1_TC_INIT_OPTION == 2
     // Option 2: after the remapper is enabled, DM1 (not the producer) resets each remapped
@@ -513,7 +514,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
         blob_l1_read_sw,
         blob_loop_ovhd,
         pairs_reg_hw,
-        enable_remapper_hw,
+        0,
         first_pair_clientR_hw,
         first_pair_clientL_hw,
         start_time,

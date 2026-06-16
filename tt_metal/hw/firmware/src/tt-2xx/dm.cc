@@ -209,6 +209,11 @@ extern "C" uint32_t _start1() {
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+
+    // Remapper can always stay enabled even if no remapper pairs are configured.
+    // The default mirroring scheme is used if a particular remapper entry's clientR[0] valid bit is not set.
+    g_remapper_configurator.enable_remapper();
+
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
@@ -345,10 +350,9 @@ extern "C" uint32_t _start1() {
                 trigger_sync_register_init();
 
                 // Need to ensure that Remapper state is cleared for next kernel launch
-                if (g_remapper_configurator.is_remapper_enabled()) {
-                    g_remapper_configurator.clear_all_pairs();
-                    g_remapper_configurator.disable_remapper();
-                }
+                // Remapper initialization by DM1 tracks which pairs were configured. This will clear valid bits for all configured remappings.
+                g_remapper_configurator.clear_clientL_valid_up_to_high_watermark_hw();
+                g_remapper_configurator.reset_pair_high_watermark();
 
                 uint32_t go_message_index = mailboxes->go_message_index;
                 mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
