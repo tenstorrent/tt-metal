@@ -596,6 +596,16 @@ class ModelArgs:
 
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
+        # TODO: Enable batched_prefill once this is fixed: https://github.com/tenstorrent/tt-metal/issues/47238
+        # Qwen3-32B prefill logits are batch-variant on multi-chip Blackhole: the
+        # float-reduction order in the prefill matmul/attention depends on the
+        # batched-token count, so identical same-seed requests that land in
+        # different-sized prefill batches get slightly different logits. Seeded
+        # sampling under concurrency then diverges (tt-inference-server#4004,
+        # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
+        # variance. Workaround until the prefill kernels are batch-invariant;
+        # mirrors the existing Llama-3.1-8B P300/P150x8 handling.
+        self.disable_batched_prefill = self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4"
 
         if (
             self.base_model_name
