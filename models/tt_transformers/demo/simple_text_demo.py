@@ -1081,26 +1081,15 @@ def test_demo_text(
 
     repeat_batch_prompts = []
     if is_seqlen_sweep:
-        # Seqlen sweep: load each prompt file separately, filtering by model's max context
-        # Map each file to its minimum required seqlen (derived from filename label)
-        seqlen_labels = {
-            "1k": 1024,
-            "2k": 2048,
-            "4k": 4096,
-            "8k": 8192,
-            "16k": 16384,
-            "32k": 32768,
-            "64k": 65536,
-            "128k": 131072,
-        }
+        # Seqlen sweep: load each prompt file separately, filtering by model's max context.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384).
         filtered_files = []
         for f in sweep_prompt_files:
-            fname = Path(f).name
-            # Extract seqlen label from filename (e.g., "input_data_long_16k.json" -> "16k")
-            for label, min_seqlen in seqlen_labels.items():
-                if f"_long_{label}.json" in fname and min_seqlen <= max_seq_len:
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            if label.endswith("k") and label[:-1].isdigit():
+                min_seqlen = int(label[:-1]) * 1024
+                if min_seqlen <= max_seq_len:
                     filtered_files.append(f)
-                    break
         if not filtered_files:
             pytest.skip(f"No sweep prompt files fit within model's max context length ({max_seq_len})")
         repeat_batches = len(filtered_files)
