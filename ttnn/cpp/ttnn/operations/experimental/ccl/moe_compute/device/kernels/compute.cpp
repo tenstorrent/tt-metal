@@ -17,15 +17,11 @@
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_silu.h"
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_gelu.h"
-
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::calculate_gelu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
-}
 #endif
 
 namespace detail {
@@ -49,7 +45,7 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 
 template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
 };
 
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
@@ -57,11 +53,39 @@ inline void pack_compute_activation() {};
 
 template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_silu,
+        (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        0 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_silu,
+        (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        2 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
 
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        0 /*DST_IN0*/,
+        1 /*DST_IN1*/,
+        0 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        2 /*DST_IN0*/,
+        3 /*DST_IN1*/,
+        2 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
 };
 
 template <>
@@ -77,11 +101,39 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 
 template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
-    PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(0)));
-    PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(2)));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_gelu,
+        (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        0 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_gelu,
+        (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        2 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
 
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        0 /*DST_IN0*/,
+        1 /*DST_IN1*/,
+        0 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        2 /*DST_IN0*/,
+        3 /*DST_IN1*/,
+        2 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
 };
 
 }  // namespace detail
@@ -93,6 +145,9 @@ void kernel_main() {
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
+
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -149,7 +204,7 @@ void kernel_main() {
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
-    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
 
     // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
@@ -164,6 +219,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
     constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
+    constexpr uint32_t tiles_per_step_shared = Cfg::in2_tiles_per_step_shared;
 
     //-------------------------------------------------------------------------
     // Compute
@@ -252,7 +308,13 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
-            for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
+            // Shared experts are TP-split + front-packed: produce only the real TpNt prefix
+            // (dm0 reads the matching shortened W0/W1), then zero-fill the rest of the full
+            // tiles_per_step stride below. The unchanged full W2 walk then contracts real×real
+            // in the prefix and (zero in2)×(front-packed zero W2) past it.
+            const bool is_shared_expert = expert_id >= num_experts - num_shared_experts;
+            const uint32_t prod_tiles_per_step = is_shared_expert ? tiles_per_step_shared : tiles_per_step;
+            for (uint32_t tile_id = 0; tile_id < prod_tiles_per_step; tile_id += 2) {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
                 tile_regs_acquire();
@@ -319,6 +381,21 @@ void kernel_main() {
 
                 pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
                 pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
+                tile_regs_release();
+            }
+
+            // Zero-fill the unproduced tail [prod_tiles_per_step, tiles_per_step) of this core's in2
+            // stride for shared experts, so the full W2 walk reads zeros there (annihilated by the
+            // front-packed zero W2 rows) rather than stale data from a prior expert.
+            if (is_shared_expert) {
+                tile_regs_acquire();
+                fill_tile_init();
+                fill_tile(0, 0.0f);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t tile_id = prod_tiles_per_step; tile_id < tiles_per_step; ++tile_id) {
+                    pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
+                }
                 tile_regs_release();
             }
 

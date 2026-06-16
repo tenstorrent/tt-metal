@@ -30,6 +30,84 @@ namespace ckernel::math
 constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
                                                 // first 16 for sfpu, next 16 for fpu
 
+// ---------------------------------------------------------------------------------------------
+// Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) state tracker.
+//
+// The flag is a math-ALU concern: it is only read by MOVA2D/MOVB2D/ELW/MVMUL (the math thread),
+// so the math thread owns it via a small state machine. The recorded state lets format reconfigs and op
+// inits compose instead of clobbering each other:
+//
+//   DEFAULT        : flag follows the operand formats (UInt16 -> 1, else 0). Established by the
+//                    format-aware math config (_llk_math_hw_configure_ / reconfig), which also
+//                    clears any stale op-state before the next FP matmul/binary/reduce.
+//   UNARY_PRESERVE : flag = 1. Selected by eltwise unary / SFPU / datacopy inits to preserve
+//                    bf16 -0.0 and 16-bit-integer datums.
+//   MOV_OPS        : flag = 1. Selected by transpose_dest / 32b hi16-lo16 MOV sequences.
+//
+// Each configurator early-returns when already in its state (DEFAULT additionally re-applies when
+// the cached operand formats changed), so steady-state ops pay no extra cfg writes.
+// See ckernel::requires_disabled_src_zero_flag for the UInt16 rationale.
+// ---------------------------------------------------------------------------------------------
+enum class SrcZeroFlagState : std::uint8_t
+{
+    UNCONFIGURED   = 0,
+    DEFAULT        = 1,
+    UNARY_PRESERVE = 2,
+    MOV_OPS        = 3,
+};
+
+static SrcZeroFlagState src_zero_flag_state    = SrcZeroFlagState::UNCONFIGURED;
+static std::uint32_t    src_zero_flag_srca_fmt = 0xff;
+static std::uint32_t    src_zero_flag_srcb_fmt = 0xff;
+
+inline void _configure_src_zero_flag_(const bool disable)
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
+}
+
+// DEFAULT: the flag follows the operand formats. Re-applies when the state or cached formats change.
+inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    if (src_zero_flag_state == SrcZeroFlagState::DEFAULT && src_zero_flag_srca_fmt == srca_dst_format && src_zero_flag_srcb_fmt == srcb_dst_format)
+    {
+        return;
+    }
+    src_zero_flag_srca_fmt = srca_dst_format;
+    src_zero_flag_srcb_fmt = srcb_dst_format;
+    src_zero_flag_state    = SrcZeroFlagState::DEFAULT;
+    _configure_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
+}
+
+// UNARY_PRESERVE: unary / SFPU / datacopy ops keep the flag disabled (preserve -0.0 and 16b ints).
+inline void _configure_unary_preserve_zero_flag_state_()
+{
+    if (src_zero_flag_state == SrcZeroFlagState::UNARY_PRESERVE)
+    {
+        return;
+    }
+    src_zero_flag_state = SrcZeroFlagState::UNARY_PRESERVE;
+    _configure_src_zero_flag_(true);
+}
+
+// MOV_OPS: transpose_dest / 32b hi16-lo16 MOV sequences keep the flag disabled.
+inline void _configure_mov_ops_zero_flag_state_()
+{
+    if (src_zero_flag_state == SrcZeroFlagState::MOV_OPS)
+    {
+        return;
+    }
+    src_zero_flag_state = SrcZeroFlagState::MOV_OPS;
+    _configure_src_zero_flag_(true);
+}
+
+// Invalidate the tracked state after code path that writes the flag directly (bypassing the
+// tracker), so the next configurator re-applies regardless of the skip-if-set fast path.
+inline void _invalidate_src_zero_flag_state_()
+{
+    src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
+}
+
 inline void reset_counters(const std::uint32_t setrwc)
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, setrwc);
