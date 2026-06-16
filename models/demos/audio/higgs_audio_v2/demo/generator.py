@@ -23,22 +23,19 @@ import os
 import pathlib
 
 import torch
-import ttnn
 from loguru import logger
 
-from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config, load_higgs_v2_state_dict
-from models.demos.audio.higgs_audio_v2.tt.model_args import HiggsModelArgs, BASE_TEXT_MODEL
-from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
-from models.demos.audio.higgs_audio_v2.tt.precision_presets import build_precision
+import ttnn
 from models.demos.audio.higgs_audio_v2.tt.audio_decode import (
-    initialize_delay_pattern_state,
-    apply_delay_pattern_to_greedy_audio_tokens,
     apply_delay_pattern_to_selected_audio_tokens,
+    initialize_delay_pattern_state,
 )
+from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
+from models.demos.audio.higgs_audio_v2.tt.model_args import BASE_TEXT_MODEL, HiggsModelArgs
+from models.demos.audio.higgs_audio_v2.tt.precision_presets import build_precision
+from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config, load_higgs_v2_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
-from models.tt_transformers.tt.common import Mode
-
 
 HIGGS_MODEL_DIR = "/data/hf_cache/higgs"
 SAMPLING_RATE = 24000
@@ -73,13 +70,22 @@ class HiggsAudioTTSGenerator:
         tt_ccl = TT_CCL(mesh_device)
         RopeCls = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         self.rope_setup = RopeCls(
-            device=mesh_device, batch_size=self.args.max_batch_size, head_dim=self.args.head_dim,
-            max_seq_len=self.args.max_seq_len, rope_theta=self.args.rope_theta, rope_scaling=self.args.rope_scaling,
-            use_qk_fused=self.args.use_qk_fused, prefetcher=None,
+            device=mesh_device,
+            batch_size=self.args.max_batch_size,
+            head_dim=self.args.head_dim,
+            max_seq_len=self.args.max_seq_len,
+            rope_theta=self.args.rope_theta,
+            rope_scaling=self.args.rope_scaling,
+            use_qk_fused=self.args.use_qk_fused,
+            prefetcher=None,
         )
         self.model = HiggsAudioTTModel(
-            args=self.args, mesh_device=mesh_device, tt_ccl=tt_ccl, state_dict=state_dict,
-            transformation_mats=self.rope_setup.get_both_trans_mats(), dtype=ttnn.bfloat8_b,
+            args=self.args,
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            state_dict=state_dict,
+            transformation_mats=self.rope_setup.get_both_trans_mats(),
+            dtype=ttnn.bfloat8_b,
         )
         logger.info(f"HiggsAudioTTSGenerator ready (precision={precision}, dim={self.args.dim})")
 
@@ -105,7 +111,9 @@ class HiggsAudioTTSGenerator:
         ridx = self.rope_setup.get_rot_idxs(cp, on_host=True)
         ridx = ttnn.to_device(ridx, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         cp_tt = ttnn.from_torch(
-            cp, device=self.mesh_device, dtype=ttnn.int32,
+            cp,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
         )
         return cp_tt, self.rope_setup.get_rot_mats(ridx)
@@ -144,7 +152,7 @@ class HiggsAudioTTSGenerator:
         if win_len <= 0 or not rows:
             return selected
         window = torch.stack(rows[-win_len:], dim=0)  # [w, K]
-        rep = (window == selected.unsqueeze(0))
+        rep = window == selected.unsqueeze(0)
         rep = rep & (window != self.cfg.audio_stream_bos_id) & (window != self.cfg.audio_stream_eos_id)
         repl = rep.sum(dim=0) >= max_rep  # [K]
         if bool(repl.any()):
@@ -153,8 +161,18 @@ class HiggsAudioTTSGenerator:
         return selected
 
     @torch.no_grad()
-    def generate(self, conversation, max_new_tokens=750, temperature=1.0, top_k=50, top_p=0.95, seed=1234,
-                 silence_patience=32, ras_win_len=7, ras_win_max_num_repeat=2):
+    def generate(
+        self,
+        conversation,
+        max_new_tokens=750,
+        temperature=1.0,
+        top_k=50,
+        top_p=0.95,
+        seed=1234,
+        silence_patience=32,
+        ras_win_len=7,
+        ras_win_max_num_repeat=2,
+    ):
         """Run prefill + free-running greedy audio decode.
 
         Returns audio_input_ids as a torch.LongTensor [1, T, K] in the delay-
@@ -174,10 +192,15 @@ class HiggsAudioTTSGenerator:
         if seed is not None:
             torch.manual_seed(seed)
         greedy = (temperature is None) or (temperature <= 0)
-        logger.info(f"decode: {'greedy' if greedy else f'sampling T={temperature} top_k={top_k} top_p={top_p}'} "
-                    f"RAS(win={ras_win_len}, max_rep={ras_win_max_num_repeat})")
+        logger.info(
+            f"decode: {'greedy' if greedy else f'sampling T={temperature} top_k={top_k} top_p={top_p}'} "
+            f"RAS(win={ras_win_len}, max_rep={ras_win_max_num_repeat})"
+        )
         _ = self.model.prefill_text(
-            input_ids, self.rope_setup, audio_input_ids=audio_in, audio_input_ids_mask=audio_mask,
+            input_ids,
+            self.rope_setup,
+            audio_input_ids=audio_in,
+            audio_input_ids_mask=audio_mask,
             audio_token_id=self.processor.audio_token_id,
         )
         if os.environ.get("HIGGS_DEBUG"):
@@ -203,8 +226,9 @@ class HiggsAudioTTSGenerator:
             nxt = nxt.to(torch.long)
             rows.append(nxt)
             if os.environ.get("HIGGS_DEBUG") and step < 14:
-                logger.info(f"[dbg] step {step:2d} pos={pos} row={nxt.tolist()} "
-                            f"nd={num_delay} nr={num_rem} fin={finished}")
+                logger.info(
+                    f"[dbg] step {step:2d} pos={pos} row={nxt.tolist()} " f"nd={num_delay} nr={num_rem} fin={finished}"
+                )
             if finished:
                 break
             # Early stop: the model loops on an identical row when it has run out

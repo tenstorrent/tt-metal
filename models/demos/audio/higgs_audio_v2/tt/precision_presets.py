@@ -14,11 +14,11 @@ the ~15.45ms device floor; the cost is accuracy, which the gate test measures.
 """
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
-    ModelOptimizations,
-    TensorGroup,
-    PrecisionSetting,
-    OpGroup,
     MathFidelitySetting,
+    ModelOptimizations,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
 )
 
 

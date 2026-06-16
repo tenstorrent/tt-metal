@@ -19,9 +19,9 @@ For Spike 3+4 we only verify construction. Forward pass arrives in Spike 6.
 from __future__ import annotations
 
 import torch
-import ttnn
 from tqdm import tqdm
 
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention
@@ -66,9 +66,7 @@ class HiggsDualFFNBlock(LightweightModule):
         )
 
         self.attention_norm = self._make_norm(state_dict, "attention_norm", layer_num, "ATTN_LN_AG_CONFIG")
-        self.audio_attention_norm = self._make_norm(
-            state_dict, "audio_attention_norm", layer_num, "ATTN_LN_AG_CONFIG"
-        )
+        self.audio_attention_norm = self._make_norm(state_dict, "audio_attention_norm", layer_num, "ATTN_LN_AG_CONFIG")
         self.ffn_norm = self._make_norm(state_dict, "ffn_norm", layer_num, "FFN_LN_AG_CONFIG")
         self.audio_ffn_norm = self._make_norm(state_dict, "audio_ffn_norm", layer_num, "FFN_LN_AG_CONFIG")
 
@@ -192,9 +190,7 @@ class HiggsAudioEmbedding(LightweightModule):
             torch_w,
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=mesh_device, dims=(None, 3), mesh_shape=args.cluster_shape
-            ),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device=mesh_device, dims=(None, 3), mesh_shape=args.cluster_shape),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=args.get_model_config()["EMB_WEIGHTS_MEMCFG"],
             cache_file_name=None,
@@ -328,9 +324,7 @@ class HiggsAudioTTModel(LightweightModule):
 
         # Audio LM head (vocab_size=8208). Custom minimal linear to avoid
         # threading audio_vocab_size through args.padded_vocab_size.
-        self.audio_lm_head = HiggsAudioLMHead(
-            mesh_device=mesh_device, args=args, state_dict=state_dict, dtype=dtype
-        )
+        self.audio_lm_head = HiggsAudioLMHead(mesh_device=mesh_device, args=args, state_dict=state_dict, dtype=dtype)
 
     def _audio_embed_host_table(self):
         """Lazy host copy of the audio codebook embedding table [audio_vocab, dim]."""
@@ -407,20 +401,16 @@ class HiggsAudioTTModel(LightweightModule):
             frames = audio_input_ids[0]  # [F, K]
             if audio_input_ids_mask is not None:
                 frames = frames[audio_input_ids_mask[0].bool()]  # [n_valid, K]
-            offsets = (torch.arange(K, dtype=torch.long) * cb)
+            offsets = torch.arange(K, dtype=torch.long) * cb
             audio_embeds = table[(frames.long() + offsets)].sum(dim=1)  # [n_valid, dim]
             ph_pos = (input_ids == audio_token_id).nonzero(as_tuple=True)[0]
             # HF merges via masked_scatter: the placeholder positions are filled
             # with the leading audio_embeds in order (the delay-pattern overhang
             # tail, n_valid - n_placeholders frames, is simply not consumed).
             n_ph = ph_pos.numel()
-            assert audio_embeds.shape[0] >= n_ph, (
-                f"placeholders {n_ph} > audio frames {audio_embeds.shape[0]}"
-            )
+            assert audio_embeds.shape[0] >= n_ph, f"placeholders {n_ph} > audio frames {audio_embeds.shape[0]}"
             audio_embeds = audio_embeds[:n_ph]
-            h_host = ttnn.to_torch(
-                h, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-            )[:S_padded].float()
+            h_host = ttnn.to_torch(h, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[:S_padded].float()
             h_host[ph_pos] = audio_embeds.to(h_host.dtype)
             h = ttnn.from_torch(
                 h_host.to(torch.bfloat16),
@@ -449,19 +439,32 @@ class HiggsAudioTTModel(LightweightModule):
         if audio_input_ids is not None:
             am = (input_ids == audio_token_id).to(torch.float32).view(1, 1, S_padded, 1)
             audio_mask_dev = ttnn.from_torch(
-                am.to(torch.bfloat16), device=self.mesh_device, dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                am.to(torch.bfloat16),
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             text_mask_dev = ttnn.from_torch(
-                (1.0 - am).to(torch.bfloat16), device=self.mesh_device, dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                (1.0 - am).to(torch.bfloat16),
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
         for blk in self.layers:
-            h = blk(h, current_pos=None, rot_mats=rot_mats, mode=Mode.PREFILL, is_audio_token=False,
-                    audio_mask=audio_mask_dev, text_mask=text_mask_dev)
+            h = blk(
+                h,
+                current_pos=None,
+                rot_mats=rot_mats,
+                mode=Mode.PREFILL,
+                is_audio_token=False,
+                audio_mask=audio_mask_dev,
+                text_mask=text_mask_dev,
+            )
 
         # Final norm + LM head, sliced to last (non-padding) token.
         last_idx = S - 1  # logical last position
@@ -475,17 +478,13 @@ class HiggsAudioTTModel(LightweightModule):
         # Audio LM head on last hidden — this is the first audio prediction.
         # Pull to host so the caller can argmax/delay-process it directly.
         audio_logits = self.audio_lm_head(h_last)
-        audio_logits_torch = ttnn.to_torch(
-            audio_logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        )
+        audio_logits_torch = ttnn.to_torch(audio_logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
         # Take row 0 (real last-token position), slice to real audio vocab,
         # reshape into per-codebook logits.
         K = self.args.audio_num_codebooks
         cb = self.args.audio_codebook_size
         last_audio_logits = (
-            audio_logits_torch.reshape(audio_logits_torch.shape[-2], -1)[0, : K * cb]
-            .reshape(K, cb)
-            .float()
+            audio_logits_torch.reshape(audio_logits_torch.shape[-2], -1)[0, : K * cb].reshape(K, cb).float()
         )
 
         # Bridge: LMHead in PREFILL wants its input in args.get_lm_head_input_mem_config.
@@ -496,6 +495,7 @@ class HiggsAudioTTModel(LightweightModule):
         logits = self.text_lm_head(h_last)
         return logits, last_audio_logits
         # logits shape: [1, 1, 32, padded_vocab_size]; row 0 is the real last token.
+
     def decode_step_audio(self, audio_token_ids: torch.Tensor, current_pos, rot_mats):
         """One audio decode step.
 
