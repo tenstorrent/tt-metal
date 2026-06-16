@@ -1009,9 +1009,15 @@ inline void calculate_atanh() {
         sfpi::vFloat inp = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::abs(inp);
 
+        // Precompute |x| - 1 once and drive every |x|-vs-1 test off it. On WH a
+        // two-register compare is lowered to (lhs - rhs) <=> 0, so comparing this
+        // difference against 0 reuses one SFPMAD instead of recomputing abs(inp)
+        // and the subtraction in each predicated block (saves ~2 cycles/iter).
+        sfpi::vFloat cmp = a - sfpi::vConst1;
+
         // Clamp |x| >= 1 lanes to 0 so the interior formula stays finite there;
         // those lanes are overwritten by the boundary fix-up below.
-        v_if(a >= sfpi::vConst1) { a = sfpi::vConst0; }
+        v_if(cmp >= sfpi::vConst0) { a = sfpi::vConst0; }
         v_endif;
 
         // Build the log1p argument, then materialise it to DST before the log1p
@@ -1025,9 +1031,10 @@ inline void calculate_atanh() {
         sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
         res = sfpi::copysgn(0.5f * res, inp);
 
-        // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN.
-        v_if(sfpi::abs(inp) > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
-        v_elseif(sfpi::abs(inp) == sfpi::vConst1) {
+        // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN. cmp = |x| - 1, so
+        // |x| > 1 is cmp > 0 and |x| == 1 is cmp == 0.
+        v_if(cmp > sfpi::vConst0) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(cmp == sfpi::vConst0) {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
             res = sfpi::copysgn(inf, inp);
         }
