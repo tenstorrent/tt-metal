@@ -4,12 +4,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Bisect which CFG register(s) a failing kernel implicitly depends on.
 
-Premise: a kernel passes on a pristine device but FAILS when the whole config space is
-poisoned at launch (see helpers/cfg_pollution.py) — so it silently relies on some subset
-of those words, config its own init never (re)writes. This tool finds the minimal such
-subset by delta-debugging: it re-runs the kernel many times, each time poisoning only a
-candidate subset (with the same per-word values, which `word_value` makes subset-
-independent) and narrows to the words that matter.
+Premise: a kernel passes on a pristine device but FAILS when config registers are poisoned
+at launch (see helpers/cfg_pollution.py) — so it silently relies on some words its own init
+never (re)writes. This tool finds them by delta-debugging (ddmin): it re-runs the kernel
+many times, each time poisoning only a candidate subset (with the same per-word values, which
+`word_value` makes subset-independent) and narrows to the words that matter.
+
+Finds ALL independent dependencies in one run, not just the first: after ddmin isolates a
+minimal failing set, those words are dropped from the universe (so they stay pristine in later
+trials) and the search repeats until poisoning everything-remaining no longer reproduces.
+
+Default universe is the "live" reconfigurable surface (registers some reachable op writes;
+see cfg_state_map.md) — failures there are candidate ACTIONABLE reconfig-escapes rather than
+reliance on never-written reset defaults. Use --universe thread for the whole config space.
 
 Trial isolation is by full device reset, NOT CFG restore. Restoring only CFG is not enough:
 empirically the failure also depends on non-CFG device state (dest/SFPU/regfile/L1) that a
@@ -40,6 +47,18 @@ PASS, FAIL, HANG = "PASS", "FAIL", "HANG"
 # exclude from the candidate universe (those break boot, not kernel compute-init).
 _CFG_STATE_SIZE = {"blackhole": 56, "wormhole": 47}
 _BOOT_OWNED = {"blackhole": set(), "wormhole": {158, 159, 160, 161}}
+
+# Mirror of cfg_pollution._LIVE_ADDR32: the reconfigurable surface (addr32 words some reachable
+# LLK/Metal op writes). Default bisection universe — failures here are candidate ACTIONABLE
+# escapes, not reliance on never-written reset defaults. Keep in sync with cfg_pollution.py.
+_LIVE_ADDR32 = {
+    "blackhole": [
+        0, 1, 2, 5, 7, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 28, 29, 30, 31, 32, 33,
+        34, 35, 37, 38, 39, 40, 41, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 64, 68, 69,
+        70, 71, 72, 73, 76, 77, 84, 86, 92, 93, 97, 112, 117, 119, 120, 124, 125, 140, 141, 145,
+        180, 186, 209, 211, 220,
+    ],
+}
 
 # cfg_defines.h relative to the tt-llk worktree (tt-metal/tt_metal/tt-llk); hw/inc is one up.
 _CFG_DEFINES_REL = {
@@ -92,9 +111,18 @@ def _run_trial(args, env_extra):
     )
 
 
-def candidate_items(arch, states):
-    """All kernel-owned (state, addr32) words — the bisection universe."""
-    addr32 = [a for a in range(_CFG_STATE_SIZE[arch] * 4) if a not in _BOOT_OWNED[arch]]
+def candidate_items(arch, states, universe="live"):
+    """The (state, addr32) bisection universe.
+
+    universe="live": only the reconfigurable surface (_LIVE_ADDR32) — failures are candidate
+    actionable escapes. universe="thread": the whole kernel-owned config space.
+    """
+    if universe == "live":
+        if arch not in _LIVE_ADDR32:
+            raise SystemExit(f"no live set for arch {arch}; use --universe thread")
+        addr32 = list(_LIVE_ADDR32[arch])
+    else:
+        addr32 = [a for a in range(_CFG_STATE_SIZE[arch] * 4) if a not in _BOOT_OWNED[arch]]
     return [(s, a) for s in states for a in addr32]
 
 
@@ -187,6 +215,12 @@ def main():
         "--states", default="0,1", help="shadow states to consider, e.g. 0,1"
     )
     p.add_argument(
+        "--universe",
+        default="live",
+        choices=["live", "thread"],
+        help="search the reconfigurable surface (live, default) or the whole config space (thread)",
+    )
+    p.add_argument(
         "--preserve",
         default="",
         help="extra addr32:mask bits to leave unpoisoned "
@@ -206,9 +240,9 @@ def main():
 
     tmp = tempfile.mkdtemp(prefix="cfg_bisect_")
     plan_path = os.path.join(tmp, "plan.json")
-    items = candidate_items(args.arch, states)
+    items = candidate_items(args.arch, states, args.universe)
     print(
-        f"[bisect] universe: {len(items)} (state, addr32) words, seed=0x{seed:08X}"
+        f"[bisect] universe: {len(items)} (state, addr32) words [{args.universe}], seed=0x{seed:08X}"
         + (
             f", preserve={ {a: hex(m) for a, m in preserve.items()} }"
             if preserve
@@ -231,31 +265,57 @@ def main():
     memo = {}
     test = make_test(args, seed, plan_path, memo, preserve)
 
-    print("[bisect] sanity: poison everything (expect reproduce)...", file=sys.stderr)
-    if not test(items):
-        raise SystemExit(
-            "[bisect] whole-space poison did NOT reproduce — nothing to bisect for this seed."
-        )
-
-    print("[bisect] bisecting...", file=sys.stderr)
-    minimal = ddmin(items, test)
-
+    # Find ALL independent dependencies, not just the first. Each round: if poisoning the
+    # remaining universe still reproduces, ddmin to a minimal failing set, record it, then
+    # DROP those words from the universe and repeat. Dropped words are never in any later
+    # subset, so they stay pristine (effectively masked) and the next round surfaces the next
+    # dependency. Terminates when poisoning all-remaining no longer reproduces.
     names = name_addr32(args.worktree, args.arch)
+    remaining = list(items)
+    rounds = []
+    round_no = 0
+    while True:
+        print(
+            f"[bisect] round {round_no}: poison remaining {len(remaining)} word(s) (expect reproduce)...",
+            file=sys.stderr,
+        )
+        if not remaining or not test(remaining):
+            print(
+                f"[bisect] remaining universe no longer reproduces — done ({round_no} dep set(s) found).",
+                file=sys.stderr,
+            )
+            break
+        minimal = ddmin(remaining, test)
+        rounds.append(minimal)
+        round_no += 1
+        print(
+            f"[bisect] round {round_no}: minimal failing set = "
+            + ", ".join(f"(s{s},a{a})" for s, a in sorted(minimal)),
+            file=sys.stderr,
+        )
+        found = {(s, a) for s, a in minimal}
+        remaining = [x for x in remaining if x not in found]
+
     print("\n========== BISECTION RESULT ==========")
     print(
-        f"Minimal failing set: {len(minimal)} word(s)  (seed=0x{seed:08X}, {len(memo)} trials)"
+        f"{len(rounds)} independent dependency set(s)  "
+        f"(universe={args.universe}, seed=0x{seed:08X}, {len(memo)} trials)"
     )
-    for s, a in sorted(minimal):
-        print(
-            f"  state {s} addr32 {a:3d}  ->  {', '.join(names.get(a, ['<unknown>']))}"
-        )
+    for i, minimal in enumerate(rounds):
+        joint = " + " if len(minimal) > 1 else " "
+        print(f"  [{i}]{joint}".rstrip() + (" (interaction)" if len(minimal) > 1 else ""))
+        for s, a in sorted(minimal):
+            print(
+                f"      state {s} addr32 {a:3d}  ->  {', '.join(names.get(a, ['<unknown>']))}"
+            )
     print("======================================")
     print(
         "BISECT_JSON "
         + json.dumps(
             {
                 "seed": seed,
-                "minimal": [[s, a] for s, a in sorted(minimal)],
+                "universe": args.universe,
+                "dependency_sets": [[[s, a] for s, a in sorted(m)] for m in rounds],
                 "trials": len(memo),
             }
         )
