@@ -1,0 +1,81 @@
+name: "[BrAIn] TTSim fast-dispatch async buffer repro"
+
+# Investigating flaky test TestAsyncRuntimeAllocatedBuffers (GH #43725)
+# TSan does not fire — bug is device-level data corruption, not a host CPU race.
+# This workflow builds unit_tests_ttnn from the mc-p300 branch (multi-chip UMD fixes)
+# and runs the test under ttsim v1.8.4 wh_x2 (N300 / 2-chip WH) in FAST DISPATCH mode.
+# No TT_METAL_SLOW_DISPATCH_MODE is set so MultiCommandQueueSingleDeviceFixture runs.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-run:
+    name: "Build & run TestAsyncRuntimeAllocatedBuffers (ttsim wh_x2, fast dispatch)"
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/ubuntu-22.04-amd64:34d2f91cc25df7cba3634c04d98d7c1758563b3a
+      volumes:
+        - ${{ github.workspace }}:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    env:
+      CC: clang-20
+      CXX: clang++-20
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: CMake configure (ttnn tests only)
+        run: |
+          ./build_metal.sh \
+            --build-dir build \
+            --build-type Release \
+            --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake \
+            --build-ttnn-tests \
+            --configure-only
+
+      - name: Build unit_tests_ttnn
+        run: cmake --build build --target unit_tests_ttnn -j$(nproc)
+
+      - name: Download ttsim v1.8.4 (wh_x2 = N300 / 2-chip WH)
+        run: |
+          mkdir -p sim
+          curl -fL --retry 5 --retry-delay 10 \
+            "https://github.com/tenstorrent/ttsim/releases/download/v1.8.4/libttsim_wh_x2.so" \
+            -o sim/libttsim.so
+          cp tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml sim/soc_descriptor.yaml
+          echo "ttsim binary: $(ls -lh sim/libttsim.so)"
+
+      - name: Run TestAsyncRuntimeAllocatedBuffers (fast dispatch, no slow-dispatch env)
+        env:
+          TT_METAL_SIMULATOR_HOME: /work/sim
+          TT_METAL_SIMULATOR: /work/sim/libttsim.so
+          TT_METAL_MOCK_CLUSTER_DESC_PATH: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/n300_cluster_desc.yaml
+          TT_METAL_DISABLE_SFPLOADMACRO: "1"
+          GTEST_COLOR: "yes"
+          TT_LOGGER_LEVEL: info
+          # NOTE: TT_METAL_SLOW_DISPATCH_MODE is intentionally NOT set.
+          # MultiCommandQueueSingleDeviceFixture calls check_dispatch_mode() which
+          # skips (GTEST_SKIP) when slow dispatch is active.
+        run: |
+          mkdir -p test-results
+          ./build/test/ttnn/unit_tests_ttnn \
+            --gtest_filter="MultiCommandQueueSingleDeviceFixture.TestAsyncRuntimeAllocatedBuffers" \
+            --gtest_output=xml:/work/test-results/async-buffer-results.xml
+          echo "--- exit code: $? ---"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: async-buffer-test-results
+          path: /work/test-results/
+          retention-days: 7
