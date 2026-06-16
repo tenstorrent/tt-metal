@@ -23,6 +23,26 @@
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
 
+# ─── devstral2-123b-instruct ────────────────────────────────────────────────
+
+- name: devstral2-123b teacher-forced accuracy sanity
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    if [[ -d /localdev/blackhole_demos/huggingface_data/hub ]]; then
+      export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
+    fi
+    export MESH_DEVICE=T3K
+    export DEVSTRAL2_HF_LOCAL_ONLY=1
+    uv pip install "git+https://github.com/huggingface/transformers"
+    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sanity -v
+  skus:
+    bh_loudbox:
+      timeout: 60
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng)
+  team: models
+  model-name: devstral2-123b-instruct
+
 # ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
 
 - name: mistral-small-3.1-24b e2e tests

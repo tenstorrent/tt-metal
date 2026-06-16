@@ -129,11 +129,14 @@ context lengths. Eval uses a fixed **500 tokens** after each prefill (same as tt
 `max_generated_tokens=500` in `simple_text_demo.py`; that test uses a 1024-token `.refpt` with a
 512-token prefill and stops decode at 500 steps).
 
-**Test file:** `tests/test_teacher_forced_accuracy.py` — single test:
-`test_devstral2_teacher_forced_accuracy_sweep`.
+**Test file:** `tests/test_teacher_forced_accuracy.py`
 
-**Default sweep (edit `SWEEP_PREFILL_LENGTHS` in the test file):** prefill lengths 32, 64, 128, …,
-262144 (powers of two). Tale of Two Cities is tiled when a longer stream is needed.
+| Test | Prefill lengths | Purpose |
+|------|-----------------|--------|
+| `test_devstral2_teacher_forced_accuracy_sanity` | 32, 64, 128 | CI gate (`-k sanity`) before full sweep is enabled |
+| `test_devstral2_teacher_forced_accuracy_sweep` | 32 … 262144 (14 points) | Full sweep (`-k sweep`); ~71 h cold on BH Loudbox |
+
+**Default sweep:** powers of two from 32 through 262144. Tale of Two Cities is tiled when a longer stream is needed.
 
 **Outputs:**
 
@@ -148,14 +151,20 @@ context lengths. Eval uses a fixed **500 tokens** after each prefill (same as tt
 **Run:**
 
 ```sh
-pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -v
+# CI / quick gate (32, 64, 128)
+pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sanity -v
+
+# Full 14-point sweep
+pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sweep -v
 ```
 
-**Timeout:** One pytest timeout covers the **entire sweep** (not per seq len). It is **always**
-budgeted for all **14** points in ``FULL_SWEEP_PREFILL_LENGTHS`` (32 … 256K), even when
-``SWEEP_PREFILL_LENGTHS`` is narrowed for a dev run. Calibrated from BH Loudbox 2026-06-15
-(32/64/128, 500 eval, cold HF refs ≈ 38 min); full 14-point cold budget ≈ **71 hours**. Re-runs
-with cached ``.refpt`` files finish much sooner.
+**CI (BH Loudbox):** ``(Blackhole) Demo tests`` workflow → model ``devstral2-123b-instruct``.
+Runs ``-k sanity`` (prefill 32/64/128). Switch to ``-k sweep`` when the full seq-length run is ready.
+Requires Devstral-2-123B weights in the MLPerf HF cache mount (`/mnt/MLPerf/huggingface` on Loudbox).
+
+**Timeout:** Each test has its own pytest timeout budgeted for its prefill list. Full sweep
+(14 points, 32 … 256K) is calibrated at ≈ **71 hours** cold on BH Loudbox; sanity (3 points) ≈ **45 min**.
+Re-runs with cached ``.refpt`` files finish much sooner.
 
 **Thresholds:** top-1 ≥ 96%, top-5 ≥ 99% (override with `DEVSTRAL2_MIN_TOP1_ACC` /
 `DEVSTRAL2_MIN_TOP5_ACC`).
