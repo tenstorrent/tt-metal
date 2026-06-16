@@ -137,6 +137,7 @@ enum class WaitPolicy : uint8_t {
     None,        // chain emits no wait_front
     PerTile,     // wait 1 per iter
     PerChunk,    // wait K per K-iter chunk
+    PerOuter,    // wait 1 at each OUTER (ht/row) iteration entry — one tile per row
     Upfront,     // wait M once at entry (M = kind's tile count)
     Cumulative,  // wait (i+1) per iter / chunk
 };
@@ -145,6 +146,7 @@ enum class PopPolicy : uint8_t {
     None,      // chain emits no pop_front
     PerTile,   // pop 1 per iter
     PerChunk,  // pop K per K-iter chunk
+    PerOuter,  // pop 1 at each OUTER (ht/row) iteration exit — one tile per row
     AtEnd,     // pop M once at exit
 };
 
@@ -159,7 +161,7 @@ struct InputLifecycle {
     // defined out-of-line below (a static member of the class's own type needs the class
     // complete at the point of definition).
     static const InputLifecycle Streaming, Chunked, Bulk, Pipelined, CallerManaged, BulkDrain, HeldBulk, HeldCumulative,
-        HeldStream, DeferredPop, NoWaitPop;
+        HeldStream, DeferredPop, NoWaitPop, OuterStream;
 };
 
 inline constexpr InputLifecycle InputLifecycle::Streaming = {WaitPolicy::PerTile, PopPolicy::PerTile};
@@ -185,6 +187,14 @@ inline constexpr InputLifecycle InputLifecycle::DeferredPop = {
 inline constexpr InputLifecycle InputLifecycle::NoWaitPop = {
     WaitPolicy::None, PopPolicy::PerTile};  // caller waited, chain pops per-tile
 
+// Streamed outer-axis broadcast: one operand tile per OUTER (ht/row) iteration, re-read at
+// the front across that row's inner cols, then advanced. wait 1 at row entry, pop 1 at row
+// exit. Pairs with OperandKind::Scalar (the front read, idx 0) — is_legal_kind_lifecycle
+// restricts it to Scalar for exactly that reason. The O(1)-L1 streaming counterpart to a
+// resident Col operand: a shallow CB fed one tile per row by the producer, vs an Ht-deep
+// staged window. Sibling of Streaming (= per inner tile) at the outer-loop cadence.
+inline constexpr InputLifecycle InputLifecycle::OuterStream = {WaitPolicy::PerOuter, PopPolicy::PerOuter};
+
 /// Validates a caller-constructed `InputLifecycle` against the legal set; every input
 /// element static_asserts on it. The half-edge cells above are legal (audit-confirmed as
 /// load-bearing); other half-edge combinations are rejected.
@@ -192,13 +202,14 @@ constexpr bool is_legal_input_lifecycle(InputLifecycle lc) noexcept {
     return lc == InputLifecycle::Streaming || lc == InputLifecycle::Chunked || lc == InputLifecycle::Bulk ||
            lc == InputLifecycle::Pipelined || lc == InputLifecycle::CallerManaged || lc == InputLifecycle::BulkDrain ||
            lc == InputLifecycle::HeldBulk || lc == InputLifecycle::HeldCumulative || lc == InputLifecycle::HeldStream ||
-           lc == InputLifecycle::DeferredPop || lc == InputLifecycle::NoWaitPop;
+           lc == InputLifecycle::DeferredPop || lc == InputLifecycle::NoWaitPop || lc == InputLifecycle::OuterStream;
 }
 
 enum class ReservePolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
+    PerOuter,  // reserve 1 at each OUTER (ht/row) iteration entry — one output tile per row
     Upfront,
 };
 
@@ -206,6 +217,7 @@ enum class PushPolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
+    PerOuter,  // push 1 at each OUTER (ht/row) iteration exit — one output tile per row
     AtEnd,
 };
 
@@ -220,7 +232,7 @@ struct OutputLifecycle {
 
     // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). Defined out-of-line below.
     static const OutputLifecycle Streaming, Chunked, Bulk, BulkReservePerTile, BulkReservePerChunk, CallerManaged,
-        HeldReserve, DeferredReserve;
+        HeldReserve, DeferredReserve, OuterStream;
 };
 
 inline constexpr OutputLifecycle OutputLifecycle::Streaming = {ReservePolicy::PerTile, PushPolicy::PerTile};
@@ -236,12 +248,17 @@ inline constexpr OutputLifecycle OutputLifecycle::CallerManaged = {ReservePolicy
 inline constexpr OutputLifecycle OutputLifecycle::HeldReserve = {ReservePolicy::PerTile, PushPolicy::None};
 // Caller bulk-reserved externally, chain bulk-pushes at end.
 inline constexpr OutputLifecycle OutputLifecycle::DeferredReserve = {ReservePolicy::None, PushPolicy::AtEnd};
+// Outer-axis streamed output: one output tile per OUTER (ht/row) iteration. reserve 1 at row
+// entry, write it (front/pinned), push 1 at row exit. The output-side counterpart of
+// InputLifecycle::OuterStream — for chains that emit one tile per row (e.g. a per-row reduced
+// result) rather than one per (ht, wt). Shallow CB, O(1) L1.
+inline constexpr OutputLifecycle OutputLifecycle::OuterStream = {ReservePolicy::PerOuter, PushPolicy::PerOuter};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
            lc == OutputLifecycle::BulkReservePerTile || lc == OutputLifecycle::BulkReservePerChunk ||
            lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::HeldReserve ||
-           lc == OutputLifecycle::DeferredReserve;
+           lc == OutputLifecycle::DeferredReserve || lc == OutputLifecycle::OuterStream;
 }
 
 /// Per-input operand kind. The output kind is always `Block` (single column
