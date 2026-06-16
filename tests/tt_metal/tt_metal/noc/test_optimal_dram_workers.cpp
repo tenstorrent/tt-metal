@@ -42,7 +42,7 @@ class OptimalDramWorkers : public ::testing::TestWithParam<DispatchCoreAxis> {};
 // gtest enumeration only lists axes that the platform actually supports — no runtime
 // skips appear in the test output.
 //
-// Blackhole rejects ROW dispatch (see ttnn::Device guard:
+// Blackhole rejects ROW dispatch (the Device guard emits
 // "ROW dispatch core axis is not supported for blackhole arch"), so we omit ROW on BH.
 std::vector<DispatchCoreAxis> supported_dispatch_axes() {
     std::vector<DispatchCoreAxis> axes = {DispatchCoreAxis::COL};

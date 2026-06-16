@@ -201,7 +201,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"]:
+        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Mistral-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
