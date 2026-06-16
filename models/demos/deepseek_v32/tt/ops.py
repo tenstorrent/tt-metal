@@ -18,7 +18,8 @@ import ttnn
 
 
 def _to_host(t: ttnn.Tensor) -> torch.Tensor:
-    """First-shard readback for replicated mesh tensors (host fallbacks only)."""
+    """First-shard readback for replicated mesh tensors (test / diagnostic readback only;
+    the compute path is fully on device)."""
     return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
 
 
@@ -111,19 +112,13 @@ def sparse_mla(
     q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
 
     # indices must align with q's per-chip sequence shard [1, 1, S/sp, k]. Replicated
-    # (sp == 1) already matches q's full S. For sp > 1, redistribute the replicated rows
-    # onto the SP axis (small host hop — to be moved on device; active chunked path is sp == 1).
+    # (sp == 1) already matches q's full S; for sp > 1 redistribute the replicated rows
+    # onto the SP axis on device.
     idx = indices
     if sp > 1:
-        dims = [None, None]
-        dims[sp_axis] = 2  # shard sequence across SP, replicate across TP
-        idx = ttnn.from_torch(
-            _to_host(indices),
-            device=mesh,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=tuple(dims)),
-        )
+        # Re-shard the replicated rows onto the SP axis on device — the inverse of all_gather
+        # (mesh_partition): chip sp_i keeps queries [i·S/sp, (i+1)·S/sp), matching its q seq shard.
+        idx = ttnn.mesh_partition(indices, dim=2, cluster_axis=sp_axis)
 
     # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
     topk = idx.shape[-1]
