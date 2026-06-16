@@ -10,17 +10,9 @@ on:
         type: choice
         options:
           - all
-          - llama3.1-8b
           - llama3.3-70b
           - qwen3-32b
-          - qwen2.5-32b
-          - qwen2.5-coder-32b
-          - mistral-7b
-          - mixtral-8x7b
           - gemma-3-4b
-          - gemma-3-27b
-          - gemma-4-26b-a4b
-          - gemma-4-31b
           - gpt-oss-20b
       sku:
         description: "Select SKU to test"
@@ -35,6 +27,10 @@ on:
           - "wh_llmbox_perf (T3000 perf)"
           - "wh_galaxy (WH Galaxy)"
           - "wh_galaxy_perf (WH Galaxy perf)"
+          - "bh_p150 (P150)"
+          - "bh_p300 (P300)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_galaxy (BH Galaxy)"
       platform:
         required: false
         type: choice
