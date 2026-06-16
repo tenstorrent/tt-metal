@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
+#include <numbers>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -346,7 +347,7 @@ std::vector<Tensor> ldexp_bw(
     grad.emplace_back(tpow_o);
     Tensor result = ttnn::multiply(
         input_a,
-        ttnn::multiply(tpow_o, static_cast<float>(M_LN2), std::nullopt, output_memory_config),
+        ttnn::multiply(tpow_o, std::numbers::ln2_v<float>, std::nullopt, output_memory_config),
         std::nullopt,
         output_memory_config);
     grad.emplace_back(result);

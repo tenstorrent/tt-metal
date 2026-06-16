@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <numbers>
 #include <utility>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -1098,7 +1099,7 @@ std::vector<Tensor> log10_bw(
     Tensor grad_a = ttnn::multiply(
         grad,
         ttnn::reciprocal(
-            ttnn::multiply(input, static_cast<float>(M_LN10), std::nullopt, output_mem_config), output_mem_config),
+            ttnn::multiply(input, std::numbers::ln10_v<float>, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_a = where(
@@ -1273,7 +1274,7 @@ std::vector<Tensor> log2_bw(
     Tensor grad_a = ttnn::multiply(
         grad,
         ttnn::reciprocal(
-            ttnn::multiply(input, static_cast<float>(M_LN2), std::nullopt, output_mem_config), output_mem_config),
+            ttnn::multiply(input, std::numbers::ln2_v<float>, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_a = where(
@@ -1313,7 +1314,7 @@ std::vector<Tensor> exp2_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor exp_result = ttnn::exp2(input, output_mem_config);
-    exp_result = ttnn::multiply(exp_result, static_cast<float>(M_LN2), std::nullopt, output_mem_config);
+    exp_result = ttnn::multiply(exp_result, std::numbers::ln2_v<float>, std::nullopt, output_mem_config);
     Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -1536,7 +1537,7 @@ std::vector<Tensor> erf_bw(
             grad,
             std::nullopt,
             output_mem_config),
-        static_cast<float>(M_2_SQRTPI),
+        2.0f * std::numbers::inv_sqrtpi_v<float>,
         std::nullopt,
         output_mem_config);
     grad_tensor.emplace_back(result);
