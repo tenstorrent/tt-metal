@@ -81,12 +81,11 @@ void kernel_main() {
 
         // Use the in1 CB's L1 write pointer as scratch — unused at kernel startup; the
         // real in1 tile reads only begin inside the K-loop below.
-        // Limitation: this reads exactly ONE page (kPageBytes) of the offsets tensor. The
+        // Limitation: this reads exactly ONE page (page 0) of the offsets tensor. The
         // (start, end) pair must therefore fall within page 0 — i.e. (E + 1) * sizeof(uint32_t)
-        // <= kPageBytes, where E is num_experts.
-        constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
+        // <= the offsets tensor's page size, where E is num_experts.
         const uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_1);
-        noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
+        noc_async_read_page(0, offsets_acc, offsets_l1_addr);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
         const uint32_t row_start = offsets_stage[offsets_start_index];

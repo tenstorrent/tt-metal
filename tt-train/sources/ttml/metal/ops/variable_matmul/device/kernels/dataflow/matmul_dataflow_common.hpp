@@ -90,7 +90,7 @@ void read_in0_block_sync(
                         tile_id = i * shape.logical_d1 + j;
                     }
                 }
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
                 fill_zeros_async(noc, dst_cb_id, tile_size_bytes, write_ptr - cb_base);
             }
@@ -163,7 +163,7 @@ void read_in1_block_sync(
                     } else {
                         tile_id = j * shape.logical_d1 + i;
                     }
-                    noc_async_read_tile(tile_id, tensor_accessor, wp);
+                    noc_async_read_page(tile_id, tensor_accessor, wp);
                 } else {
                     fill_zeros_async(noc, dst_cb_id, tile_size_bytes, wp - write_ptr_base);
                 }
@@ -185,7 +185,7 @@ void read_in1_block_sync(
                     } else {
                         tile_id = i * shape.logical_d1 + j;
                     }
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                    noc_async_read_page(tile_id, tensor_accessor, write_ptr);
                 } else {
                     fill_zeros_async(noc, dst_cb_id, tile_size_bytes, write_ptr - write_ptr_base);
                 }
@@ -235,7 +235,7 @@ void write_block_sync(
                 row = i;
             }
             uint32_t tile_id = row * shape.logical_d1 + j;
-            noc_async_write_tile(tile_id, tensor_accessor, read_ptr);
+            noc_async_write_page(tile_id, tensor_accessor, read_ptr);
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
@@ -275,7 +275,7 @@ void write_block_sync_granular(
                     break;
                 }
                 uint32_t tile_id = row * shape.logical_d1 + n_tile_id;
-                noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
+                noc_async_write_page(tile_id, tensor_accessor, out_read_ptr);
                 out_read_ptr += tile_size_bytes;
             }
         }
