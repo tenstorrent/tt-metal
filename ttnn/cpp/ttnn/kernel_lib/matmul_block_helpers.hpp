@@ -28,14 +28,14 @@ namespace compute_kernel_lib {
  *   subblock — subblock(0,0)'s tiles, then subblock(0,1)'s tiles, ..., then the
  *   next M-row-group's subblocks. Compute issues one sequential pack_tile_block per
  *   subblock at the natural fifo_wr_ptr position. Required by writer kernels that
- *   expect a subblock-ordered tile stream (multicast bmm writers, conv2d, conv3d).
+ *   expect a subblock-ordered tile stream (e.g. multicast bmm writers).
  *
  * TileRowMajor: tiles in the OUTPUT CB are grouped per tile-row — tile(0,0),
  *   tile(0,1), ..., tile(0, N-1), then tile(1,0), tile(1,1), ..., tile(1, N-1),
  *   etc. Compute issues per-tile absolute-offset pack_tile<true> calls into the
  *   caller's row-group reserve, and reserves/pushes per M-row-group. Decouples
  *   subblock choice from the writer-visible layout so factories can grow
- *   subblocks freely, and is the mode SDPA callers require for absolute-offset
+ *   subblocks freely, and is the mode to use when the writer does absolute-offset
  *   partial writes across K chunks.
  *
  *   NOTE: do NOT read TileRowMajor as "ROW_MAJOR_LAYOUT" — the OUTPUT CB is still
@@ -80,11 +80,13 @@ enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm, OutWithUntilize
  *                          producer pushes one block per K-iteration.
  * WaitAndRetainOnLastBlock Helper waits per K-block but skips the pop on the
  *                          last K-block so the caller's outer loop can reuse
- *                          the data across iterations. Use for SDPA reusing Q
- *                          across K chunks (in0) or conv3d reusing weights
- *                          across multiple matmul invocations within an
- *                          output block (in1, num_k_blocks=1 makes every call
- *                          last, so the helper never pops).
+ *                          the data across iterations. Use when you need to
+ *                          reuse one of the inputs across multiple matmul
+ *                          invocations — e.g. holding in0 fixed while sweeping
+ *                          K chunks, or reusing an in1 block across several
+ *                          invocations within an output block (with
+ *                          num_k_blocks=1 every call is last, so the helper
+ *                          never pops).
  * NoWaitNoPop              (in1 only — enforced via static_assert on the in0 slot)
  *                          Helper skips both wait and pop entirely; the caller
  *                          manages in1 lifecycle externally. Use for cross-chip
@@ -150,10 +152,10 @@ enum class InitMode : uint8_t { Short, None, ShortAfterPreKBlock };
  * binary_op_helpers pattern (NONE/INPUT/OUTPUT/INPUT_AND_OUTPUT).
  *
  * NONE              Skip all reconfiguration. Use when reconfig is handled externally
- *                   (e.g., SDPA wrappers, conv2d's per-K-block tilize PreKBlockFn,
- *                   or callers that paired init_mode=None with their own explicit
- *                   reconfig before invoking the helper) or when formats are known
- *                   to match the previous op.
+ *                   (e.g., a caller that pairs init_mode=None with its own explicit
+ *                   reconfig before invoking the helper, or a PreKBlockFn that
+ *                   re-tilizes per K-block) or when formats are known to match the
+ *                   previous op.
  * INPUT             Reconfigure unpacker only — reconfig_data_format(in1, in0). Use
  *                   when the unpacker srca/srcb config from the previous op differs
  *                   from in0/in1's format but the packer is already configured for
@@ -254,8 +256,9 @@ struct NoPostCompute {
 // Use for per-K-block preprocessing (e.g., in0_transpose, global CB pointer manipulation).
 //
 // ── MATMUL-STATE-RESTORE CONTRACT ────────────────────────────────────────────
-// The two real-world PreKBlockFns — TILIZE (conv2d / conv3d) and TRANSPOSE (matmul
-// transposing the next K-block of in1) — both have their own llk init paths and
+// The two real-world PreKBlockFns — TILIZE (tilizing each K-block before the
+// matmul) and TRANSPOSE (transposing the next K-block of in1) — both have their own
+// llk init paths and
 // often their own hw_configure-style reconfigs, which leaves the unpacker / math
 // state pointed at the WRONG operands for matmul. Once your PreKBlockFn touches
 // any of those subsystems, the helper's matmul state from the previous K-block
@@ -278,11 +281,10 @@ struct NoPostCompute {
 //       re-issues llk_unpack_AB_matmul_init + llk_math_matmul_init. The helper does
 //       NOT redo this restore for you in this mode; the per-K-block reload path
 //       inside the helper covers reload-time state but does not run on every block.
-//       Still used by conv3d and the gathered / ring CCL kernels.
+//       Still used by callers whose PreKBlockFn restores matmul state itself.
 //
-// conv2d (ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp,
-// ConvTilizePreKBlock) is the canonical mode-(A) caller; conv3d / gathered are the
-// remaining mode-(B) callers and are candidates to migrate to (A).
+// A per-K-block-tilize PreKBlockFn is the canonical mode-(A) caller; the remaining
+// mode-(B) callers are candidates to migrate to (A).
 struct NoPreKBlock {
     ALWI void operator()(uint32_t, uint32_t, bool) const {}
 };
@@ -316,8 +318,8 @@ struct NoKBlockInnerDimFn {
 // Called at the start of each K-block iteration to determine which CB to read
 // in0 from on this iteration. The default returns the in0_cb_id the helper was
 // invoked with — preserving prior single-source behavior. Callers that swap
-// between two physically-distinct in0 CBs (e.g. ring-aware all-gather where
-// block 0 reads from a self-mcast CB and blocks 1..N read from a remote CB)
+// between two physically-distinct in0 CBs (e.g. a ring pattern where block 0
+// reads from a self-mcast CB and blocks 1..N read from a remote CB)
 // override this to return the alternate CB id on the appropriate K-blocks.
 //
 // IMPORTANT — DATAFORMAT INVARIANT: the alternate in0 CBs MUST share the SAME
@@ -340,7 +342,7 @@ struct NoIn0Source {
 // Callers that share a single in1 CB across multiple ring positions (no rd_ptr
 // rotation, no separate alternate CBs — just an offset shift into the same
 // fronted region) override this to return the per-K-block base offset in tiles
-// (e.g. ring-aware all-gather without ENABLE_GLOBAL_CB:
+// (e.g. a ring pattern without ENABLE_GLOBAL_CB:
 // `return in1_block_num_tiles * curr_ring_idx;`). The wait/pop lifecycle stays
 // on the bound in1_cb_id — this is purely an LLK in1_index shift, not a CB
 // swap. Pair with `in1_policy=NoWaitNoPop` when the caller manages in1's
@@ -368,30 +370,28 @@ struct NoIn1BaseOffset {
  * end (or per-K-block under InputPolicy::WaitAndPopPerKBlock), so a writer
  * landing on the same CB as a still-fronted reader will overwrite live tiles.
  *
- * In particular, matmul-as-reduce patterns (e.g. SDPA's row-sum fold against
- * a column-identity tile) MUST allocate a separate output CB. Callers needing
+ * In particular, matmul-as-reduce patterns (a row-sum fold against a
+ * column-identity tile) MUST allocate a separate output CB. Callers needing
  * the reduce-via-matmul pattern should call matmul_block with num_k_blocks=1
  * + an in1 column of ones + a separate output CB sized identically to the
- * input — see SDPA's `matmul_reduce` wrapper in
- * `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp`
- * for the canonical pattern.
+ * input.
  *
- * The one supported aliasing is interm_buf overlaying out_buf in L1 (conv2d's
+ * The one supported aliasing is interm_buf overlaying out_buf in L1 (the
  * `partials_cb_uses_output` path); opt in via `pin_interm_to_captured_base=true`,
  * which adds explicit base-reset code per K-block to keep the writer pinned
  * to a fixed L1 base. See pin_interm_to_captured_base docstring below.
  *
- * One helper serving both standard matmul (non-multicast bmm) and SDPA. Supports two
- * output-pack strategies selected at compile time via tile_order:
+ * One helper serving both subblock-major and tile-row-major output consumers.
+ * Supports two output-pack strategies selected at compile time via tile_order:
  *
  *   tile_order=SubblockMajor (default): sequential pack_tile_block per subblock.
  *     Output lands in subblock order. Required by multicast writers that expect
  *     subblock-order tile stream.
  *   tile_order=TileRowMajor: absolute-offset pack_tile<true> at tile-row positions,
  *     reserve/push per M-row-group. Decouples subblock choice from the output-CB
- *     tile order so the factory can pick larger subblocks (the main SDPA perf path).
- *     Also the mode SDPA callers require for absolute-offset partial writes across
- *     K chunks. The output CB is still tile-format; "Row" here is tile-row
+ *     tile order so the factory can pick larger subblocks. Use it when the writer
+ *     does absolute-offset partial writes across K chunks. The output CB is still
+ *     tile-format; "Row" here is tile-row
  *     granularity, NOT the TT-Metal ROW_MAJOR_LAYOUT byte layout.
  *
  * K-accumulation also selectable at compile time:
@@ -432,7 +432,7 @@ struct NoIn1BaseOffset {
  * only if you are perf-tuning a back-to-back call sequence and can prove the previous
  * op left the unpacker / packer in a matching state. init_mode=None skips both the init
  * AND the reconfig — use when the caller has already issued an explicit mm_block_init_short
- * + reconfig pair before the helper call (the SDPA wrapper pattern). See
+ * + reconfig pair before the helper call (the externally-paired-init pattern). See
  * matmul_config::InitMode and matmul_config::DataFormatReconfig.
  *
  * SKIP_COMPUTE: When this macro is defined by the calling TU (microbenchmark path),
@@ -452,10 +452,10 @@ struct NoIn1BaseOffset {
  *                     combinations.
  *   tile_order        OutputCBLayout: SubblockMajor (default) or TileRowMajor (see above).
  *                     Pick to match your writer kernel's expected tile read order —
- *                     SubblockMajor if the writer reads tiles subblock-by-subblock
- *                     (multicast bmm, conv2d/3d), TileRowMajor if the writer reads tiles
- *                     in tile-row order (SDPA absolute-offset partial writes, matmul
- *                     factories that grow subblocks without breaking writer contracts).
+ *                     SubblockMajor if the writer reads tiles subblock-by-subblock,
+ *                     TileRowMajor if the writer reads tiles in tile-row order
+ *                     (absolute-offset partial writes, or factories that grow
+ *                     subblocks without breaking writer contracts).
  *                     The helper cannot infer this from MatmulBlockShape alone — the
  *                     choice is dictated by the writer's contract, not by subblock counts
  *                     or sizes. Note: TileRowMajor's output CB is still tile-format;
@@ -464,12 +464,12 @@ struct NoIn1BaseOffset {
  *                     ShortAfterPreKBlock. Short fires reconfig + mm_block_init_short
  *                     once before the K-loop so most callers never have to pair the call
  *                     site with manual init/reconfig. None skips both — used by callers
- *                     (e.g. SDPA wrappers) that hand-pair reconfig + init before invoking
+ *                     that hand-pair reconfig + init before invoking
  *                     the helper. ShortAfterPreKBlock relocates the reconfig + short init
  *                     to inside the K-loop, right after pre_k_block() — use it when a
  *                     state-dirtying PreKBlockFn (tilize / transpose) would otherwise have
  *                     to restore matmul state itself (see the PreKBlockFn MATMUL-STATE-
- *                     RESTORE CONTRACT; conv2d is the canonical caller). `Full` has been
+ *                     RESTORE CONTRACT). `Full` has been
  *                     removed; issue mm_block_init() exactly once at kernel boot instead.
  *   reconfig          matmul_config::DataFormatReconfig: INPUT_AND_OUTPUT (default), INPUT,
  *                     OUTPUT, or NONE. Selects which data-format reconfigs the helper issues.
@@ -477,11 +477,11 @@ struct NoIn1BaseOffset {
  *                     reconfig externally (typically paired with init_mode=None).
  *   in0_policy        InputPolicy: WaitAndPopPerKBlock (default) or
  *                     WaitAndRetainOnLastBlock (caller reuses in0 across the next
- *                     iteration — SDPA reuses Q across K chunks). NoWaitNoPop is
+ *                     iteration). NoWaitNoPop is
  *                     rejected on the in0 slot via static_assert. See InputPolicy
  *                     docstring above.
  *   in1_policy        InputPolicy: WaitAndPopPerKBlock (default),
- *                     WaitAndRetainOnLastBlock (conv3d reuses weights across
+ *                     WaitAndRetainOnLastBlock (caller reuses in1 across
  *                     multiple matmul invocations within an output block), or
  *                     NoWaitNoPop (caller manages in1 lifecycle externally —
  *                     cross-chip global-CB receivers, pre-populated L1-sharded
@@ -500,8 +500,8 @@ struct NoIn1BaseOffset {
  *                     count. Receives (block, block_k); returns the number of inner
  *                     iterations to issue. Default returns block_k (full K-tile span).
  *                     Use when some K-blocks have unpadded widths smaller than the
- *                     static block_k (e.g. ring-aware all-gather where each block
- *                     consumes a different chip's shard width). The inner LLK call's
+ *                     static block_k (e.g. a ring pattern where each block
+ *                     consumes a different shard width). The inner LLK call's
  *                     kt_dim arg stays block_k — only the loop bound shrinks.
  *   In0SourceFn       Functor called per K-block to pick which CB to read in0 from.
  *                     Receives (block, in0_cb_id); returns the active in0 CB id for
@@ -519,7 +519,7 @@ struct NoIn1BaseOffset {
  *                     offset 0 onwards, matching prior behavior). Use when a single
  *                     fronted in1 region holds multiple ring positions and the
  *                     kernel rotates between them via offset arithmetic instead of
- *                     rd_ptr advance — e.g. ring-aware all-gather without
+ *                     rd_ptr advance — e.g. a ring pattern without
  *                     ENABLE_GLOBAL_CB returns `in1_block_num_tiles * curr_ring_idx`.
  *   caller_owns_pack_target
  *                     Default false. When true, the helper skips ALL of its own
@@ -530,7 +530,7 @@ struct NoIn1BaseOffset {
  *                     call and one cb_push_back AFTER. Use for kernels that
  *                     accumulate K-blocks into a single pre-reserved L1 region via
  *                     L1_ACC and pack with absolute-offset row-major (typical of
- *                     ring-aware all-gather variants where the matmul output feeds
+ *                     ring variants where the matmul output feeds
  *                     a downstream bias/activation phase). Pair with
  *                     `last_block_target=Interm`, `OutputCBLayout::TileRowMajor`,
  *                     `packer_l1_acc=true`, and a `MatmulBlockShape` whose runtime
@@ -557,7 +557,7 @@ struct NoIn1BaseOffset {
  *                     the accumulated block; on the !pack_last_to_interm path
  *                     interm holds only K-loop scratch and no end push is needed.
  *                     Required when interm_buf is allocated to alias the output
- *                     buffer in L1 (e.g. conv2d's `partials_cb_uses_output=true`
+ *                     buffer in L1 (e.g. the `partials_cb_uses_output=true`
  *                     path) — without pin, the K-loop's natural push/pop would
  *                     advance the fifo ptrs past the captured base and wrap into
  *                     already-packed output. Constraints: tile_order must be
@@ -577,7 +577,7 @@ struct NoIn1BaseOffset {
  *                     + dest-offset flip + SFPU stall. The existing PostComputeFn
  *                     template parameter is unaffected: it still fires on the MATH
  *                     thread before tile_regs_commit and is the right hook for
- *                     non-activation math-thread post-compute (e.g. SDPA mask
+ *                     non-activation math-thread post-compute (e.g. mask
  *                     application). Allowed alongside last_block_target == Interm — the
  *                     helper does not assume a downstream bias phase; callers on the
  *                     FUSE_BIAS path keep this NoneActivation and route activation to
@@ -604,12 +604,17 @@ struct NoIn1BaseOffset {
  *   out_buf            Output buffer for the final result.
  *   interm_buf         Intermediate buffer for K-blocking spill/reload or
  *                      L1-ACC FIFO. When num_k_blocks == 1 the helper never
- *                      accesses it; pass out_buf itself in this slot as the
- *                      canonical zero-cost placeholder (no extra CB to
- *                      allocate). Any other buffer of the same type also
- *                      works — SDPA passes in0_buf because Q is retained
- *                      across K-chunks via in0_policy=WaitAndRetainOnLastBlock
- *                      (see the SDPA @example below).
+ *                      reads or writes it for data — but with the default
+ *                      reconfig it DOES point the packer at this buffer's data
+ *                      format in the pre-loop setup, and (with bf16 DEST + no
+ *                      L1 acc) never re-points it before the single K-block is
+ *                      packed. So the placeholder you pass in this slot MUST
+ *                      have the same data format as out_buf, or the result is
+ *                      packed into out_buf in the wrong format (silent
+ *                      corruption). Pass out_buf itself as the canonical
+ *                      zero-cost placeholder (no extra CB to allocate; its
+ *                      data format trivially matches). Any other buffer whose
+ *                      data format equals out_buf's also works.
  *   shape              MatmulBlockShape (see above) — subblock counts, subblock size,
  *                      K-blocking, batch. Build with MatmulBlockShape::of(...).
  *   post_compute       PostComputeFn instance (default: {}).
@@ -618,7 +623,7 @@ struct NoIn1BaseOffset {
  *                      pushes per block). Defaults to 0, meaning derive from
  *                      out_subblock_w * in1_num_subblocks. Pass the real value when the
  *                      factory pads per_core_N_compute above the actual in1 shard width
- *                      (e.g. matmul_multicore_reuse_mcast_dram_sharded), otherwise the
+ *                      (e.g. DRAM-sharded matmul factories), otherwise the
  *                      helper will wait/pop wrong tile counts and deadlock.
  *   out_row_width      N-tiles per row in the OUTPUT CB layout (row stride for the
  *                      TileRowMajor pack). Defaults to 0, meaning reuse in1_per_core_w. For most factories
@@ -650,7 +655,7 @@ struct NoIn1BaseOffset {
  *   CircularBuffer out_buf(cb_out);
  *   matmul_block<>(
  *       in0_buf, in1_buf, out_buf,
- *       out_buf,  // interm placeholder — unread when num_k_blocks == 1
+ *       out_buf,  // interm placeholder — format matches out_buf; see interm_buf doc
  *       MatmulBlockShape::of(
  *           Mt,    // in0_num_subblocks
  *           Nt,    // in1_num_subblocks
@@ -670,8 +675,8 @@ struct NoIn1BaseOffset {
  *                             in0_block_k, num_k_blocks));
  *
  * @example
- *   // SDPA-style: row-major pack, retain in0 to reuse Q across K chunks, masked post-compute.
- *   // The SDPA-side wrapper does its own [mm_block_init_short, reconfig_data_format]
+ *   // Retain-in0 + masked post-compute: row-major pack, hold in0 across K chunks.
+ *   // The caller's wrapper does its own [mm_block_init_short, reconfig_data_format]
  *   // pair externally (for ordering parity with OptionalMaskPostCompute), so the
  *   // helper is invoked with init_mode=None.
  *   // Template slot order: transpose, packer_l1_acc, last_block_target, tile_order,
@@ -680,7 +685,7 @@ struct NoIn1BaseOffset {
  *                matmul_config::InitMode::None,
  *                InputPolicy::WaitAndRetainOnLastBlock, InputPolicy::WaitAndPopPerKBlock,
  *                OptionalMaskPostCompute>(
- *       in0_buf, in1_buf, out_buf, in0_buf,  // interm unused when num_k_blocks==1
+ *       in0_buf, in1_buf, out_buf, out_buf,  // interm placeholder — format matches out_buf
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             subblock_h, subblock_w, in0_block_k, num_blocks),
  *       OptionalMaskPostCompute{...},
@@ -704,8 +709,8 @@ struct NoIn1BaseOffset {
  *       out_block_w);     // out_row_width   (DRAM-sharded padded pack width)
  *
  * @example
- *   // Per-K-block unpadded inner-dim: each K-block consumes a different chip's
- *   // shard width (ring-aware all-gather pattern). The kernel pads in0/in1 K-tiles
+ *   // Per-K-block unpadded inner-dim: each K-block consumes a different
+ *   // shard width (a ring pattern). The kernel pads in0/in1 K-tiles
  *   // up to a uniform block_k so CB sizing stays static, then the helper's
  *   // KBlockInnerDimFn callback shrinks the FMA loop to the unpadded count.
  *   struct RingInnerDimFn {
@@ -731,7 +736,7 @@ struct NoIn1BaseOffset {
  *       NoPostKBlock{}, RingInnerDimFn{unpadded, ring_idx, ring_size});
  *
  * @example
- *   // Ring-aware all-gather matmul: PreKBlockFn captures the next in1 rd_ptr,
+ *   // Ring matmul with per-K-block in1 rotation: PreKBlockFn captures the next in1 rd_ptr,
  *   // PostKBlockFn commits it after the K-block consumes in1; OutWithUntilize
  *   // untilizes per-subblock output directly through the LLK pack_untilize.
  *   // Template slot order: transpose, packer_l1_acc, last_block_target, tile_order,
@@ -751,23 +756,23 @@ struct NoIn1BaseOffset {
  *       ring_post_k_block);
  *
  * @example
- *   // conv2d pattern: per-K-block tilize (PreKBlockFn) + interm_buf pinned to a captured
- *   // base across the K-loop because matmul_partials_cb is allocated to alias out_cb in
- *   // L1 (partials_cb_uses_output=true). init_mode=None because the kernel-entry
- *   // mm_block_init covers initial state and ConvTilizePreKBlock issues
+ *   // Pinned-interm + per-K-block tilize: PreKBlockFn tilizes each K-block + interm_buf
+ *   // pinned to a captured base across the K-loop because matmul_partials_cb is allocated
+ *   // to alias out_cb in L1 (partials_cb_uses_output=true). init_mode=None because the
+ *   // kernel-entry mm_block_init covers initial state and the tilize PreKBlockFn issues
  *   // mm_block_init_short_with_both_dt after each tilize. Template slot order: transpose,
  *   // packer_l1_acc, last_block_target, tile_order, init_mode, in0_policy, in1_policy,
  *   // PostComputeFn, PreKBlockFn, pin_interm_to_captured_base.
  *   matmul_block<false, packer_l1_acc, LastBlockTarget::Interm,
  *                OutputCBLayout::SubblockMajor, matmul_config::InitMode::None,
  *                InputPolicy::WaitAndPopPerKBlock, InputPolicy::WaitAndPopPerKBlock,
- *                ConvSFPUPostCompute, ConvTilizePreKBlock,
+ *                SFPUPostCompute, TilizePreKBlock,
  *                true>(  // pin_interm_to_captured_base
  *       cb_mm_in0, cb_in1, cb_matmul_partials, cb_matmul_partials,  // out==interm
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
  *                             in0_block_k, in0_num_blocks_w),
- *       ConvSFPUPostCompute{}, conv_pre_k_block);
+ *       SFPUPostCompute{}, tilize_pre_k_block);
  *
  * ── Future perf followups ─────────────────────────────────────────────────
  *
@@ -783,9 +788,9 @@ struct NoIn1BaseOffset {
  * the K-block reload cost unnecessarily. A future helper variant or a
  * tile_order specialization that recognizes "full in0 inner-dim resident,
  * sweep in1 width only" could close this gap. Documented as an opportunity,
- * not scheduled — most decode workloads on this branch route through SDPA
- * or dedicated decode kernels rather than this helper. (Per Sofija's PR
- * review followup on the kloop removal.)
+ * not scheduled — most decode workloads route through dedicated decode
+ * kernels rather than this helper. (Per a PR review followup on the kloop
+ * removal.)
  */
 template <
     bool transpose = false,
