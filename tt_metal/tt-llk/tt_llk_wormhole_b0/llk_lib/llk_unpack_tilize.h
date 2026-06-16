@@ -538,7 +538,7 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
 
     // Restore tile-descriptor Y/Z dim to the canonical operand baseline programmed by
     // configure_unpack_AB. Y-dim is always 1, Z-dim equals the operand's num_faces.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0x0000ffff>(CANONICAL_UNPA_TILE_Y_DIM);
 
     // The unpack-config[0] write below also clears tileize_mode, haloize_mode, and the
