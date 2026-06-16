@@ -98,7 +98,7 @@ def test_lora_fuse(
     [
         (
             "pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py::test_lora_fuse",
-            166_329_976 if is_wormhole_b0() else 71_935_194,
+            165_621_931 if is_wormhole_b0() else 71_935_194,
             "sdxl_lora_fuse",
             "sdxl_lora_fuse",
             1,
