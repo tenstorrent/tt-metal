@@ -6,43 +6,44 @@
 #include <api/dataflow/dataflow_api.h>
 #include "api/debug/dprint.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
-    constexpr uint32_t core_in_channels_ntiles = get_compile_time_arg_val(1);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_weight = dfb::weights;
+    constexpr uint32_t core_in_channels_ntiles = get_arg(args::core_in_channels_ntiles);
+    constexpr uint32_t window_size_hw = get_arg(args::window_size_hw);
 
     // weight_block_width_ntiles corresponds to the full output width of each core.
-    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(3);
-    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t weight_matrix_width_ntiles = get_compile_time_arg_val(5);
-    constexpr uint32_t weight_next_channel_stride_h = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_next_block_this_core_stride_h = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_next_block_other_core_stride_h = get_compile_time_arg_val(8);
-    constexpr uint32_t remote_weight_height_blocks = get_compile_time_arg_val(9);
-    constexpr uint32_t local_weight_height_blocks = get_compile_time_arg_val(10);
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
-    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(12);
-    constexpr bool fuse_bias = get_compile_time_arg_val(13);
-    constexpr auto s_weight_args = TensorAccessorArgs<14>();
-    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
+    constexpr uint32_t weight_block_width_ntiles = get_arg(args::weight_block_width_ntiles);
+    constexpr uint32_t weight_block_num_tiles = get_arg(args::weight_block_num_tiles);
+    constexpr uint32_t weight_matrix_width_ntiles = get_arg(args::weight_matrix_width_ntiles);
+    constexpr uint32_t weight_next_channel_stride_h = get_arg(args::weight_next_channel_stride_h);
+    constexpr uint32_t weight_next_block_this_core_stride_h = get_arg(args::weight_next_block_this_core_stride_h);
+    constexpr uint32_t weight_next_block_other_core_stride_h = get_arg(args::weight_next_block_other_core_stride_h);
+    constexpr uint32_t remote_weight_height_blocks = get_arg(args::remote_weight_height_blocks);
+    constexpr uint32_t local_weight_height_blocks = get_arg(args::local_weight_height_blocks);
+    constexpr uint32_t act_num_blocks_h = get_arg(args::act_num_blocks_h);
+    // BIAS DFB bound only when has_bias; alias to weights when unbound so bias_cb
+    // construction stays well-formed (all real uses are under `if constexpr (fuse_bias)`).
+#ifdef FUSE_BIAS
+    constexpr uint32_t bias_cb_id = dfb::bias;
+#else
+    constexpr uint32_t bias_cb_id = dfb::weights;
+#endif
+    constexpr bool fuse_bias = get_arg(args::fuse_bias);
 
-    uint32_t i = 0;
-    const uint32_t init_weight_start_tile_id = get_arg_val<uint32_t>(i);
-    i += 1;
-    const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i);
-    i += 1;
-
-    uint32_t bias_addr_dram_base = get_arg_val<uint32_t>(i);
-    i += 1;
-    const uint32_t is_active = get_arg_val<uint32_t>(i);
-    i += 1;
+    const uint32_t init_weight_start_tile_id = get_arg(args::init_weight_start_tile_id);
+    const uint32_t is_active = get_arg(args::is_active);
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base);
+    // Weight (and optional bias) base addresses now arrive via the typed tensor
+    // binding channel; TensorAccessor(ta::name) packs the per-enqueue base address.
+    const auto s_weight = TensorAccessor(ta::weights);
     const uint32_t bias_pagesize =
         fuse_bias ? get_tile_size(bias_cb_id) : 0;  // dummy but valid value in case bias is not enabled
-    const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base);
+#ifdef FUSE_BIAS
+    const auto s_bias = TensorAccessor(ta::bias);
+#endif
 
     experimental::CB weight_cb(cb_id_weight);
     experimental::CB bias_cb(bias_cb_id);
@@ -104,6 +105,7 @@ void kernel_main() {
             }
             weight_start_tile_id += weight_next_block_this_core_stride_h;
             if (to_load_bias) {
+#ifdef FUSE_BIAS
                 if constexpr (fuse_bias) {
                     bias_cb.reserve_back(weight_block_width_ntiles);
                     uint32_t bias_write_offset = 0;
@@ -120,6 +122,7 @@ void kernel_main() {
                     noc.async_read_barrier();
                     bias_cb.push_back(weight_block_width_ntiles);
                 }
+#endif
                 to_load_bias = false;
             }
         }

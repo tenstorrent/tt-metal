@@ -1,11 +1,18 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port. Used only by the Pool2D::MultiCore factory, so ported in place. Logic is
+// unchanged; only the access mechanism moves to named bindings: CB ids -> dfb::<name>, scalar/
+// dimension CTAs -> get_arg(args::...), positional runtime args -> get_arg(args::...). The
+// DRAM-config path (load_config_tensor_if_in_dram / TensorAccessorArgs) is gated out by the host
+// (config_in_dram forced to 0) and stays on the legacy concept.
+
 #include <sys/types.h>
 
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
+#include "experimental/kernel_args.h"
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -163,60 +170,62 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
 void kernel_main() {
-    constexpr uint32_t reader_nindices = get_compile_time_arg_val(0);
-    constexpr uint32_t kernel_h = get_compile_time_arg_val(1);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(2);
+    constexpr uint32_t reader_nindices = get_arg(args::reader_nindices);
+    constexpr uint32_t kernel_h = get_arg(args::kernel_h);
+    constexpr uint32_t kernel_w = get_arg(args::kernel_w);
 
-    constexpr int32_t pad_w = get_compile_time_arg_val(3);
+    constexpr int32_t pad_w = get_arg(args::pad_w);
 
     // channel size in bytes
-    constexpr uint32_t in_nbytes_leftover = get_compile_time_arg_val(4);
+    constexpr uint32_t in_nbytes_leftover = get_arg(args::in_nbytes_leftover);
 
     // input tensor height / width / channels
-    constexpr int32_t in_w = get_compile_time_arg_val(5);
+    constexpr int32_t in_w = get_arg(args::in_w);
 
-    constexpr uint32_t in_c = get_compile_time_arg_val(6);
+    constexpr uint32_t in_c = get_arg(args::in_c);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(7);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(8);
+    constexpr uint32_t split_reader = get_arg(args::split_reader);
+    constexpr uint32_t reader_id = get_arg(args::reader_id);
 
-    constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(10);
+    constexpr uint32_t bf16_scalar = get_arg(args::bf16_scalar);
+    constexpr uint32_t bf16_init_value = get_arg(args::bf16_init_value);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(12);
-    constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(13);
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
+    constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
+    constexpr uint32_t in_cb_sz = get_arg(args::in_cb_sz);
+    constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
+    constexpr uint32_t ceil_pad_w = get_arg(args::ceil_pad_w);
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(21);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(22);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(25);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(26);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(28);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
-    constexpr bool zero_pages = (bool)get_compile_time_arg_val(31);
-    constexpr uint32_t config_in_dram = get_compile_time_arg_val(32);
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(33);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(34);
-    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(35);
-    constexpr uint32_t reader_page_size = get_compile_time_arg_val(36);
+    // The reader's input / scalar DFBs are bound under the SAME accessor name on both readers
+    // (reader0 -> in_0/in_scalar_0, reader1 -> in_1/in_scalar_1), so the kernel uses one handle.
+    constexpr uint32_t in_cb_id = dfb::in;
+    constexpr uint32_t in_shard_cb_id = dfb::raw_in;
+    constexpr uint32_t in_reader_indices_cb_id = dfb::reader_indices;
+    constexpr bool is_avg_pool = (bool)get_arg(args::pool_type);
+    constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
+    constexpr uint32_t in_nbytes_c = get_arg(args::in_nbytes_c);
+    constexpr uint32_t shard_width_bytes = get_arg(args::shard_width_bytes);
+    constexpr uint32_t multi_buffering_factor = get_arg(args::multi_buffering_factor);
+    constexpr uint32_t stride_w = get_arg(args::stride_w);
+    constexpr uint32_t dilation_h = get_arg(args::dilation_h);
+    constexpr uint32_t dilation_w = get_arg(args::dilation_w);
+    constexpr bool zero_pages = (bool)get_arg(args::zero_pages);
+    constexpr uint32_t config_in_dram = get_arg(args::config_in_dram);
+    constexpr uint32_t config_dram_addr = get_arg(args::config_dram_addr);
+    constexpr uint32_t config_page_size = get_arg(args::config_page_size);
+    constexpr uint32_t reader_dram_addr = get_arg(args::reader_dram_addr);
+    constexpr uint32_t reader_page_size = get_arg(args::reader_page_size);
     constexpr uint32_t reader_tensor_args_index = 55;
 
     constexpr bool use_split_reader = split_reader;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t in_scalar_cb_id =
-        use_split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+    // Each reader binds its own scalar DFB (reader0 -> in_scalar_0, reader1 -> in_scalar_1) under the
+    // shared accessor "in_scalar". When this reader does not bind a scalar DFB (reader1 without a
+    // second scalar CB), READER_BINDS_SCALAR is undefined and the scalar handle is gated out below.
+#ifdef READER_BINDS_SCALAR
+    constexpr uint32_t in_scalar_cb_id = dfb::in_scalar;
+#endif
 
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
@@ -233,11 +242,15 @@ void kernel_main() {
          interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
-    experimental::CB clear_value_cb(clear_value_cb_id);
+    experimental::CB clear_value_cb(dfb::clear_value);
+#ifdef READER_BINDS_SCALAR
     experimental::CB in_scalar_cb(in_scalar_cb_id);
+#endif
     experimental::CB in_shard_cb(in_shard_cb_id);
     experimental::CB reader_indices_cb(in_reader_indices_cb_id);
-    experimental::CB config_cb(config_cb_id);
+#ifdef HAS_CONFIG_CB
+    experimental::CB config_cb(dfb::config);
+#endif
 
     // fill the clear cb
     if constexpr (is_avg_pool || need_to_initialize_in_cb) {
@@ -250,7 +263,7 @@ void kernel_main() {
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
+            clear_out_tiles<in_cb_id, dfb::clear_value>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
         }
     }
 
@@ -262,7 +275,7 @@ void kernel_main() {
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
         in_scalar_cb.push_back(1);
     }
-    const uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
+    const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
     const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
     if constexpr (config_in_dram) {
@@ -290,6 +303,7 @@ void kernel_main() {
     uint32_t scalar_value;
     uint32_t scalar_end;
     uint32_t counter = reader_id;
+#ifdef HAS_CONFIG_CB
     if constexpr (!one_scalar_per_core) {
         uint32_t config_l1_addr = config_cb.get_read_ptr();
         if constexpr (config_in_dram) {
@@ -300,7 +314,7 @@ void kernel_main() {
                     config_dram_addr,
                     config_page_size,
                     config_tensor_args_index,
-                    config_cb_id>(Noc(), config_cb, core_nhw_index);
+                    dfb::config>(Noc(), config_cb, core_nhw_index);
             } else {
                 config_cb.wait_front(1);
             }
@@ -310,6 +324,7 @@ void kernel_main() {
         scalar_value = config_ptr[1];
         scalar_end = config_ptr[2];
     }
+#endif
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
     bool first_row_value = reader_id == 0 || !use_split_reader;
@@ -326,6 +341,9 @@ void kernel_main() {
 
         constexpr uint32_t stride_multiple = use_split_reader ? 2 : 1;
         for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
+#ifdef READER_BINDS_SCALAR
+            // fill_scalar only runs on the !one_scalar_per_core (avg) path; the scalar DFB is bound
+            // exactly on the readers that reach this code, so it is gated on READER_BINDS_SCALAR.
             if constexpr (!one_scalar_per_core) {
                 fill_scalar<
                     one_scalar_per_core,
@@ -335,6 +353,7 @@ void kernel_main() {
                     multi_buffering_factor>(
                     in_scalar_cb, scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
+#endif
             read_kernel_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
@@ -347,7 +366,7 @@ void kernel_main() {
                 total_elems_to_reduce,
                 is_avg_pool,
                 wide_reduction,
-                clear_value_cb_id,
+                dfb::clear_value,
                 in_cb_ntiles,
                 in_nbytes_c,
                 shard_width_bytes,

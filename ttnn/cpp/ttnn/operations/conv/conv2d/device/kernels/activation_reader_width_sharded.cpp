@@ -5,6 +5,7 @@
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "experimental/kernel_args.h"
 
 #define ENABLE_DEBUG 0
 
@@ -13,8 +14,8 @@
 #include "api/debug/dprint_pages.h"
 #endif
 
-constexpr uint32_t weight_size_h = get_compile_time_arg_val(5);
-constexpr uint32_t weight_size_w = get_compile_time_arg_val(6);
+constexpr uint32_t weight_size_h = get_arg(args::weight_size_h);
+constexpr uint32_t weight_size_w = get_arg(args::weight_size_w);
 // Only a part of the total channel depth (width) is used in one block.
 template <int window_height, int window_width>
 FORCE_INLINE void read_channels(
@@ -44,45 +45,48 @@ FORCE_INLINE void read_channels(
 }
 
 void kernel_main() {
-    constexpr uint32_t stride_w = get_compile_time_arg_val(0);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(1);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(2);
-    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(7);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t num_input_cores = get_compile_time_arg_val(9);
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(10);
-    constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(12));
-    Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(13));
+    constexpr uint32_t stride_w = get_arg(args::stride_w);
+    constexpr uint32_t dilation_h = get_arg(args::dilation_h);
+    constexpr uint32_t dilation_w = get_arg(args::dilation_w);
+    constexpr uint32_t conv_act_size_w = get_arg(args::conv_act_size_w);
+    constexpr uint32_t conv_act_c_read_bytes = get_arg(args::conv_act_c_read_bytes);
+    constexpr uint32_t act_block_h_datums = get_arg(args::act_block_h_datums);
+    constexpr uint32_t act_block_num_tiles = get_arg(args::act_block_num_tiles);
+    constexpr uint32_t num_input_cores = get_arg(args::num_input_cores);
+    constexpr uint32_t act_num_blocks_h = get_arg(args::act_num_blocks_h);
+    constexpr uint32_t act_num_blocks_w = get_arg(args::act_num_blocks_w);
+    Semaphore<> act_mcast_sender_sem(sem::act_mcast_sender);
+    Semaphore<> act_mcast_receiver_sem(sem::act_mcast_receiver);
     constexpr McastRect mcast_rect = {
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17)};
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(18);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(19);
-    constexpr uint32_t num_reader_cores = get_compile_time_arg_val(20);
+        get_arg(args::mcast_noc_x_start),
+        get_arg(args::mcast_noc_y_start),
+        get_arg(args::mcast_noc_x_end),
+        get_arg(args::mcast_noc_y_end)};
+    constexpr uint32_t act_mcast_sender_size_bytes = get_arg(args::act_mcast_sender_size_bytes);
+    constexpr uint32_t num_output_cores = get_arg(args::num_output_cores);
+    constexpr uint32_t num_reader_cores = get_arg(args::num_reader_cores);
 
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_id_act = dfb::act;
+    constexpr uint32_t cb_id_sharded_act = dfb::act_sharded;
+    constexpr uint32_t cb_reader_indices = dfb::reader_indices;
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = dfb::act_row_major;
+    constexpr uint32_t tilized_in0_cb_id = dfb::act_tilized;
 
     constexpr uint32_t num_mcast_cores = num_input_cores > num_output_cores ? num_input_cores : num_output_cores;
-    uint32_t i = 0;  // Runtime arg index
 
-    uint32_t this_core_x = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t this_core_y = get_arg_val<uint32_t>(i);
-    i += 1;
+    uint32_t this_core_x = get_arg(args::this_core_x);
+    uint32_t this_core_y = get_arg(args::this_core_y);
 
     // Num of cols of compute cores. (Total Cores, not active cores.)
-    uint32_t num_cores_x = get_arg_val<uint32_t>(i);
-    i += 1;
+    uint32_t num_cores_x = get_arg(args::num_cores_x);
 
+    // The two per-core mcast lookup tables are variable-length (num_cores_x entries
+    // each) and indexed by a runtime value, so they are passed as runtime varargs
+    // following the three named RTAs above. They are accessed by base pointer
+    // (get_arg_addr) + runtime index, which the value-returning get_vararg() helper
+    // cannot express; vararg index 0 lives at dispatch-buffer word 3 (= named RTA
+    // count), so we offset the legacy addr lookups by 3.
+    uint32_t i = 3;  // first vararg word (after this_core_x/y, num_cores_x)
     // X and Y lookup are independent.
     // X Lookup table for translating logical to physical cores.
     tt_l1_ptr uint32_t* act_mcast_x_lookup = (tt_l1_ptr uint32_t*)(get_arg_addr(i));

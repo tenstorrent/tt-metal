@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port. Used only by the TilizeMultiCoreDefault factory, so ported in place.
+// Logic unchanged from the legacy reader; only the access mechanism moves to named bindings:
+// source tensor address -> ta::input, CB id -> dfb::src0, positional compile-time / runtime args ->
+// get_arg(args::...). The legacy unused runtime-arg slots 2/6/7 (stick_size, num_leftover_tiles,
+// leftover_width_in_row) and compile-time slot 0 (aligned_page_size) are dropped — never read here.
+
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
@@ -9,30 +15,29 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in0 = dfb::src0;
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_rows = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles_per_block = get_arg_val<uint32_t>(3);
-    const uint32_t block_width_size = get_arg_val<uint32_t>(4);
-    const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
-    const uint32_t start_page_id = get_arg_val<uint32_t>(8);
+    const uint32_t num_rows = get_arg(args::num_rows);
+    const uint32_t num_tiles_per_block = get_arg(args::num_tiles_per_block);
+    const uint32_t block_width_size = get_arg(args::block_width_size);
+    const uint32_t num_full_blocks_in_row = get_arg(args::num_full_blocks_in_row);
+    const uint32_t start_page_id = get_arg(args::start_page_id);
 
     constexpr uint32_t num_pages_in_row =
-        get_compile_time_arg_val(1);  // For ND-sharded tensors, each row can have multiple pages.
+        get_arg(args::num_pages_in_row);  // For ND-sharded tensors, each row can have multiple pages.
     constexpr uint32_t size_of_valid_data_in_last_page_in_row =
-        get_compile_time_arg_val(2);  // For uneven sharding along the width, the last page could contain padding data,
-                                      // so we need to specify the size of valid data we want to read in.
+        get_arg(args::size_of_valid_data_in_last_page_in_row);  // For uneven sharding along the width, the last page
+                                                                // could contain padding data, so we need to specify the
+                                                                // size of valid data we want to read in.
 
-    constexpr auto src_tensor_args = TensorAccessorArgs<3>();
-
-    const auto s = TensorAccessor(src_tensor_args, src_addr);
+    const auto s = TensorAccessor(ta::input);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(cb_id_in0);
 
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
         cb_in0.reserve_back(num_tiles);

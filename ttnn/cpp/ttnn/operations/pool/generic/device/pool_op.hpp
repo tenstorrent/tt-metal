@@ -17,8 +17,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/metal2_artifacts.hpp"
 #include <utility>
 
 namespace ttnn::operations::pool {
@@ -46,21 +45,24 @@ struct Pool2D {
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct MultiCore {
-        // Builds the entire workload in one call (cache miss):
-        //   1. Uploads the halo lookup table (and, for avg-pool variants that
-        //      need it, the per-stick scalar config tensor) and parks the
-        //      backing MeshBuffers in the descriptor's `buffers` vector so
-        //      they outlive the cached workload.
-        //   2. Loops `tensor_coords` and pushes a ProgramDescriptor per coord
-        //      into `programs`.
-        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        // Metal 2.0 program factory (MetalV2FactoryConcept). Builds the immutable ProgramSpec and its
+        // mutable ProgramRunArgs, plus the op-owned config tensors (the sliding-window halo
+        // reader-indices table and, for avg-pool variants that need it, the per-stick scalar config
+        // tensor). The framework adapter parks the op-owned tensors in the cache entry (stable
+        // address) for the cached Program's lifetime and stamps one Program per mesh coordinate.
+        //
+        // Scope: L1-config, non-return-indices path only (reader_pool_2d.cpp / compute_pool_2d_m2.cpp).
+        // The DRAM-config path and the return_indices (MPWI) path are gated out (TT_FATAL).
+        static ttnn::device_operation::ProgramArtifacts create_program_spec(
             const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensors,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+            tensor_return_value_t& output_tensors);
     };
 
     using program_factory_t = std::variant<MultiCore>;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
+        return MultiCore{};
+    }
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
