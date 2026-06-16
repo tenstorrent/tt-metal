@@ -13,6 +13,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     simple_size_params,
     generate_input_tensor,
     ttnn_layer_norm_sharded,
+    run_sharded_norm_logical_width_multicore,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -485,3 +486,11 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+# A tile-aligned width split unevenly across cores (final core owns fewer real tiles). The op must
+# normalize over the logical width, not the padded per-core width. See the helper for the analytic
+# bf16 tolerance derivation; tolerances are not taken from observed output.
+@pytest.mark.parametrize(("w", "num_cores_w"), [(96, 2), (224, 3)], ids=["w96_c2", "w224_c3"])
+def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w):
+    run_sharded_norm_logical_width_multicore(device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w)
