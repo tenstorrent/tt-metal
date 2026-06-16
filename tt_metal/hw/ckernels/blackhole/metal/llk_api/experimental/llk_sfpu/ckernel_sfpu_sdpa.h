@@ -20,25 +20,13 @@ constexpr auto sdpa_bits = [](float x) constexpr { return __builtin_bit_cast(std
 constexpr auto sdpa_lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) & 0xFFFFu); };
 constexpr auto sdpa_hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) >> 16); };
 
-#ifdef ARCH_WORMHOLE
-constexpr auto sdpa_addr_mod_x = ADDR_MOD_3;
-#else
 constexpr auto sdpa_addr_mod_x = ADDR_MOD_7;
-#endif
 
-ALWI void sdpa_insert_sfpnop() {
-#ifdef ARCH_WORMHOLE
-    TTI_SFPNOP;
-#endif
-}
+ALWI void sdpa_insert_sfpnop() {}
 
 template <bool USE_SFPARECIP_INSTR, int POLY_DEGREE>
 constexpr bool sdpa_can_preload_ln2_constants() {
-#ifdef ARCH_WORMHOLE
-    return false;
-#else
     return (USE_SFPARECIP_INSTR || POLY_DEGREE == 1 || POLY_DEGREE == 2);
-#endif
 }
 
 template <bool legacy_compat = true>
@@ -86,7 +74,7 @@ inline void calculate_exponential_polynomial() {
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_7);
+        .set(sdpa_addr_mod_x);
 
     constexpr float LN2_RECIP = 1.44269504088896340736f;
     constexpr float M_LN2 = -0.69314718055994530942f;
@@ -159,15 +147,11 @@ inline void calculate_exponential_polynomial() {
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
         if constexpr (USE_SFPARECIP_INSTR) {
-#ifdef ARCH_BLACKHOLE
             TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
             TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 2);
             TTI_SFPENCC(0, 0, 0, 0);
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
-#else
-            static_assert(!USE_SFPARECIP_INSTR, "TTI_SFPARECIP instruction only supported on Blackhole");
-#endif
         } else {
             if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
                 TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
@@ -245,7 +229,6 @@ inline void calculate_exponential_first_column() {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE>
 inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr uint32_t prev_max_base_idx = 0;

@@ -59,14 +59,14 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         calculate_silu,
         (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         0 /*DST_IDX*/,
-        ::ckernel::VectorMode::RC));
+        VectorMode::RC));
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_silu,
         (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         2 /*DST_IDX*/,
-        ::ckernel::VectorMode::RC));
+        VectorMode::RC));
 
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -76,7 +76,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
         0 /*DST_OUT*/,
-        ::ckernel::VectorMode::RC)));
+        VectorMode::RC)));
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -85,7 +85,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         2 /*DST_IN0*/,
         3 /*DST_IN1*/,
         2 /*DST_OUT*/,
-        ::ckernel::VectorMode::RC)));
+        VectorMode::RC)));
 };
 
 template <>
@@ -107,14 +107,14 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         calculate_gelu,
         (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         0 /*DST_IDX*/,
-        ::ckernel::VectorMode::RC));
+        VectorMode::RC));
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_gelu,
         (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         2 /*DST_IDX*/,
-        ::ckernel::VectorMode::RC));
+        VectorMode::RC));
 
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -124,7 +124,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
         0 /*DST_OUT*/,
-        ::ckernel::VectorMode::RC)));
+        VectorMode::RC)));
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -133,7 +133,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         2 /*DST_IN0*/,
         3 /*DST_IN1*/,
         2 /*DST_OUT*/,
-        ::ckernel::VectorMode::RC)));
+        VectorMode::RC)));
 };
 
 }  // namespace detail
