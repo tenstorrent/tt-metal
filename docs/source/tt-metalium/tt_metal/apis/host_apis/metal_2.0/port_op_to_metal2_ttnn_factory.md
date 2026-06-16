@@ -56,7 +56,7 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
 The op author writes only `create_program_artifacts`. The framework adapter does the rest:
 
 - **Cache miss**: the adapter calls `create_program_artifacts`, builds one `Program` per mesh coordinate range from the spec, applies the initial `ProgramRunArgs`, and resolves each `TensorArgument` against the tensors enumerated from `tensor_args` / `tensor_return_value` followed by the factory's `op_owned_tensors` (matched by `MeshTensor` identity within the call). The op-owned tensors are parked in the cache entry so their allocation outlives the miss and stays at a stable address across dispatches.
-- **Cache hit**: the adapter enumerates fresh tensors (io tensors plus the parked op-owned ones), refreshes the cached tensor bindings in place, and applies them — no `Program` rebuild, no factory re-run.
+- **Cache hit**: the adapter enumerates fresh tensors (io tensors plus the parked op-owned ones) and patches their `TensorArgument`s into the cached `Program` in place — **only the tensor arguments are refreshed**, nothing else in the run-args — no `Program` rebuild, no factory re-run.
 
 The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates; a custom `compute_program_hash`, if present, replaces that default. Two dispatches with matching op-args share a cache entry, and only the tensor bindings are refreshed between them. The porter doesn't write any of this — it falls out of returning a correct `ProgramArtifacts`.
 
