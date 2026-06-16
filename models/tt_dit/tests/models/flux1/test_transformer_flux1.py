@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # import diffusers.models.transformers.transformer_flux as reference
-import os
 from time import time
 
 import diffusers as reference
@@ -13,10 +12,9 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.transformer_flux1 import Flux1SingleTransformerBlock, Flux1Transformer
+from ....models.transformers.transformer_flux1 import Flux1Checkpoint, Flux1SingleTransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....utils import cache
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -44,6 +42,11 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
         (1, 4096, 512),
     ],
 )
+@pytest.mark.parametrize(
+    "model_variant",
+    ["schnell", "dev"],
+    ids=["flux_schnell", "flux_dev"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_single_transformer_block(
     mesh_device: ttnn.MeshDevice,
@@ -54,6 +57,7 @@ def test_single_transformer_block(
     batch_size: int,
     prompt_seq_len: int,
     spatial_seq_len: int,
+    model_variant: str,
     id: str,
     model_location_generator,
     is_ci_env: bool,
@@ -61,7 +65,7 @@ def test_single_transformer_block(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     sp_factor = tuple(submesh_device.shape)[sp_axis]
     tp_factor = tuple(submesh_device.shape)[tp_axis]
-    model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
+    model_name = model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}", model_subdir="transformer")
     parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(
         model_name, subfolder="transformer", torch_dtype=torch.bfloat16
     )
@@ -179,10 +183,6 @@ def test_single_transformer_block(
 
 
 @pytest.mark.parametrize(
-    "dit_unit_test",
-    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
-)
-@pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
         pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
@@ -202,6 +202,11 @@ def test_single_transformer_block(
     ],
 )
 @pytest.mark.parametrize(
+    "model_variant",
+    ["schnell", "dev"],
+    ids=["flux_schnell", "flux_dev"],
+)
+@pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31000000}],
     indirect=True,
@@ -215,31 +220,22 @@ def test_transformer(
     batch_size: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
+    model_variant: str,
     id: str,
     model_location_generator,
-    dit_unit_test: bool,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
 
     sp_factor = tuple(submesh_device.shape)[sp_axis]
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
-    # Flux.1 variant "dev" is like "schnell" but with additional guidance parameter.
-    if dit_unit_test:
-        print("DIT_UNIT_TEST")
-        torch_model = reference.FluxTransformer2DModel(num_layers=1, num_single_layers=1)
-    else:
-        print("BLAH")
-
-        model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
-        torch_model = reference.FluxTransformer2DModel.from_pretrained(
-            model_name, subfolder="transformer", torch_dtype=torch.bfloat16
-        )
+    model_name = model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}", model_subdir="transformer")
+    torch_model = reference.FluxTransformer2DModel.from_pretrained(
+        model_name, subfolder="transformer", torch_dtype=torch.bfloat16
+    )
     assert isinstance(torch_model, reference.FluxTransformer2DModel)
     torch_model.eval()
 
-    head_dim = torch_model.config.attention_head_dim
-    num_heads = torch_model.config.num_attention_heads
     in_channels = torch_model.config.in_channels
     joint_attention_dim = torch_model.config.joint_attention_dim
     pooled_projection_dim = torch_model.config.pooled_projection_dim
@@ -257,37 +253,8 @@ def test_transformer(
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
 
-    if num_heads % tp_factor != 0:
-        padding_config = PaddingConfig.from_tensor_parallel_factor(num_heads, head_dim, tp_factor)
-    else:
-        padding_config = None
-
-    tt_model = Flux1Transformer(
-        patch_size=torch_model.config.patch_size,
-        in_channels=in_channels,
-        num_layers=torch_model.config.num_layers,
-        num_single_layers=torch_model.config.num_single_layers,
-        attention_head_dim=head_dim,
-        num_attention_heads=num_heads,
-        joint_attention_dim=joint_attention_dim,
-        pooled_projection_dim=pooled_projection_dim,
-        out_channels=torch_model.out_channels,
-        axes_dims_rope=torch_model.config.axes_dims_rope,
-        with_guidance_embeds=with_guidance_embeds,
-        mesh_device=submesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        padding_config=padding_config,
-    )
-
-    cache.load_model(
-        tt_model,
-        get_torch_state_dict=torch_model.state_dict,
-        model_name="Flux.1-dev",
-        subfolder="transformer",
-        parallel_config=parallel_config,
-        mesh_shape=tuple(submesh_device.shape),
-    )
+    checkpoint = Flux1Checkpoint(model_name)
+    tt_model = checkpoint.build(ccl_manager=ccl_manager, parallel_config=parallel_config)
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, spatial_seq_len, in_channels])

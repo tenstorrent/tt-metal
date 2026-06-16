@@ -606,8 +606,8 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k schnell
-    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k schnell
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_schnell
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_schnell
   model: flux.1-schnell
   skus:
     bh_quietbox_2:
@@ -619,10 +619,9 @@
 - name: TT-DiT Flux.1-dev unit tests
   cmd: |
     unset HF_HUB_OFFLINE
-    export HF_MODEL=black-forest-labs/FLUX.1-dev TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/black-forest-labs/FLUX.1-dev
     export NO_PROMPT=1
-    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k dev
-    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k dev
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
 
   model: flux.1-dev
   skus:

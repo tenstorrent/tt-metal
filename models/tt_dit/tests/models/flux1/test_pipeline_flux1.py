@@ -39,7 +39,7 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfi
         ("schnell", 1024, 1024, 4),
         ("dev", 1024, 1024, 28),
     ],
-    ids=["schnell", "dev"],
+    ids=["flux_schnell", "flux_dev"],
 )
 @pytest.mark.parametrize(
     ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
