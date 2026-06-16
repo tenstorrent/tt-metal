@@ -143,11 +143,53 @@ def create_program_descriptor(
             ],
         )
 
+    # --- R4: bound the per-core L1 footprint for large head-dim (D) ---
+    # The input/output CBs (cb_q_in/k_in/v_in/cb_out) are sized `io_factor * d_t`
+    # pages and the fp32 accumulators (cb_o/cb_pv/cb_o_resc/cb_q) `d_t` pages each;
+    # every one SCALES WITH d_t. With fp32 tiles (4 KB) at D=1024 (d_t=32) the
+    # double-buffered (io_factor=2) footprint is ~1.58 MB > the 1.5 MB L1 budget
+    # (program.cpp OOM). Dropping the input/output double-buffer (io_factor 2 -> 1)
+    # removes a d_t-scaling term (not a constant) and brings D=1024 fp32 to
+    # ~1.04 MB. We compute the projected footprint on the host and only single-
+    # buffer when the double-buffered layout would OOM — existing shapes that fit
+    # keep their reader/compute pipelining double-buffer (no perf regression).
+    L1_BUDGET = 1499136
+    SAFETY_MARGIN = 64 * 1024
+    acc_page = ttnn.tile_size(acc_format)
+    bf16_page = ttnn.tile_size(ttnn.bfloat16)
+    if has_mask:
+        mask_page = ttnn.tile_size(attn_mask.dtype)
+    elif causal:
+        mask_page = bf16_page
+    else:
+        mask_page = 0
+
+    def _footprint(io_factor):
+        total = 0
+        total += 3 * (io_factor * d_t) * q_page  # cb_q_in / cb_k_in / cb_v_in
+        total += (io_factor * d_t) * out_page  # cb_out
+        total += 2 * bf16_page  # cb_scaler_max / cb_scaler_sum
+        total += acc_page  # cb_p
+        total += 3 * (d_t * acc_page)  # cb_o / cb_pv / cb_o_resc
+        total += acc_page  # cb_recip_l
+        total += d_t * acc_page  # cb_q
+        total += 7 * acc_page  # cb_scores + 6 scalar running-stat tiles
+        if need_mask_cb:
+            total += 2 * mask_page  # cb_mask_in
+        if kv_edge:
+            total += 2 * bf16_page  # cb_edge_mask
+        return total
+
+    io_factor = 2
+    if _footprint(2) > (L1_BUDGET - SAFETY_MARGIN):
+        io_factor = 1
+
     cbs = [
-        # Input-side CBs — follow their own tensor dtype.
-        cb(CB_Q_IN, 2 * d_t, q_page, query.dtype),
-        cb(CB_K_IN, 2 * d_t, q_page, key.dtype),
-        cb(CB_V_IN, 2 * d_t, q_page, value.dtype),
+        # Input-side CBs — follow their own tensor dtype. io_factor (2 or 1)
+        # drops the double-buffer for large-D fp32 to stay inside the L1 budget.
+        cb(CB_Q_IN, io_factor * d_t, q_page, query.dtype),
+        cb(CB_K_IN, io_factor * d_t, q_page, key.dtype),
+        cb(CB_V_IN, io_factor * d_t, q_page, value.dtype),
         # Reduce scalers — always bf16 (pool-type-aware fill in the reader).
         cb(CB_SCALER_MAX, 1),
         cb(CB_SCALER_SUM, 1),
@@ -158,7 +200,7 @@ def create_program_descriptor(
         cb(CB_O_RESC, d_t, data_format=acc_format),
         cb(CB_RECIP_L, 1, data_format=acc_format),
         # Output-side CB — follows the output tensor dtype.
-        cb(CB_OUT, 2 * d_t, out_page, output.dtype),
+        cb(CB_OUT, io_factor * d_t, out_page, output.dtype),
         cb(CB_Q, d_t, data_format=acc_format),
         cb(CB_SCORES, 1, data_format=acc_format),
         cb(CB_M_CUR, 1, data_format=acc_format),
