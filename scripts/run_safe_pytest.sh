@@ -205,11 +205,14 @@ EXTRA_ARGS=("$@")
 # kernels to compile in parallel; on a narrow run its fixed overhead (a 2nd device open + a collect
 # body-run) exceeds the little serial-inline compile it would save. So:
 #   BROAD  = a whole directory or a whole test_*.py file, with NO ::nodeid and NO -k filter -> ON
-#   NARROW = a ::nodeid, a -k filter, or a --dev repro (single-case debugging)               -> OFF
+#   NARROW = a ::nodeid or a -k filter (single-case / handful repro)                         -> OFF
+# --dev does NOT force narrow: the dev-mode assert/watcher env is exported before the warm pass
+# runs, so the warm pass compiles the SAME debug-assert binaries the real run uses (build-key
+# match). A broad --dev run thus benefits from precompile like production (measured ~2.2x e2e on a
+# 569-kernel suite); only a -k / ::nodeid below keeps single-case --dev repros cold.
 # Explicit --precompile/--no-precompile win and disable this. Sim is skipped at the warm call below.
 if [[ "$PRECOMPILE_EXPLICIT" == false && "$SIM_MODE" == false ]]; then
     _narrow=false
-    [[ "$DEV_MODE" == true ]] && _narrow=true        # --dev = single-case repro; warm-up is overhead
     [[ "$TEST_PATH" == *"::"* ]] && _narrow=true      # nodeid selection
     if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
         for _a in "${EXTRA_ARGS[@]}"; do
@@ -220,7 +223,7 @@ if [[ "$PRECOMPILE_EXPLICIT" == false && "$SIM_MODE" == false ]]; then
     fi
     if [[ "$_narrow" == true ]]; then
         PRECOMPILE=false
-        echo "SAFE_PYTEST: precompile off (narrow run: nodeid/-k/--dev; pass --precompile to force)"
+        echo "SAFE_PYTEST: precompile off (narrow run: nodeid/-k; pass --precompile to force)"
     elif [[ -d "$TEST_PATH" ]]; then
         PRECOMPILE=true
         echo "SAFE_PYTEST: precompile auto-enabled (broad run: whole directory; --no-precompile to disable)"
@@ -387,6 +390,54 @@ if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
     fi
 fi
 
+# --- Debug/sim mode env (asserts + watcher) ---
+# MUST be set BEFORE the precompile warm pass below. TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,
+# TT_METAL_LLK_ASSERTS and TT_METAL_WATCHER_NOINLINE are COMPILE-TIME flags: they change the
+# kernel build key. If the warm pass compiled without them (as it used to), it would produce
+# PRODUCTION binaries the --dev real run can't reuse — 0% cache hits, full recompile, warm
+# pass wasted. Setting them first makes the warm pass compile the SAME (debug) binaries the
+# real run uses, so --dev + --precompile actually warms the cache.
+if [[ "$DEV_MODE" == true ]]; then
+    # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
+    # exact instruction. The dispatch timeout then fires and runs triage, which
+    # captures callstacks from ALL cores — showing both the assert site and any
+    # cores blocked waiting on the halted one.
+    export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
+
+    # LLK asserts: enables LLK_ASSERT() in the compute API / LLK layer.
+    # Catches invalid hardware configurations, wrong unpack/pack parameters,
+    # and API misuse deep in the compute pipeline. Also compiles as ebreak.
+    export TT_METAL_LLK_ASSERTS=1
+
+    # Polling watcher: enables all device-side instrumentation (NoC sanitizer,
+    # waypoints, CB sanitization) with the host polling thread. Recent watcher
+    # server improvements (t=0 sampling, 100ms quanta) minimize overhead for
+    # short tests. Watcher log is dumped on hang for full diagnostic context.
+    #
+    # WATCHER_DISABLE_ASSERT disables the watcher's own assert mechanism (which
+    # would conflict with the lightweight ebreak asserts above). We want ebreak
+    # asserts to halt the core so triage can capture callstacks from all cores,
+    # rather than having watcher handle asserts independently.
+    export TT_METAL_WATCHER=1
+    export TT_METAL_WATCHER_NOINLINE=1
+    export TT_METAL_WATCHER_DISABLE_ASSERT=1
+    export TT_METAL_WATCHER_DISABLE_DISPATCH=1
+
+    if [[ "$SIM_MODE" == true ]]; then
+        # NoC sanitizer is intentionally disabled on sim — the sanitizer is
+        # tuned for HW behavior and hits false positives under libttsim.
+        # (Mirrors tt-probe.sh.)
+        export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
+        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling(noc_sanitize=OFF) watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
+    else
+        echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s"
+    fi
+elif [[ "$SIM_MODE" == true ]]; then
+    echo "SAFE_PYTEST: [sim] watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
+else
+    echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s"
+fi
+
 # --- Precompile warm phase (opt-in, hardware only; never aborts the real run) ---
 if [[ "$PRECOMPILE" == true ]]; then
     if [[ "$SIM_MODE" == true ]]; then
@@ -428,46 +479,6 @@ emit_missing_ttexalens_warning() {
 }
 trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 
-if [[ "$DEV_MODE" == true ]]; then
-    # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
-    # exact instruction. The dispatch timeout then fires and runs triage, which
-    # captures callstacks from ALL cores — showing both the assert site and any
-    # cores blocked waiting on the halted one.
-    export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
-
-    # LLK asserts: enables LLK_ASSERT() in the compute API / LLK layer.
-    # Catches invalid hardware configurations, wrong unpack/pack parameters,
-    # and API misuse deep in the compute pipeline. Also compiles as ebreak.
-    export TT_METAL_LLK_ASSERTS=1
-
-    # Polling watcher: enables all device-side instrumentation (NoC sanitizer,
-    # waypoints, CB sanitization) with the host polling thread. Recent watcher
-    # server improvements (t=0 sampling, 100ms quanta) minimize overhead for
-    # short tests. Watcher log is dumped on hang for full diagnostic context.
-    #
-    # WATCHER_DISABLE_ASSERT disables the watcher's own assert mechanism (which
-    # would conflict with the lightweight ebreak asserts above). We want ebreak
-    # asserts to halt the core so triage can capture callstacks from all cores,
-    # rather than having watcher handle asserts independently.
-    export TT_METAL_WATCHER=1
-    export TT_METAL_WATCHER_NOINLINE=1
-    export TT_METAL_WATCHER_DISABLE_ASSERT=1
-    export TT_METAL_WATCHER_DISABLE_DISPATCH=1
-
-    if [[ "$SIM_MODE" == true ]]; then
-        # NoC sanitizer is intentionally disabled on sim — the sanitizer is
-        # tuned for HW behavior and hits false positives under libttsim.
-        # (Mirrors tt-probe.sh.)
-        export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
-        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling(noc_sanitize=OFF) watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
-    else
-        echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s"
-    fi
-elif [[ "$SIM_MODE" == true ]]; then
-    echo "SAFE_PYTEST: [sim] watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
-else
-    echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s"
-fi
 echo "SAFE_PYTEST: pytest ${TEST_PATH} $*"
 echo "========================================"
 
