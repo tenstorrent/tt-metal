@@ -37,6 +37,10 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
+  # MOVD2B failures
+  # https://github.com/tenstorrent/tt-metal/issues/47164
+  - tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py::test_windowed_sdpa_smoke
+
   # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
 
