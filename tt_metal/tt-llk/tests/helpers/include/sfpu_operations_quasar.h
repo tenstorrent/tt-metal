@@ -27,19 +27,30 @@
 #include "sfpu/ckernel_sfpu_square.h"
 #include "sfpu/ckernel_sfpu_tanh.h"
 
+// Binary SFPU op headers (consumed by the binary dispatchers below). The op is
+// selected via the LLK ckernel::BinaryOp enum (reused like Blackhole; the
+// comparison and max/min enumerators were added to it in llk_defs.h).
+//
+// To add a new Quasar binary SFPU op:
+// 1. Include its ckernel header below.
+// 2. Add the enumerator to ckernel::BinaryOp (llk_defs.h) if it is not there.
+// 3. Add the `if constexpr` branch in call_binary_sfpu_operation_quasar()
+//    (and init_binary_sfpu_operation_quasar() if it needs an init step).
+#include "llk_math_eltwise_binary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
+#include "llk_sfpu/ckernel_sfpu_binary_max_min.h" // calculate_binary_max_min / _init_binary_max_min_
+#include "sfpu/ckernel_sfpu_add.h"                // _add_int_ (int add)
+#include "sfpu/ckernel_sfpu_binary_comp.h"        // calculate_binary_comp_int32 (int gt/lt/le/ge)
+#include "sfpu/ckernel_sfpu_mul_int32.h"          // _mul_int32_ (int mul)
+
 namespace test_utils
 {
 using namespace ckernel;
+using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
 /**
  * @brief Run the per-operation init step for a Quasar unary SFPU op.
- *
- * Most Quasar unary ops need no dedicated init (the shared
- * `_llk_math_eltwise_sfpu_init_()` in the kernel is sufficient); only the ops
- * with a `_init_*_` entry point are handled here. This mirrors the inline
- * dispatcher previously embedded in `sfpu_nonlinear_quasar_test.cpp`, which
- * initialised only gelu.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
  * @note Pair with @ref call_unary_sfpu_operation_quasar for the calculate step.
@@ -111,6 +122,128 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index)
     else
     {
         LLK_ASSERT(false, "Unsupported Quasar unary SFPU operation");
+    }
+}
+
+constexpr bool quasar_binary_op_is_max_min(ckernel::BinaryOp op)
+{
+    return op == ckernel::BinaryOp::MAX || op == ckernel::BinaryOp::MIN;
+}
+
+/**
+ * @brief Run the per-operation init step for a Quasar binary SFPU op.
+ *
+ * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
+ * @note Pair with @ref call_binary_sfpu_operation_quasar for the calculate step.
+ */
+template <ckernel::BinaryOp OP>
+void init_binary_sfpu_operation_quasar()
+{
+    if constexpr (OP == BinaryOp::MUL)
+    {
+        sfpu_binary_init<false /*APPROX*/, BinaryOp::MUL>(); // no-op for MUL; harmless on the int path
+    }
+    else if constexpr (OP == BinaryOp::DIV)
+    {
+        sfpu_binary_init<false /*APPROX*/, BinaryOp::DIV>();
+    }
+    else if constexpr (quasar_binary_op_is_max_min(OP))
+    {
+        _init_binary_max_min_();
+    }
+    // ADD / GT / LT / LE / GE are stateless — no init.
+}
+
+/**
+ * @brief Apply a Quasar binary SFPU op over two Dest operands into a result tile.
+ *
+ * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam ITERATIONS Number of SFPU loop iterations.
+ * @param base_dst_index Base Dest tile index (used by max/min's unary-params call).
+ * @param src0_tile,src1_tile,dst_tile Operand / result tile indices.
+ * @param math_format Dest math format (Int32 vs float path for MUL and max/min).
+ * @note Must be preceded by @ref init_binary_sfpu_operation_quasar for the same op.
+ */
+template <ckernel::BinaryOp OP, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+void call_binary_sfpu_operation_quasar(
+    [[maybe_unused]] std::uint32_t base_dst_index, int src0_tile, int src1_tile, int dst_tile, [[maybe_unused]] DataFormat math_format)
+{
+    // Integer ops address Dest by row offset (tile index * rows-per-tile).
+    constexpr int stride = NUM_FACES * FACE_R_DIM;
+    const int in0_off    = src0_tile * stride;
+    const int in1_off    = src1_tile * stride;
+    const int out_off    = dst_tile * stride;
+
+    if constexpr (OP == BinaryOp::ADD)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(_add_int_<false, ITERATIONS, DataFormat::Int32, 0, false>, in0_off, in1_off, out_off);
+    }
+    else if constexpr (OP == BinaryOp::GT)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(calculate_binary_comp_int32<false, ITERATIONS, SfpuType::gt>, in0_off, in1_off, out_off);
+    }
+    else if constexpr (OP == BinaryOp::LT)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(calculate_binary_comp_int32<false, ITERATIONS, SfpuType::lt>, in0_off, in1_off, out_off);
+    }
+    else if constexpr (OP == BinaryOp::LE)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(calculate_binary_comp_int32<false, ITERATIONS, SfpuType::le>, in0_off, in1_off, out_off);
+    }
+    else if constexpr (OP == BinaryOp::GE)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(calculate_binary_comp_int32<false, ITERATIONS, SfpuType::ge>, in0_off, in1_off, out_off);
+    }
+    else if constexpr (OP == BinaryOp::MUL)
+    {
+        if (math_format == DataFormat::Int32)
+        {
+            _llk_math_eltwise_binary_sfpu_params_(_mul_int32_<false, ITERATIONS>, in0_off, in1_off, out_off);
+        }
+        else
+        {
+            _llk_math_eltwise_binary_sfpu_params_(
+                calculate_sfpu_binary<false /*APPROX*/, BinaryOp::MUL, is_fp32_dest_acc_en, ITERATIONS>, src0_tile, src1_tile, dst_tile);
+        }
+    }
+    else if constexpr (OP == BinaryOp::DIV)
+    {
+        _llk_math_eltwise_binary_sfpu_params_(
+            calculate_sfpu_binary<false /*APPROX*/, BinaryOp::DIV, is_fp32_dest_acc_en, ITERATIONS>, src0_tile, src1_tile, dst_tile);
+    }
+    else if constexpr (quasar_binary_op_is_max_min(OP))
+    {
+        constexpr bool IS_MAX = (OP == BinaryOp::MAX);
+        // All integer formats route through the Int32 path; float / MX use Float32.
+        if (math_format == DataFormat::Int32)
+        {
+            _llk_math_eltwise_unary_sfpu_params_(
+                ckernel::sfpu::calculate_binary_max_min<DataFormat::Int32, IS_MAX, ITERATIONS>,
+                base_dst_index,
+                VectorMode::RC,
+                static_cast<std::uint32_t>(src0_tile),
+                static_cast<std::uint32_t>(src1_tile),
+                static_cast<std::uint32_t>(dst_tile));
+        }
+        else
+        {
+            _llk_math_eltwise_unary_sfpu_params_(
+                ckernel::sfpu::calculate_binary_max_min<DataFormat::Float32, IS_MAX, ITERATIONS>,
+                base_dst_index,
+                VectorMode::RC,
+                static_cast<std::uint32_t>(src0_tile),
+                static_cast<std::uint32_t>(src1_tile),
+                static_cast<std::uint32_t>(dst_tile));
+        }
+    }
+    else
+    {
+        // Catches BinaryOp values this dispatcher does not implement (e.g. SUB);
+        // a compile-time static_assert can't be used here because OP is a
+        // non-type param, so sizeof(OP)==0 is non-dependent and fires for every
+        // instantiation (matches the runtime guard in the unary dispatcher).
+        LLK_ASSERT(false, "Unsupported Quasar binary SFPU operation");
     }
 }
 
