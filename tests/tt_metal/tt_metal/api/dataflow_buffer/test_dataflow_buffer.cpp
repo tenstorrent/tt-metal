@@ -2324,7 +2324,7 @@ void LogDfbInitTimingFromL1(IDevice* device, const CoreCoord& core, const char* 
             log_info(
                 tt::LogTest,
                 "  {}: e2e={} merged_sw={} remapper_spin={} tc_hw={} wait_all={} tc_reset_hw={} "
-                "tc_capacity_hw={} start={} end={}",
+                "tc_capacity_hw={} pre_loop={} entry_hdr={} tc_slots={} sig_write={} start={} end={}",
                 kDfbInitTimingSlotNames[slot],
                 e2e,
                 metric_a,
@@ -2333,6 +2333,10 @@ void LogDfbInitTimingFromL1(IDevice* device, const CoreCoord& core, const char* 
                 metric_d,
                 metric_e,
                 metric_f,
+                metric_g,
+                metric_h,
+                metric_i,
+                metric_j,
                 start_time,
                 end_time);
         }
