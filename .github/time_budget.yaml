@@ -180,9 +180,7 @@ triage:
     wh_n150_civ2: 11
     bh_p150b_civ2_viommu_prio: 11
     bh_p150b_civ2_viommu: 11
-
-debug:
-  triage:
+  unit:
     wh_n150_civ2: 16
     bh_p150b_civ2_viommu_prio: 16
     bh_p150b_civ2_viommu: 16

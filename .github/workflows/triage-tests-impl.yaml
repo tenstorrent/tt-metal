@@ -18,8 +18,8 @@ on:
       test-category:
         required: false
         type: string
-        default: triage
-        description: "Time-budget workflow key passed to verify_time_budget.py (smoke for merge-gate, triage for L2/standalone)."
+        default: unit
+        description: "Time-budget workflow key passed to verify_time_budget.py (smoke for merge-gate, unit for L2/standalone)."
       enable-watcher:
         description: "Enable watcher"
         default: false
