@@ -465,7 +465,6 @@ def test_transpose_hw_rm_with_program_cache(device, n, c, h, w):
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [224])
 @pytest.mark.parametrize("h", [16])
@@ -555,6 +554,48 @@ def test_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.num_program_cache_entries() == 3
+
+
+@pytest.mark.parametrize("n", [2])
+@pytest.mark.parametrize("c", [32])
+@pytest.mark.parametrize("h", [288])
+@pytest.mark.parametrize("w", [64])
+def test_transpose_hw_sharded_rm_ht_gt_8(device, n, c, h, w):
+    # Targets the Ht>8 path of the row-major sharded WH transpose factory, which
+    # test_transpose_hw_sharded_rm (h=16) never reaches. With h=288:
+    #   - ht = 288/32 = 9 (>8), so the compute output is routed through the c_27 staging buffer and
+    #     drained by the writer kernel (instead of packing straight into the borrowed output shard);
+    #   - h % 32 == 0, so the compute takes the regular pack_untilize branch (transpose_with_pack_untilize),
+    #     which contains the producer-side wait_front.
+    # n*c = 64 is divisible by the 32-core grid -> 2 hw-blocks/core, also exercising the outer loop.
+    torch.manual_seed(2005)
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(2, 3)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # shard config (fixed 4x8 = 32 core grid)
+    grid_size = ttnn.CoreGrid(y=4, x=8)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, (n * h * c // (grid_size.x * grid_size.y), w), ttnn.ShardOrientation.COL_MAJOR
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3)
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
 @pytest.mark.parametrize("n", [16])

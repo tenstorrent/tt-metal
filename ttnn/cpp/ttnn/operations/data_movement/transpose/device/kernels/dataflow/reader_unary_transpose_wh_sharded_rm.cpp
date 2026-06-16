@@ -2,31 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 conversion (in place; this kernel is transpose-owned). The device-side NoC + local-copy
+// logic is unchanged; only the resource bindings move to the Metal 2.0 namespaces (dfb::/args::).
+// cb_src (dfb::cb_src) is the borrowed input shard — read by L1 address (get_read_ptr); cb_dst
+// (dfb::cb_dst) is the row-gathered tile-staging buffer produced for the compute kernel.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+// get_arg lives in `namespace experimental` and is normally found via ADL on the args:: accessor
+// type. The CoreLocalMem/UnicastEndpoint NoC-with-state includes this kernel pulls in change the
+// lookup context enough that ADL doesn't resolve it here, so bring the overload set in explicitly.
+using experimental::get_arg;
 
 void kernel_main() {
-    constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t H_per_tile = get_compile_time_arg_val(2);
-    constexpr uint32_t H_per_tile_last = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t l1_write_offset_bytes = get_compile_time_arg_val(6);
-
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in = tt::CBIndex::c_24;
+    constexpr uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t H_per_tile = get_arg(args::H_per_tile);
+    constexpr uint32_t H_per_tile_last = get_arg(args::H_per_tile_last);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t W_size_bytes = get_arg(args::W_size_bytes);
+    constexpr uint32_t l1_write_offset_bytes = get_arg(args::l1_write_offset_bytes);
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
     Noc noc;
-    CircularBuffer cb_src(cb_in0);
-    CircularBuffer cb_dst(cb_in);
+    DataflowBuffer cb_src(dfb::cb_src);
+    DataflowBuffer cb_dst(dfb::cb_dst);
 
     uint32_t src_addr = cb_src.get_read_ptr();
 
