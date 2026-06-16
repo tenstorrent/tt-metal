@@ -2984,24 +2984,12 @@ void reset_worker_dispatch_state_on_device(
 }
 
 void set_num_worker_sems_on_dispatch(
-    IDevice* device,
+    IDevice* /*device*/,
     SystemMemoryManager& manager,
     uint8_t cq_id,
     uint32_t num_worker_sems,
     tt::stl::Span<const uint32_t> workers_per_sub_device) {
-    // Not needed for regular dispatch kernel
-    // if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
-    //     return;
-    // }
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
-    DispatchArray<uint32_t> default_workers_per_sub_device{};
-    if (workers_per_sub_device.empty()) {
-        TT_ASSERT(num_worker_sems == 1);
-        TT_ASSERT(dynamic_cast<distributed::MeshDevice*>(device) == nullptr);
-        auto grid_size = device->compute_with_storage_grid_size();
-        default_workers_per_sub_device[0] = grid_size.x * grid_size.y;
-        workers_per_sub_device = tt::stl::Span<const uint32_t>(default_workers_per_sub_device.data(), num_worker_sems);
-    }
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
     tt::tt_metal::DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_num_worker_sems();

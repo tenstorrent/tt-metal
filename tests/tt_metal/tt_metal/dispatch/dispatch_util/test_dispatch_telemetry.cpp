@@ -112,6 +112,27 @@ protected:
         const CoreType core_type = dcm.get_dispatch_core_type();
         return device()->virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
     }
+
+    std::optional<CoreCoord> dispatch_virtual_core(uint8_t cq_id = 0) const {
+        auto& metal_context = MetalContext::instance();
+        auto& dcm = metal_context.get_dispatch_core_manager();
+        const ChipId chip = device()->id();
+        const uint16_t channel = metal_context.get_cluster().get_assigned_channel_for_device(chip);
+        if (!dcm.is_dispatcher_core_allocated(chip, channel, cq_id)) {
+            return std::nullopt;
+        }
+
+        const auto& logical_cxy = dcm.dispatcher_core(chip, channel, cq_id);
+        const CoreType core_type = dcm.get_dispatch_core_type();
+        return device()->virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+    }
+
+    std::optional<CoreCoord> dispatch_telemetry_virtual_core(uint8_t cq_id = 0) const {
+        if (auto dispatch_s_core = dispatch_s_virtual_core(cq_id); dispatch_s_core.has_value()) {
+            return dispatch_s_core;
+        }
+        return dispatch_virtual_core(cq_id);
+    }
 };
 
 class DispatchTelemetryMultiCQReadApiTest : public UnitMeshMultiCQSingleDeviceFixture {
@@ -689,6 +710,49 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchSTelemetryTracksWorkerRuntime) {
     }
 }
 
+TEST_F(DispatchTelemetryReadApiTest, DispatchTelemetryTracksWorkersPerSubDeviceCount) {
+    constexpr uint8_t cq_id = 0;
+    auto mesh_device = devices_.at(0);
+    const auto dispatch_telemetry_core = dispatch_telemetry_virtual_core(cq_id);
+    ASSERT_TRUE(dispatch_telemetry_core.has_value());
+
+    const CoreRangeSet all_worker_cores = [&] {
+        const CoreCoord grid_size = device()->compute_with_storage_grid_size();
+        return CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}));
+    }();
+
+    constexpr size_t num_sub_devices = 2;
+    constexpr size_t first_sub_device_core_count = 2;
+    constexpr size_t second_sub_device_core_count = 3;
+    constexpr std::array<size_t, num_sub_devices> sub_device_core_counts = {
+        first_sub_device_core_count, second_sub_device_core_count};
+
+    constexpr size_t required_worker_core_count = first_sub_device_core_count + second_sub_device_core_count;
+    if (all_worker_cores.num_cores() < required_worker_core_count) {
+        GTEST_SKIP() << "Not enough worker cores";
+    }
+
+    const std::array<CoreRangeSet, num_sub_devices> sub_device_cores = {
+        select_from_corerangeset(all_worker_cores, 0, 1, true), select_from_corerangeset(all_worker_cores, 2, 4, true)};
+
+    std::array<SubDevice, num_sub_devices> sub_devices = {
+        SubDevice(std::array{sub_device_cores[0]}), SubDevice(std::array{sub_device_cores[1]})};
+    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_devices[0], sub_devices[1]}, 3200);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+
+    auto info = read_dispatch_core_telemetry(device()->id(), *dispatch_telemetry_core);
+    EXPECT_TRUE(info.has_value());
+    if (info.has_value()) {
+        for (size_t sub_device_index = 0; sub_device_index < num_sub_devices; ++sub_device_index) {
+            EXPECT_EQ(info->workers_per_sub_device[sub_device_index], sub_device_core_counts[sub_device_index])
+                << "sub_device_index=" << sub_device_index;
+        }
+    }
+
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(sub_device_manager);
+}
+
 TEST_F(DispatchTelemetryMultiCQReadApiTest, DispatchTelemetryTracksWorkersPerSubDeviceCount) {
     constexpr uint8_t first_cq_id = 0;
     constexpr uint8_t second_cq_id = 1;
@@ -744,18 +808,6 @@ TEST_F(DispatchTelemetryMultiCQReadApiTest, DispatchTelemetryTracksWorkersPerSub
          sub_devices[cq_2_second_sub_device_index]},
         3200);
     mesh_device->load_sub_device_manager(sub_device_manager);
-
-    const auto run_blank_program = [&](const uint8_t cq_id, const CoreRangeSet& program_cores) {
-        distributed::MeshWorkload workload;
-        workload.add_program(device_range_, create_blank_program(program_cores));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(cq_id), workload, false);
-        Finish(mesh_device->mesh_command_queue(cq_id));
-    };
-
-    run_blank_program(first_cq_id, sub_device_cores[cq_1_first_sub_device_index]);
-    run_blank_program(first_cq_id, sub_device_cores[cq_1_second_sub_device_index]);
-    run_blank_program(second_cq_id, sub_device_cores[cq_2_first_sub_device_index]);
-    run_blank_program(second_cq_id, sub_device_cores[cq_2_second_sub_device_index]);
 
     auto first_info = read_dispatch_core_telemetry(device()->id(), *first_dispatch_telemetry_core);
     EXPECT_TRUE(first_info.has_value());

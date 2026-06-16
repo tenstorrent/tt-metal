@@ -162,12 +162,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.dispatch_telemetry_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
     static_config_.dispatch_telemetry_disabled = descriptor_.rtoptions().get_dispatch_telemetry_disabled();
-    static_config_.sub_device_worker_counts_update_addr = my_dispatch_constants.get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::SUB_DEVICE_WORKER_COUNTS_UPDATE);
-    static_config_.worker_stream_reset_update_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::WORKER_STREAM_RESET_UPDATE);
-    static_config_.telemetry_compute_terminate_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::TELEMETRY_COMPUTE_TERMINATE);
+    static_config_.dispatch_telemetry_control_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL);
 
     // Configuration for DEVICE_PRINT dispatch.
     static_config_.device_print_dispatch_enabled = 0;
@@ -306,9 +302,7 @@ void DispatchSKernel::CreateKernel() {
         {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
         {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
         {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
-        {"SUB_DEVICE_UPDATE_SEM_ADDR", std::to_string(static_config_.sub_device_worker_counts_update_addr.value())},
-        {"WORKER_STREAM_RESET_UPDATE_ADDR", std::to_string(static_config_.worker_stream_reset_update_addr.value())},
-        {"TELEMETRY_COMPUTE_TERMINATE_ADDR", std::to_string(static_config_.telemetry_compute_terminate_addr.value())},
+        {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         {"DEVICE_PRINT_DISPATCH_ENABLED", std::to_string(static_config_.device_print_dispatch_enabled.value_or(0))},
         // For each per-device dispatch_s build, MaxNocLocations equals the actual print-core count
         // for that device — passed as a compile-time #define so DevicePrintDispatch<>'s LDM arrays
@@ -341,10 +335,7 @@ void DispatchSKernel::CreateKernel() {
             {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
             {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
             {"TOTAL_SUB_DEVICES", std::to_string(static_config_.max_num_worker_sems.value())},
-            {"SUB_DEVICE_UPDATE_SEM_ADDR", std::to_string(static_config_.sub_device_worker_counts_update_addr.value())},
-            {"WORKER_STREAM_RESET_UPDATE_ADDR", std::to_string(static_config_.worker_stream_reset_update_addr.value())},
-            {"TELEMETRY_COMPUTE_TERMINATE_ADDR",
-             std::to_string(static_config_.telemetry_compute_terminate_addr.value())},
+            {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         };
         tt::tt_metal::ComputeConfig compute_config;
         compute_config.defines = compute_defines;
@@ -362,35 +353,15 @@ void DispatchSKernel::ConfigureCore() {
             descriptor_.hal(),
             static_config_.realtime_profiler_msg_addr.value());
 
-        TT_ASSERT(static_config_.sub_device_worker_counts_update_addr.has_value());
-        const uint32_t zero_sub_device_worker_counts_update = 0;
+        TT_ASSERT(static_config_.dispatch_telemetry_control_addr.has_value());
+        DispatchTelemetryControl zero_dispatch_telemetry_control{};
         detail::WriteToDeviceL1(
             device_,
             logical_core_,
-            static_config_.sub_device_worker_counts_update_addr.value(),
+            static_config_.dispatch_telemetry_control_addr.value(),
             std::span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(&zero_sub_device_worker_counts_update),
-                sizeof(zero_sub_device_worker_counts_update)),
-            GetCoreType());
-
-        TT_ASSERT(static_config_.worker_stream_reset_update_addr.has_value());
-        const uint32_t zero_worker_stream_reset_update = 0;
-        detail::WriteToDeviceL1(
-            device_,
-            logical_core_,
-            static_config_.worker_stream_reset_update_addr.value(),
-            std::span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(&zero_worker_stream_reset_update),
-                sizeof(zero_worker_stream_reset_update)),
-            GetCoreType());
-
-        TT_ASSERT(static_config_.telemetry_compute_terminate_addr.has_value());
-        std::vector<uint32_t> zero_telemetry_compute_terminate = {0};
-        detail::WriteToDeviceL1(
-            device_,
-            logical_core_,
-            static_config_.telemetry_compute_terminate_addr.value(),
-            zero_telemetry_compute_terminate,
+                reinterpret_cast<const uint8_t*>(&zero_dispatch_telemetry_control),
+                sizeof(zero_dispatch_telemetry_control)),
             GetCoreType());
     }
 

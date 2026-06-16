@@ -94,12 +94,11 @@ DispatchMemMap::DispatchMemMap(
                     .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
             device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_TELEMETRY_SIZE;
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL) {
+            device_cq_addr_sizes_[dev_addr_idx] = sizeof(DispatchTelemetryControl);
         } else if (
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
-            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS ||
-            dev_addr_type == CommandQueueDeviceAddrType::SUB_DEVICE_WORKER_COUNTS_UPDATE ||
-            dev_addr_type == CommandQueueDeviceAddrType::WORKER_STREAM_RESET_UPDATE ||
-            dev_addr_type == CommandQueueDeviceAddrType::TELEMETRY_COMPUTE_TERMINATE) {
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
             device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
@@ -119,9 +118,7 @@ DispatchMemMap::DispatchMemMap(
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
             dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG ||
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY ||
-            dev_addr_type == CommandQueueDeviceAddrType::SUB_DEVICE_WORKER_COUNTS_UPDATE ||
-            dev_addr_type == CommandQueueDeviceAddrType::WORKER_STREAM_RESET_UPDATE ||
-            dev_addr_type == CommandQueueDeviceAddrType::TELEMETRY_COMPUTE_TERMINATE) {
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }

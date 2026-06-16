@@ -701,15 +701,13 @@ template <bool telemetry_enabled, size_t max_num_worker_sems>
 FORCE_INLINE uintptr_t set_sub_device_worker_counts(
     uintptr_t cmd_ptr,
     std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
-    uintptr_t sub_device_update_sem_addr,
+    volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
     uintptr_t dispatch_telemetry_base) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
     ASSERT(num_sub_devices <= max_num_worker_sems);
     volatile tt_l1_ptr uint32_t* data_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
-    volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sub_device_update_sem_addr);
 
     static uint32_t local_sub_device_worker_counts_update = 0;
 

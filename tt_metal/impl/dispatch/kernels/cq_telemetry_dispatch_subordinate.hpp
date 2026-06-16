@@ -13,9 +13,7 @@ constexpr uint32_t first_stream_index = FIRST_STREAM_INDEX;
 constexpr uint32_t total_sub_devices = TOTAL_SUB_DEVICES;
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
-constexpr uint32_t sub_device_update_sem_addr = SUB_DEVICE_UPDATE_SEM_ADDR;
-constexpr uint32_t worker_stream_reset_update_addr = WORKER_STREAM_RESET_UPDATE_ADDR;
-constexpr uint32_t telemetry_compute_terminate_addr = TELEMETRY_COMPUTE_TERMINATE_ADDR;
+constexpr uint32_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
 
 FORCE_INLINE uint32_t stream_wrap_delta(uint32_t current, uint32_t previous) {
     constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
@@ -58,9 +56,11 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
 
     uint32_t sub_device_update_sem = 0;
     uint32_t stream_reset_update_sem = 0;
-    auto sub_device_update_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sub_device_update_sem_addr);
-    auto stream_reset_update_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_stream_reset_update_addr);
-    auto telemetry_compute_terminate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(telemetry_compute_terminate_addr);
+    auto dispatch_telemetry_control =
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl*>(dispatch_telemetry_control_addr);
+    auto sub_device_update_sem_ptr = &dispatch_telemetry_control->sub_device_worker_counts_update;
+    auto stream_reset_update_sem_ptr = &dispatch_telemetry_control->worker_stream_reset_update;
+    auto telemetry_compute_terminate = &dispatch_telemetry_control->compute_terminate;
     auto dispatch_telemetry =
         reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
 

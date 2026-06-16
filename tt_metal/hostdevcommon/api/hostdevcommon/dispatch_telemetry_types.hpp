@@ -84,4 +84,11 @@ struct __attribute__((packed, aligned(8))) DispatchCoreTelemetry {
 // Used to determine the size of the L1 buffer that dispatch_mem_map allocates
 // Note: If new telemetry types are added, update this calculation
 constexpr size_t DISPATCH_TELEMETRY_SIZE = std::max(sizeof(DispatchCoreTelemetry), sizeof(PrefetchCoreTelemetry));
+
+struct __attribute__((packed, aligned(4))) DispatchTelemetryControl {
+    uint32_t sub_device_worker_counts_update = 0;
+    uint32_t worker_stream_reset_update = 0;
+    uint32_t compute_terminate = 0;
+};
+
 }  // namespace tt::tt_metal

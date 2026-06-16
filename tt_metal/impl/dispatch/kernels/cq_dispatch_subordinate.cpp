@@ -18,6 +18,7 @@
 #include "tt_metal/impl/dispatch/kernels/device_print_dispatch.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdev/dev_msgs.h"
 #include "risc_common.h"
 
@@ -45,13 +46,14 @@ constexpr uint32_t distributed_dispatcher =
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
 constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
 constexpr uint32_t max_num_go_signal_noc_data_entries = MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;
-constexpr uintptr_t sub_device_update_sem_addr = SUB_DEVICE_UPDATE_SEM_ADDR;
-constexpr uintptr_t telemetry_compute_terminate_addr = TELEMETRY_COMPUTE_TERMINATE_ADDR;
+constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
 constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
 constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
+volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl* dispatch_telemetry_control =
+    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl*>(dispatch_telemetry_control_addr);
 
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
@@ -593,7 +595,10 @@ void kernel_main() {
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
                 cmd_ptr = set_sub_device_worker_counts<telemetry_enabled>(
-                    cmd_ptr, workers_per_sub_device, sub_device_update_sem_addr, dispatch_telemetry_base);
+                    cmd_ptr,
+                    workers_per_sub_device,
+                    &dispatch_telemetry_control->sub_device_worker_counts_update,
+                    dispatch_telemetry_base);
                 break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
@@ -613,7 +618,7 @@ void kernel_main() {
                         realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
                 }
                 if constexpr (telemetry_enabled) {
-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(telemetry_compute_terminate_addr) = 1;
+                    dispatch_telemetry_control->compute_terminate = 1;
                 }
                 done = true;
                 break;

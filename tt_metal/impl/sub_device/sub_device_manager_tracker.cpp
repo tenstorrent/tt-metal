@@ -26,8 +26,9 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -78,7 +79,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
         // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
         for (uint8_t cq_id = 0; cq_id < mesh_device->num_hw_cqs(); ++cq_id) {
-            mesh_device->mesh_command_queue(cq_id).reset_worker_state(
+            mesh_device->impl().mesh_command_queue_base(cq_id).reset_worker_state(
                 cq_id == 0,
                 num_sub_devices,
                 sub_device_manager->noc_mcast_unicast_data(),

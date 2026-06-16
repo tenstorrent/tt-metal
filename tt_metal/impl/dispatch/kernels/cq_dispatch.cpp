@@ -19,6 +19,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 
 #include <array>
 
@@ -110,8 +111,7 @@ static uint32_t program_counter = 0;
 
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
-constexpr uintptr_t sub_device_update_sem_addr = SUB_DEVICE_UPDATE_SEM_ADDR;
-constexpr uint32_t worker_stream_reset_update_addr = WORKER_STREAM_RESET_UPDATE_ADDR;
+constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
 constexpr uint32_t upstream_blocked_count_addr =
     dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_blocked_count);
 constexpr uint32_t upstream_unblocked_count_addr =
@@ -121,6 +121,8 @@ using DispatchTelemetryBlockGuard = TelemetryBlockGuard<
     upstream_unblocked_count_addr,
     &upstream_blocked_counter,
     telemetry_enabled>;
+volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl* dispatch_telemetry_control =
+    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl*>(dispatch_telemetry_control_addr);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -1042,6 +1044,7 @@ static void process_wait() {
 
     if (clear_stream) {
         // DEVICE_PRINT("DISPATCH WAIT CLEAR STREAM 0x{:08x} count {}\n", stream, count);
+        static uint32_t local_worker_stream_reset_update = 0;
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
         uint32_t neg_sem_val = -(*sem_addr);
@@ -1050,9 +1053,7 @@ static void process_wait() {
             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
             neg_sem_val << REMOTE_DEST_BUF_WORDS_FREE_INC);
         if constexpr (telemetry_enabled) {
-            volatile tt_l1_ptr uint32_t* stream_reset_update =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_stream_reset_update_addr);
-            *stream_reset_update = *stream_reset_update + 1;
+            dispatch_telemetry_control->worker_stream_reset_update = ++local_worker_stream_reset_update;
         }
     }
     if (notify_prefetch) {
@@ -1324,7 +1325,10 @@ re_run_command:
             // DPRINT("cmd_set_sub_device_worker_counts\n");
             ASSERT(!dispatch_s_enabled);
             cmd_ptr = set_sub_device_worker_counts<telemetry_enabled>(
-                cmd_ptr, workers_per_sub_device, sub_device_update_sem_addr, dispatch_telemetry_base);
+                cmd_ptr,
+                workers_per_sub_device,
+                &dispatch_telemetry_control->sub_device_worker_counts_update,
+                dispatch_telemetry_base);
             break;
 
         case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;

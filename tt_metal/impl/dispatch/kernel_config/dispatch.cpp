@@ -112,10 +112,8 @@ void DispatchKernel::GenerateStaticConfigs() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
     static_config_.dispatch_telemetry_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
-    static_config_.sub_device_worker_counts_update_addr = my_dispatch_constants.get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::SUB_DEVICE_WORKER_COUNTS_UPDATE);
-    static_config_.worker_stream_reset_update_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::WORKER_STREAM_RESET_UPDATE);
+    static_config_.dispatch_telemetry_control_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -540,8 +538,7 @@ void DispatchKernel::CreateKernel() {
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
         {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
         {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
-        {"SUB_DEVICE_UPDATE_SEM_ADDR", std::to_string(static_config_.sub_device_worker_counts_update_addr.value())},
-        {"WORKER_STREAM_RESET_UPDATE_ADDR", std::to_string(static_config_.worker_stream_reset_update_addr.value())},
+        {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
         {"FABRIC_MUX_X", std::to_string(dependent_config_.fabric_mux_client_config.virtual_x.value_or(0))},
         {"FABRIC_MUX_Y", std::to_string(dependent_config_.fabric_mux_client_config.virtual_y.value_or(0))},

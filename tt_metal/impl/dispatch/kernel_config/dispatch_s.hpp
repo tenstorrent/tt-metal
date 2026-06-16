@@ -34,9 +34,7 @@ struct dispatch_s_static_config_t {
 
     std::optional<uint32_t> dispatch_telemetry_addr;
     std::optional<bool> dispatch_telemetry_disabled;
-    std::optional<uint32_t> sub_device_worker_counts_update_addr;
-    std::optional<uint32_t> worker_stream_reset_update_addr;
-    std::optional<uint32_t> telemetry_compute_terminate_addr;
+    std::optional<uint32_t> dispatch_telemetry_control_addr;
 
     // Configuration for DEVICE_PRINT dispatch. Populated only when the dprint server
     // exists and dispatch_s_enabled() is true. enabled stays 0 otherwise and the kernel
