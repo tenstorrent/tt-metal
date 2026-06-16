@@ -790,7 +790,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<false>();
-    // recip_tile_first_column<false>() calls the scalar _sfpu_reciprocal_ path, so initialize exactly
+    // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
     // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
     // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after

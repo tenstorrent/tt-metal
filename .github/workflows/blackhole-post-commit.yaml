@@ -376,14 +376,14 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      timeout: 20
+      timeout: 30
       # CIv1 runners: cannot use harbor-prefix (resolve-docker-pull-refs)
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-unit-tests:
-    needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix, check-harbor]
     if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
@@ -393,7 +393,8 @@ jobs:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       enabled-skus: ${{ (matrix.test-group == 'P100' || matrix.test-group == 'P100a') && 'bh_p100' || 'bh_p150b_civ2' }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-test-docker-image }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}

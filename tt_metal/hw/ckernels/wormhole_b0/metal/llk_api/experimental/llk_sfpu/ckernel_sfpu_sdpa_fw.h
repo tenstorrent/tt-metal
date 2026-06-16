@@ -20,9 +20,9 @@ inline void calculate_recip_first_column() {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat out;
         if constexpr (DST_ACCUM_MODE) {
-            out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
+            out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
         } else {
-            out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+            out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = out;
