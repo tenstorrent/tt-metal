@@ -88,7 +88,7 @@
         "cacheVariables": {
           "BUILD_TT_TRAIN": {"value": "OFF"}
         },
-        "toolchainFile": "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+        "toolchainFile": "cmake/x86_64-linux-gcc-14-toolchain.cmake"
       },
       {
         "name": "libcpp",
