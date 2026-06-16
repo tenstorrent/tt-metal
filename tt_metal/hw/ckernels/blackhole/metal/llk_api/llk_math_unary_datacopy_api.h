@@ -59,8 +59,20 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     // tilize workaround. 8bit datums in input format do not require the tilize workaround on blackhole.
     const std::uint32_t src_format = get_operand_src_format(operand_id);
     const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        num_faces, dst_format, is_input_8bit_format);
+    if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE && is_fp32_dest_acc_en) {
+        // UInt8 uses the same 4-bit register encoding as Int8; signedness is tracked separately.
+        const bool needs_int_fpu = is_int_fpu_en || (masked_data_format(src_format) == to_underlying(DataFormat::Int8));
+        if (needs_int_fpu) {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, true, pack_mode>(
+                num_faces, dst_format, is_input_8bit_format);
+        } else {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, false, pack_mode>(
+                num_faces, dst_format, is_input_8bit_format);
+        }
+    } else {
+        _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
+            num_faces, dst_format, is_input_8bit_format);
+    }
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
