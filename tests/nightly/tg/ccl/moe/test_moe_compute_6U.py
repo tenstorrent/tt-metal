@@ -105,7 +105,6 @@ class MoEModelConfig:
     num_iterations: int = 3
     tokens_per_device: int = 32
     output_height_shard_dim: int = 4
-    bh_ring_size_values: tuple = (12,)
     marks: tuple = ()
 
 
@@ -163,7 +162,7 @@ def _expand_model_configs(
     test_modes_fn=_test_modes_for_model,
     trace_values_fn=_trace_values_for_case,
 ):
-    """Expand model configs into pytest.param entries (test_mode, has_bias, epd, act, enable_trace, bh_ring_size)."""
+    """Expand model configs into pytest.param entries (test_mode, has_bias, epd, act, enable_trace)."""
     expanded = []
     for cfg in configs:
         for test_mode in test_modes_fn(cfg):
@@ -172,28 +171,24 @@ def _expand_model_configs(
                     for act in cfg.activation_types:
                         # enable_trace innermost so a shape's trace variants run back-to-back and the
                         # second hits the _build_moe_host_data lru_cache (maxsize=1, evicted on every
-                        # new shape). bh_ring_size is part of that cache key (it changes the prepped
-                        # weight layout), so it must sit outside enable_trace or the trace pair — which
-                        # shares a ring size — would never be adjacent and every call would evict.
-                        for bh_ring_size in cfg.bh_ring_size_values:
-                            for enable_trace in trace_values_fn(cfg, test_mode):
-                                bias_tag = "bias" if has_bias else "no_bias"
-                                act_tag = act.name.lower()
-                                trace_tag = "enable_trace" if enable_trace else "disable_trace"
-                                ring_tag = f"bh_ring_size{bh_ring_size}"
-                                expanded.append(
-                                    pytest.param(
-                                        cfg,
-                                        test_mode,
-                                        has_bias,
-                                        epd,
-                                        act,
-                                        enable_trace,
-                                        bh_ring_size,
-                                        id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}-{trace_tag}-{ring_tag}",
-                                        marks=cfg.marks,
-                                    )
+                        # new shape). The matmul ring size is auto-detected from the arch by the op
+                        # (8 on BH, 12 on WH) and is no longer a sweep dimension.
+                        for enable_trace in trace_values_fn(cfg, test_mode):
+                            bias_tag = "bias" if has_bias else "no_bias"
+                            act_tag = act.name.lower()
+                            trace_tag = "enable_trace" if enable_trace else "disable_trace"
+                            expanded.append(
+                                pytest.param(
+                                    cfg,
+                                    test_mode,
+                                    has_bias,
+                                    epd,
+                                    act,
+                                    enable_trace,
+                                    id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}-{trace_tag}",
+                                    marks=cfg.marks,
                                 )
+                            )
     return expanded
 
 
@@ -269,7 +264,7 @@ _MODELS_BH_LB_1x8 = [
     MoEModelConfig("qwen3_omni_thinker", N=768,  hidden_size=2048, selected_experts_k=8),
     MoEModelConfig("qwen35_35b",         N=512,  hidden_size=2048, selected_experts_k=8),
     MoEModelConfig("gemma_4_26b",        N=704,  hidden_size=2816, selected_experts_k=8, activation_types=(MoEActivationFunction.GELU,)),
-    MoEModelConfig("gpt_oss",            N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,), bh_ring_size_values=(8, 12, 16)),
+    MoEModelConfig("gpt_oss",            N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
     MoEModelConfig("qwen3_235b",         N=1536, hidden_size=4096, selected_experts_k=8),
     MoEModelConfig("qwen35_397b",        N=1024, hidden_size=4096, selected_experts_k=10),
     MoEModelConfig("glm_47",             N=1536, hidden_size=5120, selected_experts_k=8),
@@ -301,7 +296,6 @@ def _run_model_test(
     activation_type,
     num_links,
     topology=None,
-    bh_ring_size=12,
 ):
     if test_mode == "perf":
         selected_experts_k = 1
@@ -311,6 +305,10 @@ def _run_model_test(
         selected_experts_k = model_cfg.selected_experts_k
         num_layers = model_cfg.num_layers
         num_iterations = model_cfg.num_iterations
+
+    # Matmul ring size the op (and the weight-prep helpers) auto-detect from the arch
+    # (8 on BH, 12 on WH); used here for the ring-aware width-parallel derivation.
+    ring_n = effective_matmul_ring_size(mesh_device)
 
     _run_moe_compute_impl(
         mesh_device=mesh_device,
@@ -326,7 +324,7 @@ def _run_model_test(
         output_height_shard_dim=model_cfg.output_height_shard_dim,
         output_width_shard_dim=auto_output_width_shard_dim(
             model_cfg.hidden_size,
-            matmul_ring_size=effective_matmul_ring_size(mesh_device, bh_ring_size),
+            matmul_ring_size=ring_n,
         ),
         dtype=ttnn.bfloat16,
         enable_trace=enable_trace,
@@ -334,7 +332,6 @@ def _run_model_test(
         has_bias=has_bias,
         topology=topology,
         num_links=num_links,
-        bh_ring_size=bh_ring_size,
     )
 
 
@@ -1530,7 +1527,6 @@ def _build_moe_host_data(
     dtype,
     activation_type,
     has_bias,
-    bh_ring_size,
 ):
     """Build all device-independent inputs and golden references for the test.
 
@@ -1541,10 +1537,8 @@ def _build_moe_host_data(
     same shape share an entry. ``maxsize=1`` keeps at most one (large) shape's artifacts
     alive: a new shape evicts the previous one.
 
-    ``bh_ring_size`` is a parameter (the goldens don't use it) purely so it participates
-    in the lru_cache key: the quantized bfloat4_b weight host tensors attached to the
-    returned object in ``_run_moe_compute_impl`` DO depend on it (prepare/interleave
-    layout), so two ring sizes of the same shape must not share a cached object.
+    The matmul ring size is auto-detected from the arch (8 on BH, 12 on WH) by the
+    weight-prep helpers, so it is fixed per device and not part of the cache key.
     """
     torch.manual_seed(2003)
     random.seed(2003)
@@ -1701,7 +1695,7 @@ def _build_moe_host_data(
 
 
 def _build_quantized_weight_host_tensors(
-    mesh_device, weight_inputs, num_layers, experts_per_device, hidden_size, N, has_bias, bh_ring_size
+    mesh_device, weight_inputs, num_layers, experts_per_device, hidden_size, N, has_bias
 ):
     """Upload raw weights, run the on-device prepare/interleave, then quantize to
     ``bfloat4_b`` via host — returning the result as **host** tensors (memory_config
@@ -1739,7 +1733,6 @@ def _build_quantized_weight_host_tensors(
             E=experts_per_device,
             K=hidden_size,
             N=N,
-            bh_ring_size=bh_ring_size,
         )
         ttnn.deallocate(tt_b0_raw)
         ttnn.deallocate(tt_b1_raw)
@@ -1751,7 +1744,6 @@ def _build_quantized_weight_host_tensors(
             E=experts_per_device,
             K=hidden_size,
             N=N,
-            bh_ring_size=bh_ring_size,
         )
     ttnn.deallocate(tt_w0_raw)
     ttnn.deallocate(tt_w1_raw)
@@ -1770,7 +1762,6 @@ def _build_quantized_weight_host_tensors(
             E=experts_per_device,
             N=N,
             K=hidden_size,
-            bh_ring_size=bh_ring_size,
         )
         ttnn.deallocate(tt_b2_raw)
     else:
@@ -1780,7 +1771,6 @@ def _build_quantized_weight_host_tensors(
             E=experts_per_device,
             N=N,
             K=hidden_size,
-            bh_ring_size=bh_ring_size,
         )
     ttnn.deallocate(tt_w2_raw)
 
@@ -1810,7 +1800,6 @@ def _run_moe_compute_impl(
     has_bias,
     num_links,
     topology=None,
-    bh_ring_size=12,
 ):
     """Run MoE compute E2E validation. Called from test_moe_compute via _run_model_test."""
     experts = experts_per_device * mesh_shape[cluster_axis]
@@ -1865,13 +1854,11 @@ def _run_moe_compute_impl(
         dtype,
         activation_type,
         has_bias,
-        bh_ring_size,
     )
     cache_hit = _build_moe_host_data.cache_info().hits > _hits_before
     shape_desc = (
         f"mesh={tuple(mesh_shape)} EP={experts_per_device} T/dev={tokens_per_device} "
-        f"k={selected_experts_k} L={num_layers} N={N} H={hidden_size} act={activation_type} bias={has_bias} "
-        f"bh_ring_size={bh_ring_size}"
+        f"k={selected_experts_k} L={num_layers} N={N} H={hidden_size} act={activation_type} bias={has_bias}"
     )
     if host.w0_w1_host is None:
         # Quantization needs a live device, so it can't run inside the pure (cached)
@@ -1882,7 +1869,7 @@ def _run_moe_compute_impl(
         # re-quantizing. w0_w1_host is None only on a genuine miss (fresh or evicted
         # shape), which is exactly when we want to (re)build them.
         host.w0_w1_host, host.w2_host = _build_quantized_weight_host_tensors(
-            mesh_device, weight_inputs, num_layers, experts_per_device, hidden_size, N, has_bias, bh_ring_size
+            mesh_device, weight_inputs, num_layers, experts_per_device, hidden_size, N, has_bias
         )
     # cache_hit (lru_cache) and "w0_w1_host was None" (quantization) always agree: a
     # goldens hit returns the already-quantized object; a miss rebuilds it with None.
@@ -1999,7 +1986,6 @@ def _run_moe_compute_impl(
         hidden_size=hidden_size,
         intermediate_size=N,
         has_bias=has_bias,
-        bh_ring_size=bh_ring_size,
     )
     tt_w0_w1 = ttnn.to_device(host.w0_w1_host, mesh_device, memory_config=weight_mem_configs.w0_w1)
     tt_w2 = ttnn.to_device(host.w2_host, mesh_device, memory_config=weight_mem_configs.w2)
@@ -2092,7 +2078,6 @@ def _run_moe_compute_impl(
             optional_output_tensor=tt_combine_output_tensors[layer_id],
             optional_cross_device_semaphore=combine_barrier_semaphore,
             activation_type=activation_type,
-            bh_ring_size=bh_ring_size,
         )
 
     #########################################
@@ -2168,7 +2153,11 @@ def _run_moe_compute_impl(
         mesh_device, output_height_shard_dim, output_width_shard_dim
     )
     worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
-        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size, bh_ring_size
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+        effective_matmul_ring_size(mesh_device),
     )
     per_expert_tokens_all_passed = True
     activation_all_passed = True
@@ -2308,7 +2297,7 @@ def _run_moe_compute_impl(
 #   MOE_COMPUTE_FULL=1             — all models x all meshes (1x8/1x16 x torus/linear); tier rules unchanged.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "device_params, mesh_cfg, mesh_shape, mesh_device, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace, bh_ring_size",
+    "device_params, mesh_cfg, mesh_shape, mesh_device, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace",
     MOE_COMPUTE_MODEL_TEST_CASES,
     indirect=["device_params", "mesh_device"],
 )
@@ -2322,7 +2311,6 @@ def test_moe_compute(
     has_bias,
     experts_per_device,
     activation_type,
-    bh_ring_size,
 ):
     from ttnn.operations.ccl import Topology
 
@@ -2338,7 +2326,6 @@ def test_moe_compute(
         activation_type,
         topology=topology,
         num_links=mesh_cfg.num_links,
-        bh_ring_size=bh_ring_size,
     )
 
 

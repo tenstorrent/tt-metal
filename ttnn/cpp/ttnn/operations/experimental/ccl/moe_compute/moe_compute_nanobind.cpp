@@ -34,10 +34,10 @@ void bind_moe_compute(nb::module_& mod) {
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
         projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
-        Tile distribution across the matmul ring (12 cores on Wormhole; ``bh_ring_size``
-        cores — 8/12/16 — on Blackhole) is derived at compile time from ``hidden_size`` and
-        ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard formulas — no
-        model-specific configuration tables are needed.
+        Tile distribution across the matmul ring (12 cores on Wormhole; 8 cores on
+        Blackhole — auto-detected from the architecture) is derived at compile time from
+        ``hidden_size`` and ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard
+        formulas — no model-specific configuration tables are needed.
 
         Note: This is the **compute** portion of the MoE pipeline. The A2A dispatch
         (producing the sparse buffer consumed by this op) and the A2A combine (reducing
@@ -114,10 +114,10 @@ void bind_moe_compute(nb::module_& mod) {
           matmul output is the final output, slot 4) instead of 6, and all combine-path
           arguments below must be left unset (notably ``cluster_axis`` must be ``None``).
 
-        - ``bh_ring_size`` (optional, default ``None`` ≡ ``12``): Matmul ring size on
-          Blackhole; must be one of ``{8, 12, 16}``. Ignored on Wormhole, which always
-          uses 12 (one per DRAM bank). Must match the value passed to the ``prepare_*`` /
-          ``get_weight_mem_configs`` helpers that packed the weights.
+        The matmul ring size is **auto-detected** from the architecture — 8 on Blackhole,
+        12 on Wormhole (one per DRAM bank) — and is not exposed on this API. The
+        ``prepare_*`` / ``get_weight_mem_configs`` helpers that pack the weights must be
+        called with the matching ring size (see ``effective_matmul_ring_size``).
 
         **Bias support (optional)**
 
@@ -190,7 +190,8 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("has_bias") = false,
         // cluster_axis is required when compute_only=False; pass None for compute_only=True paths.
         // (Two breaking changes vs prior versions: (1) intermediate_size is now required positional
-        // from PR #43932; (2) cluster_axis became optional, new compute_only/bh_ring_size knobs.)
+        // from PR #43932; (2) cluster_axis became optional, new compute_only knob. The matmul ring
+        // size is auto-detected from the arch (8 BH / 12 WH); bh_ring_size remains only on prim.)
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("topology") = nb::none(),
         nb::arg("num_links") = nb::none(),
@@ -200,7 +201,6 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
-        nb::arg("bh_ring_size") = nb::none(),
         nb::arg("num_shared_experts_per_device") = nb::none());
 }
 
@@ -249,14 +249,17 @@ void bind_moe_compute_utils(nb::module_& mod) {
         (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``) for W2. Ring
         ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
 
+        The matmul ring size is auto-detected from the architecture — 8 on Blackhole,
+        12 on Wormhole (the DRAM-bank count) — matching ``ttnn.experimental.moe_compute``,
+        so the packed weights always line up with the op.
+
         Returns an object with ``w0_w1_shard_map``, ``w2_shard_map``, and
         ``dram_core_range_set`` attributes.
         )doc",
         &ttnn::experimental::get_weight_core_shard_maps,
         nb::arg("mesh_device"),
         nb::arg("hidden_size"),
-        nb::arg("intermediate_size"),
-        nb::arg("bh_ring_size") = 12);
+        nb::arg("intermediate_size"));
 
     nb::class_<ttnn::experimental::WeightMemoryConfigs>(mod, "WeightMemoryConfigs")
         .def_ro("w0_w1", &ttnn::experimental::WeightMemoryConfigs::w0_w1)
@@ -281,8 +284,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("experts_per_device"),
         nb::arg("hidden_size"),
         nb::arg("intermediate_size"),
-        nb::arg("has_bias") = false,
-        nb::arg("bh_ring_size") = 12);
+        nb::arg("has_bias") = false);
 
     ttnn::bind_function<"add_shared_expert_weights", "ttnn.experimental.">(
         mod,
@@ -303,8 +305,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         dim) so real columns stay paired with their real W2 rows. This keeps the
         downstream prep + DRAM layout uniform (full-Nt per-expert stride) while
         letting the kernel walk only the per-core prefixes as a balanced TpNt ring.
-        ``bh_ring_size`` selects the ring size for the shard-map generator (must
-        match the value used for ``prepare_*`` / ``get_weight_mem_configs``).
+        The shard-map generator auto-detects the ring size from the arch (8 on Blackhole,
+        12 on Wormhole), matching ``prepare_*`` / ``get_weight_mem_configs`` and the op.
 
         Returns ``(output_w0, output_w1, output_w2)``, each the result of
         concatenating routed + shared along dim 1.
@@ -316,8 +318,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("shared_w0").noconvert(),
         nb::arg("shared_w1").noconvert(),
         nb::arg("shared_w2").noconvert(),
-        nb::arg("cluster_axis"),
-        nb::arg("bh_ring_size") = 12);
+        nb::arg("cluster_axis"));
 
     ttnn::bind_function<"prepare_w0_w1_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,
@@ -337,8 +338,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("K"),
-        nb::arg("N"),
-        nb::arg("bh_ring_size") = 12);
+        nb::arg("N"));
 
     ttnn::bind_function<"prepare_w2_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,
@@ -356,8 +356,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("N"),
-        nb::arg("K"),
-        nb::arg("bh_ring_size") = 12);
+        nb::arg("K"));
 
     ttnn::bind_function<"prepare_w0_w1_tensor_with_bias", "ttnn.experimental.">(
         mod,
@@ -378,8 +377,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("K"),
-        nb::arg("N"),
-        nb::arg("bh_ring_size") = 12);
+        nb::arg("N"));
 
     ttnn::bind_function<"prepare_w2_tensor_with_bias", "ttnn.experimental.">(
         mod,
@@ -398,8 +396,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("N"),
-        nb::arg("K"),
-        nb::arg("bh_ring_size") = 12);
+        nb::arg("K"));
 
     ttnn::bind_function<"quantize_weights_via_host", "ttnn.experimental.">(
         mod,
