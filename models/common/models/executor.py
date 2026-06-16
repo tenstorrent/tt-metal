@@ -560,6 +560,65 @@ class EagerLLMExecutor:
         if isinstance(logits_or_tokens, ttnn.Tensor) and logits_or_tokens.is_allocated():
             self.decode_output_spec = TensorSpec.from_tensor(logits_or_tokens)
 
+    def compile(
+        self,
+        *,
+        prefill_tokens: torch.Tensor,  # [batch_size, seq_len], int64
+        prefill_page_table: torch.Tensor,  # [batch_size, max_blocks], int32
+        kv_cache: list[list[ttnn.Tensor]] | None = None,
+        prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
+        empty_slots: list[int] | None = None,
+        start_pos: torch.Tensor | None = None,  # [batch_size], int64
+        sampling_params: SamplingParams | None = None,
+        validate_configs: bool = False,
+    ) -> None:
+        """One-shot prefill + decode warmup compile.
+
+        Convenience wrapper that compiles both prefill and decode for the given
+        inputs (one warmup run each, output specs captured along the way). This is
+        the per-instance counterpart to ``compile_prefill()`` / ``compile_decode()``
+        and delegates to the same internal helper used by ``run_teacher_forcing()``.
+
+        Args:
+            prefill_tokens: Prefill token IDs, shape [batch_size, seq_len].
+            prefill_page_table: Page table for paged attention, shape
+                [batch_size, max_blocks]. Required.
+            kv_cache: Per-layer KV cache from allocate_kv_cache().
+            prompt_lens: Actual prompt length per user, shape [batch_size].
+            empty_slots: List of user IDs to prefill.
+            start_pos: Starting position for prefix caching, shape [batch_size].
+            sampling_params: Sampling parameters for on-device decode sampling.
+            validate_configs: When True, instrument the warmup passes to check that
+                each module's actual input memory config matches its declared config
+                (see ``_validate_module_configs``). Defaults to False.
+        """
+        _compile_prefill_and_decode(
+            self,
+            prefill_tokens=prefill_tokens,
+            prefill_page_table=prefill_page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            start_pos=start_pos,
+            sampling_params=sampling_params,
+            validate_configs=validate_configs,
+        )
+
+    def _validate_module_configs(self, *, mode: str):
+        """Context manager that validates module input configs for one forward pass.
+
+        Instruments the model's modules during a single ``mode`` ("prefill" or
+        "decode") forward pass and checks that each module's actual input memory
+        config matches the config it declares. Returns a no-op context when this
+        executor has no ``iter_named_modules`` hook.
+
+        Usage::
+
+            with executor._validate_module_configs(mode="prefill"):
+                executor.compile_prefill(...)
+        """
+        return _get_validation_context(self, mode=mode)
+
     # =========================================================================
     # Prefill Forward
     # =========================================================================
