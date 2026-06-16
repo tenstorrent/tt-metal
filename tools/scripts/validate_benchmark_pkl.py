@@ -18,6 +18,8 @@ Usage:
 Exit code 0 = all files pass, 1 = one or more files fail.
 """
 
+# TODO: integrate as a CI step after e2e perf/accuracy tests to catch regressions automatically.
+
 import json
 import pickle
 import sys
