@@ -127,19 +127,20 @@ std::optional<std::string> get_shard_align_error(
     if (!memory_config.is_sharded() || layout != Layout::TILE) {
         return std::nullopt;
     }
-        const auto& tile_shape = tile.get_tile_shape();
-        if (memory_config.shard_spec().has_value()) {
-            const auto& physical_shard_shape = Shape2D(memory_config.shard_spec().value().shape);
-            if (!(physical_shard_shape.height() % tile_shape[0] == 0 &&
-                  physical_shard_shape.width() % tile_shape[1] == 0)) {
-                return fmt::format("Physical shard shape {} must be tile {} sized!", physical_shard_shape, tile_shape);
-            }
-        } else {
-            const auto& shard_shape = memory_config.nd_shard_spec().value().shard_shape;
-            if (!(shard_shape[-2] % tile_shape[0] == 0 && shard_shape[-1] % tile_shape[1] == 0)) {
-                return fmt::format("Physical shard shape {} must be tile {} sized!", shard_shape, tile_shape);
-            }
+    const auto& tile_shape = tile.get_tile_shape();
+    if (memory_config.shard_spec().has_value()) {
+        const auto& physical_shard_shape = Shape2D(memory_config.shard_spec().value().shape);
+        if (!(physical_shard_shape.height() % tile_shape[0] == 0 &&
+              physical_shard_shape.width() % tile_shape[1] == 0)) {
+            return fmt::format("Physical shard shape {} must be tile {} sized!", physical_shard_shape, tile_shape);
         }
+    } else {
+        const auto& shard_shape = memory_config.nd_shard_spec().value().shard_shape;
+        if (!(shard_shape[-2] % tile_shape[0] == 0 && shard_shape[-1] % tile_shape[1] == 0)) {
+            return fmt::format("Physical shard shape {} must be tile {} sized!", shard_shape, tile_shape);
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
