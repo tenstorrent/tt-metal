@@ -118,9 +118,11 @@ struct DeviceStorage {
     // DeviceStorage as a view of the undelrying device memory at specific coordinates:
 
     // Returns true if the tensor spans across all devices in a mesh.
+    // Throws if the DeviceStorage is not allocated.
     bool is_uniform_storage() const;
 
     // Returns the coordinates the tensor spans across.
+    // Throws if the DeviceStorage is not allocated.
     std::span<const distributed::MeshCoordinate> get_coords() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -195,6 +197,7 @@ private:
 
     // Invariant: should never be nullptr.
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
+    // coords_ only make sense when the DeviceStorage is allocated.
     std::vector<distributed::MeshCoordinate> coords_;
 
     // Experimental features for viewing an existing DeviceStorage

@@ -210,16 +210,10 @@ void DeviceStorage::deallocate() {
 
 bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_allocated(); }
 
-bool DeviceStorage::is_uniform_storage() const {
-    if (!is_allocated()) {
-        return true;
-    }
-    return coords_.size() == get_mesh_tensor().device().num_devices();
-}
+bool DeviceStorage::is_uniform_storage() const { return coords_.size() == get_mesh_tensor().device().num_devices(); }
 
 std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
-    // Conv breaks if we keep the assert here.
-    // TT_FATAL(is_allocated(), "Device memory is not allocated");
+    TT_FATAL(is_allocated(), "DeviceStorage is not allocated");
     return coords_;
 }
 

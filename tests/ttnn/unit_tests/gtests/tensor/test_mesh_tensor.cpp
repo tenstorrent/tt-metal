@@ -400,9 +400,11 @@ TEST_F(MeshTensorTest, DefaultConstructedDeviceStorageGetters) {
     EXPECT_THAT(([&]() { storage.get_tensor_spec(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
     EXPECT_THAT(
         ([&]() { storage.get_tensor_topology(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+    EXPECT_THAT(([&]() { storage.get_coords(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
+    EXPECT_THAT(
+        ([&]() { storage.is_uniform_storage(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
 
     EXPECT_FALSE(storage.is_allocated());
-    EXPECT_TRUE(storage.is_uniform_storage());
 }
 
 TEST_F(MeshTensorTest2x4, CombineDeviceTensorsShardDimValidation) {
