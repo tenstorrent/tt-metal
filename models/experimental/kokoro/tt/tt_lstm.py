@@ -279,10 +279,14 @@ def _length_valid_mask_b1(
     memory_config: ttnn.MemoryConfig,
     dtype=ttnn.bfloat16,
 ) -> ttnn.Tensor:
-    vm = torch.zeros(batch, seq_len, 1, dtype=torch.float32)
+    # Laid out time-major ``[L, B, 1]`` (not ``[B, L, 1]``) so the per-step mask is a leading-dim
+    # slice ``valid[t]``. ``L`` is not a tiled dim here, so that slice is a clean page copy; slicing
+    # the middle ``L`` of a ``[B, L, 1]`` tile tensor instead forces an untilize+slice+tilize
+    # round-trip every masked step (same reason ``gx_comb`` is stored ``[L, B, 4H]``).
+    vm = torch.zeros(seq_len, batch, 1, dtype=torch.float32)
     for bi, le in enumerate(sequence_lengths):
         le = max(0, min(int(le), seq_len))
-        vm[bi, :le, 0] = 1.0
+        vm[:le, bi, 0] = 1.0
     return ttnn.from_torch(
         vm,
         dtype=dtype,
@@ -494,7 +498,7 @@ def tt_bilstm_nlc(
         # ops/step on the padded tail; valid-position outputs are bit-identical.
         h_f, c_f = h_new, c_new
         if valid_all is not None and t >= min_len:
-            vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
+            vt = ttnn.slice(valid_all, [t, 0, 0], [t + 1, B, 1], [1, 1, 1], memory_config=step_mc)
             vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=step_mc)
             outs_f.append(ttnn.multiply(vt_b1, h_new, memory_config=step_mc))
         else:
@@ -519,7 +523,7 @@ def tt_bilstm_nlc(
             # With old == 0 the blend ``old + valid*(new - old)`` collapses to ``valid*new`` bit-for-
             # bit (subtracting/adding 0 is exact), so one multiply replaces the 3-op blend per state
             # and the masked hidden state doubles as the masked output — 7 ops/step -> 2.
-            vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
+            vt = ttnn.slice(valid_all, [t, 0, 0], [t + 1, B, 1], [1, 1, 1], memory_config=step_mc)
             vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=step_mc)
             h_b = ttnn.multiply(vt_b1, h_new, memory_config=step_mc)
             c_b = ttnn.multiply(vt_b1, c_new, memory_config=step_mc)
