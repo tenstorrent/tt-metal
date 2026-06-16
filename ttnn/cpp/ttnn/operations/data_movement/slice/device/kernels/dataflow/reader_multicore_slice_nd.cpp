@@ -140,7 +140,7 @@ void kernel_main() {
             // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
             // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
             tt::data_movement::common::noc_async_read_sharded(
-                l1_write_addr, s0, input_row_idx, /*offset=*/0, /*size=*/input_bytes_per_row);
+                noc, l1_write_addr, s0, input_row_idx, /*offset=*/0, /*size=*/input_bytes_per_row);
             noc.async_read_barrier();
 
             // Now slice the row according to width slice parameters (last dimension)
