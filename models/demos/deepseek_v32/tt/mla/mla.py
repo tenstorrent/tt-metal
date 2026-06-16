@@ -23,7 +23,6 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA as _ttMLAv3
-from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v32.reference_cpu.model import ModelArgs
 from models.demos.deepseek_v32.reference_cpu.utils import precompute_freqs_cis
 from models.demos.deepseek_v32.tt import ops
@@ -330,16 +329,20 @@ class ttMLA(_ttMLAv3):
         kvpe = ttnn.concat([kv_nope, kv_rope], dim=-1)
         ttnn.deallocate(kv_rope)
         kvpe_b8 = ttnn.typecast(kvpe, dtype=ttnn.bfloat8_b)
-        # Full-T latent prefix on HOST for the sparse-attn fallback — no device→host→
-        # device re-upload (backlog 9). KVPE stays SP-sharded on device (v3).
         end_pos = start_pos + seq_len_local * self.sp_factor
+
+        # Build the full-T latent prefix the sparse op consumes — [1, 1, end_pos, 576] bf16
+        # ROW_MAJOR, replicated across the mesh — entirely ON DEVICE (no host round-trip; backlog 9).
         if not is_chunked:
+            # Single-shot: the live kvpe IS the whole sequence (natural order, contiguous SP shard).
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, kvpe_b8, cache_layer_idx)
-            kvpe_full = self._sp_all_gather(kvpe, dim=2)  # [1,1,T,576] replicated
-            kvpe_host = ttnn.to_torch(ttnn.get_device_tensors(kvpe_full)[0])[0, 0]  # [T,576]
+            gathered = self._sp_all_gather(kvpe, dim=2)  # [1,1,T,576] bf16 TILE, replicated, natural
+            kvpe_dev = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
+            if self.sp_factor > 1:
+                ttnn.deallocate(gathered)
         else:
-            # Same cache write as v3 _chunked_attn; read the SP-sharded prefix back with
-            # v3's SP-aware composer (de-interleaves the per-chip chunk writes).
+            # Chunked: the prefix lives in the BLOCK-CYCLIC cache; gather + un-rotate on device
+            # (device equivalent of the former ConcatMesh2dToTensor + blockcyclic_positions readback).
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kvpe_cache,
                 kvpe_b8,
@@ -349,30 +352,17 @@ class ttMLA(_ttMLAv3):
                 kv_actual_global=kv_actual_isl,
                 cluster_axis=self.sp_axis,
             )
-            # The chunked cache is stored BLOCK-CYCLIC across SP (update_padded_kv_cache
-            # distributes slabs over chips). Read TP-replica 0, then un-rotate to natural
-            # order with v3's blockcyclic_positions so it matches the natural-order indices.
-            slot = cache_user_id * self.layer_num + cache_layer_idx
-            cache_sr = ttnn.to_torch(
-                kvpe_cache,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, dims=(2, 1), mesh_shape=tuple(self.mesh_device.shape)
-                ),
-            ).to(torch.bfloat16)[
-                :, :1
-            ]  # [slots, 1, seq_len_cache, kvpe]
-            seq_len_cache = cache_sr.shape[2]
-            chunk_size_global = seq_len_local * self.sp_factor
-            p = blockcyclic_positions(self.sp_factor, chunk_size_global, seq_len_cache)
-            nat = torch.empty(seq_len_cache, cache_sr.shape[-1], dtype=torch.bfloat16)
-            nat[p] = cache_sr[slot, 0]
-            kvpe_host = nat[:end_pos]  # natural order [end_pos, 576]
+            kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, seq_len_local, end_pos, cache_user_id, cache_layer_idx)
+        ttnn.deallocate(kvpe_b8)
+        ttnn.deallocate(kvpe)
 
         # Sparse attention over selected latents (replaces ring SDPA); latent out [1,H,S,512].
-        # q SP×TP-sharded, kvpe full-T on host, indices full (replicated).
+        # q SP×TP-sharded, kvpe full-T replicated on device, indices full (replicated).
         attn_out = ops.sparse_mla(
-            q, kvpe_host, indices, self.scale, start_pos=start_pos, sp_axis=self.sp_axis, tp_axis=self.tp_axis
+            q, kvpe_dev, indices, self.scale, start_pos=start_pos, sp_axis=self.sp_axis, tp_axis=self.tp_axis
         )
+        ttnn.deallocate(kvpe_dev)
+        ttnn.deallocate(q)
 
         # wkv_b2 AFTER attention (chunked-path style), then v3 epilogue
         attn_out = ttnn.linear(
@@ -390,6 +380,46 @@ class ttMLA(_ttMLAv3):
         )
         if self.tp_factor > 1:
             out = self._tp_rs_ag(out, rs_only=True)  # v3 epilogue: RS only, output stays TP-sharded
+        return out
+
+    def _gather_kvpe_prefix(self, kvpe_cache, seq_len_local, end_pos, cache_user_id, cache_layer_idx):
+        """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
+        bf8 / TILE / ND-sharded / block-cyclic across SP; the sparse op wants the full prefix
+        bf16 / ROW_MAJOR / replicated / natural order. Pipeline (all on device — replaces the
+        former host ConcatMesh2dToTensor + blockcyclic_positions read): ND→interleaved, SP
+        all-gather to full-T (no-op at sp==1), select this user/layer slot, bf8→bf16, TILE→RM,
+        un-rotate block-cyclic→natural, trim to end_pos. Returns [1, 1, end_pos, 576] bf16 RM."""
+        cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
+        full = self._sp_all_gather(cache_i, dim=2)  # → [B, 1, seq_len_cache, 576] replicated, block-cyclic
+        if self.sp_factor > 1:
+            ttnn.deallocate(cache_i)
+        if full.shape[0] > 1:  # user-major slot select (no-op for the single-slot cache)
+            slot = cache_user_id * self.layer_num + cache_layer_idx
+            sel = ttnn.slice(full, [slot, 0, 0, 0], [slot + 1, 1, full.shape[2], full.shape[3]])
+            ttnn.deallocate(full)
+            full = sel
+        full16 = ttnn.typecast(full, ttnn.bfloat16)
+        ttnn.deallocate(full)
+        full_rm = ttnn.to_layout(full16, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(full16)
+        out = self._unrotate_blockcyclic(full_rm, seq_len_local, end_pos)
+        ttnn.deallocate(full_rm)
+        return out
+
+    def _unrotate_blockcyclic(self, t, seq_len_local, end_pos):
+        """Reorder a gathered full-cache tensor from the cache's block-cyclic SP layout into
+        natural token order, on device — the inverse of deepseek_v3_d_p ...mla.utils
+        .blockcyclic_positions. t is [1, 1, seq_len_cache, 576] ROW_MAJOR (block-cyclic);
+        returns [1, 1, end_pos, 576] natural order. Identity order at sp==1."""
+        sp = self.sp_factor
+        seq_len_cache, d = t.shape[2], t.shape[3]
+        chunk_local = seq_len_local  # = chunk_size_global / sp
+        slabs = seq_len_cache // (sp * chunk_local)  # chunks written into the cache
+        r = ttnn.reshape(t, (sp, slabs, chunk_local, d))  # seq → [chip, slab, off]
+        perm = ttnn.permute(r, (1, 0, 2, 3))  # → [slab, chip, off] = natural order
+        flat = ttnn.reshape(perm, (1, 1, seq_len_cache, d))
+        out = ttnn.slice(flat, (0, 0, 0, 0), (1, 1, end_pos, d))
+        ttnn.deallocate(perm)
         return out
 
     def _tp_rs_ag(self, t, rs_only=False):

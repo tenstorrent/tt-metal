@@ -68,7 +68,13 @@ def test_sparse_mla_shape(mesh_device, h, sq, skv, k):
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 1)),
     )
-    kvpe_host = torch.randn(skv, KVPE_DIM, dtype=torch.bfloat16)  # full-T latent on host
+    kvpe = ttnn.from_torch(
+        torch.randn(1, 1, skv, KVPE_DIM, dtype=torch.bfloat16),  # full-T latent, replicated on device
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
     idx = ttnn.from_torch(
         torch.randint(0, skv, (1, 1, sq, k), dtype=torch.int32),
         device=mesh_device,
@@ -76,7 +82,7 @@ def test_sparse_mla_shape(mesh_device, h, sq, skv, k):
         dtype=ttnn.uint32,  # sparse_sdpa requires uint32 indices (topk_indices emits uint32)
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    out = ops.sparse_mla(q, kvpe_host, idx, scale=KVPE_DIM**-0.5)
+    out = ops.sparse_mla(q, kvpe, idx, scale=KVPE_DIM**-0.5)
     out_t = ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)
     )[:1]

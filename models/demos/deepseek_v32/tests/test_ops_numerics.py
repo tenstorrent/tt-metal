@@ -104,9 +104,16 @@ def test_sparse_mla_numerics(mesh_device, start_pos):
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 1)),
     )
+    kvpe_dev = ttnn.from_torch(
+        kvpe,  # full-T latent [1, 1, skv, 576], replicated on device (ROW_MAJOR bf16)
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
     out = ops.sparse_mla(
         q_sharded,
-        kvpe[0, 0],  # full-T latent on host [skv, 576]
+        kvpe_dev,
         _dev(idx, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32),
         scale,
         start_pos=start_pos,

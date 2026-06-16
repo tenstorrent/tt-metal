@@ -67,7 +67,7 @@ LATENT_DIM = 512  # kv_lora_rank — V is kvpe[..., :LATENT_DIM]; K is the full 
 
 def sparse_mla(
     q: ttnn.Tensor,
-    kvpe_host: torch.Tensor,
+    kvpe: ttnn.Tensor,
     indices: ttnn.Tensor,
     scale: float,
     start_pos: int = 0,
@@ -92,10 +92,9 @@ def sparse_mla(
 
     Args:
         q: [1, H/tp, S/sp, 576] absorbed queries (nope·wkv_b ++ rope), TILE bf16
-        kvpe_host: [T, 576] full latent prefix on host (caller gathered it full-T).
-            Uploaded here as a replicated [1, 1, T, 576] device tensor; K = full 576,
-            V = the leading 512 cols. (The device→host→device round-trip could be
-            dropped by passing the already-replicated device tensor — backlog 9.)
+        kvpe: [1, 1, T, 576] full latent prefix **on device**, ROW_MAJOR bf16, replicated
+            across the mesh (the caller gathers it full-T on device — no host round-trip;
+            backlog 9). K = full 576, V = the leading 512 cols. Not deallocated here.
         indices: [1, 1, S_global, k] uint32 (global key positions), replicated;
             0xFFFFFFFF = masked. Re-sharded onto SP (dim2) to match q when sp > 1.
         scale: softmax scale (with YaRN mscale)
@@ -108,22 +107,12 @@ def sparse_mla(
     sp = list(mesh.shape)[sp_axis]
     assert sp_axis == 0 and tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
 
-    # kvpe [T, 576] host → replicated [1, 1, T, 576] device tensor, bf16 ROW_MAJOR.
-    t, kv_dim = kvpe_host.shape
-    kv = ttnn.from_torch(
-        kvpe_host.to(torch.bfloat16).view(1, 1, t, kv_dim),
-        device=mesh,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-    )
-
     # The op is ROW_MAJOR-only (unpadded); q comes in TILE.
     q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
 
     # indices must align with q's per-chip sequence shard [1, 1, S/sp, k]. Replicated
-    # (sp == 1) already matches q's full S. For sp > 1, redistribute the replicated
-    # rows onto the SP axis (small host hop; the op needs the matching shard per chip).
+    # (sp == 1) already matches q's full S. For sp > 1, redistribute the replicated rows
+    # onto the SP axis (small host hop — to be moved on device; active chunked path is sp == 1).
     idx = indices
     if sp > 1:
         dims = [None, None]
@@ -140,5 +129,10 @@ def sparse_mla(
     topk = idx.shape[-1]
     k_chunk = next((c for c in (128, 64, 32) if topk % c == 0), 32)
 
-    out = ttnn.transformer.sparse_sdpa(q_rm, kv, idx, v_dim=LATENT_DIM, scale=scale, k_chunk_size=k_chunk)
-    return ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
+    out = ttnn.transformer.sparse_sdpa(q_rm, kvpe, idx, v_dim=LATENT_DIM, scale=scale, k_chunk_size=k_chunk)
+    ttnn.deallocate(q_rm)
+    if idx is not indices:
+        ttnn.deallocate(idx)
+    ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
+    ttnn.deallocate(out)
+    return ret
