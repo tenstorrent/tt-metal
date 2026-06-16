@@ -10,10 +10,6 @@ import pytest
 from models.demos.gpt_oss.tt.model_config import ModelArgs
 
 
-def pytest_addoption(parser):
-    parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
-
-
 @pytest.fixture(scope="session")
 def state_dict(request):
     load_model = not request.config.getoption("--skip-model-load")

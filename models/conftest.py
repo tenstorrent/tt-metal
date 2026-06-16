@@ -4,20 +4,28 @@
 
 import ast
 import gc
+import os
 
 import pytest
 import torchvision.transforms as transforms
 from PIL import Image
+
+
+def pytest_addoption(parser):
+    # Auto-enable when MLPERF_READ_ONLY=true (set by CI impl workflows).
+    # Locally (env var unset) defaults to False so weights load normally.
+    default_skip = os.getenv("MLPERF_READ_ONLY", "false").lower() == "true"
+    parser.addoption(
+        "--skip-model-load",
+        action="store_true",
+        default=default_skip,
+        help="Skip loading the model state dict (auto-enabled when MLPERF_READ_ONLY=true)",
+    )
 
 
 @pytest.fixture(autouse=True)
 def ensure_gc():
     gc.collect()
-
-
-import pytest
-import torchvision.transforms as transforms
-from PIL import Image
 
 
 @pytest.fixture

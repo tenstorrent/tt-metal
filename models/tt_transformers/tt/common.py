@@ -836,8 +836,9 @@ def create_tt_model(
     if prefetcher is not None:
         prefetcher.num_layers = tt_model_args.n_layers
 
-    # Avoid loading state_dict for every DP model
-    if not state_dict:
+    # Avoid loading state_dict for every DP model. An empty dict is intentional
+    # when --skip-model-load is used.
+    if state_dict is None:
         state_dict = tt_model_args.load_state_dict()
 
     model = Transformer(
