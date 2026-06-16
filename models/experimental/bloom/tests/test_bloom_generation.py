@@ -15,6 +15,9 @@ from loguru import logger
 import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
 import models.experimental.bloom.bloom_utils as bloom_utils
 
+# NOTE(transformers-5.x): HammingDiversityLogitsProcessor (and ForceTokensLogitsProcessor)
+# were removed in transformers 5.x. This experimental Bloom test isn't run on CI, so it's
+# left as-is; drop those imports / the diverse-beam-search branch when bumping it to 5.x.
 from transformers.generation.logits_process import (
     EncoderNoRepeatNGramLogitsProcessor,
     EncoderRepetitionPenaltyLogitsProcessor,
