@@ -54,10 +54,8 @@ void report_counters(benchmark::State& state, double time_us, uint32_t M, uint32
     state.counters["tflops"] = tflops;
 }
 
-// Run a single benchmark loop with the given transpose flags. Matmul dimensions are always
-// M x K x N where N == K (square B), regardless of transpose configuration. The stored
-// shape of A and B is adjusted so that the matmul is logically the same operation under
-// each configuration.
+// Run one benchmark loop. Dimensions are always M x K x N with N == K (square B), so the matmul
+// is the same logical op under each transpose config — only the stored shapes of A/B change.
 void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_b) {
     auto device = ttnn::device::open_mesh_device(0);
     device->enable_program_cache();

@@ -154,11 +154,10 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     const double fwd_total_us = std::chrono::duration<double, std::micro>(t1_fwd - t0_fwd).count();
     const double fwd_avg_us = fwd_total_us / static_cast<double>(num_measure);
 
-    // Forward+backward: same pattern. Clear grads each step so backward measures a clean fwd+bwd:
-    // reset_graph() drops graph nodes but leaves the persistent weight/input grads in place, so
-    // without this every add_grad after the first step would also do an accumulation add (and grads
-    // would grow unbounded). Resetting to an empty tensor makes the next add_grad a plain set,
-    // matching an isolated training step (the clear is host-only, so it doesn't perturb timing).
+    // Forward+backward. Clear grads each step: reset_graph() drops graph nodes but not the
+    // persistent weight/input grads, so without this every add_grad after the first step would
+    // accumulate (an extra add, plus unbounded growth). Empty-tensor reset → next add_grad is a
+    // plain set. Host-only, so timing is unaffected.
     auto clear_grads = [&]() {
         grouped_fb->set_grad(ttnn::Tensor());
         for (const auto& w : w_gate) {

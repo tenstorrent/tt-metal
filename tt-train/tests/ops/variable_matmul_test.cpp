@@ -82,11 +82,9 @@ protected:
 };
 
 // ---------------------------------------------------------------------------
-// HiFi4-vs-HiFi4 minimal_matmul parity tests. variable_matmul is a superset of
-// minimal_matmul; with matched fidelity (HiFi4 + fp32 dst + packer_l1_acc), matched
-// block sizes / grid, and the EP path's offsets reduced to a single trivial range, the
-// two MUST produce bit-identical output — same algorithm, same reduction order, same
-// FPU ops. Any deviation is a regression in variable_matmul's core path.
+// minimal_matmul parity. variable_matmul is a superset of minimal_matmul: with matched fidelity
+// (HiFi4 + fp32 dst + packer_l1_acc), block sizes, grid, and a trivial single offset range, the
+// two must be bit-identical. Any deviation is a core-path regression.
 // ---------------------------------------------------------------------------
 
 // InputAndWeightK: both in0 and in1 K-sliced from the same offsets entry. Mirrors the
@@ -134,12 +132,9 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA) vs minimal not bit-exact";
 }
 
-// Non-tile-aligned matmul-M on the InputAndWeightK + transpose_a path. This is the
-// DeepSeek 16B / TP=8 moe_ffn bwd dW_gate (and dW_up) pattern: in0 = d_gate_proj
-// stored [count, I/TP=176], read as [I/TP, count] under transpose_a. matmul-M = I/TP = 176
-// (off-tile), matmul-N = H (tile-aligned), matmul-K = expert's count-tiles (tile-aligned,
-// from offsets[start..start+2]). Output [176, H] gets logical M=176 / padded 192; the
-// tail 16 padded rows are zero, downstream readers see only 176.
+// Non-tile-aligned matmul-M (176) on InputAndWeightK + transpose_a — the DeepSeek-16B/TP=8
+// dW_gate/dW_up bwd pattern (in0 stored [count, I/TP=176], read transposed). Verifies the
+// partial last M-tile (176 logical / 192 padded) is clipped correctly and pad rows stay zero.
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonTileAlignedM_176) {
     const uint32_t K_parent_in0 = 512, M = 176, K_parent_in1 = 512, N = 64;
     auto* device = &ttml::autograd::ctx().get_device();
@@ -185,11 +180,9 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
 }
 
 // ---------------------------------------------------------------------------
-// M-axis OffsetsRole bit-exact parity. variable_matmul with an M-axis offset reads only
-// the M[a..b] row range of the input parent (InputRow), writes to that row range of the
-// output parent (OutputRow), or both (InputAndOutputRow). With matched HiFi4 settings,
-// the relevant sub-region of the output MUST be bit-identical to minimal_matmul on the
-// corresponding sliced input.
+// M-axis offset parity. InputAndOutputRow reads the input row range [a, b) and writes the same
+// range of the output parent. With matched HiFi4 settings, that sub-region must be bit-identical
+// to minimal_matmul on the corresponding sliced input.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -272,11 +265,9 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow) corrupted untouched rows";
 }
 
-// InputAndOutputRow + transpose_b: the moe_ffn forward hot path. gate_proj / up_proj /
-// down_proj all call variable_matmul with transpose_b=true, since the weights are stored
-// [N, K] and used as [K, N] (x_e @ w^T). The end-to-end MoE test exercises this, but a
-// kernel-level parity test localizes a regression to the op. Weight is stored [N, K]; the
-// reference transposes it to [K, N] for the standard minimal_matmul.
+// InputAndOutputRow + transpose_b: the moe_ffn forward hot path (gate/up/down call with
+// transpose_b=true; weights stored [N, K], used as [K, N]). Kernel-level parity localizes a
+// regression vs the end-to-end MoE test. Reference transposes the weight to [K, N].
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow_TransposeB) {
     const uint32_t M_parent = 320, K = 128, N = 64;
     auto* device = &ttml::autograd::ctx().get_device();
@@ -389,20 +380,13 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
 }
 
 // ---------------------------------------------------------------------------
-// Program-cache reuse. The op's headline contract: one cached program serves any
-// (M, K, offsets_start_index) within a transpose/role/grid variant — M and K are runtime
-// args, so changing them must hit the cache and re-drive the kernels via
-// override_runtime_arguments rather than recompile. The parity tests above each make a single
-// call, so they only exercise the build path (create); these enable the program cache and call
-// the same shapes/config with different offsets entries (different active K / M ranges),
-// asserting (a) every result is still bit-exact and (b) no new program is compiled on the
-// repeat calls. (b) is the override_runtime_arguments path, where the offsets-callback bug lived.
-//
-// Cache entries are sampled immediately around the variable_matmul call only; the reference
-// ops (slice/transpose/minimal_matmul) run outside that window so their own programs don't
-// perturb the count. The first call's absolute delta isn't asserted (the device may be shared
-// across tests and already hold the program); the cache-hit guarantee is checked on every
-// subsequent call.
+// Program-cache reuse — the op's headline contract: one cached program serves any
+// (M, K, offsets_start_index) within a transpose/role/grid variant, re-driven via
+// override_runtime_arguments rather than recompiled. The parity tests above make a single call
+// each (build path only); these enable the cache and call the same program with different
+// offsets, asserting every result stays bit-exact AND no new program is compiled on the repeat
+// calls (the override path, where the offsets-callback bug lived). Cache entries are sampled
+// around the variable_matmul call only, so the reference ops don't perturb the count.
 // ---------------------------------------------------------------------------
 
 TEST_F(VariableMatmulTest, CacheHit_InputAndWeightK_VaryingK) {
