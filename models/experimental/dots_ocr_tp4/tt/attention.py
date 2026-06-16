@@ -283,7 +283,7 @@ class DotsOCRAttentionTP4(TTNNModule):
 
     def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         seq_len = int(x.shape[-2])
         if past_key_value is not None and seq_len == 1:
             return self._forward_decode(x, past_key_value, cache_position)
@@ -322,13 +322,13 @@ class DotsOCRAttentionTP4(TTNNModule):
             scale=self.scaling,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.squeeze(attn, 1)  # [B, S, q_heads_per_chip*head_dim]
         return self._o_proj_all_reduce(attn)
 
