@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of compute/transpose_wh_rm.cpp's SHARDED branch, owned by transpose's row-major
-// sharded WH factory. The compute logic is unchanged from the legacy SHARDED path; only the resource
-// bindings move to the Metal 2.0 namespaces (dfb::/args::). Differences from the shared original:
+// Metal 2.0 compute kernel for transpose's row-major sharded WH factory, split out from the SHARDED
+// branch of the row-major WH compute path. Resource bindings use the Metal 2.0 namespaces
+// (dfb::/args::). Differences from the original combined kernel:
 //   - the non-SHARDED branch is dropped (this fork is only compiled for the sharded caller);
 //   - the output buffer is referenced through a single accessor (dfb::cb_out); the host factory maps
 //     it to the borrowed output shard (ht<=8) or the intermediate staging DFB (ht>8), so the kernel
@@ -14,8 +14,7 @@
 // The producer-side cb_out_buf.wait_front in transpose_with_pack_untilize is preserved verbatim: it
 // reads the received-tiles counter the kernel just bumped (returns immediately) and is a producer-side
 // barrier, not a consume — so the factory binds compute as PRODUCER-only of the output DFB.
-// The legacy shared kernel is left untouched for its non-sharded co-borrower (the interleaved RM
-// factory uses transpose_wh_rm_metal2.cpp); sunset this fork when the shared kernel is Metal-2.0-prepped.
+// The interleaved (non-sharded) row-major path lives in transpose_wh_rm.cpp.
 
 #include <cstdint>
 

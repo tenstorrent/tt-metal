@@ -18,7 +18,7 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_program_spec(
+ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN0{"cb_in0"};  // legacy c_0: input stream (reader produces, writer consumes)

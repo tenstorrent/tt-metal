@@ -19,7 +19,7 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::create_program_spec(
+ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN0{"cb_in0"};    // legacy c_0: input shard (borrowed)
@@ -140,7 +140,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     KernelSpec compute_spec{
         .unique_id = COMPUTE_KERNEL,
         .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
-                                        "transpose_wh_sharded_metal2.cpp"},
+                                        "transpose_wh_sharded.cpp"},
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = CB_IN0, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{

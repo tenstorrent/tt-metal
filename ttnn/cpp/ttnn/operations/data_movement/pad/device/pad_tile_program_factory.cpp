@@ -20,7 +20,7 @@ namespace ttnn::prim {
 using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
-ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_program_spec(
+ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_program_artifacts(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN0{"cb_in0"};  // legacy c_0: input stream (reader produces, writer consumes)
