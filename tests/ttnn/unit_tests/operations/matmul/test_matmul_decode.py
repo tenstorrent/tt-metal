@@ -18,7 +18,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "m, k, n",
     [
         (32, 1024, 4096),
-        (32, 4096, 1024),
+        # DENOISE
+        (64, 1024, 4096),
     ],
 )
 @pytest.mark.parametrize(
@@ -62,8 +63,8 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_memory_config
     )
-    # for x in range(10):
-    output_tensor = ttnn.matmul_decode(input_tensor_a, input_tensor_b)
+    for x in range(10):
+        output_tensor = ttnn.matmul_decode(input_tensor_a, input_tensor_b)
 
     assert output_tensor.shape == (m, n)
 
@@ -75,6 +76,7 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
     "m, k, n, k_blocks, n_blocks",
     [
         (32, 4096, 1024, 4, 32),
+        (64, 4096, 1024, 4, 32),
         # (32, 64, 256, 2, 8),
     ],
 )

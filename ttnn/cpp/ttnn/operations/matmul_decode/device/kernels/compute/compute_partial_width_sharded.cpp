@@ -32,10 +32,17 @@ using std::uint32_t;
 // with sender = k_global / inA_K_tiles_per_core, kc_local = k_global % ...
 // (For M_tiles==1 this collapses to k_global, matching the old behaviour.)
 //
-// M_tiles>1 fix: phase 1 now loops over every M-tile (mt) and packs each (mt,nc)
-// partial to its row-major slot in partial_cb ([M_tiles x Nc_tiles]); phase 2
-// reduces per (mt,nc) across the K_blocks slabs in reduce_cb (each slab is one
-// [M_tiles x Nc_tiles] block).
+// M_tiles>1: phase 1 computes the entire M dimension of the partial in a single
+// DST block (out_block_h = M_tiles), so each matmul_block produces all M-tiles of
+// a given N-tile at once. The program factory asserts M < 256, keeping M_tiles <= 8
+// so the block fits in DST. Phase 2 reduces per (mt,nc) across the K_blocks slabs
+// in reduce_cb (each slab is one [M_tiles x Nc_tiles] block).
+//
+// matmul_block accumulation: matmul_block does NOT internally reduce over kt_dim.
+// kt_dim (= inA_K_tiles_per_core) is only the in0 *row stride* (K-tiles per M-row
+// in full_in0's per-sender slice). Each call multiplies one K-column slice
+// (rt_dim=M_tiles in0 tiles x ct_dim=1 in1 tile) into DST; the reduction over this
+// core's K-slice is done by the explicit kc loop, accumulating into the same DST.
 
 using namespace ckernel;
 void kernel_main() {
@@ -61,29 +68,39 @@ void kernel_main() {
     constexpr uint32_t reduce_num_tiles = K_blocks * block_num_tiles;
     constexpr uint32_t sender_slice_tiles = M_tiles * inA_K_tiles_per_core;
 
+    // The whole M dimension of the partial is computed in one DST block.
+    constexpr uint32_t out_block_h = M_tiles;
+    constexpr uint32_t out_block_w = 1;
+    // in0 row stride within a sender slice (K-tiles per M-row) == matmul kt_dim.
+    constexpr uint32_t in0_block_w = inA_K_tiles_per_core;
+
     // ---- Phase 1: partial matmul ----
     cb_wait_front(full_in0_cb_id, full_in0_num_tiles);
     cb_wait_front(in1_cb_id, in1_num_tiles);
 
-    mm_block_init(full_in0_cb_id, in1_cb_id, partial_cb_id, false, 1, 1, 1);
+    mm_block_init(full_in0_cb_id, in1_cb_id, partial_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
     const uint32_t k_offset = k_idx * Kc_tiles;  // this core's K-slice start (global K-tile)
     cb_reserve_back(partial_cb_id, block_num_tiles);
-    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-        for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
-            tile_regs_acquire();
-            for (uint32_t kc = 0; kc < Kc_tiles; ++kc) {
-                const uint32_t k_global = k_offset + kc;
-                const uint32_t sender = k_global / inA_K_tiles_per_core;
-                const uint32_t kc_local = k_global - sender * inA_K_tiles_per_core;
-                const uint32_t in0_tile = sender * sender_slice_tiles + mt * inA_K_tiles_per_core + kc_local;
-                matmul_block(full_in0_cb_id, in1_cb_id, in0_tile, kc * Nc_tiles + nc, 0, false, 1, 1, 1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, partial_cb_id, mt * Nc_tiles + nc);
-            tile_regs_release();
+    for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
+        tile_regs_acquire();
+        for (uint32_t kc = 0; kc < Kc_tiles; ++kc) {
+            const uint32_t k_global = k_offset + kc;
+            const uint32_t sender = k_global / inA_K_tiles_per_core;
+            const uint32_t kc_local = k_global - sender * inA_K_tiles_per_core;
+            // in0: K-column kc_local of this sender's block; matmul reads + r*in0_block_w
+            // for r in [0, M_tiles), i.e. every M-row of that K-column.
+            const uint32_t in0_tile = sender * sender_slice_tiles + kc_local;
+            const uint32_t in1_tile = kc * Nc_tiles + nc;
+            matmul_block(
+                full_in0_cb_id, in1_cb_id, in0_tile, in1_tile, 0, false, out_block_w, out_block_h, in0_block_w);
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t mt = 0; mt < out_block_h; ++mt) {
+            pack_tile<true>(mt, partial_cb_id, mt * Nc_tiles + nc);
+        }
+        tile_regs_release();
     }
     cb_push_back(partial_cb_id, block_num_tiles);
     cb_pop_front(full_in0_cb_id, full_in0_num_tiles);
