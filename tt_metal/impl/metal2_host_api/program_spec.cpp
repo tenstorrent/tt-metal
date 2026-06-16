@@ -464,6 +464,20 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Validate kernel tensor bindings
     for (const auto& kernel : spec.kernels) {
+        // TEMPORARY: tensor bindings on compute kernels are not yet supported end-to-end. A
+        // TensorAccessor cannot currently be constructed in a compute kernel, so a spec that binds a
+        // tensor to a compute kernel looks valid here but fails once it reaches the kernel. Reject it
+        // up front with an honest message until the compute-path support lands (expected within a day
+        // or two of 2026-06-16). Remove this guard when that ships.
+        TT_FATAL(
+            !kernel.is_compute_kernel() || kernel.tensor_bindings.empty(),
+            "Kernel '{}' is a compute kernel with a tensor binding ('{}'). Tensor bindings on compute "
+            "kernels are not yet supported — a TensorAccessor cannot currently be constructed in a "
+            "compute kernel, so this spec would compile but fail in the kernel. This is a temporary "
+            "restriction that will be lifted soon.",
+            kernel.unique_id,
+            kernel.tensor_bindings.empty() ? std::string{} : kernel.tensor_bindings.front().accessor_name);
+
         std::unordered_set<std::string> accessor_names;
         for (const auto& binding : kernel.tensor_bindings) {
             auto [it, inserted] = accessor_names.insert(binding.accessor_name);
