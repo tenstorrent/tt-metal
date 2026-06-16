@@ -283,16 +283,42 @@ CLIMATE_4P_VOICE_FILES: dict[int, str] = {
     4: "en-Maya_woman.wav",
 }
 
+# 3p_gpt5 podcast cast: Alice (host), Andrew (analyst), Frank (super-user).
+GPT5_3P_SPEAKER_NAMES: dict[int, str] = {
+    1: "Alice",
+    2: "Andrew",
+    3: "Frank",
+}
+
+GPT5_3P_VOICE_FILES: dict[int, str] = {
+    1: "en-Alice_woman.wav",
+    2: "en-Carter_man.wav",
+    3: "en-Frank_man.wav",
+}
+
 # Per golden-demo voice cloning presets (Speaker N -> voice filename under voices/).
 DEMO_VOICE_CLONES: dict[str, dict[int, str]] = {
+    "3p_gpt5": GPT5_3P_VOICE_FILES,
     "4p_climate_45min": CLIMATE_4P_VOICE_FILES,
     "4p_climate_100min": CLIMATE_4P_VOICE_FILES,
 }
 
 DEMO_SPEAKER_NAMES: dict[str, dict[int, str]] = {
+    "3p_gpt5": GPT5_3P_SPEAKER_NAMES,
     "4p_climate_45min": CLIMATE_4P_SPEAKER_NAMES,
     "4p_climate_100min": CLIMATE_4P_SPEAKER_NAMES,
 }
+
+
+def voice_preset_demo_id(demo_id: str) -> str:
+    """Map ``3p_gpt5_script`` etc. to a ``DEMO_VOICE_CLONES`` key."""
+    if demo_id in DEMO_VOICE_CLONES:
+        return demo_id
+    if demo_id.endswith("_script"):
+        base = demo_id[: -len("_script")]
+        if base in DEMO_VOICE_CLONES:
+            return base
+    return demo_id
 
 
 def resolve_voice_path(voice_ref: str, voices_dir: Path = VOICES_DIR) -> Path:
