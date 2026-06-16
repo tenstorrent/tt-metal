@@ -73,6 +73,42 @@ PL-BERT / predictor tests use the `mesh_device` fixture in `tests/conftest.py`. 
 
 ---
 
+## End-to-end quality metrics
+
+Sample-wise waveform PCC is a poor free-run gate for a TTS vocoder (a tiny phase/source drift collapses it while the speech is perceptually identical), so the pipeline is scored with three perceptual / intelligibility metrics. All three generate audio on the Blackhole device and compare against the matched torch CPU-reference `KModel` for the same text/voice/seed:
+
+| metric | what it measures | gate | test |
+|--------|------------------|------|------|
+| **ASR WER** | intelligibility — Whisper-small transcribes the TT audio; word error rate vs the prompt | < 30% | `test_tt_kmodel_asr_wer.py` |
+| **mel PCC** | spectral parity — Pearson corr of the 80-band log-mel spectrogram vs the reference (phase-invariant) | > 0.95 | `test_tt_kmodel_mel_pcc.py` |
+| **speaker cosine (SECS)** | speaker-identity parity — cosine of WavLM x-vector embeddings vs the reference (phase- & duration-invariant) | > 0.95 | `test_tt_kmodel_speaker_cosine.py` |
+
+Measured on `af_heart`, text `"Hello world this is a speech synthesis test."`, seed 0, deterministic (2.95 s audio, 44 phonemes), across the full vocoder-fallback / STFT-formulation matrix:
+
+| config | disable_complex | stft fb | phase fb | ASR WER | mel PCC | SECS |
+|--------|:---:|:---:|:---:|:---:|:---:|:---:|
+| `phase_fallback` | False | off | on | 0.00% | 0.9929 | 0.9922 |
+| `stft_and_phase_fallback` (config E) | False | on | on | 0.00% | 0.9928 | 0.9892 |
+| `no_fallback` | False | off | off | 0.00% | 0.9722 | 0.9571 |
+| `dc_phase_fallback` | True | off | on | 0.00% | 0.9932 | 0.9960 |
+| `dc_no_fallback` | True | off | off | 0.00% | 0.9724 | 0.9686 |
+
+All 15 runs PASS every gate. WER is 0.00% for every config (Whisper transcribes the audio verbatim) — speech stays fully intelligible even on the degraded `no_fallback` path, which is why ASR WER is a far more meaningful free-run gate than waveform PCC (≈0.28 there). mel PCC and SECS are tighter, frame-/timbre-level metrics: the CPU-fallback configs sit at ~0.993 / ~0.99, while the no-fallback configs drop to ~0.972 / ~0.957 — the residual BH-BF16 harmonic-source degradation surfaces here but stays above the 0.95 floor.
+
+Run them with:
+
+```bash
+export PYTHONPATH=$(pwd)
+# Full fallback / STFT-formulation matrix (all 5 configs each)
+pytest -s models/experimental/kokoro/tests/test_tt_kmodel_asr_wer.py        --timeout=3600
+pytest -s models/experimental/kokoro/tests/test_tt_kmodel_mel_pcc.py        --timeout=3600
+pytest -s models/experimental/kokoro/tests/test_tt_kmodel_speaker_cosine.py --timeout=3600
+
+# Single config (recommended config E only): add -k stft_and_phase_fallback
+```
+
+---
+
 ## Why CPU fallbacks are required (and why PCC degrades)
 
 On Blackhole (BH), MAC ops round `float32 → bfloat16`. That is harmless across the prosody stack (PLBERT → predictor → TextEncoder, PCC > 0.998) but fatal in **two spots** on the vocoder harmonic-source path:
