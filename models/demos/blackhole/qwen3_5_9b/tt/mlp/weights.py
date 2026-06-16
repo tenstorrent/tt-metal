@@ -7,6 +7,7 @@ sharded), so each device's down-projection emits a partial sum that mlp.py
 reduces across the mesh. On a unit mesh each "shard" is the full weight, so
 the same loader serves single-device runs.
 """
+import os
 from dataclasses import dataclass
 
 import ttnn
@@ -26,6 +27,9 @@ class MLPWeights:
 
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None) -> MLPWeights:
     """state_dict is the per-layer mlp substate: keys 'gate_proj.weight', 'down_proj.weight', 'up_proj.weight'."""
+
+    if tensor_cache_path is not None:
+        os.makedirs(tensor_cache_path, exist_ok=True)
 
     def cache(name):
         return str(tensor_cache_path / f"mlp.{name}.weight.tp") if tensor_cache_path else None
