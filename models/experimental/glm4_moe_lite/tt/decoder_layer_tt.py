@@ -16,6 +16,7 @@ from models.experimental.glm4_moe_lite.tt.attention_decode import flash_mla_and_
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     _is_l1_interleaved,
+    _norm_kva_sharded_in0_compatible,
     _to_l1_if_needed,
     prefill_linear_ws_out,
     prefill_norm_config_from_width_sharded_tensor,
@@ -247,19 +248,12 @@ def _shard_kvpe_update_tensor(
     skip_defensive_clones: bool = False,
 ) -> ttnn.Tensor:
     """Transform KVPE update tensor into the sharded layout required by paged_update_cache."""
-    # `paged_update_cache` expects the update tensor to be sharded.
-    #
-    # Correctness: `ttnn.pad` and some view-like ops can alias the input buffer without
-    # increasing refcounts. Make the padded/permuted update tensor own its buffer to
-    # avoid intermittent use-after-free corruption in decode.
-    # Pad in ROW_MAJOR to avoid FillPad on TILE input; TilizeWithValPadding zeros padding.
-    kvpe_rm = ttnn.to_layout(kvpe_new, ttnn.ROW_MAJOR_LAYOUT)
-    kvpe_padded_rm = ttnn.pad(kvpe_rm, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
-    ttnn.deallocate(kvpe_rm, force=False)
-    kvpe_perm_rm = ttnn.permute(kvpe_padded_rm, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
-    ttnn.deallocate(kvpe_padded_rm, force=False)
-    kvpe_perm = ttnn.to_layout(kvpe_perm_rm, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(kvpe_perm_rm, force=False)
+    # `paged_update_cache` expects the update tensor to be sharded as one 32xkvpe_dim shard
+    # per user. A single TILE-layout transpose (dim1<->dim2) moves the batch from dim2 to
+    # dim1, giving [1,B,1,kvpe_dim] whose dim2 tile-pads to 32. The kernel only reads the
+    # valid row per user, so the tile-padding rows need not be zeroed -- this avoids the
+    # untilize->pad->permute->tilize round-trip (matches the DeepSeek-V3 MLA decode path).
+    kvpe_perm = ttnn.transpose(kvpe_new, 1, 2)  # [1,1,B,kvpe_dim] -> [1,B,1,kvpe_dim]
 
     # Shard across the (B*32) height dimension so each user gets one 32xkvpe_dim shard.
     grid_size = device.compute_with_storage_grid_size()
@@ -450,6 +444,9 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         signpost(f"L{layer_idx}_attn-start")
     residual = x_embed_tok
     t0 = time.perf_counter() if profile is not None else 0.0
+    w_q_kv_a = getattr(w, "w_q_kv_a", None)
+    kva_n = int(w_q_kv_a.shape[-1]) if w_q_kv_a is not None else int(getattr(w, "w_kv_a").shape[-1])
+    direct_kva = _norm_kva_sharded_in0_compatible(k_width=int(hparams.hidden_size), n_width=kva_n)
     if cfg.sharded_decode_norm:
         x = sharded_decode_norm(
             w.input_layernorm,
@@ -457,6 +454,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             device=device,
             width=int(hparams.hidden_size),
             downstream_mc=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+            return_sharded=direct_kva,
         )
     else:
         x = w.input_layernorm(x_embed_tok, mode="decode")
