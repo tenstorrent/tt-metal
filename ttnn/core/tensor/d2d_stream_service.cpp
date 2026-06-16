@@ -340,6 +340,11 @@ struct D2DStreamServiceSender::Impl {
     // Config in create_pair (this member default never takes effect).
     bool share_fabric_links = true;
     std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
+    // Multi-lane sender (Step 2a) lane-sync words: master bumps go_count to release
+    // the sub for a transfer; sub bumps done_count when its half is shipped. One pair
+    // per coord in service-core L1; unused (but allocated) when single-lane.
+    std::map<distributed::MeshCoordinate, DeviceAddr> go_count_addrs;
+    std::map<distributed::MeshCoordinate, DeviceAddr> done_count_addrs;
     // Mesh-wide GlobalSemaphore on sender_worker_cores; the service kernel
     // multicast-incs it once per drained iteration.
     std::optional<GlobalSemaphore> consumed_sem;
@@ -439,6 +444,12 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->link_grant_addrs) {
+                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+            }
+            for (const auto& [coord, addr] : impl_->go_count_addrs) {
+                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+            }
+            for (const auto& [coord, addr] : impl_->done_count_addrs) {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->metadata_addrs) {
@@ -700,6 +711,7 @@ Program build_receiver_program(
     uint32_t metadata_l1_addr,
     bool share_fabric_links,
     uint32_t link_grant_addr,
+    uint32_t num_lanes,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const tt::tt_fabric::FabricNodeId& sender_node,
     uint32_t link_index) {
@@ -736,6 +748,7 @@ Program build_receiver_program(
         metadata_l1_addr,              // [18] receiver worker-grid L1 (uniform)
         share_fabric_links ? 1u : 0u,  // [19] fabric-link lease mode
         link_grant_addr,               // [20] service-core L1 (lease ping-pong word)
+        num_lanes,                     // [21] sender lanes = data-landed incs awaited per transfer
     };
     ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -759,6 +772,15 @@ Program build_receiver_program(
 }
 
 // CT-arg layout must stay in sync with persistent_d2d_sender.cpp.
+//
+// Builds num_lanes sender kernels into ONE program on the service core, one RISC +
+// one fabric link per lane: lane 0 = master (RISCV_0/NOC_0, scratch c_0 / header c_1),
+// lane 1 = sub (RISCV_1/NOC_1, scratch c_2 / header c_3). Distinct NoCs keep the
+// per-lane trid rings independent; distinct links keep the EDM flow-control
+// independent. The lanes split the tensor pages into contiguous halves (lane 0 takes
+// the odd page) and sync over the shared go/done L1 words. num_lanes == 1 builds only
+// the master, streaming the whole tensor. The SAME full CT layout goes to both
+// kernels; per-lane fields differ.
 Program build_sender_program(
     const Buffer& input_buffer,
     const CoreCoord& service_core,
@@ -775,71 +797,94 @@ Program build_sender_program(
     bool share_fabric_links,
     uint32_t link_grant_addr,
     uint32_t receiver_tensor_addr,
+    uint32_t go_count_addr,
+    uint32_t done_count_addr,
+    uint32_t num_lanes,
     const tt::tt_fabric::FabricNodeId& sender_node,
     const tt::tt_fabric::FabricNodeId& receiver_node,
-    uint32_t link_index) {
+    const std::vector<uint32_t>& link_indices) {
     auto program = CreateProgram();
 
-    // Single-slot scratch CB sized to one socket page (DRAM -> CB staging).
-    auto scratch_cfg =
-        CircularBufferConfig(plan.socket_page_size, {{kScratchCbIndex, datatype_to_dataformat_converter(dtype)}})
-            .set_page_size(kScratchCbIndex, plan.socket_page_size);
-    CreateCircularBuffer(program, service_core, scratch_cfg);
-
+    const uint32_t total_pages = plan.num_socket_pages * plan.pages_per_chunk;
+    const uint32_t half = (total_pages + 1) / 2;  // lane 0 takes the odd page
     const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    auto ph_cfg = CircularBufferConfig(2 * header_size, {{kPacketHeaderCbIndex, tt::DataFormat::UInt32}})
-                      .set_page_size(kPacketHeaderCbIndex, header_size);
-    CreateCircularBuffer(program, service_core, ph_cfg);
-
     auto accessor_ct = TensorAccessorArgs(input_buffer).get_compile_time_args();
 
-    std::vector<uint32_t> ct_args = {
-        socket_config_addr,
-        termination_addr,
-        plan.socket_page_size,
-        plan.num_socket_pages,
-        plan.pages_per_chunk,
-        tensor_page_size,
-        static_cast<uint32_t>(input_buffer.address()),
-        static_cast<uint32_t>(kScratchCbIndex),
-        static_cast<uint32_t>(kPacketHeaderCbIndex),
-        fabric_max_payload_size,
-        ws.enabled ? 1u : 0u,
-        ws.counter_addr,         // data_ready_counter_addr
-        ws.data_ready_sem_addr,  // consumed_sem_addr
-        ws.mcast_noc_x_start,
-        ws.mcast_noc_y_start,
-        ws.mcast_noc_x_end,
-        ws.mcast_noc_y_end,
-        ws.num_workers,
-        metadata_enabled ? 1u : 0u,    // [18]
-        metadata_size_bytes,           // [19]
-        sender_metadata_l1_addr,       // [20] sender service-core L1 (per-coord)
-        share_fabric_links ? 1u : 0u,  // [21] fabric-link lease mode
-        link_grant_addr,               // [22] service-core L1 (lease ping-pong word)
-    };
-    ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
+    // Per-lane CB indices, RISC, and NoC.
+    const tt::CBIndex scratch_cbs[2] = {tt::CBIndex::c_0, tt::CBIndex::c_2};
+    const tt::CBIndex header_cbs[2] = {tt::CBIndex::c_1, tt::CBIndex::c_3};
+    const DataMovementProcessor procs[2] = {DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1};
+    const NOC nocs[2] = {NOC::RISCV_0_default, NOC::RISCV_1_default};
 
-    auto kernel = CreateKernel(
-        program,
-        "ttnn/core/tensor/kernels/persistent_d2d_sender.cpp",
-        service_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = ct_args,
-        });
+    for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+        const tt::CBIndex scratch_cb = scratch_cbs[lane];
+        const tt::CBIndex header_cb = header_cbs[lane];
 
-    // The sender writes bulk data downstream, so its fabric connection runs
-    // sender -> receiver. The fabric-connection args come first (the kernel's
-    // build_from_args consumes them), followed by the per-coord receiver backing
-    // tensor base address (the direct fabric-write destination — varies per device
-    // because each receiver device allocates its own tensor).
-    std::vector<uint32_t> rt_args;
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        sender_node, receiver_node, link_index, program, service_core, rt_args);
-    rt_args.push_back(receiver_tensor_addr);
-    SetRuntimeArgs(program, kernel, service_core, rt_args);
+        // This lane's scratch CB (one socket page, DRAM -> CB staging) + header CB.
+        auto scratch_cfg =
+            CircularBufferConfig(plan.socket_page_size, {{scratch_cb, datatype_to_dataformat_converter(dtype)}})
+                .set_page_size(scratch_cb, plan.socket_page_size);
+        CreateCircularBuffer(program, service_core, scratch_cfg);
+        auto ph_cfg = CircularBufferConfig(2 * header_size, {{header_cb, tt::DataFormat::UInt32}})
+                          .set_page_size(header_cb, header_size);
+        CreateCircularBuffer(program, service_core, ph_cfg);
+
+        const uint32_t lane_start = lane * half;
+        const uint32_t lane_end = (lane + 1 == num_lanes) ? total_pages : (lane + 1) * half;
+
+        std::vector<uint32_t> ct_args = {
+            socket_config_addr,
+            termination_addr,
+            plan.socket_page_size,
+            plan.num_socket_pages,
+            plan.pages_per_chunk,
+            tensor_page_size,
+            static_cast<uint32_t>(input_buffer.address()),
+            static_cast<uint32_t>(scratch_cb),
+            static_cast<uint32_t>(header_cb),
+            fabric_max_payload_size,
+            ws.enabled ? 1u : 0u,
+            ws.counter_addr,         // data_ready_counter_addr
+            ws.data_ready_sem_addr,  // consumed_sem_addr
+            ws.mcast_noc_x_start,
+            ws.mcast_noc_y_start,
+            ws.mcast_noc_x_end,
+            ws.mcast_noc_y_end,
+            ws.num_workers,
+            metadata_enabled ? 1u : 0u,    // [18]
+            metadata_size_bytes,           // [19]
+            sender_metadata_l1_addr,       // [20] sender service-core L1 (per-coord)
+            share_fabric_links ? 1u : 0u,  // [21] fabric-link lease mode
+            link_grant_addr,               // [22] service-core L1 (lease ping-pong word)
+            lane == 0 ? 1u : 0u,           // [23] is_master
+            num_lanes,                     // [24]
+            lane_start,                    // [25]
+            lane_end,                      // [26]
+            go_count_addr,                 // [27] shared L1: master -> sub
+            done_count_addr,               // [28] shared L1: sub -> master
+        };
+        ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
+
+        auto kernel = CreateKernel(
+            program,
+            "ttnn/core/tensor/kernels/persistent_d2d_sender.cpp",
+            service_core,
+            DataMovementConfig{
+                .processor = procs[lane],
+                .noc = nocs[lane],
+                .compile_args = ct_args,
+            });
+
+        // The sender writes bulk data downstream, so its fabric connection runs
+        // sender -> receiver on THIS lane's link. The fabric-connection args come
+        // first (the kernel's build_from_args consumes them), followed by the per-coord
+        // receiver backing tensor base address (the direct fabric-write destination).
+        std::vector<uint32_t> rt_args;
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            sender_node, receiver_node, link_indices[lane], program, service_core, rt_args);
+        rt_args.push_back(receiver_tensor_addr);
+        SetRuntimeArgs(program, kernel, service_core, rt_args);
+    }
     return program;
 }
 
@@ -859,6 +904,10 @@ struct SenderSideResources {
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
+    // Lane-sync words (multi-lane sender): master bumps go_count, sub bumps done_count.
+    // Allocated even when single-lane (unused then); freed by the handle dtor.
+    std::map<distributed::MeshCoordinate, DeviceAddr> go_count_addrs;
+    std::map<distributed::MeshCoordinate, DeviceAddr> done_count_addrs;
     std::optional<GlobalSemaphore> consumed_sem;
     std::unique_ptr<distributed::MeshWorkload> workload;
 };
@@ -887,6 +936,9 @@ SenderSideResources build_sender_side(
     auto termination_addrs = allocate_service_core_words(mesh, service_cores);
     auto data_ready_counter_addrs = allocate_service_core_words(mesh, service_cores);
     auto link_grant_addrs = allocate_service_core_words(mesh, service_cores);
+    // Lane-sync words (multi-lane sender). Zero-initialised, like the other words.
+    auto go_count_addrs = allocate_service_core_words(mesh, service_cores);
+    auto done_count_addrs = allocate_service_core_words(mesh, service_cores);
 
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
     if (common.metadata_enabled) {
@@ -929,6 +981,14 @@ SenderSideResources build_sender_side(
         const auto links = tt::tt_fabric::get_forwarding_link_indices(sender_node, receiver_node);
         TT_FATAL(!links.empty(), "D2DStreamService: no fabric link sender->receiver at coord {}", coord);
 
+        // Lane count: one RISC + one link per lane, capped by config and by the
+        // available forwarding links. The receiver derives the same count from its
+        // (symmetric) receiver->sender link set, so it awaits the matching number of
+        // data-landed increments.
+        const uint32_t num_lanes = std::min<uint32_t>(cfg.max_sender_lanes, static_cast<uint32_t>(links.size()));
+        TT_FATAL(num_lanes >= 1, "D2DStreamService: num_lanes must be >= 1 at coord {}", coord);
+        const std::vector<uint32_t> lane_links(links.begin(), links.begin() + num_lanes);
+
         const auto ws = make_worker_sync_args(
             device,
             cfg.sender_worker_cores,
@@ -955,9 +1015,12 @@ SenderSideResources build_sender_side(
                 cfg.share_fabric_links,
                 cfg.share_fabric_links ? static_cast<uint32_t>(link_grant_addrs.at(coord)) : 0u,
                 static_cast<uint32_t>(receiver_tensor_addrs.at(coord)),
+                static_cast<uint32_t>(go_count_addrs.at(coord)),
+                static_cast<uint32_t>(done_count_addrs.at(coord)),
+                num_lanes,
                 sender_node,
                 receiver_node,
-                links.front()));
+                lane_links));
     }
 
     return SenderSideResources{
@@ -965,6 +1028,8 @@ SenderSideResources build_sender_side(
         .termination_addrs = std::move(termination_addrs),
         .link_grant_addrs = std::move(link_grant_addrs),
         .metadata_addrs = std::move(metadata_addrs),
+        .go_count_addrs = std::move(go_count_addrs),
+        .done_count_addrs = std::move(done_count_addrs),
         .consumed_sem = std::move(consumed_sem),
         .workload = std::move(workload),
     };
@@ -1051,6 +1116,11 @@ ReceiverSideResources build_receiver_side(
         const auto links = tt::tt_fabric::get_forwarding_link_indices(receiver_node, sender_node);
         TT_FATAL(!links.empty(), "D2DStreamService: no fabric link receiver->sender at coord {}", coord);
 
+        // Sender lane count, derived identically to the sender (min(max_sender_lanes,
+        // forwarding links)) — symmetric link topology ⇒ same value. This is how many
+        // data-landed increments the receiver awaits per transfer (one per sender lane).
+        const uint32_t num_lanes = std::min<uint32_t>(cfg.max_sender_lanes, static_cast<uint32_t>(links.size()));
+
         const auto ws = make_worker_sync_args(
             device,
             cfg.receiver_worker_cores,
@@ -1074,6 +1144,7 @@ ReceiverSideResources build_receiver_side(
                 static_cast<uint32_t>(metadata_l1_addr),
                 cfg.share_fabric_links,
                 cfg.share_fabric_links ? static_cast<uint32_t>(link_grant_addrs.at(coord)) : 0u,
+                num_lanes,
                 receiver_node,
                 sender_node,
                 links.front()));
@@ -1128,6 +1199,8 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
         .termination_addrs = std::move(res.termination_addrs),
         .share_fabric_links = cfg.share_fabric_links,
         .link_grant_addrs = std::move(res.link_grant_addrs),
+        .go_count_addrs = std::move(res.go_count_addrs),
+        .done_count_addrs = std::move(res.done_count_addrs),
         .consumed_sem = std::move(res.consumed_sem),
         .metadata_size_bytes = common.metadata_size_bytes,
         .metadata_addrs = std::move(res.metadata_addrs),

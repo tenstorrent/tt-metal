@@ -65,10 +65,14 @@ constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(18);
 // D2DStreamServiceReceiver::wait_for_fabric_links() / release_fabric_links().
 constexpr uint32_t share_fabric_links = get_compile_time_arg_val(19);
 constexpr uint32_t link_grant_addr = get_compile_time_arg_val(20);
-// Accessor args for the receiver backing tensor still occupy CT indices 21+ (the
-// host CT layout is unchanged), but the receiver no longer reads/writes the tensor
-// itself — the sender writes it directly over fabric — so no accessor is built.
-constexpr auto output_tensor_accessor_args = TensorAccessorArgs<21>();
+// [21] num_lanes: how many sender lanes Flush-inc bytes_sent per transfer (one inc
+// per lane), i.e. the per-transfer advance this receiver awaits as the data-landed
+// signal. Derived identically on both sides from the symmetric link topology.
+constexpr uint32_t num_lanes = get_compile_time_arg_val(21);
+// Accessor args for the receiver backing tensor occupy CT indices 22+ (host CT layout
+// unchanged otherwise), but the receiver no longer reads/writes the tensor itself —
+// the sender writes it directly over fabric — so no accessor is built.
+constexpr auto output_tensor_accessor_args = TensorAccessorArgs<22>();
 
 void kernel_main() {
     size_t rt_args_idx = 0;
@@ -91,10 +95,10 @@ void kernel_main() {
         receiver_socket.d2d.upstream_noc_y,
         receiver_socket.d2d.upstream_bytes_acked_addr);
 
-    // bytes_sent (this receiver's config word): the sender Flush-atomic-incs it per
-    // landed transfer. Step 1 single-link increments by 1 per transfer; multi-link
-    // (Step 2) will increment by num_links, so wait for an advance of kIncsPerTransfer.
-    constexpr uint32_t kIncsPerTransfer = 1;
+    // bytes_sent (this receiver's config word): each sender lane Flush-atomic-incs it
+    // once per transfer, so it advances by num_lanes per transfer — wait for exactly
+    // that. (Single-lane ⇒ kIncsPerTransfer == 1, the Step 1 behavior.)
+    constexpr uint32_t kIncsPerTransfer = num_lanes;
     volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.bytes_sent_addr);
 
