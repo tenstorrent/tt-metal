@@ -140,6 +140,13 @@ void kernel_main() {
     // Look up active token count for this expert from device-side buffers.
     // Reserve+read+push so the compute kernel (TRISC) and writer kernel
     // (NCRISC) can cb_wait_front on these CBs and read the same L1 data.
+    //
+    // Each scratch CB is a single page sized (host-side) to hold up to
+    // MAX_GLOBAL_EXPERTS UINT32 entries, so `1` here is the whole buffer and a
+    // single noc_async_read_page lands the entire counts / idx vector. The
+    // later counts_ptr[global_expert_id] / idx_ptr[local_expert_id] indexing
+    // therefore stays in-bounds for any model up to MAX_GLOBAL_EXPERTS experts
+    // (DeepSeek V3 256, Kimi 384, ... up to 1024).
     cb_reserve_back(cb_counts_scratch, 1);
     cb_reserve_back(cb_idx_scratch, 1);
     const uint32_t counts_l1 = get_write_ptr(cb_counts_scratch);
@@ -292,7 +299,7 @@ void kernel_main() {
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             const uint32_t col = kb * in0_block_w_gu + k;
                             const uint32_t tile_idx = row * K_gate_tiles + col;
-                            noc_async_read_tile(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
+                            noc_async_read_page(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
                             l1_x += x_tile_bytes;
                         }
                     } else {
@@ -327,7 +334,7 @@ void kernel_main() {
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
                             const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                            noc_async_read_tile(tile_idx, gate_acc, l1_w_gate, /*offset=*/0, /*noc=*/0);
+                            noc_async_read_page(tile_idx, gate_acc, l1_w_gate, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
                             for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
@@ -345,7 +352,7 @@ void kernel_main() {
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
                             const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                            noc_async_read_tile(tile_idx, up_acc, l1_w_up, /*offset=*/0, /*noc=*/0);
+                            noc_async_read_page(tile_idx, up_acc, l1_w_up, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
                             for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
@@ -456,7 +463,7 @@ void kernel_main() {
                         const uint32_t col = my_nt_d * per_core_N_d + n;
                         if (row < K_down_tiles && col < N_down_tiles_full) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
-                            noc_async_read_tile(tile_idx, down_acc, l1_w, /*offset=*/0, /*noc=*/0);
+                            noc_async_read_page(tile_idx, down_acc, l1_w, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
                             for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {

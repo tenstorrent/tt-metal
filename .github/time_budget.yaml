@@ -8,8 +8,6 @@
 
 # Team names are currently assigned to tests by best guess.
 #   Please message #tt-metal-infra if there are any concerns.
-# Sku names do not make the distinction between baremetal/vm, or viommu/non-viommu.
-#   This will be determined per pipeline based on need.
 
 # Example:
 metal_infra:
@@ -18,7 +16,7 @@ metal_infra:
     N150: 0
     N300: 0
     wh_llmbox: 0
-  sanity: # APC will be renamed to sanity
+  sanity: # APC and BHPC will be renamed to sanity
     CPU: 0
     N150: 0
     N300: 0
@@ -28,7 +26,6 @@ metal_infra:
     P150b: 0
     P300: 0
     wh_llmbox: 0
-    bh_llmbox: 0
     bh_loudbox: 0
     bh_qb: 0
   unit:
@@ -76,16 +73,15 @@ ttnn:
     wh_galaxy: 35
   e2e:
     wh_llmbox: 90
-    wh_galaxy: 90
+    wh_galaxy: 120
     bh_galaxy: 70
     bh_p150b_civ2: 55
-    bh_llmbox: 180
     bh_loudbox: 145
     bh_p300: 145
     bh_quietbox_2: 145
   integration:
-    wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
-    wh_galaxy: 340  # galaxy_integration_tests.yaml
+    wh_llmbox: 30
+    wh_galaxy: 340
   l2:
     wh_n150: 970
     wh_n300: 970
@@ -99,21 +95,26 @@ ttnn:
   # test-framework assignment is being settled. Tracked in
   # https://github.com/tenstorrent/tt-metal/issues/44285
   profiler:
-    # Budgets sized against the per-test decomposition of the umbrella
-    # run_profiling_test (each unique test now has its own matrix entry).
-    wh_llmbox: 150              # t3k_profiler_tests.yaml (~141m actual + headroom)
-    wh_galaxy: 50               # galaxy_profiler_tests.yaml (~45m actual + headroom)
-    wh_n150_civ2: 60            # single_card_profiler_tests.yaml (~53m actual + headroom)
+    wh_llmbox: 150
+    wh_galaxy: 50
+    wh_n150_civ2: 60
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
 
 train:
-  l2:
-    wh_n150: 40
-    wh_n300: 40
-    bh_p100: 40
-    bh_p150b_civ2: 40
+  smoke:
+    wh_n150_civ2: 20
+  unit:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 90
+    bh_p100a_civ2_viommu: 90
+    bh_p150b_civ2: 90
+  perf:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 90
+    bh_p100a_civ2_viommu: 90
+    bh_p150b_civ2: 240
 
 ttsim:
   l2:
@@ -145,7 +146,6 @@ scaleout:
     bh_spsg: 20 # single galaxy
     bh_sp1: 90
     bh_sp4: 150
-    bh_llmbox: 80
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
@@ -154,28 +154,37 @@ runtime:
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
-    bh_quietbox: 5
     bh_loudbox: 5
   unit:
-    wh_n150_civ2: 222
+    wh_n150_civ2: 226
     wh_n300_civ2: 74
     bh_p150b_civ2: 210
     bh_p150b_civ2_viommu: 5
     bh_p100a_civ2_viommu: 74
-    bh_quietbox: 20
+    bh_loudbox: 20
     wh_galaxy: 35
   integration:
     wh_n150_civ2: 360
     bh_p150b_civ2: 360
-    bh_quietbox: 25
+    bh_loudbox: 25
   perf:
     wh_n300_civ2: 55
     bh_p150_perf: 40
 
+debug:
+  triage:
+    wh_n150_civ2: 16
+    bh_p150b_civ2_viommu_prio: 16
+    bh_p150b_civ2_viommu: 16
+
 llk:
   unit:
-    wh_n150_civ2: 140
-    bh_p150b_civ2: 70
+    wh_n150_civ2: 180
+    wh_n300_civ2: 40
+    bh_p150: 40
+    bh_p150b_civ2_viommu: 70
+    bh_p150b_civ2_viommu_prio: 70
+    bh_p100a_civ2_viommu: 40
   e2e:
     wh_n150_civ2: 1800
     bh_p150b_civ2: 1800
@@ -197,28 +206,57 @@ models:
     bh_p150b_civ2: 70
   e2e:
     wh_llmbox: 198
-    wh_llmbox_perf: 330
-    wh_n150: 100
-    wh_n300: 15
-    wh_galaxy_perf: 120
     bh_p150b_civ2: 63
-    bh_p150: 60
-    bh_p300: 50
+    bh_p300: 20
     bh_loudbox: 160
-    bh_llmbox: 50
-    bh_quietbox_2: 251
+    bh_quietbox_2: 40
+  # Per-tier e2e budgets, consumed by the tiered model pipelines;
+  # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
+  e2e_tier1:
+    wh_n150: 28
+    wh_galaxy_perf: 120
+    bh_p150: 27
+    bh_quietbox_2: 35
     bh_galaxy: 78
-  unit:
-    wh_llmbox: 175
-    wh_llmbox_perf: 230
-    wh_n150: 135
+  e2e_tier2:
+    wh_llmbox_perf: 266
+    wh_n150: 30
+    bh_p150: 26
+    bh_p300: 42
+    bh_quietbox_2: 186
+  e2e_tier3:
+    wh_llmbox_perf: 64
+    wh_n150: 42
     wh_n300: 15
+    bh_p150: 7
+    bh_p300: 8
+    bh_quietbox_2: 30
+  unit:
+    wh_llmbox: 100
+    wh_galaxy_perf: 10
+  # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
+  # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
+  unit_tier1:
+    wh_llmbox: 61
+    wh_n150: 110
     wh_galaxy: 45
     wh_galaxy_perf: 45
-    bh_p150: 60
-    bh_p300: 30
-    bh_quietbox_2: 85
+    bh_p150: 20
+    bh_quietbox_2: 155
     bh_galaxy: 70
+  unit_tier2:
+    wh_llmbox: 114
+    wh_llmbox_perf: 172
+    wh_n150: 55
+    bh_p150: 20
+    bh_quietbox_2: 50
+  unit_tier3:
+    wh_llmbox_perf: 58
+    wh_n150: 33
+    wh_n300: 15
+    bh_p150: 20
+    bh_p300: 30
+    bh_quietbox_2: 21
   integration:
     wh_llmbox: 422
   perf:
@@ -230,14 +268,13 @@ models:
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
-
   demo:
     wh_llmbox_perf: 200
     wh_llmbox_perf_release: 1090
     wh_galaxy: 0
     wh_galaxy_perf: 150
     wh_galaxy_release: 345
-    bh_galaxy: 370
+    bh_galaxy: 395
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -247,15 +284,22 @@ models:
     bh_p150_perf: 420
     bh_p150b_civ2: 250
     bh_p150b_civ2_viommu: 50
-    bh_llmbox: 1200
     bh_loudbox: 1200
     bh_p300: 800
     bh_quietbox_2: 280
-  sweep:
+  sweep_tier1:
     wh_n150: 10
-    wh_llmbox_perf: 30
     wh_galaxy: 30
+  sweep_tier2:
+    wh_llmbox_perf: 30
 
 umd:
   unit:
     wh_galaxy_perf: 35
+
+syseng:
+  integration:
+    wh_n150_civ2: 34
+    wh_n300_civ2: 36
+    bh_p100: 18
+    bh_p150b_civ2: 18

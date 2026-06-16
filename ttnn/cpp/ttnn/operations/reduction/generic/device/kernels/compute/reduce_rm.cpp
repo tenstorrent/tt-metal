@@ -47,11 +47,11 @@ FORCE_INLINE void reduce_block(
         compute_kernel_lib::reduce<
             REDUCE_OP,
             REDUCE_DIM,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
             cb_tile_in,
             cb_scaler,
             cb_out,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
@@ -69,11 +69,11 @@ FORCE_INLINE void reduce_block(
         compute_kernel_lib::reduce<
             REDUCE_OP,
             REDUCE_DIM,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
             cb_tile_in,
             cb_scaler,
             cb_acc,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),

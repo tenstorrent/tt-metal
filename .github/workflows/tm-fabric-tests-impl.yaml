@@ -36,11 +36,6 @@ on:
         type: boolean
         default: true
         description: "Run Blackhole multi-card unit tests"
-      bh-runner-llmbox:
-        required: false
-        type: boolean
-        default: true
-        description: "Run tests on BH-LLMBox"
       bh-runner-loudbox:
         required: false
         type: boolean
@@ -259,10 +254,6 @@ jobs:
           runner_items=()
 
           # Check which runner labels should be included
-          if [[ "${{ inputs.bh-runner-llmbox }}" == "true" ]]; then
-            runner_items+=('{"name":"LLMBox unit tests","runner-label":"BH-LLMBox"}')
-          fi
-
           if [[ "${{ inputs.bh-runner-loudbox }}" == "true" ]]; then
             runner_items+=('{"name":"LoudBox unit tests","runner-label":"BH-LoudBox"}')
           fi

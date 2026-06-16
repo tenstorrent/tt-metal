@@ -137,13 +137,14 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
  *
  * Writes the relu mode and threshold carried by the config to the STACC_RELU config register.
  *
- * @param relu_config: Relu configuration supplying the hardware mode and threshold to apply.
+ * @param relu_config: Relu configuration supplying the mode and threshold to apply.
  */
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config)
 {
-    const std::uint32_t val = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (relu_config.get_hw_mode() << STACC_RELU_ApplyRelu_SHAMT);
-    TTI_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
-    TTI_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
+    const std::uint32_t mode = static_cast<std::uint32_t>(relu_config.get_mode());
+    const std::uint32_t val  = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (mode << STACC_RELU_ApplyRelu_SHAMT);
+    TT_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, STACC_RELU_ApplyRelu_ADDR32);
     TTI_NOP;

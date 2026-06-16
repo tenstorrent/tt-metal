@@ -1345,3 +1345,195 @@ def test_ttnn_topk_correctness(ttnn_mesh_device, input_width, dtype):
         test_label=f"ttnn.topk isolation (width={input_width}, dtype={dtype_tag}, B={B}, K={K})",
         quant_tolerance=quant_tolerance,
     )
+
+
+# ==============================================================================
+# Logprobs plumbing (enable_log_probs per-call arg)
+# ==============================================================================
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
+def test_sampling1d_logprobs_disabled_returns_none(ttnn_mesh_device):
+    """Default (enable_log_probs=False) → log_probs is None on every mesh, both paths."""
+    torch.manual_seed(42)
+    B = 32
+    vocab_size = 1024
+
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+
+    # Top-k path
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+    _, log_probs = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
+    assert log_probs is None, "top-k path must return None when enable_log_probs=False"
+
+    # Argmax path
+    logits_tt2 = _make_logits_tt(logits_host, ttnn_mesh_device)
+    _, log_probs_argmax = sampler.decode_forward(logits_tt2)
+    assert log_probs_argmax is None, "argmax path must return None when enable_log_probs=False"
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
+def test_sampling1d_argmax_never_emits_logprobs(ttnn_mesh_device):
+    """Argmax contract (P0): argmax path returns None even when enable_log_probs=True."""
+    torch.manual_seed(42)
+    B = 32
+    vocab_size = 1024
+
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
+
+    _, log_probs = sampler.decode_forward(logits_tt, enable_log_probs=True)
+    assert log_probs is None, "argmax path must never compute logprobs (force-argmax ⇒ no logprobs)"
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
+def test_sampling1d_logprobs_topk(ttnn_mesh_device):
+    """enable_log_probs=True on the top-k path.
+
+    The old single-token logprob path only computes on multi-device shards with
+    num_devices ∈ {8, 32} (T3K 1×8). On 1×1/1×2 the calculator returns None even when enabled.
+    On 1×8, with k=1/p=0/temp=1 the sampled token is the argmax, so its logprob must match
+    torch.log_softmax(logits)[argmax].
+    """
+    from models.common.utility_functions import comp_pcc
+
+    torch.manual_seed(42)
+    B = 32
+    vocab_size = 32768  # divisible by 8
+
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+
+    tokens_tt, log_probs = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp, enable_log_probs=True)
+
+    num_devices = max(cluster_shape)
+    if num_devices not in (8, 32):
+        assert log_probs is None, f"logprobs unsupported on {num_devices} devices → expected None"
+        return
+
+    assert log_probs is not None, "logprobs must be computed on a 1×8 mesh when enabled"
+
+    # output_tensor is replicated across devices; read a single device copy → shape (1,1,1,B)
+    lp_host = ttnn.to_torch(ttnn.get_device_tensors(log_probs)[0]).reshape(-1)[:B].float()
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+
+    # Reference: log_softmax over the full vocab (fp32), indexed at the sampled token.
+    ref_log_softmax = torch.log_softmax(logits_host.float().squeeze(), dim=-1)  # [B, V]
+    ref_lp = ref_log_softmax[torch.arange(B), tokens_host]
+
+    passing, pcc_msg = comp_pcc(ref_lp, lp_host, pcc=0.99)
+    print(f"\n  logprobs PCC (V={vocab_size}, mesh={cluster_shape}): {pcc_msg}")
+    assert passing, f"logprobs PCC below threshold: {pcc_msg}"
+
+
+# ==============================================================================
+# Trace capture — on-device sampling under begin/end_trace_capture (N150/N300)
+# ==============================================================================
+#
+# The tests above prove the sampler is correct *eagerly* on every mesh. They do NOT exercise the
+# thing that actually gates on-device sampling in a model: whether the sampling op graph can be
+# captured inside ttnn.begin_trace_capture / ttnn.end_trace_capture. TracedLLMExecutor runs
+# model.sampling.decode_forward *inside* trace capture (executor.py:_capture_decode_trace).
+#
+# The TTTv2 perf-recovery handoff gated models' supports_on_device_sampling on num_devices >= 8,
+# assuming the sub-8-device Linear+barrier all-gather could not be trace-captured. The cases below
+# DISPROVE that at the op level: argmax and top-k both capture AND replay correctly on 1x1 (N150,
+# no CCL) and 1x2 (N300, Linear+barrier all-gather). See the handoff doc's "wrong assumption" note.
+#
+# Note the dict-form ttnn_mesh_device param: it carries trace_region_size so the device is opened
+# with a trace region (the fixture does not set one by default).
+
+_TRACE_REGION_SIZE = 32 << 20
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [
+        {"mesh_shape": (1, 1), "trace_region_size": _TRACE_REGION_SIZE},
+        {"mesh_shape": (1, 2), "trace_region_size": _TRACE_REGION_SIZE},
+    ],
+    ids=["1x1", "1x2"],
+    indirect=True,
+)
+@pytest.mark.parametrize("mode", ["argmax", "topk"])
+def test_sampling1d_trace_capture(ttnn_mesh_device, mode):
+    """Sampling1D.decode_forward must trace-capture and replay correctly on N150/N300.
+
+    Mirrors TracedLLMExecutor._capture_decode_trace: warmup-compile + load_device_buffers OUTSIDE
+    capture (those issue device writes that are illegal mid-capture), then run decode_forward
+    inside begin/end_trace_capture and replay, asserting replayed tokens == eager tokens.
+
+    All four (mesh x mode) combos pass — including the 1x2 Linear+barrier all-gather the
+    ``num_devices >= 8`` model gate assumes is not capturable.
+    """
+    mesh_device = ttnn_mesh_device
+    num_devices = mesh_device.get_num_devices()
+    cluster_shape = tuple(mesh_device.shape)
+
+    torch.manual_seed(0)
+    B = 32
+    vocab_size = 128256  # Llama-class vocab; per-device shard on 1x2 (64128) >> max_top_k=32
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+
+    sampler = Sampling1D(
+        vocab_size=vocab_size,
+        mesh_device=mesh_device,
+        max_batch_size=B,
+        allow_force_argmax=True,
+        pad_to_power_of_2=(mode == "topk" and num_devices > 1),
+    )
+
+    # k/p/temp built ONCE, OUTSIDE capture, and the same persistent tensors are referenced inside
+    # it — exactly as TracedLLMExecutor caches them (executor.py:_get_decode_sampling_kpt).
+    # Building them inside capture would itself be an illegal in-capture host->device write.
+    kpt = (
+        _make_sampling_params(mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape)
+        if mode == "topk"
+        else None
+    )
+
+    def _forward(logits_tt):
+        if mode == "argmax":
+            return sampler.decode_forward(logits_tt)
+        k, p, temp = kpt
+        return sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
+
+    # Persistent input buffer, reused across warmup / capture / replay (as the executor does).
+    logits_tt = _make_logits_tt(logits_host, mesh_device, shard_vocab=True)
+
+    # --- Warmup: load buffers + JIT-compile the sampling program OUTSIDE capture ---
+    sampler.load_device_buffers()
+    eager_tok, _ = _forward(logits_tt)
+    ttnn.synchronize_device(mesh_device)
+    eager_host = to_torch_auto_compose(eager_tok).flatten()[:B].long()
+
+    # --- Capture (close+release in finally so a failed capture can't wedge the next case) ---
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    captured_tok = None
+    try:
+        captured_tok, _ = _forward(logits_tt)
+    finally:
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+    # --- Replay (same logits -> same tokens) ---
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    replay_host = to_torch_auto_compose(captured_tok).flatten()[:B].long()
+    ttnn.release_trace(mesh_device, trace_id)
+
+    assert torch.equal(replay_host, eager_host), (
+        f"[{mode} mesh={cluster_shape}] traced tokens diverged from eager:\n"
+        f"  eager:  {eager_host[:8]}\n  replay: {replay_host[:8]}"
+    )

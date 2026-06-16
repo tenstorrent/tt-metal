@@ -1199,6 +1199,11 @@ void py_module(nb::module_& mod) {
             "compute_output_specs",
             &ttnn::prim::MatmulDeviceOperation::compute_output_specs,
             nb::arg("operation_attributes"),
+            nb::arg("tensor_args"))
+        .def_static(
+            "compute_program_hash",
+            &ttnn::prim::MatmulDeviceOperation::compute_program_hash,
+            nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
     // Bind MatmulMultiCoreReuseOptimizedProgramFactory for descriptor creation

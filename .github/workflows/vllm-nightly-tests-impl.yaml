@@ -51,7 +51,7 @@ jobs:
           #
           # The two Gemma4-31B vLLM entries below are temporarily disabled —
           # the full unquantized KV cache for the global-attention layers
-          # runs out of DRAM on both 1x4 (BH-QB-GE) and 1x8 (WH-T3K).
+          # runs out of DRAM on both 1x4 (BH-Quietbox-2) and 1x8 (WH-T3K).
           # Re-enable once KV cache quantization lands — TODO: file follow-up issue.
           #
           # Disabled entries preserved verbatim for the re-enable:
@@ -81,7 +81,26 @@ jobs:
           #     "additional-server-args": "--async-scheduling",
           #     "multimodal": false,
           #     "owner_id": "U08TJ70UFRT"
-          #   }
+          #   },
+          #
+          # Disabled due to Metal timeout in reduce-scatter async tests
+          # https://github.com/tenstorrent/vllm/issues/416
+          # Originally disabled in:
+          #   https://github.com/tenstorrent/tt-metal/pull/39088
+          #   {
+          #     "name": "[WH-T3K] Multi-process reduce scatter test model",
+          #     "model": "models/vllm_test_utils/t3000_multiproc_test",
+          #     "server-timeout": 4,
+          #     "benchmark-timeout": 4,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "(2, 4)",
+          #     "tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
+          #     "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
+          #     "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
+          #     "multimodal": false,
+          #     "co-owner-1-id": "U08CEGF78ET"
+          #   },
           all_tests='[
             {
               "name": "[WH-T3K] Gemma3-27B",
@@ -330,20 +349,6 @@ jobs:
               "multimodal": true,
               "additional-server-args": "--async-scheduling",
               "co-owner-1-id": "U08H31YMN4Q"
-            },
-            {
-              "name": "[WH-T3K] Multi-process reduce scatter test model",
-              "model": "models/vllm_test_utils/t3000_multiproc_test",
-              "server-timeout": 4,
-              "benchmark-timeout": 4,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "(2, 4)",
-              "tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
-              "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
-              "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
-              "multimodal": false,
-              "co-owner-1-id": "U08CEGF78ET"
             },
             {
               "name": "[WH-T3K] NoOp test model (vLLM overhead)",
