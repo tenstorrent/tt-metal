@@ -2037,12 +2037,10 @@ def test_ternary_resolve_mem_config_with_grid_size_two(device):
 def test_where_ttt_outer_bcast_with_height_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
-    # NOTE: TTT only enables native L1 sharding when all three inputs have identical shapes
-    # (see is_native_L1_sharding in ternary_op_utils.cpp). Because `true` outer-broadcasts on N,
-    # the shapes differ, so the op always drops the sharding request and runs the interleaved
-    # outer-bcast path (SRC_SHARDED_*=0) regardless of the *_sharded flags. This test verifies
-    # that fallback produces correct results (and a sharded output when requested) across cores.
-    torch.manual_seed(0)
+    # NOTE: Native L1 sharding is enabled only when all tensor inputs have identical shapes
+    # and identical memory configs (see is_native_L1_sharding in ternary_op_utils.cpp).
+    # When enabled, the whole shard is pre-populated into the CB (bulk reserve/push).
+    # Otherwise, per-tile NOC reads are performed via TensorAccessor (interleaved fallback).
     predicate_shape = (2, 7, 2 * 32, 4 * 32)
     true_shape = (1, 7, 2 * 32, 4 * 32)  # outer broadcast on N (2 -> 1); H/W identical
     false_shape = (2, 7, 2 * 32, 4 * 32)

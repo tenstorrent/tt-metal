@@ -200,6 +200,7 @@ void setup_reader_defines(
     // SRC_SHARDED_A always maps to CB0 (predicate)
     // SRC_SHARDED_B maps to CB1: value_true for TTT/TTS, value_false for TST
     // SRC_SHARDED_C maps to CB2: value_false for TTT (unused for TTS/TST)
+    // SRC_SHARDED_* is 0 for unequal shaped sharded inputs, since has_sharding and is_native_L1_sharding are both false
     reader_defines["SRC_SHARDED_A"] = (predicate_sharded && has_sharding) ? "1" : "0";
     if (variant == TernaryVariant::TST) {
         reader_defines["SRC_SHARDED_B"] = (value_false_sharded && has_sharding) ? "1" : "0";
