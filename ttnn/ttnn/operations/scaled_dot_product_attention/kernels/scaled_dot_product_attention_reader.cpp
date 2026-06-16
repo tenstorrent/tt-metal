@@ -68,8 +68,13 @@ void kernel_main() {
     constexpr uint16_t causal_neg_bits = get_compile_time_arg_val(10);  // bf16 −inf bias bits
     constexpr uint32_t kv_edge = get_compile_time_arg_val(11);          // R3 — KV-seq edge masking active
     constexpr uint32_t kv_valid_last = get_compile_time_arg_val(12);    // valid key cols in last KV tile
+    constexpr uint32_t Bkv_t = get_compile_time_arg_val(13);            // R5 — KV tiles per chunk
+    // Non-causal KV-chunk count. Bkv_t divides Skv_t when Bkv_t > 1
+    // (host-enforced); causal/edge keep Bkv_t == 1 so Nkv == Skv_t and j is a
+    // tile index (diagonal/edge logic unchanged).
+    constexpr uint32_t Nkv = Skv_t / Bkv_t;
 
-    constexpr auto q_args = TensorAccessorArgs<13>();
+    constexpr auto q_args = TensorAccessorArgs<14>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -127,37 +132,56 @@ void kernel_main() {
         // Causal: query-chunk qc attends only to key-chunks j <= qc (the
         // diagonal block j==qc is partially masked; j>qc is fully future ->
         // skipped entirely). Requires S_q==S_kv (causal+cross is excluded).
-        const uint32_t kv_count = causal ? (qc + 1) : Skv_t;
+        // R5: non-causal streams Nkv chunks of Bkv_t tiles each; causal keeps
+        // Bkv_t == 1 so Nkv == Skv_t and j is a tile index.
+        const uint32_t kv_count = causal ? (qc + 1) : Nkv;
 
         // --- KV loop ---
         for (uint32_t j = 0; j < kv_count; ++j) {
-            const uint32_t kv_base = ((b * H_kv + h_kv) * Skv_t + j) * d_t;
+            // First key tile-row of this chunk; the chunk spans key tile-rows
+            // [kv0, kv0 + Bkv_t).
+            const uint32_t kv0 = j * Bkv_t;
+            const uint32_t kv_tile_base = (b * H_kv + h_kv) * Skv_t;
 
-            cb_reserve_back(cb_k_in, d_t);
+            // K block — laid out K-major for the QK^T matmul in1 ([d_t][Bkv_t]):
+            //   dd outer, key inner -> tile index dd*Bkv_t + key. (Bkv_t == 1
+            //   recovers the original dd-only order.)
+            cb_reserve_back(cb_k_in, Bkv_t * d_t);
             uint32_t k_wr = get_write_ptr(cb_k_in);
             for (uint32_t dd = 0; dd < d_t; ++dd) {
-                noc_async_read_page(kv_base + dd, k_acc, k_wr);
-                k_wr += tile_bytes;
+                for (uint32_t kk = 0; kk < Bkv_t; ++kk) {
+                    noc_async_read_page((kv_tile_base + (kv0 + kk)) * d_t + dd, k_acc, k_wr);
+                    k_wr += tile_bytes;
+                }
             }
             noc_async_read_barrier();
-            cb_push_back(cb_k_in, d_t);
+            cb_push_back(cb_k_in, Bkv_t * d_t);
 
-            cb_reserve_back(cb_v_in, d_t);
+            // V block — laid out K-major for the PV matmul in1 ([Bkv_t][d_t]):
+            //   key outer, dd inner -> tile index key*d_t + dd (natural DRAM
+            //   order). (Bkv_t == 1 recovers the original single tile-row.)
+            cb_reserve_back(cb_v_in, Bkv_t * d_t);
             uint32_t v_wr = get_write_ptr(cb_v_in);
-            for (uint32_t dd = 0; dd < d_t; ++dd) {
-                noc_async_read_page(kv_base + dd, v_acc, v_wr);
-                v_wr += tile_bytes;
+            for (uint32_t kk = 0; kk < Bkv_t; ++kk) {
+                for (uint32_t dd = 0; dd < d_t; ++dd) {
+                    noc_async_read_page((kv_tile_base + (kv0 + kk)) * d_t + dd, v_acc, v_wr);
+                    v_wr += tile_bytes;
+                }
             }
             noc_async_read_barrier();
-            cb_push_back(cb_v_in, d_t);
+            cb_push_back(cb_v_in, Bkv_t * d_t);
 
             if constexpr (has_mask) {
-                const uint32_t mask_tile = ((mask_b * mask_H + mask_h) * Sq_t + qc) * Skv_t + j;
-                cb_reserve_back(cb_mask_in, 1);
+                // Custom mask block: Bkv_t tiles for (qc, key) over the chunk.
+                const uint32_t mask_row_base = ((mask_b * mask_H + mask_h) * Sq_t + qc) * Skv_t;
+                cb_reserve_back(cb_mask_in, Bkv_t);
                 uint32_t m_wr = get_write_ptr(cb_mask_in);
-                noc_async_read_page(mask_tile, mask_acc, m_wr);
+                for (uint32_t kk = 0; kk < Bkv_t; ++kk) {
+                    noc_async_read_page(mask_row_base + kv0 + kk, mask_acc, m_wr);
+                    m_wr += tile_bytes;
+                }
                 noc_async_read_barrier();
-                cb_push_back(cb_mask_in, 1);
+                cb_push_back(cb_mask_in, Bkv_t);
             } else if constexpr (causal) {
                 // Only the diagonal-straddling block (j == qc) needs the
                 // triangular bias; j < qc is fully past (unmasked).

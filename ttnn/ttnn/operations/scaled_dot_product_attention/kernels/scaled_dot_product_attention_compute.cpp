@@ -6,8 +6,20 @@
 // Implements the FlashAttention online-softmax recurrence per work-unit
 // (b, h, q-chunk). The S_q x S_kv score matrix is NEVER materialized: per
 // Q-chunk (Bq_t = 1 tile-row of queries) we stream every KV-chunk
-// (Bkv_t = 1 tile-row of keys/values) once and fold it into the running
+// (Bkv_t tile-rows of keys/values) once and fold it into the running
 // max (cb_m), running sum (cb_l) and running output (cb_o).
+//
+// R5 — long-context precision: Bkv_t KV blocking. The online-softmax
+// recurrence rescales the running output (corr*O) once per KV-chunk. At
+// long context (S>=4096) the mask=none output is a near-uniform average of
+// thousands of V vectors -> near-zero magnitude, so the per-chunk 16-bit
+// DEST rounding of that rescale accumulates into a large *relative* RMS.
+// Processing Bkv_t key-tiles per chunk cuts the rescale-round count by
+// Bkv_t (fewer accumulation roundings) — the only lever left once the
+// golden pins fp32_dest_acc_en/HiFi (CB format and fidelity proven inert by
+// the R1 probe). Bkv_t == 1 recovers the original per-tile behaviour
+// EXACTLY; the host sets Bkv_t > 1 only for long, non-causal, tile-aligned
+// shapes (causal / edge-mask / large-D-fp32 stay on the Bkv_t == 1 path).
 //
 // All helper substitutions are documented inline. Raw-API usage:
 //   - compute_kernel_hw_startup + mm_block_init: boot init (no helper covers
@@ -37,6 +49,10 @@ void kernel_main() {
     constexpr uint32_t causal = get_compile_time_arg_val(4);      // native causal masking
     constexpr uint32_t Sq_t = get_compile_time_arg_val(5);        // Q seq tiles (for qc decode)
     constexpr uint32_t kv_edge = get_compile_time_arg_val(6);     // R3 — KV-seq edge masking active
+    constexpr uint32_t Bkv_t = get_compile_time_arg_val(7);       // R5 — KV tiles folded per chunk
+    // KV-chunks streamed per Q-chunk (non-causal). Bkv_t divides Skv_t (host-
+    // enforced when Bkv_t > 1); causal/edge keep Bkv_t == 1 so Nkv == Skv_t.
+    constexpr uint32_t Nkv = Skv_t / Bkv_t;
 
     const uint32_t num_units = get_arg_val<uint32_t>(0);
     const uint32_t start_unit = get_arg_val<uint32_t>(1);
@@ -77,7 +93,10 @@ void kernel_main() {
         // diagonal block (j == qc) and how many KV-chunks to fold (qc+1).
         // Requires S_q == S_kv (causal+cross excluded), so Sq_t == Skv_t.
         const uint32_t qc = (start_unit + u) % Sq_t;
-        const uint32_t kv_count = causal ? (qc + 1) : Skv_t;
+        // Non-causal: Nkv blocks of Bkv_t tiles each. Causal keeps Bkv_t == 1
+        // (host-enforced) so Nkv == Skv_t and j is a tile index, preserving the
+        // diagonal (j == qc) / edge (j == Skv_t-1) logic verbatim.
+        const uint32_t kv_count = causal ? (qc + 1) : Nkv;
 
         // 0c. scale Q: cb_q = cb_q_in * scale (folds the softmax scale into Q).
         eltwise_chain(
@@ -93,6 +112,9 @@ void kernel_main() {
 
         for (uint32_t j = 0; j < kv_count; ++j) {
             // A. QKt: scores = Q . K^T (reduction over D). Q retained across kv loop.
+            //   Output is a [1, Bkv_t] score row (in1_num_subblocks = Bkv_t,
+            //   one tile per subblock). in1 = cb_k_in is laid out K-major
+            //   ([d_t][Bkv_t]); the reader writes it dd-outer / key-inner.
             matmul_block<
                 /*transpose*/ true,
                 /*packer_l1_acc*/ false,
@@ -106,14 +128,15 @@ void kernel_main() {
                 scores_buf,
                 scores_buf,
                 MatmulBlockShape::of(
-                    /*in0_sb*/ 1, /*in1_sb*/ 1, /*sb_h*/ 1, /*sb_w*/ 1, /*in0_block_k*/ d_t, /*num_k_blocks*/ 1));
+                    /*in0_sb*/ 1, /*in1_sb*/ Bkv_t, /*sb_h*/ 1, /*sb_w*/ 1, /*in0_block_k*/ d_t, /*num_k_blocks*/ 1));
 
             // B. mask add: scores += mask.
             //   custom mode  -> add a per-chunk mask tile every KV-chunk.
             //   causal mode  -> add the triangular −inf bias only on the
             //                   diagonal block (j == qc); j < qc is fully past.
             if constexpr (has_mask) {
-                add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(1));
+                // Custom mask: one [1, Bkv_t] mask block per KV-chunk.
+                add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(Bkv_t));
             } else if constexpr (causal) {
                 if (j == qc) {
                     add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(1));
@@ -131,9 +154,10 @@ void kernel_main() {
                 }
             }
 
-            // C. rowmax over the KV (width) axis -> cb_m_cur [Bq_t,1]. No pop (exp reuses scores).
+            // C. rowmax over the KV (width) axis of the whole [1, Bkv_t] block
+            //   -> cb_m_cur [Bq_t,1]. No pop (exp reuses scores).
             reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, ReduceInputPolicy::WaitUpfrontNoPop>(
-                cb_scores, cb_scaler_max, cb_m_cur, ReduceInputBlockShape::of(1, 1));
+                cb_scores, cb_scaler_max, cb_m_cur, ReduceInputBlockShape::of(1, Bkv_t));
 
             // D. m_new = max(m, m_cur). m retained (corr needs old m); m_new held for E/G/K.
             binary_sfpu<
@@ -145,9 +169,10 @@ void kernel_main() {
                 InputLifecycle::Streaming>(  // cb_m_cur: wait + pop
                 EltwiseShape::tiles(1));
 
-            // E. P = exp(scores - m_new), per-row max broadcast across width (Col).
+            // E. P = exp(scores - m_new) over the [1, Bkv_t] block, per-row max
+            //   broadcast across width (Col).
             eltwise_chain(
-                EltwiseShape::tiles(1),
+                EltwiseShape::grid(1, Bkv_t),
                 BinaryFpu<
                     cb_scores,
                     cb_m_new,
@@ -158,9 +183,9 @@ void kernel_main() {
                 Exp<>{},
                 PackTile<cb_p>{});
 
-            // F. rowsum over P -> cb_l_cur [Bq_t,1]. No pop (PV reuses P).
+            // F. rowsum over the [1, Bkv_t] P block -> cb_l_cur [Bq_t,1]. No pop (PV reuses P).
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, ReduceInputPolicy::WaitUpfrontNoPop>(
-                cb_p, cb_scaler_sum, cb_l_cur, ReduceInputBlockShape::of(1, 1));
+                cb_p, cb_scaler_sum, cb_l_cur, ReduceInputBlockShape::of(1, Bkv_t));
 
             // G. corr = exp(m_old - m_new). Pops old m; m_new held (K still needs it).
             eltwise_chain(
@@ -180,7 +205,9 @@ void kernel_main() {
                 EltwiseShape::tiles(1));
             add<cb_l, cb_l_cur, cb_l, BroadcastDim::None>(EltwiseShape::tiles(1));
 
-            // I. PV: pv = P . V (reduction over the kv-chunk).
+            // I. PV: pv = P . V (reduction over the Bkv_t-tile kv-chunk). in0 = P
+            //   [1, Bkv_t], in1 = V [Bkv_t, d_t] laid out K-major ([Bkv_t][d_t],
+            //   natural DRAM order); reduction depth in0_block_k = Bkv_t.
             matmul_block<
                 /*transpose*/ false,
                 /*packer_l1_acc*/ false,
@@ -194,7 +221,7 @@ void kernel_main() {
                 pv_buf,
                 pv_buf,
                 MatmulBlockShape::of(
-                    /*in0_sb*/ 1, /*in1_sb*/ d_t, /*sb_h*/ 1, /*sb_w*/ 1, /*in0_block_k*/ 1, /*num_k_blocks*/ 1));
+                    /*in0_sb*/ 1, /*in1_sb*/ d_t, /*sb_h*/ 1, /*sb_w*/ 1, /*in0_block_k*/ Bkv_t, /*num_k_blocks*/ 1));
 
             // J1. o_resc = corr * O (per-row corr broadcast across d_t columns).
             mul<cb_o,

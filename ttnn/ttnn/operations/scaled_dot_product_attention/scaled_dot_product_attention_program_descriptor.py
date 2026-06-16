@@ -85,6 +85,28 @@ def create_program_descriptor(
     kv_valid_last = S_kv % TILE_DIM  # 0 ⇒ tile-aligned
     kv_edge = 1 if (kv_valid_last != 0 and not causal) else 0
 
+    # R5 — long-context precision: KV-chunk blocking. The online-softmax
+    # recurrence rescales the running output (corr*O) once per KV-chunk; at
+    # S>=4096 mask=none that per-chunk 16-bit-DEST rounding accumulates into a
+    # large *relative* RMS (the output is a near-zero average of thousands of V
+    # vectors). Folding Bkv_t key-tiles per chunk cuts the rescale-round count
+    # by Bkv_t — the only lever once the golden pins fp32_dest_acc_en/HiFi.
+    # Gated to long (S_kv>=4096 ⇒ Skv_t>=128), non-causal, tile-aligned shapes
+    # so the causal/edge per-tile paths and the large-D fp32 L1 budget (R4) are
+    # untouched (every long-context workload has D<=128 ⇒ small d_t, so the
+    # Bkv_t-scaled K/V CBs stay well inside L1). Bkv_t==1 recovers Phase-0
+    # behaviour byte-for-byte. Must divide Skv_t evenly (no partial last block).
+    def _choose_bkv():
+        if causal or kv_edge or Skv_t < 128:
+            return 1
+        for b in (8, 4, 2):
+            if Skv_t % b == 0:
+                return b
+        return 1
+
+    Bkv_t = _choose_bkv()
+    Nkv = Skv_t // Bkv_t
+
     # cb_mask_in exists for custom OR causal masking; cb_edge_mask for R3 edge.
     need_mask_cb = has_mask or causal
 
@@ -166,16 +188,18 @@ def create_program_descriptor(
 
     def _footprint(io_factor):
         total = 0
-        total += 3 * (io_factor * d_t) * q_page  # cb_q_in / cb_k_in / cb_v_in
+        total += io_factor * d_t * q_page  # cb_q_in (Q tile-row, not KV-blocked)
+        total += 2 * (io_factor * Bkv_t * d_t) * q_page  # cb_k_in / cb_v_in (R5: Bkv_t-blocked)
         total += (io_factor * d_t) * out_page  # cb_out
         total += 2 * bf16_page  # cb_scaler_max / cb_scaler_sum
-        total += acc_page  # cb_p
+        total += Bkv_t * acc_page  # cb_p (R5: Bkv_t-wide)
         total += 3 * (d_t * acc_page)  # cb_o / cb_pv / cb_o_resc
         total += acc_page  # cb_recip_l
         total += d_t * acc_page  # cb_q
-        total += 7 * acc_page  # cb_scores + 6 scalar running-stat tiles
+        total += Bkv_t * acc_page  # cb_scores (R5: Bkv_t-wide)
+        total += 6 * acc_page  # 6 scalar running-stat tiles
         if need_mask_cb:
-            total += 2 * mask_page  # cb_mask_in
+            total += 2 * Bkv_t * mask_page  # cb_mask_in (R5: Bkv_t-wide for custom)
         if kv_edge:
             total += 2 * bf16_page  # cb_edge_mask
         return total
@@ -188,13 +212,14 @@ def create_program_descriptor(
         # Input-side CBs — follow their own tensor dtype. io_factor (2 or 1)
         # drops the double-buffer for large-D fp32 to stay inside the L1 budget.
         cb(CB_Q_IN, io_factor * d_t, q_page, query.dtype),
-        cb(CB_K_IN, io_factor * d_t, q_page, key.dtype),
-        cb(CB_V_IN, io_factor * d_t, q_page, value.dtype),
+        # R5 — K/V CBs hold a Bkv_t-tile KV-chunk (Bkv_t==1 ⇒ Phase-0 sizing).
+        cb(CB_K_IN, io_factor * Bkv_t * d_t, q_page, key.dtype),
+        cb(CB_V_IN, io_factor * Bkv_t * d_t, q_page, value.dtype),
         # Reduce scalers — always bf16 (pool-type-aware fill in the reader).
         cb(CB_SCALER_MAX, 1),
         cb(CB_SCALER_SUM, 1),
         # Intermediate / accumulator CBs — acc_format (fp32 with fp32 DEST acc).
-        cb(CB_P, 1, data_format=acc_format),
+        cb(CB_P, Bkv_t, data_format=acc_format),  # R5 — Bkv_t-wide P block
         cb(CB_O, d_t, data_format=acc_format),
         cb(CB_PV, d_t, data_format=acc_format),
         cb(CB_O_RESC, d_t, data_format=acc_format),
@@ -202,7 +227,7 @@ def create_program_descriptor(
         # Output-side CB — follows the output tensor dtype.
         cb(CB_OUT, io_factor * d_t, out_page, output.dtype),
         cb(CB_Q, d_t, data_format=acc_format),
-        cb(CB_SCORES, 1, data_format=acc_format),
+        cb(CB_SCORES, Bkv_t, data_format=acc_format),  # R5 — Bkv_t-wide score block
         cb(CB_M_CUR, 1, data_format=acc_format),
         cb(CB_M, 1, data_format=acc_format),
         cb(CB_M_NEW, 1, data_format=acc_format),
@@ -211,7 +236,8 @@ def create_program_descriptor(
         cb(CB_CORR, 1, data_format=acc_format),
     ]
     if has_mask:
-        cbs.append(cb(CB_MASK_IN, 2, data_format=attn_mask.dtype))
+        # R5 — custom mask block is Bkv_t-wide (Bkv_t==1 ⇒ Phase-0 sizing).
+        cbs.append(cb(CB_MASK_IN, 2 * Bkv_t, data_format=attn_mask.dtype))
     elif causal:
         # On-device generated triangular bias — always bf16 (it is a generated
         # bias, not tensor data; added into the fp32/bf16 cb_scores).
@@ -236,6 +262,7 @@ def create_program_descriptor(
         causal_neg_bits,
         kv_edge,
         kv_valid_last,
+        Bkv_t,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
@@ -281,7 +308,7 @@ def create_program_descriptor(
     )
 
     # --- Compute kernel ---
-    compute_ct = [Skv_t, d_t, has_mask, scale_bits, causal, Sq_t, kv_edge]
+    compute_ct = [Skv_t, d_t, has_mask, scale_bits, causal, Sq_t, kv_edge, Bkv_t]
 
     compute_config = ttnn.ComputeConfigDescriptor()
     compute_config.math_fidelity = math_fidelity
