@@ -114,19 +114,6 @@ struct DeviceStorage {
     // post-condition: this DeviceStorage will be equivalent to a default constructed DeviceStorage.
     MeshTensor release_mesh_tensor();
 
-    // Returns the MeshDevice associated with the underlying device memory.
-    // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    //
-    // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
-    // When DeviceStorage is copied (e.g. view/reshape) and the original is deallocated, the copy's
-    // holder becomes DeallocatedTombStone while the MeshBuffer reference is still present.
-    // This path preserves a valid device pointer when constructing new tensors from such storage.
-    //
-    // TODO: Remove this workaround once models properly manage tensor lifetimes and
-    // don't operate on deallocated tensors.
-    distributed::MeshDevice* get_device_bypass_deallocate_check() const;
-
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // DeviceStorage as a view of the undelrying device memory at specific coordinates:
 

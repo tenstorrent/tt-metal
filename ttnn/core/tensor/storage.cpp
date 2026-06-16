@@ -69,9 +69,8 @@ struct DeviceStorage::MeshTensorHolder {
     struct DeallocatedTombStone {
         TensorSpec tensor_spec_;
         TensorTopology tensor_topology_;
-        // Deallocated buffer kept so device() stays valid without dangling MeshDevice.
-        // Remove once post-deallocation mesh_device access is no longer needed.
-        // See: get_device_bypass_deallocate_check
+        // Deallocated buffer kept so get_mesh_buffer_leak_ownership() stays valid after deallocation.
+        // Remove once post-deallocation MeshBuffer access is no longer needed.
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
     };
 
@@ -211,24 +210,11 @@ void DeviceStorage::deallocate() {
 
 bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_allocated(); }
 
-distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {
-    return std::visit(
-        ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) -> distributed::MeshDevice* {
-                return &allocated.mesh_tensor_.mutable_device();
-            },
-            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> distributed::MeshDevice* {
-                return tombstone.mesh_buffer_->device();
-            },
-            [](const auto&) -> distributed::MeshDevice* { TT_THROW("Tensor is not allocated"); }},
-        mesh_tensor_holder_->state_);
-}
-
 bool DeviceStorage::is_uniform_storage() const {
     if (!is_allocated()) {
         return true;
     }
-    return coords_.size() == get_device_bypass_deallocate_check()->num_devices();
+    return coords_.size() == get_mesh_tensor().device().num_devices();
 }
 
 std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
