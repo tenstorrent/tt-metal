@@ -32,11 +32,11 @@ line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 65536}
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 12)])
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, encoder_tp_factor, vae_tp_factor, topology, num_links, is_fsdp, dynamic_load, traced",
+    "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, traced",
     [
-        [(1, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 1, False, True, False],
-        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 4, True, False, True],
-        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 2, False, False, True],
+        [(1, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 1, False, True, False],
+        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 4, True, False, True],
+        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, True],
     ],
     ids=[
         "1x8tp1",
@@ -53,8 +53,8 @@ def test_pipeline(
     num_inference_steps: int,
     sp_axis: int,
     tp_axis: int,
-    encoder_tp_factor: int,
-    vae_tp_factor: int,
+    encoder_tp_axis: int,
+    vae_tp_axis: int,
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
@@ -69,8 +69,10 @@ def test_pipeline(
         checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-dev"),
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        encoder_tp_factor=encoder_tp_factor,
-        vae_tp_factor=vae_tp_factor,
+        encoder_tp_axis=encoder_tp_axis,
+        vae_tp_axis=vae_tp_axis,
+        vae_h_axis=1 - vae_tp_axis,
+        vae_w_axis=None,
         num_links=num_links,
         topology=topology,
         width=width,
