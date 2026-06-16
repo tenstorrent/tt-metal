@@ -124,7 +124,9 @@ void validate_alignment(const TensorLayout& tensor_layout) {
 
 std::optional<std::string> get_shard_align_error(
     const MemoryConfig& memory_config, const Layout& layout, const Tile& tile) {
-    if (memory_config.is_sharded() && layout == Layout::TILE) {
+    if (!memory_config.is_sharded() || layout != Layout::TILE) {
+        return std::nullopt;
+    }
         const auto& tile_shape = tile.get_tile_shape();
         if (memory_config.shard_spec().has_value()) {
             const auto& physical_shard_shape = Shape2D(memory_config.shard_spec().value().shape);
@@ -138,8 +140,6 @@ std::optional<std::string> get_shard_align_error(
                 return fmt::format("Physical shard shape {} must be tile {} sized!", shard_shape, tile_shape);
             }
         }
-    }
-    return std::nullopt;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -155,8 +155,11 @@ TensorLayout::TensorLayout(
     initialize_alignment();
     CMAKE_UNIQUE_NAMESPACE::validate_alignment(*this);
 
-    auto shard_align_error = CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config_, get_layout(), get_tile());
-    TT_FATAL(!shard_align_error.has_value(), "{}", shard_align_error);
+    if (get_layout() == Layout::TILE) {
+        auto shard_align_error =
+            CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config_, get_layout(), get_tile());
+        TT_FATAL(!shard_align_error.has_value(), "{}", shard_align_error);
+    }
 }
 
 TensorLayout TensorLayout::fromPaddedShape(
