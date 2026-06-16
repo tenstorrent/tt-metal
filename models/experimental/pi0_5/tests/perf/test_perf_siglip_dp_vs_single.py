@@ -20,6 +20,20 @@ Run (needs full pi0.5 ckpt + 28-chip galaxy):
     models/experimental/pi0_5/tests/perf/test_perf_siglip_dp_vs_single.py
 """
 import os
+
+# Per-head parallelism for the head TM ops (C++ getenv at op-build time, so set
+# before any device op is constructed). Without these, NlpCreateQkvHeads /
+# NlpConcatHeads decompose work per-sequence-tile only (batch*seq/32 = 24 cores
+# at bs=3), leaving most of the grid idle. With them, create splits by num_kv
+# heads (-> full 120-core grid) and concat splits into 8 head-groups. Matches
+# the production config used by the e2e tests.
+os.environ.setdefault("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "1")
+os.environ.setdefault("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "1")
+# _prefix_setup() uploads the pre-folded (B, H, W/patch, C*patch) layout, which only
+# PatchEmbeddingTTNN._forward_fold accepts. That fast path is gated on PI0_SIGLIP_USE_FOLD;
+# without it forward() falls into the generic unfold path and the reshape volume mismatches.
+os.environ.setdefault("PI0_SIGLIP_USE_FOLD", "1")
+
 import statistics
 import time
 from pathlib import Path
@@ -42,6 +56,23 @@ pytestmark = pytest.mark.skipif(
 def _pcc(a, b):
     a, b = a.flatten().float(), b.flatten().float()
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+def _prefix_setup(imgs_bchw, device, patch=14):
+    """Host-side prefix_setup (matches PI0_SIGLIP_USE_FOLD production path): permute
+    BCHW→BHWC and pre-reshape to (B, H, W/patch, C*patch) on host, upload ROW_MAJOR.
+    Lets PatchEmbeddingTTNN._forward_fold take its fast path (b) — the device skips the
+    permute/reshape/untilize (~0.89 ms) it would otherwise do on a raw TILE input."""
+    x = imgs_bchw.permute(0, 2, 3, 1).contiguous()  # (B,H,W,3)
+    B, H, W, C = x.shape
+    x = x.reshape(B, H, W // patch, C * patch).contiguous()  # (B,H,W/patch,C*patch)
+    return ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def _time_traced(submeshes, fwds, sync_dev, nperf):
@@ -99,9 +130,8 @@ def test_perf_siglip_single_vs_dp():
         cams = [SigLIPCameraSlice(cfg, vw, pw, chips[i]) for i in range(NCAM)]
 
         # ---- SINGLE-CHIP: all cameras on chips[0] at bs=NCAM ----
-        px_single = ttnn.from_torch(
-            px, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=chips[0], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        # prefix_setup on host (matches production fold path → fast _forward_fold).
+        px_single = _prefix_setup(px, chips[0], patch=cfg.patch_size)
         out_single = ttnn.to_torch(cams[0].forward(px_single))  # (NCAM,256,2048)
         single_ms = _time_traced([chips[0]], [lambda: cams[0].forward(px_single)], chips[0], NPERF)
 
@@ -109,16 +139,8 @@ def test_perf_siglip_single_vs_dp():
         from models.experimental.pi0_5.tt.tt_bh_glx.transport import SocketTransport
 
         transport = SocketTransport()
-        px_dp = [
-            ttnn.from_torch(
-                px[i : i + 1],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=chips[i],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            for i in range(NCAM)
-        ]
+        # prefix_setup per camera on its own chip (1 camera each).
+        px_dp = [_prefix_setup(px[i : i + 1], chips[i], patch=cfg.patch_size) for i in range(NCAM)]
         # EAGER warmup BEFORE capture: the first forward builds lazy BS-memcfg / LN
         # program-config caches (host writes) and the first transport.send creates the
         # socket pairs + recv buffers (host writes) — both are forbidden during trace
