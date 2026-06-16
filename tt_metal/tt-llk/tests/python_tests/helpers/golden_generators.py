@@ -1700,6 +1700,75 @@ class DataCopyGolden:
 
 
 @register_golden
+class TypecastGolden:
+    """Golden generator for the SFPU typecast operation.
+
+    Models the production typecast flow (copy_tile -> typecast_tile -> pack):
+    the input tile is loaded into Dest, the SFPU converts each datum in place
+    to the output dtype, and the packer writes it to L1. Typecast is purely
+    elementwise and the device result is read back in row-major order (same
+    unpack->Dest->pack data path as DataCopyGolden), so no tilization is
+    applied here — the conversion is element-for-element on the flat input.
+
+    Scope: the numeric SFPU conversions (float<->int, int<->int, fp32->fp16b).
+    Pure unpacker/packer block-float<->float conversions are already covered by
+    the datacopy tests and are intentionally excluded here.
+
+    Conversion semantics mirror the ckernel_sfpu_typecast.h kernels:
+      * float -> integer: truncation toward zero.
+      * -> UInt8: low-byte wrap (two's complement), matching `& 0xFF`.
+      * -> UInt16/UInt32/Int32: clamp to the destination range.
+      * integer/float -> float: value-preserving cast.
+    """
+
+    def __call__(
+        self,
+        operand,
+        input_format: DataFormat,
+        output_format: DataFormat,
+        input_dimensions: list[int] = [32, 32],
+    ):
+        operand = quantize_input_to_unpack_format(
+            operand, input_format, all_mx_formats=True
+        )
+        if not isinstance(operand, torch.Tensor):
+            operand = torch.tensor(operand)
+
+        operand = operand.flatten()
+
+        if output_format.is_integer():
+            if input_format.is_integer():
+                values = operand.to(torch.int64)
+            else:
+                # Truncation toward zero (SFPU exman/shift + floor(|v|) kernels).
+                values = torch.trunc(operand.float()).to(torch.int64)
+            result = self._to_integer(values, output_format)
+        else:
+            result = self._to_float(operand.float(), output_format)
+
+        return _apply_ftz(result, output_format).flatten()
+
+    @staticmethod
+    def _to_integer(values: torch.Tensor, output_format: DataFormat) -> torch.Tensor:
+        out_torch = format_dict[output_format]
+        if output_format == DataFormat.UInt8:
+            # Hardware keeps the low 8 bits (two's complement wrap).
+            return (values % 256).to(out_torch)
+        if output_format == DataFormat.UInt16:
+            return torch.clamp(values, 0, 65535).to(out_torch)
+        if output_format == DataFormat.UInt32:
+            return torch.clamp(values, 0, 2**32 - 1).to(out_torch)
+        if output_format == DataFormat.Int32:
+            # +1 on the min: hardware uses sign-magnitude representation.
+            return torch.clamp(values, -(2**31 - 1), 2**31 - 1).to(out_torch)
+        return saturate_integer(values, output_format, out_torch)
+
+    @staticmethod
+    def _to_float(values: torch.Tensor, output_format: DataFormat) -> torch.Tensor:
+        return values.to(format_dict[output_format])
+
+
+@register_golden
 class PackGolden:
     """
     Golden generator for pack operations with optional ReLU activation.
