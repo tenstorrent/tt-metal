@@ -29,6 +29,7 @@ for path in (_REFERENCE_DIR, _TT_METAL_ROOT):
 
 from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, VOICES_DIR  # noqa: E402
 from models.experimental.vibevoice.common.model_utils import ensure_model_weights  # noqa: E402
+from models.experimental.vibevoice.common.resource_utils import load_script, unique_speaker_ids  # noqa: E402
 from vibevoice.modular.modeling_vibevoice_inference import (  # noqa: E402
     VibeVoiceForConditionalGenerationInference,
 )
@@ -137,6 +138,12 @@ def parse_args():
         default=["Alice"],
         help="Speaker names in order (e.g. Alice)",
     )
+    parser.add_argument(
+        "--voice_path",
+        type=str,
+        default=None,
+        help="Direct path to reference voice WAV (overrides speaker_names lookup for speaker 1)",
+    )
     parser.add_argument("--output_dir", type=str, default="./outputs", help="Directory for output WAV")
     parser.add_argument(
         "--device",
@@ -150,7 +157,12 @@ def parse_args():
         help="Disable voice-cloning prefill (is_prefill=False)",
     )
     parser.add_argument("--cfg_scale", type=float, default=1.3, help="Classifier-free guidance scale")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed (optional)")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for diffusion noise (default: 0; use -1 for unseeded)",
+    )
     return parser.parse_args()
 
 
@@ -173,10 +185,13 @@ def main():
 
     print(f"Using device: {args.device}")
 
-    if args.seed is not None:
+    if args.seed >= 0:
         torch.manual_seed(args.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(args.seed)
+        print(f"Using random seed: {args.seed}")
+    else:
+        print("Diffusion noise unseeded (--seed -1)")
 
     voice_mapper = VoiceMapper(VOICES_DIR)
 
@@ -185,31 +200,32 @@ def main():
         return
 
     print(f"Reading script from: {args.txt_path}")
-    with open(args.txt_path, encoding="utf-8") as f:
-        txt_content = f.read()
+    try:
+        full_script = load_script(args.txt_path)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
 
-    scripts, speaker_numbers = parse_txt_script(txt_content)
-    if not scripts:
+    speaker_ids = unique_speaker_ids(full_script)
+    if not speaker_ids:
         print("Error: No valid speaker scripts found in the txt file")
-        return
+        return 1
 
     speaker_name_mapping = {str(i): name for i, name in enumerate(args.speaker_names, 1)}
 
     voice_samples = []
-    unique_speaker_numbers = []
-    seen = set()
-    for speaker_num in speaker_numbers:
-        if speaker_num not in seen:
-            unique_speaker_numbers.append(speaker_num)
-            seen.add(speaker_num)
-
-    for speaker_num in unique_speaker_numbers:
-        speaker_name = speaker_name_mapping.get(speaker_num, f"Speaker {speaker_num}")
-        voice_path = voice_mapper.get_voice_path(speaker_name)
+    for speaker_num in speaker_ids:
+        speaker_key = str(speaker_num)
+        speaker_name = speaker_name_mapping.get(speaker_key, f"Speaker {speaker_key}")
+        if args.voice_path and speaker_num == speaker_ids[0]:
+            voice_path = args.voice_path
+            if not os.path.isfile(voice_path):
+                print(f"Error: voice file not found: {voice_path}")
+                return 1
+        else:
+            voice_path = voice_mapper.get_voice_path(speaker_name)
         voice_samples.append(voice_path)
-        print(f"Speaker {speaker_num} ('{speaker_name}') -> Voice: {os.path.basename(voice_path)}")
-
-    full_script = "\n".join(scripts).replace("\u2019", "'")
+        print(f"Speaker {speaker_key} ('{speaker_name}') -> Voice: {os.path.basename(voice_path)}")
 
     print(f"Loading processor & model from {args.model_path}")
     processor = VibeVoiceProcessor.from_pretrained(args.model_path)
