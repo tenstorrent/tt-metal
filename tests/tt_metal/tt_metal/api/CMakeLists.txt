@@ -6,9 +6,7 @@ add_library(TT::Metalium::Test::API ALIAS unit_tests_api_lib)
 include(sources.cmake)
 
 # Use target_sources to gather the necessary sources
-target_sources(unit_tests_api_lib PRIVATE
-    ${UNIT_TESTS_API_SOURCES}
-)
+target_sources(unit_tests_api_lib PRIVATE ${UNIT_TESTS_API_SOURCES})
 
 target_include_directories(
     unit_tests_api_lib
