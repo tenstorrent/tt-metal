@@ -48,8 +48,8 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-from test_sfpu_nonlinear_quasar import (
-    SFPU_NONLINEAR_FORMATS,
+from test_eltwise_unary_sfpu_quasar import SFPU_UNARY_FORMATS as SFPU_NONLINEAR_FORMATS
+from test_eltwise_unary_sfpu_quasar import (
     prepare_inputs_for_operation,
 )
 
@@ -61,7 +61,6 @@ MATMUL_B_DIMENSIONS = [32, 32]
 def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
     combinations = []
     for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
-        # dest_acc=Yes deferred for 16-bit bring-up (exp golden mismatch).
         if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
             continue
         for dest_sync in (DestSync.Half, DestSync.Full):
@@ -87,26 +86,26 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         format_dest_acc_sync_implied_math[0]
     )
 
-    torch.manual_seed(42)
-
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=MATMUL_A_DIMENSIONS,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=MATMUL_B_DIMENSIONS,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
+        spec_A=matmul_spec,
+        spec_B=matmul_spec,
         output_format=formats.output_format,
     )
 
+    exp_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_exp, tile_cnt_exp, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=EXP_INPUT_DIMENSIONS,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=EXP_INPUT_DIMENSIONS,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
+        spec_A=exp_spec,
+        spec_B=exp_spec,
+        output_format=formats.output_format,
     )
     src_exp = prepare_inputs_for_operation(
         src_exp, MathOperation.Exp, formats.input_format, formats.output_format
