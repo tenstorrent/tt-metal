@@ -697,6 +697,13 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr tt::CBIndex kScratchCbIndex = tt::CBIndex::c_0;
 constexpr tt::CBIndex kPacketHeaderCbIndex = tt::CBIndex::c_1;
 
+// Sender read-pipeline trid-ring depth (power of 2): each lane stages this many tensor
+// pages and keeps that many DRAM reads in flight while fabric-writing. Decoupled from
+// the (vestigial) socket chunk plan so the pipeline runs at full depth regardless of
+// pages_per_chunk. Sizes the per-lane scratch CB (kSenderReadRingSlots * tensor page);
+// two lanes consume 2*kSenderReadRingSlots trids, which must fit the 0..15 id space.
+constexpr uint32_t kSenderReadRingSlots = 4;
+
 // CT-arg layout must stay in sync with persistent_d2d_receiver.cpp.
 Program build_receiver_program(
     const Buffer& output_buffer,
@@ -820,10 +827,13 @@ Program build_sender_program(
         const tt::CBIndex scratch_cb = scratch_cbs[lane];
         const tt::CBIndex header_cb = header_cbs[lane];
 
-        // This lane's scratch CB (one socket page, DRAM -> CB staging) + header CB.
+        // This lane's scratch CB: the trid-ring staging buffer, sized to the ring
+        // (kSenderReadRingSlots tensor pages) — NOT the socket page. The kernel indexes
+        // it manually by slot, so the whole CB is one allocation page.
+        const uint32_t scratch_cb_bytes = kSenderReadRingSlots * tensor_page_size;
         auto scratch_cfg =
-            CircularBufferConfig(plan.socket_page_size, {{scratch_cb, datatype_to_dataformat_converter(dtype)}})
-                .set_page_size(scratch_cb, plan.socket_page_size);
+            CircularBufferConfig(scratch_cb_bytes, {{scratch_cb, datatype_to_dataformat_converter(dtype)}})
+                .set_page_size(scratch_cb, scratch_cb_bytes);
         CreateCircularBuffer(program, service_core, scratch_cfg);
         auto ph_cfg = CircularBufferConfig(2 * header_size, {{header_cb, tt::DataFormat::UInt32}})
                           .set_page_size(header_cb, header_size);
@@ -862,6 +872,7 @@ Program build_sender_program(
             lane_end,                      // [26]
             go_count_addr,                 // [27] shared L1: master -> sub
             done_count_addr,               // [28] shared L1: sub -> master
+            kSenderReadRingSlots,          // [29] trid-ring depth = scratch CB slot capacity
         };
         ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 

@@ -88,7 +88,11 @@ constexpr uint32_t page_start = get_compile_time_arg_val(25);       // this lane
 constexpr uint32_t page_end = get_compile_time_arg_val(26);         // this lane's last tensor page + 1
 constexpr uint32_t go_count_addr = get_compile_time_arg_val(27);    // shared L1: master -> sub
 constexpr uint32_t done_count_addr = get_compile_time_arg_val(28);  // shared L1: sub -> master
-constexpr auto input_tensor_accessor_args = TensorAccessorArgs<29>();
+// [29] num_read_slots: trid-ring depth (power of 2), = the scratch CB's slot capacity.
+// Decoupled from pages_per_chunk so the read pipeline runs at full depth regardless of
+// the (vestigial) socket chunk plan; the host sizes the scratch CB to match.
+constexpr uint32_t num_read_slots = get_compile_time_arg_val(29);
+constexpr auto input_tensor_accessor_args = TensorAccessorArgs<30>();
 
 // Emit `size` bytes from a contiguous L1 source to a single remote NoC address over
 // fabric, split into <= fabric_max_payload_size packets. Used for both a tensor page
@@ -136,11 +140,11 @@ struct TridRing {
 };
 
 // Read pipelining: stream pages through a trid ring over the scratch CB so DRAM reads
-// overlap the fabric writes. Ring depth = scratch capacity (pages_per_chunk pages),
-// capped at kMaxReadsInFlight and rounded DOWN to a power of 2 (TridRing's bitmask).
-constexpr uint32_t kMaxReadsInFlight = 4;
-constexpr uint32_t ring_cap = (pages_per_chunk < kMaxReadsInFlight) ? pages_per_chunk : kMaxReadsInFlight;
-constexpr uint32_t kRingDepth = floor_pow2(ring_cap);
+// overlap the fabric writes. Ring depth = the scratch CB's slot capacity
+// (num_read_slots, host-sized), rounded DOWN to a power of 2 (TridRing's bitmask) —
+// independent of pages_per_chunk, so a large tensor page (small pages_per_chunk) still
+// pipelines at full depth.
+constexpr uint32_t kRingDepth = floor_pow2(num_read_slots);
 // Each lane (RISC) gets a DISJOINT trid range so the two RISCs on this core never
 // share a NoC transaction id — the trid-barrier counters are not assumed independent
 // across the two RISCs. Lane 0 -> [1, 1+depth), lane 1 -> [1+depth, 1+2*depth).
