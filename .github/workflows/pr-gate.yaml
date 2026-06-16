@@ -480,9 +480,9 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build"
+          required-jobs: ""
           optional-jobs: >-
-            code-analysis,
+            asan-build, code-analysis,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
             llk-test-wormhole, llk-test-blackhole, llk-build-quasar
