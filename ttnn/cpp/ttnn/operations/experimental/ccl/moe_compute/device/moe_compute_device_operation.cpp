@@ -199,7 +199,12 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const CoreRangeSet validate_mux_cores =
         args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{};
     ttnn::operations::ccl::common::select_moe_compute_cores(
-        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, validate_mux_cores);
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        validate_mux_cores,
+        args.bh_ring_size);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(

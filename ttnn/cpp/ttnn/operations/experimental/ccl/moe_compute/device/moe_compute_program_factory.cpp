@@ -362,14 +362,33 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
 
-    // noc_async_write_multicast (non-loopback) excludes the sender from destinations.
-    // When a tilize core that multicasts is inside the matmul bounding box rectangle,
-    // the hardware delivers to (matmul_bounding_box_num_cores - 1) destinations, so
-    // num_dests must reflect that.  With DispatchCoreAxis::ROW the matmul bounding box
-    // can span the entire worker grid, which includes the tilize cores.
-    const bool tilize_sender_in_matmul_bbox = matmul_bounding_box.intersects(tilize_bounding_box);
+    // noc_async_write_multicast / noc_semaphore_set_multicast (non-loopback) exclude the sender.
+    // Matmul-targeting mcast is issued by tilize_cores[0] (drain) and, on the first chunk when
+    // num_tilize_cores > 1, also by tilize_cores[tilize_num_cores / 2] (secondary mcaster).
+    // All tilize kernels share one compile-time num_dests, so every sender must be consistently
+    // inside or outside the matmul bounding-box rectangle (not merely bbox intersection).
+    bool any_sender_inside = false;
+    bool any_sender_outside = false;
+    const auto check_matmul_mcast_sender = [&](const CoreCoord& sender) {
+        if (matmul_bounding_box.contains(sender)) {
+            any_sender_inside = true;
+        } else {
+            any_sender_outside = true;
+        }
+    };
+    check_matmul_mcast_sender(tilize_cores.at(0));
+    if (tilize_num_cores > 1) {
+        check_matmul_mcast_sender(tilize_cores.at(tilize_num_cores / 2));
+    }
+    TT_FATAL(
+        !(any_sender_inside && any_sender_outside),
+        "moe_compute: tilize matmul mcast senders {} and {} straddle matmul bbox {} (inside vs outside); "
+        "core placement must keep all senders on the same side of the rectangle",
+        tilize_cores.at(0).str(),
+        tilize_num_cores > 1 ? tilize_cores.at(tilize_num_cores / 2).str() : tilize_cores.at(0).str(),
+        matmul_bounding_box.str());
     const uint32_t matmul_mcast_num_dests =
-        tilize_sender_in_matmul_bbox ? matmul_bounding_box_num_cores - 1 : matmul_bounding_box_num_cores;
+        any_sender_inside ? matmul_bounding_box_num_cores - 1 : matmul_bounding_box_num_cores;
 
     // All worker cores bounding box
     const CoreRange all_worker_cores_bounding_box = all_worker_cores_range_set.bounding_box();
