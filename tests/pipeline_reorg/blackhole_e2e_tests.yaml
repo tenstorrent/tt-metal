@@ -238,7 +238,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 55
+      timeout: 40
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -268,7 +268,7 @@
     exit $exit_code
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
