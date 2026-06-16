@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import (
@@ -21,8 +23,11 @@ from models.experimental.tt_symbiote.modules.linear import (
     _ccl_num_links,
     _decode_linear_output_memory_config,
     _dp_matmul_program_config,
+    _dram_sharded_mem_config_2d,
+    _l1_width_sharded_mem_config,
     _linear_mesh_num_devices,
     _tp_mesh_mapper,
+    _tp_num_shards,
     _tp_requires_ccl,
 )
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
@@ -31,6 +36,43 @@ try:
     from transformers.cache_utils import Cache
 except ImportError:
     Cache = object
+
+
+# Column-parallel o_proj DRAM-sharded decode grid for the TP/CCL path. 6 compute
+# cores matches the single-device o_proj (k_tiles=48 / 6 = 8 = in0_block_w).
+_O_PROJ_COL_DRAM_SHARDED_GRID = (6, 1)
+
+
+def _decode_o_proj_col_dram_sharded_program_config(k_per_dev: int, n_per_dev: int, num_cores: int):
+    """DRAM-sharded decode config for the per-device COLUMN-PARALLEL o_proj.
+
+    Unlike the single-device o_proj DRAM-sharded path in ``linear.py`` (which
+    pattern-matches the full N=1536 shape on 6c x per_core_N=8), this builds the
+    config for the per-device N-shard (``hidden/TP``) the column-sharded o_proj
+    weight holds on each chip. The col-sharded o_proj matmul carries NO collective
+    on its output (each device owns its own ``hidden/TP`` columns; the all_gather
+    in ``_match_residual_width`` is a separate downstream op), so it is a standalone
+    DRAM-sharded problem per chip even on a CCL/TP mesh.
+    """
+    tile = ttnn.TILE_SIZE
+    if k_per_dev % tile != 0:
+        return None
+    k_tiles = k_per_dev // tile
+    if k_tiles % num_cores != 0:
+        return None
+    k_block = k_tiles // num_cores
+    in0_block_w = 1
+    for candidate in range(min(k_block, 8), 0, -1):
+        if k_block % candidate == 0:
+            in0_block_w = candidate
+            break
+    per_core_n = math.ceil(n_per_dev / (tile * num_cores))
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=in0_block_w,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fused_activation=None,
+    )
 
 
 class _TTNNDotsOCRQKVPrefillLinear(TTNNLinearLLamaIColShardedWAllReduced):
@@ -109,6 +151,48 @@ class _TTNNDotsOCROProjPrefillLinear(TTNNLinearLLamaIReplicatedWColSharded):
         self._prefill_pc = None
 
         shape_matches = int(self.in_features) == self._PREFILL_DIM and int(self.out_features) == self._PREFILL_DIM
+
+        # Decode (TP/CCL) column-parallel DRAM-sharded o_proj. The col-sharded
+        # o_proj matmul has NO collective on its output (each chip owns its
+        # hidden/TP column slice; the all_gather in _match_residual_width is a
+        # separate op), so it is a standalone DRAM-sharded problem per chip even on
+        # a CCL mesh. The parent stores tt_weight DRAM_INTERLEAVED for the generic
+        # mcast CCL path (prefill + fallback); here we add a second
+        # DRAM_WIDTH_SHARDED copy + L1 width-sharded input so decode engages the
+        # MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig kernel instead of
+        # the ~13us 12-core generic mcast. Bias-less o_proj only (Qwen2 o_proj has
+        # no bias); falls back to the generic mcast otherwise. Memory: +1 BFP4
+        # weight / layer (~0.6 MB; q_size=1536 / out=1536).
+        self._o_proj_col_dram_weight = None
+        self._o_proj_col_dram_pc = None
+        self._o_proj_col_dram_input_cfg = None
+        if (
+            raw_weight_torch is not None
+            and shape_matches
+            and _tp_requires_ccl(self.device)
+            and getattr(self, "tt_bias", None) is None
+        ):
+            num_tp = max(1, _tp_num_shards(self.device))
+            col_grid = _O_PROJ_COL_DRAM_SHARDED_GRID
+            col_num_cores = col_grid[0] * col_grid[1]
+            weight_t = raw_weight_torch.T.contiguous()  # [K=q_size, N=hidden]
+            k = int(weight_t.shape[-2])
+            n_per_dev = math.ceil(int(weight_t.shape[-1]) / num_tp)
+            program_config = _decode_o_proj_col_dram_sharded_program_config(
+                k_per_dev=k, n_per_dev=n_per_dev, num_cores=col_num_cores
+            )
+            if program_config is not None:
+                self._o_proj_col_dram_weight = ttnn.as_tensor(
+                    weight_t,
+                    device=self.device,
+                    dtype=getattr(self, "_weight_dtype", ttnn.bfloat4_b),
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
+                    memory_config=_dram_sharded_mem_config_2d(self.device, k=k, n=n_per_dev),
+                )
+                self._o_proj_col_dram_pc = program_config
+                self._o_proj_col_dram_input_cfg = _l1_width_sharded_mem_config(k=k, grid=col_grid)
+
         if raw_weight_torch is None or _tp_requires_ccl(self.device) or not shape_matches:
             return
 
@@ -149,6 +233,38 @@ class _TTNNDotsOCROProjPrefillLinear(TTNNLinearLLamaIReplicatedWColSharded):
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        # Decode (TP/CCL) column-parallel DRAM-sharded fast path. Engages when the
+        # per-device DRAM-sharded weight was built (CCL mesh + o_proj shape + no
+        # bias) and this is a decode-shape (M<=TILE) call. We reshard the BF16
+        # input to L1 width-sharded (BF16 x BFP4 -> BFP8, matching the o_proj
+        # recipe; the activation is NOT downcast to keep PCC on the residual), run
+        # the DRAM-sharded matmul, then sharded_to_interleaved the output back to
+        # L1 so the downstream all_gather (_match_residual_width) is unchanged.
+        # (Keeping the output width-sharded for a sharded all_gather is a further
+        # win, pending sharded-CCL validation on the 1x4 Linear fabric.)
+        if getattr(self, "_o_proj_col_dram_pc", None) is not None:
+            x = input_tensor
+            if x.layout != ttnn.TILE_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            in_shape = list(x.shape)
+            shape_4d = list(in_shape)
+            while len(shape_4d) < 4:
+                shape_4d.insert(1, 1)
+            if int(shape_4d[-2]) <= ttnn.TILE_SIZE and int(shape_4d[-1]) == self._PREFILL_DIM:
+                x = ttnn.reshape(x, shape_4d)
+                x = ttnn.to_memory_config(x, self._o_proj_col_dram_input_cfg)
+                out = ttnn.linear(
+                    x,
+                    self._o_proj_col_dram_weight,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=self._o_proj_col_dram_pc,
+                )
+                ttnn.deallocate(x)
+                out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+                return ttnn.reshape(out, in_shape[:-1] + [-1])
+
         if getattr(self, "_prefill_weight", None) is not None and not _tp_requires_ccl(self.device):
             if input_tensor.layout != ttnn.TILE_LAYOUT:
                 input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)

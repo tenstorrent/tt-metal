@@ -789,13 +789,20 @@ class TTNNDotsOCRMLPColParallelFusedGateUp(TTNNModule):
             gate, up = ttnn.chunk(gate_up, 2, dim=-1)
         ttnn.deallocate(gate_up)
 
+        # Decode keeps the silu*mul result (down_proj's in0) L1-resident: it is a
+        # tiny [32, intermediate/TP] tensor (~70 KB BFP8), and feeding the down
+        # 1D-mcast matmul from L1 avoids the DRAM write + DRAM read the profiler
+        # flagged ("place input 0 in L1"). Prefill stays DRAM (large activation).
+        # Mirrors the row-parallel TTNNDotsOCRMLP decode path.
+        is_decode = int(hidden_states.shape[1]) == 1
+        mul_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
         gate_up_mul = ttnn.mul(
             gate,
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             fast_and_approximate_mode=True,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mul_mc,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
