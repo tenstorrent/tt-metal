@@ -219,10 +219,12 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
 }
 
 const Tile& RowMajorPageConfig::get_tile() const {
+    bool is_trivial = (tile_ == Tile{});
     log_warning(
         LogMetal,
-        "Attempting to extract tile infomation out of a ROW MAJOR layout, this will be rejected in the future. See "
-        "#18536");
+        "Attempting to extract tile information out of a ROW MAJOR layout, this will be rejected in the future. See "
+        "#18536. (trivial tile: {})",
+        is_trivial);
     return tile_;
 }
 
