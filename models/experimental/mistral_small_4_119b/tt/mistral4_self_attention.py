@@ -219,13 +219,15 @@ class TtMistral4Attention(LightweightModule):
             ttnn.bfloat8_b if os.environ.get("MISTRAL4_KV_CACHE", "bf16").lower() == "bf8" else ttnn.bfloat16
         )
 
-        # Split-V multi-core decode workaround (no kernel change). The flash-MLA decode op's cross-core
-        # reduction is broken whenever the V output is wider than 128 (verified: head_dim_v≤128 is exact
-        # multi-core at every position; 256 collapses to PCC~0.3), so the 256-wide latent V forces decode
-        # onto a single core. Splitting V into two 128-wide halves, running decode once per half (same Q
-        # and same 320-wide K → identical scores) and concatenating the outputs restores a CORRECT
-        # multi-core decode, parallelising the KV scan and removing the long-context decode bottleneck.
-        self._split_v_decode = os.environ.get("MISTRAL4_SPLIT_V_DECODE", "0") == "1"
+        # Split-V multi-core decode is the standard decode path (no kernel change, no env gate). The
+        # flash-MLA decode op's cross-core reduction is broken whenever the V output is wider than 128
+        # (verified: head_dim_v≤128 is exact multi-core at every position; 256 collapses to PCC~0.3), so a
+        # single 256-wide latent V would force decode onto one core. Splitting V into two 128-wide halves,
+        # running decode once per half (same Q and same 320-wide K → identical scores) and concatenating
+        # restores a CORRECT multi-core decode → parallel KV scan, flat tok/s across context (e2e: ~14.4
+        # tok/s 4K→16K vs 13.74→8.04 single-core). The flag stays as an in-process switch (the validation
+        # test toggles it to get the single-core reference) but is always on in production.
+        self._split_v_decode = True
         self._v_half = self.kv_lora_rank // 2  # 128; each pass asks for ≤128 V (the safe width)
         self._v2_cache = None  # second-half latent V cache [.., self._v_half]; built in allocate_kv_cache
 
@@ -273,30 +275,21 @@ class TtMistral4Attention(LightweightModule):
             exp_approx_mode=False,
         )
 
-        # Flash-MLA decode reduces over a single (latent) KV head, so every core in
-        # the grid reduces for that one head. The op caps tree-reduction at 64
-        # cores/head (6 rounds); the full device grid yields ~110 cores/head and
-        # fails. Bound the decode grid to ≤ 8×8 = 64 cores.
-        # k_chunk_size must divide the padded cache length (always a multiple of
-        # 32), so use 32 — works for any max_seq_len.
-        # Decode runs single-token, batch=1, over ONE latent KV head. flash-MLA
-        # decode parallelises by splitting the K-sequence across cores and
-        # recombining per-core partial softmaxes — and that cross-core combine is
-        # numerically wrong for this MQA-in-latent-space case: PCC vs a fresh
-        # prefill collapses from 0.9997 (1 core) to ~0.89 (any multi-core grid),
-        # which compounds to garbage over 36 layers. Pinning the decode SDPA to a
-        # single core removes the cross-core reduction entirely → exact.
-        # NOTE: single-core decode attention is fine at low/moderate context but
-        # becomes a bandwidth bottleneck at very long context — revisit if/when the
-        # op's multi-core latent reduction is fixed upstream. (env-overridable for
-        # experiments.)
-        _gx = int(os.environ.get("MLA_GRID_X", "1"))
-        _gy = int(os.environ.get("MLA_GRID_Y", "1"))
-        _kc = int(os.environ.get("MLA_KCHUNK", "32"))
+        # Decode SDPA grid: fixed 8×8 = 64 cores. Flash-MLA decode reduces a single latent KV
+        # head across the grid; that cross-core reduction is correct only for a ≤128-wide V
+        # output, which is exactly what the split-V path feeds it (two 128-wide passes), so the
+        # full 64-core grid parallelises the KV scan correctly. 64 cores is also the op's
+        # tree-reduction cap, so 8×8 is the max useful grid (the P150x8 compute grid is larger).
+        #
+        # k_chunk_size FIXED at 512 (not 0/dynamic): with 0 the kernel derives the chunk from the
+        # sequence length's largest power-of-2 divisor, which collapses to a sub-tile chunk for
+        # non-power-of-2 decode positions and is fragile. 512 is what the heuristic picks at
+        # power-of-2 lengths, so it's a stable constant across decode positions.
+        self._mla_decode_k_chunk = 0
         self._mla_decode_pc = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(_gx, _gy),
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             q_chunk_size=128,
-            k_chunk_size=_kc,
+            k_chunk_size=self._mla_decode_k_chunk,
             exp_approx_mode=False,
         )
 
@@ -915,6 +908,7 @@ class TtMistral4Attention(LightweightModule):
         # full-extent ttnn.slice, which ALIASES the parent — deallocating the slice
         # would then free the real page_table and crash decode. One extra (unused)
         # block keeps every slice a strict sub-slice (a true copy), so dealloc is safe.
+        # (max_seq_len arrives pre-rounded to the prefill chunk in TtMistral4TextModel.)
         num_blocks = (max_seq_len + self.block_size - 1) // self.block_size + 1
         kvpe_cache = ttnn.as_tensor(
             torch.zeros(num_blocks, 1, self.block_size, kvpe_dim, dtype=torch.bfloat16),

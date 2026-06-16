@@ -159,8 +159,16 @@ class TtMistral4TextModel:
         )
 
         NT_per_device = N_PER_DEVICE // TILE  # 512
+        # in0_block_w=2 (not 8): the DRAM-sharded weight-prefetch CB scales with
+        # in0_block_w, and at 8 the static CB region needs ~1.23 MB contiguous L1.
+        # On the sparse moe_compute path L1 is heavily fragmented (small persistent
+        # buffers cap the largest contiguous free block at ~0.84 MB even though L1 is
+        # 97% free), so the 8-wide CBs clash with those buffers in the full-depth
+        # decode/prefill logits paths. in0_block_w=2 shrinks the weight CB ~4× so the
+        # region fits the available contiguous block; correctness is unchanged (just
+        # more K-blocks), and smaller CBs only add headroom for the production decode.
         self.lm_head_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=8,
+            in0_block_w=2,
             per_core_M=1,
             per_core_N=NT_per_device // self.num_banks,  # 512/8 = 64
             fused_activation=None,
@@ -387,7 +395,15 @@ class TtMistral4TextModel:
         the full ``[seq_len, vocab]`` tensor is reassembled. DS would assert here (M == 1 tile).
         """
         seq_len = x.shape[2]
-        chunk = self._prefill_chunk
+        # Cap the logits chunk at 64 (per_core_M=2): the 1D-mcast lm_head's output +
+        # partials CBs scale with per_core_M (= chunk//32), and at the default 512
+        # (per_core_M=16) the static CB region needs ~1.2 MB contiguous L1 — which the
+        # sparse moe_compute path's L1 fragmentation (largest contiguous free ~0.84 MB)
+        # can't satisfy, clashing in the full-logits prefill path. A smaller chunk shrinks
+        # the CB to fit; rows are independent so the logits are identical (just more
+        # iterations). This is the test/PCC path only — production prefill uses
+        # prefill_next_token (single-position lm_head, m_tiles=1).
+        chunk = min(self._prefill_chunk, 64)
         pc = self._lm_head_prefill_pc(chunk // 32)
         # lm_head_weight is column-sharded across devices (dim=1 of [hidden, vocab]); each
         # device produces partial logits [1, 1, chunk, vocab/n_devices], concatenated on host.
@@ -593,8 +609,12 @@ class TtMistral4TextModel:
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
             x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
 
-        x_last = ttnn.slice(x, [0, 0, seq_len - 1, 0], [1, 1, seq_len, HIDDEN_SIZE])
-        ttnn.deallocate(x)
+        if seq_len == 1:
+            # Full-extent slice of a 1-row tensor aliases x; don't deallocate it (use directly).
+            x_last = x
+        else:
+            x_last = ttnn.slice(x, [0, 0, seq_len - 1, 0], [1, 1, seq_len, HIDDEN_SIZE])
+            ttnn.deallocate(x)
 
         x_last = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config)
         # Last-token-only path: M == 1 tile after the slice, so the DS weight + DS
@@ -689,8 +709,14 @@ class TtMistral4TextModel:
 
         # Extract the last position's hidden state: [1, 1, 1, HIDDEN_SIZE].
         last_len = x.shape[-2]
-        x_last = ttnn.slice(x, [0, 0, last_len - 1, 0], [1, 1, last_len, HIDDEN_SIZE])
-        ttnn.deallocate(x)
+        if last_len == 1:
+            # Slicing [0:1] of a 1-row tensor is a full-extent slice that ALIASES x, so
+            # deallocating x would free x_last's buffer. Use x directly. Hit when the final
+            # prefill chunk is a single token (prompt_len ≡ 1 mod prefill_chunk).
+            x_last = x
+        else:
+            x_last = ttnn.slice(x, [0, 0, last_len - 1, 0], [1, 1, last_len, HIDDEN_SIZE])
+            ttnn.deallocate(x)
         token_id = self._next_token_on_device(x_last)
         ttnn.deallocate(x_last)
         return token_id
@@ -883,7 +909,7 @@ class TtMistral4TextModel:
                 cos_c = ttnn.pad(cos_c, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
                 sin_c = ttnn.pad(sin_c, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
             for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-                xc = layer.forward_with_cache(xc, cos_c, sin_c, kv_cache, chunk_start_idx=s)
+                xc = layer.forward_with_cache(xc, cos_c, sin_c, kv_cache, chunk_start_idx=s, valid_tokens=real)
             ttnn.deallocate(cos_c)
             ttnn.deallocate(sin_c)
             if real < chunk:
@@ -933,8 +959,15 @@ class TtMistral4TextModel:
         """
         x = self._run_prefill_chunked(inputs_embeds, last_only=True)
         last_len = x.shape[-2]
-        x_last = ttnn.slice(x, [0, 0, last_len - 1, 0], [1, 1, last_len, HIDDEN_SIZE])
-        ttnn.deallocate(x)
+        if last_len == 1:
+            # x is already the single last token. Slicing [0:1] of a 1-row tensor is a
+            # full-extent slice that ALIASES x, so deallocating x would free x_last's buffer
+            # (crash in the argmax path). Use x directly. Hit when the final prefill chunk is
+            # a single token (prompt_len ≡ 1 mod prefill_chunk).
+            x_last = x
+        else:
+            x_last = ttnn.slice(x, [0, 0, last_len - 1, 0], [1, 1, last_len, HIDDEN_SIZE])
+            ttnn.deallocate(x)
         token_id = self._next_token_on_device(x_last)
         ttnn.deallocate(x_last)
         return token_id
