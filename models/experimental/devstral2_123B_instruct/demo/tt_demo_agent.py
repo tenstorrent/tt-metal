@@ -33,13 +33,10 @@ Use ``--verbose`` to print per-turn KV/prefill/decode-trace progress (off by def
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
-import subprocess
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -90,41 +87,36 @@ DEFAULT_SYSTEM_PROMPT = (
     "Help with debugging, implementation, and code review in a local repository."
 )
 DEFAULT_AGENT_RULES = """
-Tools: terminal, bash, read_file, write_file, search_replace, grep, web_search, web_fetch,
-todo, ask_user_question, load_skill, inspect_codebase, delegate_task.
+Tools: read_file, write_file, search_replace, grep, todo, ask_user_question, load_skill,
+inspect_codebase.
 
 When you need a tool, output ONLY the tool call — no preamble, no markdown code fences, no plain-text
 explanation on that turn. Prefer a single-line Devstral native call, e.g.
-  terminal{"command":"python fibonacci.py 7"}
+  read_file{"path":"src/main.py","offset":1,"limit":80}
 or XML:
   <tool_call>
-  {"name":"terminal","arguments":{"command":"python fibonacci.py 7"}}
+  {"name":"read_file","arguments":{"path":"src/main.py","offset":1,"limit":80}}
   </tool_call>
 
 Rules:
 - Exactly one tool call per tool turn.
-- Always close all JSON braces (``terminal{"command":"..."}`` needs a final ``}``).
-- Keep ``terminal``/``bash`` commands short (one line). Use ``path``, not ``file_path``, for files.
-- To create then run code: ``write_file`` first, then ``terminal`` on a later turn.
+- Always close all JSON braces.
+- Use ``path``, not ``file_path``, for file tools.
+- Shell, web search, and web fetch are not available; use read_file/write_file/search_replace/grep/inspect_codebase.
 - After ``<tool_result>...</tool_result>``: another tool call (same format) or a plain-text answer.
 (Closing ``</tool_call>`` is optional.)
 """
 
 _KNOWN_TOOL_NAMES = frozenset(
     {
-        "terminal",
-        "bash",
         "read_file",
         "write_file",
         "search_replace",
         "grep",
-        "web_search",
-        "web_fetch",
         "todo",
         "ask_user_question",
         "load_skill",
         "inspect_codebase",
-        "delegate_task",
     }
 )
 
@@ -139,7 +131,6 @@ class ChatConfig:
     device: str
     system_prompt: str
     workspace_root: str
-    command_timeout_sec: int
     max_tool_calls_per_turn: int
 
 
@@ -152,7 +143,7 @@ def _extract_balanced_json_object(text: str, start: int) -> Optional[Tuple[str, 
     """Return (json substring, index after closing brace) when ``text[start]`` is ``{``.
 
     Stops at ``</tool_call>`` if present. When the model truncates before the outer
-    ``}`` (common on long ``terminal`` commands), append missing closing braces so
+    ``}`` when the model truncates mid-object), append missing closing braces so
     ``json.loads`` can still succeed.
     """
     if start >= len(text) or text[start] != "{":
@@ -302,42 +293,6 @@ def _resolve_workspace_path(workspace_root: str, raw_path: str) -> Path:
     return candidate
 
 
-def run_shell(command: str, workspace_root: str, timeout_sec: int) -> Dict[str, Any]:
-    try:
-        completed = subprocess.run(
-            ["bash", "-lc", command],
-            cwd=workspace_root,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-            check=False,
-        )
-        output = (
-            (completed.stdout or "")
-            + ("\n" if completed.stdout and completed.stderr else "")
-            + (completed.stderr or "")
-        ).strip()
-        return {
-            "ok": completed.returncode == 0,
-            "exit_code": completed.returncode,
-            "output": _limit_text(output),
-        }
-    except subprocess.TimeoutExpired as exc:
-        # TimeoutExpired attaches raw bytes even when text=True was passed to run().
-        def _s(o: object) -> str:
-            return o.decode("utf-8", errors="replace") if isinstance(o, bytes) else (o or "")
-
-        partial = (_s(exc.stdout) + ("\n" if exc.stdout and exc.stderr else "") + _s(exc.stderr)).strip()
-        return {
-            "ok": False,
-            "exit_code": None,
-            "output": _limit_text(partial),
-            "error": f"Command timed out after {timeout_sec} seconds.",
-        }
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "exit_code": None, "output": "", "error": str(exc)}
-
-
 def _tool_path_arg(args: Dict[str, Any]) -> str:
     return str(args.get("path") or args.get("file_path") or "")
 
@@ -392,53 +347,42 @@ def tool_search_replace(args: Dict[str, Any], config: ChatConfig) -> Dict[str, A
 def tool_grep(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
     pattern = str(args.get("pattern", ""))
     rel_path = str(args.get("path", "."))
-    glob = str(args.get("glob", "*"))
+    glob_pattern = str(args.get("glob", "*"))
     case_insensitive = bool(args.get("case_insensitive", False))
     max_results = int(args.get("max_results", 200))
     if not pattern:
         return {"ok": False, "error": "pattern is required"}
-    target = _resolve_workspace_path(config.workspace_root, rel_path)
-    cmd = ["rg", "-n", "--glob", glob, "--max-count", str(max_results), pattern, str(target)]
-    if case_insensitive:
-        cmd.insert(1, "-i")
-    return run_shell(
-        " ".join(subprocess.list2cmdline([part]) for part in cmd), config.workspace_root, config.command_timeout_sec
-    )
-
-
-def tool_web_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
-    url = str(args.get("url", ""))
-    max_chars = int(args.get("max_chars", 12000))
-    if not url:
-        return {"ok": False, "error": "url is required"}
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "devstral-demo-agent/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-        return {"ok": True, "url": url, "output": _limit_text(body, max_chars=max_chars)}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def tool_web_search(args: Dict[str, Any]) -> Dict[str, Any]:
-    query = str(args.get("query", "")).strip()
-    max_results = int(args.get("max_results", 5))
-    if not query:
-        return {"ok": False, "error": "query is required"}
-    encoded = urllib.parse.quote_plus(query)
-    url = f"https://duckduckgo.com/html/?q={encoded}"
+        flags = re.IGNORECASE if case_insensitive else 0
+        regex = re.compile(pattern, flags)
+    except re.error as exc:
+        return {"ok": False, "error": f"invalid pattern: {exc}"}
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "devstral-demo-agent/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-        matches = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html)
-        results: List[Dict[str, str]] = []
-        for href, title_html in matches[:max_results]:
-            title = re.sub(r"<.*?>", "", title_html)
-            results.append({"title": title, "url": href})
-        return {"ok": True, "query": query, "results": results}
-    except urllib.error.URLError as exc:
-        return {"ok": False, "error": f"Search failed: {exc}"}
+        root = Path(config.workspace_root).resolve()
+        target = _resolve_workspace_path(config.workspace_root, rel_path)
+        paths = [target] if target.is_file() else sorted(p for p in target.rglob("*") if p.is_file())
+        hits: List[str] = []
+        for path in paths:
+            if ".git" in path.parts:
+                continue
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                continue
+            if not fnmatch.fnmatch(str(rel), glob_pattern) and not fnmatch.fnmatch(path.name, glob_pattern):
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for lineno, line in enumerate(lines, 1):
+                if regex.search(line):
+                    hits.append(f"{path}:{lineno}:{line}")
+                    if len(hits) >= max_results:
+                        break
+            if len(hits) >= max_results:
+                break
+        return {"ok": True, "output": _limit_text("\n".join(hits))}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
 
@@ -525,10 +469,6 @@ def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: Agen
     if not isinstance(args, dict):
         return {"ok": False, "error": "arguments must be an object"}
 
-    if name in ("terminal", "bash"):
-        if "command" not in args:
-            return {"ok": False, "error": "command is required"}
-        return run_shell(str(args["command"]), config.workspace_root, config.command_timeout_sec)
     if name == "read_file":
         return tool_read_file(args, config)
     if name == "write_file":
@@ -537,10 +477,6 @@ def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: Agen
         return tool_search_replace(args, config)
     if name == "grep":
         return tool_grep(args, config)
-    if name == "web_search":
-        return tool_web_search(args)
-    if name == "web_fetch":
-        return tool_web_fetch(args)
     if name == "todo":
         return tool_todo(args, state)
     if name == "ask_user_question":
@@ -549,13 +485,6 @@ def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: Agen
         return tool_load_skill(args, config)
     if name == "inspect_codebase":
         return tool_inspect_codebase(args, config)
-    if name == "delegate_task":
-        if "command" not in args:
-            return {"ok": False, "error": "command is required"}
-        result = run_shell(str(args["command"]), config.workspace_root, config.command_timeout_sec)
-        result["description"] = str(args.get("description", ""))
-        result["delegated"] = True
-        return result
     return {"ok": False, "error": f"Unknown tool: {name}"}
 
 
@@ -1336,7 +1265,6 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
         device="cpu",
         system_prompt=config.system_prompt,
         workspace_root=config.workspace_root,
-        command_timeout_sec=config.command_timeout_sec,
         max_tool_calls_per_turn=config.max_tool_calls_per_turn,
     )
 
@@ -1453,7 +1381,6 @@ def parse_tt_args() -> TTAgentConfig:
     p.add_argument("--no-sample", action="store_true", help="Greedy decoding (argmax)")
     p.add_argument("--system-prompt", default=DEFAULT_SYSTEM_PROMPT)
     p.add_argument("--workspace-root", default=str(Path.cwd()))
-    p.add_argument("--command-timeout-sec", type=int, default=20)
     p.add_argument("--max-tool-calls-per-turn", type=int, default=6)
 
     # TT runtime
@@ -1522,7 +1449,6 @@ def parse_tt_args() -> TTAgentConfig:
         device="cpu",
         system_prompt=a.system_prompt,
         workspace_root=str(Path(a.workspace_root).resolve()),
-        command_timeout_sec=a.command_timeout_sec,
         max_tool_calls_per_turn=a.max_tool_calls_per_turn,
         mesh_device_name=a.mesh_device,
         num_layers=a.num_layers,
