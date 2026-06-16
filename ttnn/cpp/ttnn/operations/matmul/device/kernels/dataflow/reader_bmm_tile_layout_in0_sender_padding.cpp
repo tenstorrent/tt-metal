@@ -110,8 +110,17 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
+    // interleaved in0 CB pages are sized to match (see the program factory). The NOC reads the
+    // unpadded tile of data into each padded slot, and tiles are laid out / multicast at the padded
+    // stride. No-op when already aligned. The sharded path keeps the natural (unpadded) stride.
+    constexpr uint32_t in0_aligned_tile_size_bytes =
+        (in0_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+#ifdef IN0_SHARDED
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
-    constexpr uint32_t one_tile = 1;
+#else
+    constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_aligned_tile_size_bytes;
+#endif
 
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
@@ -136,12 +145,6 @@ void kernel_main() {
 
 #else
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
-#ifndef IN0_SHARDED
-#ifdef INTERMEDIATE_CB_READ
-    constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
-    CircularBuffer cb_helper(in0_intermediate_cb_index);
-#endif  // INTERMEDIATE_CB_READ
-#endif
 #endif  // IN0_SHARDED
 
     // sparsity accessor
@@ -242,10 +245,6 @@ void kernel_main() {
                         cb_in0.reserve_back(in0_block_num_tiles);
 #ifndef IN0_SHARDED
 
-#ifdef INTERMEDIATE_CB_READ
-                        cb_helper.reserve_back(one_tile);
-#endif  // INTERMEDIATE_CB_READ
-
                         uint32_t in0_write_offset = 0;
 
 #ifndef SKIP_MCAST
@@ -259,26 +258,12 @@ void kernel_main() {
                             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
                                 if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
-#ifndef INTERMEDIATE_CB_READ
                                     noc.async_read(
                                         s0,
                                         cb_in0,
                                         in0_single_tile_size_bytes,
                                         {.page_id = in0_tensor_tile_id},
                                         {.offset_bytes = in0_write_offset});
-#else
-                                    noc.async_read(
-                                        s0,
-                                        cb_helper,
-                                        in0_single_tile_size_bytes,
-                                        {.page_id = in0_tensor_tile_id},
-                                        {.offset_bytes = 0});
-                                    noc.async_read_barrier();
-                                    memcpy(
-                                        /*dst=*/reinterpret_cast<void*>(cb_in0.get_write_ptr() + in0_write_offset),
-                                        /*src=*/reinterpret_cast<const void*>(cb_helper.get_write_ptr()),
-                                        /*size=*/in0_single_tile_size_bytes);
-#endif  // INTERMEDIATE_CB_READ
                                 }
 
                                 // Zero out padded regions for the very last tile
@@ -299,7 +284,7 @@ void kernel_main() {
                                     }
                                 }
 
-                                in0_write_offset += in0_single_tile_size_bytes;
+                                in0_write_offset += in0_aligned_tile_size_bytes;
                                 in0_tensor_tile_id += in0_tensor_stride_w;
                             }
                             in0_tensor_row_start_tile_id += in0_tensor_stride_h;
@@ -405,12 +390,6 @@ void kernel_main() {
 
                         // Common for sharded and interleaved paths
                         cb_in0.push_back(in0_block_num_tiles);
-#ifdef INTERMEDIATE_CB_READ
-                        // Clean up helper CB
-                        cb_helper.push_back(one_tile);
-                        cb_helper.wait_front(one_tile);
-                        cb_helper.pop_front(one_tile);
-#endif  // INTERMEDIATE_CB_READ
                     }
                 }
 #ifdef IN0_SHARDED

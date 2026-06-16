@@ -505,6 +505,7 @@ def _run_chunked_prefill(
     prefill_len=0,
     num_users=1,
     use_pretrained=False,
+    topology=ttnn.Topology.Linear,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -605,7 +606,7 @@ def _run_chunked_prefill(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_balanced=False,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         is_chunked=True,
         slot_num=num_users,
         layer_num=1,
@@ -784,8 +785,16 @@ _CHUNKED_SCENARIOS = (
 # TODO(FABRIC_2D): the BH Galaxy 8x4 prefill target moved to FABRIC_2D (#45595, which fixed the MLA
 # ring all-gather writer this path uses). Add a fabric2d device_params variant (router config +
 # RELAXED_INIT + per-mesh num_links, via conftest's FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS) in a
-# follow-up, validated on BH Galaxy. This test currently covers FABRIC_1D only.
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+# follow-up, validated on BH Galaxy. This test currently covers FABRIC_1D (line + ring) only.
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+    ],
+    ids=["line", "ring"],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
@@ -814,4 +823,9 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
     if reference == "cpu" and os.environ.get(variant.env_var) and not kwargs.get("use_pretrained"):
         kwargs = {**kwargs, "use_pretrained": True}
-    _run_chunked_prefill(request, mesh_device, reference=reference, **kwargs)
+    topology = (
+        ttnn.Topology.Ring
+        if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
+        else ttnn.Topology.Linear
+    )
+    _run_chunked_prefill(request, mesh_device, reference=reference, topology=topology, **kwargs)
