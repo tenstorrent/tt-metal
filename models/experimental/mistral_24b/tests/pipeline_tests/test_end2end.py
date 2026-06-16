@@ -222,6 +222,8 @@ def log_e2e_performance_measurements(
         logger.info(f"Full run (prefill + decode wall time): {full_run_time:.4f}s")
     logger.info("===")
 
+    return measurements
+
 
 def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optimizations):
     """Setup model arguments for vision-enabled model (Single Responsibility)."""
@@ -348,6 +350,7 @@ def run_generation_exactly_like_test_end2end(
     paged_attention_config=None,
     max_gen_len=20,
     repetition_ngram_size=3,
+    metrics_out=None,
 ):
     """Run generation following the EXACT pattern from test_end2end.py."""
     input_ids = processed_inputs["input_ids"]
@@ -467,7 +470,7 @@ def run_generation_exactly_like_test_end2end(
     run_t1 = time.perf_counter()
     full_run_time = run_t1 - run_t0  # Total prefill + decode wall time including model init overhead.
 
-    log_e2e_performance_measurements(
+    measurements = log_e2e_performance_measurements(
         batch_size=batch_size,
         num_prefill_tokens=num_prefill_tokens,
         inference_prefill_time=inference_prefill_time,
@@ -475,6 +478,9 @@ def run_generation_exactly_like_test_end2end(
         decode_step_times=decode_step_times,
         full_run_time=full_run_time,
     )
+    # ISL sweep (and other callers) can capture throughput metrics without re-parsing logs.
+    if metrics_out is not None:
+        metrics_out.update(measurements)
 
     return all_outputs[0]
 

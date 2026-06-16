@@ -14,6 +14,7 @@ pass the resulting visual tokens to the text model along with text tokens.
 import ttnn
 import torch
 
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.model import Transformer
 from ttnn import ConcatMeshToTensor
 
@@ -29,6 +30,19 @@ class MistralTransformer(Transformer):
         paged_attention_config=None,
         use_paged_kv_cache=False,
     ):
+        # On Blackhole, greedy on-device sampling otherwise falls through to the full top-k
+        # path, which issues two all-gathers per decode step. Those alias the depth-2 CCL
+        # semaphore pool across the back-to-back non-blocking decode + sampling traces and
+        # make greedy decode non-deterministic / garbled. Enabling force-argmax collapses
+        # greedy sampling to a single all-gather + argmax, removing the aliasing. Scoped here
+        # (not in shared tt_transformers config) so only this model is affected; Wormhole keeps
+        # the default. Must run before super().__init__, which builds the sampling module that
+        # reads this flag.
+        if is_blackhole():
+            sampling_ag_config = args.model_config.get("SAMPLING_AG_CONFIG")
+            if sampling_ag_config is not None:
+                sampling_ag_config["allow_force_argmax"] = True
+
         super().__init__(
             args,
             dtype,
