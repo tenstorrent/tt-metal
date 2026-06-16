@@ -727,17 +727,21 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
 
 
 class _TP4PrefillDecodeCacheAdapter(TTNNPagedAttentionKVCache):
-    """Fill TP4 prefill cache and symbiote decode cache from TP4 K/V states.
+    """Fill the symbiote decode cache from TP4 prefill K/V states.
 
     TP4 attention computes one KV head per chip. The existing fast
     ``col_parallel`` decode path expects both KV heads on each chip. During
     prefill, gather the per-chip TP4 KV head across the TP axis, drop duplicate
     KV replicas, and fill the decode cache with the resulting two-head tensor.
     Decode operations delegate to the decode cache unchanged.
+
+    Note: this hybrid path keeps NO separate TP4-layout cache. Prefill SDPA runs
+    on local q/k/v (not a cache) and decode reads only ``decode_cache``, so a
+    second TP4 cache would be write-only -- its per-layer ``paged_fill_cache``
+    was ~5.6% of decode device time (the single largest fill op) for zero use.
     """
 
-    def __init__(self, tp4_cache: TTNNPagedAttentionKVCache, decode_cache: TTNNPagedAttentionKVCache, device):
-        self.tp4_cache = tp4_cache
+    def __init__(self, decode_cache: TTNNPagedAttentionKVCache, device):
         self.decode_cache = decode_cache
         self.device = device
         self.num_layers = decode_cache.num_layers
@@ -748,10 +752,23 @@ class _TP4PrefillDecodeCacheAdapter(TTNNPagedAttentionKVCache):
     def __getattr__(self, name):
         return getattr(self.decode_cache, name)
 
-    def _tp4_kv_to_decode_kv(self, kv: ttnn.Tensor) -> ttnn.Tensor:
+    def _tp4_kv_pair_to_decode_kv(self, key_states: ttnn.Tensor, value_states: ttnn.Tensor):
+        """Relayout TP4 per-chip 1-KV-head K/V to the replicated decode layout
+        with a SINGLE all_gather covering both tensors.
+
+        Each chip computes ``local_heads`` KV heads; the decode cache wants
+        ``target_heads`` replicated on every chip. Gathering K and V separately
+        is two CCL launches/layer -- instead concat them on the head dim, gather
+        once, then split the run-structured result back into K and V. Halves the
+        all_gather count (the dominant op here) at the cost of one merge concat.
+        """
         target_heads = int(self.decode_cache.num_kv_heads)
-        if _tp_degree(self.device) <= 1 or int(kv.shape[1]) == target_heads:
-            return kv
+        if _tp_degree(self.device) <= 1 or int(key_states.shape[1]) == target_heads:
+            return key_states, value_states
+
+        local_heads = int(key_states.shape[1])  # KV heads per chip (1 for TP4)
+        # Per chip: [K heads ... , V heads ...] on the head dim -> one tensor to gather.
+        kv = ttnn.concat([key_states, value_states], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         gathered = ttnn.all_gather(
             kv,
             dim=1,
@@ -760,33 +777,45 @@ class _TP4PrefillDecodeCacheAdapter(TTNNPagedAttentionKVCache):
             memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        if int(gathered.shape[1]) == target_heads:
-            return gathered
+        ttnn.deallocate(kv)
 
-        group = max(1, int(gathered.shape[1]) // target_heads)
-        selected = []
-        for head_idx in range(target_heads):
-            src_idx = min(head_idx * group, int(gathered.shape[1]) - 1)
-            selected.append(
-                ttnn.slice(
-                    gathered,
-                    [0, src_idx, 0, 0],
-                    [int(gathered.shape[0]), src_idx + 1, int(gathered.shape[2]), int(gathered.shape[3])],
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+        # gathered dim1 is chip-major: chip c contributes [K(local_heads), V(local_heads)],
+        # so chip c starts at c*2*local_heads, its K block at +0 and V block at +local_heads.
+        # KV heads repeat in runs of ``group`` chips, so unique heads sit at chips
+        # [0, group, 2*group, ...]. A *strided* slice would force TILE->RM->TILE
+        # (Untilize+Tilize, very costly on long prefill seqs), so pick each head with a
+        # contiguous step-1 slice and concat -- everything stays in TILE.
+        tp = _tp_degree(self.device)
+        group = max(1, tp // target_heads)
+        g0, g2, g3 = int(gathered.shape[0]), int(gathered.shape[2]), int(gathered.shape[3])
+
+        def _pick(value_offset):
+            parts = []
+            for h in range(target_heads):
+                base = (h * group) * (2 * local_heads) + value_offset * local_heads
+                parts.append(
+                    ttnn.slice(
+                        gathered,
+                        [0, base, 0, 0],
+                        [g0, base + local_heads, g2, g3],
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
                 )
-            )
-        decode_kv = ttnn.concat(selected, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        for part in selected:
-            ttnn.deallocate(part)
+            out = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            for p in parts:
+                if p is not out:
+                    ttnn.deallocate(p)
+            return out
+
+        decode_k = _pick(0)
+        decode_v = _pick(1)
         ttnn.deallocate(gathered)
-        return decode_kv
+        return decode_k, decode_v
 
     def paged_fill_on_device(
         self, key_states: ttnn.Tensor, value_states: ttnn.Tensor, layer_idx: int, batch_idx: int = 0
     ):
-        self.tp4_cache.paged_fill_on_device(key_states, value_states, layer_idx=layer_idx, batch_idx=batch_idx)
-        decode_k = self._tp4_kv_to_decode_kv(key_states)
-        decode_v = self._tp4_kv_to_decode_kv(value_states)
+        decode_k, decode_v = self._tp4_kv_pair_to_decode_kv(key_states, value_states)
         self.decode_cache.paged_fill_on_device(decode_k, decode_v, layer_idx=layer_idx, batch_idx=batch_idx)
         if decode_k is not key_states:
             ttnn.deallocate(decode_k)
@@ -800,14 +829,12 @@ class _TP4PrefillDecodeCacheAdapter(TTNNPagedAttentionKVCache):
         return self.decode_cache.paged_sdpa_decode(*args, **kwargs)
 
     def update_seq_length(self, layer_idx: int, seq_len: int = 1) -> None:
-        self.tp4_cache.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
         self.decode_cache.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
 
     def get_seq_length(self, layer_idx: int = 0) -> int:
         return self.decode_cache.get_seq_length(layer_idx=layer_idx)
 
     def reset(self) -> None:
-        self.tp4_cache.reset()
         self.decode_cache.reset()
 
 
@@ -1039,19 +1066,20 @@ class TTNNDotsOCRPipeline(TTNNModule):
         lm_head = TTNNDotsOCRDRAMShardedLMHead.from_torch(hf_model.lm_head)
         lm_head._unique_name = "lm_head"
 
-        # Paged KV cache. The TP4 body stores exactly its one assigned KV head per
-        # chip (head-sharded across the mesh). Hybrid prefill fills both that
-        # cache and the symbiote two-KV-head decode cache.
+        # Paged KV cache. Pure-TP4 decode stores exactly its one assigned KV head
+        # per chip (head-sharded across the mesh). The hybrid prefill path instead
+        # fills only the symbiote two-KV-head decode cache (see the adapter).
         if use_tp4_decode:
             from models.experimental.dots_ocr_tp4.tt.kv_cache import create_paged_kv_cache as _create_tp4_paged_kv_cache
 
             paged_cache = _create_tp4_paged_kv_cache(dots_cfg, device, batch_size=batch_size)
         elif use_tp4_prefill:
-            from models.experimental.dots_ocr_tp4.tt.kv_cache import create_paged_kv_cache as _create_tp4_paged_kv_cache
-
-            tp4_paged_cache = _create_tp4_paged_kv_cache(dots_cfg, device, batch_size=batch_size)
+            # Hybrid: TP4 prefill, symbiote two-KV-head decode. Decode reads only
+            # the symbiote cache; the TP4-layout cache would be write-only (the
+            # adapter docstring explains the dropped ~5.6% per-layer fill), so we
+            # allocate just the decode cache here.
             decode_paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
-            paged_cache = _TP4PrefillDecodeCacheAdapter(tp4_paged_cache, decode_paged_cache, device)
+            paged_cache = _TP4PrefillDecodeCacheAdapter(decode_paged_cache, device)
         else:
             paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
 

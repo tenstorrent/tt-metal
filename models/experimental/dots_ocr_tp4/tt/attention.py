@@ -27,6 +27,7 @@ from models.experimental.dots_ocr_tp4.tt.common import (
     prefill_matmul_2d_config,
     qkv_prefill_matmul_config,
     shard_to_mesh,
+    to_l1,
     tp_degree,
 )
 from models.experimental.tt_symbiote.core.module import TTNNModule
@@ -72,7 +73,7 @@ class DotsOCRAttentionTP4(TTNNModule):
         self.qkv_weight_dtype = ttnn.bfloat8_b
         self.o_weight_dtype = tp4_lossy_matmul_dtype()
         self.qkv_compute = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -90,7 +91,7 @@ class DotsOCRAttentionTP4(TTNNModule):
         # config below vs ~480 us at HiFi2+fp32acc and ~1335 us auto (~3.4x).
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
@@ -224,12 +225,19 @@ class DotsOCRAttentionTP4(TTNNModule):
                 self.mesh_device, m, int(x.shape[-1]), int(self.qkv_w.shape[-1]), fp32_dest=False
             )
         x_mm = x
-        # if qkv_pc is None and m > 32 and x.memory_config().buffer_type == ttnn.BufferType.L1:
-        #     # Safety net: program_config=None + an L1 in0 makes ttnn pick
-        #     # MatmulMultiCoreProgramConfig, which hardcodes HiFi4 and ignores
-        #     # qkv_compute (~1515 us, ~10x slower). If we have no tuned config, keep
-        #     # in0 in DRAM so the auto path stays the HiFi2 MatmulMultiCoreReuseMultiCast.
-        #     x_mm = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        if qkv_pc is not None and m > 32:
+            # This op is activation-read-bound: an L1-interleaved in0 runs the tuned
+            # 2D-mcast config (8x8 / per_core_M=12 / per_core_N=3 / in0_block_w=4 /
+            # subblock 2x3) at ~151 us vs ~204 us with a DRAM in0 (~1.35x). The
+            # tuned grid is already at the sweep optimum -- 7x8 and 8x8 are tied at a
+            # 150.9 us median over 12 reps, so geometry has no headroom left; L1 in0
+            # is the lever. The decoder block already hands us the input_layernorm
+            # output in L1 (decoder_block.py), so to_l1 is a no-op there; this only
+            # does real work (and still wins) if a caller feeds a DRAM hidden.
+            # We always pass a program_config here, so the L1-in0 -> HiFi4 trap in
+            # [[matmul-l1-in0-forces-hifi4]] (which needs program_config=None) does
+            # not apply. See test_qkv_prefill_matmul_sweep / _confirm.
+            x_mm = to_l1(x)
         qkv = ttnn.linear(
             x_mm,
             self.qkv_w,
@@ -262,7 +270,7 @@ class DotsOCRAttentionTP4(TTNNModule):
         out = ttnn.linear(
             attn,
             self.o_w,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             memory_config=out_mc,
             compute_kernel_config=self.o_compute,
             program_config=o_pc,
