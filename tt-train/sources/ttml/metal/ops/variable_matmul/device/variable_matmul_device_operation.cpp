@@ -241,13 +241,18 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const auto& a = tensor_args.input_tensor;
     const bool transpose_a = operation_attributes.transpose_a;
     const bool transpose_b = operation_attributes.transpose_b;
+    // Derive tile counts from padded_shape() — the program factory builds from padded shapes, so
+    // the hash MUST read the same source. Using logical shapes here would floor-divide where the
+    // factory ceil-divides (padded): two non-tile-aligned K shapes that floor to the same tile
+    // count but pad differently could then collide on the hash yet need different use_offset
+    // programs → wrong cache hit. (Tile-aligned shapes are unaffected; floor == ceil there.)
+    const auto& a_padded = a.padded_shape();
+    const auto& w_padded = w.padded_shape();
     // use_offset is a compile-time knob (offset-enabled vs disabled → two cached programs,
     // keeping the offset=0 hot path at baseline). Parent-K mode (input K extent > weight's)
     // also forces it on, since the kernel then needs the parent stride to read correctly.
-    const uint32_t K_in_tiles =
-        (transpose_a ? a.logical_shape()[-2] : a.logical_shape()[-1]) / tt::constants::TILE_WIDTH;
-    const uint32_t K_w_tiles =
-        (transpose_b ? w.logical_shape()[-1] : w.logical_shape()[-2]) / tt::constants::TILE_WIDTH;
+    const uint32_t K_in_tiles = (transpose_a ? a_padded[-2] : a_padded[-1]) / tt::constants::TILE_WIDTH;
+    const uint32_t K_w_tiles = (transpose_b ? w_padded[-1] : w_padded[-2]) / tt::constants::TILE_WIDTH;
     // in0 side: parent-K is K_in > K_matmul. K_matmul = K_w when in0 is parent, K_in when in1 is.
     const bool in1_parent_k_mode = K_w_tiles > K_in_tiles;
     const bool in0_parent_k_mode = !in1_parent_k_mode && K_in_tiles > K_w_tiles;
@@ -261,16 +266,16 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     // Mirror the program factory's transpose_core_grid decision exactly: use the caller's
     // expected_M_tiles when set (per-call M upper bound), else fall back to the input's
     // full M dimension. Comparison in tile units.
-    const uint32_t parent_M_for_hash = transpose_a ? a.logical_shape()[-1] : a.logical_shape()[-2];
+    const uint32_t parent_M_for_hash = transpose_a ? a_padded[-1] : a_padded[-2];
     const uint32_t parent_M_tiles_for_hash = tt::div_up(parent_M_for_hash, tt::constants::TILE_HEIGHT);
     const uint32_t actual_M_tiles_for_hash =
         (operation_attributes.expected_M_tiles > 0) ? operation_attributes.expected_M_tiles : parent_M_tiles_for_hash;
-    const uint32_t N = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
+    const uint32_t N = transpose_b ? w_padded[-2] : w_padded[-1];
     const uint32_t N_tiles_for_hash = N / tt::constants::TILE_WIDTH;
     const bool transpose_core_grid = actual_M_tiles_for_hash > N_tiles_for_hash;
 
-    // Variable-K: only N must be in the hash (matmul-K is RT-driven, fully variable).
-    const uint32_t N_dim = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
+    // Variable-K: only N must be in the hash (matmul-K is RT-driven, fully variable). N is the
+    // padded matmul-N (computed above) so the hash groups calls that share a compiled program.
     return ttsl::hash::hash_objects_with_default_seed(
         transpose_core_grid,
         operation_attributes.config.M_block_size,
@@ -283,7 +288,7 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
         operation_attributes.compute_kernel_config,
         a.dtype(),
         w.dtype(),
-        N_dim,
+        N,
         transpose_a,
         transpose_b,
         use_offset,
