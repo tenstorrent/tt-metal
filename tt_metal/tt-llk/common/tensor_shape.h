@@ -132,9 +132,9 @@ constexpr TensorShape make_tensor_shape(
  * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
  *
  * Maps the historical scalar parameters used across LLK call sites:
- * - num_faces == 1: 1x1 face grid (face_r_dim x 16)
- * - num_faces == 2: 1x2 face grid (face_r_dim x 32)
- * - num_faces == 4: 2x2 face grid (32x32)
+ * - num_faces == 1: 1x1 face grid (face_r_dim × 16)
+ * - num_faces == 2: 1x2 face grid (face_r_dim × 32)
+ * - num_faces == 4: 2x2 face grid (face_r_dim*2 × 32; 32x32 when face_r_dim == 16)
  */
 constexpr TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
 {
