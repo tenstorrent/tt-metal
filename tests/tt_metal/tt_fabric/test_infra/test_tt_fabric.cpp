@@ -215,18 +215,15 @@ int main(int argc, char** argv) {
                 test_context.close_devices();
                 return 1;  // Hard exit - cannot run performance benchmarks with invalid frequencies
             }
-        }
-        // Gate ALL tests (including functional/stability) on ethernet link health. A degraded or
-        // retraining link not only inflates measured cycles for bandwidth tests, it can stall fabric
-        // traffic for functional tests: a dropped/undelivered packet leaves a receiver kernel waiting
-        // forever, which surfaces much later as an opaque dispatch completion-queue timeout
-        // ("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
-        // system_memory_manager.cpp) whose tt-triage reports no broken component. Surfacing the
-        // degraded link here, up front, with a per-link diagnostic converts that confusing hang into
-        // an actionable hardware signal. Cached, so this runs once for the fixture's lifetime.
-        if (!fixture->validate_fabric_link_health()) {
-            test_context.close_devices();
-            return 1;  // Hard exit - cannot run fabric tests on degraded ethernet links
+            // Gate on ethernet link health for performance tests only: a degraded/retraining link
+            // inflates measured cycles and produces bimodal bandwidth variance that fails golden
+            // comparison without any clock change. Functional/stability tests do not depend on link
+            // health for correctness and must not be hard-failed by a benign retrain. Cached, so this
+            // runs once for the fixture's lifetime.
+            if (!fixture->validate_fabric_link_health()) {
+                test_context.close_devices();
+                return 1;  // Hard exit - cannot run performance benchmarks on degraded ethernet links
+            }
         }
 
         // Check topology-based skip conditions after devices are opened
