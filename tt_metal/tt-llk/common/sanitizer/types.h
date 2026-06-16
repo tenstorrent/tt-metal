@@ -324,12 +324,12 @@ struct OperationState
 
 enum class FsmState : std::uint32_t
 {
-    INITIAL,
-    CONFIGURED,
-    INITIALIZED,
-    EXECUTED,
-    UNINITIALIZED,
-    RECONFIGURED
+    Initial,
+    Configured,
+    Initialized,
+    Executed,
+    Uninitialized,
+    Reconfigured
 };
 
 struct UnwindContext

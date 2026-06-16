@@ -54,7 +54,7 @@ static inline void thread_init_impl(SanitizerState& sanitizer)
     }
 
     new (&sanitizer.operation[COMPILE_FOR_TRISC]) llk::san::OperationState();
-    new (&sanitizer.fsm[COMPILE_FOR_TRISC]) llk::san::FsmState(llk::san::FsmState::INITIAL);
+    new (&sanitizer.fsm[COMPILE_FOR_TRISC]) llk::san::FsmState(llk::san::FsmState::Initial);
 }
 
 static inline void thread_silent_push_impl(ThreadOutputContext& context)
@@ -470,7 +470,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
     if (!thread_silent_get_impl(context))
     {
         fsm_assert<Trigger::ERROR>(
-            current != FsmState::INITIAL || next == FsmState::CONFIGURED,
+            current != FsmState::Initial || next == FsmState::Configured,
             CTSTR("First transition must be INITIAL -> CONFIGURED"),
             current,
             next,
@@ -479,7 +479,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.current);
 
         fsm_assert<Trigger::ERROR>(
-            current != FsmState::CONFIGURED || next == FsmState::INITIALIZED,
+            current != FsmState::Configured || next == FsmState::Initialized,
             CTSTR("Expected CONFIGURED -> INITIALIZED"),
             current,
             next,
@@ -488,7 +488,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.current);
 
         fsm_assert<Trigger::ERROR>(
-            current != FsmState::INITIALIZED || !operation.expect_uninit || next == FsmState::EXECUTED,
+            current != FsmState::Initialized || !operation.expect_uninit || next == FsmState::Executed,
             CTSTR("Operation UNINIT required, expected INITIALIZED -> EXECUTED"),
             current,
             next,
@@ -499,7 +499,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
         // Reconfig after init (without an intervening execute) is tolerated for operations that don't require
         // uninit, but it is still likely indicative of a bug, hence WARN rather than ERROR.
         fsm_assert<Trigger::WARN>(
-            current != FsmState::INITIALIZED || operation.expect_uninit || next == FsmState::EXECUTED || next == FsmState::RECONFIGURED,
+            current != FsmState::Initialized || operation.expect_uninit || next == FsmState::Executed || next == FsmState::Reconfigured,
             CTSTR("Operation UNINIT not required, expected INITIALIZED -> [EXECUTED, RECONFIGURED]"),
             current,
             next,
@@ -508,7 +508,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.current);
 
         fsm_assert<Trigger::ERROR>(
-            current != FsmState::EXECUTED || !operation.expect_uninit || next == FsmState::UNINITIALIZED || next == FsmState::EXECUTED,
+            current != FsmState::Executed || !operation.expect_uninit || next == FsmState::Uninitialized || next == FsmState::Executed,
             CTSTR("Operation UNINIT required, expected EXECUTED -> [UNINITIALIZED, EXECUTED]"),
             current,
             next,
@@ -517,8 +517,8 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.current);
 
         fsm_assert<Trigger::ERROR>(
-            current != FsmState::EXECUTED || operation.expect_uninit || next == FsmState::EXECUTED || next == FsmState::INITIALIZED ||
-                next == FsmState::RECONFIGURED,
+            current != FsmState::Executed || operation.expect_uninit || next == FsmState::Executed || next == FsmState::Initialized ||
+                next == FsmState::Reconfigured,
             CTSTR("Operation UNINIT not required, expected EXECUTED -> [EXECUTED, INITIALIZED, RECONFIGURED]"),
             current,
             next,
@@ -527,7 +527,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.current);
 
         fsm_assert<Trigger::ERROR>(
-            current != FsmState::UNINITIALIZED || next == FsmState::INITIALIZED || next == FsmState::RECONFIGURED,
+            current != FsmState::Uninitialized || next == FsmState::Initialized || next == FsmState::Reconfigured,
             CTSTR("Expected UNINITIALIZED -> [INITIALIZED, RECONFIGURED]"),
             current,
             next,

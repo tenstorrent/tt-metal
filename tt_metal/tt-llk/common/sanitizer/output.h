@@ -212,17 +212,17 @@ static inline ct_string fsm_state_name(const FsmState state)
 {
     switch (state)
     {
-        case FsmState::INITIAL:
+        case FsmState::Initial:
             return CTSTR("INITIAL");
-        case FsmState::CONFIGURED:
+        case FsmState::Configured:
             return CTSTR("CONFIGURED");
-        case FsmState::INITIALIZED:
+        case FsmState::Initialized:
             return CTSTR("INITIALIZED");
-        case FsmState::EXECUTED:
+        case FsmState::Executed:
             return CTSTR("EXECUTED");
-        case FsmState::UNINITIALIZED:
+        case FsmState::Uninitialized:
             return CTSTR("UNINITIALIZED");
-        case FsmState::RECONFIGURED:
+        case FsmState::Reconfigured:
             return CTSTR("RECONFIGURED");
     }
     __builtin_unreachable();
