@@ -739,18 +739,18 @@ def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dty
     assert passed, f"[sharded {norm} residual dtype={dtype} w={w} dist={distribution}] {msg}"
 
 
-@pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_ulp_sharded_non_tile_aligned_width_split_across_cores_rejected(device, use_welford):
-    """LayerNorm (non-RMS) over a non-tile-aligned width split across multiple cores is rejected, not
+def test_layer_norm_ulp_sharded_non_tile_aligned_width_split_across_cores_welford_rejected(device):
+    """WELFORD LayerNorm over a non-tile-aligned width split across multiple cores is rejected, not
     silently wrong.
 
-    A non-tile-aligned width puts a partially-valid tile in the reduction. LayerNorm masks that at the
-    E[x] site with one partial tile at the end, which is only correct when the whole row width is on a
-    single core (num_blocks == 1); the Welford partial-tile handling has the same single-core
-    assumption in its cross-core combine. The op must throw rather than normalize the full blocks over
-    their padding columns. (RMSNorm, by contrast, masks the per-block squares and does support this
-    split.)
+    The legacy (non-Welford) path masks each core's padding columns with its own per-core column mask,
+    so it supports this split and is covered by the correctness tests in test_layer_norm_sharded.py.
+    The Welford path has no such per-core mask (it relies on last_block_wt / the reciprocal LUT) and its
+    cross-core combine does not account for a partial final core, so it must throw rather than normalize
+    the full blocks over their padding columns. (RMSNorm masks the per-block squares and supports this
+    split too.)
     """
+    use_welford = True
     torch.manual_seed(0)
     h, w = 32, 200  # 200 -> per-core 128; split across 2 cores, the last core's final tile is partial
     num_cores_w = 2
@@ -774,7 +774,7 @@ def test_layer_norm_ulp_sharded_non_tile_aligned_width_split_across_cores_reject
         memory_config=sharded_mem_config,
     )
 
-    with pytest.raises(RuntimeError, match="non-tile-aligned width"):
+    with pytest.raises(RuntimeError, match="does not support a non-tile-aligned width"):
         ttnn_layer_norm_sharded(
             device,
             tt_input_tensor,

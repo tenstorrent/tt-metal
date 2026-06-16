@@ -344,9 +344,14 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
     )
 
 
-# A tile-aligned width split unevenly across cores (final core owns fewer real tiles). The op must
-# normalize over the logical width, not the padded per-core width. See the helper for the analytic
-# bf16 tolerance derivation; tolerances are not taken from observed output.
-@pytest.mark.parametrize(("w", "num_cores_w"), [(96, 2), (224, 3)], ids=["w96_c2", "w224_c3"])
+# A width split across cores so the final core owns fewer real tiles: a tile-aligned width whose tiles
+# do not divide evenly (96 over 2, 224 over 3), and a non-tile-aligned width split across cores (72
+# over 2, 200 over 3). The op must normalize over the logical width, not the padded per-core width. See
+# the helper for the analytic bf16 tolerance derivation; tolerances are not taken from observed output.
+@pytest.mark.parametrize(
+    ("w", "num_cores_w"),
+    [(96, 2), (224, 3), (72, 2), (200, 3)],
+    ids=["w96_c2", "w224_c3", "w72_c2_nonaligned", "w200_c3_nonaligned"],
+)
 def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w):
     run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w)

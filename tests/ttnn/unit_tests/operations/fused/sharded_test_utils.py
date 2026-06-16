@@ -510,17 +510,19 @@ _LOGICAL_WIDTH_NORM_PAD_POISON = 1000.0  # poison the implicit tile padding so a
 
 
 def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w, eps=1e-5):
-    """Verify a width-sharded layer/RMS norm normalizes over the LOGICAL width when a tile-aligned
-    width is split unevenly across cores (the final core owns fewer real tiles, plus a padding tile).
+    """Verify a width-sharded layer/RMS norm normalizes over the LOGICAL width when the width is split
+    across cores so the final core owns fewer real tiles (and, for a non-tile-aligned width, a partially
+    valid final tile plus pure-padding tiles).
 
-    The correctness property is the defining one for normalization: statistics are reduced over the
-    logical element count only. Dividing by the padded count (num_blocks * block_w) instead scales the
-    output by sqrt(padded/logical) -- a (near-)pure scale. The check therefore gates on the standard
+    Covers two related cases with one path: a tile-aligned width whose tiles do not divide evenly across
+    cores (e.g. 96 over 2), and a non-tile-aligned width split across cores (e.g. 200 over 2). The
+    correctness property is the defining one for normalization: statistics are reduced over the logical
+    element count only. Dividing by the padded count (num_blocks * block_w) instead scales the output by
+    sqrt(padded/logical) -- a (near-)pure scale. The check therefore gates on the standard
     relative-Frobenius and allclose metrics (both scale-sensitive) and DISABLES PCC, which is
     scale-invariant and so blind to this class of error. Tolerances are the bf16 budget defined above.
     """
-    assert w % TILE_WIDTH == 0, "this check targets a tile-aligned width"
-    kt = w // TILE_WIDTH
+    kt = -(-w // TILE_WIDTH)  # ceil: a non-tile-aligned width rounds up to a whole number of tiles
     shard_wt = -(-kt // num_cores_w)  # tiles per core (ceil) -> last core owns fewer real tiles
     shard_w = shard_wt * TILE_WIDTH
     assert (num_cores_w - 1) * shard_wt < kt, "geometry must leave the last core at least one real tile"

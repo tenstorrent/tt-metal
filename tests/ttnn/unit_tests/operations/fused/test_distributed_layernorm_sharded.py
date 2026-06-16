@@ -662,41 +662,33 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
     assert_numeric_metrics(torch_golden, actual, pcc_threshold=0.999, rtol=0.05, atol=0.2, frobenius_threshold=0.05)
 
 
-# The distributed pre-all-gather stats kernel masks the final shard's padding columns before reducing
-# the squared input, so a non-tile-aligned width split across cores excludes the padding from the
-# per-shard mean of squares and the normalized output matches the reference.
+# The distributed pre-all-gather stats kernel masks each final shard's padding columns before reducing,
+# so a non-tile-aligned width split across cores excludes the padding from the per-shard statistics and
+# the normalized output matches the reference. Covers both norms: RMSNorm masks the squared input,
+# LayerNorm masks both the input (E[x]) and its square.
+@pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
 @pytest.mark.parametrize("w", [120, 240])
 @pytest.mark.parametrize("num_cores_w", [2])
 @pytest.mark.parametrize("eps", [1e-6])
-def test_simulated_distributed_rms_norm_multi_core_non_tile_aligned_width(device, w, num_cores_w, eps):
-    _run_simulated_distributed_norm_multi_core(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, eps=eps)
+def test_simulated_distributed_norm_multi_core_non_tile_aligned_width(device, is_rmsnorm, w, num_cores_w, eps):
+    _run_simulated_distributed_norm_multi_core(device, is_rmsnorm=is_rmsnorm, w=w, num_cores_w=num_cores_w, eps=eps)
 
 
 # A 2D (num_cores_w x num_cores_h, both > 1) width-shard grid drives the cross-core reduction through
 # its two-stage path (should_use_two_stage_reduce). This exercises the non-tile-aligned scaler
 # (winv = num_blocks / logical_K) and the per-shard padding masking in the two-stage regime, which the
-# 1xN grids above do not reach. RMSNorm only: LayerNorm rejects a non-tile-aligned width across cores.
-# w=120/240 keep the shard count dividing the tile-padded width evenly (physical width == padded width).
+# 1xN grids above do not reach. w=120/240 keep the shard count dividing the tile-padded width evenly
+# (physical width == padded width).
+@pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
 @pytest.mark.parametrize("w", [120, 240])
 @pytest.mark.parametrize(("num_cores_w", "num_cores_h"), [(2, 2)])
 @pytest.mark.parametrize("eps", [1e-6])
-def test_simulated_distributed_rms_norm_two_stage_reduce_non_tile_aligned_width(
-    device, w, num_cores_w, num_cores_h, eps
+def test_simulated_distributed_norm_two_stage_reduce_non_tile_aligned_width(
+    device, is_rmsnorm, w, num_cores_w, num_cores_h, eps
 ):
     _run_simulated_distributed_norm_multi_core(
-        device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, eps=eps, num_cores_h=num_cores_h
+        device, is_rmsnorm=is_rmsnorm, w=w, num_cores_w=num_cores_w, eps=eps, num_cores_h=num_cores_h
     )
-
-
-@pytest.mark.parametrize("w", [120, 240])
-@pytest.mark.parametrize("num_cores_w", [2])
-@pytest.mark.parametrize("eps", [1e-6])
-def test_simulated_distributed_layer_norm_multi_core_non_tile_aligned_width_rejected(device, w, num_cores_w, eps):
-    # Sharded LayerNorm masks the input at the E[x] site with a per-block mask that is only correct when
-    # the whole row resides on a single core, so a non-tile-aligned width split across cores is rejected.
-    # This is the documented limitation (see the layer_norm nanobind docstring), not a gap to be wired up.
-    with pytest.raises(RuntimeError, match="does not support a non-tile-aligned width"):
-        _run_simulated_distributed_norm_multi_core(device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, eps=eps)
 
 
 def _run_simulated_distributed_norm(device, is_rmsnorm, w, eps):
