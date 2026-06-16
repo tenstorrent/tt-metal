@@ -194,6 +194,50 @@ TEST_F(MemoryConfigEqualityTest, NdShardCreatedIgnoresLegacyField) {
     EXPECT_EQ(user_config, tensor_config);
 }
 
+TEST_F(MemoryConfigEqualityTest, WithShardSpecPreservesNdCreationPath) {
+    MemoryConfig nd_config(BufferType::L1, nd_shard_spec_a_);
+
+    auto updated = nd_config.with_shard_spec(shard_spec_a_);
+
+    EXPECT_TRUE(updated.created_with_nd_shard_spec());
+    EXPECT_EQ(updated.nd_shard_spec(), nd_config.nd_shard_spec());
+    EXPECT_EQ(updated.shard_spec(), std::optional<ShardSpec>(shard_spec_a_));
+    EXPECT_EQ(updated, nd_config);
+}
+
+TEST_F(MemoryConfigEqualityTest, WithShardSpecUpdatesLegacyFieldWithoutDroppingNdProvenance) {
+    MemoryConfig nd_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/true);
+
+    auto updated = nd_config.with_shard_spec(shard_spec_b_);
+    auto expected = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_b_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/true);
+
+    EXPECT_TRUE(updated.created_with_nd_shard_spec());
+    EXPECT_EQ(updated.nd_shard_spec(), expected.nd_shard_spec());
+    EXPECT_EQ(updated.shard_spec(), expected.shard_spec());
+    EXPECT_EQ(updated, expected);
+}
+
+TEST_F(MemoryConfigEqualityTest, WithShardSpecPreservesPerCoreAllocation) {
+    MemoryConfig legacy_config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    experimental::per_core_allocation::set_per_core_allocation(legacy_config, true);
+
+    auto updated = legacy_config.with_shard_spec(shard_spec_b_);
+
+    EXPECT_FALSE(updated.created_with_nd_shard_spec());
+    EXPECT_TRUE(experimental::per_core_allocation::is_per_core_allocation(updated));
+    EXPECT_EQ(updated.shard_spec(), std::optional<ShardSpec>(shard_spec_b_));
+}
+
 TEST_F(MemoryConfigEqualityTest, LegacyShardCreatedIgnoresNdField) {
     // Two configs both created with legacy shard_spec should compare equal on shard_spec alone,
     // even if one has an nd_shard_spec prepopulated and the other does not.
