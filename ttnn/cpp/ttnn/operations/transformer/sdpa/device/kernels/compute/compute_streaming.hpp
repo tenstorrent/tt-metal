@@ -1998,7 +1998,11 @@ void sdpa_standard_v2(
             bool apply_causal_mask = is_causal_sdpa;
             uint32_t target_active_Sk = chunk_active_Sk;
             if constexpr (use_padded_mask && !is_causal_sdpa && !use_provided_mask) {
-                if (is_padded && lw_mask.global_n_partial_col > 0) {
+                // Stamp the partial-tile vertical mask whenever the tensor's last K chunk carries a
+                // partial tile (Sk % TILE != 0), independent of fully padded tiles. When there are no
+                // fully padded tiles, global_n_padded_tiles is 0, so target_active_Sk remains
+                // Sk_chunk_t and only the vertical mask stamp is added.
+                if ((k_chunk == k_num_chunks - 1) && lw_mask.global_n_partial_col > 0) {
                     target_active_Sk = Sk_chunk_t - lw_mask.global_n_padded_tiles;
                     apply_partial_mask = true;
                 }
