@@ -474,14 +474,23 @@ class ModelArgs(TTModelArgs):
 
         return state_dict
 
+    @staticmethod
+    def _gemma3_multi_modal_projector(model):
+        # transformers 5.x wraps the inner Gemma3Model as `model.model`, moving
+        # multi_modal_projector off the top-level Gemma3ForConditionalGeneration.
+        mmp = getattr(model, "multi_modal_projector", None)
+        if mmp is None:
+            mmp = model.model.multi_modal_projector
+        return mmp
+
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector
+        layer = self._gemma3_multi_modal_projector(model)
         return layer
 
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector.mm_soft_emb_norm
+        layer = self._gemma3_multi_modal_projector(model).mm_soft_emb_norm
         return layer
 
     def reference_rms_norm(self, i=0):
