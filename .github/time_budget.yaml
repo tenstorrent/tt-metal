@@ -83,9 +83,9 @@ ttnn:
     wh_llmbox: 30
     wh_galaxy: 340
   l2:
-    wh_n150: 970
-    wh_n300: 970
-    bh_p100: 795
+    wh_n150: 825
+    wh_n300: 825
+    bh_p100: 650
     bh_p150b_civ2: 1050
     wh_n150_civ2: 250
     wh_n300_civ2: 250
