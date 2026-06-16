@@ -70,7 +70,7 @@ inline void accumulate_compute_loop(
     constexpr bool pop_input = input_policy::pop;
     constexpr bool sync_full_block = input_policy::sync_full_block;
 
-    auto accumulate_cb = [&cb_scalar, block_size, &cb_out, num_tiles, last_tile_partial](CircularBuffer& cb) {
+    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles, last_tile_partial](CircularBuffer& cb) {
         reduce_init<reduce_type, reduce_dim, FLOAT32_REDUCTION>(
             cb.get_cb_id(), cb_scalar.get_cb_id(), cb_out.get_cb_id());
         for (auto block : generic::blocks(num_tiles, block_size)) {
