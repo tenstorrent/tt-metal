@@ -161,6 +161,8 @@
     { "job-name-component": "t3000-frequent-tests / t3k mistral tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
     { "job-name-component": "blackhole-demo-tests / llama3.3-70b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
     { "job-name-component": "blackhole-demo-tests / devstral2-123b-instruct", "owner": { "id": "U09SQ3SP5HV", "name": "Moritz Thüning" } },
+    { "job-name-component": "devstral2-123b text demo", "owner": { "id": "U09SQ3SP5HV", "name": "Moritz Thüning" } },
+    { "job-name-component": "blackhole-e2e-tests / devstral2-123b-instruct", "owner": { "id": "U09SQ3SP5HV", "name": "Moritz Thüning" } },
     { "job-name-component": "devstral2-123b teacher-forced accuracy sanity", "owner": { "id": "U09SQ3SP5HV", "name": "Moritz Thüning" } },
     { "job-name-component": "galaxy-demo-tests / Galaxy Llama3 demo tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
     { "job-name-component": "Galaxy Llama3 demo tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },

@@ -30,6 +30,7 @@ on:
         options:
           - all
           - deepseek_prefill
+          - devstral2-123b-instruct
       test-selection:
         description: 'Select e2e tests to run: all tests, all SDPA tests, or one test id'
         required: false
@@ -40,6 +41,7 @@ on:
           - sdpa
           - bh-sdpa-nightly-integration
           - bh-ring-sdpa-perf
+          - bh-lb-devstral2-123b-teacher-forced-sanity
       build-type:
         required: false
         type: choice

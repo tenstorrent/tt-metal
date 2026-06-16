@@ -158,8 +158,14 @@ pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_acc
 pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sweep -v
 ```
 
-**CI (BH Loudbox):** ``(Blackhole) Demo tests`` workflow → model ``devstral2-123b-instruct``.
-Runs ``-k sanity`` (prefill 32/64/128). Switch to ``-k sweep`` when the full seq-length run is ready.
+**CI (BH Loudbox):**
+
+| Workflow | Test | Purpose |
+|----------|------|---------|
+| ``(Blackhole) e2e tests`` → ``devstral2-123b-instruct`` | ``test_teacher_forced_accuracy.py -k sanity`` | Teacher-forced accuracy gate (prefill 32/64/128) |
+| ``(Blackhole) Demo tests`` → ``devstral2-123b-instruct`` | ``demo/text_demo.py`` | End-to-end text generation smoke |
+
+Switch e2e to ``-k sweep`` when the full seq-length teacher-forced run is ready.
 Requires Devstral-2-123B weights in the MLPerf HF cache mount (`/mnt/MLPerf/huggingface` on Loudbox).
 
 **Timeout:** Each test has its own pytest timeout budgeted for its prefill list. Full sweep
