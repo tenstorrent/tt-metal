@@ -9,12 +9,13 @@ Cities is tiled when a longer token stream is required. Each sweep point writes 
 ``.refpt`` HF reference (generated on first run) and a JSON result under
 ``tests/teacher_forced_sweep_outputs/`` (``references/`` and ``results/`` subdirs).
 
-Run::
+Run sanity (CI gate, short prefill lengths)::
 
-    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -v
+    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sanity -v
 
-Edit ``SWEEP_PREFILL_LENGTHS`` to run a subset; pytest timeout always budgets for all 14 points in
-``FULL_SWEEP_PREFILL_LENGTHS`` (32 … 256K).
+Run full sweep (all 14 prefill lengths, 32 … 256K)::
+
+    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sweep -v
 
 Environment overrides::
 
@@ -85,8 +86,8 @@ FULL_SWEEP_PREFILL_LENGTHS = [
     262144,
 ]
 
-# Prefill lengths to run in this invocation. Edit to narrow during development.
-SWEEP_PREFILL_LENGTHS = list(FULL_SWEEP_PREFILL_LENGTHS)
+# Short prefill gate for CI / nightly sanity before the full 14-point sweep is enabled.
+SANITY_SWEEP_PREFILL_LENGTHS = [32, 64, 128]
 
 # Teacher-forced eval window after prefill. Matches tt-transformers CI token-accuracy run
 # (max_generated_tokens=500); the .refpt there is 1024 tokens split 512 prefill / 512 eval but
@@ -107,12 +108,11 @@ def _sweep_output_dir() -> Path:
     return _TESTS_DIR / "teacher_forced_sweep_outputs"
 
 
-def _sweep_timeout_seconds() -> int:
-    """Budget for TT model load, weight cache, cold HF ``.refpt`` generation, and **all 14** sweep points.
+def _sweep_timeout_seconds(prefill_lengths: list[int]) -> int:
+    """Budget for TT model load, weight cache, cold HF ``.refpt`` generation, and sweep points.
 
-    Always uses ``FULL_SWEEP_PREFILL_LENGTHS`` (32 … 256K) even when ``SWEEP_PREFILL_LENGTHS`` is a
-    subset. Calibrated from BH Loudbox run 2026-06-15T11:21Z (prefill 32/64/128, 500 eval, cold HF
-    refs): **2270 s (~38 min)** for 3 points. Rates: HF hub load ~167 s/ref, HF forward ~0.07 s/token,
+    Calibrated from BH Loudbox run 2026-06-15T11:21Z (prefill 32/64/128, 500 eval, cold HF refs):
+    **2270 s (~38 min)** for 3 points. Rates: HF hub load ~167 s/ref, HF forward ~0.07 s/token,
     TT prefill ~39 s/128-token chunk, TT decode ~0.42 s/step → **~71 h** for 14 points (25% margin).
     """
     tt_model_setup_sec = 600
@@ -124,7 +124,7 @@ def _sweep_timeout_seconds() -> int:
     kv_block_size = Devstral2Args.kv_block_size
 
     budget = tt_model_setup_sec
-    for prefill_len in FULL_SWEEP_PREFILL_LENGTHS:
+    for prefill_len in prefill_lengths:
         total_length = prefill_len + TEACHER_EVAL_TOKENS
         num_prefill_chunks = (prefill_len + kv_block_size - 1) // kv_block_size
         budget += hf_hub_load_per_ref_sec + int(total_length * hf_forward_sec_per_token)
@@ -606,15 +606,27 @@ _DEVICE_PARAMS = [
 
 @pytest.mark.slow
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.timeout(_sweep_timeout_seconds())
+@pytest.mark.timeout(_sweep_timeout_seconds(FULL_SWEEP_PREFILL_LENGTHS))
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
 def test_devstral2_teacher_forced_accuracy_sweep(mesh_device):
     """Teacher-forced accuracy sweep: prefill lengths 32, 64, …, 256K (powers of two)."""
-    prefill_lengths = SWEEP_PREFILL_LENGTHS
+    _run_teacher_forced_accuracy_sweep(mesh_device, FULL_SWEEP_PREFILL_LENGTHS)
+
+
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.timeout(_sweep_timeout_seconds(SANITY_SWEEP_PREFILL_LENGTHS))
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
+def test_devstral2_teacher_forced_accuracy_sanity(mesh_device):
+    """Short prefill lengths (32/64/128) as a gate before the full sweep runs in CI."""
+    _run_teacher_forced_accuracy_sweep(mesh_device, SANITY_SWEEP_PREFILL_LENGTHS)
+
+
+def _run_teacher_forced_accuracy_sweep(mesh_device, prefill_lengths: list[int]) -> None:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     fail_fast = not _SWEEP_RUN_ALL_BEFORE_FAIL
-    sweep_timeout_sec = _sweep_timeout_seconds()
+    sweep_timeout_sec = _sweep_timeout_seconds(prefill_lengths)
 
     logger.info(
         f"Teacher-forced sweep run_id={run_id}, points={prefill_lengths}, "
