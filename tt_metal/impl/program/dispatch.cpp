@@ -2990,9 +2990,9 @@ void set_num_worker_sems_on_dispatch(
     uint32_t num_worker_sems,
     tt::stl::Span<const uint32_t> workers_per_sub_device) {
     // Not needed for regular dispatch kernel
-    if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
-        return;
-    }
+    // if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    //     return;
+    // }
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     DispatchArray<uint32_t> default_workers_per_sub_device{};
     if (workers_per_sub_device.empty()) {
@@ -3009,9 +3009,14 @@ void set_num_worker_sems_on_dispatch(
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
-    command_sequence.add_dispatch_set_sub_device_worker_counts(
-        workers_per_sub_device, DispatcherSelect::DISPATCH_SUBORDINATE);
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
+        command_sequence.add_dispatch_set_sub_device_worker_counts(
+            workers_per_sub_device, DispatcherSelect::DISPATCH_SUBORDINATE);
+    } else {
+        command_sequence.add_dispatch_set_sub_device_worker_counts(
+            workers_per_sub_device, DispatcherSelect::DISPATCH_MASTER);
+    }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);

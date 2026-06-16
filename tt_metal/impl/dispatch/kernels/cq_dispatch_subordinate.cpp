@@ -21,6 +21,8 @@
 #include "hostdev/dev_msgs.h"
 #include "risc_common.h"
 
+#include <array>
+
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
 // Cmd Buf 1 is used for small (inline) writes.
@@ -164,7 +166,7 @@ static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 static uint32_t num_worker_sems = 1;
 
 // The dispatch message entry limit also bounds the number of sub-devices.
-static uint32_t workers_per_sub_device[max_num_worker_sems] = {0};
+static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
@@ -466,41 +468,6 @@ void set_num_worker_sems() {
 }
 
 FORCE_INLINE
-void set_sub_device_worker_counts() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-    uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
-    ASSERT(num_sub_devices <= max_num_worker_sems);
-    volatile tt_l1_ptr uint32_t* data_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
-    volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sub_device_update_sem_addr);
-
-    static uint32_t local_sub_device_worker_counts_update = 0;
-
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        uint32_t worker_count = *(data_ptr++);
-        workers_per_sub_device[i] = worker_count;
-        if (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
-                ->workers_per_sub_device[i] = worker_count;
-        }
-#if DEVICE_PRINT_DISPATCH_ENABLED
-        DPRINT("dispatch_s sub_device_idx={} num_workers={}\n", i, workers_per_sub_device[i]);
-#endif
-    }
-    for (uint32_t i = num_sub_devices; i < max_num_worker_sems; ++i) {
-        workers_per_sub_device[i] = 0;
-        if (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
-                ->workers_per_sub_device[i] = 0;
-        }
-    }
-
-    *sub_device_worker_counts_update = ++local_sub_device_worker_counts_update;
-    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
-}
-
-FORCE_INLINE
 void set_go_signal_noc_data() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
@@ -624,7 +591,10 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
-            case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS: set_sub_device_worker_counts(); break;
+            case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
+                cmd_ptr = set_sub_device_worker_counts<telemetry_enabled>(
+                    cmd_ptr, workers_per_sub_device, sub_device_update_sem_addr, dispatch_telemetry_base);
+                break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
                 if (rt_profiler_enabled) {

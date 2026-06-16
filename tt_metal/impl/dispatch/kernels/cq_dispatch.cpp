@@ -20,6 +20,8 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 
+#include <array>
+
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
 
@@ -99,12 +101,16 @@ constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
 constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
+// The dispatch message entry limit also bounds the number of sub-devices.
+static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
+
 // Read and store telemetry values via local variables to avoid L1 reads
 static uint32_t upstream_blocked_counter = 0;
 static uint32_t program_counter = 0;
 
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
+constexpr uintptr_t sub_device_update_sem_addr = SUB_DEVICE_UPDATE_SEM_ADDR;
 constexpr uint32_t worker_stream_reset_update_addr = WORKER_STREAM_RESET_UPDATE_ADDR;
 constexpr uint32_t upstream_blocked_count_addr =
     dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_blocked_count);
@@ -1316,9 +1322,9 @@ re_run_command:
 
         case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
             // DPRINT("cmd_set_sub_device_worker_counts\n");
-            // This command is only used by dispatch_s
-            ASSERT(0);
-            cmd_ptr += sizeof(CQDispatchCmd);
+            ASSERT(!dispatch_s_enabled);
+            cmd_ptr = set_sub_device_worker_counts<telemetry_enabled>(
+                cmd_ptr, workers_per_sub_device, sub_device_update_sem_addr, dispatch_telemetry_base);
             break;
 
         case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
