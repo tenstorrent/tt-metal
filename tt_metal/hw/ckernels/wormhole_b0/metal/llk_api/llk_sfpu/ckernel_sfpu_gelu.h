@@ -158,7 +158,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
         sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
-        sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestEven);
+        sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
         frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
         sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
 
@@ -340,7 +340,7 @@ inline void calculate_gelu() {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
             sfpi::vFloat result = calculate_gelu_piecewise(in);
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
@@ -449,7 +449,7 @@ inline void calculate_gelu_derivative_polynomial() {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE, is_fp32_dest_acc_en>(val);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

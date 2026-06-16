@@ -435,13 +435,16 @@ jobs:
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-build-quasar.yaml
-    secrets: inherit
-    with:
-      docker_image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      runs_on: tt-ubuntu-2204-xlarge-stable
-      test_splits: 1
-      pytest_markers: "quasar"
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 80
+    container:
+      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - uses: ./.github/actions/llk-compile-quasar
+        with:
+          pytest-markers: "quasar"
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.

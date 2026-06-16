@@ -307,12 +307,12 @@ class ttMLA:
         # re-allocated per layer.
         if self.is_chunked:
             # Single combined gathered-KV scratch buffer for ring_mla: K and V both come from the
-            # latent kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the
-            # separate per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other
-            # mode. cache_batch = slot_num * layer_num is forced by the op's TT_FATAL (gathered-KV
-            # batch == cache batch) even though only the kv_cache_batch_idx slot is ever gathered.
+            # latent kvpe cache, so one (1, 1, seq_len, kvpe_dim) buffer replaces the separate
+            # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
+            # ring_mla's single-slot gather (kv_cache_batch_idx) writes only the active cache slot
+            # into gathered slot 0, so the scratch is batch-1 regardless of slot_num * layer_num.
             self._chunked_kv_buf = self.tt_ccl.get_mla_chunked_kv_buffer(
-                cache_batch=self.slot_num * self.layer_num,
+                cache_batch=1,
                 seq_len=seq_len,
                 kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
             )
@@ -403,9 +403,33 @@ class ttMLA:
         "wkv_b2": ("kv_lora_rank", "v_head_dim"),
     }
 
+    def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
+        """Resolve the tuned matmul config for this weight/seq_len, applying head-count and
+        chunked-mode gating. Returns None when no tuned config applies (caller falls back to defaults).
+        """
+        cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
+        # Some tuned configs are head-count specific (the chunked-prefill 640 set was tuned for Kimi's
+        # 64 heads; several program_configs overflow the grid at DeepSeek's 128). A config may declare
+        # the num_heads it was tuned for; when it doesn't match this model, fall back so a different
+        # variant at the same seq_len_local doesn't pick up a dimensionally-invalid program_config.
+        if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
+            cfg = None
+        # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
+        # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
+        # them to a batch=1 latent). Fall back to defaults when this ttMLA was not built for chunked.
+        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
+            cfg = None
+        return cfg
+
+    def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
+        """Memory config for the activation (in0) feeding this weight's matmul, as tuned in the mm
+        config (act_mem_config). Defaults to DRAM when no tuned config applies."""
+        cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
+        return cfg["act_mem_config"] if cfg is not None else ttnn.DRAM_MEMORY_CONFIG
+
     def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
         """Get matmul kwargs from config, falling back to defaults."""
-        cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
+        cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         if cfg is None:
             if weight_name in self._BATCHED_MM_DIMS:
                 return self._make_batched_mm_kwargs(weight_name, seq_len_local)
@@ -464,6 +488,13 @@ class ttMLA:
     def _get_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
         """Get SDPA program config, falling back to default chunk sizes."""
         cfg = self.sdpa_configs.get(seq_len_local)
+        # Like the matmul configs, an SDPA config may be head-count specific (the chunked 640 entry
+        # was tuned for Kimi's 64 heads). Fall back to defaults when it doesn't match this model.
+        if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
+            cfg = None
+        # The 640 chunk tiling drives ring joint attention and is only valid in chunked mode.
+        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
+            cfg = None
         q_chunk_size = cfg["q_chunk_size"] if cfg else 32
         k_chunk_size = cfg["k_chunk_size"] if cfg else 32
         return ttnn.SDPAProgramConfig(
@@ -507,7 +538,7 @@ class ttMLA:
         tt_kvpe: ttnn.Tensor,
         kvpe_cache: ttnn.Tensor,
         kv_actual_isl: int,
-        actual_isl: Optional[int],
+        actual_end: Optional[int],
         cache_batch_idx: int,
         cache_layer_idx: int,
         cache_user_id: int,
@@ -546,17 +577,17 @@ class ttMLA:
         )
 
         # Migration-gated: update_padded_kv_cache wrote full 32-row tiles, so the tokens between the
-        # last real token (kv_actual_isl + actual_isl) and the next 128-boundary hold stale data. Zero
-        # that pad window so the decode side reads clean zeros, then fire the per-layer ack. The op
-        # handles the window spilling across a chip border (block-cyclic layout).
+        # last real token (actual_end) and the next 128-boundary hold stale data. Zero that pad window
+        # so the decode side reads clean zeros, then fire the per-layer ack. The op handles the window
+        # spilling across a chip border (block-cyclic layout).
         if on_layer_complete is not None:
-            assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
+            assert actual_end is not None, "actual_end required when on_layer_complete is set"
             ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                 kvpe_cache,
                 cache_user_id,
                 cache_layer_idx,
                 self.layer_num,
-                kv_actual_isl + actual_isl,
+                actual_end,
                 chunk_size_global,
                 self.sp_axis,
             )
@@ -584,7 +615,6 @@ class ttMLA:
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
             topology=self.ccl_topology,
-            subdevice_id=self.tt_ccl.worker_sub_device_id,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
@@ -592,12 +622,16 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
         )
 
-        # ring_mla output is in kv_lora_rank (latent V) space; expand to v_head_dim per head.
+        # ring_mla output is in kv_lora_rank (latent V) space; expand to v_head_dim per head. Unlike the
+        # single-shot path this in0 is the per-head SDPA output (batch=local_heads), so the tuned 640
+        # config is a true batched MatmulMultiCoreReuse. When no tuned config matches (non-Kimi variant
+        # or non-blackhole) _get_mm_kwargs falls back to the 1D batched default.
+        # NOTE: Input is ideally L1 but DRAM comes from SDPA
         attn_out = ttnn.linear(
             attn_out,
             self.wkv_b2_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
         return attn_out
 
@@ -610,34 +644,32 @@ class ttMLA:
         kvpe_cache: ttnn.Tensor,
         cache_layer_idx: int = 0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
-        actual_isl: Optional[int] = None,
-        kv_actual_isl: Optional[int] = None,
+        actual_start: Optional[int] = None,
+        actual_end: Optional[int] = None,
         cache_user_id: int = 0,
+        return_kv_intermediates: bool = False,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
 
-        # Chunked-prefill mode is selected by passing kv_actual_isl (the cumulative count of valid
-        # KV tokens already in the cache before this chunk; 0 for the first chunk). When None we run
-        # the original single-shot path. The two paths share the Q/KV projection + rope prologue and
-        # the nlp_concat_heads + o_proj epilogue; they differ only in cache write, attention op, and
-        # where wkv_b2 is applied. See _chunked_attn for the unified chunked implementation.
-        is_chunked = kv_actual_isl is not None
-        # Buffers are pre-allocated per-mode in __init__, so the per-call mode must match how this
-        # ttMLA was constructed (chunked -> _chunked_kv_buf; non-chunked -> persistent_k/v + joint).
-        assert is_chunked == self.is_chunked, (
-            f"forward mode (is_chunked={is_chunked}, from kv_actual_isl) does not match construction "
-            f"(self.is_chunked={self.is_chunked}); the required ring buffers are not allocated"
+        # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
+        # __init__ and the rope variant, and forward honors that flag — it does not infer the mode from
+        # the arguments. actual_start/actual_end are the chunk parameters, supplied iff chunked:
+        # actual_start is the absolute KV position of this chunk's first real token (cumulative valid
+        # count before it; 0 for the first chunk) — the cache write + rotation offset (the internal
+        # kv_actual_isl); actual_end is the absolute position past the chunk's last real token — the
+        # migration pad-zero boundary. The single-shot and chunked paths share the Q/KV projection +
+        # rope prologue and the nlp_concat_heads + o_proj epilogue; they differ only in cache write,
+        # attention op, and where wkv_b2 is applied. See _chunked_attn for the unified chunked impl.
+        kv_actual_isl = actual_start
+        assert (actual_start is not None) == self.is_chunked, (
+            f"actual_start ({'set' if actual_start is not None else 'None'}) does not match construction "
+            f"(self.is_chunked={self.is_chunked}); pass actual_start/actual_end iff built with is_chunked=True"
         )
 
-        # Cache batch dim is user-major: each user reserves self.layer_num contiguous slots, so the
-        # flat slot is cache_user_id * layer_num + cache_layer_idx (reduces to cache_layer_idx for the
-        # single-user default cache_user_id == 0).
-        assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
-        cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
-
         # q_projection
+        # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         tt_q = ttnn.linear(
             hidden_states,
             self.q_a_proj_weight,
@@ -674,7 +706,7 @@ class ttMLA:
             tt_q,
             weight=self.q_a_layernorm_weight,
             epsilon=self.config.rms_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._get_act_mem_config("q_b_proj", seq_len_local),
             compute_kernel_config=self.default_compute_kernel_config,
         )
         tt_q = ttnn.linear(
@@ -716,6 +748,7 @@ class ttMLA:
         ttnn.deallocate(tt_q_rope)
 
         # kv
+        # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         tt_kv = ttnn.linear(
             hidden_states,
             self.kv_a_proj_with_mqa_weight,
@@ -739,6 +772,9 @@ class ttMLA:
                 tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
             )
 
+        # Raw compressed KV (pre-norm/pre-rope, [.., 576]) for debug/PCC against golden traces.
+        kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
+
         # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
         tt_kv_rope = ttnn.slice(
@@ -756,12 +792,21 @@ class ttMLA:
 
         tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
 
+        if return_kv_intermediates:
+            # post-RMSNorm latent ([.., 512]) and post-RoPE k_pe ([.., 64]); clone before concat.
+            kv_intermediates["tt_kv_nope"] = ttnn.clone(tt_kv_nope)
+            kv_intermediates["tt_kv_rope"] = ttnn.clone(tt_kv_rope)
+
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
-        if not is_chunked:
+        if return_kv_intermediates:
+            # post-transform concat ([.., 576], bf8) — what actually gets written to the cache.
+            kv_intermediates["tt_kvpe"] = ttnn.clone(tt_kvpe)
+
+        if not self.is_chunked:
             # === single-shot prefill: fill the whole local slot, run on-device ring SDPA with a
             # materialized V (wkv_b2 applied before attention). Unchanged from the original path. ===
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
@@ -792,7 +837,6 @@ class ttMLA:
                 cluster_axis=self.sp_axis,
                 mesh_device=self.mesh_device,
                 topology=self.ccl_topology,
-                subdevice_id=self.tt_ccl.worker_sub_device_id,
                 ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
                 use_column_major_ccl=True,
                 is_causal=True,
@@ -803,12 +847,17 @@ class ttMLA:
             # === chunked prefill: write this chunk into the cache at its per-chip offset, then run
             # ring_mla over the populated prefix with V materialized in-op from the latent KV. wkv_b2
             # is applied to the compact attention output afterwards (see _chunked_attn). ===
+            # Cache batch dim is user-major: each user reserves self.layer_num contiguous slots, so the
+            # flat slot is cache_user_id * layer_num + cache_layer_idx. Computed here (chunked-only) so
+            # the non-chunked path never multiplies by layer_num (None unless built for chunked prefill).
+            assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
+            cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
             attn_out = self._chunked_attn(
                 tt_q=tt_q,
                 tt_kvpe=tt_kvpe,
                 kvpe_cache=kvpe_cache,
                 kv_actual_isl=kv_actual_isl,
-                actual_isl=actual_isl,
+                actual_end=actual_end,
                 cache_batch_idx=cache_batch_idx,
                 cache_layer_idx=cache_layer_idx,
                 cache_user_id=cache_user_id,
@@ -837,4 +886,6 @@ class ttMLA:
         else:
             out = v_out
         signpost(header="MLA_END")
+        if return_kv_intermediates:
+            return out, kv_intermediates
         return out
