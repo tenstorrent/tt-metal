@@ -60,7 +60,7 @@
   numerical-precision long-context, owned by R1); xpass_drift=0,
   xfail_wrong_mode=0.
 
-### [ ] Refinement 1 — Numerical configurability + fp32 accumulator precision
+### [~] Refinement 1 — Numerical configurability + fp32 accumulator precision
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`,
 derive per-CB data formats from input dtype (input CBs, score CB, mask CB,
@@ -146,3 +146,45 @@ subtle part — verify against the `47`/`50`/`100`/`33` non-aligned INPUTS.
 `h_non_aligned`; the non-aligned golden cells (e.g. `Q1x1x32x50`,
 `Q1x1x47x64`, `Q1x12x33x50`) move from `xfail_expected` to `supported_pass`
 (minus any bf8b+non-aligned cells parked in EXCLUSIONS), no `xpass_drift`.
+
+### [ ] Refinement 4 — fp32 L1 budget: bound per-core CB footprint for D=1024
+
+**Goal**: fp32 input @ `D=1024` (`d_t=32`) OOMs L1 — the input CBs
+(`cb_q_in/k_in/v_in`, sized `2*d_t` pages) plus the fp32 accumulators
+(`cb_o/cb_pv/cb_o_resc`, `d_t` pages each) and `cb_out` together exceed the
+1.5 MB L1 budget when each tile is fp32 (4 KB). Failing golden cells:
+`Q1x1x128x1024_KV1x1x128x1024` × {fp32, acc=True} × {none,custom} ×
+{auto,explicit} (4 cells, `RuntimeError: circular buffers grow beyond max L1
+size`, program.cpp:1450). bf16 at the same shape fits, so this is fp32-only.
+
+**Implementation skill**: /memory-budget-metal
+
+**Verifier notes**: do NOT EXCLUDE these (OOM is the signal, per the
+numeric-formats OOM rule). The fix is the K-blocking / bounded-footprint
+pattern: stream the head dim in `d_chunk` tiles instead of sizing
+`cb_q_in/cb_out`/accumulators by the full `d_t`, OR drop the input-CB
+double-buffer (`2*d_t → d_t`) for fp32. Per-core CB footprint must stop
+scaling with `d_t`. Independent of R2/R3.
+
+### [ ] Refinement 5 — long-context precision: lift acc=False / fp32 S≥4096 misses
+
+**Goal**: the remaining long-context `supported_fail` cells are precision
+near-misses at S∈{4096,8192}, NOT structural gaps (left red by R1, not
+EXCLUDED):
+- `bf16` + `acc=False` and `bf8b` + `acc=False` @ S≥4096: rel_rms 0.15–0.77
+  vs golden 0.12. **Proven** (R1 probe: fp32-CB-always gives identical rms) to
+  be the 16-bit DEST register floor — the golden hard-codes
+  `fp32_dest_acc_en=False` + HiFi2 for this path, so neither CB format nor
+  fidelity is a lever. The only remaining lever is **algorithmic**: reduce the
+  KV-chunk count via `Bkv_t = 2/4` blocking (fewer online-softmax rescale
+  rounds → less 16-bit-DEST error accumulation), per op_design.md
+  "Performance: consider Bq_t/Bkv_t = 2 blocking for long context".
+- `fp32` + `acc=True` @ S≥4096: rel_rms 0.028–0.053 vs tight golden 0.02. The
+  fp32→TF32 srcA/srcB truncation in the QK^T/PV matmuls is the floor (HiFi4 is
+  already max). Lever: Kahan/compensated accumulation of the running output,
+  or wider-than-tile reduce blocking — investigate whether the 0.02 fp32 bound
+  is reachable at all at S≥4096 or whether the golden tolerance is the limit.
+
+**Verifier notes**: depends on R1. These are `severity=precision` misses with
+the PCC/RMS baseline recorded in `changelog.md` / `precision_matrix_results.md`.
+Order after R4 (the OOM blocks fp32 from even building at the largest D).
