@@ -2,200 +2,200 @@
 
 stage_to_slice_mapping:
   0:
-    host: bh-glx-120-a03u08
-    slice: 3
+    host: bh-glx-110-d02u02
+    slice: 2
   1:
-    host: bh-glx-120-a02u08
-    slice: 0
+    host: bh-glx-110-d02u02
+    slice: 3
   2:
-    host: bh-glx-120-a02u08
-    slice: 1
+    host: bh-glx-110-d02u08
+    slice: 0
   3:
-    host: bh-glx-120-a02u08
-    slice: 2
+    host: bh-glx-110-d02u08
+    slice: 1
   4:
-    host: bh-glx-120-a02u08
-    slice: 3
+    host: bh-glx-110-d02u08
+    slice: 2
   5:
-    host: bh-glx-120-a02u02
-    slice: 0
+    host: bh-glx-110-d02u08
+    slice: 3
   6:
-    host: bh-glx-120-a02u02
-    slice: 1
+    host: bh-glx-110-d01u08
+    slice: 0
   7:
-    host: bh-glx-120-a02u02
-    slice: 2
+    host: bh-glx-110-d01u08
+    slice: 1
   8:
-    host: bh-glx-120-a02u02
-    slice: 3
+    host: bh-glx-110-d01u08
+    slice: 2
   9:
-    host: bh-glx-120-a03u02
-    slice: 0
+    host: bh-glx-110-d01u08
+    slice: 3
   10:
-    host: bh-glx-120-a03u02
-    slice: 1
+    host: bh-glx-110-d01u02
+    slice: 0
   11:
-    host: bh-glx-120-a03u02
-    slice: 2
+    host: bh-glx-110-d01u02
+    slice: 1
   12:
-    host: bh-glx-120-a03u02
-    slice: 3
+    host: bh-glx-110-d01u02
+    slice: 2
   13:
-    host: bh-glx-120-a03u08
-    slice: 0
+    host: bh-glx-110-d01u02
+    slice: 3
   14:
-    host: bh-glx-120-a03u08
-    slice: 1
+    host: bh-glx-110-d02u02
+    slice: 0
   15:
-    host: bh-glx-120-a03u08
-    slice: 2
-  # jump to pod 2
+    host: bh-glx-110-d02u02
+    slice: 1
+  #interpod hop from 02u02 slice 1 to 04u02 slice 2
   16:
-    host: bh-glx-120-a08u08
-    slice: 1
+    host: bh-glx-110-d04u02
+    slice: 2
   17:
-    host: bh-glx-120-a08u08
-    slice: 2
+    host: bh-glx-110-d04u02
+    slice: 3
   18:
-    host: bh-glx-120-a08u08
-    slice: 3
+    host: bh-glx-110-d04u08
+    slice: 0
   19:
-    host: bh-glx-120-a08u02
-    slice: 0
+    host: bh-glx-110-d04u08
+    slice: 1
   20:
-    host: bh-glx-120-a08u02
-    slice: 1
+    host: bh-glx-110-d04u08
+    slice: 2
   21:
-    host: bh-glx-120-a08u02
-    slice: 2
+    host: bh-glx-110-d04u08
+    slice: 3
   22:
-    host: bh-glx-120-a08u02
-    slice: 3
+    host: bh-glx-110-d03u08
+    slice: 0
   23:
-    host: bh-glx-120-a09u02
-    slice: 0
+    host: bh-glx-110-d03u08
+    slice: 1
   24:
-    host: bh-glx-120-a09u02
-    slice: 1
+    host: bh-glx-110-d03u08
+    slice: 2
   25:
-    host: bh-glx-120-a09u02
-    slice: 2
+    host: bh-glx-110-d03u08
+    slice: 3
   26:
-    host: bh-glx-120-a09u02
-    slice: 3
+    host: bh-glx-110-d03u02
+    slice: 0
   27:
-    host: bh-glx-120-a09u08
-    slice: 0
+    host: bh-glx-110-d03u02
+    slice: 1
   28:
-    host: bh-glx-120-a09u08
-    slice: 1
+    host: bh-glx-110-d03u02
+    slice: 2
   29:
-    host: bh-glx-120-a09u08
-    slice: 2
+    host: bh-glx-110-d03u02
+    slice: 3
   30:
-    host: bh-glx-120-a09u08
-    slice: 3
+    host: bh-glx-110-d04u02
+    slice: 0
   31:
-    host: bh-glx-120-a08u08
-    slice: 0
-  # jump to pod 3
+    host: bh-glx-110-d04u02
+    slice: 1
+  # interpod hop from 04u02 slice 1 to 06u02 slice 3
   32:
-    host: bh-glx-120-a07u08
-    slice: 3
+    host: bh-glx-110-d06u02
+    slice: 2
   33:
-    host: bh-glx-120-a06u08
-    slice: 0
+    host: bh-glx-110-d06u02
+    slice: 3
   34:
-    host: bh-glx-120-a06u08
-    slice: 1
+    host: bh-glx-110-d06u08
+    slice: 0
   35:
-    host: bh-glx-120-a06u08
-    slice: 2
+    host: bh-glx-110-d06u08
+    slice: 1
   36:
-    host: bh-glx-120-a06u08
-    slice: 3
+    host: bh-glx-110-d06u08
+    slice: 2
   37:
-    host: bh-glx-120-a06u02
-    slice: 0
+    host: bh-glx-110-d06u08
+    slice: 3
   38:
-    host: bh-glx-120-a06u02
-    slice: 1
+    host: bh-glx-110-d05u08
+    slice: 0
   39:
-    host: bh-glx-120-a06u02
-    slice: 2
+    host: bh-glx-110-d05u08
+    slice: 1
   40:
-    host: bh-glx-120-a06u02
-    slice: 3
+    host: bh-glx-110-d05u08
+    slice: 2
   41:
-    host: bh-glx-120-a07u02
-    slice: 0
-  42:
-    host: bh-glx-120-a07u02
-    slice: 1
-  43:
-    host: bh-glx-120-a07u02
-    slice: 2
-  44:
-    host: bh-glx-120-a07u02
+    host: bh-glx-110-d05u08
     slice: 3
-  45:
-    host: bh-glx-120-a07u08
+  42:
+    host: bh-glx-110-d05u02
     slice: 0
-  46:
-    host: bh-glx-120-a07u08
+  43:
+    host: bh-glx-110-d05u02
     slice: 1
-  47:
-    host: bh-glx-120-a07u08
+  44:
+    host: bh-glx-110-d05u02
     slice: 2
+  45:
+    host: bh-glx-110-d05u02
+    slice: 3
+  46:
+    host: bh-glx-110-d06u02
+    slice: 0
+  47:
+    host: bh-glx-110-d06u02
+    slice: 1
   # jump to pod 4
   48:
-    host: bh-glx-120-a04u08
-    slice: 1
+    host: bh-glx-110-d08u02
+    slice: 2
   49:
-    host: bh-glx-120-a04u08
-    slice: 2
+    host: bh-glx-110-d08u02
+    slice: 3
   50:
-    host: bh-glx-120-a04u08
-    slice: 3
+    host: bh-glx-110-d08u08
+    slice: 0
   51:
-    host: bh-glx-120-a04u02
-    slice: 0
+    host: bh-glx-110-d08u08
+    slice: 1
   52:
-    host: bh-glx-120-a04u02
-    slice: 1
+    host: bh-glx-110-d08u08
+    slice: 2
   53:
-    host: bh-glx-120-a04u02
-    slice: 2
+    host: bh-glx-110-d08u08
+    slice: 3
   54:
-    host: bh-glx-120-a04u02
-    slice: 3
+    host: bh-glx-110-d07u08
+    slice: 0
   55:
-    host: bh-glx-120-a05u02
-    slice: 0
+    host: bh-glx-110-d07u08
+    slice: 1
   56:
-    host: bh-glx-120-a05u02
-    slice: 1
+    host: bh-glx-110-d07u08
+    slice: 2
   57:
-    host: bh-glx-120-a05u02
-    slice: 2
+    host: bh-glx-110-d07u08
+    slice: 3
   58:
-    host: bh-glx-120-a05u02
-    slice: 3
+    host: bh-glx-110-d07u02
+    slice: 0
   59:
-    host: bh-glx-120-a05u08
-    slice: 0
-  60:
-    host: bh-glx-120-a05u08
+    host: bh-glx-110-d07u02
     slice: 1
-  61:
-    host: bh-glx-120-a05u08
+  60:
+    host: bh-glx-110-d07u02
     slice: 2
-  62:
-    host: bh-glx-120-a05u08
+  61:
+    host: bh-glx-110-d07u02
     slice: 3
-  63:
-    host: bh-glx-120-a04u08
+  62:
+    host: bh-glx-110-d08u02
     slice: 0
+  63:
+    host: bh-glx-110-d08u02
+    slice: 1
 mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
 rank_binding_file: blitz_decode_pipeline_rank_binding_superpod_ci.yaml
 rank_file: blitz_decode_pipeline_rank_file_superpod_ci
