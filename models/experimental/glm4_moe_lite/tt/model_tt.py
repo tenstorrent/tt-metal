@@ -44,6 +44,7 @@ from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear
 from models.experimental.glm4_moe_lite.tt.tt_embedding import (
     convert_embedding_weight_to_tt,
     prefill_embed_memory_config,
+    run_tt_decode_embedding,
     run_tt_embedding,
 )
 from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
@@ -87,6 +88,53 @@ class _DecodeTraceSamplingState:
     mtp_trace_id: int | None = None
     mtp_top1_values_tt: ttnn.Tensor | None = None
     mtp_top1_indices_tt: ttnn.Tensor | None = None
+
+
+@dataclass
+class _EagerDecodePrepState:
+    """Persistent decode prep tensors for eager (non-trace) decode steps."""
+
+    batch: int = 0
+    page_table_width: int = 0
+    use_decode_rope: bool = False
+    tt_positions: ttnn.Tensor | None = None
+    cos_batch_tt: ttnn.Tensor | None = None
+    sin_batch_tt: ttnn.Tensor | None = None
+    page_table_tt: ttnn.Tensor | None = None
+    tokens_tt: ttnn.Tensor | None = None
+    cos_decode_tt: ttnn.Tensor | None = None
+    sin_decode_tt: ttnn.Tensor | None = None
+    trans_decode_tt: ttnn.Tensor | None = None
+    rope_sharded_mem_config: Any | None = None
+    positions_main_tt: ttnn.Tensor | None = None
+    positions_draft_tt: ttnn.Tensor | None = None
+
+
+def _eager_persistent_decode_prep_enabled() -> bool:
+    """Reuse device-side decode prep buffers and host-copy RoPE rows each step."""
+    raw = os.environ.get("GLM4_MOE_LITE_EAGER_PERSISTENT_DECODE_PREP", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _host_rope_cos_sin_batches(
+    *,
+    rope: dict[str, Any],
+    positions: torch.Tensor,
+    max_seq_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Gather per-position RoPE cos/sin on host into [1, 1, B, rope_dim] bf16."""
+    positions_clamped = positions.to(torch.int32).clamp_min(0)
+    positions_clamped = torch.clamp(positions_clamped, 0, max(0, int(max_seq_len) - 1))
+    batch = int(positions_clamped.shape[0])
+    cos_host = rope["cos_matrix_host"]
+    sin_host = rope["sin_matrix_host"]
+    rope_dim = int(cos_host.shape[3])
+    idx = positions_clamped.view(-1)
+    cos_rows = cos_host[0, 0, idx, :].to(dtype=torch.bfloat16)
+    sin_rows = sin_host[0, 0, idx, :].to(dtype=torch.bfloat16)
+    cos_batch = cos_rows.view(1, 1, batch, rope_dim).contiguous()
+    sin_batch = sin_rows.view(1, 1, batch, rope_dim).contiguous()
+    return cos_batch, sin_batch
 
 
 def _torch_dtype_to_ttnn(dtype: torch.dtype) -> ttnn.DataType:
@@ -230,6 +278,7 @@ class Glm4MoeLiteDenseOnlyTT:
     # At runtime, decode pads to the nearest bucket instead of MAX_NUM_SEQS,
     # giving small batches more cores/seq and lower ITL.
     _decode_trace_states: dict[int, _DecodeTraceSamplingState] = field(init=False, default_factory=dict)
+    _eager_decode_prep_states: dict[int, _EagerDecodePrepState] = field(init=False, default_factory=dict)
     # Per-step batch-expansion metadata (set during decode, consumed by trace input copy)
     _batch_expand_num_main: int = 0
 
@@ -1367,38 +1416,67 @@ class Glm4MoeLiteDenseOnlyTT:
         # vLLM uses a constant page_table width; accept any W here.
         t0 = time.perf_counter() if profile_on else 0.0
         is_mesh_device = _is_mesh_device(self.device)
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=self.device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None,
-        )
-
-        tt_positions, cos_batch, sin_batch = prepare_decode_rope_and_positions_tt(
-            device=self.device, rope=self.rope, positions=positions
-        )
-
-        # Decode-mode RoPE is faster but has been observed to be brittle during
-        # bring-up. Default to the non-decode rotary kernel for correctness,
-        # and only enable decode-mode when tracing (or explicitly requested).
-        use_decode_rope = enable_trace or os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
+        use_decode_rope = os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
+        use_persistent_prep = _eager_persistent_decode_prep_enabled()
+        persistent_prep = False
+        prep_state: _EagerDecodePrepState | None = None
         cos_decode = sin_decode = trans_decode = rope_sharded_cfg = None
-        if use_decode_rope:
+        positions_main_tt = None
+        positions_draft_tt = None
+
+        if use_persistent_prep:
+            prep_state = self._get_or_create_eager_decode_prep_state(
+                batch=active,
+                page_table_width=int(page_table.shape[1]),
+                use_decode_rope=use_decode_rope,
+            )
             (
+                tt_positions,
+                cos_batch,
+                sin_batch,
+                page_table_tt,
                 cos_decode,
                 sin_decode,
                 trans_decode,
                 rope_sharded_cfg,
-            ) = prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
-                device=self.device,
-                cos_batch=cos_batch,
-                sin_batch=sin_batch,
-                trans_matrix=self.rope["trans_matrix"],
-                batch=active,
-                rope_dim=int(self.hparams.qk_rope_head_dim),
+                positions_main_tt,
+                positions_draft_tt,
+            ) = self._copy_eager_decode_prep_inputs(
+                state=prep_state,
+                positions=positions,
+                page_table=page_table,
+                tokens=tokens,
+                num_main_lanes=num_main_lanes,
             )
+            persistent_prep = True
+        else:
+            page_table_tt = ttnn.from_torch(
+                page_table,
+                device=self.device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None,
+            )
+
+            tt_positions, cos_batch, sin_batch = prepare_decode_rope_and_positions_tt(
+                device=self.device, rope=self.rope, positions=positions
+            )
+
+            if use_decode_rope:
+                (
+                    cos_decode,
+                    sin_decode,
+                    trans_decode,
+                    rope_sharded_cfg,
+                ) = prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
+                    device=self.device,
+                    cos_batch=cos_batch,
+                    sin_batch=sin_batch,
+                    trans_matrix=self.rope["trans_matrix"],
+                    batch=active,
+                    rope_dim=int(self.hparams.qk_rope_head_dim),
+                )
         if profile_on:
             decode_profile["prep_inputs_s"] = decode_profile.get("prep_inputs_s", 0.0) + (time.perf_counter() - t0)
 
@@ -1408,33 +1486,26 @@ class Glm4MoeLiteDenseOnlyTT:
         if _SIGNPOST_ENABLED:
             signpost("embed-start")
         t0 = time.perf_counter() if profile_on else 0.0
-        x = run_tt_embedding(device=self.device, token_ids=tokens, tt_weight=self.embed_w)
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.reshape(x, (1, active, 1, int(self.hparams.hidden_size)))
-        x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
-        # Some TT tile-layout ops materialize/preserve tile padding in the logical
-        # shape. Keep the decode batch dimension tight so downstream kernels (MoE,
-        # FlashMLA, RoPE) do not execute inflated work on padded lanes.
-        #
-        # `slice` can return a view that aliases the source buffer (no refcounting).
-        # Materialize the sliced tensor and then free the padded source to avoid
-        # intermittent use-after-free corruption during decode.
-        x_view = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, int(self.hparams.hidden_size)])
-        x_tight = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # NOTE: `x_view` may alias `x`; do not deallocate it separately.
-        ttnn.deallocate(x, force=False)
-        x = x_tight
+        skip_embed_clone = os.environ.get("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES", "").strip() == "1"
+        embed_width_sharded = (
+            os.environ.get("GLM4_MOE_LITE_DECODE_EMBED_WIDTH_SHARDED", "0").strip() == "1"
+            and os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "").strip() == "1"
+        )
+        embed_tokens_tt = prep_state.tokens_tt if prep_state is not None else None
+        x = run_tt_decode_embedding(
+            device=self.device,
+            token_ids=tokens,
+            tt_weight=self.embed_w,
+            tokens_tt=embed_tokens_tt,
+            skip_defensive_clone=skip_embed_clone,
+            width_sharded_norm=embed_width_sharded,
+        )
         if profile_on:
             decode_profile["embed_s"] = decode_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
         if _SIGNPOST_ENABLED:
             signpost("embed-end")
 
-        # Batch-expansion serial cache update: construct masked position tensors
-        # so paged_update_cache serializes writes from aliased page_table entries.
-        positions_main_tt = None
-        positions_draft_tt = None
-        if self.batch_expand and num_main_lanes > 0:
+        if not persistent_prep and self.batch_expand and num_main_lanes > 0:
             n = num_main_lanes
             pos_main = positions.clone()
             pos_draft = positions.clone()
@@ -1503,7 +1574,7 @@ class Glm4MoeLiteDenseOnlyTT:
         if self.mtp_enabled:
             mtp_hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        if use_decode_rope:
+        if use_decode_rope and not persistent_prep:
             assert cos_decode is not None and sin_decode is not None and trans_decode is not None
             ttnn.deallocate(cos_decode, force=False)
             ttnn.deallocate(sin_decode, force=False)
@@ -1618,10 +1689,11 @@ class Glm4MoeLiteDenseOnlyTT:
                 next_ids_flat = next_ids
 
             ttnn.deallocate(x, force=False)
-            ttnn.deallocate(tt_positions, force=False)
-            ttnn.deallocate(cos_batch, force=False)
-            ttnn.deallocate(sin_batch, force=False)
-            ttnn.deallocate(page_table_tt, force=False)
+            if not persistent_prep:
+                ttnn.deallocate(tt_positions, force=False)
+                ttnn.deallocate(cos_batch, force=False)
+                ttnn.deallocate(sin_batch, force=False)
+                ttnn.deallocate(page_table_tt, force=False)
             if profile_on:
                 decode_profile["total_s"] = decode_profile.get("total_s", 0.0) + (time.perf_counter() - t_decode0)
                 self._profile_record(
@@ -1702,14 +1774,15 @@ class Glm4MoeLiteDenseOnlyTT:
         # Cleanup.
         ttnn.deallocate(logits_tt, force=False)
         ttnn.deallocate(x, force=False)
-        ttnn.deallocate(tt_positions, force=False)
-        ttnn.deallocate(cos_batch, force=False)
-        ttnn.deallocate(sin_batch, force=False)
-        ttnn.deallocate(page_table_tt, force=False)
-        if positions_main_tt is not None:
-            ttnn.deallocate(positions_main_tt, force=False)
-        if positions_draft_tt is not None:
-            ttnn.deallocate(positions_draft_tt, force=False)
+        if not persistent_prep:
+            ttnn.deallocate(tt_positions, force=False)
+            ttnn.deallocate(cos_batch, force=False)
+            ttnn.deallocate(sin_batch, force=False)
+            ttnn.deallocate(page_table_tt, force=False)
+            if positions_main_tt is not None:
+                ttnn.deallocate(positions_main_tt, force=False)
+            if positions_draft_tt is not None:
+                ttnn.deallocate(positions_draft_tt, force=False)
         if mtp_hidden is not None:
             ttnn.deallocate(mtp_hidden, force=False)
         if profile_on:
@@ -1902,6 +1975,342 @@ class Glm4MoeLiteDenseOnlyTT:
         ttnn.deallocate(page_table_tt, force=False)
 
         return draft_token_ids
+
+    def _release_eager_decode_prep_state(self, state: _EagerDecodePrepState) -> None:
+        for t in (
+            state.tt_positions,
+            state.cos_batch_tt,
+            state.sin_batch_tt,
+            state.page_table_tt,
+            state.tokens_tt,
+            state.cos_decode_tt,
+            state.sin_decode_tt,
+            state.trans_decode_tt,
+            state.positions_main_tt,
+            state.positions_draft_tt,
+        ):
+            if t is not None:
+                try:
+                    ttnn.deallocate(t, force=False)
+                except Exception:
+                    pass
+
+    def _get_or_create_eager_decode_prep_state(
+        self,
+        *,
+        batch: int,
+        page_table_width: int,
+        use_decode_rope: bool,
+    ) -> _EagerDecodePrepState:
+        batch = int(batch)
+        page_table_width = int(page_table_width)
+        if batch <= 0:
+            raise ValueError("eager decode prep batch must be > 0")
+        if page_table_width <= 0:
+            raise ValueError("eager decode prep page_table_width must be > 0")
+
+        state = self._eager_decode_prep_states.get(batch)
+        if (
+            state is not None
+            and state.tt_positions is not None
+            and state.cos_batch_tt is not None
+            and state.sin_batch_tt is not None
+            and state.page_table_tt is not None
+            and state.tokens_tt is not None
+            and int(state.page_table_width) == page_table_width
+            and bool(state.use_decode_rope) == bool(use_decode_rope)
+            and (
+                not use_decode_rope
+                or (
+                    state.cos_decode_tt is not None
+                    and state.sin_decode_tt is not None
+                    and state.trans_decode_tt is not None
+                    and state.rope_sharded_mem_config is not None
+                )
+            )
+        ):
+            return state
+
+        if state is not None:
+            self._release_eager_decode_prep_state(state)
+
+        state = _EagerDecodePrepState(
+            batch=batch,
+            page_table_width=page_table_width,
+            use_decode_rope=bool(use_decode_rope),
+        )
+        is_mesh_device = _is_mesh_device(self.device)
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None
+        rope_dim = int(self.hparams.qk_rope_head_dim)
+
+        state.tt_positions = ttnn.from_torch(
+            torch.zeros((batch,), dtype=torch.int32),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        state.cos_batch_tt = ttnn.from_torch(
+            torch.zeros((1, 1, batch, rope_dim), dtype=torch.bfloat16),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        state.sin_batch_tt = ttnn.from_torch(
+            torch.zeros((1, 1, batch, rope_dim), dtype=torch.bfloat16),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        state.page_table_tt = ttnn.from_torch(
+            torch.zeros((batch, page_table_width), dtype=torch.int32),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        state.tokens_tt = ttnn.from_torch(
+            torch.zeros((batch, 1), dtype=torch.int32),
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+        if use_decode_rope:
+            grid_size = self.device.compute_with_storage_grid_size()
+            user_grid = ttnn.num_cores_to_corerangeset(int(batch), grid_size, row_wise=True)
+            state.rope_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, rope_dim),
+                core_grid=user_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            state.cos_decode_tt = ttnn.from_torch(
+                torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=state.rope_sharded_mem_config,
+                mesh_mapper=mapper,
+            )
+            state.sin_decode_tt = ttnn.from_torch(
+                torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=state.rope_sharded_mem_config,
+                mesh_mapper=mapper,
+            )
+            trans_mat_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+                core_grid=user_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            trans_mat_torch = _rot_transformation_mat_torch().to(dtype=torch.bfloat16)
+            trans_mat_torch = trans_mat_torch.repeat(1, 1, int(batch), 1).contiguous()
+            state.trans_decode_tt = ttnn.from_torch(
+                trans_mat_torch,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=trans_mat_mem_config,
+                mesh_mapper=mapper,
+            )
+
+        if self.batch_expand:
+            state.positions_main_tt = ttnn.from_torch(
+                torch.zeros((batch,), dtype=torch.int32),
+                device=self.device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            state.positions_draft_tt = ttnn.from_torch(
+                torch.zeros((batch,), dtype=torch.int32),
+                device=self.device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+
+        self._eager_decode_prep_states[batch] = state
+        return state
+
+    def _copy_eager_decode_prep_inputs(
+        self,
+        *,
+        state: _EagerDecodePrepState,
+        positions: torch.Tensor,
+        page_table: torch.Tensor,
+        tokens: torch.Tensor,
+        num_main_lanes: int,
+    ) -> tuple[
+        ttnn.Tensor,
+        ttnn.Tensor,
+        ttnn.Tensor,
+        ttnn.Tensor,
+        ttnn.Tensor | None,
+        ttnn.Tensor | None,
+        ttnn.Tensor | None,
+        Any | None,
+        ttnn.Tensor | None,
+        ttnn.Tensor | None,
+    ]:
+        """Copy host decode inputs into persistent device buffers for eager decode."""
+        if (
+            state.tt_positions is None
+            or state.cos_batch_tt is None
+            or state.sin_batch_tt is None
+            or state.page_table_tt is None
+            or state.tokens_tt is None
+        ):
+            raise RuntimeError("eager decode prep state is missing persistent tensors")
+
+        batch = int(state.batch)
+        if int(positions.shape[0]) != batch:
+            raise RuntimeError(f"eager decode prep batch mismatch: allocated={batch} got={int(positions.shape[0])}")
+        if int(page_table.shape[1]) != int(state.page_table_width):
+            raise RuntimeError(
+                f"eager decode prep page_table_width mismatch: "
+                f"allocated={int(state.page_table_width)} got={int(page_table.shape[1])}"
+            )
+
+        is_mesh_device = _is_mesh_device(self.device)
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None
+
+        host_pos = ttnn.from_torch(
+            positions.to(torch.int32),
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        ttnn.copy_host_to_device_tensor(host_pos, state.tt_positions)
+
+        cos_torch, sin_torch = _host_rope_cos_sin_batches(
+            rope=self.rope,
+            positions=positions,
+            max_seq_len=int(self.max_seq_len),
+        )
+        host_cos = ttnn.from_torch(
+            cos_torch,
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        host_sin = ttnn.from_torch(
+            sin_torch,
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        ttnn.copy_host_to_device_tensor(host_cos, state.cos_batch_tt)
+        ttnn.copy_host_to_device_tensor(host_sin, state.sin_batch_tt)
+
+        host_pt = ttnn.from_torch(
+            page_table.to(torch.int32),
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        ttnn.copy_host_to_device_tensor(host_pt, state.page_table_tt)
+
+        host_tokens = ttnn.from_torch(
+            tokens.to(torch.int32),
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        ttnn.copy_host_to_device_tensor(host_tokens, state.tokens_tt)
+
+        cos_decode = sin_decode = trans_decode = None
+        rope_sharded_cfg = state.rope_sharded_mem_config
+        if state.use_decode_rope:
+            assert (
+                state.cos_decode_tt is not None
+                and state.sin_decode_tt is not None
+                and state.trans_decode_tt is not None
+                and state.rope_sharded_mem_config is not None
+            )
+            cos_tmp = ttnn.transpose(state.cos_batch_tt, 1, 2)
+            sin_tmp = ttnn.transpose(state.sin_batch_tt, 1, 2)
+            cos_sharded = ttnn.interleaved_to_sharded(cos_tmp, state.rope_sharded_mem_config)
+            sin_sharded = ttnn.interleaved_to_sharded(sin_tmp, state.rope_sharded_mem_config)
+            ttnn.copy(cos_sharded, state.cos_decode_tt)
+            ttnn.copy(sin_sharded, state.sin_decode_tt)
+            ttnn.deallocate(cos_tmp, force=False)
+            ttnn.deallocate(sin_tmp, force=False)
+            ttnn.deallocate(cos_sharded, force=False)
+            ttnn.deallocate(sin_sharded, force=False)
+            cos_decode = state.cos_decode_tt
+            sin_decode = state.sin_decode_tt
+            trans_decode = state.trans_decode_tt
+
+        positions_main_tt = None
+        positions_draft_tt = None
+        if self.batch_expand and num_main_lanes > 0:
+            if state.positions_main_tt is None or state.positions_draft_tt is None:
+                raise RuntimeError("batch_expand enabled but eager decode prep masked positions are missing")
+            n = int(num_main_lanes)
+            pos_main = positions.clone()
+            pos_draft = positions.clone()
+            pos_main[n : 2 * n] = -1
+            pos_draft[:n] = -1
+            host_pos_main = ttnn.from_torch(
+                pos_main.to(torch.int32),
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            host_pos_draft = ttnn.from_torch(
+                pos_draft.to(torch.int32),
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            ttnn.copy_host_to_device_tensor(host_pos_main, state.positions_main_tt)
+            ttnn.copy_host_to_device_tensor(host_pos_draft, state.positions_draft_tt)
+            positions_main_tt = state.positions_main_tt
+            positions_draft_tt = state.positions_draft_tt
+
+        return (
+            state.tt_positions,
+            state.cos_batch_tt,
+            state.sin_batch_tt,
+            state.page_table_tt,
+            cos_decode,
+            sin_decode,
+            trans_decode,
+            rope_sharded_cfg,
+            positions_main_tt,
+            positions_draft_tt,
+        )
 
     def _get_or_create_trace_state(self, *, batch: int, page_table_width: int) -> _DecodeTraceSamplingState:
         """Get or create a per-bucket decode trace state with persistent inputs."""

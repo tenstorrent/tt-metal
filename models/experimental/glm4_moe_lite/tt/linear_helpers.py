@@ -303,6 +303,33 @@ def _is_l1_width_sharded(tensor: ttnn.Tensor) -> bool:
     return mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
 
+def _decode_activation_m_total(x: ttnn.Tensor) -> int:
+    """Flattened M for decode activations (product of all dims except hidden)."""
+    shape = x.shape
+    if len(shape) < 2:
+        return 1
+    m = 1
+    for i in range(len(shape) - 1):
+        m *= int(shape[i])
+    return m
+
+
+def _width_shard_mc_matches(tensor: ttnn.Tensor, expected_mc: ttnn.MemoryConfig) -> bool:
+    """True when ``tensor`` is already in the same WIDTH_SHARDED L1 layout as ``expected_mc``."""
+    if not _is_l1_width_sharded(tensor):
+        return False
+    mc = tensor.memory_config()
+    if mc.memory_layout != expected_mc.memory_layout or mc.buffer_type != expected_mc.buffer_type:
+        return False
+    spec = mc.shard_spec
+    exp = expected_mc.shard_spec
+    if spec is None or exp is None:
+        return False
+    if spec.shape != exp.shape or spec.orientation != exp.orientation:
+        return False
+    return int(spec.grid.num_cores()) == int(exp.grid.num_cores())
+
+
 def _shard_grid_fits_prog(sharded_tensor: ttnn.Tensor, prog_core_x: int, prog_core_y: int) -> bool:
     """True when the activation shard grid fits inside the matmul program compute grid."""
     spec = sharded_tensor.memory_config().shard_spec
@@ -711,6 +738,12 @@ def prefill_norm_config_from_width_sharded_tensor(tensor: ttnn.Tensor) -> dict:
     }
 
 
+def decode_width_sharded_norm_input_config(device: Any, batch: int, width: int) -> ttnn.MemoryConfig:
+    """WIDTH_SHARDED L1 memory config for decode embed output / input RMSNorm."""
+    cfg = prefill_width_sharded_norm_config(device, int(batch), int(width))
+    return cfg["sharded_output_config"]
+
+
 def prefill_width_sharded_norm_config(device: Any, m_total: int, width: int, *, ws_nc_hint: int | None = None) -> dict:
     """RMSNorm config for WIDTH_SHARDED prefill activations (``in_sharded`` + ``out_sharded``)."""
     core_x, core_y, best_pcn, mt, _, ws_mc = _prefill_ws_grid(device, m_total, width, forced_nc=ws_nc_hint)
@@ -727,23 +760,53 @@ def prefill_width_sharded_norm_config(device: Any, m_total: int, width: int, *, 
     }
 
 
-def sharded_decode_norm(norm_fn: Any, x: ttnn.Tensor, *, device: Any, width: int, downstream_mc: ttnn.MemoryConfig):
+def _norm_kva_sharded_in0_compatible(*, k_width: int, n_width: int) -> bool:
+    """True when norm WIDTH_SHARDED output can feed attn_kva without an input gather.
+
+    Requires a core count that divides both K-tiles (norm width) and N-tiles (matmul
+    output).  For GLM w_q_kv_a (K=2048, N=1344) gcd(64,42)=2 only — too small.
+    """
+    kt = (int(k_width) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    nt = (int(n_width) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    g = math.gcd(kt, nt)
+    return g >= 8
+
+
+def sharded_decode_norm(
+    norm_fn: Any,
+    x: ttnn.Tensor,
+    *,
+    device: Any,
+    width: int,
+    downstream_mc: ttnn.MemoryConfig,
+    return_sharded: bool = False,
+    ws_nc_hint: int | None = None,
+):
     """Run a decode RMSNorm width-sharded across cores instead of on a single core.
 
     ``ttnn.rms_norm`` on an interleaved [B, width] decode activation runs on ONE
     core (~30us for width=2048).  Width-sharding the input lets the LayerNorm
     sharded multi-core kernel parallelize the reduction; one to_memory_config
-    gathers the result back to the downstream interleaved format.  Falls back to
-    the plain single-core norm if the width is not shardable on this grid.
+    gathers the result back to the downstream interleaved format unless
+    ``return_sharded=True``.  Falls back to the plain single-core norm if the
+    width is not shardable on this grid.
     """
-    m_total = int(x.shape[-2])
+    m_total = _decode_activation_m_total(x)
     try:
-        norm_cfg = prefill_width_sharded_norm_config(device, m_total, int(width))
-        x_sharded = ttnn.to_memory_config(x, norm_cfg["sharded_output_config"])
+        norm_cfg = prefill_width_sharded_norm_config(device, m_total, int(width), ws_nc_hint=ws_nc_hint)
+        if _width_shard_mc_matches(x, norm_cfg["sharded_output_config"]):
+            x_sharded = x
+            x_owned = False
+        else:
+            x_sharded = ttnn.to_memory_config(x, norm_cfg["sharded_output_config"])
+            x_owned = x_sharded is not x
     except Exception:
         return norm_fn(x, mode="decode")
     out_sharded = norm_fn(x_sharded, mode="decode", in_sharded=True, out_sharded=True, norm_config=norm_cfg)
-    ttnn.deallocate(x_sharded, force=False)
+    if x_owned:
+        ttnn.deallocate(x_sharded, force=False)
+    if return_sharded:
+        return out_sharded
     out = ttnn.to_memory_config(out_sharded, downstream_mc)
     ttnn.deallocate(out_sharded, force=False)
     return out
