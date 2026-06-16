@@ -1338,6 +1338,19 @@ CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const
         idx.num_reduce_tiles_per_block_h = ctx.Kt - ctx.last_core_width_index * ctx.block_wt;
     }
 
+    // Real (logical) column count this core reduces over (used by the Welford compute kernel, which has
+    // no per-column mask). Cores before the last own a full block_w; the final real core owns the
+    // remaining logical columns (which may end in a partial tile); any all-padding core beyond it owns
+    // none. For a single width shard this is just the whole logical width.
+    const uint32_t block_w = ctx.block_wt * TILE_WIDTH;
+    if (idx.width_index < ctx.last_core_width_index) {
+        idx.welford_reduce_w = block_w;
+    } else if (idx.width_index == ctx.last_core_width_index) {
+        idx.welford_reduce_w = ctx.logical_K - ctx.last_core_width_index * block_w;
+    } else {
+        idx.welford_reduce_w = 0;
+    }
+
     return idx;
 }
 
@@ -1373,6 +1386,10 @@ std::vector<uint32_t> build_compute_args(
             args.push_back((uint32_t)ctx.num_distributed_devices);
         }
     }
+    // Appended last (after the all-to-all args) so the other compute kernels, which do not read it, are
+    // unaffected. The Welford kernel reads it at index 4 on all-to-all workers (num_reduce_tiles,
+    // num_rows, use_two_stage_reduce, is_second_stage_reader, welford_reduce_w) and index 1 otherwise.
+    args.push_back(idx.welford_reduce_w);
     return args;
 }
 

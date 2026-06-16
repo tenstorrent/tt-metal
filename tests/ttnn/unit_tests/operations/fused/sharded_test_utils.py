@@ -509,7 +509,7 @@ _LOGICAL_WIDTH_NORM_ATOL = 0.05  # floor for near-zero normalized outputs (relat
 _LOGICAL_WIDTH_NORM_PAD_POISON = 1000.0  # poison the implicit tile padding so any leak is caught
 
 
-def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w, eps=1e-5):
+def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w, eps=1e-5, use_welford=False):
     """Verify a width-sharded layer/RMS norm normalizes over the LOGICAL width when the width is split
     across cores so the final core owns fewer real tiles (and, for a non-tile-aligned width, a partially
     valid final tile plus pure-padding tiles).
@@ -521,7 +521,12 @@ def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w,
     sqrt(padded/logical) -- a (near-)pure scale. The check therefore gates on the standard
     relative-Frobenius and allclose metrics (both scale-sensitive) and DISABLES PCC, which is
     scale-invariant and so blind to this class of error. Tolerances are the bf16 budget defined above.
+
+    use_welford exercises the Welford reduction (LayerNorm only); it has no per-column mask and instead
+    reduces each core's exact logical column count, so it is the path most sensitive to a split where the
+    final core owns a partial tile.
     """
+    assert not (use_welford and is_rmsnorm), "RMSNorm does not use the Welford reduction"
     kt = -(-w // TILE_WIDTH)  # ceil: a non-tile-aligned width rounds up to a whole number of tiles
     shard_wt = -(-kt // num_cores_w)  # tiles per core (ceil) -> last core owns fewer real tiles
     shard_w = shard_wt * TILE_WIDTH
@@ -550,12 +555,14 @@ def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w,
     # hide a scale error behind PCC). gamma padded width must equal the input padded width (= w).
     ones = ttnn.from_torch(torch.ones(1, 1, 1, w, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
 
-    subblock_w = next(d for d in range(min(shard_wt, 8), 0, -1) if shard_wt % d == 0)
+    # fp32 dest caps subblock_w at 4; keep it a divisor of the shard width in tiles.
+    subblock_w = next(d for d in range(min(shard_wt, 4), 0, -1) if shard_wt % d == 0)
     prgm = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[num_cores_w, 1],
         subblock_w=subblock_w,
         block_h=1,
         block_w=shard_wt,
+        use_welford=use_welford,
         inplace=False,
     )
     # fp32 dest + HiFi4 isolate the normalization from accumulation/fidelity error (see budget above).
@@ -569,6 +576,11 @@ def run_sharded_norm_logical_width_multicore(device, is_rmsnorm, w, num_cores_w,
     common = dict(
         epsilon=eps, weight=ones, program_config=prgm, compute_kernel_config=compute_cfg, memory_config=sharded_cfg
     )
+    if use_welford:
+        # Welford normalizes via a reciprocal LUT rather than a divide, so it needs the per-core LUT.
+        common["recip_tensor"] = ttnn.create_layer_norm_reciprocals(
+            device, sharded_cfg.shard_spec.grid, sharded_cfg.shard_spec.shape[1]
+        )
     if is_rmsnorm:
         tt_out = ttnn.rms_norm(tt_x, **common)
     else:
