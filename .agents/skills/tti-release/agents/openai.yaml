@@ -1,0 +1,7 @@
+interface:
+  display_name: "TTI Release"
+  short_description: "Run tt-inference-server release reports"
+  default_prompt: "Use $tti-release to run the tt-inference-server release workflow for a completed vLLM model and copy back the readiness report."
+
+policy:
+  allow_implicit_invocation: true
