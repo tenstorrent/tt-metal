@@ -82,9 +82,20 @@ class Qwen25Coder32BExecutorRuntimeConfig:
     optimizations: Any = None
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int) -> bool:
-        # Prefill trace replay is not supported for this graph today: capture hits TT_FATAL on
-        # event sync / host reads / writes (``LazyWeight`` + distributed norms). Decode trace remains enabled.
-        return False
+        # Mirror TTTv1's ModelArgs.get_trace_prefill_supported_seq_lens. Qwen2.5-Coder-32B has no
+        # model-specific entry there, so it falls through to the device default; on its only
+        # supported SKU (T3K, 8 devices) that default is [128, 1024] (model_config.py:2406-2415).
+        # The old hardcoded ``return False`` (claimed TT_FATAL under LazyWeight + distributed norms)
+        # no longer reproduces -- prefill compiles, captures and replays for these seq lens (mirrors
+        # the Llama-3.2-1B finding in the rebase handoff). On-device confirmation NOT RUN this
+        # session (device queue unavailable); see the model's REBASE_UPDATE.md.
+        num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
+        allowed = {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(num_devices, (128,))
+        return (
+            prefill_seq_len in allowed
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
 
 
 @dataclass
