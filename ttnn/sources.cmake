@@ -376,6 +376,10 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/send_direct_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_direct_async/recv_direct_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/send_recv_async/buffered_send/buffered_send_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/send_recv_async/buffered_recv/buffered_recv_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
