@@ -700,6 +700,15 @@ def _save_wav_fallback(wav: Any, out_path: Path, sample_rate: int = 48000) -> No
 
 _DEFAULT_CKPT_DIR = Path.home() / ".cache" / "huggingface" / "hub" / "ACE-Step-1.5-checkpoints"
 
+
+def _resolve_ckpt_dir() -> Path:
+    for key in ("ACESTEP_CHECKPOINTS_DIR", "ACE_STEP_CHECKPOINT_DIR"):
+        val = os.environ.get(key)
+        if val:
+            return Path(val).expanduser().resolve()
+    return _DEFAULT_CKPT_DIR.expanduser().resolve()
+
+
 _HF_REPO_MAP = {
     "acestep-v15-base": ("ACE-Step/acestep-v15-base", False),
     "acestep-v15-sft": ("ACE-Step/acestep-v15-sft", False),
@@ -885,7 +894,7 @@ def main() -> None:
 
     import torch
 
-    ckpt_dir = _DEFAULT_CKPT_DIR.expanduser().resolve()
+    ckpt_dir = _resolve_ckpt_dir()
     os.environ["ACESTEP_CHECKPOINTS_DIR"] = str(ckpt_dir)
 
     model_dir = _ensure_variant(args.variant, ckpt_dir)

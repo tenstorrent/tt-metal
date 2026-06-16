@@ -167,6 +167,23 @@ jobs:
               resume_download=True,
           )
           PY
+      - name: Download ACE-Step v1.5 checkpoints to local cache
+        if: ${{ inputs.regenerate-ttnn-cache && contains(matrix.test-group.name, 'ACE-Step') }}
+        timeout-minutes: 60
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/hub
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id="ACE-Step/Ace-Step1.5",
+              local_dir="/localdev/blackhole_demos/huggingface_data/hub/ACE-Step-1.5-checkpoints",
+              token=os.environ.get("HF_TOKEN"),
+              resume_download=True,
+          )
+          PY
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
