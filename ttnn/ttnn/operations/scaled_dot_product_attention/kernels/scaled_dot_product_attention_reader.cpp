@@ -12,6 +12,28 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
+// Generate the diagonal triangular causal-bias tile directly into L1 (bf16).
+// Additive form: element (row, col) -> 0 where col <= row (attend), neg_bits
+// (a large negative) where col > row (mask). Tile layout is 4 faces of 16x16
+// (row-major within face; faces ordered TL, TR, BL, BR).
+inline void gen_causal_mask_tile(uint32_t cb_id, uint16_t neg_bits) {
+    constexpr uint32_t FACE = 16;
+    cb_reserve_back(cb_id, 1);
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
+    for (uint32_t face = 0; face < 4; ++face) {
+        const uint32_t row_off = (face >= 2) ? FACE : 0;
+        const uint32_t col_off = (face & 1U) ? FACE : 0;
+        for (uint32_t h = 0; h < FACE; ++h) {
+            const uint32_t row = row_off + h;
+            for (uint32_t w = 0; w < FACE; ++w) {
+                const uint32_t col = col_off + w;
+                *ptr++ = (col <= row) ? uint16_t(0) : neg_bits;
+            }
+        }
+    }
+    cb_push_back(cb_id, 1);
+}
+
 void kernel_main() {
     constexpr uint32_t H_q = get_compile_time_arg_val(0);
     constexpr uint32_t H_kv = get_compile_time_arg_val(1);
@@ -22,8 +44,10 @@ void kernel_main() {
     constexpr uint32_t has_mask = get_compile_time_arg_val(6);
     constexpr uint32_t mask_H = get_compile_time_arg_val(7);  // mask num-heads (1 or H_q)
     constexpr uint32_t mask_B = get_compile_time_arg_val(8);  // mask batch (1 or B)
+    constexpr uint32_t causal = get_compile_time_arg_val(9);  // native causal masking
+    constexpr uint16_t causal_neg_bits = get_compile_time_arg_val(10);  // bf16 −inf bias bits
 
-    constexpr auto q_args = TensorAccessorArgs<9>();
+    constexpr auto q_args = TensorAccessorArgs<11>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -77,8 +101,13 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_q_in, d_t);
 
+        // Causal: query-chunk qc attends only to key-chunks j <= qc (the
+        // diagonal block j==qc is partially masked; j>qc is fully future ->
+        // skipped entirely). Requires S_q==S_kv (causal+cross is excluded).
+        const uint32_t kv_count = causal ? (qc + 1) : Skv_t;
+
         // --- KV loop ---
-        for (uint32_t j = 0; j < Skv_t; ++j) {
+        for (uint32_t j = 0; j < kv_count; ++j) {
             const uint32_t kv_base = ((b * H_kv + h_kv) * Skv_t + j) * d_t;
 
             cb_reserve_back(cb_k_in, d_t);
@@ -106,6 +135,12 @@ void kernel_main() {
                 noc_async_read_page(mask_tile, mask_acc, m_wr);
                 noc_async_read_barrier();
                 cb_push_back(cb_mask_in, 1);
+            } else if constexpr (causal) {
+                // Only the diagonal-straddling block (j == qc) needs the
+                // triangular bias; j < qc is fully past (unmasked).
+                if (j == qc) {
+                    gen_causal_mask_tile(cb_mask_in, causal_neg_bits);
+                }
             }
         }
     }

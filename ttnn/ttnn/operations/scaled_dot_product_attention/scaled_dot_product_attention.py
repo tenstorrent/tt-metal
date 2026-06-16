@@ -72,8 +72,8 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
-    "kv_heads_mode": ["mha"],
-    "mask_mode": ["none", "custom"],
+    "kv_heads_mode": ["mha", "gqa", "mqa"],
+    "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
 }
 
@@ -87,6 +87,11 @@ EXCLUSIONS = [
     # legal-but-lossy and refused — a maxed input demands the maxed DEST
     # accumulator. (mirrors softmax; R1 numeric-formats contract).
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # Native causal masking generates the triangular bias on-device assuming
+    # the diagonal aligns at tile boundaries — i.e. S_q == S_kv. A rectangular
+    # (cross-attention) causal mask is mathematically well-defined but
+    # corresponds to no real decoder workload; reject it (R2 causal contract).
+    {"mask_mode": "causal", "attention_kind": "cross"},
 ]
 
 
@@ -259,6 +264,7 @@ def scaled_dot_product_attention(
         scale=resolved_scale,
         fp32_dest_acc_en=fp32_dest_acc_en,
         math_fidelity=math_fidelity,
+        is_causal=is_causal,
     )
 
     inputs = [query, key, value]

@@ -21,6 +21,16 @@ def _f32_bits(x: float) -> int:
     return struct.unpack("I", struct.pack("f", float(x)))[0]
 
 
+def _bf16_bits(x: float) -> int:
+    """High 16 bits of the float32 encoding (truncation to bfloat16)."""
+    return _f32_bits(x) >> 16
+
+
+# Additive "−inf" bias written into the on-device causal mask. Finite (no
+# NaN risk) but large enough that exp(masked − rowmax) underflows to 0.
+CAUSAL_NEG = -1e30
+
+
 def create_program_descriptor(
     query: ttnn.Tensor,
     key: ttnn.Tensor,
@@ -31,6 +41,7 @@ def create_program_descriptor(
     scale: float,
     fp32_dest_acc_en: bool,
     math_fidelity: "ttnn.MathFidelity",
+    is_causal: bool = False,
 ) -> ttnn.ProgramDescriptor:
     q_shape = list(query.shape)
     k_shape = list(key.shape)
@@ -46,6 +57,13 @@ def create_program_descriptor(
     has_mask = 1 if attn_mask is not None else 0
     mask_B = int(attn_mask.shape[0]) if attn_mask is not None else 0
     mask_H = int(attn_mask.shape[1]) if attn_mask is not None else 0
+
+    causal = 1 if is_causal else 0
+    # Causal masking generates a triangular −inf bias tile on-device (no
+    # caller tensor). It reuses the cb_mask_in path with a bf16 bias tile.
+    causal_neg_bits = _bf16_bits(CAUSAL_NEG)
+    # cb_mask_in exists for custom OR causal masking.
+    need_mask_cb = has_mask or causal
 
     total_units = B * H_q * Sq_t
 
@@ -128,9 +146,13 @@ def create_program_descriptor(
     ]
     if has_mask:
         cbs.append(cb(CB_MASK_IN, 2, data_format=attn_mask.dtype))
+    elif causal:
+        # On-device generated triangular bias — always bf16 (it is a generated
+        # bias, not tensor data; added into the fp32/bf16 cb_scores).
+        cbs.append(cb(CB_MASK_IN, 2, data_format=ttnn.bfloat16))
 
     # --- Reader kernel ---
-    reader_ct = [H_q, H_kv, Sq_t, Skv_t, d_t, group, has_mask, mask_H, mask_B]
+    reader_ct = [H_q, H_kv, Sq_t, Skv_t, d_t, group, has_mask, mask_H, mask_B, causal, causal_neg_bits]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
@@ -152,7 +174,7 @@ def create_program_descriptor(
     for c, start_unit, num_units in assignments:
         reader_rt[c.x][c.y] = [start_unit, num_units, q_addr, k_addr, v_addr, mask_addr]
         writer_rt[c.x][c.y] = [start_unit, num_units, out_addr]
-        compute_rt[c.x][c.y] = [num_units]
+        compute_rt[c.x][c.y] = [num_units, start_unit]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_reader.cpp"),
@@ -175,7 +197,7 @@ def create_program_descriptor(
     )
 
     # --- Compute kernel ---
-    compute_ct = [Skv_t, d_t, has_mask, scale_bits]
+    compute_ct = [Skv_t, d_t, has_mask, scale_bits, causal, Sq_t]
 
     compute_config = ttnn.ComputeConfigDescriptor()
     compute_config.math_fidelity = math_fidelity

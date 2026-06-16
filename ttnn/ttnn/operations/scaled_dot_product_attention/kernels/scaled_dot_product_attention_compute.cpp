@@ -34,8 +34,11 @@ void kernel_main() {
     constexpr uint32_t d_t = get_compile_time_arg_val(1);         // head-dim tiles
     constexpr uint32_t has_mask = get_compile_time_arg_val(2);    // custom-mask mode
     constexpr uint32_t scale_bits = get_compile_time_arg_val(3);  // fp32 scale, bit-cast
+    constexpr uint32_t causal = get_compile_time_arg_val(4);      // native causal masking
+    constexpr uint32_t Sq_t = get_compile_time_arg_val(5);        // Q seq tiles (for qc decode)
 
     const uint32_t num_units = get_arg_val<uint32_t>(0);
+    const uint32_t start_unit = get_arg_val<uint32_t>(1);
 
     // --- Circular buffers (semantic names) ---
     constexpr uint32_t cb_q_in = 0;
@@ -68,6 +71,12 @@ void kernel_main() {
     CircularBuffer scores_buf(cb_scores), p_buf(cb_p), pv_buf(cb_pv);
 
     for (uint32_t u = 0; u < num_units; ++u) {
+        // Causal: decode the Q-chunk index of this work-unit so we know the
+        // diagonal block (j == qc) and how many KV-chunks to fold (qc+1).
+        // Requires S_q == S_kv (causal+cross excluded), so Sq_t == Skv_t.
+        const uint32_t qc = (start_unit + u) % Sq_t;
+        const uint32_t kv_count = causal ? (qc + 1) : Skv_t;
+
         // 0c. scale Q: cb_q = cb_q_in * scale (folds the softmax scale into Q).
         eltwise_chain(
             EltwiseShape::tiles(d_t),
@@ -80,7 +89,7 @@ void kernel_main() {
         eltwise_chain(EltwiseShape::tiles(1), FillScalar<Dst::D0>(0.0f), PackTile<cb_l>{});
         eltwise_chain(EltwiseShape::tiles(d_t), FillScalar<Dst::D0>(0.0f), PackTile<cb_o>{});
 
-        for (uint32_t j = 0; j < Skv_t; ++j) {
+        for (uint32_t j = 0; j < kv_count; ++j) {
             // A. QKt: scores = Q . K^T (reduction over D). Q retained across kv loop.
             matmul_block<
                 /*transpose*/ true,
@@ -97,9 +106,16 @@ void kernel_main() {
                 MatmulBlockShape::of(
                     /*in0_sb*/ 1, /*in1_sb*/ 1, /*sb_h*/ 1, /*sb_w*/ 1, /*in0_block_k*/ d_t, /*num_k_blocks*/ 1));
 
-            // B. mask add (custom mode only): scores += mask.
+            // B. mask add: scores += mask.
+            //   custom mode  -> add a per-chunk mask tile every KV-chunk.
+            //   causal mode  -> add the triangular −inf bias only on the
+            //                   diagonal block (j == qc); j < qc is fully past.
             if constexpr (has_mask) {
                 add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(1));
+            } else if constexpr (causal) {
+                if (j == qc) {
+                    add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(1));
+                }
             }
 
             // C. rowmax over the KV (width) axis -> cb_m_cur [Bq_t,1]. No pop (exp reuses scores).

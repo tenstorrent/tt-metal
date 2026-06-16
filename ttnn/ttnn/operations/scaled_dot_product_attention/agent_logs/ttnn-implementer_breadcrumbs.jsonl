@@ -7,3 +7,6 @@
 {"event":"test_run","status":"pass","test":"golden medium shapes 128/256 all dtypes","details":"60 passed, 48 xfailed — fp32+bf8b dtype axis works cleanly for short/medium; failures only at S>=4096","ts":"2026-06-16T18:51:55+00:00"}
 {"event":"test_run","status":"partial","test":"full golden suite","details":"674 passed (Phase0=346), 26 failed, 1532 xfailed. Failures: 4 fp32@D=1024 RuntimeError (suspected L1 OOM), 22 precision near-miss at S>=4096","ts":"2026-06-16T18:57:32+00:00"}
 {"event":"test_run","status":"pass","test":"precision_matrix full","details":"107 passed, 21 skipped after fidelity/context-aware PCC floor. Existing unit tests 28/28 pass. Marking R1 [~] partial.","ts":"2026-06-16T19:02:27+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find on-device causal mask generation","ts":"2026-06-16T19:20:01+00:00"}
+{"event":"test_run","status":"pass","tests":"variants gqa/mqa + validate contract (9 passed)","detail":"GQA/MQA validate-only path + causal+cross EXCLUSION + is_causal/attn_mask ValueError all pass","ts":"2026-06-16T19:26:49+00:00"}
+{"event":"test_run","status":"pass","tests":"causal self-attention (15 passed --dev)","detail":"on-device triangular bias; causal==additive-triangular PCC>=0.999; shapes single/multi-tile/multi-head/multi-batch x auto/explicit scale","ts":"2026-06-16T19:27:24+00:00"}
