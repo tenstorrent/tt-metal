@@ -241,17 +241,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
         TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
     }
 
-    // The tile-descriptor z-dim (face count) sits in the upper 16 bits of TileDescriptor word 1.
-    const std::uint32_t TILE_DESCRIPTOR_Z_DIM_SHIFT = 16;
-    const std::uint32_t TILE_DESCRIPTOR_Z_DIM_MASK  = 0xffff0000;
-
-    // Program the tile-descriptor z-dim for each operand from its own face count, so a compressed
-    // (e.g. Bfp8_b) matmul operand sizes its per-tile exponent/RowStart arrays correctly regardless
-    // of what a preceding op (e.g. tilize, which leaves z-dim = its operand's num_faces) left behind.
-    // SEC0 is UNP_A, SEC1 is UNP_B.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, TILE_DESCRIPTOR_Z_DIM_SHIFT, TILE_DESCRIPTOR_Z_DIM_MASK>(unpA_num_faces);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, TILE_DESCRIPTOR_Z_DIM_SHIFT, TILE_DESCRIPTOR_Z_DIM_MASK>(unpB_num_faces);
-
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
