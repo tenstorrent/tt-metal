@@ -27,7 +27,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
     // If in ≠ ±0 and in ≠ ±inf, then x = in * 2**(127-in.Exp).
     // If in = ±0 or in = ±inf, then x = ±1.
     // Then negative_x = -x.
-    sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, in);
+    sfpi::vFloat negative_x = sfpi::copyman(-1.0f, in);
 
     // Quadratic initial estimate: y = k2 - k1*x + k0*x**2.
     sfpi::vFloat y = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_x;
@@ -41,13 +41,13 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
     // Not only is 255-in.Exp more efficient via SFPNOT, but it also ensures
     // that in.Exp == 0 results in ±inf, and in.Exp == 255 results in ±0.
     // See the scale factor adjustment via scale*0.5 below for further details.
-    sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(in);
+    sfpi::vInt scale_bits = ~sfpi::as<sfpi::vInt>(in);
 
     // Continue with quadratic estimate.
     y = sfpi::vConstFloatPrgm2 + y * negative_x;
 
     // Scale factor: set mantissa to zero.
-    sfpi::vFloat scale = sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(scale_bits), 0);
+    sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(scale_bits), 0);
 
     // First iteration of Newton-Raphson: t = 1.0 - x*y.
     sfpi::vFloat t = sfpi::vConst1 + negative_x * y;
