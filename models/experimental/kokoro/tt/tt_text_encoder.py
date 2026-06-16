@@ -18,7 +18,7 @@ import torch.nn as nn
 import ttnn
 
 from .tt_conv import TTConv1dParams, tt_conv1d_nlc, tt_weight_norm_materialize
-from .tt_lstm import TTLSTMParams, preprocess_tt_lstm_1layer, tt_bilstm_nlc
+from .tt_lstm import TTLSTMParams, build_fused_recurrent_weight, preprocess_tt_lstm_1layer, tt_bilstm_nlc
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,10 @@ class TTTextEncoderParams:
     blocks: tuple[TTTextEncoderConvLNBlockParams, ...]
     lstm_fwd: TTLSTMParams
     lstm_rev: TTLSTMParams
+    # Block-diagonal recurrent weight fusing both BiLSTM directions into one matmul/step
+    # (None for a unidirectional LSTM). Halves per-step matmul/activation/elementwise ops on
+    # the unpadded path; bit-exact at bf16 state (see ``build_fused_recurrent_weight``).
+    lstm_w_h_block: Optional[ttnn.Tensor] = None
     ln_eps: float = 1e-5
 
 
@@ -104,12 +108,14 @@ def preprocess_tt_text_encoder(
 
     fwd, rev = preprocess_tt_lstm_1layer(text_encoder.lstm, device, weights_dtype=weights_dtype)
     assert rev is not None, "TextEncoder expects a bidirectional LSTM"
+    lstm_w_h_block = build_fused_recurrent_weight(text_encoder.lstm, device, weights_dtype=weights_dtype)
 
     return TTTextEncoderParams(
         embedding_weight=emb_w,
         blocks=tuple(block_params),
         lstm_fwd=fwd,
         lstm_rev=rev,
+        lstm_w_h_block=lstm_w_h_block,
         ln_eps=1e-5,
     )
 
@@ -252,6 +258,7 @@ class TTTextEncoder:
             rev=self.params.lstm_rev,
             compute_kernel_config=self.compute_kernel_config,
             sequence_lengths=lengths_list,
+            w_h_block=self.params.lstm_w_h_block,
         )
 
         x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)

@@ -285,22 +285,6 @@ def _length_valid_mask_b1(
     )
 
 
-def _blend_state(
-    valid_b1: ttnn.Tensor,
-    new_state: ttnn.Tensor,
-    old_state: ttnn.Tensor,
-    *,
-    memory_config: ttnn.MemoryConfig,
-) -> ttnn.Tensor:
-    """Blend LSTM state; ``valid_b1`` is ``[B, 1]`` (broadcasts over hidden dim).
-
-    ``old + valid*(new - old)`` — 3 ops vs 5 for the ``valid*new + (1-valid)*old``
-    form, and bit-exact for the 0/1 mask (valid=1 -> new, valid=0 -> old).
-    """
-    diff = ttnn.subtract(new_state, old_state, memory_config=memory_config)
-    return ttnn.add(old_state, ttnn.multiply(valid_b1, diff, memory_config=memory_config), memory_config=memory_config)
-
-
 def tt_bilstm_nlc(
     *,
     x_nlc: ttnn.Tensor,
@@ -488,7 +472,6 @@ def tt_bilstm_nlc(
     outs_f = []
     for t in range(L):
         gxt = _gates_x_at(gx_fwd, t)
-        h_old, c_old = h_f, c_f
         h_new, c_new = _lstm_step(
             gxt,
             h_f,
@@ -497,14 +480,17 @@ def tt_bilstm_nlc(
             compute_kernel_config=compute_kernel_config,
             memory_config=step_mc,
         )
+        # Forward padding is a *suffix* (t >= length): once a row is padded it never returns to a
+        # valid position, and batch rows don't mix (per-row recurrence). So a padded row's evolving
+        # state is never read by any valid output — the state needs no freeze; only the output at
+        # padded positions must be zeroed. Skipping the two ``_blend_state`` calls saves 6 binary
+        # ops/step on the padded tail; valid-position outputs are bit-identical.
+        h_f, c_f = h_new, c_new
         if valid_all is not None and t >= min_len:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
             vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=step_mc)
-            h_f = _blend_state(vt_b1, h_new, h_old, memory_config=step_mc)
-            c_f = _blend_state(vt_b1, c_new, c_old, memory_config=step_mc)
             outs_f.append(ttnn.multiply(vt_b1, h_new, memory_config=step_mc))
         else:
-            h_f, c_f = h_new, c_new
             outs_f.append(h_f)
 
     h_b = h0
@@ -512,7 +498,6 @@ def tt_bilstm_nlc(
     outs_b_rev = []
     for t in reversed(range(L)):
         gxt = _gates_x_at(gx_rev, t)
-        h_old, c_old = h_b, c_b
         h_new, c_new = _lstm_step(
             gxt,
             h_b,
@@ -522,11 +507,16 @@ def tt_bilstm_nlc(
             memory_config=step_mc,
         )
         if valid_all is not None and t >= min_len:
+            # Reverse hits the suffix padding *first*, so the recurrent state is still 0 across the
+            # whole padded region (it starts at 0 and each padded step multiplies it back to 0).
+            # With old == 0 the blend ``old + valid*(new - old)`` collapses to ``valid*new`` bit-for-
+            # bit (subtracting/adding 0 is exact), so one multiply replaces the 3-op blend per state
+            # and the masked hidden state doubles as the masked output — 7 ops/step -> 2.
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
             vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=step_mc)
-            h_b = _blend_state(vt_b1, h_new, h_old, memory_config=step_mc)
-            c_b = _blend_state(vt_b1, c_new, c_old, memory_config=step_mc)
-            outs_b_rev.append(ttnn.multiply(vt_b1, h_new, memory_config=step_mc))
+            h_b = ttnn.multiply(vt_b1, h_new, memory_config=step_mc)
+            c_b = ttnn.multiply(vt_b1, c_new, memory_config=step_mc)
+            outs_b_rev.append(h_b)
         else:
             h_b, c_b = h_new, c_new
             outs_b_rev.append(h_b)
