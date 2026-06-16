@@ -395,7 +395,7 @@ static inline void operation_init_impl(ThreadOutputContext& context, OperationSt
 // Goes in LLK_LIB in Execute
 // Check operation type and arguments against stored ones
 template <Operation op, typename... Ts>
-void operation_check_impl(const ThreadOutputContext& context, OperationState& state, const Ts... args)
+static inline void operation_check_impl(const ThreadOutputContext& context, OperationState& state, const Ts... args)
 {
     if (thread_silent_get_impl(context))
     {
@@ -454,7 +454,7 @@ void operation_check_impl(const ThreadOutputContext& context, OperationState& st
 // Goes in LLK_LIB in Uninit
 // Check operation type and clear must uninit flag
 template <Operation op>
-void operation_uninit_impl(const ThreadOutputContext& context, OperationState& state)
+static inline void operation_uninit_impl(const ThreadOutputContext& context, OperationState& state)
 {
     if (!thread_silent_get_impl(context))
     {
@@ -465,7 +465,7 @@ void operation_uninit_impl(const ThreadOutputContext& context, OperationState& s
 }
 
 template <FsmState next>
-void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_unused]] const OperationState& operation)
+static inline void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_unused]] const OperationState& operation)
 {
     if (!thread_silent_get_impl(context))
     {
@@ -529,6 +529,15 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
         fsm_assert<Trigger::ERROR>(
             current != FsmState::Uninitialized || next == FsmState::Initialized || next == FsmState::Reconfigured,
             CTSTR("Expected UNINITIALIZED -> [INITIALIZED, RECONFIGURED]"),
+            current,
+            next,
+            CTSTR("INITIALIZED, RECONFIGURED"),
+            context.fsm,
+            context.current);
+
+        fsm_assert<Trigger::ERROR>(
+            current != FsmState::Reconfigured || next == FsmState::Initialized || next == FsmState::Reconfigured,
+            CTSTR("Expected RECONFIGURED -> [INITIALIZED, RECONFIGURED]"),
             current,
             next,
             CTSTR("INITIALIZED, RECONFIGURED"),
