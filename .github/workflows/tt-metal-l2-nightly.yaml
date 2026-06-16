@@ -151,7 +151,7 @@ jobs:
       basic-ttnn-runtime-docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
 
   # =============================================================================
-  # No Team determinated
+  # No Team determined
   # =============================================================================
   tt-metal-l2-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -167,7 +167,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
-        ${{ github.event_name == 'schedule' && 'sdxl,train'
+        ${{ github.event_name == 'schedule' && 'sdxl'
         || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 

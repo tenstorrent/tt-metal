@@ -4,7 +4,7 @@
 # moved to ops_unit_tests.yaml / ops_integration_tests.yaml /
 # ttnn_integration_tests.yaml / tt_cnn_unit_tests.yaml. The ttsim
 # compute-fused entry moved to ttsim_unit_tests.yaml. This file retains the
-# models (sdxl) and tt-train entries that still need an l2-budgeted home
+# models (sdxl) entries that still need an l2-budgeted home
 # until those teams reorg their own buckets.
 #
 # Each entry represents a parallel job with the following keys:
