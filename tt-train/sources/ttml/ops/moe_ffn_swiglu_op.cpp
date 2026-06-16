@@ -125,7 +125,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     if (token_capacity > produced_rows) {
         const uint32_t pad_rows = token_capacity - produced_rows;
         down_proj_parts.push_back(ttnn::moreh_full(
-            ttnn::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
+            ttsl::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
             0.0F,
             &autograd::ctx().get_device(),
             grouped_value.dtype(),
@@ -233,7 +233,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         if (token_capacity > produced_rows) {
             const uint32_t pad_rows = token_capacity - produced_rows;
             dX_parts.push_back(ttnn::moreh_full(
-                ttnn::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
+                ttsl::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
                 0.0F,
                 &autograd::ctx().get_device(),
                 grouped_value.dtype(),

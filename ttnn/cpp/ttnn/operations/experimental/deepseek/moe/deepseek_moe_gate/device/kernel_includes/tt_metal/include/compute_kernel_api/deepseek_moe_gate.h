@@ -33,7 +33,7 @@ ALWI void deepseek_moe_gate_init(uint32_t icb0, uint32_t icb1) {
         // Init copy add (FPU)
         unpack_AB_init_short(icb0, icb1, Transpose::Both);
         MATH((llk_math_deepseek_moe_gate_eltwise_binary_init_with_operands<
-              ELWADD,
+              EltwiseBinaryType::ELWADD,
               DeepseekMoeGateEltwiseBinaryMode::COPY,
               MATH_FIDELITY>(icb0, icb1, false)));
         // Init transpose dest addrmods (does not conflict with copy add)
@@ -54,12 +54,13 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             false, false, icb1)));
         MATH((llk_math_deepseek_moe_gate_eltwise_binary_init_with_operands<
-              ELWADD,
+              EltwiseBinaryType::ELWADD,
               DeepseekMoeGateEltwiseBinaryMode::RELOAD,
               MATH_FIDELITY>(icb1, icb1, false)));
         // Add binary reuse (FPU)
         UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb1, 0)));
-        MATH((llk_math_deepseek_moe_gate_eltwise_binary<ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(icb1, icb1, 0)));
+        MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
+            icb1, icb1, 0)));
         // Init transpose dest addrmods (does not conflict with add binary reuse)
         MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
@@ -67,7 +68,8 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
     } else {
         // Copy add (FPU)
         UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
-        MATH((llk_math_deepseek_moe_gate_eltwise_binary<ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1, 0)));
+        MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
+            icb0, icb1, 0)));
     }
     // Set srcb dummy valid for transpose wh (FPU)
     UNPACK((llk_unpack_set_srcb_dummy_valid()));

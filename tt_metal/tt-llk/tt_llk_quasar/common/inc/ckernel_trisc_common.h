@@ -45,7 +45,7 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 // Uint8 requires special handling because when int8 is put into DEST, the sign bit actually gets put
 // to the MSB of the 32bit container, rather than to bit 8. So for int8 the packer will read the 7 LSBs + 1 MSB,
 // but for uint8 the packer will read the 8 LSBs.
-constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 4;
+constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
 
@@ -80,7 +80,11 @@ typedef union
 tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)TILE_COUNTERS_BASE;
 
 // Destination register offset, offset = 0 -> targets dest bank 0, offset = 512 for 16bit dest, 256 for 32bit dest -> targets dest bank 1
+#ifdef ENV_LLK_INFRA
 static std::uint32_t dest_register_offset = 0;
+#else
+extern thread_local std::uint32_t dest_register_offset;
+#endif
 
 /**
 * @brief Check divisibility by power of 2

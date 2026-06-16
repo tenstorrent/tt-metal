@@ -1,5 +1,9 @@
 include(sources.cmake)
 
+if(TT_UMD_BUILD_SIMULATION)
+    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/buffers/simulator_direct_write.cpp)
+endif()
+
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 
@@ -78,6 +82,11 @@ GENERATE_PROTO_FILES(
 )
 list(APPEND IMPL_SRC ${PROTO_SRCS})
 
+# Serializer free-functions (export_to_protobuf_file / import_from_protobuf_file).
+# protobuf::libprotobuf is already linked below and the generated pb.h include
+# dir is already on this target, so this is the natural home for it.
+list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp)
+
 if(TT_METAL_USE_EMULE)
     list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp)
 endif()
@@ -104,7 +113,7 @@ target_link_libraries(
         capnp
         capnp-rpc
         protobuf::libprotobuf
-        libdwarf::dwarf-static
+        ttexalens::elf
         Taskflow::Taskflow
 )
 
@@ -123,6 +132,10 @@ target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/experi
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
+
+if(TT_UMD_BUILD_SIMULATION)
+    target_compile_definitions(impl PRIVATE TT_UMD_BUILD_SIMULATION)
+endif()
 
 if(TT_METAL_USE_EMULE)
     get_target_property(_EMULE_JIT_DIR tt_emule_headers TT_EMULE_JIT_INCLUDE_DIR)

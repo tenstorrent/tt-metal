@@ -12,6 +12,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {
@@ -21,6 +22,7 @@ DispatchMemMap::DispatchMemMap(
     uint32_t num_hw_cqs,
     const Hal& hal,
     bool is_galaxy_cluster,
+    bool are_fd_kernels_on_same_core,
     const tt::llrt::RunTimeOptions& rtoptions) :
     settings(DispatchSettings(
         num_hw_cqs,
@@ -94,6 +96,8 @@ DispatchMemMap::DispatchMemMap(
             device_cq_addr_sizes_[dev_addr_idx] =
                 hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX)
                     .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
+            device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_TELEMETRY_SIZE;
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }
@@ -110,7 +114,8 @@ DispatchMemMap::DispatchMemMap(
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
-            dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) {
+            dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG ||
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }
@@ -119,8 +124,18 @@ DispatchMemMap::DispatchMemMap(
         device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
-    dispatch_buffer_base_ =
-        align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    if (are_fd_kernels_on_same_core) {
+        // All FD kernels share one core (Quasar 1CQ), so dispatch_buffer must not alias
+        // any of prefetch_q / cmddat_q / scratch_db / ringbuffer. scratch_db and
+        // ringbuffer are two views of the same region rooted at scratch_db_base_, so
+        // the prefetch footprint ends at scratch_db_base_ + max(scratch_db, ringbuffer).
+        uint32_t prefetch_top =
+            scratch_db_base_ + std::max(settings.prefetch_scratch_db_size_, settings.prefetch_ringbuffer_size_);
+        dispatch_buffer_base_ = align(prefetch_top, 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    } else {
+        dispatch_buffer_base_ =
+            align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    }
     dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
 
@@ -132,6 +147,11 @@ DispatchMemMap::DispatchMemMap(
         scratch_db_base_ + settings.prefetch_ringbuffer_size_,
         l1_size);
 
+    TT_ASSERT(
+        dispatch_cb_end + (are_fd_kernels_on_same_core ? settings.dispatch_s_buffer_size_ : 0) <= l1_size,
+        "Dispatch layout overflows L1 (dispatch_cb_end=0x{:X}, l1_size=0x{:X})",
+        dispatch_cb_end,
+        l1_size);
     TT_ASSERT(dispatch_cb_end < l1_size);
 
     const uint32_t dispatch_s_buffer_base = (core_type == CoreType::WORKER) ? dispatch_cb_end : dispatch_buffer_base_;
@@ -159,7 +179,7 @@ DispatchMemMap::DispatchMemMap(
 
     TT_FATAL(
         dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ <= l1_size,
-        "DEVICE_PRINT dispatch L1 region (l1_cache {} bytes after dispatch_s end {}) exceeds L1 size {}.",
+        "DPRINT dispatch L1 region (l1_cache {} bytes after dispatch_s end {}) exceeds L1 size {}.",
         dispatch_s_device_print_l1_cache_size_,
         dispatch_s_buffer_end_,
         l1_size);

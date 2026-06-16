@@ -23,9 +23,23 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop();
 
+/**
+ * @brief Transpose the pooled row result through SrcB so a row-reduction lands as a column in the destination register.
+ *
+ * The FP32-accumulation path transposes the hi16 and lo16 halves separately (MOVD2B/TRNSPSRCB/MOVB2D) to avoid
+ * precision loss; otherwise it casts int32 dest datums to int8 (when integer FPU is enabled) before the SrcB transpose.
+ *
+ * @tparam enforce_fp32_accumulation: Transpose in two 16-bit halves to preserve FP32 accumulation.
+ * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
+ */
 template <bool enforce_fp32_accumulation, bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
+    // The MOVB2D/MOVD2B/ELWADD below read the Src zero-substitution flag (FlushDenormals = !flag).
+    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
+    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
+    // return it to the operand-driven baseline. WH does the same in its fp32 transpose.
+    math::_configure_mov_ops_zero_flag_state_();
     if (enforce_fp32_accumulation)
     {
         // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
@@ -105,8 +119,20 @@ inline void reduce_row_perform_transpose()
         TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
         TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
     }
+    // Restore the operand-driven baseline for the currently-configured formats.
+    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
 }
 
+/**
+ * @brief Pool one face into the destination register, dispatching to the right pool instruction for the op type.
+ *
+ * MAX uses GMPOOL; SUM/AVG use GAPOOL directly (LoFi) or the preconfigured MOP followed by a DVALID clear (high fidelity).
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
+ * @tparam clear_mode: Source-clear mode applied after pooling (p_setrwc::CLR_* value).
+ * @tparam index: Destination-register offset (the GMPOOL/GAPOOL dst field) the pooled result is written to.
+ */
 template <PoolType type, bool high_fidelity, std::uint32_t clear_mode, std::uint32_t index = 0>
 inline void reduce_pool_op()
 {
@@ -129,6 +155,23 @@ inline void reduce_pool_op()
     }
 }
 
+/**
+ * @brief Perform a reduction on the math thread, pooling faces into the destination register.
+ *
+ * For REDUCE_ROW the per-row pooled result is transposed back into dest; REDUCE_COL pools down rows of faces;
+ * REDUCE_SCALAR pools all faces then transposes the partial result into a single column for a final pool.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
+ * @tparam enforce_fp32_accumulation: Force FP32 accumulation through the transpose (requires is_fp32_dest_acc_en).
+ * @param dst_index: Tile index into the destination register.
+ * @param tensor_shape: Tensor shape describing tile dimensions.
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this
+ *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
+ */
 template <
     PoolType type,
     ReduceDim dim,
@@ -246,6 +289,12 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
 }
 
+/**
+ * @brief Program the address-mod slots for a reduce: no-op/fidelity-clear, single-row, 8-row, and (high fidelity) fidelity-step.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ */
 template <PoolType type, MathFidelity math_fidelity>
 inline void reduce_configure_addrmod()
 {
@@ -274,6 +323,12 @@ inline void reduce_configure_addrmod()
     }
 }
 
+/**
+ * @brief Build the high-fidelity reduce MOP: a multi-phase GAPOOL sequence (one inner-loop iteration per fidelity phase).
+ *
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam math_fidelity: Math fidelity for controlling precision; sets the inner-loop length, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ */
 template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop()
 {
@@ -295,6 +350,16 @@ inline void reduce_configure_mop()
     }
 }
 
+/**
+ * @brief Configure the math (FPU) thread for a reduce operation: programs address mods and, for high fidelity, the pool MOP.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam enforce_fp32_accumulation: Force FP32 accumulation (requires is_fp32_dest_acc_en).
+ * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_init_()
 {
@@ -315,12 +380,18 @@ inline void _llk_math_reduce_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
+ *
+ * @tparam enforce_fp32_accumulation: Must match the value used at init.
+ * @note Reverses @ref _llk_math_reduce_init_; re-enables debug feature bit 11 (@ref _llk_math_dbg_feature_enable_) only when FP32 accumulation was enforced.
+ */
 template <bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_uninit_()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Clear bit 11 (restore from workaround for budabackend#1372)
+        // Clear bit 11 (restore from workaround for tt-metal#46219)
         // Uses helper from llk_math_common.h which includes tensix_sync()
         _llk_math_dbg_feature_enable_();
         // Note: BH doesn't need format restoration (init doesn't change it)

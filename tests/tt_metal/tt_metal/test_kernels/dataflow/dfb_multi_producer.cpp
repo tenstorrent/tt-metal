@@ -36,7 +36,7 @@ void kernel_main() {
         const uint32_t page_id = chunk_offset + tile_id;
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_read<Noc::TxnIdMode::ENABLED>(
+            noc.async_read<NocOptions::TXN_ID>(
                 tensor_accessor, dfb, {.page_id = page_id}, {});
 #endif
         } else {
@@ -46,7 +46,7 @@ void kernel_main() {
             dfb.push_back(1);
         }
     }
-    DPRINT << "producer before finish" << ENDL();
+    DPRINT("producer before finish\n");
     dfb.finish();
-    DPRINT << "producer after finish" << ENDL();
+    DPRINT("producer after finish\n");
 }

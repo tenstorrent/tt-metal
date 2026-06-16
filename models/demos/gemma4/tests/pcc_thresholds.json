@@ -2,36 +2,84 @@
   "gemma-4-E2B-it": {
     "1x1": {
       "test_attention_prefill[wormhole_b0-seq4096-global-1x1]": 0.98,
-      "test_full_model[wormhole_b0-1x1]": 0.90
+      "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.97,
+      "test_full_model[wormhole_b0-1x1]": 0.90,
+      "test_full_model[blackhole-1x1]": 0.84,
+      "test_full_model_parity_warmup_then_inference[wormhole_b0-pli-all-kv-shared-steps4-1x1]": 0.98,
+      "test_full_model_parity_warmup_then_inference[blackhole-pli-all-kv-shared-steps4-1x1]": 0.98
     }
   },
   "gemma-4-E4B-it": {
     "1x1": {
       "test_attention_decode_paged[wormhole_b0-cache1023-global-1x1]": 0.98,
       "test_attention_decode_paged[wormhole_b0-cache1500-global-1x1]": 0.96,
+      "test_attention_decode_paged[blackhole-cache1023-global-1x1]": 0.97,
+      "test_attention_decode_paged[blackhole-cache1500-global-1x1]": 0.95,
       "test_attention_prefill[wormhole_b0-seq1024-global-1x1]": 0.98,
       "test_attention_prefill[wormhole_b0-seq4096-global-1x1]": 0.98,
-      "test_full_model[wormhole_b0-1x1]": 0.95
+      "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.97,
+      "test_full_model[wormhole_b0-1x1]": 0.95,
+      "test_full_model[blackhole-1x1]": 0.96
+    },
+    "1x2": {
+      "test_attention_prefill[blackhole-seq4096-global-1x2]": 0.97,
+      "test_full_model[blackhole-1x2]": 0.95
+    },
+    "1x4": {
+      "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
+      "test_full_model[blackhole-1x4]": 0.96
     }
   },
   "gemma-4-26B-A4B-it": {
+    "1x4": {
+      "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
+      "test_attention_paged_decode_via_harness[blackhole-sliding-1x4]": 0.98,
+      "test_layer_forward[blackhole-prefill_128-sliding-1x4]": 0.97,
+      "test_layer_forward[blackhole-prefill_1024-sliding-1x4]": 0.97,
+      "test_layer_forward[blackhole-prefill_4096-sliding-1x4]": 0.97
+    },
     "1x8": {
       "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
       "test_attention_prefill[wormhole_b0-seq4096-global-1x8]": 0.98,
+      "test_attention_prefill[blackhole-seq4096-global-1x8]": 0.97,
       "test_full_model[wormhole_b0-1x8]": 0.80,
+      "test_full_model[blackhole-1x8]": 0.83,
       "test_layer_forward[wormhole_b0-prefill_128-sliding-1x8]": 0.98,
       "test_layer_forward[wormhole_b0-prefill_1024-sliding-1x8]": 0.98,
       "test_layer_forward[wormhole_b0-prefill_4096-sliding-1x8]": 0.98,
+      "test_layer_forward[blackhole-prefill_128-sliding-1x8]": 0.97,
+      "test_layer_forward[blackhole-prefill_1024-sliding-1x8]": 0.97,
+      "test_layer_forward[blackhole-prefill_4096-sliding-1x8]": 0.97,
       "test_moe[wormhole_b0-prefill_4096-1x8]": 0.95
     }
   },
   "gemma-4-31B-it": {
+    "1x1": {
+      "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
+      "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97
+    },
+    "1x4": {
+      "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.97,
+      "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
+      "test_full_model[blackhole-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-batch1-prefill_128-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-batch4-prefill_128-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-batch32-prefill_128-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-batch1-prefill_1024-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-batch4-prefill_1024-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-batch32-prefill_1024-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_2048-1x4]": 0.99,
+      "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_4096-1x4]": 0.99
+    },
     "1x8": {
       "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
       "test_attention_prefill[wormhole_b0-seq1024-sliding-1x8]": 0.98,
       "test_attention_prefill[wormhole_b0-seq4096-global-1x8]": 0.98,
       "test_attention_prefill[wormhole_b0-seq4096-sliding-1x8]": 0.98,
-      "test_full_model[wormhole_b0-1x8]": 0.98
+      "test_attention_prefill[blackhole-seq1024-global-1x8]": 0.97,
+      "test_attention_prefill[blackhole-seq4096-global-1x8]": 0.97,
+      "test_full_model[wormhole_b0-1x8]": 0.98,
+      "test_full_model[blackhole-1x8]": 0.97
     }
   }
 }

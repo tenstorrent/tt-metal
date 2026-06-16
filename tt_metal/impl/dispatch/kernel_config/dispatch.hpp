@@ -58,6 +58,9 @@ struct dispatch_static_config_t {
     // DispatchSKernel and to the RT-profiler core kernels.
     std::optional<uint32_t> realtime_profiler_msg_addr;
 
+    std::optional<uint32_t> dispatch_telemetry_addr;
+    std::optional<bool> dispatch_telemetry_disabled;
+
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
 

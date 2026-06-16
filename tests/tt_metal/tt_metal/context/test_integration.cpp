@@ -82,8 +82,10 @@ void PerformDeviceWork(
 
     auto program = CreateProgram();
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    auto core_grid = mesh_device->compute_with_storage_grid_size();
-    auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+    // A no-op kernel only validates the create / JIT / dispatch pipeline,
+    // so a single worker core is sufficient. (0, 0) is always a logical
+    // compute core regardless of dispatch-core configuration.
+    auto core_range = CoreRange({0, 0}, {0, 0});
 
     std::string kernel_src = "void kernel_main() {\n    // " + kernel_identifier + "\n}";
 
@@ -218,33 +220,29 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         buffer->deallocate();
         ASSERT_FALSE(buffer->is_allocated());
 
-        // Test command queue operations
+        // Test command queue operations. Source vector is sized to fill the entire buffer so
+        // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
+        // is satisfied; the prior 16-element vector was a pre-#43429 leftover.
         auto& cq = mock_device->mesh_command_queue();
-        constexpr size_t num_elements = 16;
+        constexpr size_t num_elements = buffer_size / sizeof(uint32_t);
         std::vector<uint32_t> write_data(num_elements);
-        std::iota(write_data.begin(), write_data.end(), 0xDEADBEEF);
+        std::iota(write_data.begin(), write_data.end(), 0xDEADBEEFu);
 
         distributed::EnqueueWriteMeshBuffer(cq, buffer, write_data, true);
 
         std::vector<uint32_t> read_data;
         distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
 
-        // TODO: Uncomment this once CreateProgram and CreateKernel stop implicitly creating the physical metal context
-        // https://github.com/tenstorrent/tt-metal/issues/39849
-        // auto program = CreateProgram();
-        // distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
-        // auto core_grid = mock_device->compute_with_storage_grid_size();
-        // auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+        auto program = CreateProgram();
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
+        // Single worker core; see comment in PerformDeviceWork.
+        auto core_range = CoreRange({0, 0}, {0, 0});
 
-        // CreateKernelFromString(
-        //     program,
-        //     "void kernel_main() {}",
-        //     core_range,
-        //     DataMovementConfig{});
+        CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
 
-        // distributed::MeshWorkload workload;
-        // workload.add_program(device_range, std::move(program));
-        // distributed::EnqueueMeshWorkload(cq, workload, true);
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, true);
     }
 
     // Assert that we didn't implicitly create the physical metal context
@@ -255,20 +253,34 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 }
 
 TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
-    // Create mock mesh device with 1 blackhole chip
-    MetalEnv mock_env_bh_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
-    auto mock_mesh_shape_bh_1 = mock_env_bh_1.get_system_mesh().shape();
-    auto mock_mesh_device_config_bh_1 = distributed::MeshDeviceConfig(mock_mesh_shape_bh_1);
-    std::shared_ptr<distributed::MeshDevice> mock_mesh_device_bh_1 =
-        mock_env_bh_1.create_mesh_device(mock_mesh_device_config_bh_1);
-    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_1->shape().dims());
+    // BuildEnvManager is a process-global singleton whose kernel/firmware build-state index tables
+    // are sized once from the HAL of whichever context first triggers add_build_env(). When the
+    // mock arch differs from the silicon arch (e.g. mock-BH on a WH runner), the second context
+    // ends up indexing a wrong-sized table and JIT'd kernels reference incorrect dispatch
+    // addresses, causing silicon dispatch to hang. Forge's real flow is same-arch coexistence
+    // (mock used as a compile-time stand-in for the live silicon), so probe the silicon arch and
+    // create the mock to match. Cross-arch coexistence is a separate `BuildEnvManager`-singleton
+    // limitation tracked outside #38445.
+    tt::ARCH silicon_arch;
+    {
+        MetalEnv probe;
+        silicon_arch = probe.get_arch();
+    }
 
-    // Create mock mesh device with 2 blackhole chips
-    MetalEnv mock_env_bh_2{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2))};
-    auto mock_mesh_shape_bh_2 = mock_env_bh_2.get_system_mesh().shape();
-    auto mock_mesh_device_config_bh_2 = distributed::MeshDeviceConfig(mock_mesh_shape_bh_2);
-    auto mock_mesh_device_bh_2 = mock_env_bh_2.create_mesh_device(mock_mesh_device_config_bh_2);
-    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_2->shape().dims());
+    // Create mock mesh device with 1 chip on the silicon arch
+    MetalEnv mock_env_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(silicon_arch, 1))};
+    auto mock_mesh_shape_1 = mock_env_1.get_system_mesh().shape();
+    auto mock_mesh_device_config_1 = distributed::MeshDeviceConfig(mock_mesh_shape_1);
+    std::shared_ptr<distributed::MeshDevice> mock_mesh_device_1 =
+        mock_env_1.create_mesh_device(mock_mesh_device_config_1);
+    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_1->shape().dims());
+
+    // Create mock mesh device with 2 chips on the silicon arch
+    MetalEnv mock_env_2{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(silicon_arch, 2))};
+    auto mock_mesh_shape_2 = mock_env_2.get_system_mesh().shape();
+    auto mock_mesh_device_config_2 = distributed::MeshDeviceConfig(mock_mesh_shape_2);
+    auto mock_mesh_device_2 = mock_env_2.create_mesh_device(mock_mesh_device_config_2);
+    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_2->shape().dims());
 
     // Create silicon mesh
     MetalEnv env;
@@ -277,38 +289,79 @@ TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
     std::shared_ptr<distributed::MeshDevice> mesh_device = env.create_mesh_device(mesh_device_config);
     log_info(tt::LogTest, "Created silicon mesh device with shape {}", mesh_device->shape().dims());
 
-    ASSERT_EQ(mock_mesh_device_bh_1->get_devices().size(), 1);
-    ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
+    ASSERT_EQ(mock_mesh_device_1->get_devices().size(), 1);
+    ASSERT_EQ(mock_mesh_device_2->get_devices().size(), 2);
+
+    // Run a no-op program on both the mock and silicon devices side-by-side. This exercises the
+    // full create-program / create-kernel / JIT-compile / enqueue-workload pipeline through both
+    // contexts in the same process to validate mock+silicon coexistence (issue #38445).
+    auto run_noop_program = [](distributed::MeshDevice& target, const std::string& label) {
+        auto program = CreateProgram();
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
+        // Single worker core; see comment in PerformDeviceWork.
+        auto core_range = CoreRange({0, 0}, {0, 0});
+
+        CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(target.mesh_command_queue(), workload, true);
+        log_info(tt::LogTest, "Successfully enqueued no-op program on {}", label);
+    };
+
+    run_noop_program(*mock_mesh_device_1, "mock_mesh_device_1");
+    run_noop_program(*mesh_device, "silicon_mesh_device");
 }
 
 // Same test as above but reverse the order to ensure no hangs due to unexpected internal objects created for the
-// incorrect context id
+// incorrect context id. See `CoexistingSiliconAndMockDevice` for why mock arch is matched to silicon arch.
 TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDevice) {
     // Create silicon mesh
     MetalEnv silicon_env;
+    const tt::ARCH silicon_arch = silicon_env.get_arch();
 
     auto mesh_shape = silicon_env.get_system_mesh().shape();
     auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
     std::shared_ptr<distributed::MeshDevice> mesh_device = silicon_env.create_mesh_device(mesh_device_config);
     log_info(tt::LogTest, "Created silicon mesh device with shape {}", mesh_device->shape().dims());
 
-    // Create mock mesh device with 1 blackhole chip
-    MetalEnv mock_env_bh_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
-    auto mock_mesh_shape_bh_1 = mock_env_bh_1.get_system_mesh().shape();
-    auto mock_mesh_device_config_bh_1 = distributed::MeshDeviceConfig(mock_mesh_shape_bh_1);
-    auto mock_mesh_device_bh_1 = mock_env_bh_1.create_mesh_device(mock_mesh_device_config_bh_1);
-    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_1->shape().dims());
+    // Create mock mesh device with 1 chip on the silicon arch
+    MetalEnv mock_env_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(silicon_arch, 1))};
+    auto mock_mesh_shape_1 = mock_env_1.get_system_mesh().shape();
+    auto mock_mesh_device_config_1 = distributed::MeshDeviceConfig(mock_mesh_shape_1);
+    auto mock_mesh_device_1 = mock_env_1.create_mesh_device(mock_mesh_device_config_1);
+    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_1->shape().dims());
 
-    // Create mock mesh device with 2 blackhole chips
-    MetalEnv mock_env_bh_2{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2))};
+    // Create mock mesh device with 2 chips on the silicon arch
+    MetalEnv mock_env_2{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(silicon_arch, 2))};
 
-    auto mock_mesh_shape_bh_2 = mock_env_bh_2.get_system_mesh().shape();
-    auto mock_mesh_device_config_bh_2 = distributed::MeshDeviceConfig(mock_mesh_shape_bh_2);
-    auto mock_mesh_device_bh_2 = mock_env_bh_2.create_mesh_device(mock_mesh_device_config_bh_2);
-    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_2->shape().dims());
+    auto mock_mesh_shape_2 = mock_env_2.get_system_mesh().shape();
+    auto mock_mesh_device_config_2 = distributed::MeshDeviceConfig(mock_mesh_shape_2);
+    auto mock_mesh_device_2 = mock_env_2.create_mesh_device(mock_mesh_device_config_2);
+    log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_2->shape().dims());
 
-    ASSERT_EQ(mock_mesh_device_bh_1->get_devices().size(), 1);
-    ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
+    ASSERT_EQ(mock_mesh_device_1->get_devices().size(), 1);
+    ASSERT_EQ(mock_mesh_device_2->get_devices().size(), 2);
+
+    // Run a no-op program on both the silicon and mock devices in this reversed-creation-order
+    // case to confirm the JIT/compile/enqueue pipeline does not depend on which context was
+    // opened first.
+    auto run_noop_program = [](distributed::MeshDevice& target, const std::string& label) {
+        auto program = CreateProgram();
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
+        // Single worker core; see comment in PerformDeviceWork.
+        auto core_range = CoreRange({0, 0}, {0, 0});
+
+        CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(target.mesh_command_queue(), workload, true);
+        log_info(tt::LogTest, "Successfully enqueued no-op program on {}", label);
+    };
+
+    run_noop_program(*mesh_device, "silicon_mesh_device");
+    run_noop_program(*mock_mesh_device_1, "mock_mesh_device_1");
 }
 
 TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {

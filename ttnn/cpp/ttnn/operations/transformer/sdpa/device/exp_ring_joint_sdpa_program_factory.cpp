@@ -102,9 +102,10 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);
 }
 
-}  // namespace
-
-tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descriptor(
+// Per-coord ProgramDescriptor build. Kept inside the anonymous namespace so
+// create_workload_descriptor() below can loop coords and reuse this body verbatim.
+// Op-specific name suffix avoids Unity-build collisions with sibling ring sdpa factories.
+tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const ExpRingJointSDPAParams& operation_attributes,
     const ExpRingJointSDPAInputs& tensor_args,
     ExpRingJointSDPAResult& tensor_return_value,
@@ -113,7 +114,7 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
     auto& output_tensors = tensor_return_value;
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
-        "ExpRingJointSDPAProgramFactory::create_descriptor requires mesh_dispatch_coordinate");
+        "build_exp_ring_joint_sdpa_program_descriptor requires mesh_dispatch_coordinate");
     const auto& coord = mesh_dispatch_coordinate.value();
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
@@ -545,17 +546,6 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    // Early format check: when all data formats are identical, reconfig calls can be skipped.
-    const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    const tt::DataFormat k_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
-    const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-    const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
-    const bool uniform_dataformat =
-        (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
-         q_df_early == mask_df_early && q_df_early == im_df_early);
-
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
         DHt,
@@ -586,7 +576,6 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
         static_cast<std::uint32_t>(use_streaming_compute),
         global_n_partial_col,
         joint_l_partial_col,
-        static_cast<std::uint32_t>(uniform_dataformat),
     };
 
     std::map<std::string, std::string> defines;
@@ -1734,6 +1723,27 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
     }
 
     return desc;
+}
+
+}  // namespace
+
+// Exp ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
+// device_index / forward_coord / backward_coord / DEST_CHIP_ID-style fabric routing all
+// depend on the mesh coordinate, so descriptors cannot be shared across coords.
+tt::tt_metal::WorkloadDescriptor ExpRingJointSDPAProgramFactory::create_workload_descriptor(
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc =
+            build_exp_ring_joint_sdpa_program_descriptor(operation_attributes, tensor_args, tensor_return_value, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
 }
 
 }  // namespace ttnn::prim

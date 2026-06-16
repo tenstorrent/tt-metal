@@ -88,7 +88,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id);
-        noc_async_read_tile(i, s, l1_write_addr);
+        noc_async_read_page(i, s, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id, 1);
     }
@@ -134,7 +134,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write_tile(i, d, l1_read_addr);
+        noc_async_write_page(i, d, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
     }
@@ -325,6 +325,7 @@ class TestPerfDemos:
             out_subblock_w=min(N_tiles, 4),
             per_core_M=M_tiles // 8,
             per_core_N=N_tiles,
+            allowed_worker_cores=core_range,
         )
 
         torch_input = torch.randn(1, 1, 256, H, dtype=torch.bfloat16)
@@ -726,13 +727,24 @@ class TestPerfDemos:
         # [1024,256] x [256,128] on 1x8 grid
         # M=32 tiles, K=8 tiles, N=4 tiles
         # per_core_M=32/8=4, per_core_N=4, in0_block_w=K/32=8
-        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+        # Two separate configs bound to their respective disjoint grids
+        mm_cfg_a = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
             in0_block_w=K // 32,
             out_subblock_h=1,
             out_subblock_w=min(N // 32, 4),
             per_core_M=shard_h // 32,
             per_core_N=N // 32,
+            allowed_worker_cores=cores_a,
+        )
+        mm_cfg_b = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=K // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(N // 32, 4),
+            per_core_M=shard_h // 32,
+            per_core_N=N // 32,
+            allowed_worker_cores=cores_b,
         )
 
         torch_a = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
@@ -769,7 +781,8 @@ class TestPerfDemos:
             sharded_in_b,
             sharded_out_a,
             sharded_out_b,
-            mm_cfg,
+            mm_cfg_a,
+            mm_cfg_b,
             ta,
             tb,
             tw,
@@ -792,7 +805,8 @@ class TestPerfDemos:
             sharded_in_b,
             sharded_out_a,
             sharded_out_b,
-            mm_cfg,
+            mm_cfg_a,
+            mm_cfg_b,
             ta,
             tb,
             tw,
@@ -813,7 +827,7 @@ class TestPerfDemos:
             la.output_tensors[0],
             tB,
             core_range_set=cores_a,
-            program_config=mm_cfg,
+            program_config=mm_cfg_a,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=sharded_out_a,
         )
@@ -829,7 +843,7 @@ class TestPerfDemos:
             rb.output_tensors[0],
             tB,
             core_range_set=cores_b,
-            program_config=mm_cfg,
+            program_config=mm_cfg_b,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=sharded_out_b,
         )
@@ -841,9 +855,9 @@ class TestPerfDemos:
             result_b = ttnn.to_torch(result_b_t)
 
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
@@ -863,9 +877,9 @@ class TestPerfDemos:
 
             # Unfused reference for PCC — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
@@ -881,9 +895,9 @@ class TestPerfDemos:
 
             # Unfused reference for accuracy check — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg_a, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg_b, compute_kernel_config=COMPUTE_CONFIG)
 
             ref_a = ttnn.to_torch(ua2)
             ref_b = ttnn.to_torch(ub2)
@@ -921,6 +935,7 @@ class TestPerfDemos:
             out_subblock_w=min(N // 32, 4),
             per_core_M=shard_h // 32,
             per_core_N=N // 32,
+            allowed_worker_cores=cores,
         )
         ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(1, 8),
@@ -1034,13 +1049,23 @@ class TestPerfDemos:
         # B=[1,1,256,128] -> output [1,1,1024,128]
         # in0_block_w must equal shard_w / tile_w for block-sharded A input
         # (shard [128,256] on 1-col grid -> shard_w=256, so in0_block_w=256/32=8)
-        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+        mm_cfg_left = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
             in0_block_w=cols // 32,
             out_subblock_h=1,
             out_subblock_w=min(mm_n // 32, 4),
             per_core_M=4,
             per_core_N=mm_n // 32,
+            allowed_worker_cores=left_cores,
+        )
+        mm_cfg_right = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=cols // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(mm_n // 32, 4),
+            per_core_M=4,
+            per_core_N=mm_n // 32,
+            allowed_worker_cores=right_cores,
         )
 
         # Block-sharded: height / grid_rows, width / grid_cols.
@@ -1097,7 +1122,8 @@ class TestPerfDemos:
             lr_cores,
             rl_cores,
             rr_cores,
-            mm_cfg,
+            mm_cfg_left,
+            mm_cfg_right,
             mm_n,
             tt_input,
             tt_B_left,
@@ -1119,7 +1145,8 @@ class TestPerfDemos:
             lr_cores,
             rl_cores,
             rr_cores,
-            mm_cfg,
+            mm_cfg_left,
+            mm_cfg_right,
             mm_n,
             tt_input,
             tt_B_left,
@@ -1156,7 +1183,7 @@ class TestPerfDemos:
             sl_top.output_tensors[0],
             tt_B_left,
             core_range_set=left_cores,
-            program_config=mm_cfg,
+            program_config=mm_cfg_left,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=shards["mm_left"],
         )
@@ -1164,7 +1191,7 @@ class TestPerfDemos:
             sl_bot.output_tensors[0],
             tt_B_right,
             core_range_set=right_cores,
-            program_config=mm_cfg,
+            program_config=mm_cfg_right,
             compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=shards["mm_right"],
         )
@@ -1226,7 +1253,7 @@ class TestPerfDemos:
             ln_lr,
             ln_rl,
             ln_rr,
-            mm_cfg,
+            mm_cfg_left,
             mm_n,
             tt_input,
             tt_B_left,
@@ -1264,7 +1291,7 @@ class TestPerfDemos:
             ln_lr,
             ln_rl,
             ln_rr,
-            mm_cfg,
+            mm_cfg_left,
             mm_n,
             tt_input,
             tt_B_left,
@@ -1310,7 +1337,7 @@ class TestPerfDemos:
             u_left = ttnn.matmul(
                 u_top,
                 tt_B_left,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1330,7 +1357,7 @@ class TestPerfDemos:
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1394,7 +1421,7 @@ class TestPerfDemos:
             u_left = ttnn.matmul(
                 u_top,
                 tt_B_left,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1414,7 +1441,7 @@ class TestPerfDemos:
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1474,7 +1501,7 @@ class TestPerfDemos:
             u_left = ttnn.matmul(
                 u_top,
                 tt_B_left,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1494,7 +1521,7 @@ class TestPerfDemos:
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
-                program_config=mm_cfg,
+                program_config=mm_cfg_left,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=shards["mm_left"],
             )
@@ -1563,6 +1590,7 @@ class TestPerfDemos:
             out_subblock_w=min(mm_n // 32, 4),
             per_core_M=4,
             per_core_N=mm_n // 32,
+            allowed_worker_cores=branch_cores,
         )
 
         ln_prog_cfg = lambda gx, gy, bh, bw: ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -2053,7 +2081,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write_tile(i, d, l1_read_addr);
+        noc_async_write_page(i, d, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
     }

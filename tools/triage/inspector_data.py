@@ -23,10 +23,10 @@ Owner:
     tt-vjovanovic
 """
 
-from triage import triage_singleton, ScriptConfig, TTTriageError, run_script
-from parse_inspector_logs import get_data as get_logs_data, get_log_directory
-from mpi4py import MPI
+from triage import triage_singleton, ScriptConfig, TTTriageError, log_warning, run_script
+from parse_inspector_logs import get_log_directory
 import asyncio
+import atexit
 import capnp
 import os
 import threading
@@ -64,6 +64,13 @@ class InspectorRpcController(InspectorData):
                 exception = self.task.exception()
                 assert exception is not None
                 raise exception
+        # The asyncio loop runs on a daemon thread. If that thread is still
+        # alive at interpreter shutdown, CPython curtails finalization and
+        # nanobind reports its still-registered objects (ELF/DWARF/frame
+        # wrappers held by cached data providers) as leaked. Since this
+        # controller is cached for the whole run, __del__ won't fire in time,
+        # so stop the loop and join the thread via atexit instead.
+        atexit.register(self.stop)
 
     def __del__(self):
         if self.running:
@@ -170,13 +177,13 @@ def run(args, context) -> InspectorData:
     rank: int | None = None
 
     if not args["--inspector-disable-rank"]:
-        # If MPI is available, add rank to the RPC host and port
+        # If MPI rank is available, add rank to the RPC host and port
         try:
-            size = MPI.COMM_WORLD.Get_size()
-            if size > 1:
-                rank = MPI.COMM_WORLD.Get_rank()
-        except Exception:
-            # If MPI is not available or fails, fall back to rank-less mode without aborting.
+            rank_env = os.environ.get("TT_RUN_RANK")
+            if rank_env is not None:
+                rank = int(rank_env)
+        except Exception as e:
+            log_warning(f"Warning: MPI rank is not available or failed to parse, running in rank-less mode. Error: {e}")
             pass
 
     # First try to connect to Inspector RPC

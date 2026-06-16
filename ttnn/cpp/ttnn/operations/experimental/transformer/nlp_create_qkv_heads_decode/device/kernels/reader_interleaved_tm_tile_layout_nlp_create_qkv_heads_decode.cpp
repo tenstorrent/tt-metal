@@ -4,10 +4,17 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
+    Noc noc;
+
     uint32_t in_tile_offset_by_batch = get_arg_val<uint32_t>(0);
     uint32_t q_start_addr = get_arg_val<uint32_t>(1);
 
@@ -51,6 +58,11 @@ void kernel_main() {
 
     const auto qkv_reader = TensorAccessor(qkv_args, q_start_addr);
 
+    CircularBuffer cb_q_out(cb_id_q_out);
+    CircularBuffer cb_k_out(cb_id_k_out);
+    CircularBuffer cb_v_out(cb_id_v_out);
+    CircularBuffer cb_aligned_scratch(cb_id_aligned_scratch);
+
     uint32_t qkv_tile_id = 0;
 
     if constexpr (USE_ALIGNED_PATH) {
@@ -61,7 +73,7 @@ void kernel_main() {
         // also be aligned. CB allocations are only L1-aligned (16 B on BH), so round up the
         // scratch base; the program factory oversizes the CB by one DRAM_ALIGN_BYTES chunk to
         // accommodate this rounding.
-        const uint32_t raw_scratch_base = get_write_ptr(cb_id_aligned_scratch);
+        const uint32_t raw_scratch_base = cb_aligned_scratch.get_write_ptr();
         const uint32_t scratch_base = (raw_scratch_base + DRAM_ALIGN_BYTES - 1u) & ~(DRAM_ALIGN_BYTES - 1u);
 
         auto stage_phase = [&](uint32_t write_addr_base, uint32_t starting_tile_id, uint32_t phase_offset) {
@@ -75,12 +87,16 @@ void kernel_main() {
             uint32_t scratch_offset = scratch_base;
             uint32_t local_tile_id = starting_tile_id;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-                uint64_t aligned_src = get_noc_addr(local_tile_id, qkv_reader) + aligned_offset;
-                noc_async_read(aligned_src, scratch_offset, DRAM_ALIGN_BYTES);
+                noc.async_read(
+                    qkv_reader,
+                    CoreLocalMem<uint32_t>(scratch_offset),
+                    DRAM_ALIGN_BYTES,
+                    {.page_id = local_tile_id, .offset_bytes = aligned_offset},
+                    {});
                 scratch_offset += DRAM_ALIGN_BYTES;
                 local_tile_id++;
             }
-            noc_async_read_barrier();
+            noc.async_read_barrier();
 
             // Stage 2: copy the desired SUBTILE_LINE_BYTES slice from each scratch slot into the
             // output CB at the per-tile destination offset.
@@ -109,7 +125,7 @@ void kernel_main() {
             // the output CB region to be populated. The std::memcpy version was synchronous so no
             // barrier was needed; the NOC datamover path is async and writes to scratch must
             // complete before the next stage_phase issues stage-1 DRAM reads into the same CB.
-            noc_async_read_barrier();
+            noc.async_read_barrier();
         };
 
         auto handle_one_head = [&](uint32_t write_addr_base) {
@@ -132,7 +148,7 @@ void kernel_main() {
                                           : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES +
                                                 HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t q_write_addr = get_write_ptr(cb_id_q_out) + wptr_offset;
+            uint32_t q_write_addr = cb_q_out.get_write_ptr() + wptr_offset;
             handle_one_head(q_write_addr);
         }
 
@@ -145,7 +161,7 @@ void kernel_main() {
                                           : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES +
                                                 HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t k_write_addr = get_write_ptr(cb_id_k_out) + wptr_offset;
+            uint32_t k_write_addr = cb_k_out.get_write_ptr() + wptr_offset;
             handle_one_head(k_write_addr);
         }
 
@@ -158,11 +174,11 @@ void kernel_main() {
                                           : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES +
                                                 HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t v_write_addr = get_write_ptr(cb_id_v_out) + wptr_offset;
+            uint32_t v_write_addr = cb_v_out.get_write_ptr() + wptr_offset;
             handle_one_head(v_write_addr);
         }
 
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         return;
     }
 
@@ -179,25 +195,32 @@ void kernel_main() {
                 ? row_in_tile * SUBTILE_LINE_BYTES
                 : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
         uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-        uint32_t q_write_addr = get_write_ptr(cb_id_q_out) + wptr_offset;
+        uint32_t q_write_addr = cb_q_out.get_write_ptr() + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-            uint64_t qkv_in_noc_addr = get_noc_addr(qkv_tile_id, qkv_reader) + in_tile_offset_by_batch;
-
             // Read first phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
-                noc_async_read(qkv_in_noc_addr, q_write_addr, SUBTILE_LINE_BYTES);
+                noc.async_read(
+                    qkv_reader,
+                    CoreLocalMem<uint32_t>(q_write_addr),
+                    SUBTILE_LINE_BYTES,
+                    {.page_id = qkv_tile_id, .offset_bytes = in_tile_offset_by_batch},
+                    {});
             }
             // Read second phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
-                noc_async_read(
-                    qkv_in_noc_addr + 256 * ELEMENT_SIZE, q_write_addr + 256 * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                noc.async_read(
+                    qkv_reader,
+                    CoreLocalMem<uint32_t>(q_write_addr + 256 * ELEMENT_SIZE),
+                    SUBTILE_LINE_BYTES,
+                    {.page_id = qkv_tile_id, .offset_bytes = in_tile_offset_by_batch + 256 * ELEMENT_SIZE},
+                    {});
             }
 
             qkv_tile_id += 1;
             q_write_addr += tile_size;
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     }
 
     // K
@@ -210,23 +233,30 @@ void kernel_main() {
                 ? row_in_tile * SUBTILE_LINE_BYTES
                 : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
         uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-        uint32_t k_write_addr = get_write_ptr(cb_id_k_out) + wptr_offset;
+        uint32_t k_write_addr = cb_k_out.get_write_ptr() + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-            uint64_t qkv_in_noc_addr = get_noc_addr(qkv_tile_id, qkv_reader) + in_tile_offset_by_batch;
-
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
-                noc_async_read(qkv_in_noc_addr, k_write_addr, SUBTILE_LINE_BYTES);
+                noc.async_read(
+                    qkv_reader,
+                    CoreLocalMem<uint32_t>(k_write_addr),
+                    SUBTILE_LINE_BYTES,
+                    {.page_id = qkv_tile_id, .offset_bytes = in_tile_offset_by_batch},
+                    {});
             }
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
-                noc_async_read(
-                    qkv_in_noc_addr + 256 * ELEMENT_SIZE, k_write_addr + 256 * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                noc.async_read(
+                    qkv_reader,
+                    CoreLocalMem<uint32_t>(k_write_addr + 256 * ELEMENT_SIZE),
+                    SUBTILE_LINE_BYTES,
+                    {.page_id = qkv_tile_id, .offset_bytes = in_tile_offset_by_batch + 256 * ELEMENT_SIZE},
+                    {});
             }
 
             qkv_tile_id += 1;
             k_write_addr += tile_size;
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     }
 
     // V
@@ -239,24 +269,31 @@ void kernel_main() {
                 ? row_in_tile * SUBTILE_LINE_BYTES
                 : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
         uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-        uint32_t v_write_addr = get_write_ptr(cb_id_v_out) + wptr_offset;
+        uint32_t v_write_addr = cb_v_out.get_write_ptr() + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-            uint64_t qkv_in_noc_addr = get_noc_addr(qkv_tile_id, qkv_reader) + in_tile_offset_by_batch;
-
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
-                noc_async_read(qkv_in_noc_addr, v_write_addr, SUBTILE_LINE_BYTES);
+                noc.async_read(
+                    qkv_reader,
+                    CoreLocalMem<uint32_t>(v_write_addr),
+                    SUBTILE_LINE_BYTES,
+                    {.page_id = qkv_tile_id, .offset_bytes = in_tile_offset_by_batch},
+                    {});
             }
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
-                noc_async_read(
-                    qkv_in_noc_addr + 256 * ELEMENT_SIZE, v_write_addr + 256 * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                noc.async_read(
+                    qkv_reader,
+                    CoreLocalMem<uint32_t>(v_write_addr + 256 * ELEMENT_SIZE),
+                    SUBTILE_LINE_BYTES,
+                    {.page_id = qkv_tile_id, .offset_bytes = in_tile_offset_by_batch + 256 * ELEMENT_SIZE},
+                    {});
             }
 
             qkv_tile_id += 1;
             v_write_addr += tile_size;
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     }
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

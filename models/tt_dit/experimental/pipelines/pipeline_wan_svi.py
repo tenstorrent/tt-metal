@@ -17,10 +17,11 @@ from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, UniPCMultistep
 from loguru import logger
 from PIL import Image
 
+import ttnn
 from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
-from models.tt_dit.solvers import EulerSolver
+from models.tt_dit.solvers import EulerSolver, UniPCSolver, UniPCVariant
 
 Regime = Literal["python", "comfyui"]
 
@@ -50,7 +51,9 @@ class WanPipelineSVI(WanPipelineI2VLora):
 
     def __init__(
         self,
-        *args,
+        *,
+        device: ttnn.MeshDevice,
+        config: WanPipelineConfig,
         svi_high: str,
         svi_low: str,
         lightx2v_high: Optional[str] = None,
@@ -58,9 +61,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
         regime: Regime = "python",
         num_motion_latent: int = 1,
         num_overlap_frame: int = 4,
-        sigma_shift: Optional[float] = None,
-        **kwargs,
-    ):
+    ) -> None:
         if regime not in _REGIMES:
             raise ValueError(f"regime must be one of {sorted(_REGIMES)}, got {regime!r}")
 
@@ -75,30 +76,29 @@ class WanPipelineSVI(WanPipelineI2VLora):
         # that method's finally block.
         self._anchor_latents_cache: Optional[tuple] = None
 
-        self._configure_regime(
+        lora_high, lora_low, scheduler = self._configure_regime(
             regime=regime,
             svi_high=svi_high,
             svi_low=svi_low,
             lightx2v_high=lightx2v_high,
             lightx2v_low=lightx2v_low,
-            sigma_shift=sigma_shift,
-            kwargs=kwargs,
         )
 
-        solver_override = self._prepare_scheduler_for_base_init(kwargs)
-        super().__init__(*args, **kwargs)
-        if solver_override is not None:
-            self._solver = solver_override
-
-    @staticmethod
-    def _prepare_scheduler_for_base_init(kwargs: dict) -> Optional[EulerSolver]:
-        """Adapt FlowMatch scheduler locally because WanPipeline builds UniPCSolver."""
-        scheduler = kwargs.get("scheduler")
-        if not isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
-            return None
-
-        kwargs["scheduler"] = UniPCMultistepScheduler(use_flow_sigmas=True, prediction_type="flow_prediction")
-        return EulerSolver(scheduler=scheduler)
+        super().__init__(
+            device=device,
+            config=config,
+            lora_high=lora_high,
+            lora_low=lora_low,
+        )
+        # Override the base's scheduler/solver — breaks tracing.
+        self._scheduler = scheduler
+        if isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
+            self._solver = EulerSolver()
+        else:
+            self._solver = UniPCSolver(
+                order=scheduler.config.solver_order,
+                variant=UniPCVariant(scheduler.config.solver_type),
+            )
 
     @staticmethod
     def _configure_regime(
@@ -108,22 +108,20 @@ class WanPipelineSVI(WanPipelineI2VLora):
         svi_low: str,
         lightx2v_high: Optional[str],
         lightx2v_low: Optional[str],
-        sigma_shift: Optional[float],
-        kwargs: dict,
-    ) -> None:
-        """Populate ``kwargs['lora_high'/'lora_low'/'scheduler']`` per regime."""
-        shift = _REGIMES[regime]["flow_shift"] if sigma_shift is None else float(sigma_shift)
+    ) -> tuple[list[LoRASpec], list[LoRASpec], object]:
+        """Return ``(lora_high, lora_low, scheduler)`` per regime."""
+        shift = _REGIMES[regime]["flow_shift"]
 
         if regime == "python":
             if lightx2v_high is not None or lightx2v_low is not None:
                 raise ValueError("lightx2v_* are only valid in regime='comfyui'; drop them for 'python'.")
-            kwargs["lora_high"] = [LoRASpec(svi_high, 1.0)]
-            kwargs["lora_low"] = [LoRASpec(svi_low, 1.0)]
             # Matches diffsynth's FlowMatchScheduler("Wan") — plain Euler on a
             # flow-matching schedule, dispatched to EulerSolver downstream.
-            if kwargs.get("scheduler") is None:
-                kwargs["scheduler"] = FlowMatchEulerDiscreteScheduler(shift=shift)
-            return
+            return (
+                [LoRASpec(svi_high, 1.0)],
+                [LoRASpec(svi_low, 1.0)],
+                FlowMatchEulerDiscreteScheduler(shift=shift),
+            )
 
         # comfyui regime: requires LightX2V LoRAs stacked under SVI.
         if lightx2v_high is None or lightx2v_low is None:
@@ -136,22 +134,63 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 raise FileNotFoundError(f"{label}: file does not exist: {path}")
         # Per upstream docs/svi/comfyui.md: LightX2V at 1.0 on the high-noise
         # expert hurts SVI; 0.5 is recommended.
-        kwargs["lora_high"] = [LoRASpec(lightx2v_high, 0.5), LoRASpec(svi_high, 1.0)]
-        kwargs["lora_low"] = [LoRASpec(lightx2v_low, 1.0), LoRASpec(svi_low, 1.0)]
         # ComfyUI workflow uses k-diffusion dpm++_sde; tt-metal has no
         # on-device port, so we substitute UniPC at the same flow_shift.
         # Visually close, not bit-exact.
-        if kwargs.get("scheduler") is None:
-            kwargs["scheduler"] = UniPCMultistepScheduler(
+        return (
+            [LoRASpec(lightx2v_high, 0.5), LoRASpec(svi_high, 1.0)],
+            [LoRASpec(lightx2v_low, 1.0), LoRASpec(svi_low, 1.0)],
+            UniPCMultistepScheduler(
                 use_flow_sigmas=True,
                 prediction_type="flow_prediction",
                 flow_shift=shift,
-            )
+            ),
+        )
 
-    @staticmethod
-    def create_pipeline(*args, **kwargs):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanPipelineSVI, **kwargs)
+    @classmethod
+    def create_pipeline(
+        cls,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        num_links: int | None = None,
+        dynamic_load: bool | None = None,
+        topology: ttnn.Topology | None = None,
+        is_fsdp: bool | None = None,
+        svi_high: str,
+        svi_low: str,
+        lightx2v_high: Optional[str] = None,
+        lightx2v_low: Optional[str] = None,
+        regime: Regime = "python",
+        num_motion_latent: int = 1,
+        num_overlap_frame: int = 4,
+    ) -> WanPipelineSVI:
+        config = WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            checkpoint_name=WanPipelineI2VLora.BASE_DIFFUSERS_REPO,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            num_links=num_links,
+            topology=topology,
+            dynamic_load=dynamic_load,
+            is_fsdp=is_fsdp,
+            boundary_ratio=0.875,
+            model_type="i2v",
+        )
+        return cls(
+            device=mesh_device,
+            config=config,
+            svi_high=svi_high,
+            svi_low=svi_low,
+            lightx2v_high=lightx2v_high,
+            lightx2v_low=lightx2v_low,
+            regime=regime,
+            num_motion_latent=num_motion_latent,
+            num_overlap_frame=num_overlap_frame,
+        )
 
     def __call__(
         self,
@@ -178,7 +217,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         num_frames: int = 81,
         dtype=None,
         device=None,
-        latents=None,
         anchor_image: Optional[Image.Image] = None,
         prev_last_latent: Optional[torch.Tensor] = None,
     ):
@@ -199,7 +237,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 num_frames=num_frames,
                 dtype=dtype,
                 device=device,
-                latents=latents,
             )
 
         anchor_pil = _as_anchor_image(anchor_image if anchor_image is not None else image_prompt)
@@ -209,7 +246,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
         # invariant under (anchor, H, W, T, dtype).
         cache_key = (id(anchor_pil), height, width, num_frames, num_channels_latents, dtype)
         cached = self._anchor_latents_cache
-        if latents is None and cached is not None and cached[0] == cache_key:
+        if cached is not None and cached[0] == cache_key:
             tt_y_template = cached[1]
             latents, _ = WanPipeline.prepare_latents(
                 self,
@@ -220,7 +257,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 num_frames=num_frames,
                 dtype=dtype,
                 device=device,
-                latents=None,
             )
             tt_y = tt_y_template.clone()
         else:
@@ -233,7 +269,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 num_frames=num_frames,
                 dtype=dtype,
                 device=device,
-                latents=latents,
             )
             # Cloned because the motion-latent splice below mutates tt_y in place.
             self._anchor_latents_cache = (cache_key, tt_y.clone())
@@ -266,9 +301,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         num_clips: int,
         anchor_image: Optional[Image.Image] = None,
         image_prompt=None,
-        num_frames: int = 81,
-        height: int = 480,
-        width: int = 832,
         base_seed: int = 0,
         seed_stride: int = 42,
         partial_output_path: Optional[str] = None,
@@ -301,9 +333,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
             return self._generate_clips_loop(
                 clip_specs=clip_specs,
                 anchor_image=anchor_pil,
-                height=height,
-                width=width,
-                num_frames=num_frames,
                 partial_output_path=partial_output_path,
                 call_kwargs=call_kwargs,
             )
@@ -317,9 +346,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
         *,
         clip_specs: List[_ClipSpec],
         anchor_image: Image.Image,
-        height,
-        width,
-        num_frames,
         partial_output_path,
         call_kwargs,
     ):
@@ -335,11 +361,8 @@ class WanPipelineSVI(WanPipelineI2VLora):
             )
 
             result = self(
-                prompt=spec.prompt,
+                prompts=[spec.prompt],
                 image_prompt=[ImagePrompt(image=anchor_image, frame_pos=0)],
-                height=height,
-                width=width,
-                num_frames=num_frames,
                 seed=spec.seed,
                 guidance_scale=spec.guidance_scale,
                 guidance_scale_2=spec.guidance_scale_2,
@@ -348,10 +371,9 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 **call_kwargs,
             )
 
-            frames = result.frames if hasattr(result, "frames") else result[0]
-            prev_last_latent = getattr(result, "last_latent", None)
-            if prev_last_latent is None:
+            if not (isinstance(result, tuple) and len(result) == 2):
                 raise RuntimeError("SVI requires output_type='pt_with_last_latent' from the inner pipeline.")
+            frames, prev_last_latent = result
 
             clips.append(frames[0] if frames.ndim == 5 else frames)
 

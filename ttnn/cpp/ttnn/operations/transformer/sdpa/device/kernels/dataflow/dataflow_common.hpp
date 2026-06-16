@@ -7,42 +7,50 @@
 #include <cstdint>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
 }
 
-void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    // Fill tile with zeros
-    uint32_t bytes_left = tile_bytes;
-    for (;;) {
-        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-        if (bytes_left == 0) {
-            break;
-        }
-    }
+inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t tile_bytes, uint32_t offset_bytes = 0) {
+    CircularBuffer cb(cb_id);
+    noc.async_write_zeros(cb, tile_bytes, {.offset_bytes = offset_bytes});
 }
 
 template <uint32_t tile_bytes, bool wait_for_barrier = true>
-void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+void fill_tile_zeros(const Noc& noc, uint32_t cb_id, uint32_t tile_id) {
     static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
 
-    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-    fill_zeros_async(write_addr, tile_bytes);
+    fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
     if (wait_for_barrier) {
-        noc_async_read_barrier();
+        noc.write_zeros_l1_barrier();
     }
 }
 
-template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+// Convenience overload for callers that don't already have a Noc instance in scope.
+template <uint32_t tile_bytes, bool wait_for_barrier = true>
+void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+    Noc noc;
+    fill_tile_zeros<tile_bytes, wait_for_barrier>(noc, cb_id, tile_id);
+}
+
+// capacity_t = 0 means "no wrap" (legacy / unbounded cache).  Nonzero means the cache
+// holds capacity_t tile-rows in a circular buffer; the kernel wraps seq_tile_idx
+// modulo capacity_t before resolving the page_table entry, so callers can pass
+// absolute (un-wrapped) positions even with bounded sliding-window allocations.
+// capacity_t must be a multiple of block_size_t (validated on the caller side); that
+// guarantees the wrap preserves intra-block offsets.
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, uint32_t capacity_t = 0>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
     uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
@@ -50,6 +58,9 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
+    if constexpr (capacity_t > 0) {
+        seq_tile_idx %= capacity_t;
+    }
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
     const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
@@ -59,18 +70,24 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
 
 template <typename PageTableArgs>
 volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
+    Noc noc,
     uint32_t cb_id,
     uint32_t batch_idx,
     const PageTableArgs& page_table_args,
     uint32_t page_table_addr,
     uint32_t page_table_stick_size) {
-    uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id);
+    CircularBuffer cb(cb_id);
+    uint32_t page_table_cb_wr_ptr = cb.get_write_ptr();
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.
     const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
-    uint64_t page_table_noc_addr = page_table_reader.get_noc_addr(batch_idx);
-    noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-    noc_async_read_barrier();
+    noc.async_read(
+        page_table_reader,
+        CoreLocalMem<uint32_t>(page_table_cb_wr_ptr),
+        page_table_stick_size,
+        {.page_id = batch_idx},
+        {});
+    noc.async_read_barrier();
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 }
 
@@ -96,6 +113,23 @@ public:
     uint32_t id_of(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t i3) const {
         return i0 * strides[0] + i1 * strides[1] + i2 * strides[2] + i3 * strides[3];
     }
+
+    uint32_t d2() const { return shape[2]; }
+    uint32_t stride2() const { return strides[2]; }
+};
+
+template <uint32_t D0, uint32_t D1, uint32_t D2, uint32_t D3>
+class StaticTensorTileShape {
+public:
+    constexpr StaticTensorTileShape() = default;
+    constexpr StaticTensorTileShape(uint32_t, uint32_t, uint32_t, uint32_t) {}
+
+    uint32_t id_of(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t i3) const {
+        return i0 * D1 * D2 * D3 + i1 * D2 * D3 + i2 * D3 + i3;
+    }
+
+    static constexpr uint32_t d2() { return D2; }
+    static constexpr uint32_t stride2() { return D3; }
 };
 
 template <uint32_t tile_bytes, typename ReaderType, bool push_num_tiles = true>
@@ -118,9 +152,11 @@ uint32_t read_chunk_with_padding(
       This handles the case where the dst CB is larger than the src CB, with some padding on the
       rows or cols of the DST CB.
     */
+    Noc noc;
     const uint32_t num_tiles = dst_rows * dst_cols;
-    cb_reserve_back(cb_id, num_tiles);
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(num_tiles);
+    const uint32_t base_write_ptr = cb.get_write_ptr();
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
     uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
 
@@ -128,12 +164,12 @@ uint32_t read_chunk_with_padding(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_page(start_tile_id, reader, write_ptr);
+            noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = start_tile_id}, {});
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
             if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 barrier_count = 0;
             }
         }
@@ -147,13 +183,16 @@ uint32_t read_chunk_with_padding(
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
+            fill_tile_zeros<tile_bytes, false>(noc, cb_id, tile_id);
         }
     }
-    noc_async_read_barrier();
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
 
     if constexpr (push_num_tiles) {
-        cb_push_back(cb_id, num_tiles);
+        cb.push_back(num_tiles);
         return 0;
     } else {
         return num_tiles;
@@ -174,9 +213,11 @@ FORCE_INLINE void read_q_subblock(
     const uint32_t src_cols,
     const uint32_t dst_cols,
     const uint32_t barrier_threshold) {
+    Noc noc;
     const uint32_t sb_tiles = subblock_h * dst_cols;
-    cb_reserve_back(cb_id, sb_tiles);
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(sb_tiles);
+    const uint32_t base_write_ptr = cb.get_write_ptr();
 
     uint32_t barrier_count = 0;
     for (uint32_t row = sb_start_row; row < sb_start_row + subblock_h; ++row) {
@@ -185,27 +226,30 @@ FORCE_INLINE void read_q_subblock(
 
         if (row < src_rows) {
             for (uint32_t col = 0; col < src_cols; ++col) {
-                noc_async_read_page(start_tile_id++, reader, write_ptr);
+                noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = start_tile_id++}, {});
                 write_ptr += tile_bytes;
                 if (++barrier_count == barrier_threshold) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     barrier_count = 0;
                 }
             }
             // Zero-pad extra columns (src_cols < dst_cols case)
             for (uint32_t col = src_cols; col < dst_cols; ++col) {
-                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+                fill_tile_zeros<tile_bytes, false>(noc, cb_id, local_row * dst_cols + col);
             }
         } else {
             // Entire row is padding
             for (uint32_t col = 0; col < dst_cols; ++col) {
-                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+                fill_tile_zeros<tile_bytes, false>(noc, cb_id, local_row * dst_cols + col);
             }
         }
     }
 
-    noc_async_read_barrier();
-    cb_push_back(cb_id, sb_tiles);
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+    cb.push_back(sb_tiles);
 }
 
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
@@ -223,9 +267,11 @@ void read_paged_chunk_with_padding(
     const volatile tt_l1_ptr uint32_t* const page_table_ptr,
     const bool transpose = false,
     const uint32_t skip_src_cols = 0) {
+    Noc noc;
     const uint32_t num_tiles = dst_rows * dst_cols;
-    cb_reserve_back(cb_id, num_tiles);
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(num_tiles);
+    const uint32_t base_write_ptr = cb.get_write_ptr();
 
     // Stride calculation based on transpose flag
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
@@ -239,12 +285,12 @@ void read_paged_chunk_with_padding(
             virtual_row_num, cur_head, page_table_ptr);
 
         for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_page(physical_tile_id, reader, write_ptr);
+            noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = physical_tile_id}, {});
             physical_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
             if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 barrier_count = 0;
             }
         }
@@ -258,17 +304,27 @@ void read_paged_chunk_with_padding(
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_zeros_async(base_write_ptr + tile_id * tile_bytes, tile_bytes);
+            fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
         }
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_id, num_tiles);
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+    cb.push_back(num_tiles);
 }
 
 template <uint32_t tile_bytes>
-void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
-    noc_async_read(
-        noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
+void copy_tile(
+    Noc noc, uint32_t src_l1_addr_base, uint32_t dst_l1_addr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
+    const uint8_t noc_id = noc.get_noc_id();
+    UnicastEndpoint src;
+    noc.async_read(
+        src,
+        CoreLocalMem<uint32_t>(dst_l1_addr_base + dst_tile_id * tile_bytes),
+        tile_bytes,
+        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = src_l1_addr_base + src_tile_id * tile_bytes},
+        {});
 }
 
 // Generic fill with -inf that works for all supported mask formats (bfp4, bfp8, bfloat16)
@@ -279,7 +335,8 @@ void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
     constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
 
-    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
+    CircularBuffer cb(cb_id);
+    uint32_t write_addr = cb.get_write_ptr() + tile_id * tile_bytes;
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     constexpr uint32_t total_words = tile_bytes / sizeof(uint32_t);
 
@@ -313,17 +370,18 @@ void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
  * Within each uint32 word: low 16 bits = even column, high 16 bits = odd column.
  */
 template <uint32_t tile_bytes>
-void fill_vertical_tile_bf16(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_tile) {
+void fill_vertical_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_tile) {
     // Start with all zeros (valid)
-    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+    fill_tile_zeros<tile_bytes>(noc, cb_id, tile_id);
 
     constexpr uint32_t NEGINF_PAIR = 0xFF80FF80;
     constexpr uint32_t bf16_per_uint32 = 2;
     constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
     constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
 
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Face offsets in uint32 words
     constexpr uint32_t face_offsets[4] = {
@@ -380,17 +438,18 @@ void fill_vertical_tile_bf16(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
  * Face 3 (rows 16-31, cols 16-31): same diagonal pattern as face 0 (shifted by 16 in both dims)
  */
 template <uint32_t tile_bytes>
-void fill_causal_diagonal_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
+void fill_causal_diagonal_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
     // Start with all zeros
-    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+    fill_tile_zeros<tile_bytes>(noc, cb_id, tile_id);
 
     constexpr uint32_t NEGINF_PAIR = 0xFF80FF80;
     constexpr uint32_t bf16_per_uint32 = 2;
     constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
     constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
 
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Face offsets in uint32 words
     constexpr uint32_t face_offsets[4] = {
@@ -438,8 +497,111 @@ void fill_causal_diagonal_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
 }
 
 /**
+ * Fill a bf16 tile with a diagonal-edge mask pattern relative to `boundary_col = row + diagonal_offset`:
+ *   - leading edge (leading_edge=true):  col c is -inf if c < boundary_col
+ *   - trailing edge (leading_edge=false): col c is -inf if c > boundary_col
+ */
+template <uint32_t tile_bytes, int32_t diagonal_offset = 0, bool leading_edge = true>
+void fill_diagonal_edge_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
+    fill_tile_zeros<tile_bytes>(noc, cb_id, tile_id);
+
+    constexpr uint32_t neginf_bf16 = 0xFF80;
+    constexpr uint32_t bf16_per_uint32 = 2;
+    constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
+    constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
+
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+
+    constexpr uint32_t face_offsets[4] = {
+        0,
+        uint32_per_face,
+        2 * uint32_per_face,
+        3 * uint32_per_face,
+    };
+    constexpr uint32_t face_row_starts[4] = {0, 0, 16, 16};
+    constexpr uint32_t face_col_starts[4] = {0, 16, 0, 16};
+
+    for (uint32_t f = 0; f < 4; f++) {
+        const uint32_t face_base = face_offsets[f];
+        const uint32_t row_start = face_row_starts[f];
+        const uint32_t col_start = face_col_starts[f];
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
+            const uint32_t global_row = row_start + row;
+            const int32_t boundary_col = static_cast<int32_t>(global_row) + diagonal_offset;
+            const uint32_t row_base = face_base + row * uint32_per_face_row;
+            for (uint32_t word = 0; word < uint32_per_face_row; word++) {
+                const int32_t col0 = static_cast<int32_t>(col_start + word * bf16_per_uint32);
+                const int32_t col1 = col0 + 1;
+                uint32_t mask_word = 0;
+                if constexpr (leading_edge) {
+                    if (col0 < boundary_col) {
+                        mask_word |= neginf_bf16;
+                    }
+                    if (col1 < boundary_col) {
+                        mask_word |= neginf_bf16 << 16;
+                    }
+                } else {
+                    if (col0 > boundary_col) {
+                        mask_word |= neginf_bf16;
+                    }
+                    if (col1 > boundary_col) {
+                        mask_word |= neginf_bf16 << 16;
+                    }
+                }
+                if (mask_word != 0) {
+                    ptr[row_base + word] = mask_word;
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Emit the four sliding-window edge tiles (trailing_primary, leading_prev, leading_current,
+ * trailing_next) starting at `start_tile_idx` in the mask CB.
+ *
+ * The per-tile diagonal offsets place each edge's transition at the correct sub-tile column.
+ * `leading_remainder`/`trailing_remainder` are the window edges' positions within a 32-row tile;
+ * when they are 0 the window is tile-aligned and the prev/next straddle tiles go unused. The
+ * causal window has only a leading (left) edge — its trailing tile reuses the plain causal diagonal.
+ *
+ * NOTE: this is per-row *stamp* geometry (floor + remainder), intentionally distinct from the
+ * ceil-based loop bounds in SlidingWindowLoopGeometry. See sliding_window_geometry.hpp.
+ */
+template <uint32_t sliding_window_size, bool is_causal_lw, uint32_t cb_mask_in, uint32_t tile_bytes>
+void fill_sliding_window_edge_tiles(Noc noc, uint32_t start_tile_idx) {
+    constexpr uint32_t half_window = sliding_window_size / 2;
+    constexpr uint32_t leading_remainder =
+        is_causal_lw ? (sliding_window_size % tt::constants::TILE_HEIGHT) : (half_window % tt::constants::TILE_HEIGHT);
+    constexpr uint32_t trailing_remainder = is_causal_lw ? 0 : (half_window % tt::constants::TILE_HEIGHT);
+    constexpr int32_t leading_prev_offset =
+        is_causal_lw ? (leading_remainder == 0 ? 1 : static_cast<int32_t>(33 - leading_remainder))
+                     : (leading_remainder == 0 ? 0 : static_cast<int32_t>(32 - leading_remainder));
+    constexpr int32_t leading_current_offset =
+        is_causal_lw ? (leading_remainder == 0 ? 1 : 1 - static_cast<int32_t>(leading_remainder))
+                     : (leading_remainder == 0 ? 0 : -static_cast<int32_t>(leading_remainder));
+    constexpr int32_t trailing_primary_offset = static_cast<int32_t>(trailing_remainder);
+    constexpr int32_t trailing_next_offset = static_cast<int32_t>(trailing_remainder) - 32;
+
+    // Tile 0: trailing/right edge. Causal uses the normal causal diagonal.
+    fill_diagonal_edge_tile_bf16<tile_bytes, trailing_primary_offset, /*leading_edge=*/false>(
+        noc, cb_mask_in, start_tile_idx);
+    // Tile 1/2: left edge when it straddles two K tiles; tile 1 is unused for aligned windows.
+    fill_diagonal_edge_tile_bf16<tile_bytes, leading_prev_offset, /*leading_edge=*/true>(
+        noc, cb_mask_in, start_tile_idx + 1);
+    fill_diagonal_edge_tile_bf16<tile_bytes, leading_current_offset, /*leading_edge=*/true>(
+        noc, cb_mask_in, start_tile_idx + 2);
+    // Tile 3: non-causal right edge when it straddles into the next K tile; unused for causal/aligned windows.
+    fill_diagonal_edge_tile_bf16<tile_bytes, trailing_next_offset, /*leading_edge=*/false>(
+        noc, cb_mask_in, start_tile_idx + 3);
+}
+
+/**
  * Generate lightweight mask tiles into a single CB for ring joint SDPA.
- * Layout: [neginf_tile(0)] [causal_diag_tile?(1)] [global_n_partial_tile?] [joint_l_partial_tile?]
+ * Layout without sliding: [neginf_tile(0)] [causal_diag_tile?] [global_n_partial_tile?] [joint_l_partial_tile?]
+ * Layout with sliding:    [neginf_tile(0)] [trailing_primary(1)] [leading_prev(2)]
+ *                         [leading_current(3)] [trailing_next(4)] [partial tiles...]
  * Tiles are pushed once and stay permanently fronted for the entire kernel lifetime.
  *
  * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no partial)
@@ -447,47 +609,62 @@ void fill_causal_diagonal_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
  * @tparam cb_mask_in            CB to generate mask tiles into (must be constexpr for get_tile_size)
  * @tparam is_causal_lw          Whether to include the causal diagonal tile
  */
-template <uint32_t global_n_partial_col, uint32_t joint_l_partial_col, uint32_t cb_mask_in, bool is_causal_lw = false>
-void generate_lightweight_mask_tiles() {
+template <
+    uint32_t global_n_partial_col,
+    uint32_t joint_l_partial_col,
+    uint32_t cb_mask_in,
+    bool is_causal_lw = false,
+    uint32_t sliding_window_size = 0>
+void generate_lightweight_mask_tiles(Noc noc) {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
-    constexpr uint32_t causal_diag_tiles = is_causal_lw ? 1 : 0;
-    constexpr uint32_t total_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
+    constexpr bool has_sliding_window = sliding_window_size > 0;
+    constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
+    constexpr uint32_t causal_diag_tiles = (!has_sliding_window && is_causal_lw) ? 1 : 0;
+    constexpr uint32_t total_mask_tiles = 1 + sliding_diag_tiles + causal_diag_tiles + partial_mask_tiles;
     constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
 
-    cb_reserve_back(cb_mask_in, total_mask_tiles);
+    CircularBuffer cb(cb_mask_in);
+    cb.reserve_back(total_mask_tiles);
 
     // Tile 0: neginf tile
     fill_neginf_tile<mask_tile_size_bytes>(cb_mask_in, 0);
 
     uint32_t tile_idx = 1;
 
-    // Tile 1 (if causal): causal diagonal tile
-    if constexpr (is_causal_lw) {
-        fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(cb_mask_in, tile_idx++);
+    if constexpr (has_sliding_window) {
+        fill_sliding_window_edge_tiles<sliding_window_size, is_causal_lw, cb_mask_in, mask_tile_size_bytes>(
+            noc, tile_idx);
+        tile_idx += kSlidingWindowEdgeTiles;
+    } else if constexpr (is_causal_lw) {
+        fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++);
     }
 
     // Subsequent tiles: partial mask tiles for boundary conditions
     if constexpr (partial_mask_tiles > 0) {
         if constexpr (global_n_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(cb_mask_in, tile_idx++, global_n_partial_col);
+            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, global_n_partial_col);
         }
         if constexpr (joint_l_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(cb_mask_in, tile_idx++, joint_l_partial_col);
+            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, joint_l_partial_col);
         }
     }
 
-    cb_push_back(cb_mask_in, total_mask_tiles);
+    cb.push_back(total_mask_tiles);
 }
 
 template <uint32_t tile_bytes>
 inline void fill_custom_diagonal_tile_bfp4(
-    uint32_t cb_id, uint32_t tile_id, int32_t leading_diagonal_offset, int32_t trailing_diagonal_offset) {
+    Noc noc,
+    uint32_t cb_id,
+    uint32_t tile_id,
+    int32_t leading_diagonal_offset,
+    int32_t trailing_diagonal_offset) {
     // Assert that we're not in a case where the entire tile should be fully masked or fully allowed
     // Those cases should be handled before calling this function
     ASSERT(leading_diagonal_offset >= -32 && trailing_diagonal_offset >= -32);
 
     // Clear the tile first
-    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+    fill_tile_zeros<tile_bytes>(noc, cb_id, tile_id);
 
     /**
      * In bfp4_b, -inf is represented as 0xF exp and 0xC mantissa.
@@ -517,8 +694,9 @@ inline void fill_custom_diagonal_tile_bfp4(
     constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / bf4_mant_per_uint32;
     constexpr uint32_t uint32_exp_per_face = tt::constants::FACE_HEIGHT / bf4_exp_per_uint32;
 
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Fill all exponents with NEG_INF_EXP
     for (uint32_t i = 0; i < uint32_exp_per_face * 4; i++) {
@@ -610,14 +788,14 @@ inline void fill_custom_diagonal_tile_bfp4(
 }
 
 template <uint32_t tile_bytes>
-void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_tile) {
+void fill_vertical_tile_bfp4(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_tile) {
     /*
     This tile should be set such that tile[:, unpad_col_in_tile:] = -inf
     For block float 4 format where 8 mantissas are packed per uint32
     */
 
     // Prefill with zeros (fast)
-    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+    fill_tile_zeros<tile_bytes>(noc, cb_id, tile_id);
 
     constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
     constexpr uint32_t NEG_INF_MANT = 0xCCCCCCCC;  // All mantissas set to 0xC
@@ -628,8 +806,9 @@ void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
     constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / bf4_mant_per_uint32;
     constexpr uint32_t uint32_exp_per_face = tt::constants::FACE_HEIGHT / bf4_exp_per_uint32;
 
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Calculate face offsets in uint32 words
     constexpr uint32_t exp_section_size = uint32_exp_per_face * 4;
@@ -707,6 +886,7 @@ enum class MaskType { FULLY_ALLOWED, FULLY_MASKED, PARTIAL_MASK };
 
 template <uint32_t cb_mask_in>
 void generate_causal_sliding_window_mask(
+    Noc noc,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t q_chunk,
@@ -714,10 +894,10 @@ void generate_causal_sliding_window_mask(
     bool is_causal = true,
     uint32_t sliding_window_size = 0) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    cb_reserve_back(cb_mask_in, mask_size_tiles);
+    CircularBuffer cb(cb_mask_in);
+    cb.reserve_back(mask_size_tiles);
 
-    uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
-    uint64_t noc_write_addr_base = get_noc_addr(write_ptr_base);
+    uint32_t write_ptr_base = cb.get_write_ptr();
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
     int zero_tile_idx = -1;
@@ -816,10 +996,10 @@ void generate_causal_sliding_window_mask(
             switch (mask_type) {
                 case MaskType::FULLY_ALLOWED:
                     if (zero_tile_idx == -1) {
-                        fill_tile_zeros<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                        fill_tile_zeros<tile_bytes>(noc, cb_mask_in, in_mask_tile_id);
                         zero_tile_idx = in_mask_tile_id;
                     } else {
-                        copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, zero_tile_idx, in_mask_tile_id);
+                        copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, zero_tile_idx, in_mask_tile_id);
                     }
                     break;
                 case MaskType::FULLY_MASKED:
@@ -827,26 +1007,26 @@ void generate_causal_sliding_window_mask(
                         fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                         inf_tile_idx = in_mask_tile_id;
                     } else {
-                        copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
+                        copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
                     }
                     break;
                 case MaskType::PARTIAL_MASK:
                     fill_custom_diagonal_tile_bfp4<tile_bytes>(
-                        cb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
+                        noc, cb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
             }
         }
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_mask_in, mask_size_tiles);
+    noc.async_read_barrier();
+    cb.push_back(mask_size_tiles);
 }
 
 template <uint32_t cb_mask_in>
-void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t unpadded_Sk) {
+void generate_noncausal_padded_mask(Noc noc, uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t unpadded_Sk) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    cb_reserve_back(cb_mask_in, mask_size_tiles);
+    CircularBuffer cb(cb_mask_in);
+    cb.reserve_back(mask_size_tiles);
 
-    uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
-    uint64_t noc_write_addr_base = get_noc_addr(write_ptr_base);
+    uint32_t write_ptr_base = cb.get_write_ptr();
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
     int zero_tile_idx = -1;
@@ -867,36 +1047,36 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
 
             if (do_zero) {
                 if (zero_tile_idx == -1) {
-                    fill_tile_zeros<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                    fill_tile_zeros<tile_bytes>(noc, cb_mask_in, in_mask_tile_id);
                     zero_tile_idx = in_mask_tile_id;
                 } else {
-                    copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, zero_tile_idx, in_mask_tile_id);
+                    copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, zero_tile_idx, in_mask_tile_id);
                 }
             } else if (do_inf) {
                 if (inf_tile_idx == -1) {
                     fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
-                    copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
+                    copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
                 }
             } else {
                 if (vertical_tile_idx == -1) {
-                    fill_vertical_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id, unpad_col_in_tile);
+                    fill_vertical_tile_bfp4<tile_bytes>(noc, cb_mask_in, in_mask_tile_id, unpad_col_in_tile);
                     vertical_tile_idx = in_mask_tile_id;
                 } else {
-                    copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, vertical_tile_idx, in_mask_tile_id);
+                    copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, vertical_tile_idx, in_mask_tile_id);
                 }
             }
         }
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_mask_in, mask_size_tiles);
+    noc.async_read_barrier();
+    cb.push_back(mask_size_tiles);
 }
 
-// Issue noc_async_read_page for a (num_rows × cols) tile block. tile_id starts at base_tile_id,
+// Issue noc.async_read for a (num_rows x cols) tile block. tile_id starts at base_tile_id,
 // advances by ++ per col and by row_stride per row (i.e., tile_id += row_stride - cols after each
 // inner col loop). dst starts at dst_addr + dst_row_origin * outer_stride, advances by
-// inner_stride per col and outer_stride per row. No barrier — caller must noc_async_read_barrier().
+// inner_stride per col and outer_stride per row. No barrier - caller must noc.async_read_barrier().
 // barrier_threshold > 0 fires a partial barrier every barrier_threshold tiles.
 template <typename ReaderType>
 inline void issue_block_reads(
@@ -912,14 +1092,21 @@ inline void issue_block_reads(
     uint32_t barrier_threshold,
     uint32_t& barrier_count) {
     uint32_t tile_id = base_tile_id;
+    uint32_t tile_bytes;
+    if constexpr (has_get_aligned_page_size_v<ReaderType>) {
+        tile_bytes = reader.get_aligned_page_size();
+    } else {
+        tile_bytes = reader.page_size;
+    }
+    Noc noc;
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_read_page(tile_id, reader, dst);
+            noc.async_read(reader, CoreLocalMem<uint32_t>(dst), tile_bytes, {.page_id = tile_id}, {});
             ++tile_id;
             dst += inner_stride;
             if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 barrier_count = 0;
             }
         }
@@ -937,26 +1124,32 @@ inline void zero_fill_block(
     uint32_t num_rows,
     uint32_t cols,
     uint32_t dst_row_origin,
+    uint32_t dst_cb_id,
     uint32_t dst_addr,
     uint32_t outer_stride,
     uint32_t inner_stride) {
+    Noc noc;
+    uint32_t page_size;
+    if constexpr (has_get_aligned_page_size_v<ReaderType>) {
+        page_size = reader.get_aligned_page_size();
+    } else {
+        page_size = reader.page_size;
+    }
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            if constexpr (has_get_aligned_page_size_v<ReaderType>) {
-                fill_zeros_async(dst, reader.get_aligned_page_size());
-            } else {
-                fill_zeros_async(dst, reader.page_size);
-            }
+            fill_zeros_async(noc, dst_cb_id, page_size, dst - dst_addr);
             dst += inner_stride;
         }
     }
 }
 
-// Issue noc_async_write_page for a (num_rows × cols) tile block. Same tile_id/src arithmetic
-// as issue_block_reads (with src instead of dst). No barrier — caller must noc_async_write_barrier().
+// Issue noc.async_write for a (num_rows x cols) tile block. Same tile_id/src arithmetic
+// as issue_block_reads (with src instead of dst). No barrier - caller must noc.async_write_barrier().
+// trid=0 is the default tag for untagged writes; nonzero tags writes for per-TRID barriers/flushes.
 template <typename WriterType>
 inline void issue_block_writes(
+    Noc noc,
     const WriterType& writer,
     uint32_t base_tile_id,
     uint32_t row_stride,
@@ -965,12 +1158,20 @@ inline void issue_block_writes(
     uint32_t src_row_origin,
     uint32_t src_addr,
     uint32_t outer_stride,
-    uint32_t inner_stride) {
+    uint32_t inner_stride,
+    uint32_t trid = 0) {
     uint32_t tile_id = base_tile_id;
+    uint32_t tile_bytes;
+    if constexpr (has_get_aligned_page_size_v<WriterType>) {
+        tile_bytes = writer.get_aligned_page_size();
+    } else {
+        tile_bytes = writer.page_size;
+    }
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t src = src_addr + (src_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_page(tile_id, writer, src);
+            noc.async_write<NocOptions::TXN_ID>(
+                CoreLocalMem<uint32_t>(src), writer, tile_bytes, {}, {.page_id = tile_id}, {.trid = trid});
             ++tile_id;
             src += inner_stride;
         }
@@ -1027,6 +1228,7 @@ struct CatAddrGenerator {
     void issue_reads(
         const Slice& slice,
         uint32_t /*end_seq_tile*/,
+        uint32_t dst_cb_id,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
@@ -1060,7 +1262,14 @@ struct CatAddrGenerator {
         const uint32_t s1_end = std::min(d2_end, gap_end);
         if (s1_start < s1_end) {
             zero_fill_block(
-                first_reader, s1_end - s1_start, cols, s1_start - d2_start, dst_addr, outer_stride, inner_stride);
+                first_reader,
+                s1_end - s1_start,
+                cols,
+                s1_start - d2_start,
+                dst_cb_id,
+                dst_addr,
+                outer_stride,
+                inner_stride);
         }
         // Segment 2: second tensor (d2 shifted by first_seq_padded).
         const uint32_t s2_start = std::max(d2_start, gap_end);
@@ -1083,7 +1292,14 @@ struct CatAddrGenerator {
         const uint32_t s3_start = std::max(d2_start, second_end);
         if (s3_start < d2_end) {
             zero_fill_block(
-                first_reader, d2_end - s3_start, cols, s3_start - d2_start, dst_addr, outer_stride, inner_stride);
+                first_reader,
+                d2_end - s3_start,
+                cols,
+                s3_start - d2_start,
+                dst_cb_id,
+                dst_addr,
+                outer_stride,
+                inner_stride);
         }
     }
 
@@ -1091,11 +1307,13 @@ struct CatAddrGenerator {
     // noc_async_write_barrier(). Same segment split as issue_reads; gap and tail produce no
     // writes (those rows aren't mapped to either tensor). end_seq_tile unused (see issue_reads).
     void issue_writes(
+        Noc noc,
         const Slice& slice,
         uint32_t /*end_seq_tile*/,
         uint32_t src_addr,
         uint32_t outer_stride,
-        uint32_t inner_stride) const {
+        uint32_t inner_stride,
+        uint32_t trid = 0) const {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t d2_end = slice.d2_end;
         const uint32_t cols = slice.get_d3_size();
@@ -1107,6 +1325,7 @@ struct CatAddrGenerator {
         const uint32_t s0_end = std::min(d2_end, first_end);
         if (d2_start < s0_end) {
             issue_block_writes(
+                noc,
                 first_reader,
                 first_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
                 first_shape.strides[2],
@@ -1115,7 +1334,8 @@ struct CatAddrGenerator {
                 /*src_row_origin=*/0,
                 src_addr,
                 outer_stride,
-                inner_stride);
+                inner_stride,
+                trid);
         }
         // Gap rows: no writes.
         // Segment 2: second tensor.
@@ -1123,6 +1343,7 @@ struct CatAddrGenerator {
         const uint32_t s2_end = std::min(d2_end, second_end);
         if (s2_start < s2_end) {
             issue_block_writes(
+                noc,
                 second_reader,
                 second_shape.id_of(slice.d0, slice.d1, s2_start - first_seq_padded, slice.d3_start),
                 second_shape.strides[2],
@@ -1131,18 +1352,19 @@ struct CatAddrGenerator {
                 s2_start - d2_start,
                 src_addr,
                 outer_stride,
-                inner_stride);
+                inner_stride,
+                trid);
         }
         // Tail rows: no writes.
     }
 };
 
-template <typename ReaderType>
+template <typename ReaderType, typename TensorShapeType = TensorTileShape>
 struct PaddedAddrGenerator {
     ReaderType reader;
-    TensorTileShape tensor_shape;
+    TensorShapeType tensor_shape;
 
-    PaddedAddrGenerator(const ReaderType& reader, TensorTileShape tensor_shape) :
+    PaddedAddrGenerator(const ReaderType& reader, TensorShapeType tensor_shape) :
         reader(reader), tensor_shape(tensor_shape) {}
 
     // Issue async NoC reads for a slice to L1. No barrier — caller must
@@ -1151,6 +1373,7 @@ struct PaddedAddrGenerator {
     void issue_reads(
         const Slice& slice,
         uint32_t end_seq_tile,
+        uint32_t dst_cb_id,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
@@ -1158,7 +1381,7 @@ struct PaddedAddrGenerator {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t rows = slice.get_d2_size();
         const uint32_t cols = slice.get_d3_size();
-        const uint32_t shape_d2 = tensor_shape.shape[2];
+        const uint32_t shape_d2 = tensor_shape.d2();
         const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
         const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
         uint32_t barrier_count = 0;
@@ -1167,7 +1390,7 @@ struct PaddedAddrGenerator {
         issue_block_reads(
             reader,
             tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
-            tensor_shape.strides[2],
+            tensor_shape.stride2(),
             valid_rows,
             cols,
             /*dst_row_origin=*/0,
@@ -1182,39 +1405,68 @@ struct PaddedAddrGenerator {
             rows - valid_rows,
             cols,
             /*dst_row_origin=*/valid_rows,
+            dst_cb_id,
             dst_addr,
             outer_stride,
             inner_stride);
     }
 
     // Issue async NoC writes for a slice from L1. No barrier — caller must
-    // noc_async_write_barrier(). Out-of-bound rows produce no writes.
+    // noc.async_write_barrier(). Out-of-bound rows produce no writes.
     void issue_writes(
+        Noc noc,
         const Slice& slice,
         uint32_t end_seq_tile,
         uint32_t src_addr,
         uint32_t outer_stride,
-        uint32_t inner_stride) const {
+        uint32_t inner_stride,
+        uint32_t trid = 0) const {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t rows = slice.get_d2_size();
         const uint32_t cols = slice.get_d3_size();
-        const uint32_t shape_d2 = tensor_shape.shape[2];
+        const uint32_t shape_d2 = tensor_shape.d2();
         const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
         const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
 
         // Valid segment only; out-of-bound rows produce no writes.
         issue_block_writes(
+            noc,
             reader,
             tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
-            tensor_shape.strides[2],
+            tensor_shape.stride2(),
             valid_rows,
             cols,
             /*src_row_origin=*/0,
             src_addr,
             outer_stride,
-            inner_stride);
+            inner_stride,
+            trid);
+    }
+
+    void issue_writes_no_padding(
+        Noc noc,
+        const Slice& slice,
+        uint32_t src_addr,
+        uint32_t outer_stride,
+        uint32_t inner_stride,
+        uint32_t trid = 0) const {
+        issue_block_writes(
+            noc,
+            reader,
+            tensor_shape.id_of(slice.d0, slice.d1, slice.d2_start, slice.d3_start),
+            tensor_shape.stride2(),
+            slice.get_d2_size(),
+            slice.get_d3_size(),
+            /*src_row_origin=*/0,
+            src_addr,
+            outer_stride,
+            inner_stride,
+            trid);
     }
 };
+
+template <typename ReaderType, typename TensorShapeType>
+PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<ReaderType, TensorShapeType>;
 
 // Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Used by forwarding paths that mcast before pushing.
@@ -1231,18 +1483,24 @@ __attribute__((noinline)) void fetch_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,
+    const uint32_t dst_cb_id,
     const uint32_t dst_addr,
     const uint32_t tile_bytes,
     const bool transpose,
     const uint32_t barrier_threshold = 0) {
+    Noc noc;
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
     const uint32_t outer_ptr_stride = transpose ? tile_bytes : src_cols * tile_bytes;
     const uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
 
     cat_addr_generator.issue_reads(
-        src_slice, end_seq_tile, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
-    noc_async_read_barrier();
+        src_slice, end_seq_tile, dst_cb_id, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
+    // issue_reads internally emits noc.async_read (NOC) AND zero_fill_block → async_write_zeros
+    // (iDMA on Quasar). NOC reads and async_write_zeros use the same completion path on WH/BH
+    // but different paths on Quasar. Issue both — second is a no-op on WH/BH.
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 template <typename CatAddrGeneratorType>
@@ -1255,10 +1513,18 @@ void read_block(
     const bool transpose,
     const uint32_t barrier_threshold = 0) {
     const uint32_t num_tiles = src_slice.get_d2_size() * src_slice.get_d3_size();
-    cb_reserve_back(cb_id, num_tiles);
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(num_tiles);
     fetch_block(
-        cat_addr_generator, src_slice, end_seq_tile, get_write_ptr(cb_id), tile_bytes, transpose, barrier_threshold);
-    cb_push_back(cb_id, num_tiles);
+        cat_addr_generator,
+        src_slice,
+        end_seq_tile,
+        cb_id,
+        cb.get_write_ptr(),
+        tile_bytes,
+        transpose,
+        barrier_threshold);
+    cb.push_back(num_tiles);
 }
 
 // Pop a (rows × cols) tile block out of a CB and write it via NoC. Symmetric to read_block:
@@ -1267,6 +1533,7 @@ void read_block(
 // dispatch). Out-of-bound rows are skipped (no zero-fill on writes).
 template <typename CatAddrGeneratorType>
 void write_block(
+    Noc noc,
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
     const uint32_t end_seq_tile,
@@ -1275,18 +1542,20 @@ void write_block(
     const uint32_t dst_rows = dst_slice.get_d2_size();
     const uint32_t dst_cols = dst_slice.get_d3_size();
     const uint32_t num_tiles = dst_rows * dst_cols;
-    const uint32_t base_read_ptr = get_read_ptr(cb_id);
+    CircularBuffer cb(cb_id);
     const uint32_t outer_ptr_stride = dst_cols * tile_bytes;
     const uint32_t inner_ptr_stride = tile_bytes;
 
-    cb_wait_front(cb_id, num_tiles);
-    cat_addr_generator.issue_writes(dst_slice, end_seq_tile, base_read_ptr, outer_ptr_stride, inner_ptr_stride);
-    noc_async_write_barrier();
-    cb_pop_front(cb_id, num_tiles);
+    cb.wait_front(num_tiles);
+    cat_addr_generator.issue_writes(
+        noc, dst_slice, end_seq_tile, cb.get_read_ptr(), outer_ptr_stride, inner_ptr_stride);
+    noc.async_write_barrier();
+    cb.pop_front(num_tiles);
 }
 
 template <typename TensorAccessorType>
 void write_block(
+    Noc noc,
     const TensorAccessorType& out_writer,
     const uint32_t cb_out,
     const uint32_t out_chunk_tiles,
@@ -1298,23 +1567,24 @@ void write_block(
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
 
-    cb_wait_front(cb_out, out_chunk_tiles);
+    CircularBuffer cb(cb_out);
+    cb.wait_front(out_chunk_tiles);
 
-    uint32_t l1_read_addr = get_read_ptr(cb_out);
+    uint32_t l1_read_addr = cb.get_read_ptr();
     for (uint32_t row = 0; row < rows; ++row) {
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_page(tile_id, out_writer, l1_read_addr);
+            noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), out_writer, tile_bytes, {}, {.page_id = tile_id});
             ++tile_id;
             l1_read_addr += tile_bytes;
 
             if (++barrier_count == barrier_threshold) {
-                noc_async_writes_flushed();
+                noc.async_writes_flushed();
                 barrier_count = 0;
             }
         }
     }
-    noc_async_write_barrier();
-    cb_pop_front(cb_out, out_chunk_tiles);
+    noc.async_write_barrier();
+    cb.pop_front(out_chunk_tiles);
 }
 
 // Single-chip linear-tile-id drain. Iterates total_rows in groups of sbh rows (last group is
@@ -1325,6 +1595,7 @@ void write_block(
 // sets a non-zero trid → drain flushes trid 0 (the default trid all writes here carry).
 template <typename TensorAccessorType>
 void write_block_row_grouped(
+    Noc noc,
     const TensorAccessorType& out_writer,
     const uint32_t cb_out,
     const uint32_t total_rows,
@@ -1342,19 +1613,25 @@ void write_block_row_grouped(
     const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
     const uint32_t num_groups = num_full_groups + (remainder_rows ? 1 : 0);
 
+    CircularBuffer cb(cb_out);
     for (uint32_t rg = 0; rg < num_groups; ++rg) {
         const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
         const uint32_t tiles_this_group = rows_this_group * cols;
-        cb_wait_front(cb_out, tiles_this_group);
-        uint32_t l1_read_addr = get_read_ptr(cb_out);
+        cb.wait_front(tiles_this_group);
+        uint32_t l1_read_addr = cb.get_read_ptr();
         for (uint32_t r = 0; r < rows_this_group; ++r) {
             const uint32_t row = rg * sbh + r;
             if (row < write_rows) {
                 for (uint32_t col = 0; col < cols; ++col) {
-                    noc_async_write_page(tile_id, out_writer, l1_read_addr + col * tile_bytes);
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(l1_read_addr + col * tile_bytes),
+                        out_writer,
+                        tile_bytes,
+                        {},
+                        {.page_id = tile_id});
                     ++tile_id;
                     if (++barrier_count == barrier_threshold) {
-                        noc_async_write_flushed_with_trid(default_trid);
+                        noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = default_trid});
                         barrier_count = 0;
                     }
                 }
@@ -1362,20 +1639,21 @@ void write_block_row_grouped(
             l1_read_addr += cols * tile_bytes;
         }
         // Flush THIS drain's writes (default trid) before pop so compute can safely reuse the L1 slot.
-        noc_async_write_flushed_with_trid(default_trid);
-        cb_pop_front(cb_out, tiles_this_group);
+        noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = default_trid});
+        cb.pop_front(tiles_this_group);
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }
 
-// Multi-chip row-grouped drain of cb_out to DRAM via cat_addr_generator.issue_writes; writes
-// overlap with compute's next row-group push. Padding past end_seq_tile is silently skipped
-// (out-of-bound rows produce no writes). flush_trid is the TRID the caller stamped writes
-// with via noc_async_write_set_trid (0 = default); per-group flush uses
-// noc_async_write_flushed_with_trid(flush_trid) so it waits exactly for THIS drain's writes
-// to be source-L1-acked. Caller handles any final DRAM-arrival NoC barrier.
-template <typename CatAddrGeneratorType>
+// Multi-chip row-grouped drain of cb_out to DRAM;
+// writes overlap with compute's next row-group push. Padding past end_seq_tile is silently skipped
+// (out-of-bound rows produce no writes). flush_trid is the TRID stamped on each individual
+// write via noc.async_write<NocOptions::TXN_ID>(..., {.trid=flush_trid});
+// per-group flush uses noc.async_writes_flushed<TXN_ID>(flush_trid) so it waits exactly for
+// THIS drain's writes to be source-L1-acked. Caller handles any final DRAM-arrival NoC barrier.
+template <bool all_rows_valid = false, typename CatAddrGeneratorType>
 void write_block_row_grouped_trid(
+    Noc noc,
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
     const uint32_t end_seq_tile,
@@ -1391,10 +1669,11 @@ void write_block_row_grouped_trid(
     const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
     const uint32_t num_groups = num_full_groups + (remainder_rows ? 1 : 0);
 
+    CircularBuffer cb(cb_out);
     for (uint32_t rg = 0; rg < num_groups; ++rg) {
         const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
         const uint32_t tiles_this_group = rows_this_group * cols;
-        cb_wait_front(cb_out, tiles_this_group);
+        cb.wait_front(tiles_this_group);
         const Slice group_slice(
             dst_slice.d0,
             dst_slice.d1,
@@ -1402,9 +1681,15 @@ void write_block_row_grouped_trid(
             dst_slice.d2_start + rg * sbh + rows_this_group,
             dst_slice.d3_start,
             dst_slice.d3_end);
-        cat_addr_generator.issue_writes(group_slice, end_seq_tile, get_read_ptr(cb_out), outer_stride, tile_bytes);
-        noc_async_write_flushed_with_trid(flush_trid);
-        cb_pop_front(cb_out, tiles_this_group);
+        if constexpr (all_rows_valid) {
+            cat_addr_generator.issue_writes_no_padding(
+                noc, group_slice, cb.get_read_ptr(), outer_stride, tile_bytes, flush_trid);
+        } else {
+            cat_addr_generator.issue_writes(
+                noc, group_slice, end_seq_tile, cb.get_read_ptr(), outer_stride, tile_bytes, flush_trid);
+        }
+        noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = flush_trid});
+        cb.pop_front(tiles_this_group);
     }
 }
 
@@ -1430,7 +1715,8 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
     // This ensures stale L1 values don't affect the max computation
     constexpr uint16_t neg_inf_bf16 = 0xFF80;
 
-    uint32_t write_ptr = get_write_ptr(cb_id);
+    CircularBuffer cb(cb_id);
+    uint32_t write_ptr = cb.get_write_ptr();
 
     // Tile is 32x32 in row-major order within faces
     // For bfloat16, each element is 2 bytes (uint16_t)
@@ -1473,6 +1759,7 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
 
 template <bool is_chunked, uint32_t sliding_window_size, bool padded_or_joint_masks, uint32_t cb_mask_in>
 void generate_mask(
+    Noc noc,
     const uint32_t Sq_chunk_t,
     const uint32_t Sk_chunk_t,
     const uint32_t q_chunk,
@@ -1504,15 +1791,15 @@ void generate_mask(
                 // If no sliding window, only generate mask along diagonal
                 // Otherwise, generate mask for all chunks
                 generate_causal_sliding_window_mask<cb_mask_in>(
-                    Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
+                    noc, Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
             }
         }
     } else if constexpr (padded_or_joint_masks) {
         if (generate_mask_0) {
-            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_0);
+            generate_noncausal_padded_mask<cb_mask_in>(noc, Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_0);
         }
         if (generate_mask_1) {
-            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_1);
+            generate_noncausal_padded_mask<cb_mask_in>(noc, Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_1);
         }
     }
 }

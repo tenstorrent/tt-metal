@@ -20,7 +20,6 @@ struct SelectiveReduceCombineParams {
     uint32_t batch_size;
     uint32_t seq_size;
     uint32_t select_experts_k;
-    uint32_t experts;
     uint32_t num_links;
 
     uint32_t axis;
@@ -40,7 +39,6 @@ struct SelectiveReduceCombineParams {
         attrs.emplace_back("batch_size", batch_size);
         attrs.emplace_back("seq_size", seq_size);
         attrs.emplace_back("select_experts_k", select_experts_k);
-        attrs.emplace_back("experts", experts);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("axis", axis);
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);

@@ -5,6 +5,7 @@
 #include "moreh_norm.hpp"
 
 #include "device/moreh_norm_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
@@ -18,11 +19,7 @@ Tensor moreh_norm(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    if (!dim.has_value()) {
-        ttnn::SmallVector<int64_t> dims(input.padded_shape().rank());
-        std::iota(dims.begin(), dims.end(), 0);
-        dim = std::make_optional(dims);
-    }
+    auto dims = operations::get_dim(dim, input.logical_shape().rank());
     auto INF = std::numeric_limits<float>::infinity();
     if (auto* single_dim = std::get_if<int64_t>(&dim.value())) {
         if (p == 0.0 || p == INF || p == -INF) {
@@ -34,12 +31,6 @@ Tensor moreh_norm(
         return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
     }
 
-    auto dims = std::get<ttnn::SmallVector<int64_t>>(dim.value());
-    if (dims.empty()) {
-        ttnn::SmallVector<int64_t> all_dims(input.padded_shape().rank());
-        std::iota(all_dims.begin(), all_dims.end(), 0);
-        dims = all_dims;
-    }
     if (dims.size() == 1) {
         if (p == 0.0 || p == INF || p == -INF) {
             return ttnn::prim::moreh_norm(input, p, dims[0], keepdim, output, memory_config, compute_kernel_config);

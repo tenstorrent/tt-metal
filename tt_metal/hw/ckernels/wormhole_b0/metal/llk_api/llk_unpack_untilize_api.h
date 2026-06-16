@@ -8,6 +8,11 @@
 
 /*************************************************************************
  * LLK UNPACK UNTILIZE
+ *
+ * DEPRECATED: The unpack-based untilize path has poor performance and is
+ * deprecated in favor of pack_untilize (see llk_pack_untilize_api.h). These
+ * wrappers are retained only for the legacy `untilize_init/block/uninit`
+ * compute API and are scheduled for removal; see tt-metal#22904.
  *************************************************************************/
 
 inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
