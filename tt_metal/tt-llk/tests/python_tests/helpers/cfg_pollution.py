@@ -232,14 +232,17 @@ def pollute_items(
             for (state, addr32), value in restore.items():
                 risc_debug.write_memory(_word_core_addr(addr32, state, arch), value)
         for item in items:
-            # item is (state, addr32) or (state, addr32, mask): mask selects which BITS to
-            # poison (default all 32). Bit-granular masking lets a caller poison one field of
-            # a mixed word (e.g. STACC_RELU vs DISABLE_RISC_BP, which share addr32 2).
+            # item is (state, addr32[, mask[, value]]). mask selects which BITS to poison
+            # (default all 32) — lets a caller poison one field of a mixed word. value, if given,
+            # is the EXACT source to write into the masked bits (instead of the random word_value)
+            # — used to plant a specific realistic value a real op would leave (e.g. Pack_L1_Acc=1)
+            # to demonstrate an actionable reconfig-escape rather than random garbage.
             state, addr32 = item[0], item[1]
             mask = item[2] if len(item) > 2 else 0xFFFFFFFF
+            src = item[3] if len(item) > 3 else word_value(seed, state, addr32)
             addr = _word_core_addr(addr32, state, arch)
             original = risc_debug.read_memory(addr)
-            value = (original & ~mask) | (word_value(seed, state, addr32) & mask)
+            value = (original & ~mask) | (src & mask)
             preserve = _PRESERVE_BITS.get(addr32, 0) | extra_preserve.get(addr32, 0)
             if preserve:
                 value = (value & ~preserve) | (original & preserve)
