@@ -100,7 +100,7 @@ def test_div_fp32(device, ttnn_function):
     z_tt_div = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_allclose(z_torch, tt_out, atol=1e-10, rtol=1e-6)
+    assert_with_ulp(z_torch, tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -432,4 +432,4 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
         golden_tensor = torch.where(
             torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
         )
-    assert torch.allclose(golden_tensor, output_tensor, equal_nan=True)
+    assert_with_ulp(golden_tensor, output_tensor, 0, allow_nonfinite=True)

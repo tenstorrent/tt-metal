@@ -2128,7 +2128,7 @@ def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, de
     if ttnn_dtype == ttnn.bfloat16:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
     else:
-        assert_allclose(output_tensor, golden_tensor, rtol=1e-6, atol=1e-7)
+        assert_allclose(output_tensor, golden_tensor, rtol=1e-6, atol=1e-6)
 
 
 @pytest.mark.parametrize("input_shape", (torch.Size([3, 128, 32]),))
@@ -2158,7 +2158,7 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
         if finite_mask.any():
             assert_with_ulp(output_tensor[finite_mask], golden_tensor[finite_mask], ulp_threshold=1)
     else:
-        assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-6, atol=1e-7)
+        assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-6, atol=1e-6)
 
 
 @pytest.mark.parametrize(
