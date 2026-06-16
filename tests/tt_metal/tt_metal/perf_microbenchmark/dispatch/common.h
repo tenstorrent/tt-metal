@@ -994,7 +994,7 @@ protected:
             GTEST_SKIP();
         }
         if (is_quasar_sim()) {
-            GTEST_SKIP() << "FD unsupported on Quasar simulator: 256 MB DRAM-backed CQ overflows the 64 MB window";
+            GTEST_SKIP();
         }
         tt_metal::GenericMeshDeviceFixture::SetUp();
 
