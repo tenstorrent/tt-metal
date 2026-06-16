@@ -211,4 +211,6 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 #endif
+
+    cb_out.pop_front(out_block_num_tiles);
 }
