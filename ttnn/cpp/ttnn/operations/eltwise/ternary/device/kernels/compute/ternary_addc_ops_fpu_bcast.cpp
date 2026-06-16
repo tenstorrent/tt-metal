@@ -122,35 +122,28 @@ void kernel_main() {
         return;
     }
 
-    CircularBuffer cb_in0(tt::CBIndex::c_0);  // input_a
-    CircularBuffer cb_in1(tt::CBIndex::c_1);  // input_b
-    CircularBuffer cb_in2(tt::CBIndex::c_2);  // input_c
-    CircularBuffer cb_out(tt::CBIndex::c_3);  // output
+    constexpr auto cb_in0_id = tt::CBIndex::c_0;  // input_a
+    constexpr auto cb_in1_id = tt::CBIndex::c_1;  // input_b
+    constexpr auto cb_in2_id = tt::CBIndex::c_2;  // input_c
+    constexpr auto cb_out_id = tt::CBIndex::c_3;  // output
 
     // output = input_a + value * input_b * input_c
-    binary_op_init_common(cb_in1.get_cb_id(), cb_in2.get_cb_id(), cb_out.get_cb_id());
+    binary_op_init_common(cb_in1_id, cb_in2_id, cb_out_id);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_in0.get_cb_id(),
-            cb_in1.get_cb_id(),
-            cb_in2.get_cb_id(),
-            cb_out.get_cb_id(),
-            tile_freq,
-            tile_start,
-            num_tiles_per_cycle,
-            scalar_arg);
+            cb_in0_id, cb_in1_id, cb_in2_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle, scalar_arg);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_in0.get_cb_id(),
-            cb_in1.get_cb_id(),
-            cb_in2.get_cb_id(),
-            cb_out.get_cb_id(),
+            cb_in0_id,
+            cb_in1_id,
+            cb_in2_id,
+            cb_out_id,
             remaining_iterations,
             tile_start,
             num_tiles_per_cycle,
