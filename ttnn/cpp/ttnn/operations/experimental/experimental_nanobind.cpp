@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/neighbor_pad_conv3d/neighbor_pad_conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
@@ -134,6 +135,9 @@ void py_module(nb::module_& mod) {
     cnn::detail::bind_convert_to_hwc(mod);
 
     ttnn::operations::experimental::conv3d::detail::bind_conv3d(mod);
+    // NpConv3dConfig subclasses Conv3dConfig; bind it on the same module right after the base so
+    // the fused-op config registers with its base type already present.
+    ttnn::operations::experimental::ccl::bind_np_conv3d_config(mod);
     adaptive_pool::bind_adaptive_avg_pool2d_operation(mod);
     adaptive_pool::bind_adaptive_max_pool2d_operation(mod);
 

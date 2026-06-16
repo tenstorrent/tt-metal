@@ -325,10 +325,7 @@ _LTX_DECODER_MESH_MULTI_ONLY_IDS = [
 
 # (num_frames, height, width): H/W divisible by 64; (num_frames - 1) % 8 == 0 for VAE.
 _LTX_DECODER_SHAPE_PARAMS = [
-    pytest.param(17, 128, 256, id="17f_128x256"),  # smoke — fast on 2x4
-    pytest.param(9, 512, 832, id="9f_512x832"),  # ~480p latent grid
-    pytest.param(17, 544, 960, id="17f_544x960"),  # stage-1 half of 1080p (544x960)
-    pytest.param(9, 1088, 1920, id="9f_1088x1920"),  # 1080p production (modest T)
+    pytest.param(145, 1088, 1920, id="145f_1088x1920"),  # 1080p production (19 latent frames)
 ]
 
 _LTX_DECODER_2K_SHAPE_PARAMS = [
@@ -752,3 +749,113 @@ def test_ltx_video_decoder_2k(
     generic blockings — correct, but not yet perf-tuned. See conv3d.py.
     """
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
+
+
+# --- Fused vs standalone CausalConv3d (the hybrid-dispatch correctness gate) -----------------------
+# Sharded shapes (T,H,W per device) that get routed to the fused neighbor_pad_conv3d op in production
+# (the s3 halo_last and s4 force_spatial layers of the 1080p 2x4 decoder). The fused path is exercised
+# only when sharded (halo present), so these are multi-device-only. PCC is fused-output vs the
+# standalone NP+conv3d path on identical weights/input — the product-never-regresses gate (>= 0.999).
+_LTX_FUSED_CONV_SHAPES = [
+    # (in_c, out_c, T_in, H_dev, W_dev) — per-device after 2x4 sharding (h_factor=2, w_factor=4).
+    pytest.param(256, 256, 147, 68, 60, id="ltx_s3_res_halo_last"),
+    pytest.param(128, 128, 147, 136, 120, id="ltx_s4_res_halo_last"),
+]
+
+
+@pytest.mark.parametrize("in_c, out_c, T, H, W", _LTX_FUSED_CONV_SHAPES)
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis, num_links",
+    [((2, 4), 0, 1, 2)],
+    ids=["2x4_h0_w1"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", _LTX_VAE_FABRIC_DEVICE_PARAMS, indirect=True)
+def test_ltx_causal_conv3d_fused_vs_standalone(
+    mesh_device: ttnn.MeshDevice,
+    in_c: int,
+    out_c: int,
+    T: int,
+    H: int,
+    W: int,
+    h_axis: int,
+    w_axis: int,
+    num_links: int,
+):
+    """Fused neighbor_pad_conv3d vs standalone NP+conv3d on the production-routed LTX shapes.
+
+    Both paths share weights and input; the fused output must match the standalone output to
+    >= 0.999 PCC (the product-never-regresses gate). Confirms the layer actually routes to fused.
+    """
+    from models.tt_dit.utils.conv3d import ConvDims
+    from models.tt_dit.utils.tensor import typed_tensor_2dshard
+
+    B = 1
+    torch.manual_seed(42)
+
+    H_full = H * tuple(mesh_device.shape)[h_axis]
+    W_full = W * tuple(mesh_device.shape)[w_axis]
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+    parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
+    )
+    conv_dims = ConvDims(T=T, H=H, W=W)
+    conv_kwargs = dict(
+        in_channels=in_c,
+        out_channels=out_c,
+        kernel_size=3,
+        stride=1,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        conv_dims=conv_dims,
+        # Production decoder default: frame-repeat temporal pad, causal=False (symmetric 1+1 frames).
+        temporal_padding_mode="repeat",
+    )
+
+    conv_standalone = LTXCausalConv3d(use_fused=False, **conv_kwargs)
+    conv_fused = LTXCausalConv3d(use_fused=True, **conv_kwargs)
+
+    assert conv_fused._use_fused, (
+        f"shape ({in_c},{out_c},T{T},H{H},W{W}) did not route to fused — "
+        f"halo_last={conv_fused.conv_config.halo_last} "
+        f"force_spatial={conv_fused.conv_config.force_spatial_parallel} needs_halo={conv_fused._needs_halo}"
+    )
+
+    # Random weights, identical for both. Input T is the pre-temporal-pad latent T (conv adds the pad).
+    weight = torch.randn(out_c, in_c, 3, 3, 3, dtype=torch.float32) * 0.05
+    bias = torch.randn(out_c, dtype=torch.float32) * 0.05
+    state = {"conv.weight": weight, "conv.bias": bias}
+    import copy
+
+    conv_standalone.load_torch_state_dict(copy.deepcopy(state))
+    conv_fused.load_torch_state_dict(copy.deepcopy(state))
+
+    T_in = T - 2  # conv prepends time_pad (=kernel_t-1=2) frames internally
+    x = torch.randn(B, T_in, H_full, W_full, in_c, dtype=torch.float32)
+    x = conv_pad_in_channels(x)
+
+    def _shard(t):
+        return typed_tensor_2dshard(
+            t,
+            mesh_device,
+            shard_mapping={h_axis: 2, w_axis: 3},
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+
+    out_std = conv_standalone(_shard(x), causal=False)
+    out_fused = conv_fused(_shard(x), causal=False)
+
+    concat_dims = [None, None]
+    concat_dims[h_axis] = 2
+    concat_dims[w_axis] = 3
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims)
+    std_torch = ttnn.to_torch(out_std, mesh_composer=composer)
+    fused_torch = ttnn.to_torch(out_fused, mesh_composer=composer)
+
+    logger.info(f"fused {tuple(fused_torch.shape)} vs standalone {tuple(std_torch.shape)}")
+    assert_quality(std_torch, fused_torch, pcc=0.999)
+    logger.info(f"PASSED: fused matches standalone for ({in_c}->{out_c}, T{T} H{H} W{W})")

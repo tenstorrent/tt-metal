@@ -24,6 +24,7 @@ from ...utils.conv3d import (
     ConvDims,
     _ntuple,
     aligned_channels,
+    apply_fused_blocking_override,
     compute_decoder_dims,
     compute_encoder_dims,
     conv3d_blocking_hash,
@@ -47,6 +48,16 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 CACHE_T = 2
+
+# Hybrid-dispatch threshold: below this input-T, the fused neighbor_pad+conv3d op
+# degrades to serial NP+Conv3d + sync overhead (Tracy-confirmed: when conv3d's
+# t_out_parallel ≥ T_out, each core handles 1 t_out block, so the progress-sem
+# wait covers the entire NP transfer and pipelining can't amortize it).
+# Above the threshold, each conv3d core handles multiple t_out blocks and
+# pipelining starts to hide NP behind compute.
+# Measured crossover on 2x2 blackhole: T=14 still regresses by ~1.16x, T=28
+# slightly wins (~0.98x). 20 is a conservative cutoff.
+MIN_T_FOR_FUSED = 20
 
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
@@ -305,6 +316,7 @@ class WanCausalConv3d(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -349,13 +361,32 @@ class WanCausalConv3d(Module):
             H=conv_dims.H,
             W=conv_dims.W,
         )
-        logger.debug(f"Loaded conv_config: {self.conv_config}")
+        self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
+            self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        )
+        # Hybrid dispatch: fused is only net-faster than standalone when pipelining
+        # can hide NP behind conv3d compute. That requires T_in ≥ MIN_T_FOR_FUSED.
+        self._use_fused = use_fused and self._needs_halo and conv_dims.T >= MIN_T_FOR_FUSED
+        if self._use_fused:
+            # Fused-only finer blocking for shapes where it beats the standalone-optimal _BLOCKINGS
+            # entry; applied here so standalone conv3d keeps the shared table.
+            apply_fused_blocking_override(
+                self.conv_config,
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                h_factor=self.parallel_config.height_parallel.factor,
+                w_factor=self.parallel_config.width_parallel.factor,
+                T=conv_dims.T,
+                H=conv_dims.H,
+                W=conv_dims.W,
+            )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() and dtype == ttnn.float32)
-            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi4 if (is_blackhole() and dtype == ttnn.float32) else ttnn.MathFidelity.HiFi2
+            ),  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -426,8 +457,9 @@ class WanCausalConv3d(Module):
 
         # T-front causal zero padding: fuse into neighbor_pad when h_pad_needed (avoids a
         # separate reshape+pad+reshape and an intermediate tensor allocation).
-        # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback on.
-        fuse_t_front_pad = t_front_padding > 0 and h_pad_needed
+        # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback on,
+        # OR when using the fused op (neighbor_pad_conv3d does not fuse the T-front pad).
+        fuse_t_front_pad = t_front_padding > 0 and h_pad_needed and not self._use_fused
         if t_front_padding > 0 and not fuse_t_front_pad:
             B, T, H, W, C = x_BTHWC.shape
             x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
@@ -437,24 +469,47 @@ class WanCausalConv3d(Module):
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
-            if h_pad_needed:
+            sem_getter = (
+                self.ccl_manager.get_np_fused_ping_pong_semaphore
+                if self._use_fused
+                else self.ccl_manager.get_np_ping_pong_semaphore
+            )
+            if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
                 pad_right.append(self.external_padding[1])
                 axes.append(self.parallel_config.height_parallel.mesh_axis)
-                neighbor_sems.append(
-                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
-                )
+                neighbor_sems.append(sem_getter(self.parallel_config.height_parallel.mesh_axis))
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
-            if w_pad_needed:
+            if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
                 dims.append(3)
                 pad_left.append(self.external_padding[2])
                 pad_right.append(self.external_padding[2])
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
-                neighbor_sems.append(
-                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
-                )
+                neighbor_sems.append(sem_getter(self.parallel_config.width_parallel.mesh_axis))
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
+
+            if self._use_fused:
+                return self.ccl_manager.neighbor_pad_conv3d_fused(
+                    x_BTHWC,
+                    self.weight.data,
+                    self.bias.data,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    conv_config=self.conv_config,
+                    output_channels=self.out_channels,
+                    kernel_size=self.kernel_size,
+                    stride=self.stride,
+                    padding=self.internal_padding,
+                    dilation=(1, 1, 1),
+                    padding_mode="zeros",
+                    dtype=self.dtype,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
 
             fused_logical_h = (
                 logical_h
@@ -503,6 +558,7 @@ class WanResidualBlock(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -529,6 +585,7 @@ class WanResidualBlock(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=conv_dims,
+            use_fused=use_fused,
         )
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
@@ -549,6 +606,7 @@ class WanResidualBlock(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=conv_dims,
+            use_fused=use_fused,
         )
 
         if in_dim != out_dim:
@@ -563,9 +621,9 @@ class WanResidualBlock(Module):
 
         self.matmul_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() or dtype == ttnn.float32)
-            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi4 if (is_blackhole() or dtype == ttnn.float32) else ttnn.MathFidelity.HiFi2
+            ),  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -667,6 +725,7 @@ class WanMidBlock(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
         sdpa_t_fracture_w_only: bool = False,
         conv_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -684,6 +743,7 @@ class WanMidBlock(Module):
                 parallel_config=parallel_config,
                 dtype=dtype,
                 conv_dims=conv_dims,
+                use_fused=use_fused,
             )
         )
 
@@ -707,6 +767,7 @@ class WanMidBlock(Module):
                     parallel_config=parallel_config,
                     dtype=dtype,
                     conv_dims=conv_dims,
+                    use_fused=use_fused,
                 )
             )
 
@@ -748,6 +809,7 @@ class WanConv2d(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -789,13 +851,32 @@ class WanConv2d(Module):
             H=conv_dims.H,
             W=conv_dims.W,
         )
-        logger.debug(f"Loaded conv_config: {self.conv_config}")
+        self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
+            self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        )
+        # Hybrid dispatch: fused is only net-faster than standalone when pipelining
+        # can hide NP behind conv3d compute. That requires T_in ≥ MIN_T_FOR_FUSED.
+        self._use_fused = use_fused and self._needs_halo and conv_dims.T >= MIN_T_FOR_FUSED
+        if self._use_fused:
+            # Fused-only finer blocking for shapes where it beats the standalone-optimal _BLOCKINGS
+            # entry; applied here so standalone conv3d keeps the shared table.
+            apply_fused_blocking_override(
+                self.conv_config,
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                h_factor=self.parallel_config.height_parallel.factor,
+                w_factor=self.parallel_config.width_parallel.factor,
+                T=conv_dims.T,
+                H=conv_dims.H,
+                W=conv_dims.W,
+            )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() and dtype == ttnn.float32)
-            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi4 if (is_blackhole() and dtype == ttnn.float32) else ttnn.MathFidelity.HiFi2
+            ),  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -850,23 +931,24 @@ class WanConv2d(Module):
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
-            if h_pad_needed:
+            sem_getter = (
+                self.ccl_manager.get_np_fused_ping_pong_semaphore
+                if self._use_fused
+                else self.ccl_manager.get_np_ping_pong_semaphore
+            )
+            if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
                 pad_right.append(self.external_padding[1])
                 axes.append(self.parallel_config.height_parallel.mesh_axis)
-                neighbor_sems.append(
-                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
-                )
+                neighbor_sems.append(sem_getter(self.parallel_config.height_parallel.mesh_axis))
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
-            if w_pad_needed:
+            if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
                 dims.append(3)
                 pad_left.append(self.external_padding[2])
                 pad_right.append(self.external_padding[2])
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
-                neighbor_sems.append(
-                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
-                )
+                neighbor_sems.append(sem_getter(self.parallel_config.width_parallel.mesh_axis))
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
             fused_logical_h = (
@@ -917,6 +999,7 @@ class WanResample(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
         tconv_dims: ConvDims = ConvDims(),
         spatial_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -938,6 +1021,7 @@ class WanResample(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=spatial_dims,
+            use_fused=use_fused,
         )
 
         self.is_upsample = "upsample" in mode
@@ -1108,6 +1192,7 @@ class WanUpBlock(Module):
         res_dims: ConvDims = ConvDims(),
         tconv_dims: ConvDims = ConvDims(),
         spatial_dims: ConvDims = ConvDims(),
+        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1133,6 +1218,7 @@ class WanUpBlock(Module):
                     parallel_config=parallel_config,
                     dtype=dtype,
                     conv_dims=res_dims,
+                    use_fused=use_fused,
                 )
             )
             current_dim = out_dim
@@ -1147,6 +1233,7 @@ class WanUpBlock(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 dtype=dtype,
+                use_fused=use_fused,
                 tconv_dims=tconv_dims,
                 spatial_dims=spatial_dims,
             )
@@ -1199,6 +1286,7 @@ class WanDecoder3d(Module):
         width: int = 0,
         t_chunk_size: int | None = None,
         cached: bool = False,
+        use_fused: bool = True,
     ) -> None:
         super().__init__()
 
@@ -1242,6 +1330,7 @@ class WanDecoder3d(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=lat_dims,
+            use_fused=use_fused,
         )
 
         # middle blocks
@@ -1254,6 +1343,7 @@ class WanDecoder3d(Module):
             dtype=dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
             conv_dims=lat_dims,
+            use_fused=use_fused,
         )
 
         # upsample blocks
@@ -1291,6 +1381,7 @@ class WanDecoder3d(Module):
                 res_dims=ConvDims(T_res, stage_h, stage_w),
                 tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
                 spatial_dims=ConvDims(T_spatial, next_h, next_w),
+                use_fused=use_fused,
             )
             self.up_blocks.append(up_block)
 
@@ -1315,6 +1406,7 @@ class WanDecoder3d(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             conv_dims=ConvDims(stage_t[-1].T_res, full_h, full_w),
+            use_fused=use_fused,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1432,6 +1524,7 @@ class WanDecoder(Module):
         width: int = 0,
         t_chunk_size: int | None = None,
         cached: bool = False,
+        use_fused: bool = True,
     ) -> None:
         super().__init__()
 
@@ -1472,6 +1565,7 @@ class WanDecoder(Module):
             width=width,
             t_chunk_size=t_chunk_size,
             cached=cached,
+            use_fused=use_fused,
         )
 
         self.cached_conv_count = count_convs(self.decoder)
