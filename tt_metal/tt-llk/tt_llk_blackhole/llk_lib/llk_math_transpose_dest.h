@@ -138,8 +138,7 @@ inline void transpose_dest_32b()
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 56, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 56);
     }
 
-    // Restore config state (the Src zero-substitution flag stays in the MOV_OPS state set above;
-    // the next op's init/reconfig re-establishes its own state).
+    // Restore config state
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 }

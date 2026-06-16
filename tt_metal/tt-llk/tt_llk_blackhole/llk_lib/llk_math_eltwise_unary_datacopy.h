@@ -44,12 +44,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    // NOTE: the Src zero-substitution flag baseline is the operand-driven DEFAULT state established by
-    // hw_configure/reconfig. Eltwise-unary / SFPU ops that need -0.0 preserved select
-    // UNARY_PRESERVE in unary_op_init_common. A plain datacopy must NOT force the flag, or it perturbs
-    // float copies in reduce-based ops (layernorm/group_norm). The 32b unpack-to-dest path below manages
-    // the flag itself as part of the tt-llk#449 Fp32_enabled dance.
-
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
