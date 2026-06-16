@@ -15,7 +15,7 @@ excludeAgent: "cloud-agent"
 ### 🟡 IMPORTANT
 - **Rule-of-5/0 violations**: class manages a resource but is missing copy/move/destructor — or has them when rule-of-0 would suffice
 - **Unsafe casts**: `reinterpret_cast`, C-style casts on non-trivial types, `const_cast` removing logical constness
-- **Include hygiene**: unnecessary `#include` in a widely-included header; missing forward declaration; `impl/` header included from `api/` header
+- **Include hygiene**: unnecessary `#include` directives; missing forward declaration; `impl/` header included from `api/` header (Abstraction boundary violations).
 - **Compile-time impact**: header fanout increase or new template instantiation depth in a widely-included header
 
 ### 🟢 SUGGESTION
