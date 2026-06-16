@@ -30,7 +30,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     v_endif;
 
     // Compute reciprocal of b
-    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, b_f);
+    sfpi::vFloat neg_b_f = sfpi::copyman(-1.0f, b_f);
 
     sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
 
@@ -76,12 +76,12 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
-    sfpi::vInt qb = sfpi::exman(lo) << 11;
+    sfpi::vUInt qb = sfpi::exman(lo) << 11;
     qb += sfpi::exman(hi) << 22;
 
     // Compute remainder - recompute abs(a_signed)
     a = sfpi::abs(a_signed);
-    sfpi::vInt r = a - qb;
+    sfpi::vInt r{a - qb};
 
     // Use abs(r) for correction computation
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
@@ -102,20 +102,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp = sfpi::exman(low);
-    tmp += sfpi::exman(mid) << 11;
-    tmp += sfpi::exman(top) << 22;
-
-    // Extract sign mask of r
-    // r_sign = 0 if r >= 0, -1 if r < 0
-    sfpi::vInt r_sign = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(r) >> 31);
-    r_sign = -r_sign;
-
-    // Apply correction with sign of r
-    // If r < 0  -> r += tmp
-    // Else      -> r -= tmp
-    sfpi::vInt signed_tmp = (tmp ^ r_sign) - r_sign;
-    r -= signed_tmp;
+    sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
+    v_if(r < 0) { tmp = -tmp; }
+    v_endif;
+    r -= tmp;
 
     // Final adjustment - recompute b to reduce register pressure
     b = sfpi::abs(b_signed);
@@ -176,7 +166,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // XOR of the float bit-patterns detects sign mismatch via the MSB,
     // avoiding a compound conditional with four comparisons and an OR.
     v_if(result != sfpi::vFloat(0.0f)) {
-        sfpi::vInt signs = sfpi::reinterpret<sfpi::vUInt>(result) ^ sfpi::reinterpret<sfpi::vUInt>(b);
+        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
         v_and(signs < 0);
         result += b;
     }

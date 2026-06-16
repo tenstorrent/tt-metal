@@ -48,7 +48,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
         // Compensated residual for the reciprocal-correction branch.
         // This preserves precision when tan(x) is near its poles.
         s = sfpi::vConstNeg1 * r + a;
-        sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, r);
+        sfpi::vFloat negative_x = sfpi::copyman(-1.0f, r);
         s = t * a + s;
 
         // Approximate reciprocal of -r using quadratic initial estimate.
@@ -56,7 +56,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
         const float k1 = 1.4545459747314453125f;
         const float k2 = 2.121212482452392578125f;
 
-        sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(r);
+        sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vInt>(r);
         t = k1 + k0 * negative_x;
         sfpi::vFloat scale = sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(scale_bits), 0);
         t = k2 + t * negative_x;
@@ -95,9 +95,9 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
         const float k1 = 1.4545459747314453125f;
         const float k2 = 2.121212482452392578125f;
 
-        sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, r);
+        sfpi::vFloat negative_x = sfpi::copyman(-1.0f, r);
         t = k1 + k0 * negative_x;
-        sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(r);
+        sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vInt>(r);
         t = k2 + t * negative_x;
         sfpi::vFloat scale = sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(scale_bits), 0);
 

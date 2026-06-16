@@ -36,7 +36,7 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
     sfpi::vInt exp = sfpi::exexp(val);
     sfpi::vInt man =
         sfpi::exman(val, sfpi::MantissaMode::ImplicitOne);  // get mantissa with implicit bit (man in [1; 2])
-    man = sfpi::reinterpret<sfpi::vInt>(sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
+    man = sfpi::shft(man, exp, sfpi::ShiftMode::Logical);
     return man;
 }
 
