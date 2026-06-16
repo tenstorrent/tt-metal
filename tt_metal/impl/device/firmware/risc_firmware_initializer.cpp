@@ -1074,6 +1074,23 @@ void RiscFirmwareInitializer::initialize_firmware(
             cluster_.noc_multicast_write(
                 &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), go_message_index_addr);
         }
+
+        // Initialize fw_shared_globals_ready_addr Quasar DM0 to WAIT
+        if (cluster_.arch() == ARCH::QUASAR) {
+            auto factory = hal_.get_dev_msgs_factory(programmable_core_type);
+            const DeviceAddr mailbox_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
+            const DeviceAddr fw_shared_globals_ready_addr =
+                mailbox_addr +
+                factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::fw_shared_globals_ready);
+            const uint8_t zero = 0;
+            if (core_type != HalProgrammableCoreType::TENSIX) {
+                cluster_.write_core(
+                    &zero, sizeof(zero), tt_cxy_pair(device_id, virtual_core), fw_shared_globals_ready_addr);
+            } else {
+                cluster_.noc_multicast_write(
+                    &zero, sizeof(zero), device_id, start_core, end_core.value(), fw_shared_globals_ready_addr);
+            }
+        }
     };
 
     switch (core_type) {

@@ -112,14 +112,6 @@ enum class SfpuType : std::uint32_t
     mul_int,
 };
 
-enum class BinaryOp : std::uint8_t
-{
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-};
-
 enum class DstSync : std::uint8_t
 {
     SyncHalf,
