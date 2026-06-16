@@ -607,6 +607,73 @@ $PP models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_e2e.py    # e2e wal
 
 ---
 
+## All-socket per-1×1-mesh traced e2e (`tt/tt_bh_glx/socket_trace_experiment/`)
+
+A second, fully-resolved traced path that — unlike the per-stage `_trace_e2e_full.py`
+above — keeps **every chip a 1×1 submesh** and makes **every** cross-stage hand-off a
+**fabric socket** (`send_direct_async`/`recv_direct_async`, **no** `point_to_point`),
+then **traces per-submesh** (begin/end_trace_capture on each of the 28 submeshes, not the
+parent). It reuses the production pipeline's pure-device body (`_sample_actions_device`)
+unchanged and does **not** modify the production pipeline.
+
+**Status: RESOLVED — it works.** Captures per-submesh (28 concurrent submesh traces, no
+deadlock) and replays at **PCC 1.000000 vs eager / 0.998796 vs torch**, including the
+N-step denoise loop. The original `capture_trace` hang was capturing on the PARENT while
+ops ran on 1×1 children — not a socket-replay problem. Full writeup:
+**`tt/tt_bh_glx/socket_trace_experiment/README.md`**.
+
+### How to run — full traced socket e2e (`run_socket_traced.py`)
+
+Production perf flags are **auto-applied** from `_bench_runs/pi05_production.env` (via
+`os.environ.setdefault` at startup) — no manual `source` needed. Only the checkpoint path
+and `PYTHONPATH`/`TT_METAL_HOME` are machine-specific. **Always start from a clean
+`tt-smi -glx_reset`** — without the production flags or on a dirty device it runs ~67 ms
+at PCC ~0.98 instead of ~50 ms at PCC 1.0.
+
+```bash
+cd /home/tt-admin/sdawle/tt-metal
+
+export PI05_CHECKPOINT_DIR=/home/tt-admin/sdawle/tt-metal/models/experimental/pi0_5/weights/pi05_libero_upstream
+export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
+
+python_env/bin/tt-smi -glx_reset                 # clean device state — do this before EVERY run
+
+# capture + PCC-vs-eager + PCC-vs-torch + PERF_ITERS-averaged latency
+TRACE_SCOPE=full FIXED_NOISE=1 PI05_E2E_PCC=1 PI05_SOCK_CONN=2 PERF_ITERS=20 \
+  python_env/bin/python models/experimental/pi0_5/tt/tt_bh_glx/socket_trace_experiment/run_socket_traced.py
+```
+
+Bare `python_env/bin/python .../run_socket_traced.py` (after the reset) also works — every
+flag below defaults correctly; the line above just makes them explicit and adds the
+torch-PCC check.
+
+| Env var | Default | Effect |
+|---|---|---|
+| `TRACE_SCOPE` | `full` | whole pipeline (vision → build_prefix → prefill → KV migration → N-step denoise). Also `vp` (vision+prefill) and `denoise` (denoise-only) for localization. |
+| `FIXED_NOISE` | `1` | pin one noise tensor across eager+capture+replay. **Required** for a valid PCC compare (else fresh `torch.randn` per call makes eager≠replay). |
+| `PI05_E2E_PCC` | off | after replay, also compare all-socket actions vs the torch reference (target ≥0.95; gets ≈0.998796). |
+| `PI05_SOCK_CONN` | `2` | socket connections per hop. `2` spreads `send_direct_async` across the adjacent pair's 2 fabric links (~7% faster e2e); `1` is the single-link baseline. |
+| `PERF_ITERS` | `20` | replays averaged for the `PERF:` latency line. |
+| `EAGER` | off | **no trace** — 1 warm-up + 1 profiled eager iter with tracy signposts. Use under `python -m tracy` for true per-op device-kernel durations. |
+| `TRACY` | off | capture + 1 warm-up + 1 profiled replay, then stop. Use under `python -m tracy --device-trace-profiler`. |
+
+Prints, per replay, `PCC vs eager` (trace fidelity, expect 1.000000), then `PCC vs torch`
+(numerics, ≈0.998796), then `PERF: traced all-socket e2e replay = <ms>/inference`.
+
+### Latest measured (validated 2026-06-14, clean reset, production flags on)
+
+| sockets | e2e replay | infer/s | PCC vs eager | PCC vs torch |
+|---|---|---|---|---|
+| `PI05_SOCK_CONN=1` | 53.67 ms | 18.6 | 1.000000 | 0.998796 |
+| `PI05_SOCK_CONN=2` *(default)* | **49.94 ms** | **20.0** | 1.000000 | 0.998796 |
+
+2 connections is ~7% faster at identical numerics. The gain is modest (not 2×) because the
+pipeline is **serialization/dispatch-bound, not socket-bandwidth-bound** — the busiest
+single chip does only ~4 ms of compute; the ~50 ms is the critical path through the 18-hop
+prefill snake + the N-step denoise loop + host dispatch.
+
+---
+
 ## LIBERO simulator rollout
 
 End-to-end real-robot benchmark on the LIBERO suites (`libero_spatial`, `libero_object`, `libero_goal`, `libero_10`).
