@@ -62,18 +62,18 @@ def _rms_norm(
 
 # ── Sharded RMSNorm for the full-hidden hot path ───────────────────────────
 # Default ttnn.rms_norm on an L1-interleaved [1,1,seq,HIDDEN_SIZE] tensor lands
-# on a single core (~57 μs for HIDDEN_SIZE=4096). Width-sharding across 32 cores
-# brings each norm to ~5 μs (+ ~1 μs each for the shard/unshard pair).
+# on a single core (~57 μs for HIDDEN_SIZE=4096). Width-sharding across 64 cores
+# brings each norm to ~2.5 μs (+ ~1 μs each for the shard/unshard pair).
 # `ttnn.rms_norm` auto-builds the sharded program config from `input.shard_spec()`,
 # but we hand it the matching one explicitly so the program is cached.
 _NORM_TILE = 32
 _NORM_CORE_GRID_X = 8
-_NORM_CORE_GRID_Y = 4  # 8 × 4 = 32 cores
+_NORM_CORE_GRID_Y = 8  # 8 × 8 = 64 cores
 _NORM_NUM_CORES = _NORM_CORE_GRID_X * _NORM_CORE_GRID_Y
 assert (
     HIDDEN_SIZE % _NORM_NUM_CORES == 0
 ), f"HIDDEN_SIZE ({HIDDEN_SIZE}) must divide num_cores ({_NORM_NUM_CORES}) for width-sharded RMSNorm"
-_NORM_SHARD_WIDTH = HIDDEN_SIZE // _NORM_NUM_CORES  # 128 cols/core
+_NORM_SHARD_WIDTH = HIDDEN_SIZE // _NORM_NUM_CORES  # 64 cols/core (4096 / 64)
 assert (
     _NORM_SHARD_WIDTH % _NORM_TILE == 0
 ), f"shard width ({_NORM_SHARD_WIDTH}) must be a multiple of tile width ({_NORM_TILE})"
@@ -99,9 +99,9 @@ def _norm_sharded_configs(m_tiles: int):
     )
     program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(_NORM_CORE_GRID_X, _NORM_CORE_GRID_Y),
-        subblock_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 4 tiles
+        subblock_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 2 tiles (64 / 32)
         block_h=m_tiles,
-        block_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 4 tiles
+        block_w=_NORM_SHARD_WIDTH // _NORM_TILE,  # 2 tiles (64 / 32)
         inplace=False,
     )
     cfg = (input_memcfg, program_cfg)
@@ -249,8 +249,14 @@ class TtMistral4DecoderLayer(LightweightModule):
         sin: ttnn.Tensor,
         kv_cache: tuple,
         chunk_start_idx: int = 0,
+        valid_tokens: int = None,
     ) -> ttnn.Tensor:
-        """Prefill forward (one chunk) that also fills the attention KV cache in-place."""
+        """Prefill forward (one chunk) that also fills the attention KV cache in-place.
+
+        valid_tokens: real (un-padded) row count for this chunk. When the chunk loop
+        zero-pads a ragged final chunk, the pad rows route identically and would starve a
+        device in the MoE combine — pass the real count so the MoE rebalances them.
+        """
         _mem = ttnn.L1_MEMORY_CONFIG
         residual = x
         normed = _rms_norm_sharded(x, self.input_norm_w, self.compute_kernel_config)
@@ -261,7 +267,7 @@ class TtMistral4DecoderLayer(LightweightModule):
 
         residual = x
         normed = _rms_norm_sharded(x, self.post_attn_norm_w, self.compute_kernel_config)
-        moe_out = self.moe.forward(normed)
+        moe_out = self.moe.forward(normed, valid_tokens=valid_tokens)
         ttnn.deallocate(normed)
         x = ttnn.add(residual, moe_out, memory_config=_mem)
         ttnn.deallocate(moe_out)

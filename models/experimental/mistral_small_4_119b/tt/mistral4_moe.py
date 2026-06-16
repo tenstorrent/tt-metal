@@ -610,8 +610,8 @@ class TtMistral4MoELayer(LightweightModule):
         self._mc_pad_idx_cache[key] = rr
         return rr
 
-    def _balanced_padding_idx(self, topk_idx: ttnn.Tensor, S_orig: int, S: int, k: int) -> ttnn.Tensor:
-        """Replace the padding rows [S_orig:S] of topk_idx with round-robin expert
+    def _balanced_padding_idx(self, topk_idx: ttnn.Tensor, pad_start: int, S: int, k: int) -> ttnn.Tensor:
+        """Replace the padding rows [pad_start:S] of topk_idx with round-robin expert
         indices so every device receives dispatched tokens.
 
         A single real token (decode) — or a small ragged prefill chunk — otherwise
@@ -626,9 +626,9 @@ class TtMistral4MoELayer(LightweightModule):
         _drm = ttnn.DRAM_MEMORY_CONFIG
         idx_rm = ttnn.to_layout(topk_idx, ttnn.ROW_MAJOR_LAYOUT, memory_config=_drm)
         ttnn.deallocate(topk_idx)
-        real = ttnn.slice(idx_rm, [0, 0, 0, 0], [1, 1, S_orig, k], memory_config=_drm)
+        real = ttnn.slice(idx_rm, [0, 0, 0, 0], [1, 1, pad_start, k], memory_config=_drm)
         ttnn.deallocate(idx_rm)
-        pad = self._padding_rr_idx(S_orig, S, k)
+        pad = self._padding_rr_idx(pad_start, S, k)
         merged = ttnn.concat([real, pad], dim=2, memory_config=_drm)
         ttnn.deallocate(real)
         merged_tile = ttnn.to_layout(merged, ttnn.TILE_LAYOUT, memory_config=_drm)
@@ -660,10 +660,16 @@ class TtMistral4MoELayer(LightweightModule):
         ttnn.deallocate(s)
         return vals, idx
 
-    def _forward_moe_compute(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _forward_moe_compute(self, x: ttnn.Tensor, decode: bool = False, valid_tokens: int = None) -> ttnn.Tensor:
         """Level-2 sparse prefill: dispatch → moe_compute (grouped expert FFN + combine) → weight+sum.
 
         Args:  x: [1, 1, seq, HIDDEN_SIZE] replicated.   Returns: [1, 1, seq, HIDDEN_SIZE] replicated.
+               decode: single-token decode step — run the shared expert via its L1
+                       forward_decode with a 64-core 1D-mcast PC instead of the DRAM prefill path.
+               valid_tokens: number of leading real tokens. Rows [valid_tokens:] are padding
+                       (e.g. the prefill chunk loop zero-pads a ragged final chunk up to the
+                       chunk size) — their routing is rebalanced round-robin so they don't all
+                       hit one device's experts and starve the combine. Defaults to all rows real.
         """
         md = self.mesh_device
         D = self.num_devices
@@ -677,6 +683,10 @@ class TtMistral4MoELayer(LightweightModule):
         # per-device token count is tile-aligned for moe_compute. Padding tokens (zeros) flow
         # through routing+experts and are sliced off at the end.
         S_orig = x.shape[2]
+        # Rows [valid:] are padding (MoE alignment pad below, and/or the prefill chunk loop's
+        # zero-pad of a ragged final chunk). Their routing must be rebalanced so they don't
+        # starve a device — see the balancing call below.
+        valid = S_orig if valid_tokens is None else valid_tokens
         align = D * ttnn.TILE_SIZE
         S = ((S_orig + align - 1) // align) * align
         if S != S_orig:
@@ -692,10 +702,13 @@ class TtMistral4MoELayer(LightweightModule):
 
         topk_vals, topk_idx = self._compute_routing_sparse(x, S)  # [1,1,S,k]
         topk_idx = ttnn.typecast(topk_idx, ttnn.uint16)
-        if S != S_orig:
+        if valid < S:
             # Balance the padding rows' routing so every device gets tokens (else the
             # combine's cross-device reduction deadlocks; see _balanced_padding_idx).
-            topk_idx = self._balanced_padding_idx(topk_idx, S_orig, S, k)
+            # `valid` (not S_orig) is the boundary: a full-size chunk (S == S_orig) can still
+            # carry zero-pad rows from the prefill loop that route identically and starve a
+            # device — those must be rebalanced too.
+            topk_idx = self._balanced_padding_idx(topk_idx, valid, S, k)
 
         # ── DP-shard tokens + indices, then all_to_all_dispatch ─────────────
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=_drm)
@@ -799,21 +812,40 @@ class TtMistral4MoELayer(LightweightModule):
         )  # [1,1,S,H]
         ttnn.deallocate(routed_dp)
         routed = ttnn.to_layout(routed, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if S != S_orig:
+            routed = ttnn.slice(routed, [0, 0, 0, 0], [1, 1, S_orig, H], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        shared_out = self.shared_expert.forward(x)
+        # Shared expert runs on the real (unpadded) tokens only — it's independent of
+        # routing, so the S→256 decode padding is pure waste for it. Slice x back to
+        # S_orig (x is DRAM here, so this is cheap) and, for decode, use the L1
+        # forward_decode with a 64-core 1D-mcast PC instead of the ~12-core DRAM default.
+        if S != S_orig:
+            x_shared = ttnn.slice(x, [0, 0, 0, 0], [1, 1, S_orig, H], memory_config=_drm)
+        else:
+            x_shared = x
+        if decode:
+            sI = self.shared_expert.intermediate_size
+            gu_pc = self._expert_1d_mcast_pc(1, H // 32, (2 * sI) // 32)
+            d_pc = self._expert_1d_mcast_pc(1, sI // 32, H // 32)
+            shared_out = self.shared_expert.forward_decode(x_shared, gu_pc=gu_pc, d_pc=d_pc)
+        else:
+            shared_out = self.shared_expert.forward(x_shared)
+        if S != S_orig:
+            ttnn.deallocate(x_shared)
         out = ttnn.add(routed, shared_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(routed)
         ttnn.deallocate(shared_out)
-        if S != S_orig:
-            out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, S_orig, H], memory_config=ttnn.L1_MEMORY_CONFIG)
         return out
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, valid_tokens: int = None) -> ttnn.Tensor:
         """
         Args:  x: [1, 1, seq, HIDDEN_SIZE]  (replicated on all devices)
+               valid_tokens: number of leading real rows; rows [valid_tokens:] are padding
+                       whose routing is rebalanced (defaults to all real). The prefill chunk
+                       loop passes the un-padded count for a zero-padded ragged final chunk.
         Returns:   [1, 1, seq, HIDDEN_SIZE]  (replicated on all devices)
         """
-        return self._forward_moe_compute(x)
+        return self._forward_moe_compute(x, valid_tokens=valid_tokens)
 
     def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -823,4 +855,4 @@ class TtMistral4MoELayer(LightweightModule):
         _forward_moe_compute is seq-agnostic — a single decode token (seq=1) is
         padded up to num_devices×TILE, processed, and sliced back to [1,1,1,H].
         """
-        return self._forward_moe_compute(x)
+        return self._forward_moe_compute(x, decode=True)
