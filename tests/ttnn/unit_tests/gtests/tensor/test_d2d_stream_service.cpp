@@ -556,14 +556,15 @@ void verify_reuse(
     }
 }
 
-// Fabric-link lease round-trip (share_fabric_links == true). With lease mode the
-// service holds no fabric connection and does NOTHING until granted a turn, so each
-// round must drive the full ping-pong: enqueue the worker workloads (which block on
-// the service), grant both sides one transfer via release_fabric_links(), Finish,
-// then wait_for_fabric_links() to confirm both services released the links again.
-// Two rounds with distinct seeds prove the service re-acquires + releases the link
-// per transfer and keeps streaming. A service that never re-acquired would hang the
-// Finish; one that never released would hang wait_for_fabric_links.
+// Fabric-link lease round-trip (share_fabric_links == true). With lease mode the service
+// holds no fabric connection and does NOTHING until granted a turn. The lease is
+// CQ-ordered: each round enqueues, on each mesh's queue, [release (grant) -> worker ->
+// wait (fence)]. Granting BEFORE the worker means the worker's handshake completes
+// against an already-granted service (granting after the worker would deadlock — the
+// grant would sit behind a worker that is itself waiting for the grant). The wait kernel
+// fences the next round. Two rounds with distinct seeds prove the service re-acquires +
+// releases the link per transfer and keeps streaming. A service that never re-acquired
+// would hang the Finish; one that never released would hang the wait kernel.
 void verify_fabric_lease(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
@@ -572,25 +573,27 @@ void verify_fabric_lease(
         sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape, /*share_fabric_links=*/true));
 
     auto run_round = [&](uint32_t seed) {
+        // Grant each service its turn FIRST (CQ-ordered; receiver before sender so it is
+        // ready to drain), so the grant is in place when the worker workloads run and
+        // each service completes its handshake in the same window.
+        receiver->release_fabric_links();
+        sender->release_fabric_links();
+
         auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, /*num_iters=*/1);
         auto sender_workload =
             make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/seed);
         EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
         EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
 
-        // Nothing moves until granted: lease the links to each service for one
-        // transfer (a device hosting both an inbound receiver and an outbound sender
-        // must grant both). Grant before Finish, else the workers block forever.
-        receiver->release_fabric_links();
-        sender->release_fabric_links();
-
-        Finish(sender_mesh->mesh_command_queue());
-        Finish(receiver_mesh->mesh_command_queue());
-
-        // Both services must hand the links back (link_grant == 0) before the next
-        // round — in production this is the point a fabric op would launch.
+        // Fence: each service must hand its link back (link_grant == 0) before the next
+        // round grants again — in production this is the point a fabric op would launch.
+        // CQ-ordered after the workers, so no host poll.
         sender->wait_for_fabric_links();
         receiver->wait_for_fabric_links();
+
+        // Drain both queues before the host reads the landed tensor back.
+        Finish(sender_mesh->mesh_command_queue());
+        Finish(receiver_mesh->mesh_command_queue());
 
         expect_receiver_backing_iota(receiver.get(), receiver_mesh, seed);
     };
@@ -599,15 +602,17 @@ void verify_fabric_lease(
     run_round(0x5678u);
 }
 
-// Fabric-link lease stress. Build the pair once, launch sender + receiver dummy
-// worker programs that each loop num_iters INTERNALLY, then drive num_iters
-// grant/release cycles interleaved with those worker iterations. The workers only
-// advance an iteration when their service is granted the link, so the host loop
-// paces every transfer — exercising the open/close + link_grant ping-pong many
-// times against a single long-running workload. Catches state drift a 2-round test
-// would miss: a stuck grant word, a failed connection re-open, or monotonic-counter
-// desync would hang a wait_for_fabric_links() / Finish() mid-loop. The sender writes
-// values 1..num_iters, so the receiver backing tensor must hold num_iters at the end.
+// Fabric-link lease stress. Build the pair once, then drive num_iters grant -> transfer
+// -> release cycles. Each iteration enqueues, on each mesh's queue, [release (grant) ->
+// single-iteration worker -> wait (fence)] and Finishes before the next iteration. The
+// grant always lands before its worker, so the worker's handshake completes against an
+// already-granted service; the per-iteration Finish drains the queue so the loop-local
+// worker workloads stay valid until executed (a MeshWorkload owns the on-device program
+// binaries the queue runs, so it must outlive its non-blocking enqueue). fill_base =
+// i + 1, so the sender writes 1..num_iters and the receiver backing tensor must hold
+// num_iters at the end. Exercises the open/close + link_grant ping-pong many times;
+// catches state drift a 2-round test would miss: a stuck grant word, a failed connection
+// re-open, or monotonic-counter desync would hang a wait kernel / a Finish mid-stream.
 void verify_fabric_lease_stress(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
@@ -616,22 +621,24 @@ void verify_fabric_lease_stress(
     auto [sender, receiver] = D2DStreamService::create_pair(
         sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape, /*share_fabric_links=*/true));
 
-    auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, num_iters);
-    auto sender_workload = make_sender_worker_workload(sender.get(), sender_mesh, num_iters, /*fill_base=*/1);
-    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
-    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
-
-    // One grant per transfer. Grant both services (receiver first so it's ready to
-    // drain), then wait for both to hand the links back before the next grant.
     for (uint32_t i = 0; i < num_iters; ++i) {
+        // Grant before the worker (receiver first so it is ready to drain).
         receiver->release_fabric_links();
         sender->release_fabric_links();
+
+        auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, /*num_iters=*/1);
+        auto sender_workload =
+            make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/i + 1);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+
+        // Fence this transfer, then drain both queues before the worker workloads (loop
+        // locals) go out of scope.
         sender->wait_for_fabric_links();
         receiver->wait_for_fabric_links();
+        Finish(sender_mesh->mesh_command_queue());
+        Finish(receiver_mesh->mesh_command_queue());
     }
-
-    Finish(sender_mesh->mesh_command_queue());
-    Finish(receiver_mesh->mesh_command_queue());
 
     expect_receiver_backing_iota(receiver.get(), receiver_mesh, num_iters);
 }

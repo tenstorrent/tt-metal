@@ -365,6 +365,12 @@ struct D2DStreamServiceSender::Impl {
     // Persistent sender workload, launched once at create_pair.
     std::unique_ptr<distributed::MeshWorkload> workload;
     bool launched = false;
+
+    // Cached lease workloads (LEASE mode only): release_fabric_links enqueues the RELEASE
+    // (write grant=1) BEFORE the producer; wait_for_fabric_links enqueues the WAIT (spin
+    // grant==0) AFTER. Both CQ-ordered — no host PCIe poke. Null in OWN mode.
+    std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
+    std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
 };
 
 struct D2DStreamServiceReceiver::Impl {
@@ -404,6 +410,10 @@ struct D2DStreamServiceReceiver::Impl {
     // Persistent receiver workload, launched once at create_pair.
     std::unique_ptr<distributed::MeshWorkload> workload;
     bool launched = false;
+
+    // Cached lease workloads (LEASE mode only), mirror of the sender's. Null in OWN mode.
+    std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
+    std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
 };
 
 // ===========================================================================
@@ -528,18 +538,15 @@ void D2DStreamServiceSender::wait_for_fabric_links() {
         "(it owns the link for its lifetime); the lease API is a no-op in that mode");
     auto* mesh = impl_->mesh_device.get();
     TT_FATAL(mesh != nullptr, "D2DStreamServiceSender::wait_for_fabric_links: mesh device is null");
-    // Block until every sender service core is off the link, i.e. link_grant == 0
-    // (idle/done — any granted transfer has completed and the connection closed).
-    // The kernel is the only writer of 0, so this is the read half of the ping-pong.
-    std::vector<uint32_t> rb;
-    for (const auto& [coord, addr] : impl_->link_grant_addrs) {
-        auto* d = mesh->get_device(coord);
-        const CoreCoord core = impl_->service_cores.at(coord);
-        do {
-            rb.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(d, core, static_cast<uint32_t>(addr), sizeof(uint32_t), rb);
-        } while (rb.empty() || rb[0] != 0u);
-    }
+    TT_FATAL(
+        impl_->lease_wait_workload != nullptr,
+        "D2DStreamServiceSender::wait_for_fabric_links: lease wait workload not built");
+    // Enqueue a kernel that spins until every sender service core is off the link
+    // (link_grant == 0 — any granted transfer finished and the connection closed).
+    // CQ-ordered AFTER the producer, so whatever the caller enqueues next is fenced until
+    // the link is free. No host Finish: CQ order already provides that ordering, and
+    // blocking the host here would be redundant. Non-blocking.
+    EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_wait_workload, /*blocking=*/false);
 }
 
 void D2DStreamServiceSender::release_fabric_links() {
@@ -548,15 +555,15 @@ void D2DStreamServiceSender::release_fabric_links() {
         "D2DStreamServiceSender::release_fabric_links: service was created with share_fabric_links == false");
     auto* mesh = impl_->mesh_device.get();
     TT_FATAL(mesh != nullptr, "D2DStreamServiceSender::release_fabric_links: mesh device is null");
-    // Grant every sender service core ONE transfer: link_grant = 1. The host is the
-    // only writer of 1, and only writes it after wait_for_fabric_links() observed 0,
-    // so writers never overlap. Must be called only AFTER the fabric op's CQ has
-    // been Finish()-ed (unordered host write).
-    std::vector<uint32_t> one_word{1};
-    for (const auto& [coord, addr] : impl_->link_grant_addrs) {
-        tt::tt_metal::detail::WriteToDeviceL1(
-            mesh->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), one_word);
-    }
+    TT_FATAL(
+        impl_->lease_release_workload != nullptr,
+        "D2DStreamServiceSender::release_fabric_links: lease release workload not built");
+    // Grant every sender service core ONE transfer (link_grant = 1) via a CQ-enqueued
+    // kernel. Enqueue this BEFORE the producer workload so the grant is already in place
+    // when the producer runs — the service then completes its handshake with the
+    // producer in the same window. CQ order keeps the grant (1, here) and the service's
+    // own reset (0, on its hot path) strictly alternating. Non-blocking.
+    EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_release_workload, /*blocking=*/false);
 }
 
 // ===========================================================================
@@ -663,18 +670,12 @@ void D2DStreamServiceReceiver::wait_for_fabric_links() {
         "D2DStreamServiceReceiver::wait_for_fabric_links: service was created with share_fabric_links == false");
     auto* mesh = impl_->mesh_device.get();
     TT_FATAL(mesh != nullptr, "D2DStreamServiceReceiver::wait_for_fabric_links: mesh device is null");
-    // Mirror of the sender: block until every receiver service core is off the link
-    // (link_grant == 0 — its granted drain, if any, completed and the credit-return
-    // connection closed).
-    std::vector<uint32_t> rb;
-    for (const auto& [coord, addr] : impl_->link_grant_addrs) {
-        auto* d = mesh->get_device(coord);
-        const CoreCoord core = impl_->service_cores.at(coord);
-        do {
-            rb.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(d, core, static_cast<uint32_t>(addr), sizeof(uint32_t), rb);
-        } while (rb.empty() || rb[0] != 0u);
-    }
+    TT_FATAL(
+        impl_->lease_wait_workload != nullptr,
+        "D2DStreamServiceReceiver::wait_for_fabric_links: lease wait workload not built");
+    // Mirror of the sender: CQ-enqueue a kernel that spins until every receiver service
+    // core is off the link (link_grant == 0). CQ-ordered, no host Finish. Non-blocking.
+    EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_wait_workload, /*blocking=*/false);
 }
 
 void D2DStreamServiceReceiver::release_fabric_links() {
@@ -683,13 +684,13 @@ void D2DStreamServiceReceiver::release_fabric_links() {
         "D2DStreamServiceReceiver::release_fabric_links: service was created with share_fabric_links == false");
     auto* mesh = impl_->mesh_device.get();
     TT_FATAL(mesh != nullptr, "D2DStreamServiceReceiver::release_fabric_links: mesh device is null");
-    // Grant every receiver service core ONE drain (link_grant = 1). Must be called
-    // only AFTER the fabric op's CQ has been Finish()-ed (unordered host write).
-    std::vector<uint32_t> one_word{1};
-    for (const auto& [coord, addr] : impl_->link_grant_addrs) {
-        tt::tt_metal::detail::WriteToDeviceL1(
-            mesh->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), one_word);
-    }
+    TT_FATAL(
+        impl_->lease_release_workload != nullptr,
+        "D2DStreamServiceReceiver::release_fabric_links: lease release workload not built");
+    // Mirror of the sender: CQ-enqueue the grant (link_grant = 1) BEFORE the consumer
+    // workload so the receiver service can drain + complete its handshake in the same
+    // window. Non-blocking.
+    EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_release_workload, /*blocking=*/false);
 }
 
 // ===========================================================================
@@ -906,6 +907,58 @@ Program build_sender_program(
     return program;
 }
 
+// Build a cached fabric-link lease workload: one program per coord, a d2d_lease kernel
+// on a single worker core that NoC-accesses that coord's service-core link_grant word.
+// is_wait -> WAIT (spin until 0); else RELEASE (write 1). Enqueued on demand by
+// wait_for_fabric_links / release_fabric_links so the lease is CQ-ordered: RELEASE is
+// enqueued BEFORE the producer workload (grant in place when the producer runs), WAIT
+// AFTER (fences the next op). Built only in LEASE mode (share_fabric_links).
+std::unique_ptr<distributed::MeshWorkload> build_lease_workload(
+    const std::shared_ptr<distributed::MeshDevice>& mesh,
+    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    const std::map<distributed::MeshCoordinate, DeviceAddr>& link_grant_addrs,
+    const CoreRange& worker_cores,
+    bool is_wait) {
+    // One worker core per coord drives the lease (NoC to the service core). It runs
+    // between model ops, when the worker grid is otherwise idle.
+    const CoreCoord lease_core = worker_cores.start_coord;
+    const CoreRange lease_core_range{lease_core, lease_core};
+    constexpr tt::CBIndex kLeaseScratchCb = tt::CBIndex::c_0;
+    const uint32_t scratch_bytes = hal::get_l1_alignment();
+
+    auto workload = std::make_unique<distributed::MeshWorkload>();
+    for (const auto& [coord, svc_core] : service_cores) {
+        auto program = CreateProgram();
+        // WAIT needs a 1-word L1 staging slot for the NoC read; RELEASE doesn't.
+        if (is_wait) {
+            auto cb_cfg = CircularBufferConfig(scratch_bytes, {{kLeaseScratchCb, tt::DataFormat::UInt32}})
+                              .set_page_size(kLeaseScratchCb, scratch_bytes);
+            CreateCircularBuffer(program, lease_core_range, cb_cfg);
+        }
+        const std::vector<uint32_t> ct_args = {static_cast<uint32_t>(kLeaseScratchCb)};
+        auto kernel = CreateKernel(
+            program,
+            "ttnn/core/tensor/kernels/d2d_lease.cpp",
+            lease_core_range,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = ct_args,
+                .defines = {{"LEASE_MODE", is_wait ? "0" : "1"}}});
+
+        auto* device = mesh->get_device(coord);
+        const auto svc_phys = device->worker_core_from_logical_core(svc_core);
+        const std::vector<uint32_t> rt_args = {
+            static_cast<uint32_t>(svc_phys.x),
+            static_cast<uint32_t>(svc_phys.y),
+            static_cast<uint32_t>(link_grant_addrs.at(coord)),
+        };
+        SetRuntimeArgs(program, kernel, lease_core, rt_args);
+        workload->add_program(distributed::MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
+
 // ===========================================================================
 // Per-side resource builders
 // ===========================================================================
@@ -928,6 +981,11 @@ struct SenderSideResources {
     std::map<distributed::MeshCoordinate, DeviceAddr> done_count_addrs;
     std::optional<GlobalSemaphore> consumed_sem;
     std::unique_ptr<distributed::MeshWorkload> workload;
+    // Cached lease workloads (LEASE mode only): release_fabric_links enqueues the RELEASE
+    // (write grant=1) before the producer; wait_for_fabric_links enqueues the WAIT (spin
+    // grant==0) after. Null in OWN mode.
+    std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
+    std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
 };
 
 SenderSideResources build_sender_side(
@@ -1041,6 +1099,18 @@ SenderSideResources build_sender_side(
                 lane_links));
     }
 
+    // LEASE mode: cache the per-coord RELEASE / WAIT lease workloads so the host can
+    // enqueue them (CQ-ordered) without rebuilding. OWN mode leaves them null. Built
+    // before link_grant_addrs is moved into the result.
+    std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
+    std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
+    if (cfg.share_fabric_links) {
+        lease_release_workload =
+            build_lease_workload(mesh, service_cores, link_grant_addrs, cfg.sender_worker_cores, /*is_wait=*/false);
+        lease_wait_workload =
+            build_lease_workload(mesh, service_cores, link_grant_addrs, cfg.sender_worker_cores, /*is_wait=*/true);
+    }
+
     return SenderSideResources{
         .data_ready_counter_addrs = std::move(data_ready_counter_addrs),
         .termination_addrs = std::move(termination_addrs),
@@ -1050,6 +1120,8 @@ SenderSideResources build_sender_side(
         .done_count_addrs = std::move(done_count_addrs),
         .consumed_sem = std::move(consumed_sem),
         .workload = std::move(workload),
+        .lease_wait_workload = std::move(lease_wait_workload),
+        .lease_release_workload = std::move(lease_release_workload),
     };
 }
 
@@ -1061,6 +1133,9 @@ struct ReceiverSideResources {
     std::shared_ptr<distributed::MeshBuffer> metadata_buffer;
     DeviceAddr metadata_l1_addr = 0;
     std::unique_ptr<distributed::MeshWorkload> workload;
+    // Cached lease workloads (LEASE mode only), mirror of the sender's. Null in OWN mode.
+    std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
+    std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
 };
 
 ReceiverSideResources build_receiver_side(
@@ -1168,6 +1243,17 @@ ReceiverSideResources build_receiver_side(
                 links.front()));
     }
 
+    // LEASE mode: cache the per-coord RELEASE / WAIT lease workloads (mirror of the
+    // sender). OWN mode leaves them null. Built before link_grant_addrs is moved out.
+    std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
+    std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
+    if (cfg.share_fabric_links) {
+        lease_release_workload =
+            build_lease_workload(mesh, service_cores, link_grant_addrs, cfg.receiver_worker_cores, /*is_wait=*/false);
+        lease_wait_workload =
+            build_lease_workload(mesh, service_cores, link_grant_addrs, cfg.receiver_worker_cores, /*is_wait=*/true);
+    }
+
     return ReceiverSideResources{
         .consumed_counter_addrs = std::move(consumed_counter_addrs),
         .termination_addrs = std::move(termination_addrs),
@@ -1176,6 +1262,8 @@ ReceiverSideResources build_receiver_side(
         .metadata_buffer = std::move(metadata_buffer),
         .metadata_l1_addr = metadata_l1_addr,
         .workload = std::move(workload),
+        .lease_wait_workload = std::move(lease_wait_workload),
+        .lease_release_workload = std::move(lease_release_workload),
     };
 }
 
@@ -1224,6 +1312,8 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
         .metadata_addrs = std::move(res.metadata_addrs),
         .workload = std::move(res.workload),
         .launched = false,
+        .lease_wait_workload = std::move(res.lease_wait_workload),
+        .lease_release_workload = std::move(res.lease_release_workload),
     });
     auto handle = std::unique_ptr<D2DStreamServiceSender>(new D2DStreamServiceSender(std::move(impl)));
     ok = true;
@@ -1264,6 +1354,8 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .metadata_l1_addr = res.metadata_l1_addr,
         .workload = std::move(res.workload),
         .launched = false,
+        .lease_wait_workload = std::move(res.lease_wait_workload),
+        .lease_release_workload = std::move(res.lease_release_workload),
     });
     auto handle = std::unique_ptr<D2DStreamServiceReceiver>(new D2DStreamServiceReceiver(std::move(impl)));
     ok = true;
