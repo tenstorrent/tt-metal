@@ -82,12 +82,27 @@ static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface (unpack TRISC)
 #else
 
 // Per–tile-counter slot (DM).
+//
+// Layout is designed so that every DFBTCSlot in the tc_slots[] array is naturally
+// 4B-aligned, eliminating misaligned-store penalties in setup_local_dfb_interfaces:
+//
+//   - LocalDFBInterface has a 20B scalar prefix (19 bytes of fields + 1B _tc_align_pad),
+//     so tc_slots[0] starts at offset 20 (divisible by 4).
+//   - DFBTCSlot is padded to 20B (next multiple of 4 after 17B), so tc_slots[i] starts
+//     at offset 20 + i*20 which is always divisible by 4.
+//   - sizeof(LocalDFBInterface) = 20 + 6*20 = 140 = 4*35, so g_dfb_interface[id] is
+//     4B-aligned for every id when the array base is 4B-aligned.
+//
+// Without alignment: rd_ptr/wr_ptr/base_addr/limit would sit at misaligned offsets,
+// causing the compiler to emit 4 byte-stores per u32 field (16 instead of 4 stores
+// per slot per DFB init entry).
 struct DFBTCSlot {
     uint32_t rd_ptr;
     uint32_t wr_ptr;
     uint32_t base_addr;
     uint32_t limit;
     dfb::PackedTileCounter packed_tile_counter;
+    uint8_t _align[3];  // pad 17 → 20B so every slot in tc_slots[] is 4B-aligned
 } __attribute__((packed));
 
 // on WH/BH arrays will be sized to 1
@@ -104,12 +119,13 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
     uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
+    uint8_t _tc_align_pad;  // pad 19B prefix → 20B so tc_slots[0] is 4B-aligned
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
-static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 121, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 140, "LocalDFBInterface size is incorrect");
 
 #endif
 
