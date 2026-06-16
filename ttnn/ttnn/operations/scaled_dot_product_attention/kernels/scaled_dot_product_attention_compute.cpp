@@ -49,6 +49,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+#include "api/debug/device_print.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -305,6 +306,12 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
                 cb_q_buf, cb_k_buf, cb_qk_buf, cb_q_buf /*interm placeholder (num_k_blocks==1)*/, qk_shape);
 
+            if (u == 0 && j == 0) {
+                cb_wait_front(cb_qk, 1);
+                SliceRange r0 = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
+                DEVICE_PRINT("DBG QK post-matmul row0col0-7: {}\n", TSLICE(cb_qk, 0, r0));
+            }
+
             // ---- D: S *= scale  (scalar broadcast, in place) ----
             ckl::mul<
                 cb_qk,
@@ -358,6 +365,12 @@ void kernel_main() {
                         InputLifecycle::Streaming,
                         InputLifecycle::HeldStream>(K_CHUNK_T);
                 }
+            }
+
+            if (u == 0 && j == 0) {
+                cb_wait_front(cb_qk, 1);
+                SliceRange r0 = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
+                DEVICE_PRINT("DBG QK post-scale row0col0-7: {}\n", TSLICE(cb_qk, 0, r0));
             }
 
             // ---- G: m_blk = rowmax(S)  (cb_qk retained for the P subtract) ----

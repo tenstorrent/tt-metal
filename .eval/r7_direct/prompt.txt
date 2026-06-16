@@ -1,0 +1,66 @@
+# Refinement task
+
+Operation: scaled_dot_product_attention
+Refinement: Refinement 7 — fp32_dest_acc_en precision axis (fix the bf8b fp16-DEST defect)
+
+You are running in Mode 2 (refinement of an existing op). See the
+"Modes of Operation" and "Running a refinement" sections of your system
+prompt for context file paths, binding rules, and the success / giving-up
+protocol.
+
+Your scope is the single heading
+`### [ ] Refinement 7 — fp32_dest_acc_en precision axis (fix the bf8b fp16-DEST defect)`
+in `ttnn/ttnn/operations/scaled_dot_product_attention/op_requirements.md`.
+**Read the verifier notes under that heading FIRST** — they contain the proven
+root cause, the FORBIDDEN workaround, and the exact acceptance criteria. The
+`feature_spec.py` already declares the new `fp32_dest_acc_en` TARGET axis; your
+job is the op side (SUPPORTED + validate() gate + EXCLUSION + the real kernel fix).
+
+Add a refinement-specific test at
+`tests/ttnn/unit_tests/operations/scaled_dot_product_attention/` that exercises
+bf8b at `fp32_dest_acc_en=False` on `fa_rand` inputs directly. Commit it
+alongside the kernel changes.
+
+## Checkbox outcomes
+
+When you commit, flip the checkbox character per the "Done when" block in the
+heading. Summary:
+- `[x]` — **full**: bf16 AND bf8b pass at BOTH `fp32_dest_acc_en ∈ {True, False}`,
+  bf8b@False matches reference-grade PCC, `{fp32, False}` is an EXCLUSION, no
+  regression. The fix must be a real kernel/CB-format change — NOT forcing fp32
+  DEST for bf8b and NOT silently overriding the caller's compute_kernel_config
+  (that is the reverted prior workaround; it is FORBIDDEN).
+- `[~]` — **partial**: real work landed AND you characterized the blocker at depth
+  (minimal repro → real failure signal → `ttnn-static-analyzer` / `ttnn-expert-debugger`
+  → ≥1 concrete code lever). File the sharper next lever. Demoting/excluding
+  bf8b@fp16-DEST is NOT acceptable — it is provably fixable.
+- `[ ]` — **untouched**: only if you delivered nothing usable.
+
+## Changelog entry format
+
+Append to `ttnn/ttnn/operations/scaled_dot_product_attention/changelog.md`:
+
+    ## Refinement 7 — fp32_dest_acc_en precision axis (fix the bf8b fp16-DEST defect)
+    - **Date**: 2026-06-16
+    - **What was done**: (the actual kernel/CB-format fix — cite the reference diff if you used it)
+    - **Accuracy achieved**: PCC=..., rmse=... on bf8b @ fp32_dest_acc_en=False, shapes [...]
+    - **Golden test progress**: X/Y passing
+    - **Issues encountered**: (any, or "None")
+    - **Tests added**: (new test files / cases)
+
+## DEVICE SAFETY (unattended run — heed strictly)
+
+- Drive your fix primarily off a MINIMAL bf8b fp16-DEST repro
+  (B=1, H=1, S=1024, D=128, causal, `fa_rand`, a `WormholeComputeKernelConfig`
+  with `fp32_dest_acc_en=False`) via `scripts/run_safe_pytest.sh` (FOREGROUND only;
+  add `--dev` to halt on kernel ASSERT/LLK_ASSERT at the failing instruction).
+- When you run the golden suite (`eval/golden_tests/scaled_dot_product_attention/`),
+  you MUST deselect the device-wedging configs that hung the prior run:
+  `-k "not perf and not benchmark and not with_program_cache and not large_seq"`.
+  Running the full suite without this WILL stall the device on the perf/profiler tail.
+- The reference SDPA op is built and READABLE at
+  `/localdev/dnijemcevic/sdpa_main_baseline/tt-metal` (commit e61af82). Diff its
+  compute kernel / program factory against ours — it does bf8b @ fp16-DEST
+  correctly (PCC 0.9996). If you run it, override the leaked `PYTHON_ENV_DIR` /
+  `TT_METAL_HOME` and use that clone's own `python_env`.
+- If you claim to mirror reference behavior, CITE the reference source you read.

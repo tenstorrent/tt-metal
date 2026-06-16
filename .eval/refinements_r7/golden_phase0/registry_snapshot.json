@@ -1,0 +1,50 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16",
+      "FLOAT32",
+      "BFLOAT8_B"
+    ],
+    "layout": [
+      "TILE"
+    ],
+    "alignment": [
+      "tile_aligned",
+      "w_non_aligned",
+      "h_non_aligned"
+    ],
+    "attention_kind": [
+      "self",
+      "cross"
+    ],
+    "kv_heads_mode": [
+      "mha",
+      "gqa",
+      "mqa"
+    ],
+    "mask_mode": [
+      "none",
+      "custom",
+      "causal"
+    ],
+    "scale_mode": [
+      "auto",
+      "explicit"
+    ]
+  },
+  "exclusions": [
+    {
+      "mask_mode": "causal",
+      "attention_kind": "cross"
+    },
+    {
+      "dtype": "BFLOAT8_B",
+      "alignment": "w_non_aligned"
+    },
+    {
+      "dtype": "BFLOAT8_B",
+      "alignment": "h_non_aligned"
+    }
+  ],
+  "invalid": []
+}

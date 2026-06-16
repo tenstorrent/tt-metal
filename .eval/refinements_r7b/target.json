@@ -1,0 +1,37 @@
+{
+  "dtype": [
+    "FLOAT32",
+    "BFLOAT16",
+    "BFLOAT8_B"
+  ],
+  "fp32_dest_acc_en": [
+    true,
+    false
+  ],
+  "layout": [
+    "TILE"
+  ],
+  "alignment": [
+    "tile_aligned",
+    "w_non_aligned",
+    "h_non_aligned"
+  ],
+  "attention_kind": [
+    "self",
+    "cross"
+  ],
+  "kv_heads_mode": [
+    "mha",
+    "gqa",
+    "mqa"
+  ],
+  "mask_mode": [
+    "none",
+    "custom",
+    "causal"
+  ],
+  "scale_mode": [
+    "auto",
+    "explicit"
+  ]
+}
