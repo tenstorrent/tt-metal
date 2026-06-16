@@ -283,7 +283,8 @@ inline void _llk_pack_fast_tilize_uninit_(
     // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them).
     // Note: set_packer_strides's first param is semantically pack_src_format.
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
-    // Restore X counter, addr_mods, and MOP via _llk_pack_init_ (aligned with WH approach)
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */>(FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */);
+    // Restore X counter, addr_mods, and MOP via _llk_pack_init_ (aligned with WH approach); init owns
+    // the X counter and sets it itself. Strides are restored just above, so skip them in init.
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        pack_src_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 }

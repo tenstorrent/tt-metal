@@ -29,8 +29,8 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0>();
     uint32_t read_size = unpadded_stick_size + misalignment;
 
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
+    // padded_stick_size = per-shard page size (shard_W on B/W-sharded, full row otherwise);
+    // feeds `noc_async_read_sharded`'s multi-shard split via `get_aligned_page_size()`.
     const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
 
     constexpr uint32_t cb_id_in0 = 0;
@@ -47,8 +47,10 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            CoreLocalMem<uint32_t> dst(src_buffer_l1_addr);
-            noc.async_read(s0, dst, read_size, {.page_id = src_stick_id, .offset_bytes = 0}, {.offset_bytes = 0});
+            // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
+            // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
+            tt::data_movement::common::noc_async_read_sharded(
+                src_buffer_l1_addr, s0, src_stick_id, /*offset=*/0, /*size=*/read_size);
             if (misalignment != 0) {
                 noc.async_read_barrier();
                 tt::data_movement::common::tt_memmove<false, false, false, 0>(

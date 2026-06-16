@@ -12,28 +12,13 @@
 #include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "noc/noc_parameters.h"
+#include "api/numeric/bfloat16.h"
 
 constexpr std::uint32_t NOC_MINIMUM_READ_SIZE = 32;  // 32 Bytes
 
-static inline float bfloat16_to_float(uint16_t bfloat_val) {
-    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
-    float f;
-    std::memcpy(&f, &uint32_data, sizeof(f));
-    return f;
-}
-
-static inline uint16_t float_to_bfloat16(float val) {
-    union {
-        float f;
-        uint32_t u;
-    } ret;
-    ret.f = val;
-    return uint16_t(ret.u >> 16);
-}
-
 #if defined(FP32_DEST_ACC_EN)
 using FP32_DEST_ACC_FTYPE = float;
-FORCE_INLINE FP32_DEST_ACC_FTYPE fp32_dest_acc_cast(uint16_t val) { return bfloat16_to_float(val); }
+FORCE_INLINE FP32_DEST_ACC_FTYPE fp32_dest_acc_cast(uint16_t val) { return bf16_to_fp32(val); }
 FORCE_INLINE FP32_DEST_ACC_FTYPE fp32_dest_acc_cast(float val) { return val; }
 #else
 using FP32_DEST_ACC_FTYPE = uint16_t;

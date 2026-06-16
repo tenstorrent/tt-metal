@@ -61,9 +61,12 @@ struct ComputeHardwareConfig {
     //   2. The DFB's data format is Float32.
     //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
     //
-    // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
-    // failing to do so will trigger an error. Otherwise, supplying an entry is optional
-    // and only Default is accepted.
+    // You MUST provide an unpack_to_dest_mode entry for the DFB when all three conditions hold;
+    // failing to do so will trigger an error. Outside the triple an entry is optional: Default is
+    // always accepted, and UnpackToDestFp32 is tolerated where it is inert (non-consumer or
+    // non-Float32 — the hardware ignores the mode there, and legacy ops set it unconditionally).
+    // UnpackToDestFp32 always requires fp32_dest_acc_en=true, even where inert; otherwise it is
+    // rejected as incoherent (Dest is 16-bit and cannot hold full FP32).
     using UnpackToDestModes = Table<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
     UnpackToDestModes unpack_to_dest_mode;
 };

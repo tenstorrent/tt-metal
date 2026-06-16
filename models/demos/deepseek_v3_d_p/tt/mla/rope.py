@@ -6,7 +6,11 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
-from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    block_cyclic_reorder,
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+)
 
 
 def get_rot_transformation_mat():
@@ -55,24 +59,6 @@ def get_cos_sin_matrix(hf_config):
     return cos, sin
 
 
-def block_cyclic_reorder(matrix: torch.Tensor, chunk_local: int, sp_factor: int, seq_dim: int = 2) -> torch.Tensor:
-    """Reorder a [.., seq, ..] matrix into block-cyclic order keyed by `chunk_local`.
-
-    Splits the sequence into blocks of `chunk_local` rows and concatenates them so that device c's
-    contiguous shard (after a plain SP shard over `seq_dim`) holds blocks c, c+sp, c+2sp, ... — the
-    same block-cyclic layout the per-chip KV cache writes into. This makes the indexed-RoPE op's
-    contiguous, `update_idxt`-offset read of each device's cos/sin shard land on the right global
-    positions, including the boundary chip's older-then-wrap rows.
-    """
-    seq_len = matrix.shape[seq_dim]
-    assert seq_len % chunk_local == 0, f"seq_len {seq_len} must be a multiple of chunk_local {chunk_local}"
-    num_blocks = seq_len // chunk_local
-    assert num_blocks % sp_factor == 0, f"num_blocks {num_blocks} must be a multiple of sp_factor {sp_factor}"
-    blocks = list(torch.split(matrix, chunk_local, dim=seq_dim))
-    order = [b for c in range(sp_factor) for b in range(c, num_blocks, sp_factor)]
-    return torch.cat([blocks[b] for b in order], dim=seq_dim)
-
-
 class RotarySetup:
     """Rotary positional embedding setup for MLA prefill with SP sharding and balanced reordering."""
 
@@ -107,6 +93,80 @@ class RotarySetup:
             chunk_order = create_balanced_chunk_order(self.sp_factor)
             cos_matrix_torch = reorder_tensor_chunks(cos_matrix_torch, chunk_order, seq_dim=2)
             sin_matrix_torch = reorder_tensor_chunks(sin_matrix_torch, chunk_order, seq_dim=2)
+
+        shard_dims = [None, None]
+        shard_dims[self.sp_axis] = 2
+
+        cos_matrix = ttnn.from_torch(
+            cos_matrix_torch,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.mesh_device.shape),
+        )
+        sin_matrix = ttnn.from_torch(
+            sin_matrix_torch,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.mesh_device.shape),
+        )
+
+        trans_mat_torch = get_rot_transformation_mat()
+        trans_matrix = ttnn.from_torch(
+            trans_mat_torch,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
+
+    def get_rope_tensors_indexed(self, cache_seq_len_global: int, chunk_size_global: int) -> dict[str, ttnn.Tensor]:
+        """Get whole-cache cos/sin/trans matrices for the KV-pad-aware *indexed* rotated path.
+
+        This builds the rope values for the *entire* cache once. The cos/sin are
+        block-cyclic-reordered keyed by the per-chip chunk size and SP-sharded, so device ``c``'s
+        contiguous shard holds -- in local-cache-row order -- the rope values for every global
+        position it will ever carry. ``rotary_embedding_indexed`` then derives each chunk's start
+        row in that shard on-device from a single ``kv_actual_global`` runtime arg (the same
+        ``update_idxt`` math the per-chip KV-cache writer uses), so the same tensors are reused
+        across all chunks and only ``kv_actual_global`` varies.
+
+        Args:
+            cache_seq_len_global: total cache length in tokens across all SP devices (the cos/sin
+                cover every position the cache can hold). Per-chip shard = cache_seq_len_global // sp.
+            chunk_size_global: global chunk size (one chunk across all SP devices). Per-chip chunk =
+                chunk_size_global // sp_factor, which keys the block-cyclic reorder.
+
+        Constraints (mirroring the block-cyclic / cache layout):
+            * ``cache_seq_len_global <= max_seq_len``
+            * ``chunk_size_global % (TILE_SIZE * sp_factor) == 0``
+            * ``cache_seq_len_global % chunk_size_global == 0``
+        """
+        assert not self.is_balanced, "indexed rotated rope is incompatible with is_balanced"
+        sp = self.sp_factor
+        assert (
+            cache_seq_len_global <= self.hf_config.max_seq_len
+        ), f"cache_seq_len_global ({cache_seq_len_global}) must be <= max_seq_len {self.hf_config.max_seq_len}"
+        assert (
+            chunk_size_global % (ttnn.TILE_SIZE * sp) == 0
+        ), f"chunk_size_global ({chunk_size_global}) must be a multiple of TILE_SIZE * sp ({ttnn.TILE_SIZE * sp})"
+        assert cache_seq_len_global % chunk_size_global == 0, (
+            f"cache_seq_len_global ({cache_seq_len_global}) must be a multiple of "
+            f"chunk_size_global ({chunk_size_global})"
+        )
+        chunk_local = chunk_size_global // sp
+
+        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
+        cos_matrix_torch = cos_matrix_torch[..., :cache_seq_len_global, :]
+        sin_matrix_torch = sin_matrix_torch[..., :cache_seq_len_global, :]
+
+        # Block-cyclic reorder keyed by the per-chip chunk so a plain SP shard hands device c the
+        # rope values for every global position it carries, in local-cache-row order.
+        cos_matrix_torch = block_cyclic_reorder(cos_matrix_torch, chunk_local, sp, seq_dim=2)
+        sin_matrix_torch = block_cyclic_reorder(sin_matrix_torch, chunk_local, sp, seq_dim=2)
 
         shard_dims = [None, None]
         shard_dims[self.sp_axis] = 2

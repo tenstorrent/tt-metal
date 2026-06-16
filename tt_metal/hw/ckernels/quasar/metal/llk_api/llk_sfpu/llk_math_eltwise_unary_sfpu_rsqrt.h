@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_rsqrt.h"
 
 namespace ckernel {
@@ -22,11 +21,11 @@ template <
     [[maybe_unused]] bool FAST_APPROX = false,
     [[maybe_unused]] bool legacy_compat = false,
     int ITERATIONS = SFPU_ITERATIONS>
-inline void llk_math_eltwise_unary_sfpu_rsqrt(std::uint32_t dst_index, VectorMode vector_mode = VectorMode::RC) {
-    static_assert(is_fp32_dest_acc_en == false, "Non-default is_fp32_dest_acc_en (true) not supported in Quasar rsqrt");
+inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index) {
     static_assert(FAST_APPROX == false, "Non-default FAST_APPROX (true) not supported in Quasar rsqrt");
     static_assert(legacy_compat == false, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_rsqrt<ITERATIONS>, dst_index, vector_mode);
+    static_assert(is_fp32_dest_acc_en == false, "Non-default is_fp32_dest_acc_en (true) not supported in Quasar rsqrt");
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, (ITERATIONS), dst_index, VectorMode::RC);
 }
 
 }  // namespace ckernel

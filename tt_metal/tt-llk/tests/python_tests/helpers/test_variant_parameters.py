@@ -30,6 +30,7 @@ from .llk_params import (
     StableSort,
     StochasticRounding,
     Tilize,
+    TilizeUnpackerSel,
     TopKSortDirection,
     Transpose,
     UnpackerEngine,
@@ -138,6 +139,22 @@ class SFPU_INT_OP(TemplateParameter):
         if self.op:
             return f"#define SFPU_INT_OP_{self.op.upper()}"
         return ""
+
+
+@dataclass
+class SFPU_BINARY_OP(TemplateParameter):
+    """Select the consolidated Quasar binary-SFPU op at compile time.
+
+    Emits ``constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::<op>;``,
+    consumed by ``sfpu_operations_quasar.h``. ``op`` is one of:
+    ADD, MUL, DIV, GT, LT, LE, GE, MAX, MIN (reusing the LLK BinaryOp enum, like
+    Blackhole — int vs float MUL is disambiguated by the math format in the cpp).
+    """
+
+    op: str = "ADD"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::{self.op};"
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
@@ -282,11 +299,37 @@ class IMPLIED_MATH_FORMAT(TemplateParameter):
 
 
 @dataclass
+class ENABLE_2X_FORMAT(TemplateParameter):
+    enable_2x_format: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool ENABLE_2X_FORMAT = {str(self.enable_2x_format).lower()};"
+        )
+
+
+@dataclass
+class ENABLE_DIRECT_INDEXING(TemplateParameter):
+    enable_direct_indexing: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool ENABLE_DIRECT_INDEXING = {str(self.enable_direct_indexing).lower()};"
+
+
+@dataclass
 class UNPACKER_ENGINE_SEL(TemplateParameter):
     unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t UNPACKER_ENGINE_SEL = p_unpacr::{self.unpacker_engine_sel.value};"
+
+
+@dataclass
+class TILIZE_UNPACKER_SEL(TemplateParameter):
+    tilize_unp_sel: TilizeUnpackerSel = TilizeUnpackerSel.UnpA
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr TilizeUnpackerSel TILIZE_UNP_SEL = TilizeUnpackerSel::{self.tilize_unp_sel.value};"
 
 
 @dataclass

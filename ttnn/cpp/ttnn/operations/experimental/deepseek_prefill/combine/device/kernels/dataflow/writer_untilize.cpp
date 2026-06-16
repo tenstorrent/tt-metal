@@ -68,9 +68,7 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
 #if INIT_ZEROS
-    fill_zero_buffer(cb_zero_buffer_id);
-    uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
-    zero_pages(zero_buffer_addr, page_start, page_end, aligned_output_page_size, output_addr_gen);
+    zero_pages(cb_zero_buffer_id, page_start, page_end, aligned_output_page_size, output_addr_gen);
 
     // Signal all sender/reader cores that output-zeroing is complete
     for (uint32_t c = 0; c < num_sender_cores; c++) {
@@ -80,8 +78,9 @@ void kernel_main() {
     noc_async_atomic_barrier();
 #endif
 
-#if IS_TILE_LAYOUT
-    // ===== Untilized-data send path =====
+    // ===== Untilized-data send path (runs for both TILE_LAYOUT and ROW_MAJOR) =====
+    // cb_untilize_id (c_2) is filled by the compute kernel in TILE_LAYOUT or directly by
+    // reader_untilize in ROW_MAJOR; either way this kernel forwards each row to the sender.
     //
     // Compile-time args (appended after the output-zeroing TensorAccessorArgs block):
     //   +0: cb_untilize_id                        - CB into which compute pushes untilized batches
@@ -320,5 +319,4 @@ void kernel_main() {
     noc_semaphore_inc(sender_data_ready_noc_addr, 1);
     noc_async_atomic_barrier();
     cb_pop_front(cb_experts_tok_counter_id, cb_counter_total_pages);
-#endif
 }

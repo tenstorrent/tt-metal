@@ -33,7 +33,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_layer_norm
+
 
 # Poison value to ensure Welford's algorithm ignores padded elements (#31982)
 PAD_VALUE = -42
@@ -103,7 +106,7 @@ def _run_ttnn_layer_norm(
         ln_kwargs["weight"] = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     if torch_bias is not None:
         ln_kwargs["bias"] = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.layer_norm(input_tensor, **ln_kwargs)
+    output_tensor = ttnn_layer_norm(input_tensor, **ln_kwargs)
     output_tensor = ttnn.from_device(output_tensor)
     return ttnn.to_torch(output_tensor)
 
@@ -262,6 +265,11 @@ _FP32_NEAR_ZERO_ATOL_FRACTION = 0.004
 @pytest.mark.parametrize("distribution", ["normal", "wide_uniform", "centered_uniform"])
 def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford, distribution):
     """FP32 layer_norm ULP vs torch float32 golden (no weight/bias); fp32_dest_acc_en=True only."""
+    if is_blackhole() and use_welford and w == 4096:
+        # The large-tensor Welford layer_norm kernels produce nondeterministic FP32 output on
+        # Blackhole (back-to-back runs differ; failure disappears under watcher), so the
+        # determinism check in ttnn_layer_norm trips. Tracked in issue #46523.
+        pytest.skip("Blackhole large-tensor Welford layer_norm is nondeterministic (FP32); see #46523")
     torch.manual_seed(0)
     torch_input_tensor = _make_ln_input(h, w, torch.float32, distribution)
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])

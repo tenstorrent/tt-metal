@@ -216,11 +216,8 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  * @param unpB_tensor_shape: Tensor shape for source B operand
  * @note Call @ref _llk_unpack_AB_init_ before this function.
  */
-inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape, const ckernel::TensorShape unpB_tensor_shape)
+inline void _llk_unpack_AB_uninit_()
 {
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, unpA_tensor_shape.face_r_dim * unpA_tensor_shape.face_c_dim - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_tensor_shape.face_r_dim * unpB_tensor_shape.face_c_dim - 1, 0x0);
 }
 
 /**

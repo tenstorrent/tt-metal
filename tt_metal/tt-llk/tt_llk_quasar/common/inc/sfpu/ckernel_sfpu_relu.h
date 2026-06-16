@@ -56,7 +56,7 @@ inline void _calculate_lrelu_sfp_rows_()
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_lrelu_(const std::uint32_t slope)
 {
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2 (runtime imm)
     TTI_SFPENCC(1, 2);                                           // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -87,7 +87,7 @@ inline void _calculate_relu_min_sfp_rows_()
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _relu_min_(const std::uint32_t threshold)
 {
-    TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
+    TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
     TTI_SFPENCC(1, 2);                                               // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -123,7 +123,7 @@ inline void _calculate_relu_max_sfp_rows_()
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _relu_max_(const std::uint32_t threshold)
 {
-    TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
+    TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
     TTI_SFPENCC(1, 2);                                               // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)

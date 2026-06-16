@@ -27,7 +27,9 @@ Optional:
                                             (Kubernetes CNI, flannel, docker) being selected by MPI
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
-    --output <directory>                     Output directory for log files (default: recover-logs)
+    --output <directory>                    Output directory for logs and validation artifacts (default: recover-logs).
+                                            Passed to run_cluster_validation as --output-path so the
+                                            unretrainable_channels.yaml artifact lands here too.
 
     --cabling-descriptor-path <path>        Path to cabling descriptor file (4x32 only, overrides --config default)
                                             (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
@@ -43,6 +45,14 @@ Optional:
                                             e.g. --validation-args "--min-connections 2 --hard-fail"
                                             Use this for any run_cluster_validation flag (relaxed validation, strict
                                             failure, connectivity prints, metrics logging, etc.)
+    --no-regenerate-on-failure              Disable automatic descriptor regeneration after an unrecoverable
+                                            validation failure. By default, when run_cluster_validation
+                                            exhausts its retrain budget and emits unretrainable_channels.yaml,
+                                            recover.sh invokes run_regen_descriptors to write a degraded
+                                            descriptor set (FSD + cabling + deployment) to <output>/regenerated.
+                                            In --use-docker mode regen runs inside the image on the first host.
+                                            Regen is skipped automatically when only --factory-descriptor-path is
+                                            in use (cabling+deployment are required inputs).
     --help                                  Display this help message and exit
 
 ================================================================================
@@ -79,6 +89,7 @@ MPI_EXTRA_ARGS=()
 OUTPUT_DIR="recover-logs"
 RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
+REGENERATE_ON_FAILURE=true
 
 CABLING_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
@@ -226,6 +237,10 @@ while [[ $# -gt 0 ]]; do
             VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
+        --no-regenerate-on-failure)
+            REGENERATE_ON_FAILURE=false
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -267,8 +282,12 @@ if [[ "$SKIP_RESET" == true && "$SKIP_VALIDATION" == true ]]; then
     exit 1
 fi
 
-# Set log file path inside output directory (captures actual start time)
+# Set log file path inside output directory (captures actual start time).
+# Resolve to an absolute path so it can be bind-mounted into Docker containers
+# (regen runs inside the image in --use-docker mode) and referenced identically
+# inside and outside the container.
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 LOG_FILE="$OUTPUT_DIR/recover_$(date +%Y%m%d_%H%M%S).log"
 
 # Redirect all output: terminal sees colors, log file gets ANSI/CR stripped
@@ -342,6 +361,7 @@ echo "Rerun on retrain: $RERUN_ON_RETRAIN"
 if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
 fi
+echo "Regenerate on failure: $REGENERATE_ON_FAILURE"
 echo "=========================================="
 echo ""
 
@@ -362,6 +382,7 @@ else
 fi
 
 # Step 2: Cluster validation
+VALIDATION_EXIT=0
 if [[ "$SKIP_VALIDATION" == false ]]; then
     VALIDATION_ARGS=("${DESCRIPTOR_ARGS[@]}")
     if [[ "$SEND_TRAFFIC" == true ]]; then
@@ -371,6 +392,7 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
     if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
         VALIDATION_ARGS+=("${VALIDATION_EXTRA_ARGS[@]}")
     fi
+    VALIDATION_ARGS+=(--output-path "$OUTPUT_DIR")
 
     run_cluster_validation() {
         if [[ -n "$DOCKER_IMAGE" ]]; then
@@ -395,19 +417,77 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
     echo ""
     echo "Running cluster validation..."
     VALIDATION_LOG=$(mktemp)
-    run_cluster_validation 2>&1 | tee "$VALIDATION_LOG"
+    # Capture the exit code without tripping `set -e` (the `if` context suspends it) so regen
+    # can run on failure. pipefail makes the pipeline reflect run_cluster_validation's status.
+    if run_cluster_validation 2>&1 | tee "$VALIDATION_LOG"; then VALIDATION_EXIT=0; else VALIDATION_EXIT=$?; fi
 
     if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$VALIDATION_LOG"; then
         echo ""
         echo "Ethernet links were retrained — rerunning validation to issue traffic..."
-        run_cluster_validation
+        if run_cluster_validation 2>&1 | tee "$VALIDATION_LOG"; then VALIDATION_EXIT=0; else VALIDATION_EXIT=$?; fi
     fi
     rm -f "$VALIDATION_LOG"
 else
     echo "Skipping validation (--skip-validation)"
 fi
 
+# Step 3: Regenerate descriptors if validation hit unrecoverable state
+if [[ "$REGENERATE_ON_FAILURE" == true && $VALIDATION_EXIT -ne 0 ]]; then
+    UNRETRAINABLE_YAML="$OUTPUT_DIR/unretrainable_channels.yaml"
+    if [[ -f "$UNRETRAINABLE_YAML" ]]; then
+        if [[ -z "$CABLING_DESCRIPTOR_PATH" || -z "$DEPLOYMENT_DESCRIPTOR_PATH" ]]; then
+            echo ""
+            echo "Skipping descriptor regeneration: requires --cabling-descriptor-path and"
+            echo "--deployment-descriptor-path (cannot regenerate from --factory-descriptor-path alone)."
+        else
+            REGEN_DIR="$OUTPUT_DIR/regenerated"
+            REGEN_ARGS=(
+                --cabling "$CABLING_DESCRIPTOR_PATH"
+                --deployment "$DEPLOYMENT_DESCRIPTOR_PATH"
+                --unretrainable-channels "$UNRETRAINABLE_YAML"
+                --output-dir "$REGEN_DIR"
+            )
+            echo ""
+            echo "Validation exited unrecoverable; regenerating descriptors without unretrainable cables..."
+            if [[ -n "$DOCKER_IMAGE" ]]; then
+                # run_regen_descriptors is a single-host offline tool. In docker mode the binary
+                # only exists inside the image, so run one rank on the first host, mounting the
+                # descriptor inputs and the output dir so paths resolve identically in-container.
+                # Relative input paths resolve against the container's working dir, which differs
+                # from the host cwd, so warn the operator to use absolute paths.
+                if [[ "$CABLING_DESCRIPTOR_PATH" != /* || "$DEPLOYMENT_DESCRIPTOR_PATH" != /* ]]; then
+                    echo "Warning: --cabling-descriptor-path / --deployment-descriptor-path are relative;"
+                    echo "         in --use-docker mode they may not resolve inside the container."
+                    echo "         Use absolute paths if regeneration fails to find the descriptors."
+                fi
+                FIRST_HOST="${HOSTS%%,*}"
+                REGEN_VOLUMES=(--volume /data/scaleout_configs --volume "$OUTPUT_DIR")
+                # Mount the directories holding the input descriptors too, in case they live
+                # outside /data/scaleout_configs (custom --cabling/--deployment paths).
+                CABLING_DIR="$(cd "$(dirname "$CABLING_DESCRIPTOR_PATH")" && pwd)"
+                DEPLOYMENT_DIR="$(cd "$(dirname "$DEPLOYMENT_DESCRIPTOR_PATH")" && pwd)"
+                REGEN_VOLUMES+=(--volume "$CABLING_DIR" --volume "$DEPLOYMENT_DIR")
+                ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+                    --empty-entrypoint \
+                    --mpi-interface "$MPI_IF" \
+                    "${REGEN_VOLUMES[@]}" \
+                    --host "$FIRST_HOST" -np 1 \
+                    ./build/tools/scaleout/run_regen_descriptors \
+                    "${REGEN_ARGS[@]}" || echo "Warning: descriptor regeneration failed (see error above)"
+            else
+                ./build/tools/scaleout/run_regen_descriptors \
+                    "${REGEN_ARGS[@]}" || echo "Warning: descriptor regeneration failed (see error above)"
+            fi
+        fi
+    fi
+fi
+
 echo ""
 echo "=========================================="
 echo "Recovery completed at $(date)"
 echo "=========================================="
+
+# Propagate validation's exit code so callers still see the failure
+if [[ $VALIDATION_EXIT -ne 0 ]]; then
+    exit "$VALIDATION_EXIT"
+fi

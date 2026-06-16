@@ -144,9 +144,11 @@ is_valid_config() {
     return 1
 }
 
-SEP=$'\x1f'
+SEP=$'\x1f'   # field separator for test entry records (group/filter/config/envvars/gtest_repeat)
+ENV_SEP='|'  # separator between env KEY=value pairs (yq join() does not interpret \u escapes)
+EMPTY_ENV='-'  # TSV placeholder for empty env (bash read collapses consecutive tab fields)
 declare -a test_entries=()
-while IFS=$'\t' read -r group filter configs envvars; do
+while IFS=$'\t' read -r group filter configs envvars gtest_repeat; do
     [[ -z "$group" ]] && continue
     # Split comma-separated configs and create one entry per config
     IFS=',' read -ra config_list <<< "$configs"
@@ -157,9 +159,9 @@ while IFS=$'\t' read -r group filter configs envvars; do
             echo "       Supported configs: ${VALID_CONFIGS[*]}"
             exit 1
         fi
-        test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}")
+        test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}${SEP}${gtest_repeat}")
     done
-done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, (.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("\u001f"))] | @tsv' "$TESTS_FILE")
+done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, ((.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("|") | sub("^$"; "-"))), (.gtest_repeat // "" | tostring)] | @tsv' "$TESTS_FILE")
 
 total_tests=${#test_entries[@]}
 
@@ -180,6 +182,50 @@ fmt_duration() {
 }
 
 sanitize_name() { echo "$1" | tr -cs 'A-Za-z0-9_.-' '_' | sed 's/^_//;s/_$//'; }
+
+# Read gtest --gtest_output=json and set gtest_tests, gtest_skipped, gtest_failures.
+parse_gtest_json() {
+    local json_file="$1"
+    gtest_tests=0
+    gtest_skipped=0
+    gtest_failures=0
+    [[ -f "$json_file" ]] || return 1
+    gtest_tests=$(yq '.tests // 0' "$json_file")
+    gtest_failures=$(yq '.failures // 0' "$json_file")
+    gtest_skipped=$(yq '[.testsuites[].testsuite[]? | select(.result == "SKIPPED")] | length' "$json_file")
+}
+
+record_gtest_result() {
+    local label="$1" elapsed="$2" rc="$3" json_file="$4"
+    if ! parse_gtest_json "$json_file"; then
+        if [[ $rc -eq 0 ]]; then
+            passed=$((passed + 1))
+            results+=("PASS  $label  ($(fmt_duration $elapsed))")
+        else
+            failed=$((failed + 1))
+            results+=("FAIL  $label  ($(fmt_duration $elapsed))")
+        fi
+        return
+    fi
+
+    if [[ $rc -ne 0 || $gtest_failures -gt 0 ]]; then
+        failed=$((failed + 1))
+        results+=("FAIL  $label  ($(fmt_duration $elapsed))")
+        echo "  RESULT: FAIL"
+    elif [[ $gtest_tests -eq 0 ]]; then
+        skipped=$((skipped + 1))
+        results+=("SKIP  $label  ($(fmt_duration $elapsed), no tests matched filter)")
+        echo "  RESULT: SKIP (no tests matched filter)"
+    elif [[ $gtest_skipped -gt 0 ]]; then
+        skipped=$((skipped + 1))
+        results+=("SKIP  $label  ($(fmt_duration $elapsed), ${gtest_skipped} gtest skipped)")
+        echo "  RESULT: SKIP (${gtest_skipped} gtest skipped)"
+    else
+        passed=$((passed + 1))
+        results+=("PASS  $label  ($(fmt_duration $elapsed))")
+        echo "  RESULT: PASS"
+    fi
+}
 
 print_summary() {
     echo ""
@@ -204,8 +250,14 @@ run_start=$SECONDS
 trap 'echo ""; echo "*** Interrupted ***"; print_summary; exit 130' INT
 test_num=0
 
+# Associative array: log_base path -> how many times we've used that stem (for
+# _2, _3 suffixes). Do not use ${arr["$key"]:-0} — keys can contain '/' and bash
+# misparses :- with the subscript, yielding "operand expected". With set -u,
+# use ${arr["$key"]-0} (hyphen only) so a missing key is not an unbound read.
+declare -A log_base_counts=()
+
 for entry in "${test_entries[@]}"; do
-    IFS="$SEP" read -r group filter config envvars <<< "$entry"
+    IFS="$SEP" read -r group filter config envvars gtest_repeat <<< "$entry"
 
     if [[ -n "$FILTER_CONFIG" && "$config" != "$FILTER_CONFIG" ]]; then
         skipped=$((skipped + 1))
@@ -220,6 +272,11 @@ for entry in "${test_entries[@]}"; do
     sim_path="$(simulator_path_for_config "$config")"
     binary="$BUILD_DIR/test/tt_metal/$group"
     label="[$config] $group --gtest_filter=$filter"
+    gtest_repeat_args=()
+    if [[ -n "$gtest_repeat" ]]; then
+        gtest_repeat_args+=("--gtest_repeat=$gtest_repeat")
+        label="$label --gtest_repeat=$gtest_repeat"
+    fi
 
     echo "--- [$test_num] $label ---"
 
@@ -241,8 +298,9 @@ for entry in "${test_entries[@]}"; do
 
     # Apply per-test env vars
     extra_env_keys=()
+    [[ "$envvars" == "$EMPTY_ENV" ]] && envvars=""
     if [[ -n "$envvars" ]]; then
-        while IFS= read -r -d "$SEP" pair || [[ -n "$pair" ]]; do
+        while IFS= read -r -d "$ENV_SEP" pair || [[ -n "$pair" ]]; do
             [[ -z "$pair" ]] && continue
             key="${pair%%=*}"
             export "$pair"
@@ -257,7 +315,7 @@ for entry in "${test_entries[@]}"; do
     for key in "${extra_env_keys[@]}"; do
         echo "  $key=${!key}"
     done
-    echo "  CMD: $binary --gtest_filter=$filter"
+    echo "  CMD: $binary --gtest_filter=$filter${gtest_repeat_args[*]:+ ${gtest_repeat_args[*]}}"
 
     if [[ "$DRY_RUN" == true ]]; then
         results+=("DRY   $label")
@@ -265,47 +323,34 @@ for entry in "${test_entries[@]}"; do
     fi
 
     resolved_name="$(sanitize_name "$filter")"
-    matched_tests="$("$binary" --gtest_list_tests --gtest_filter="$filter" 2>/dev/null | grep -v -e '^\s*$' -e '^Running main' || true)"
-    if [[ -n "$matched_tests" ]]; then
-        full_name=""
-        suite=""
-        while IFS= read -r line; do
-            if [[ "$line" == *. ]]; then
-                suite="$line"
-            else
-                # Drop gtest's "# GetParam() = ..." suffix from parameterized tests
-                test="$(echo "$line" | sed 's/[[:space:]]*# GetParam().*//' | xargs)"
-                if [[ -n "$full_name" ]]; then
-                    full_name="${full_name}__${test}"
-                else
-                    full_name="${suite}${test}"
-                fi
-            fi
-        done <<< "$matched_tests"
-        resolved_name="$(sanitize_name "$full_name")"
-    fi
 
     gtest_log_args=()
     logger_env=()
+    json_file=""
+    log_file=""
     if [[ -n "$LOG_DIR" ]]; then
         log_base="$LOG_DIR/${config}_${group}_${resolved_name}"
-        gtest_log_args+=("--gtest_output=json:${log_base}.json")
-        logger_env=(env "TT_METAL_LOGGER_FILE=${log_base}.log")
-        echo "  TT_METAL_LOGGER_FILE=${log_base}.log"
+        count="${log_base_counts["$log_base"]-0}"
+        count=$((count + 1))
+        log_base_counts["$log_base"]=$count
+        if [[ $count -gt 1 ]]; then
+            log_base="${log_base}_${count}"
+        fi
+        json_file="${log_base}.json"
+        log_file="${log_base}.log"
+        gtest_log_args+=("--gtest_output=json:${json_file}")
+        logger_env=(env "TT_METAL_LOGGER_FILE=${log_file}")
+        echo "  TT_METAL_LOGGER_FILE=${log_file}"
     fi
 
     test_start=$SECONDS
     rc=0
-    "${logger_env[@]}" "$binary" --gtest_filter="$filter" "${gtest_log_args[@]}" || rc=$?
+    "${logger_env[@]}" "$binary" --gtest_filter="$filter" "${gtest_repeat_args[@]}" "${gtest_log_args[@]}" || rc=$?
 
     elapsed=$((SECONDS - test_start))
-    if [[ $rc -eq 0 ]]; then
-        passed=$((passed + 1))
-        results+=("PASS  $label  ($(fmt_duration $elapsed))")
-    else
-        failed=$((failed + 1))
-        results+=("FAIL  $label  ($(fmt_duration $elapsed))")
-        [[ -n "$LOG_DIR" ]] && echo "  LOG: ${log_base}.log"
+    record_gtest_result "$label" "$elapsed" "$rc" "$json_file"
+    if [[ $rc -ne 0 && -n "$log_file" ]]; then
+        echo "  LOG: $log_file"
     fi
 
     # Clean up per-test env vars

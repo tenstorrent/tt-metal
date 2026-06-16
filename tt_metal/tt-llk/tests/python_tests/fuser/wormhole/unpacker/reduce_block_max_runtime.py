@@ -84,5 +84,4 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        return f"_llk_unpack_AB_reduce_block_max_row_uninit_runtime_({face_r_dim}, {face_r_dim});\n"
+        return f"_llk_unpack_AB_reduce_block_max_row_uninit_runtime_();\n"

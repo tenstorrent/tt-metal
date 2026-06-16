@@ -205,11 +205,8 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  * @param unpB_tensor_shape: Tensor shape for source B operand
  * @note Call @ref _llk_unpack_AB_init_ before this function.
  */
-inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape, const ckernel::TensorShape unpB_tensor_shape)
+inline void _llk_unpack_AB_uninit_()
 {
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, unpA_tensor_shape.face_r_dim * unpA_tensor_shape.face_c_dim - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_tensor_shape.face_r_dim * unpB_tensor_shape.face_c_dim - 1, 0x0);
 }
 
 /**
@@ -402,17 +399,16 @@ inline void _llk_unpack_bcastA_B_init_()
 /**
  * @brief Uninitialize the unpacker after the SDPA sub_bcast_row variant.
  *
- * Restores the SrcA Y stride and resets the SrcA/SrcB datum counters to a full face worth of datums.
+ * Restores the SrcA Y stride. x-start/x-end is transient and reprogrammed by each operation's init
+ * (see tt-llk#1036), so it is not restored here.
  *
  * @param y_stride: SrcA Y stride to restore.
- * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
  * @note Call @ref _llk_unpack_bcastA_B_init_ before this function.
  */
-inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t y_stride = FACE_R_DIM * 2, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t y_stride = FACE_R_DIM * 2)
 {
     // Revisit default stride value in tt-llk#1015
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(y_stride);
-    TT_SETADCXX(p_setadc::UNP_AB, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
 /**

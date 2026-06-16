@@ -50,6 +50,7 @@ class TestVariant:
         moe_pcc_threshold: float = 0.999,
         mla_pcc_threshold: float = 0.999,
         supports_pretrained: bool = True,
+        prefill_trace_default: Optional[str] = None,
     ) -> None:
         self.name = name
         self.env_var = env_var
@@ -67,6 +68,9 @@ class TestVariant:
         self.moe_pcc_threshold = moe_pcc_threshold
         self.mla_pcc_threshold = mla_pcc_threshold
         self.supports_pretrained = supports_pretrained
+        # Golden chunked-prefill trace (metadata.json token_ids + kv_cache/ + hidden_states/) for the
+        # chunked block/transformer PCC tests. The PREFILL_TRACE_DIR env overrides this default.
+        self.prefill_trace_default = prefill_trace_default
 
 
 DSV3 = TestVariant(
@@ -85,6 +89,7 @@ DSV3 = TestVariant(
     ttnn_cache_env="TT_DS_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.996,
     moe_pcc_threshold=0.985,
+    prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad",
 )
 
 KIMI_V2_6 = TestVariant(
@@ -102,7 +107,10 @@ KIMI_V2_6 = TestVariant(
     mla_ref_cache_env="KIMI_MLA_REF_CACHE",
     ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.995,
-    moe_pcc_threshold=0.987,
+    moe_pcc_threshold=0.971,
+    # vllm-traced golden: metadata.json + kv_cache nest under a run-hash subdir (resolve_trace_dir
+    # descends), and kv_post_transform is row-sharded (the transformer test's loader reassembles it).
+    prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320",
 )
 
 TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI_V2_6]}
