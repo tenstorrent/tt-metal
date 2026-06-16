@@ -23,9 +23,6 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& config = operation_attributes.config;
 
-    // Every tensor handed to the kernels must live in device storage on one shared device — the
-    // kernels read buffer addresses directly, so a host/null/cross-device tensor would fault at
-    // launch. check_on_device enforces this uniformly for inputs, the optional output, and offsets.
     TT_FATAL(act_tensor.storage_type() == StorageType::DEVICE, "variable_matmul activation must be on device");
     auto* device = act_tensor.device();
     auto check_on_device = [device](const ttnn::Tensor& t, const char* name) {
@@ -36,12 +33,10 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     check_on_device(act_tensor, "activation");
     check_on_device(weight_tensor, "weight");
 
-    // Layout requirements: all inputs must be TILE layout
     TT_FATAL(
         act_tensor.layout() == Layout::TILE && weight_tensor.layout() == Layout::TILE,
         "variable_matmul requires TILE layout for activation and weight");
 
-    // DType constraints
     auto dtype_supported = [](tt::tt_metal::DataType dt) {
         return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B ||
                dt == DataType::FLOAT32;
@@ -50,7 +45,6 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         dtype_supported(act_tensor.dtype()) && dtype_supported(weight_tensor.dtype()),
         "variable_matmul supports only BFLOAT16, BFLOAT8_B, BFLOAT4_B, and FLOAT32 for inputs");
 
-    // Shape constraints
     const auto& a_logical = act_tensor.logical_shape();
     const auto& w_logical = weight_tensor.logical_shape();
     TT_FATAL(a_logical.rank() >= 2 && w_logical.rank() >= 2, "variable_matmul expects rank >= 2 tensors");
@@ -102,7 +96,6 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         M_tiles_ceil,
         M_parent_tiles);
 
-    // Tile alignment checks
     const auto& a_padded = act_tensor.padded_shape();
     const auto& w_padded = weight_tensor.padded_shape();
     TT_FATAL(
@@ -112,7 +105,6 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         w_padded[-2] % TILE_HEIGHT == 0 && w_padded[-1] % TILE_WIDTH == 0,
         "variable_matmul weight must be tile-aligned");
 
-    // Config constraints
     const auto& cfg = config;
     TT_FATAL(cfg.M_block_size > 0 && cfg.K_block_size > 0 && cfg.N_block_size > 0, "Block sizes must be > 0");
     TT_FATAL(cfg.subblock_h > 0 && cfg.subblock_w > 0, "Subblock sizes must be > 0");

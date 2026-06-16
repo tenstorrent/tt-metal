@@ -21,20 +21,15 @@ struct VariableMatmulConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
 };
 
-// EP-friendly on-device offsets: the kernel reads offsets[start_index..start_index+2]
-// from a device tensor at runtime and derives the matching row/K offsets. Lets moe_ffn
-// avoid offsets.to_vector() under MeshDevice EP.
+// On-device offsets (EP-friendly): at runtime the dataflow kernels read offsets[start..start+2]
+// (a {start, end} pair) from a UINT32 device tensor and derive the role's row/K ranges.
 enum class OffsetsRole : uint32_t {
-    // Reads offsets[start..start+2] and uses the same range for BOTH the in0 read window
-    // AND the output write window. Lets moe_ffn use a single shared output tensor of shape
-    // [T_cap, N] instead of E per-expert intermediates — each expert's matmul reads
-    // grouped[offsets[e]:offsets[e+1]] and writes into the corresponding row range of the
-    // shared output. The upper-bound constraint on per-expert size disappears: every
-    // expert's actual rows fit naturally into its slice of the shared [T_cap, N] tensor.
+    // [start, end) drives BOTH the in0 row read and the output row write. Lets a caller (moe_ffn)
+    // route every expert's matmul into its slice of one shared [T_cap, N] output, instead of
+    // allocating E per-expert, upper-bound-sized intermediates.
     InputAndOutputRow = 1,
-    // Reads offsets[start..start+2] and uses the same range for BOTH the in0 K-slice and
-    // the in1 K-slice. Used in moe_ffn backward dW matmuls where both operands are shared
-    // [T_cap, *] tensors and only the expert's K-row range should participate in the K-reduce.
+    // [start, end) K-slices BOTH in0 and in1. Used by moe_ffn's backward dW matmuls, where both
+    // operands are shared [T_cap, *] tensors and only the expert's K-rows participate in the reduce.
     InputAndWeightK = 2,
 };
 
@@ -51,28 +46,24 @@ struct VariableMatmulParams {
     // matmul kernel applies intra-tile transpose via the LLK transpose flag.
     bool transpose_b = false;
 
-    // expected_M_tiles:
-    //   When > 0, the matmul processes only `expected_M_tiles` rows on the M axis (instead
-    //   of the input's full M). With an output_tensor, this also bounds the host-side
-    //   output-shape validation (the EP path may further override the per-core M split).
-    //   Runtime arg — different values hit the same cached program.
+    // Per-call matmul-M extent in tiles (0 = use the input's full M). Does NOT cap the work:
+    // InputAndOutputRow re-derives the actual per-core M from the offsets at runtime. Used to
+    // pick the grid orientation and to bound the host-side output-shape check. Feeds the program
+    // hash (via use_offset / transpose_core_grid), so a stable value reuses one cached program
+    // while values crossing the 0/>0 or M-vs-N thresholds compile distinct programs.
     uint32_t expected_M_tiles = 0;
 
-    // On-device offsets (EP). Dataflow kernels read offsets[start..start+2] at runtime and
-    // derive the role-appropriate ranges:
-    //   InputAndOutputRow: offsets[start..start+2] → input-row range + output write-at-offset
-    //                      row + per-core M_start/M_end/M_blocks_per_core (dm_in0_sender
-    //                      publishes the latter via cb_ctrl so compute can override RT args).
-    //   InputAndWeightK:   offsets[start..start+2] → in0 K-slice + in1 K-slice (same range).
+    // How the on-device offsets are interpreted (see OffsetsRole). offsets_start_index is the
+    // index of this call's {start, end} pair within the offsets tensor.
     OffsetsRole offsets_role = OffsetsRole::InputAndOutputRow;
     uint32_t offsets_start_index = 0;
 };
 
 struct VariableMatmulInputs {
-    ttnn::Tensor input_tensor;   // [actual_M, K]
-    ttnn::Tensor weight_tensor;  // [K, N]
-    // Optional caller-provided output tensor (write-at-offset mode). When set, the
-    // EP path derives the row offset from offsets_tensor and matmul-N must match.
+    ttnn::Tensor input_tensor;   // logical [M, K] (stored [K, M] when transpose_a)
+    ttnn::Tensor weight_tensor;  // logical [K, N] (stored [N, K] when transpose_b)
+    // Optional caller-provided output (write-at-offset): InputAndOutputRow writes each call's
+    // row range into it; matmul-N must equal its N.
     std::optional<ttnn::Tensor> output_tensor;
     // 1-D UINT32 ROW_MAJOR device tensor of offsets; read on every call per offsets_role.
     ttnn::Tensor offsets_tensor;
