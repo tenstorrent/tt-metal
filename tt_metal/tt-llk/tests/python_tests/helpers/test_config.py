@@ -30,6 +30,7 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
+from .cfg_pollution import maybe_pollute_cfg_from_env
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
@@ -1466,12 +1467,23 @@ class TestConfig:
                 boot_mode == BootMode.BRISC
                 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             ):
+                # WH's combined cache-update+start command releases the TRISCs and
+                # returns before the fall-through pollution below ever runs, so this
+                # reload path needs its own injection (TRISCs still in reset here).
+                # See the comment on the fall-through call for the rationale.
+                maybe_pollute_cfg_from_env(TestConfig.TENSIX_LOCATION)
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
                     timeout=brisc_cmd_timeout,
                 )
                 return
+
+        # Init-completeness fuzzing: while the TRISCs are still held in reset (ELFs
+        # loaded, not yet released), optionally scribble garbage into the CFG space.
+        # Anything the kernel's init fails to (re)write stays polluted. No-op unless
+        # LLK_POLLUTE_CFG is set. CFG is not reset at launch, so this survives.
+        maybe_pollute_cfg_from_env(TestConfig.TENSIX_LOCATION)
 
         match boot_mode:
             case BootMode.BRISC:

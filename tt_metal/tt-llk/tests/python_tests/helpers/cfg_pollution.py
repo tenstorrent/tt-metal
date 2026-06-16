@@ -1,0 +1,421 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Host-side Tensix CFG (THCON) register pollution for init-completeness testing.
+
+The premise: a correct kernel's init must (re)write every config register it
+depends on. To test that, we scribble garbage into the CFG space *before* the
+kernel runs. Anything the kernel rewrites is harmless; anything it silently
+relies on (a reset/leftover value it never sets) stays polluted and the kernel
+either miscomputes (PCC fail) or hangs.
+
+This works because the CFG space is NOT reset at kernel launch: firmware boot
+only flips the shadow id (`reset_cfg_state_id`) and zeroes PRNG_SEED, so values
+written while the TRISCs are held in reset persist into kernel execution. See
+`run_elf_files()` for the injection point.
+
+Access mechanism — important:
+  The CFG register file at TENSIX_CFG_BASE (0xFFEF0000) is *core-private* address
+  space, NOT directly NOC-addressable from the host. A raw read/write to
+  0xFFEF0000 over the NOC times out. The only host path is the RISC debug
+  private-memory interface (`risc_debug.read_memory`/`write_memory`) — the same
+  path ttexalens' `get_tensix_state` uses to read CFG. We drive it through one
+  TRISC; CFG is shared Tensix config, so a single core's private view reaches the
+  whole register file. `ensure_private_memory_access()` transparently handles a
+  core held in reset (it briefly releases it into an injected `JAL x0,0` loop,
+  halts it, performs the accesses, then restores the saved code word and puts the
+  core back in reset). All reads/writes happen inside one such session, so the
+  core is released/halted/restored exactly once — not per register.
+
+Memory map (Blackhole; Wormhole analogous with CFG_STATE_SIZE=47):
+  - TENSIX_CFG_BASE = 0xFFEF0000.
+  - The thread-config region is double-buffered into two shadow "states". Each
+    state spans CFG_STATE_SIZE 128-bit entries == CFG_STATE_SIZE*4 32-bit words.
+    Register `addr32` lives at word `addr32` in state 0 and `addr32 + stride` in
+    state 1, where `stride = CFG_STATE_SIZE*4` (224 words on BH). A kernel may
+    flip between states mid-run, so we pollute both by default.
+  - Every CFG register defined in cfg_defines.h fits within a single state
+    (highest addr32 is 222 on BH / 186 on WH, both below CFG_STATE_SIZE*4), so the
+    "thread" group below genuinely covers the whole config register space.
+  - Word addr32 0 packs CFG_STATE_ID.StateID (bit 0) alongside legacy ALU format
+    fields. Bit 0 selects the active shadow, so we preserve it (polluting it
+    would just flip shadows — a confound, not a finding).
+"""
+
+import json
+import os
+import random
+import sys
+from functools import lru_cache
+
+from ttexalens.tt_exalens_lib import check_context, convert_coordinate
+
+from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .logger import logger
+
+TENSIX_CFG_BASE = 0xFFEF0000
+
+# CFG_STATE_SIZE counts 128-bit entries (from cfg_defines.h). Shadow-state stride
+# in 32-bit words is CFG_STATE_SIZE * 4.
+_CFG_STATE_SIZE = {
+    ChipArchitecture.BLACKHOLE: 56,
+    ChipArchitecture.WORMHOLE: 47,
+}
+
+# addr32 words that boot configures (NOT the kernel) and that kernels depend on —
+# polluting them is over-reach (it breaks boot, not kernel compute-init), so the
+# whole-space "thread" sweep excludes them. Verified per arch against the boot path
+# (tests/helpers/include/boot.h::device_setup):
+#   - Blackhole: device_setup writes NO CFG-space register (only the 0xFFB12xxx debug
+#     block + TTI instructions), so nothing is excluded.
+#   - Wormhole: device_setup writes the TRISC reset-PC vectors — TRISC_RESET_PC_SEC0/1/2
+#     (addr32 158/159/160) and RESET_PC_OVERRIDE (161). Trampling those wedges the boot PC.
+_BOOT_OWNED_ADDR32 = {
+    ChipArchitecture.BLACKHOLE: set(),
+    ChipArchitecture.WORMHOLE: {158, 159, 160, 161},
+    ChipArchitecture.QUASAR: set(),
+}
+
+
+def _thread_words(arch: ChipArchitecture) -> list[int]:
+    excluded = _BOOT_OWNED_ADDR32.get(arch, set())
+    return [a for a in range(0, _CFG_STATE_SIZE[arch] * 4) if a not in excluded]
+
+
+# Named addr32 groups within the per-state thread-config region.
+# "alu" is the 3-word ALU config block (addr32 0,1,2) — a small, targeted probe.
+# "thread" is the whole shadowed config register space (minus boot-owned words): every
+# register defined in cfg_defines.h fits inside one state (see module docstring), so
+# this is the complete kernel-owned config-register sweep.
+_GROUPS = {
+    ChipArchitecture.BLACKHOLE: {
+        "alu": [0, 1, 2],
+        "thread": _thread_words(ChipArchitecture.BLACKHOLE),
+    },
+    ChipArchitecture.WORMHOLE: {
+        "alu": [0, 1, 2],
+        "thread": _thread_words(ChipArchitecture.WORMHOLE),
+    },
+}
+
+# addr32 -> bit mask of bits that must NOT be polluted: they are firmware/hardware-owned,
+# not LLK-compute config, so trampling them is over-reach (breaks boot/debug, not kernel
+# init). The rest of each such word stays poisonable. Same addr32/bit layout on BH and WH.
+_PRESERVE_BITS = {
+    0: 0x1,  # CFG_STATE_ID.StateID — selects the active shadow.
+    # DISABLE_RISC_BP (bits 22-31): RISC branch-prediction enable. Set by firmware (brisc
+    # disable_branch_prediction) and toggled by the debug halt path (ttexalens
+    # set_branch_prediction); no compute kernel owns it. Poisoning it hangs the cores
+    # (bisected to this exact field on BH, 2026-06-16). Bits 0-21 (STACC_RELU / ALU_ACC_CTRL)
+    # remain kernel-owned and are still poisoned.
+    2: 0xFFC00000,
+}
+
+# TRISC whose debug private-memory interface we drive to reach CFG. CFG is shared
+# Tensix config, so any TRISC's private view works.
+_ACCESS_RISC = "trisc0"
+
+
+def _state_stride_words(arch: ChipArchitecture) -> int:
+    return _CFG_STATE_SIZE[arch] * 4
+
+
+def _word_core_addr(addr32: int, state: int, arch: ChipArchitecture) -> int:
+    """Core-private CFG address of `addr32` in the given shadow state."""
+    return TENSIX_CFG_BASE + (addr32 + state * _state_stride_words(arch)) * 4
+
+
+@lru_cache(maxsize=8)
+def _full_value_map(seed: int, arch: ChipArchitecture) -> dict:
+    """The value every (state, addr32) word receives in the canonical whole-space sweep.
+
+    Built by drawing one RNG sequence over the fixed ordering `for state in (0,1): for
+    addr32 in 0..CFG_STATE_SIZE*4` — i.e. exactly what a sequential whole-space pollution
+    would write. Cached per (seed, arch). Spans the full range (boot-owned words included)
+    so a word's value never shifts when those words are excluded from the *pollute* set.
+    """
+    rng = random.Random(seed)
+    stride = _state_stride_words(arch)
+    return {
+        (state, addr32): rng.getrandbits(32)
+        for state in (0, 1)
+        for addr32 in range(stride)
+    }
+
+
+def word_value(seed: int, state: int, addr32: int) -> int:
+    """Deterministic 32-bit poison value for one word — the value it gets in the canonical
+    whole-space sweep for this seed. Pure function of (seed, state, addr32), independent of
+    which/how many words a given run actually pollutes. That subset-independence is what makes
+    bisection sound: a culprit word carries an identical value whether tested alone or with
+    everything, and a seed that fails the whole-space sweep is faithfully reproduced by subsets.
+    """
+    return _full_value_map(seed, get_chip_architecture())[(state, addr32)]
+
+
+def resolve_words(group_or_words, arch: ChipArchitecture) -> list[int]:
+    """Resolve a group name (e.g. "alu") or an explicit addr32 iterable to a word list."""
+    if isinstance(group_or_words, str):
+        groups = _GROUPS[arch]
+        if group_or_words not in groups:
+            raise ValueError(
+                f"unknown CFG pollution group {group_or_words!r} for {arch.value}; "
+                f"known: {sorted(groups)}"
+            )
+        return list(groups[group_or_words])
+    return list(group_or_words)
+
+
+def _get_risc_debug(location: str, arch: ChipArchitecture, device_id: int, context):
+    context = context or check_context()
+    coordinate = convert_coordinate(location, device_id, context)
+    block = coordinate.device.get_block(coordinate)
+    return block.get_risc_debug(
+        _ACCESS_RISC, neo_id=0 if arch == ChipArchitecture.QUASAR else None
+    )
+
+
+def pollute_items(
+    location: str,
+    items,
+    *,
+    seed: int,
+    restore=None,
+    extra_preserve=None,
+    device_id: int = 0,
+    context=None,
+    verify: bool = True,
+) -> list[dict]:
+    """Poison an explicit list of (state, addr32) words with deterministic values.
+
+    `restore`, if given, is a {(state, addr32): value} map written FIRST (before any
+    poisoning) so a bisection trial starts from a known-clean CFG regardless of what a
+    prior trial left behind. Each item's poison value is `word_value(seed, state, addr32)`
+    — subset-independent (see `word_value`). Returns a per-write log.
+
+    `extra_preserve` is a {addr32: mask} of bits to leave untouched ON TOP OF the built-in
+    `_PRESERVE_BITS`. The two are distinct classes: `_PRESERVE_BITS` is *over-reach* (firmware/
+    hardware-owned, never a kernel-init finding — always masked); `extra_preserve` is *acknowledged
+    kernel dependencies* — real findings a caller has already noted and wants to set aside so a
+    sweep/bisection surfaces NEW ones (e.g. mask DEST_REGW_BASE to find the next datacopy gap).
+
+    Call only while the target TRISCs are held in soft reset — the access core is
+    released/halted/restored automatically around the accesses (one session for all).
+    """
+    arch = get_chip_architecture()
+    extra_preserve = extra_preserve or {}
+    log: list[dict] = []
+    risc_debug = _get_risc_debug(location, arch, device_id, context)
+    with risc_debug.ensure_private_memory_access():
+        if restore:
+            for (state, addr32), value in restore.items():
+                risc_debug.write_memory(_word_core_addr(addr32, state, arch), value)
+        for item in items:
+            # item is (state, addr32) or (state, addr32, mask): mask selects which BITS to
+            # poison (default all 32). Bit-granular masking lets a caller poison one field of
+            # a mixed word (e.g. STACC_RELU vs DISABLE_RISC_BP, which share addr32 2).
+            state, addr32 = item[0], item[1]
+            mask = item[2] if len(item) > 2 else 0xFFFFFFFF
+            addr = _word_core_addr(addr32, state, arch)
+            original = risc_debug.read_memory(addr)
+            value = (original & ~mask) | (word_value(seed, state, addr32) & mask)
+            preserve = _PRESERVE_BITS.get(addr32, 0) | extra_preserve.get(addr32, 0)
+            if preserve:
+                value = (value & ~preserve) | (original & preserve)
+            risc_debug.write_memory(addr, value)
+            readback = risc_debug.read_memory(addr) if verify else None
+            log.append(
+                {
+                    "state": state,
+                    "addr32": addr32,
+                    "original": original,
+                    "poisoned": value,
+                    "readback": readback,
+                }
+            )
+    return log
+
+
+def snapshot_cfg(location: str, items, *, device_id: int = 0, context=None) -> dict:
+    """Read the given (state, addr32) words and return a {(state, addr32): value} map."""
+    arch = get_chip_architecture()
+    risc_debug = _get_risc_debug(location, arch, device_id, context)
+    snap = {}
+    with risc_debug.ensure_private_memory_access():
+        for state, addr32 in items:
+            snap[(state, addr32)] = risc_debug.read_memory(
+                _word_core_addr(addr32, state, arch)
+            )
+    return snap
+
+
+def restore_snapshot(
+    location: str, snapshot: dict, *, device_id: int = 0, context=None
+) -> None:
+    """Write a {(state, addr32): value} snapshot back to CFG (full clean restore)."""
+    arch = get_chip_architecture()
+    risc_debug = _get_risc_debug(location, arch, device_id, context)
+    with risc_debug.ensure_private_memory_access():
+        for (state, addr32), value in snapshot.items():
+            risc_debug.write_memory(_word_core_addr(addr32, state, arch), value)
+
+
+def thread_items(arch: ChipArchitecture, states=(0, 1)) -> list:
+    """All kernel-owned (state, addr32) words — the bisection candidate universe."""
+    return [(s, a) for s in states for a in _thread_words(arch)]
+
+
+def parse_preserve(spec) -> dict:
+    """Parse an "addr32:mask,addr32:mask" string into {addr32: mask}. Empty/None -> {}."""
+    out = {}
+    for tok in (spec or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        a, _, m = tok.partition(":")
+        out[int(a, 0)] = int(m, 0) if m else 0xFFFFFFFF
+    return out
+
+
+def pollute_cfg(
+    location: str,
+    words,
+    *,
+    seed: int,
+    states=(0, 1),
+    extra_preserve=None,
+    device_id: int = 0,
+    context=None,
+    verify: bool = True,
+) -> list[dict]:
+    """Poison CFG words (group name / addr32 iterable) across the given shadow states.
+
+    Thin wrapper over `pollute_items` preserving the original group/addr32 interface.
+    """
+    arch = get_chip_architecture()
+    addr32_list = resolve_words(words, arch)
+    items = [(state, addr32) for state in states for addr32 in addr32_list]
+    return pollute_items(
+        location,
+        items,
+        seed=seed,
+        extra_preserve=extra_preserve,
+        device_id=device_id,
+        context=context,
+        verify=verify,
+    )
+
+
+def restore_cfg(
+    location: str, log: list[dict], *, device_id: int = 0, context=None
+) -> None:
+    """Restore the original values captured by a pollute log (best-effort cleanup)."""
+    snapshot = {(e["state"], e["addr32"]): e["original"] for e in log}
+    restore_snapshot(location, snapshot, device_id=device_id, context=context)
+
+
+def _log_landed(log: list[dict], summary_prefix: str) -> None:
+    # A write "landed" if the register's value changed. Many CFG words are sparse
+    # (narrow fields / read-only bits), so readback rarely equals the full 32-bit poison
+    # value — that is NOT a failure. The real failure mode is a write with *no* visible
+    # effect (readback == original) across the board → the access mechanism missed CFG.
+    verified = [e for e in log if e["readback"] is not None]
+    landed = [e for e in verified if e["readback"] != e["original"]]
+    summary = f"{summary_prefix} landed={len(landed)}/{len(verified)}"
+    # Also print (flushed) so the reproducing seed survives even if the loguru file sink
+    # is lost when a hung run is killed / the device is reset mid-test.
+    print(summary, file=sys.stderr, flush=True)
+    logger.warning(summary)
+    if verified and not landed:
+        logger.error(
+            "[CFG-POLLUTE] no polluted word changed value — the access mechanism did "
+            "not reach CFG (cores not in reset / wrong access core?)."
+        )
+
+
+def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=None):
+    """Pollute / snapshot CFG based on env. No-op (returns None) unless one is set.
+
+    Modes (checked in order):
+      LLK_POLLUTE_SNAPSHOT=<path>  Read every kernel-owned word (both shadows) and dump a
+                                   JSON clean reference to <path>; do NOT pollute. Run this
+                                   once on a device where the kernel passes — the snapshot is
+                                   that passing run's pre-kernel CFG, the bisection baseline.
+      LLK_POLLUTE_PLAN=<path>      Bisection trial: JSON {seed, snapshot:[[s,a,v]..],
+                                   pollute:[[s,a]..]}. Restore the snapshot, then poison only
+                                   the `pollute` subset. Lets a driver test arbitrary subsets.
+      LLK_POLLUTE_CFG=<spec>       Whole-space / group / addr32-list sweep across both shadows.
+                                   LLK_POLLUTE_SEED optional (random + logged if unset).
+
+    LLK_POLLUTE_PRESERVE="a:m,a:m" (optional, all modes): extra {addr32: mask} bits to leave
+    unpoisoned ON TOP OF the built-in over-reach set — used to mask already-found dependencies
+    (e.g. "6:0xffff" for DEST_REGW_BASE) so a sweep/bisection surfaces the NEXT gap. The plan
+    mode also accepts a "preserve":[[addr32,mask]..] field for the same purpose.
+    """
+    arch = get_chip_architecture()
+    env_preserve = parse_preserve(os.environ.get("LLK_POLLUTE_PRESERVE"))
+
+    snap_path = os.environ.get("LLK_POLLUTE_SNAPSHOT")
+    if snap_path:
+        items = thread_items(arch)
+        snap = snapshot_cfg(location, items, device_id=device_id, context=context)
+        with open(snap_path, "w") as f:
+            json.dump([[s, a, v] for (s, a), v in snap.items()], f)
+        msg = (
+            f"[CFG-POLLUTE] snapshot arch={arch.value} words={len(snap)} -> {snap_path}"
+        )
+        print(msg, file=sys.stderr, flush=True)
+        logger.warning(msg)
+        return None
+
+    plan_path = os.environ.get("LLK_POLLUTE_PLAN")
+    if plan_path:
+        with open(plan_path) as f:
+            plan = json.load(f)
+        seed = int(plan["seed"])
+        restore = {(s, a): v for s, a, v in plan.get("snapshot", [])}
+        # pollute entries: [state, addr32] or [state, addr32, mask] (bit-granular).
+        items = [tuple(e) for e in plan["pollute"]]
+        preserve = {**{a: m for a, m in plan.get("preserve", [])}, **env_preserve}
+        log = pollute_items(
+            location,
+            items,
+            seed=seed,
+            restore=restore,
+            extra_preserve=preserve,
+            device_id=device_id,
+            context=context,
+        )
+        pres = f" preserve={sorted(preserve)}" if preserve else ""
+        _log_landed(
+            log,
+            f"[CFG-POLLUTE] plan arch={arch.value} seed=0x{seed:08X} pollute={len(items)}{pres}",
+        )
+        return seed, log
+
+    spec = os.environ.get("LLK_POLLUTE_CFG")
+    if not spec:
+        return None
+
+    seed_env = os.environ.get("LLK_POLLUTE_SEED")
+    seed = int(seed_env, 0) if seed_env else random.getrandbits(32)
+    if "," in spec or spec.strip().isdigit():
+        words = [int(tok, 0) for tok in spec.split(",") if tok.strip()]
+    else:
+        words = spec
+
+    log = pollute_cfg(
+        location,
+        words,
+        seed=seed,
+        extra_preserve=env_preserve,
+        device_id=device_id,
+        context=context,
+    )
+    addr32_set = sorted({e["addr32"] for e in log})
+    pres = f" preserve={sorted(env_preserve)}" if env_preserve else ""
+    _log_landed(
+        log,
+        f"[CFG-POLLUTE] arch={arch.value} spec={spec!r} seed=0x{seed:08X} states=(0,1) words={addr32_set}{pres}",
+    )
+    return seed, log
