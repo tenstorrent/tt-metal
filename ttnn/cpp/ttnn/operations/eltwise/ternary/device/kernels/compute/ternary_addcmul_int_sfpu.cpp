@@ -16,17 +16,12 @@ void kernel_main() {
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
 
-    constexpr auto cb_in0_id = tt::CBIndex::c_0;  // input_a
-    constexpr auto cb_in1_id = tt::CBIndex::c_1;  // input_b
-    constexpr auto cb_in2_id = tt::CBIndex::c_2;  // input_c
-    constexpr auto cb_out_id = tt::CBIndex::c_3;
+    CircularBuffer cb_in0(tt::CBIndex::c_0);  // input_a
+    CircularBuffer cb_in1(tt::CBIndex::c_1);  // input_b
+    CircularBuffer cb_in2(tt::CBIndex::c_2);  // input_c
+    CircularBuffer cb_out(tt::CBIndex::c_3);
 
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_in1(cb_in1_id);
-    CircularBuffer cb_in2(cb_in2_id);
-    CircularBuffer cb_out(cb_out_id);
-
-    unary_op_init_common(cb_in0_id, cb_out_id);
+    unary_op_init_common(cb_in0.get_cb_id(), cb_out.get_cb_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         cb_in0.wait_front(num_tiles_per_cycle);
@@ -37,14 +32,14 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_init(cb_in0_id);
-        copy_tile(cb_in0_id, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+        copy_tile_init(cb_in0.get_cb_id());
+        copy_tile(cb_in0.get_cb_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(cb_in1_id);
-        copy_tile(cb_in1_id, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+        copy_tile_init(cb_in1.get_cb_id());
+        copy_tile(cb_in1.get_cb_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(cb_in2_id);
-        copy_tile(cb_in2_id, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        copy_tile_init(cb_in2.get_cb_id());
+        copy_tile(cb_in2.get_cb_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         fill_tile_init();
         fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
@@ -59,7 +54,7 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        pack_tile(0, cb_out_id);
+        pack_tile(0, cb_out.get_cb_id());
 
         tile_regs_release();
 

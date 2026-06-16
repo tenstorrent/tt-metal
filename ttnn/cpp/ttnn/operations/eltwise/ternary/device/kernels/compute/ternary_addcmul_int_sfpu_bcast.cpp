@@ -55,14 +55,14 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Load all three inputs into DST registers
-        copy_tile_init(cb_in0_id);
-        copy_tile(cb_in0_id, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+        copy_tile_init(cb_in0.get_cb_id());
+        copy_tile(cb_in0.get_cb_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(cb_in1_id);
-        copy_tile(cb_in1_id, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+        copy_tile_init(cb_in1.get_cb_id());
+        copy_tile(cb_in1.get_cb_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(cb_in2_id);
-        copy_tile(cb_in2_id, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        copy_tile_init(cb_in2.get_cb_id());
+        copy_tile(cb_in2.get_cb_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         fill_tile_init();
         fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
@@ -78,7 +78,7 @@ ALWI void process_tile(
         tile_regs_wait();
 
         // Pack the result from DST[0] to output
-        pack_tile(0, cb_out_id);
+        pack_tile(0, cb_out.get_cb_id());
 
         tile_regs_release();
 

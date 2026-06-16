@@ -53,14 +53,14 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Copy all 3 inputs to destination registers
-        copy_tile_init(predicate_cb_id);
-        copy_tile(predicate_cb_id, 0, 0);  // predicate to reg 0, 3, 6, ...
+        copy_tile_init(predicate_cb.get_cb_id());
+        copy_tile(predicate_cb.get_cb_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        copy_tile_init(true_cb_id);
-        copy_tile(true_cb_id, 0, 1);  // true to reg 1, 4, 7, ...
+        copy_tile_init(true_cb.get_cb_id());
+        copy_tile(true_cb.get_cb_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
-        copy_tile_init(false_cb_id);
-        copy_tile(false_cb_id, 0, 2);  // false to reg 2, 5, 8, ...
+        copy_tile_init(false_cb.get_cb_id());
+        copy_tile(false_cb.get_cb_id(), 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the ternary operation
         TERNARY_SFPU_OP_INIT();
@@ -70,7 +70,7 @@ ALWI void process_tile(
 
         tile_regs_wait();
 
-        pack_tile(0, cb_out_id);  // result is stored in predicate register
+        pack_tile(0, cb_out.get_cb_id());  // result is stored in predicate register
         tile_regs_release();
 
         cb_out.push_back(num_tiles_per_cycle);

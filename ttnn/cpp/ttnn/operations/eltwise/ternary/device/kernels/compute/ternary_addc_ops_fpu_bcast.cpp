@@ -51,8 +51,8 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // (input_b * input_c)
-        mul_tiles_init(cb_in1_id, cb_in2_id);
-        mul_tiles(cb_in1_id, cb_in2_id, 0, 0, 0);
+        mul_tiles_init(cb_in1.get_cb_id(), cb_in2.get_cb_id());
+        mul_tiles(cb_in1.get_cb_id(), cb_in2.get_cb_id(), 0, 0, 0);
 
         // Done with cb_in1 and cb_in2, pop them early for pipeline efficiency
 #if !BCAST_B
@@ -74,8 +74,10 @@ ALWI void process_tile(
 #endif
 
         // Step 3: Load A and add with result DST[0] + cb_in0 -> DST[0]
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in0_id);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in0_id, 0, 0);
+        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            cb_in0.get_cb_id());
+        binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            cb_in0.get_cb_id(), 0, 0);
 
         tile_regs_commit();
         tile_regs_wait();
@@ -84,7 +86,7 @@ ALWI void process_tile(
         cb_out.reserve_back(num_tiles_per_cycle);
 
         // Pack the result from DST[0] to output
-        pack_tile(0, cb_out_id);
+        pack_tile(0, cb_out.get_cb_id());
 
         tile_regs_release();
 
@@ -120,28 +122,35 @@ void kernel_main() {
         return;
     }
 
-    constexpr auto cb_in0_id = tt::CBIndex::c_0;  // input_a
-    constexpr auto cb_in1_id = tt::CBIndex::c_1;  // input_b
-    constexpr auto cb_in2_id = tt::CBIndex::c_2;  // input_c
-    constexpr auto cb_out_id = tt::CBIndex::c_3;  // output
+    CircularBuffer cb_in0(tt::CBIndex::c_0);  // input_a
+    CircularBuffer cb_in1(tt::CBIndex::c_1);  // input_b
+    CircularBuffer cb_in2(tt::CBIndex::c_2);  // input_c
+    CircularBuffer cb_out(tt::CBIndex::c_3);  // output
 
     // output = input_a + value * input_b * input_c
-    binary_op_init_common(cb_in1_id, cb_in2_id, cb_out_id);
+    binary_op_init_common(cb_in1.get_cb_id(), cb_in2.get_cb_id(), cb_out.get_cb_id());
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_in0_id, cb_in1_id, cb_in2_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle, scalar_arg);
+            cb_in0.get_cb_id(),
+            cb_in1.get_cb_id(),
+            cb_in2.get_cb_id(),
+            cb_out.get_cb_id(),
+            tile_freq,
+            tile_start,
+            num_tiles_per_cycle,
+            scalar_arg);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_in0_id,
-            cb_in1_id,
-            cb_in2_id,
-            cb_out_id,
+            cb_in0.get_cb_id(),
+            cb_in1.get_cb_id(),
+            cb_in2.get_cb_id(),
+            cb_out.get_cb_id(),
             remaining_iterations,
             tile_start,
             num_tiles_per_cycle,

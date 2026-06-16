@@ -30,9 +30,11 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t cb_post_lhs_id,
     uint32_t cb_post_rhs_id,
     uint32_t cb_out_id ISCLOSE_RT_ARG_PARAMS) {
-    PREPROCESS(LHS, cb_pre_lhs_id, cb_post_lhs_id, cb_out_id, n);
     CircularBuffer cb_post_lhs(cb_post_lhs_id);
+    CircularBuffer cb_post_rhs(cb_post_rhs_id);
     CircularBuffer cb_out(cb_out_id);
+
+    PREPROCESS(LHS, cb_pre_lhs_id, cb_post_lhs.get_cb_id(), cb_out.get_cb_id(), n);
     cb_post_lhs.wait_front(n);
 
     cb_out.reserve_back(n);
@@ -42,13 +44,13 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(cb_post_rhs_id, cb_post_lhs_id);
+    copy_tile_to_dst_init_short_with_dt(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_lhs_id, i, i * 2);
+        copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
-    copy_tile_to_dst_init_short_with_dt(cb_post_lhs_id, cb_post_rhs_id);
+    copy_tile_to_dst_init_short_with_dt(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_rhs_id, 0, i * 2 + 1);  // Always use scalar at index 0
+        copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
@@ -63,7 +65,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 
     tile_regs_wait();
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out_id);
+        pack_tile(i * 2, cb_out.get_cb_id());
     }
     tile_regs_release();
 
@@ -85,9 +87,8 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
-    constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
-    CircularBuffer cb_post_rhs(cb_post_rhs_id);
+    CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
 
     unary_op_init_common(cb_post_lhs_id, cb_out_id);
 #ifdef PACK_RELU
@@ -98,21 +99,21 @@ void kernel_main() {
     BINARY_SFPU_INIT
 #endif
 
-    PREPROCESS(RHS, cb_pre_rhs_id, cb_post_rhs_id, cb_out_id, 1);
+    PREPROCESS(RHS, cb_pre_rhs_id, cb_post_rhs.get_cb_id(), cb_out_id, 1);
     cb_post_rhs.wait_front(1);
 
     // Process full chunks
     uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
         process_sfpu_scalar_tiles(
-            num_tiles_per_cycle, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs_id, cb_out_id ISCLOSE_RT_ARG_FWD);
+            num_tiles_per_cycle, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
         process_sfpu_scalar_tiles(
-            remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs_id, cb_out_id ISCLOSE_RT_ARG_FWD);
+            remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 
     // Pop the scalar tile from RHS CB

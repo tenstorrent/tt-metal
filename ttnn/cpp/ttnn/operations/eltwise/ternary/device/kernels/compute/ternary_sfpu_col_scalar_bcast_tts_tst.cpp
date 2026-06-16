@@ -49,18 +49,18 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Copy predicate to destination register 0
-        copy_tile_init(predicate_cb_id);
-        copy_tile(predicate_cb_id, 0, 0);
+        copy_tile_init(predicate_cb.get_cb_id());
+        copy_tile(predicate_cb.get_cb_id(), 0, 0);
 
         // Fill scalar and copy tensor based on variant
         fill_tile_init();
-        copy_tile_init(tensor_cb_id);
+        copy_tile_init(tensor_cb.get_cb_id());
 
         // TTS: scalar=false (reg 2), tensor=true (reg 1)
         // TST: scalar=true (reg 1), tensor=false (reg 2)
         if constexpr (get_compile_time_arg_val(1) == 0) {  // TTS: scalar is false
             // Copy true tensor to reg 1
-            copy_tile(tensor_cb_id, 0, 1);
+            copy_tile(tensor_cb.get_cb_id(), 0, 1);
             // Fill false scalar to reg 2
 #ifdef FILL_WITH_VALUE_FLOAT
             const auto scalar_val = reinterpret_cast<const float*>(&scalar);
@@ -79,7 +79,7 @@ ALWI void process_tile(
             FILL_LLK(1, scalar);
 #endif
             // Copy false tensor to reg 2
-            copy_tile(tensor_cb_id, 0, 2);
+            copy_tile(tensor_cb.get_cb_id(), 0, 2);
         }
 
         // Perform the ternary operation
@@ -90,7 +90,7 @@ ALWI void process_tile(
 
         tile_regs_wait();
 
-        pack_tile(0, cb_out_id);  // result is stored in predicate register
+        pack_tile(0, cb_out.get_cb_id());  // result is stored in predicate register
         tile_regs_release();
 
         cb_out.push_back(num_tiles_per_cycle);
