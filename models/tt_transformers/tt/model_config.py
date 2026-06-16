@@ -24,6 +24,9 @@ from models.tt_transformers.tt.common import (
     encode_prompt_hf,
     get_base_model_name,
     get_out_subblock_w,
+    get_rope_local_base_freq,
+    get_rope_scaling,
+    get_rope_theta,
     nearest_multiple,
     num_to_core_range_set,
     rope_scaling_model_factory,
@@ -2735,9 +2738,9 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
-        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+        # RoPE params (transformers 5.x nests these under `rope_parameters`)
+        self.rope_theta = get_rope_theta(text_config)
+        self.rope_theta_local = get_rope_local_base_freq(text_config)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
             self.sliding_window is not None
@@ -2746,7 +2749,7 @@ class ModelArgs:
         ):  # For interleaved attention
             self.rope_theta_local = self.rope_theta
 
-        rope_scaling_params = text_config.get("rope_scaling", None)
+        rope_scaling_params = get_rope_scaling(text_config)
         self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
@@ -2823,7 +2826,7 @@ class ModelArgs:
         # Common vision parameters for all models
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_image_size = vision_config.get("image_size", 1540)
-        self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
+        self.vision_rope_theta = get_rope_theta(vision_config, default=10000.0)
         self.image_token_index = vision_config.get("image_token_index", 10)
 
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
