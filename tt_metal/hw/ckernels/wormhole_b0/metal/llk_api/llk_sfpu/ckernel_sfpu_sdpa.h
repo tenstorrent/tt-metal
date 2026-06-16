@@ -49,7 +49,7 @@ inline void calculate_recip_first_column() {
             sfpi::vFloat in = sfpi::dst_reg[0];
             sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
             if constexpr (!(DST_ACCUM_MODE || APPROX)) {
-                out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+                out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
             }
             sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
@@ -65,7 +65,7 @@ inline void calculate_recip_first_column() {
                 out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
             } else {
                 out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+                out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
             }
             sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
