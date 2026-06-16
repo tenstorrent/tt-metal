@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# sulphur OUTPUT.mp4 "prompt" — generate a 6s 1080p AV video with Sulphur-2-base.
+# Fully self-contained under /home/sulphur. Submits through the shared tt-device broker
+# and runs an external staleness watchdog: if the job stops emitting output it says so,
+# even when the worker's GIL is pinned or the device is wedged (an in-process timer can't).
+set -euo pipefail
+
+ROOT=/home/sulphur
+STALE=${STALE:-45}          # seconds of no output before the watchdog speaks up
+
+# Two variants, both always available:
+#   (default)  the merged Sulphur distilled checkpoint
+#   --lora     Lightricks distilled base + Sulphur style-LoRA fused (see INSTALL.md §6b)
+CKPT=$ROOT/models/sulphur_distil_bf16.safetensors
+if [[ ${1:-} == --lora ]]; then
+  CKPT=$ROOT/models/sulphur_lora_fused_distil.safetensors
+  shift
+fi
+# CKPT_PATH overrides everything — point at any LTX-2.3 distilled-bundle drop-in
+# (e.g. another fine-tune like 10Eros). Must be byte-compatible with ltx-2.3-22b-distilled.
+[[ -n ${CKPT_PATH:-} ]] && CKPT=$CKPT_PATH
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: sulphur [--lora] OUTPUT.mp4 \"prompt\"" >&2
+  exit 2
+fi
+out=$1; [[ $out = /* ]] || out=$PWD/$out
+prompt=$2
+[[ -f $CKPT ]] || { echo "sulphur: checkpoint missing: $CKPT" >&2; exit 1; }
+
+# Broker locates the job's python via these captured vars (else it mis-derives the path).
+export TT_METAL_HOME="$ROOT/tt-metal" PYTHONPATH="$ROOT/tt-metal" PYTHON_ENV_DIR="$ROOT/tt-metal/python_env"
+
+# TT_METAL_OPERATION_TIMEOUT_SECONDS bounds each device op: a stuck mesh write (e.g. a
+# sharded from_torch that never completes on a degraded device) aborts with a timeout
+# error + dispatch dump instead of an infinite silent finish_nolock wait. Generous default
+# so real ops never trip; override with OP_TIMEOUT.
+cmd=$(printf 'source python_env/bin/activate && TT_METAL_HOME=%q PYTHONPATH=%q HF_HOME=%q HF_HUB_OFFLINE=1 GEMMA_PATH=google/gemma-3-12b-it-qat-q4_0-unquantized TT_DIT_CACHE_DIR=%q LTX_CHECKPOINT=%q OUTPUT_PATH=%q PROMPT=%q NO_PROMPT=1 LTX_TRACED=0 SEED=%q HEIGHT=%q WIDTH=%q NUM_FRAMES=%q TT_METAL_OPERATION_TIMEOUT_SECONDS=%q python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k bh_4x8sp1tp0_linear -s -v --timeout=0' \
+  "$ROOT/tt-metal" "$ROOT/tt-metal" "$ROOT/hf" "$ROOT/tt_dit_cache" "$CKPT" "$out" "$prompt" \
+  "${SEED:-10}" "${HEIGHT:-1088}" "${WIDTH:-1920}" "${NUM_FRAMES:-145}" "${OP_TIMEOUT:-180}")
+
+echo "sulphur: queueing on tt-device broker -> $out"
+submit=$(tt-device-mcp run-bg -w "$ROOT/tt-metal" -t "${TIMEOUT:-5400}" "$cmd")
+printf '%s\n' "$submit"
+jobid=$(printf '%s\n' "$submit" | grep -oE 'Job [0-9-]+' | head -1 | awk '{print $2}')
+logf=$(printf '%s\n' "$submit" | grep -oE '/var/log/tt-device-broker/[^ ]+\.log' | head -1)
+[[ -n $jobid ]] || { echo "sulphur: submit failed" >&2; exit 1; }
+
+# Stream the job's output (routed through the broker, so it works for any user).
+tt-device-mcp logs -f "$jobid" 2>/dev/null &
+streampid=$!
+trap 'kill $streampid 2>/dev/null || true' EXIT INT TERM
+
+# External watchdog: poll status; warn whenever the log file has gone quiet past $STALE.
+status=""
+while true; do
+  sleep 15
+  status=$(tt-device-mcp status "$jobid" 2>/dev/null | awk -F'[[:space:]]+' '/^Status/{print $2; exit}')
+  if [[ -f $logf ]]; then
+    silent=$(( $(date +%s) - $(stat -c %Y "$logf") ))
+    [[ $silent -ge $STALE ]] && echo "⚠ sulphur: NO OUTPUT for ${silent}s — job $jobid is ${status:-running}, still watching (NOT done)"
+  fi
+  case "${status:-}" in completed|failed|timeout|killed) break;; esac
+done
+kill $streampid 2>/dev/null || true
+echo "sulphur: job $jobid finished: ${status}"
+[[ $status = completed ]] && echo "sulphur: done -> $out" || { echo "sulphur: did not complete — see $logf" >&2; exit 1; }
