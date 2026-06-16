@@ -374,10 +374,10 @@ def create_tt_model(
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
             True,  # instruct mode
-            1,  # repeat_batches
+            16,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            32,  # max_generated_tokens
+            1024,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
@@ -1019,24 +1019,14 @@ def test_demo_text(
     repeat_batch_prompts = []
     if is_seqlen_sweep:
         # Seqlen sweep: load each prompt file individually, filtering out lengths that exceed the model's max.
-        # Each filename encodes its minimum required seqlen via the label (e.g. "input_data_long_16k.json" → 16k).
-        seqlen_labels = {
-            "1k": 1 * 1024,
-            "2k": 2 * 1024,
-            "4k": 4 * 1024,
-            "8k": 8 * 1024,
-            "16k": 16 * 1024,
-            "32k": 32 * 1024,
-            "64k": 64 * 1024,
-            "128k": 128 * 1024,
-        }
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> stem "input_data_long_16k" -> "16k" -> 16384).
         filtered_files = []
         for f in sweep_prompt_files:
-            fname = Path(f).name
-            for label, min_seqlen in seqlen_labels.items():
-                if f"_long_{label}.json" in fname and min_seqlen <= max_seq_len:
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            if label.endswith("k") and label[:-1].isdigit():
+                min_seqlen = int(label[:-1]) * 1024
+                if min_seqlen <= max_seq_len:
                     filtered_files.append(f)
-                    break
         if not filtered_files:
             pytest.skip(f"No sweep prompt files fit within model's max context length ({max_seq_len})")
         repeat_batches = len(filtered_files)
@@ -1066,8 +1056,7 @@ def test_demo_text(
         prefill_profile=prefill_profile,
     )
 
-    if model_args.tokenizer is None:
-        model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 

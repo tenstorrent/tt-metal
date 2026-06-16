@@ -475,6 +475,7 @@ def test_gpt_oss_demo(
                 f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
             )
         elif max_seq_len > 64 * 1024 and not is_seqlen_sweep:
+            # Seqlen sweep uses actual_max_seq_len (capped at 64k) for execution; skip only non-sweep tests
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
     if is_blackhole() and batch_size > 1:
         pytest.skip(
@@ -626,12 +627,18 @@ def test_gpt_oss_demo(
     # Create repeat batches (like tt-transformers)
     repeat_batch_prompts = []
     if is_seqlen_sweep:
-        # Load each seqlen step from its own file; skip steps exceeding the mesh's seqlen cap
-        _SEQLEN_SWEEP_LENS = [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
-        for i, (sweep_file, step_len) in enumerate(zip(seqlen_sweep_files, _SEQLEN_SWEEP_LENS)):
+        # Load each seqlen step from its own file; skip steps exceeding the mesh's seqlen cap.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384).
+        from pathlib import Path
+
+        for sweep_file in seqlen_sweep_files:
+            label = Path(sweep_file).stem.split("_")[-1]  # e.g. "16k"
+            if not (label.endswith("k") and label[:-1].isdigit()):
+                continue
+            step_len = int(label[:-1]) * 1024
             if step_len > actual_max_seq_len:
                 logger.info(
-                    f"Seqlen sweep step {i} ({step_len // 1024}k) skipped: exceeds mesh cap of {actual_max_seq_len // 1024}k"
+                    f"Seqlen sweep step ({step_len // 1024}k) skipped: exceeds mesh cap of {actual_max_seq_len // 1024}k"
                 )
                 continue
             step_prompts, _ = load_inputs(sweep_file, num_real_users, instruct=False)

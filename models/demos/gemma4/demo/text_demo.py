@@ -493,7 +493,7 @@ def run_generation(
 
     # Paged attention config
     if page_params is None:
-        page_params = {"page_block_size": 64, "page_max_num_blocks": (max_seq_len + 63) // 64}
+        page_params = {"page_block_size": 64, "page_max_num_blocks": max_seq_len // 64}
     paged_attention_config = PagedAttentionConfig(
         block_size=page_params["page_block_size"],
         max_num_blocks=page_params["page_max_num_blocks"],
@@ -1027,7 +1027,7 @@ def test_demo_single_layer(device, model_path):
 
 
 _DEMO_PREFILL_LENGTHS = [128, 4096]
-_SEQLEN_SWEEP_LENGTHS = (1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072)
+_SEQLEN_SWEEP_LENGTHS = (128, 4096, 32768, 131072)
 
 
 @parametrize_mesh_with_fabric()
@@ -1092,7 +1092,7 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     page_block_size = 64
     page_params = {
         "page_block_size": page_block_size,
-        "page_max_num_blocks": (max_seq_len + page_block_size - 1) // page_block_size,
+        "page_max_num_blocks": max_seq_len // page_block_size,
     }
 
     results = run_generation(

@@ -997,19 +997,12 @@ def test_demo_text(
 
     repeat_batch_prompts = []
     if is_seqlen_sweep:
-        label_to_len = {
-            "1k": 1024,
-            "2k": 2048,
-            "4k": 4096,
-            "8k": 8192,
-            "16k": 16384,
-            "32k": 32768,
-            "64k": 65536,
-            "128k": 131072,
-        }
-        filtered_files = [
-            f for f in seqlen_sweep_files if label_to_len.get(Path(f).stem.split("_")[-1], 0) <= max_seq_len
-        ]
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384)
+        def _seqlen_from_file(f):
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            return int(label[:-1]) * 1024 if label.endswith("k") and label[:-1].isdigit() else 0
+
+        filtered_files = [f for f in seqlen_sweep_files if 0 < _seqlen_from_file(f) <= max_seq_len]
         if not filtered_files:
             pytest.skip(f"No sweep prompt files fit within max_seq_len={max_seq_len}")
         for f in filtered_files:
