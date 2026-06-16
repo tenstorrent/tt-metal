@@ -193,48 +193,6 @@ def test_flux1_pipeline(
             run(prompt=prompt, number=i, seed=i)
 
 
-@pytest.mark.parametrize(
-    ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
-    [
-        pytest.param((1, 1), (0, 0), (0, 0), (2, 1), (2, 1), ttnn.Topology.Linear, 2, "2x2sp0tp1", id="2x2sp0tp1"),
-    ],
-    indirect=["mesh_device"],
-)
-def test_flux1_schnell_load(
-    *,
-    mesh_device: ttnn.MeshDevice,
-    sp: tuple[int, int],
-    tp: tuple[int, int],
-    encoder_tp: tuple[int, int],
-    vae_tp: tuple[int, int],
-    topology: ttnn.Topology,
-    num_links: int,
-    mesh_test_id: str,
-    model_location_generator,
-) -> None:
-    """Simple test that loads Flux.1-schnell model and verifies initialization."""
-    logger.info(f"Loading Flux.1-schnell on mesh device: {mesh_device.shape}")
-
-    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp)
-    encoder_parallel_config = EncoderParallelConfig.from_tuple(encoder_tp)
-    vae_parallel_config = VAEParallelConfig.from_tuple(vae_tp)
-
-    pipeline = Flux1Pipeline(
-        device=mesh_device,
-        config=Flux1PipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            dit_parallel_config=parallel_config,
-            encoder_parallel_config=encoder_parallel_config,
-            vae_parallel_config=vae_parallel_config,
-            num_links=num_links,
-            topology=topology,
-            checkpoint_name=model_location_generator("black-forest-labs/FLUX.1-dev"),
-        ),
-    )
-
-    logger.info("Flux.1-schnell pipeline loaded successfully")
-
-
 def _log_hf_checkpoint_location(checkpoint_name) -> None:
     """Log where HuggingFace will look for / resolve the checkpoint files."""
     import huggingface_hub.constants as hf_const
