@@ -80,21 +80,12 @@ constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MA
 /**
  * @brief Enumeration of all currently-supported TensorShape values.
  *
- * Combines the constraints from @ref validate_tensor_shape_tile_dependent_ops_
- * (face_c_dim == 16, face_r_dim ∈ {1,2,4,8,16}, total_num_faces ∈ {1,2,4})
- * with the per-axis HW maxes (num_faces_r_dim ≤ 2, num_faces_c_dim ≤ 2),
+ * Matches validate_tensor_shape_tile_dependent_ops_ plus the per-axis HW limits,
  * yielding 20 unique shapes. Naming convention:
  *   TENSOR_SHAPE_FR{face_r_dim}_NF{num_faces_r_dim}x{num_faces_c_dim}
  *
- * The trailing comment on each constant gives the resulting tile size as
- * (rows × cols) where rows = face_r_dim * num_faces_r_dim and
- * cols = face_c_dim * num_faces_c_dim.
- *
- * These constants are only used by:
- *   - validation paths (@ref validate_tensor_shape_tile_dependent_ops_, gated by ENABLE_LLK_ASSERT)
- *   - the device-print coverage manifest in tensor_shape_coverage.h (gated by DEBUG_PRINT_ENABLED)
- * so the table is excluded from production kernel builds where neither flag is set,
- * keeping the kernel ELF free of unused constexpr storage / debug symbols.
+ * Kept out of production kernel builds unless asserts or tensor-shape DPRINT
+ * coverage need the table.
  */
 #if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
 
@@ -130,12 +121,7 @@ constexpr TensorShape TENSOR_SHAPE_FR16_NF2x2 = {16, MAX_FACE_C_DIM, 2, 2}; ///<
 
 #endif // defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
 
-/**
- * @brief Construct a TensorShape from explicit face dimensions and face-grid counts.
- *
- * Convenience builder that mirrors the aggregate constructor and is convenient at call sites
- * that derive components from runtime values.
- */
+/// Build a TensorShape from explicit face dimensions and face-grid counts.
 constexpr TensorShape make_tensor_shape(
     const std::uint8_t face_r_dim, const std::uint8_t face_c_dim, const std::uint8_t num_faces_r_dim, const std::uint8_t num_faces_c_dim)
 {
@@ -145,12 +131,10 @@ constexpr TensorShape make_tensor_shape(
 /**
  * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
  *
- * Maps the historical scalar parameters used across LLK call sites to a structured TensorShape:
+ * Maps the historical scalar parameters used across LLK call sites:
  * - num_faces == 1: 1x1 face grid (face_r_dim x 16)
  * - num_faces == 2: 1x2 face grid (face_r_dim x 32)
  * - num_faces == 4: 2x2 face grid (32x32)
- *
- * face_c_dim is always MAX_FACE_C_DIM (16) for HW.
  */
 constexpr TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
 {
@@ -158,11 +142,9 @@ constexpr TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_di
 }
 
 /**
- * @brief Validates tensor shape for operations that depend on face positioning within a tile.
- * Will start relaxing this constraint once we test larger tensor shapes.
+ * @brief Validates shapes for ops that depend on face positioning within a tile.
  *
- * @param tensor_shape: Tensor shape to validate
- * @return true if tensor shape is valid, false otherwise
+ * Keep this conservative until larger TensorShape variants have coverage.
  **/
 __attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const TensorShape &tensor_shape)
 {
@@ -173,53 +155,38 @@ __attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const T
            (face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16) && (face_c_dim == 16);
 }
 
+/**
+ * @brief Fires the LLK_ASSERT for an unobserved TensorShape coverage hole.
+ *
+ * Keeping the assert in a noinline helper gives triage scripts a real frame
+ * containing an `ASSERT(` token instead of pointing at the macro call site.
+ */
+__attribute__((noinline, cold)) inline void assert_tensor_shape_unobserved_()
+{
+    LLK_ASSERT(false, "TensorShape not observed before, please add it to the coverage table.");
+}
+
 } // namespace ckernel
 
 /**
  * @brief Emit a TensorShape via DEVICE_PRINT (see tests/DPRINT.md).
  *
- * Intended to be placed in front of validation asserts so a failing assert is
- * preceded by the offending shape.
- *
- * Auto-pulls the appropriate device-print wrapper when DEBUG_PRINT_ENABLED is
- * set so the macro "just works" from any consumer:
- *   - LLK test builds (`-DENV_LLK_INFRA`) get tests/helpers/include/dprint.h,
- *     which defines invalidate_l1_cache, gates on COVERAGE, and asserts the
- *     LLK device-print buffer layout.
- *   - Kernel builds get api/debug/dprint.h, which pulls risc_common.h and
- *     thereby provides invalidate_l1_cache.
- * Outside DEBUG_PRINT_ENABLED the macro is a no-op (and no extra header is
- * pulled in), so this stays free for production builds.
- *
- * @param fn_name  String literal naming the function emitting the print.
- * @param ts       TensorShape value (or reference) to dump.
+ * Place in front of validation asserts so the failing assert is preceded by the
+ * offending shape. Outside debug/assert builds this compiles to a no-op.
  */
 #if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
 
-// The DEVICE_PRINT call is only reachable when DEBUG_PRINT_ENABLED is set, since
-// dprint.h / api/debug/dprint.h are the only providers of that macro. Pull the
-// right header here so the print path "just works" from any consumer:
-//   - LLK test builds (`-DENV_LLK_INFRA`) get tests/helpers/include/dprint.h,
-//     which defines invalidate_l1_cache, gates on COVERAGE, and asserts the
-//     LLK device-print buffer layout.
-//   - Kernel builds get api/debug/dprint.h, which pulls risc_common.h and
-//     thereby provides invalidate_l1_cache.
-// In ENABLE_LLK_ASSERT-only builds (no DPRINT), LLK_DPRINT_TENSOR_SHAPE_EMIT_
-// expands to a no-op so the surrounding macro stays compilable while still
-// firing the LLK_ASSERT on every newly-observed shape.
+// Pull the correct DEVICE_PRINT wrapper only for DPRINT builds; assert-only builds
+// still use the dedupe path but skip the print emission.
 #ifdef DEBUG_PRINT_ENABLED
 #ifdef ENV_LLK_INFRA
 #include "dprint.h"
 #else
 #include "api/debug/dprint.h"
 #endif
-// We cannot use CTSTR(fn_name) here: CTSTR allocates a `static const char[]` into
-// `.device_print_strings`, but our call sites are inline function templates, so the
-// CTSTR lambda inherits vague (COMDAT) linkage and conflicts with the
-// `std::array<char, N>` format-string statistics already placed in the same section by
-// DEVICE_PRINT's own register_string_info() (see device_print.h:247-252). Concatenate
-// the function name into the format string literal instead so DEVICE_PRINT's allocator
-// handles placement uniformly.
+// Concatenate fn_name into the literal instead of using CTSTR(fn_name); CTSTR's
+// COMDAT string object conflicts with DEVICE_PRINT's own string-section metadata
+// at inline template call sites.
 #define LLK_DPRINT_TENSOR_SHAPE_EMIT_(fn_name, ts)                                                         \
     DEVICE_PRINT(                                                                                          \
         "[" fn_name "] tensor_shape: face_r_dim={} face_c_dim={} num_faces_r_dim={} num_faces_c_dim={}\n", \
@@ -231,17 +198,9 @@ __attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const T
 #define LLK_DPRINT_TENSOR_SHAPE_EMIT_(fn_name, ts) ((void)0)
 #endif
 
-// Per-call-site dedupe: keep a small static table of shapes already seen and emit
-// the DEVICE_PRINT (and, in ENABLE_LLK_ASSERT builds, fire LLK_ASSERT) only on the
-// first sighting of a unique TensorShape. The table lives in the inlined function
-// instance; it survives across calls within one kernel run and is rezeroed when
-// the ELF is reloaded for the next variant. This trims DPRINT volume from
-// O(tile-loop-iterations * variants) down to O(unique shapes per variant) without
-// changing the host-side parser contract.
-//
-// LLK_DPRINT_DEDUP_MAX is sized to the universe of valid TensorShapes (20, see
-// TENSOR_SHAPE_FR{1,2,4,8,16}_NF{1,2}x{1,2} above) plus a small slack to allow
-// observing out-of-bounds shapes if a regression slips through.
+// Per-call-site dedupe trims DPRINT volume to unique shapes per variant while
+// preserving the host-side parser contract. The table covers the 20 valid shapes
+// plus slack for out-of-bounds regressions.
 #define LLK_DPRINT_DEDUP_MAX 32
 #define LLK_DPRINT_TENSOR_SHAPE(fn_name, ts)                                                                                                                \
     do                                                                                                                                                      \
@@ -263,7 +222,7 @@ __attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const T
         {                                                                                                                                                   \
             _llk_dprint_seen[_llk_dprint_count++] = _llk_dprint_key;                                                                                        \
             LLK_DPRINT_TENSOR_SHAPE_EMIT_(fn_name, ts);                                                                                                     \
-            LLK_ASSERT(false, "TensorShape not observed before, please add it to the coverage table.");                                                     \
+            ::ckernel::assert_tensor_shape_unobserved_();                                                                                                   \
         }                                                                                                                                                   \
     } while (0)
 

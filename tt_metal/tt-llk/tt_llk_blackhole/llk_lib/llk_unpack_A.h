@@ -285,7 +285,7 @@ inline void _llk_unpack_A_init_(
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_A_uninit_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+inline void _llk_unpack_A_uninit_(const ckernel::TensorShape tensor_shape)
 {
     // Unpack A is used for all single unpacker operations, except bcast, since bcast HW feature is only available on unpacker B
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;

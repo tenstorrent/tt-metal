@@ -362,7 +362,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_A_uninit_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+inline void _llk_unpack_A_uninit_(const ckernel::TensorShape tensor_shape)
 {
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_AB;
     TT_SETADCXX(UNP_SEL, tensor_shape.face_r_dim * tensor_shape.face_c_dim - 1, 0x0);
