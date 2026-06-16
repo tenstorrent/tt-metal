@@ -349,28 +349,7 @@ def run_model(
     all_passed = True
     validation_results = []
 
-    # PCC thresholds. The fp8-compression path quantizes the dispatched activations to
-    # e4m3 (extra rounding error), so it carries its own separate thresholds; the
-    # non-compression path keeps the original thresholds unchanged.
-    if use_fp8_compression:
-        shared_output_pcc = 0.997
-        routed_output_pcc = 0.97
-        final_output_pcc = 0.98
-        expert_outputs_pcc = 0.95
-        combined_output_pcc = 0.95
-        reference_output_pcc = variant.moe_pcc_threshold_fp8
-        # The dispatched buffer is fp8-quantized (e4m3 round-trip), so relax the exact-match
-        # tolerance to the observed quantization granularity instead of requiring a bit match.
-        dispatched_buffer_atol = 0.5
-    else:
-        shared_output_pcc = 0.997
-        routed_output_pcc = 0.90
-        final_output_pcc = 0.96
-        expert_outputs_pcc = 0.95
-        combined_output_pcc = 0.95
-        reference_output_pcc = variant.moe_pcc_threshold
-        dispatched_buffer_atol = 1e-6
-
+    # PCC thresholds
     shared_output_pcc = 0.997
     routed_output_pcc = 0.90
     final_output_pcc = 0.96
