@@ -28,6 +28,13 @@ unset PI0_VLM_MLP_MINIMAL   # minimal_matmul regresses the TP MLP; bf8-only is t
 
 `T=models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py`
 
+**Checkpoint-free option:** `test_prefill_tp4_perf_dummy` runs TP=4/8 with random
+weights (no checkpoint) — for profiling, op shapes/timing are identical to real
+weights. It also checks PCC (torch ref on the *same* dummy weights; bar 0.97 since
+random weights stress bf8 more than trained). Honors `PI0_TP` / `PI0_VLM_CHUNK_SIZE`
+/ `PI0_SKIP_TORCH_REF`. Example: `TT_VISIBLE_DEVICES=8,9,10,11 python_env/bin/python
+-m tracy -p -v -r --op-support-count 8000 -m pytest -sq $T::test_prefill_tp4_perf_dummy`
+
 ### PCC (correctness)
 
 ```bash

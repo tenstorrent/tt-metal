@@ -217,6 +217,90 @@ def test_prefill_tp4_pcc():
     assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
 
 
+def test_prefill_tp4_perf_dummy():
+    """TP=4/8 VLM prefill with DUMMY weights — no checkpoint required.
+
+    Profiling: op shapes/dtypes (hence device-kernel timing) are identical to the
+    real-weight run; weight *values* don't affect the profile. PCC is also valid —
+    it measures TTNN-vs-torch fidelity on the SAME weights, independent of whether
+    they're real or random — so we run the torch reference on the same dummy weights
+    and check PCC too (skip via PI0_SKIP_TORCH_REF=1 for pure profiling).
+
+    Mesh tp from PI0_TP (default 4); seq from PI0_VLM_CHUNK_SIZE. Run under tracy
+    exactly like test_prefill_tp4_pcc.
+    """
+    from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
+    from models.experimental.pi0_5.tt.tt_bh_glx.stage_prefill_tp4 import StagePrefillTP4
+
+    cfg = Pi0_5ModelConfig(num_denoising_steps=5)
+    v = cfg.vlm_config
+    torch.manual_seed(SEED)
+
+    def _w(*shape):
+        return torch.randn(*shape) * 0.02
+
+    vw = {}
+    for i in range(v.depth):
+        p = f"model.layers.{i}."
+        vw[p + "self_attn.q_proj.weight"] = _w(v.num_heads * v.head_dim, v.width)
+        vw[p + "self_attn.k_proj.weight"] = _w(v.num_kv_heads * v.head_dim, v.width)
+        vw[p + "self_attn.v_proj.weight"] = _w(v.num_kv_heads * v.head_dim, v.width)
+        vw[p + "self_attn.o_proj.weight"] = _w(v.width, v.num_heads * v.head_dim)
+        vw[p + "mlp.gate_proj.weight"] = _w(v.mlp_dim, v.width)
+        vw[p + "mlp.up_proj.weight"] = _w(v.mlp_dim, v.width)
+        vw[p + "mlp.down_proj.weight"] = _w(v.width, v.mlp_dim)
+        vw[p + "input_layernorm.weight"] = _w(v.width)
+        vw[p + "post_attention_layernorm.weight"] = _w(v.width)
+    vw["model.norm.weight"] = _w(v.width)
+    weights = {"vlm_language": vw}
+
+    seq_len = int(os.environ.get("PI0_VLM_CHUNK_SIZE", "1024"))
+    prefix_embs = torch.randn(1, seq_len, v.width) * 0.5
+
+    # Torch reference on the SAME dummy weights → valid PCC. Replicate forward_vlm
+    # directly from GemmaBlock (the 18 VLM blocks + RoPE + final norm) — avoids
+    # instantiating the full backbone, which would also need vision/expert weights
+    # that forward_vlm never uses. Skip via PI0_SKIP_TORCH_REF=1 for pure profiling.
+    ref_out = None
+    if not os.environ.get("PI0_SKIP_TORCH_REF"):
+        from models.experimental.pi0_5.reference.torch_gemma import GemmaBlock, precompute_freqs_cis, rms_norm
+
+        cos, sin = precompute_freqs_cis(v.head_dim, cfg.max_seq_len, v.rope_base)
+        with torch.no_grad():
+            h = prefix_embs
+            for i in range(v.depth):
+                pfx = f"model.layers.{i}."
+                bw = {k[len(pfx) :]: val for k, val in vw.items() if k.startswith(pfx)}
+                h, _ = GemmaBlock(v, bw, i).forward(h, cos, sin, None, None, None, False)
+            ref_out = rms_norm(h, vw["model.norm.weight"], v.rms_norm_eps)
+
+    with open_prefill_tp4_mesh(tp=int(os.environ.get("PI0_TP", "4")), l1_small_size=24576) as mesh:
+        stage = StagePrefillTP4(cfg, weights, mesh)
+        prefix_ttnn = ttnn.from_torch(
+            prefix_embs,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out_ttnn, _ = stage.run(prefix_ttnn, attention_mask=None, position_ids=None)
+        ttnn.synchronize_device(mesh)
+        out = ttnn.to_torch(ttnn.get_device_tensors(out_ttnn)[0])
+
+    assert tuple(out.shape) == (1, seq_len, v.width), f"unexpected shape {tuple(out.shape)}"
+    if ref_out is None:
+        print(f"\n✅ Prefill TP4 (dummy weights) ran  (shape {tuple(out.shape)})")
+        return
+    pcc = _compute_pcc(ref_out, out)
+    print(f"\n✅ Prefill TP4 (dummy weights) PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
+    # Looser bar than the real-weight test (0.99): RANDOM weights + bf8 MLP outputs
+    # compound worse over 18 layers than trained weights (no structure for bf8 to
+    # exploit) — measured ~0.981 dummy vs 0.9939 real. This is a structural-fidelity
+    # check (TTNN matches torch); the real-weight test_prefill_tp4_pcc is the bar.
+    assert pcc >= 0.97, f"PCC {pcc:.6f} < 0.97 (dummy-weight fidelity bar)"
+
+
 @pytest.mark.skipif(
     not (CHECKPOINT_DIR / "model.safetensors").exists(),
     reason=f"checkpoint not found at {CHECKPOINT_DIR}",
