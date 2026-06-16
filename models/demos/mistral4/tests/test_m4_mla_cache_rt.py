@@ -58,7 +58,6 @@ def test_m4_mla_cache_rt(mesh_device, reset_seeds):
 
     pt = ttnn.to_torch(page_table, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:B]
     c = ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))  # device0 copy is [nb,1,32,d]
-    nb = c.shape[0]
     # user u, pos 0 -> physical block pt[u,0], row 0
     read = torch.stack([c[int(pt[u, 0]), 0, 0, :] for u in range(B)]).float()  # [B,d]
     passing, msg = comp_pcc(lat.reshape(B, d).float(), read, 0.99)

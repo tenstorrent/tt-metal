@@ -172,12 +172,15 @@ PCC ~0.9997 on some kernel compiles, ~0.02 on others) — an op-execution reliab
 upstream, not a model-integration fix (`test_m4_mla_compressed_decode` is xfail). The **expanded-kv
 decode (0.99971, fully reproducible) is the verified default**, so the model is unaffected.
 
-Remaining (large, scoped): **A10 MoE sparse dispatch** — `all_to_all_dispatch` requires a **2D mesh**
-(tokens batch-sharded on a data-parallel axis AND experts on a separate expert-parallel axis, as in
-deepseek's dispatch×TP layout). This model's flat **1×8 mesh shards all 128 experts across the 8
-devices**, leaving no free axis to batch-shard tokens for dispatch — a topology mismatch, not a bug
-(`all_to_all_dispatch` itself is proven on this mesh, `test_m4_a2a_probe`). The dense expert-parallel
-MoE is the appropriate design on 1×8; enabling sparse dispatch needs a 2×4 mesh remap (2-way DP ×
-4-way EP) + the dispatch machinery, or a non-dispatch per-token expert gather. `_forward_sparse` is
-the authored pipeline (`test_m4_moe_sparse`, xfail). **A6 paged compressed-latent KV + chunked
-prefill** for >4K contexts. A4 2CQ (low value for the tiny decode inputs). All documented, not hidden.
+**A10 MoE sparse dispatch — DONE** (on the native 1×8 mesh; no 2×4 remap needed). `forward_decode(use_sparse=True)`
+routes each token to only its top-4 experts via `ttnn.mesh_partition` (device-side replicated→sharded, the
+inverse of all_gather) → `all_to_all_dispatch` → local experts → `all_to_all_combine` → `all_gather`. The
+original blocker was thinking it needed a 2D DP×EP mesh; the real fix was that the dispatch input must be
+**token-sharded, not replicated** — `mesh_partition` provides that on 1×8 with `cluster_axis=1` spanning all
+8. Matches dense logits **PCC 0.9958**, trace-compatible (PCC 1.0), **+39.2% decode tok/s @B=32** (see perf
+table); `test_m4_moe_sparse` passes. Dense is the default; sparse is opt-in for batched serving.
+
+Remaining (optional, non-blocking): **A6 paged compressed-latent KV** (12.8× smaller cache, the
+op-nondeterministic xfail above) + **chunked prefill at 16K full-depth** (8K works; 16K OOMs at 36L — a
+paged-cache memory-management follow-up); sparse-decode generator auto-wiring; A4 2CQ (low value for the
+tiny decode inputs). All documented, not hidden.

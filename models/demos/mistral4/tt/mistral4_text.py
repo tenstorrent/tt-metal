@@ -150,12 +150,15 @@ class TtMistral4MLA(LightweightModule):
         return ttnn.linear(attn, self.w_o)
 
     def init_kv_cache(self, batch, max_seq):
-        """Allocate the standard expanded-k/v KV cache [batch, n_heads, max_seq, qk_head_dim]."""
-        z = torch.zeros(batch, self.H, max_seq, self.qk, dtype=torch.bfloat16)
-        mk = lambda: ttnn.from_torch(
-            z, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
+        """Allocate the expanded KV cache: k [batch, n_heads, max_seq, qk_head_dim], v [..., v_head_dim].
+        (qk_head_dim == v_head_dim == 128 for this checkpoint, but keep the dims distinct for correctness.)"""
+        mk = lambda d: ttnn.from_torch(
+            torch.zeros(batch, self.H, max_seq, d, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
-        return [mk(), mk()]  # [k_cache, v_cache]
+        return [mk(self.qk), mk(self.vd)]  # [k_cache (qk_head_dim), v_cache (v_head_dim)]
 
     def forward_prefill(self, x, cos, sin, kv_cache):
         """Prefill: full causal attention over the prompt AND populate the KV cache (positions
@@ -164,7 +167,7 @@ class TtMistral4MLA(LightweightModule):
         q_states, k_states, value = self._qkv(x, cos, sin)  # [B,H,S,qk]
         for b in range(B):
             kf = k_states if B == 1 else ttnn.slice(k_states, [b, 0, 0, 0], [b + 1, self.H, S, self.qk])
-            vf = value if B == 1 else ttnn.slice(value, [b, 0, 0, 0], [b + 1, self.H, S, self.qk])
+            vf = value if B == 1 else ttnn.slice(value, [b, 0, 0, 0], [b + 1, self.H, S, self.vd])
             ttnn.fill_cache(kv_cache[0], kf, b)
             ttnn.fill_cache(kv_cache[1], vf, b)
         attn = ttnn.transformer.scaled_dot_product_attention(
@@ -238,7 +241,7 @@ class TtMistral4MLA(LightweightModule):
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
             q_dec, kv_cache[0], kv_cache[1], cur_pos_tensor=pos_t, scale=self.scale
         )
-        attn = ttnn.reshape(ttnn.permute(attn, (1, 0, 2, 3)), (B, 1, self.H * self.qk))
+        attn = ttnn.reshape(ttnn.permute(attn, (1, 0, 2, 3)), (B, 1, self.H * self.vd))  # SDPA out is v_head_dim
         return ttnn.linear(attn, self.w_o)
 
     # ---- A6: compressed-latent paged MLA decode (12.8x smaller KV cache) ----
