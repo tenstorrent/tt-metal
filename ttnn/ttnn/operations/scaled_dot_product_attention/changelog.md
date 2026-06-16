@@ -85,3 +85,47 @@
 - **Tests added**: `test_scaled_dot_product_attention_precision_matrix.py`
   (dtype × fp32_acc × math_fidelity × shapes, incl. `test_exclusion_fp32_no_acc`
   and `test_bfloat8_b_supported`); `precision_matrix_results.md`.
+
+## Refinement 2 — Attention variants: causal masking + GQA / MQA
+- **Date**: 2026-06-16
+- **What was done**:
+  - `SUPPORTED["mask_mode"]` += `causal`; `SUPPORTED["kv_heads_mode"]` += `gqa`, `mqa`.
+  - `EXCLUSIONS` += `{"mask_mode": "causal", "attention_kind": "cross"}` (causal
+    generates the triangular bias assuming the diagonal aligns at tile
+    boundaries, i.e. S_q == S_kv; the `is_causal` + `attn_mask` mutual-exclusion
+    `ValueError` was already present and is retained).
+  - **Causal (kernel work)**: triangular −inf bias generated **on-device** from
+    `is_causal` — no caller tensor, no materialized full mask. The reader writes
+    the 32×32 diagonal bias tile directly into L1 (`gen_causal_mask_tile`,
+    face-aware fill, bf16, additive form 0 where col≤row else −1e30) and pushes
+    it to `cb_mask_in` only on the diagonal block (`j == qc`). The reader skips
+    fully-future KV-chunks (`kv_count = qc+1`) and passes fully-past chunks
+    (`j < qc`) unmasked. Compute decodes `qc` from a new `start_unit` runtime
+    arg, bounds its KV loop to `qc+1`, and adds the bias only at `j == qc`
+    (reusing the existing custom-mask `add` path). Reader/compute agree on
+    `kv_count` and on the single per-unit mask push (CB sync preserved).
+  - **GQA / MQA (validate-only)**: no kernel change — the reader already computes
+    `h_kv = h / group`, `group = H_q / H_kv`. Only `validate()` + `SUPPORTED`
+    needed widening.
+  - Program descriptor threads `is_causal`; creates `cb_mask_in` (bf16) for the
+    causal path; passes `(causal, Sq_t)` compute CT + `start_unit` compute RT and
+    `(causal, causal_neg_bits)` reader CT.
+- **Accuracy achieved** (bf16, randn): causal self-attention PCC ≥ 0.995
+  (golden bf16 tol (0.995, 0.05) — all pass); causal output vs the equivalent
+  additive triangular mask PCC ≥ 0.999 (1×2×128×64); GQA/MQA PCC ≥ 0.995 across
+  4:1 / 3:1 / 8:1 / 32:1 ratios + batched.
+- **Golden test progress**: the 4 `test_gqa_mqa_forward` regression cases pass;
+  causal-self + GQA/MQA matrix cells move from `xfail_expected` to
+  `supported_pass`; causal+cross cells correctly `xfail` via the EXCLUSION
+  (verified: 36 xfailed / 0 xpassed on the cross shapes; 60 passed / 0 xpassed
+  on a gqa/mqa+causal-self spread). **No `xpass_drift`, no new failures.** The
+  full 2767-cell suite was not run to completion in one sitting (runtime), but
+  every targeted causal / gqa / mqa / cross subset is green.
+- **Issues encountered**: None. Causal worked on the first device run (the cheap
+  isolated test passed immediately); no sub-agent escalation needed.
+- **Tests added**: `tests/.../test_scaled_dot_product_attention_variants.py`
+  — `test_causal_self_attention` (7 shapes × 2 scale modes),
+  `test_causal_matches_additive_triangular`, `test_gqa_mqa_self_attention`
+  (6 ratios), `test_gqa_with_custom_mask`, `test_causal_cross_rejected`
+  (EXCLUSION → NotImplementedError), `test_causal_and_mask_mutually_exclusive`
+  (ValueError). 24 cases, all pass (--dev + non-dev).

@@ -10,3 +10,5 @@
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find on-device causal mask generation","ts":"2026-06-16T19:20:01+00:00"}
 {"event":"test_run","status":"pass","tests":"variants gqa/mqa + validate contract (9 passed)","detail":"GQA/MQA validate-only path + causal+cross EXCLUSION + is_causal/attn_mask ValueError all pass","ts":"2026-06-16T19:26:49+00:00"}
 {"event":"test_run","status":"pass","tests":"causal self-attention (15 passed --dev)","detail":"on-device triangular bias; causal==additive-triangular PCC>=0.999; shapes single/multi-tile/multi-head/multi-batch x auto/explicit scale","ts":"2026-06-16T19:27:24+00:00"}
+{"event":"test_run","status":"pass","tests":"golden test_gqa_mqa_forward (4 passed)","detail":"the 4 cases R2 explicitly unblocks now pass","ts":"2026-06-16T19:29:14+00:00"}
+{"event":"test_run","status":"pass","tests":"golden causal+gqa/mqa spread","detail":"causal+cross 36 xfailed (EXCLUSION, 0 xpass); gqa/mqa+causal-self 60 passed, 12 xfailed (fp32+acc=False EXCLUSION); no xpass_drift, no failures","ts":"2026-06-16T19:35:09+00:00"}

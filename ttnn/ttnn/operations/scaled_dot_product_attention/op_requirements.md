@@ -90,7 +90,7 @@ that is the seam to open.
 long-context bf16 cells) passes, and `SUPPORTED["dtype"]` contains
 `float32` + `bfloat8_b` with the float32+acc=False EXCLUSION armed.
 
-### [ ] Refinement 2 — Attention variants: causal masking + GQA / MQA
+### [x] Refinement 2 — Attention variants: causal masking + GQA / MQA
 
 **Goal**: two attention-semantic additions that share the validate / reader
 surface:
