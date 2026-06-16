@@ -1026,8 +1026,10 @@ const MeshDeviceView& MeshDeviceImpl::get_view() const {
 }
 
 int MeshDeviceImpl::id() const { return mesh_id_; }
-// For a mesh, build id is the same as the device id for the reference device
-ChipId MeshDeviceImpl::build_id() const { return reference_device()->id(); }
+// Build id keys BuildEnvManager's per-device build env (context-encoded, see
+// encode_build_env_id), so delegate to the reference device's build_id() rather
+// than its raw id() — otherwise a non-default-context mesh would miss its entry.
+ChipId MeshDeviceImpl::build_id() const { return reference_device()->build_id(); }
 
 bool MeshDeviceImpl::is_parent_mesh() const { return parent_mesh_ == nullptr; }
 

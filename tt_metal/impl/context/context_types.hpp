@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <tt_stl/strong_type.hpp>
 #include <tt-metalium/device.hpp>
@@ -28,6 +29,11 @@ constexpr size_t MAX_CONTEXT_COUNT = 32;
 // mock device in a non-default context clobber a real device's build env for the same
 // ChipId, which can hang on Blackhole. Backward compatible: ctx 0 -> chip. See #38445.
 inline int encode_build_env_id(int context_id, int chip_id) {
+    // 16 bits each: context in the high half, chip in the low half. Far more than
+    // enough today (context < MAX_CONTEXT_COUNT, chips < a few hundred); assert so a
+    // future overflow surfaces instead of silently aliasing build envs.
+    assert(context_id >= 0 && context_id < static_cast<int>(MAX_CONTEXT_COUNT));
+    assert(chip_id >= 0 && chip_id <= 0xFFFF);
     return (context_id << 16) | (chip_id & 0xFFFF);
 }
 
