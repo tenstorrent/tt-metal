@@ -152,6 +152,15 @@ _MESH_SHAPES: dict[str, tuple[int, int]] = {
 }
 
 
+def _stream_choice_is_token_event(choice: Any) -> bool:
+    """Return true for streamed completion chunks that represent output tokens."""
+    text = getattr(choice, "text", None)
+    finish_reason = getattr(choice, "finish_reason", None)
+    if text is None:
+        return False
+    return text != "" or finish_reason is None
+
+
 def _find_plugin_tests_dir() -> Path:
     """Locate `vllm-tt-plugin/tests/tt/` from the installed editable package."""
     spec = importlib.util.find_spec("vllm_tt_plugin")
@@ -452,9 +461,9 @@ def _run_serving_benchmark(
     `ignore_eos=True` so every request emits exactly `output_len` tokens
     regardless of natural EOS, which keeps the workload deterministic.
 
-    Reports TTFT P50/P99, ITL P50/P99, aggregate output throughput, and the
-    mean per-user decode throughput (t/s/u). Saves the full summary to
-    `vllm_benchmark.json`.
+    Reports TTFT P50/P99, ITL P50/P99, aggregate output throughput, mean
+    per-user decode throughput, and ITL P50-implied decode throughput. Saves
+    the full summary to `vllm_benchmark.json`.
     """
     import asyncio
     import random
@@ -478,6 +487,8 @@ def _run_serving_benchmark(
         start = time.perf_counter()
         first: Optional[float] = None
         token_times: List[float] = []
+        empty_text_token_events = 0
+        non_token_stream_events = 0
         stream = await client.completions.create(
             model=hf_model,
             prompt=token_ids,
@@ -487,12 +498,19 @@ def _run_serving_benchmark(
             extra_body={"ignore_eos": True},
         )
         async for chunk in stream:
-            if not chunk.choices or not chunk.choices[0].text:
+            if not chunk.choices:
+                non_token_stream_events += 1
+                continue
+            choice = chunk.choices[0]
+            if not _stream_choice_is_token_event(choice):
+                non_token_stream_events += 1
                 continue
             now = time.perf_counter()
             if first is None:
                 first = now
             token_times.append(now)
+            if getattr(choice, "text", None) == "":
+                empty_text_token_events += 1
         end = time.perf_counter()
         return {
             "start": start,
@@ -500,6 +518,8 @@ def _run_serving_benchmark(
             "ttft_s": (first - start) if first is not None else None,
             "total_s": end - start,
             "token_count": len(token_times),
+            "empty_text_token_events": empty_text_token_events,
+            "non_token_stream_events": non_token_stream_events,
             "itl_s": [token_times[i] - token_times[i - 1] for i in range(1, len(token_times))],
         }
 
@@ -528,6 +548,11 @@ def _run_serving_benchmark(
     ttfts: List[float] = [r["ttft_s"] for r in results if r["ttft_s"] is not None]
     itls: List[float] = [t for r in results for t in r["itl_s"]]
     total_output_tokens = sum(r["token_count"] for r in results)
+    requested_output_tokens = output_len * len(results)
+    empty_text_token_events = sum(r["empty_text_token_events"] for r in results)
+    non_token_stream_events = sum(r["non_token_stream_events"] for r in results)
+    itl_p50_s = _pct(itls, 0.5)
+    itl_mean_s = (sum(itls) / len(itls)) if itls else None
 
     per_request_tsu: List[float] = []
     for r in results:
@@ -547,16 +572,22 @@ def _run_serving_benchmark(
         "elapsed_s": elapsed,
         "completed_requests": len(results),
         "total_output_tokens": total_output_tokens,
+        "requested_output_tokens": requested_output_tokens,
+        "missing_output_tokens": max(0, requested_output_tokens - total_output_tokens),
+        "empty_text_token_events": empty_text_token_events,
+        "non_token_stream_events": non_token_stream_events,
         "ttft_ms": {
             "p50": _ms(_pct(ttfts, 0.5)),
             "p99": _ms(_pct(ttfts, 0.99)),
             "mean": _ms(sum(ttfts) / len(ttfts)) if ttfts else None,
         },
         "itl_ms": {
-            "p50": _ms(_pct(itls, 0.5)),
+            "p50": _ms(itl_p50_s),
             "p99": _ms(_pct(itls, 0.99)),
-            "mean": _ms(sum(itls) / len(itls)) if itls else None,
+            "mean": _ms(itl_mean_s),
         },
+        "itl_p50_decode_tps": (1.0 / itl_p50_s) if itl_p50_s else None,
+        "itl_mean_decode_tps": (1.0 / itl_mean_s) if itl_mean_s else None,
         "output_throughput_tok_per_s": (total_output_tokens / elapsed) if elapsed > 0 else None,
         "request_throughput_per_s": (len(results) / elapsed) if elapsed > 0 else None,
         "mean_per_request_decode_tps": (sum(per_request_tsu) / len(per_request_tsu)) if per_request_tsu else None,
@@ -572,7 +603,13 @@ def _run_serving_benchmark(
     print(f"  Requests : {len(results)} completed in {elapsed:.1f}s")
     print(f"  TTFT     : P50={_fmt(summary['ttft_ms']['p50'], 'ms')}  P99={_fmt(summary['ttft_ms']['p99'], 'ms')}")
     print(f"  ITL      : P50={_fmt(summary['itl_ms']['p50'], 'ms')}  P99={_fmt(summary['itl_ms']['p99'], 'ms')}")
+    print(f"  ITL P50  : {_fmt(summary['itl_p50_decode_tps'], ' t/s/u')} implied")
     print(f"  Output   : {_fmt(summary['output_throughput_tok_per_s'], ' tok/s')} aggregate")
+    print(
+        "  Tokens   : "
+        f"{total_output_tokens}/{requested_output_tokens} events"
+        f" ({empty_text_token_events} empty-text token events, {non_token_stream_events} non-token stream events)"
+    )
     print(f"  Per-user : {_fmt(summary['mean_per_request_decode_tps'], ' t/s/u')} (mean over requests)")
     print(f"  Saved to {output_file}")
 
