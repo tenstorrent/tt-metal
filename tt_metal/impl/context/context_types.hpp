@@ -23,6 +23,14 @@ constexpr ContextId DEFAULT_CONTEXT_ID = ContextId{0};
 // Limit the number of context IDs so they can be stored in an array
 constexpr size_t MAX_CONTEXT_COUNT = 32;
 
+// Build-env identity, unique per (context, chip). BuildEnvManager keys its per-device
+// build envs by this value (via IDevice::build_id()). Keying by ChipId alone lets a
+// mock device in a non-default context clobber a real device's build env for the same
+// ChipId, which can hang on Blackhole. Backward compatible: ctx 0 -> chip. See #38445.
+inline int encode_build_env_id(int context_id, int chip_id) {
+    return (context_id << 16) | (chip_id & 0xFFFF);
+}
+
 // Helper function to extract the context ID from the public API device type by casting it to the impl type.
 // This function may perform a dynamic cast on the IDevice so should not be used in performance critical paths.
 // TODO: Remove these extract_context_id functions once all child objects have MetalEnv and MetalContext references

@@ -207,7 +207,10 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id) {
     const std::lock_guard<std::mutex> lock(this->lock);
     auto dev_config = create_jit_device_config(device_id, num_hw_cqs, context_id);
-    add_build_env_locked(device_id, dev_config, MetalContext::instance(context_id).rtoptions());
+    // Key by (context, chip) so a mock device in a non-default context can't clobber a
+    // real device's build env for the same ChipId. Raw device_id above is the HW config.
+    add_build_env_locked(
+        encode_build_env_id(context_id.get(), device_id), dev_config, MetalContext::instance(context_id).rtoptions());
 }
 
 void BuildEnvManager::add_build_env(

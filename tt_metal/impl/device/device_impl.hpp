@@ -67,8 +67,10 @@ public:
     tt::ARCH arch() const override;
 
     ChipId id() const override { return id_; }
-    // For a single device, build id is the same as device id
-    ChipId build_id() const override { return id_; }
+    // Build id keys BuildEnvManager's per-device build env; unique per (context, chip)
+    // so a mock device in another context can't clobber this device's build env (see
+    // encode_build_env_id). Default context (0) -> id_, unchanged.
+    ChipId build_id() const override { return encode_build_env_id(get_context_id().get(), id_); }
 
     uint8_t num_hw_cqs() const override { return num_hw_cqs_; }
 

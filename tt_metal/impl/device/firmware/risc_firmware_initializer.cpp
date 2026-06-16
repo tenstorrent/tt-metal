@@ -182,7 +182,9 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                                        (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
                                         !mock_firmware_sources_available_for(cluster_.arch()));
             if (!skip_fw_build) {
-                BuildEnvManager::get_instance().build_firmware(device_id);
+                // Match the (context, chip) build-env id add_build_env keyed by above.
+                BuildEnvManager::get_instance().build_firmware(
+                    encode_build_env_id(descriptor_->metal_context().get_context_id().get(), device_id));
             }
             if (!cluster_.is_mock_or_emulated()) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
