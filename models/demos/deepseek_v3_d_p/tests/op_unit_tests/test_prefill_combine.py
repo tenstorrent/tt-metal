@@ -75,6 +75,8 @@ def test_ttnn_combine(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
     num_devices = mesh_device.get_num_devices()
@@ -101,6 +103,10 @@ def test_ttnn_combine(
     # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
     if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
         pytest.skip("fp8 combine output requires Blackhole hardware")
+
+    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
+    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("ROW_MAJOR perf coverage does not run in CI")
 
     torch.manual_seed(42)
 

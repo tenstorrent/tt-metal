@@ -125,6 +125,8 @@ def test_ttnn_dispatch(
     use_fp8_output,
     verbose,
     run_pcc_check,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Test TTNN dispatch operation against PyTorch reference."""
     num_devices = mesh_device.get_num_devices()
@@ -142,6 +144,10 @@ def test_ttnn_dispatch(
 
     if use_fp8_output and input_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("fp8 output not supported with row_major input layout")
+
+    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
+    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("ROW_MAJOR perf coverage does not run in CI")
 
     torch.manual_seed(42)
 

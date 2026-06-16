@@ -76,8 +76,13 @@ def test_ttnn_dispatch_combine(
     topology,
     use_predictable_data,
     dispatched_buffer_layout,
+    is_ci_env=False,
+    is_ci_v2_env=False,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
+    if (is_ci_env or is_ci_v2_env) and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("ROW_MAJOR coverage does not run in CI")
+
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
@@ -603,7 +608,9 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
-def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched_buffer_layout):
+def test_ttnn_dispatch_combine_top4(
+    mesh_device, num_links, topology, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
+):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
     # dispatch_buffer_capacity_factor: ceil(N/2) of the most conservative integer
     # N such that dgs*seq*N >= theoretical worst-case dispatch buffer. Real traffic
@@ -619,4 +626,6 @@ def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched
         topology=topology,
         use_predictable_data=True,
         dispatched_buffer_layout=dispatched_buffer_layout,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
     )

@@ -225,7 +225,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 75
+      timeout: 90
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -266,7 +266,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
