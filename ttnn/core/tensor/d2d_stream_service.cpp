@@ -694,7 +694,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // Both kernels run on the single service core, RISCV_0. CB indices are private
 // to each program so the sender (scratch + headers) and receiver (headers only)
 // don't need to agree.
-constexpr tt::CBIndex kScratchCbIndex = tt::CBIndex::c_0;
+[[maybe_unused]] constexpr tt::CBIndex kScratchCbIndex = tt::CBIndex::c_0;
 constexpr tt::CBIndex kPacketHeaderCbIndex = tt::CBIndex::c_1;
 
 // Sender read-pipeline trid-ring depth (power of 2): each lane stages this many tensor
