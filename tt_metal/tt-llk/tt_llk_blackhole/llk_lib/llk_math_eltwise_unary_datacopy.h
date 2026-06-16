@@ -43,6 +43,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
@@ -200,6 +201,9 @@ inline void _llk_math_eltwise_unary_datacopy_(
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
             TTI_CLEARDVALID(0b10, 0);
         }
+        // The 32b path manipulated the flag directly above (tt-llk#449 Fp32_enabled dance); invalidate the
+        // tracked state so the next op re-applies the Src zero-substitution flag.
+        math::_invalidate_src_zero_flag_state_();
     }
     else
     {
