@@ -49,7 +49,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
-#include "api/debug/device_print.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -119,6 +118,23 @@ void kernel_main() {
     CircularBuffer cb_qk_buf(cb_qk);
     CircularBuffer cb_p_buf(cb_p);
     CircularBuffer cb_pv_buf(cb_pv);
+    // Interm placeholder for the QK^T matmul. num_k_blocks == 1, so matmul_block
+    // never reads/writes this buffer for K-spill — but with the default
+    // reconfig=INPUT_AND_OUTPUT it DOES call pack_reconfig_data_format(interm) in
+    // the pre-loop setup, configuring the packer for interm's data format. The
+    // helper only re-points the packer to the true output format on the last
+    // K-block when (packer_l1_acc || fp32_dest_acc_en); with bf16 DEST + no L1
+    // acc that re-point is skipped, so whatever format the interm placeholder
+    // carries is the format the QK result is PACKED into cb_qk with. cb_qk is
+    // bf16 (accum_fmt), so the placeholder MUST be a bf16 CB. Passing cb_q_in
+    // (the in0 buffer, as the canonical "unused interm" idiom suggests) is bf16
+    // for bf16 inputs but bf8b for bf8b inputs — in the bf8b case the packer
+    // stays in bf8b and cb_qk's tiles are written in the wrong (block-float)
+    // encoding, which the downstream score ops read back as ~1e-37 garbage
+    // (PCC collapse). cb_o_tmp is bf16 (accum_fmt) and not live during the QK
+    // matmul, so it is the correct format-matched placeholder. (The PV matmul
+    // already passes cb_p, which is bf16, so it was never affected.)
+    CircularBuffer cb_o_tmp_buf(cb_o_tmp);
 
     using ckl::BinaryFpu;
     using ckl::BinaryFpuOp;
@@ -304,13 +320,7 @@ void kernel_main() {
                 ckl::matmul_config::InitMode::Short,
                 ckl::InputPolicy::WaitAndRetainOnLastBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
-                cb_q_buf, cb_k_buf, cb_qk_buf, cb_q_buf /*interm placeholder (num_k_blocks==1)*/, qk_shape);
-
-            if (qi == 0 && j == 0) {
-                cb_wait_front(cb_qk, 1);
-                SliceRange r0 = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-                DEVICE_PRINT("DBG qi0 j0 QK post-mm row0: {}\n", TSLICE(cb_qk, 0, r0));
-            }
+                cb_q_buf, cb_k_buf, cb_qk_buf, cb_o_tmp_buf /*bf16 interm placeholder — see decl*/, qk_shape);
 
             // ---- D: S *= scale  (scalar broadcast, in place) ----
             ckl::mul<
@@ -365,12 +375,6 @@ void kernel_main() {
                         InputLifecycle::Streaming,
                         InputLifecycle::HeldStream>(K_CHUNK_T);
                 }
-            }
-
-            if (qi == 0 && j == 0) {
-                cb_wait_front(cb_qk, 1);
-                SliceRange r0 = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-                DEVICE_PRINT("DBG qi0 j0 QK postmask row0: {}\n", TSLICE(cb_qk, 0, r0));
             }
 
             // ---- G: m_blk = rowmax(S)  (cb_qk retained for the P subtract) ----
@@ -443,12 +447,6 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
                 cb_p_buf, cb_v_buf, cb_pv_buf, cb_p_buf /*interm placeholder*/, pv_shape);
-
-            if (qi == 1) {
-                cb_wait_front(cb_pv, D_t);
-                SliceRange r1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-                DEVICE_PRINT("DBG qi1 j={} PV row1: {}\n", (uint32_t)j, TSLICE(cb_pv, 0, r1));
-            }
 
             if (first) {
                 ckl::copy<cb_pv, cb_o_acc>(D_t);

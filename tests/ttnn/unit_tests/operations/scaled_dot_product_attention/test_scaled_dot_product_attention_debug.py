@@ -50,6 +50,7 @@ the binding online-softmax topology.
 
 import math
 
+import pytest
 import torch
 
 
@@ -130,3 +131,82 @@ def test_error_source_isolation_no_device():
     assert rms_tf32 < 0.001, f"TF32-matmul rms unexpectedly large: {rms_tf32}"
     # 3. A ~0.3% per-exp relative error reproduces the device-scale miss.
     assert rms_exp > 0.015, f"exp-error model did not reproduce the miss: {rms_exp}"
+
+
+# ============================================================================
+# bf8b + fp32_dest_acc_en=False (16-bit DEST) numerical-mismatch investigation
+# ----------------------------------------------------------------------------
+# Symptom: bf8b inputs at fp32_dest_acc_en=False -> PCC ~0.05 (garbage); bf16 at
+# the same config worked fine.
+#
+# Root cause (FIXED): the QK^T matmul in the online-softmax compute kernel passed
+# cb_q_in (bf8b for bf8b inputs) as the matmul_block interm placeholder.
+# matmul_block with the default reconfig=INPUT_AND_OUTPUT issues
+# pack_reconfig_data_format(interm) before the K-loop, configuring the PACKER for
+# the interm CB's data format. The helper only RE-points the packer to the true
+# output format on the last K-block when (packer_l1_acc || fp32_dest_acc_en) — so
+# with bf16 DEST + no L1 acc that re-point is skipped and the QK result is packed
+# into cb_qk (bf16) using bf8b block-float encoding. The downstream score path
+# reads those bytes back as ~1e-37 denormals -> PCC collapse.
+#
+# Localization (DEVICE_PRINT, TSLICE on cb_qk, fa_rand seed 1234, B1H1S1024D128):
+#   true bf8b QK post-matmul row0 = -7.7e-37, -3.2e-36, ...  (garbage)
+#   with bf16 interm placeholder  = 1.3125, ... (matches torch expected 1.3377)
+#
+# Fix: pass cb_o_tmp (bf16 accum_fmt, not live during the QK matmul) as the QK
+# interm placeholder so the packer DF matches cb_qk. (PV already passed cb_p,
+# which is bf16, so it was never affected.)
+#
+# NOTE: the op-level precision_matrix test currently SKIPS bf8b+fp16-DEST as
+# "known-bad" (test_..._precision_matrix.py:118). With this fix that skip can be
+# lifted — left to the implementer (the debugger does not edit acceptance tests).
+# ============================================================================
+
+
+def _fa_rand(*shape):
+    n1 = torch.randn(shape)
+    n2 = torch.randn(shape) * 10
+    b = torch.bernoulli(torch.full(shape, 0.001))
+    return n1 + n2 * b
+
+
+def _pcc(a, b):
+    x = a.flatten().float()
+    y = b.flatten().float()
+    x = x - x.mean()
+    y = y - y.mean()
+    return float((x * y).sum() / (x.norm() * y.norm() + 1e-12))
+
+
+@pytest.mark.parametrize("dtype_name", ["bfloat8_b", "bfloat16"])
+def test_sdpa_fp16_dest_acc_off(device, dtype_name):
+    """bf8b and bf16 must both pass at fp32_dest_acc_en=False (16-bit DEST).
+
+    bf8b here was the original bug (PCC ~0.05 before the QK interm-placeholder
+    format fix). bf16 is the control that always worked.
+    """
+    import ttnn
+    from ttnn.operations.scaled_dot_product_attention import scaled_dot_product_attention
+
+    dtype = {"bfloat8_b": ttnn.bfloat8_b, "bfloat16": ttnn.bfloat16}[dtype_name]
+    torch.manual_seed(1234)
+    b, h, s, d = 1, 1, 1024, 128
+    q = _fa_rand(b, h, s, d)
+    k = _fa_rand(b, h, s, d)
+    v = _fa_rand(b, h, s, d)
+    ref = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), is_causal=True)
+
+    ckc = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    tq = ttnn.from_torch(q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tk = ttnn.from_torch(k, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tv = ttnn.from_torch(v, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    out = scaled_dot_product_attention(tq, tk, tv, is_causal=True, compute_kernel_config=ckc)
+    o = ttnn.to_torch(out).float()
+
+    pcc = _pcc(o, ref)
+    assert pcc > 0.99, f"{dtype_name} fp16-DEST PCC={pcc:.5f} (expected >0.99)"
