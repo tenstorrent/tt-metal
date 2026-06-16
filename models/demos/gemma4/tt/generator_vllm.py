@@ -119,6 +119,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         use_batched_prefill=False,
         user_id=None,
         padded_batch_size=None,
+        use_full_prompt_len=False,
     ):
         """Override the shared Generator helper to size/slice the
         per-user page table to the *smallest* effective block_size in
@@ -154,6 +155,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
                 use_batched_prefill=use_batched_prefill,
                 user_id=user_id,
                 padded_batch_size=padded_batch_size,
+                use_full_prompt_len=use_full_prompt_len,
             )
 
         # Per-user (non-batched) path: replicate the base behavior but
@@ -171,7 +173,14 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         max_head_dim = max(head_dims)
         effective_block_size = cache_block_size * cache_head_dim // max_head_dim
 
-        target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
+        # Mirror the base Generator semantics: when ``use_full_prompt_len`` is
+        # set (vLLM warmup runs prefill kernels on the padded prompt length, e.g.
+        # a 32-token prompt becomes a 128-token kernel), size the page table to
+        # the full ``prefill_len`` so it exposes blocks for the padded length.
+        if use_full_prompt_len:
+            target_prefill_len = prefill_len
+        else:
+            target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
         num_blocks = num_blocks_in_seq(target_prefill_len, effective_block_size)
         # Bounded sliding-window cache: ``paged_fill_cache`` /
         # ``paged_update_cache`` with ``cache_position_modulo`` set require
