@@ -1,5 +1,38 @@
 ---
-description: 'PR review rules for GitHub Actions workflows and CI infrastructure'
+description: 'PR review for GitHub Actions workflows and CI infrastructure — security, runner hygiene, time budget, and pipeline structure'
 applyTo: '.github/workflows/**,.github/actions/**'
 excludeAgent: "cloud-agent"
 ---
+
+# CI/CD Workflow Review
+
+## 🔴 CRITICAL
+
+- **Mutable action ref**: every `uses:` must be pinned to a full commit SHA, not a tag (`@v4`) or branch (`@main`). Tags are mutable and can be silently redirected to malicious commits. Add the version as a comment: `uses: actions/checkout@abc123 # v4.3.1`
+- **Secret in env or run**: secrets must be referenced via `${{ secrets.NAME }}` only. Never echo, print, or interpolate a secret into a log line — even masked secrets can leak via timing.
+- **`GITHUB_TOKEN` over-permission**: default `GITHUB_TOKEN` permissions are broad. Set `permissions:` at workflow level to `contents: read` and grant write only where explicitly needed.
+- **Self-hosted runner label changes**: modifying `runs-on:` labels for Tenstorrent hardware runners requires infra team sign-off. Wrong labels route jobs to wrong hardware silently.
+
+## 🟡 IMPORTANT
+
+- **`time_budget.yaml` changes**: any edit to `.github/time_budget.yaml` must include a justification comment explaining the new budget and which jobs drove the change.
+- **Profiler workflow changes**: `.github/workflows/*profiler*` require co-review from profiler CODEOWNERS.
+- **Sweep workflow changes**: `.github/workflows/ttnn-run-sweeps*` require co-review from sweep CODEOWNERS.
+- **`fetch-depth`**: use `fetch-depth: 1` unless full history is explicitly needed (e.g., release tagging, `git describe`). Large repo + full history = slow CI.
+- **Caching**: if a workflow installs Python or C++ dependencies, it should cache them with a key based on `hashFiles('**/requirements*.txt')` or `hashFiles('**/CMakeLists.txt')`.
+- **Concurrency**: workflows that run on every push to `main` should set `concurrency:` to cancel in-progress runs when a new commit arrives.
+
+## 🟢 SUGGESTION
+
+- Reusable workflows (`workflow_call`) for patterns shared across 3+ workflow files — reduces duplication and makes updates atomic.
+- Step names should be descriptive enough to identify failures in the GitHub UI without opening logs.
+- `timeout-minutes` on any job that could hang (hardware-in-loop tests, long compile steps).
+
+## Review Checklist
+
+- [ ] All `uses:` pinned to full SHA with version comment
+- [ ] No secrets echoed or interpolated into run commands
+- [ ] `permissions:` block present and minimal
+- [ ] Self-hosted runner label changes reviewed by infra
+- [ ] `time_budget.yaml` changes justified
+- [ ] `fetch-depth: 1` unless full history required
