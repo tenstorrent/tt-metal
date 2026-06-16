@@ -40,6 +40,7 @@ from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_core_grid_k_n
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
+from models.common.modules.sampling.sampling_1d import Sampling1D
 from models.common.modules.tt_ccl import default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
@@ -590,13 +591,35 @@ class Qwen3_32B(LightweightModule):
         self.norm = norm
         self.lm_head = lm_head
         self.mesh_device = mesh_device
-        self.sampling = None
         self.model_args: Qwen3_32BExecutorRuntimeConfig | None = None
 
         self.vocab_size = cfg.vocab_size
         self.n_layers = cfg.num_hidden_layers
         self.num_devices = mesh_device.get_num_devices()
         self.tt_ccl = get_tt_ccl(mesh_device) if self.num_devices > 1 else None
+
+        # The model owns its sampler (replacing the self.sampling = None placeholder); callers pick
+        # behavior per request via sampling_params. Buffers are lazy (nothing materializes until the
+        # first on-device sampled decode), so this is harmless when sampling_params is None (the
+        # host-argmax path, which stays the demo default). Qwen3-32B is T3K-only (num_devices == 8),
+        # where the vocab shards 8-ways and on-device top-k is the cheap path.
+        self.supports_on_device_sampling = self.num_devices >= 1
+        self.sampling = (
+            Sampling1D(
+                vocab_size=self.vocab_size,
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+                max_batch_size=_nearest_32(cfg.max_batch_size),
+                # Clone TTTv1's decision: allow_force_argmax=False for all non-Galaxy meshes (only
+                # Llama-3.1-8B on TG flips it True). The perf recipe (temp=0, top_k=32, top_p=0.08)
+                # routes through the cheap top-k op path — per-device ttnn.topk -> all-gather of the
+                # [*,32] tuples -> ttnn.sampling — never the full-vocab argmax all-gather.
+                allow_force_argmax=False,
+                pad_to_power_of_2=True,
+            )
+            if self.supports_on_device_sampling
+            else None
+        )
 
     @property
     def n_kv_heads(self) -> int:
