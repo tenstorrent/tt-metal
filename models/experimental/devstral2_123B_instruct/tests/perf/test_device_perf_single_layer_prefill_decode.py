@@ -8,8 +8,8 @@ Runs the 1-layer prefill+decode profile workload under Tracy (``run_device_perf`
 writes ``device_perf_*.csv`` plus a partial benchmark JSON via ``prep_device_perf_report``.
 No golden perf assertion — this test is for collecting / inspecting reports.
 
-The profile workload matches the decode PCC test setup in
-``test_ministral3_single_layer.py`` (partial Hub weights, prefill 128, decode at 128).
+The profile workload matches ``tests/perf/test_profile_single_layer_prefill_decode.py``
+(partial Hub weights, prefill 128, decode at 128).
 Each measured iteration profiles **both** prefill and decode inside the signpost window.
 
 Run::
@@ -20,10 +20,6 @@ Run::
 After the run, analyze ``generated/profiler/devstral2_123B_instruct_L1_prefill_decode/reports/*/ops_perf_results_*.csv``::
 
     tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
-
-Equivalent to the PCC decode test path::
-
-    test_ministral3_model_pcc_devstral2_123B_instruct_partial_weights_one_layer_decode
 """
 
 from __future__ import annotations

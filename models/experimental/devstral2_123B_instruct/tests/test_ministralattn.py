@@ -4,8 +4,7 @@
 
 """PCC: TT ``TtAttention`` vs HF ``Ministral3Attention`` on Devstral-2-123B layer-0 weights.
 
-Covers prefill (full sequence, KV cache populated). Decode is exercised by the decoder-layer
-and model tests.
+Covers prefill (full sequence, KV cache populated). Decode is exercised by ``test_decoder.py``.
 """
 
 from __future__ import annotations

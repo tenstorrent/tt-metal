@@ -283,6 +283,16 @@ def load_ministral3_model_weights(
         load_ministral3_decoder_layer_weights(layer, state_dict, layer_idx)
 
 
+def decode_tt_to_torch(tt_out: "ttnn.Tensor", *, hidden_size: int, batch_size: int = 1) -> torch.Tensor:
+    """Convert decode output to ``[batch, 1, hidden]``, trimming TILE height padding."""
+    import ttnn
+
+    tt = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+    if tt.ndim == 4:
+        tt = tt[:, :, :batch_size, :hidden_size]
+    return tt.reshape(batch_size, 1, hidden_size)
+
+
 def replicated_tt_to_torch(tensor: "ttnn.Tensor", *, reshape: tuple[int, ...] | None = None) -> torch.Tensor:
     """Read a replicated mesh tensor from one device (post all-reduce activations)."""
     import ttnn
