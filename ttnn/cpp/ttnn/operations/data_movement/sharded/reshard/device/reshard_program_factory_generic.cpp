@@ -6,38 +6,15 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
-
-namespace {
-
-// Anonymous-namespace helper unique to reshard generic to avoid unity-build collisions.
-void push_reshard_generic_cb_pair(
-    ProgramDescriptor& desc,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t total_size,
-    uint32_t page_size,
-    const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
-    CBDescriptor cb;
-    cb.total_size = total_size;
-    cb.core_ranges = core_ranges;
-    cb.format_descriptors.push_back(CBFormatDescriptor{
-        .buffer_index = static_cast<uint8_t>(cb_index),
-        .data_format = data_format,
-        .page_size = page_size,
-    });
-    cb.buffer = bound_buffer;
-    desc.cbs.push_back(std::move(cb));
-}
-
-}  // namespace
 
 namespace detail {
 // start is inclusive, end is exclusive
@@ -649,7 +626,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 }  // namespace detail
 
-ProgramDescriptor ReshardGenericFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_spec(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
@@ -661,7 +638,6 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
     auto grid = input_buffer->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
                                                                 : device->compute_with_storage_grid_size();
     auto input_core_type = input_buffer->core_type();
-    uint32_t dst_cb_index = 16;
     auto cores = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
 
@@ -686,40 +662,68 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         total_size = static_cast<uint32_t>(output_shard_shape[0] * output_shard_shape[1] * output.element_size());
     }
 
-    ProgramDescriptor desc;
+    // Names. The output sharded buffer backs a borrowed-memory DFB; the input tensor flows through the
+    // typed TensorAccessor channel (Case-2 bridge: base address pulled kernel-side via get_bank_base_address).
+    const TensorParamName kInput{"input"};
+    const TensorParamName kOutput{"output"};
+    const DFBSpecName kShardCb{"shard_cb"};
+    const KernelSpecName kReader{"reader"};
+    const KernelSpecName kWriter{"writer"};
 
-    // Output sharded CB. Bind to output buffer for dynamic-CB rebinding on cache hits via cb.buffer.
-    push_reshard_generic_cb_pair(
-        desc,
-        dst_cb_index,
-        data_format,
-        total_size,
-        output_buffer->page_size(),
-        all_cores,
-        /*bound_buffer=*/output_buffer);
+    // Both KernelDescriptors used the SAME source (selected by input/output page-size equality).
+    const std::filesystem::path kKernelSource =
+        input_buffer->page_size() != output_buffer->page_size()
+            ? std::filesystem::path(
+                  "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/"
+                  "reshard_reader_diff_width_m2.cpp")
+            : std::filesystem::path(
+                  "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/reshard_reader_m2.cpp");
 
-    const std::string kernel_source = input_buffer->page_size() != output_buffer->page_size()
-                                          ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                                            "reshard_reader_diff_width.cpp"
-                                          : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                                            "reshard_reader.cpp";
+    ProgramSpec spec;
+    spec.name = "reshard_generic";
 
-    std::vector<uint32_t> compile_args = {
-        dst_cb_index, static_cast<uint32_t>(grid.x), static_cast<uint32_t>(grid.y), page_size, unit_size};
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = kInput, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = kOutput, .spec = output.tensor_spec()});
 
-    KernelDescriptor kernel_desc_0;
-    kernel_desc_0.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    kernel_desc_0.kernel_source = kernel_source;
-    kernel_desc_0.core_ranges = all_cores;
-    kernel_desc_0.config = ReaderConfigDescriptor{};
-    kernel_desc_0.compile_time_args = compile_args;
+    // Output sharded CB bound to the output buffer: borrowed-memory DFB. The backing L1 address resolves
+    // at runtime from the output TensorArgument (legacy set CBDescriptor.buffer + dynamic-CB rebinding).
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = kShardCb,
+        .entry_size = output_buffer->page_size(),
+        .num_entries = total_size / std::max<uint32_t>(output_buffer->page_size(), 1u),
+        .data_format_metadata = data_format,
+        .borrowed_from = kOutput,
+    });
 
-    KernelDescriptor kernel_desc_1;
-    kernel_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    kernel_desc_1.kernel_source = kernel_source;
-    kernel_desc_1.core_ranges = all_cores;
-    kernel_desc_1.config = WriterConfigDescriptor{};
-    kernel_desc_1.compile_time_args = std::move(compile_args);
+    // Self-loop the borrowed DFB on both kernels (base-pointer access only; no real FIFO).
+    auto bind_self_loop = [&](KernelSpec& k) {
+        k.dfb_bindings = {
+            DFBBinding{
+                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{
+                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::CONSUMER},
+        };
+    };
+
+    // CTAs: the legacy slot 0 (dst CB index) is now dfb::shard_cb; the remaining four stay CTAs.
+    auto make_kernel = [&](const KernelSpecName& unique_id, DataMovementRoleHint role) {
+        KernelSpec k;
+        k.unique_id = unique_id;
+        k.source = kKernelSource;
+        k.compile_time_args = {
+            {"num_x_cores", static_cast<uint32_t>(grid.x)},
+            {"num_y_cores", static_cast<uint32_t>(grid.y)},
+            {"page_size", page_size},
+            {"unit_size", unit_size},
+        };
+        bind_self_loop(k);
+        k.tensor_bindings = {TensorBinding{.tensor_parameter_name = kInput, .accessor_name = "input"}};
+        k.hw_config = DataMovementHardwareConfig{.role = role};
+        return k;
+    };
+
+    KernelSpec reader = make_kernel(kReader, DataMovementRoleHint::READER);
+    KernelSpec writer = make_kernel(kWriter, DataMovementRoleHint::WRITER);
 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
@@ -732,6 +736,22 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         physical_core_coords.push_back(physical_input_core.y);
     }
 
+    // The detail helpers emit a vector laid out as
+    //   [physical_core_coords (grid.x+grid.y)] [input_addr] [num_output_pages] [num_ranges] [output_page_offset] ...
+    // The input_addr element (legacy buffer base address, formerly back-patched to a Buffer*) is dropped:
+    // the kernel now reads the base address from the Case-2 TensorAccessor binding. Everything else rides
+    // VERBATIM as a runtime vararg block, preserving the legacy packed layout the kernel indexes positionally.
+    const size_t addr_slot = static_cast<size_t>(grid.x) + static_cast<size_t>(grid.y);
+    auto strip_addr = [&](std::vector<uint32_t> v) {
+        if (addr_slot < v.size()) {
+            v.erase(v.begin() + addr_slot);
+        }
+        return v;
+    };
+
+    std::vector<std::vector<uint32_t>> reader_tails(cores.size());
+    std::vector<std::vector<uint32_t>> writer_tails(cores.size());
+    size_t core_pos = 0;
     for (const auto& core : cores) {
         std::vector<uint32_t> runtime_args_0;
         std::vector<uint32_t> runtime_args_1;
@@ -776,35 +796,52 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
                 page_stride_vector.size());
         }
 
-        // Patch arg index (grid.x + grid.y) to bind the input-buffer base address.
-        // The detail helpers already pre-compute physical_core_coords (size grid.x+grid.y) followed by input addr.
-        KernelDescriptor::RTArgList rt_args_0;
-        rt_args_0.reserve(runtime_args_0.size());
-        for (size_t i = 0; i < runtime_args_0.size(); ++i) {
-            if (i == grid.x + grid.y) {
-                rt_args_0.push_back(input_buffer);
-            } else {
-                rt_args_0.push_back(runtime_args_0[i]);
-            }
-        }
-        KernelDescriptor::RTArgList rt_args_1;
-        rt_args_1.reserve(runtime_args_1.size());
-        for (size_t i = 0; i < runtime_args_1.size(); ++i) {
-            if (i == grid.x + grid.y) {
-                rt_args_1.push_back(input_buffer);
-            } else {
-                rt_args_1.push_back(runtime_args_1[i]);
-            }
-        }
-
-        kernel_desc_0.emplace_runtime_args(core, rt_args_0);
-        kernel_desc_1.emplace_runtime_args(core, rt_args_1);
+        reader_tails[core_pos] = strip_addr(std::move(runtime_args_0));
+        writer_tails[core_pos] = strip_addr(std::move(runtime_args_1));
+        ++core_pos;
     }
 
-    desc.kernels.push_back(std::move(kernel_desc_0));
-    desc.kernels.push_back(std::move(kernel_desc_1));
+    uint32_t max_tail = 0;
+    for (size_t i = 0; i < cores.size(); ++i) {
+        max_tail = std::max<uint32_t>(max_tail, static_cast<uint32_t>(reader_tails[i].size()));
+        max_tail = std::max<uint32_t>(max_tail, static_cast<uint32_t>(writer_tails[i].size()));
+    }
+    reader.advanced_options.num_runtime_varargs = max_tail;
+    writer.advanced_options.num_runtime_varargs = max_tail;
 
-    return desc;
+    spec.kernels.push_back(reader);
+    spec.kernels.push_back(writer);
+
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "wu",
+        .kernels = {kReader, kWriter},
+        .target_nodes = all_cores,
+    });
+
+    // Run args.
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run;
+    reader_run.kernel = kReader;
+    KernelRunArgs writer_run;
+    writer_run.kernel = kWriter;
+
+    for (size_t i = 0; i < cores.size(); ++i) {
+        const NodeCoord node{cores[i]};
+        reader_tails[i].resize(max_tail, 0u);
+        writer_tails[i].resize(max_tail, 0u);
+        reader_run.advanced_options.runtime_varargs[node] = std::move(reader_tails[i]);
+        writer_run.advanced_options.runtime_varargs[node] = std::move(writer_tails[i]);
+    }
+
+    run_args.kernel_run_args.push_back(std::move(reader_run));
+    run_args.kernel_run_args.push_back(std::move(writer_run));
+
+    run_args.tensor_args = {
+        {kInput, input.mesh_tensor()},
+        {kOutput, output.mesh_tensor()},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

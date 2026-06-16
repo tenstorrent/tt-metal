@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <string>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -22,17 +23,16 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
+#include "ttnn/metal2_artifacts.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
 using namespace tt;
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-using tt::tt_metal::CBDescriptor;
-using tt::tt_metal::CBFormatDescriptor;
-using tt::tt_metal::ComputeConfigDescriptor;
-using tt::tt_metal::DataMovementConfigDescriptor;
-using tt::tt_metal::KernelDescriptor;
-using tt::tt_metal::ProgramDescriptor;
+namespace m2 = tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 namespace reuse_batched_hs_dram_sharded_optimized_helpers {
@@ -43,9 +43,25 @@ using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 // Batch-sharded DRAM matmul
 // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
-// ProgramDescriptor variant: translates the same logic as create_program_batch_sharded
-// into a lightweight ProgramDescriptor (no Program object created).
-static ProgramDescriptor create_program_batch_sharded_descriptor(
+// Metal 2.0 ProgramSpec variant: translates the same logic as the legacy create_descriptor into
+// a ProgramSpec + ProgramRunArgs.
+//
+// Notes on the structural translation:
+//  - Local CBs (c_0 in0, c_1 in1, c_3 bias, c_4 out, c_5 intermed0) become same-node DFBs. When
+//    interm0_data_format == output_data_format the legacy uses ONE CBDescriptor with two
+//    format_descriptors (c_4 + c_5 over one L1 region); that is expressed as two DFBs sharing
+//    backing memory via advanced_options.alias_with.
+//  - The legacy borrowed CBs c_2 (sharded in0 on input storage cores, backed by in0_tensor) and
+//    c_6 (output reshard on output storage cores, backed by out_tensor) are NOT bound by any
+//    kernel — they were the pre-Metal-2.0 way to reserve the io tensors' L1 on the storage cores.
+//    In Metal 2.0 the io tensors' own buffer reservations cover that, and the kernels obtain the
+//    shard base addresses via the typed `a`/`out` tensor bindings (Case-2 bridge). So c_2/c_6
+//    drop, subsumed by the TensorParameters.
+//  - Raw addresses (in0 shard L1, in1/bias DRAM bank base, out shard L1) flowed through RTAs in
+//    the legacy data-movement kernels; they now flow through the typed tensor channel and the
+//    kernels pull the base via TensorAccessor::get_bank_base_address(), keeping the explicit NoC
+//    walks unchanged (Case-2 portable).
+static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spec(
     tt::tt_metal::IDevice* device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
@@ -63,10 +79,10 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     uint32_t per_core_M,
     uint32_t per_core_N,
     std::optional<UnaryWithParam> fused_activation,
-    const tt_metal::MeshTensor& in0_tensor,
-    const tt_metal::MeshTensor& in1_tensor,
-    ttsl::optional_reference<const tt_metal::MeshTensor> bias_tensor,
-    const tt_metal::MeshTensor& out_tensor,
+    const ttnn::Tensor& in0_tensor,
+    const ttnn::Tensor& in1_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const ttnn::Tensor& out_tensor,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const tt::tt_metal::Tile& bias_tile,
@@ -171,27 +187,25 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    // CB sizes
+    // CB / DFB sizes (in tiles; entry_size carries the per-tile byte size)
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     uint32_t in1_block_tiles = in0_block_w * per_core_N;
     uint32_t in1_CB_tiles = in1_block_tiles * 3;
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     uint32_t out_block_tiles = per_core_M * per_core_N;
-    uint32_t interm0_CB_size = out_block_tiles * interm0_single_tile_size;
+    uint32_t interm0_CB_tiles = out_block_tiles;
 
     uint32_t in0_shard_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_tile_shape()[0] *
                                in0_tensor.shard_spec()->shape[1] / in0_tile.get_tile_shape()[1];
     uint32_t in2_CB_size = in0_shard_tiles * in0_single_tile_size;
 
     uint32_t in3_block_tiles = per_core_N;
-    uint32_t in3_CB_size = in3_block_tiles * bias_single_tile_size;
 
     uint32_t out_shard_tiles = out_tensor.shard_spec()->shape[0] / output_tile.get_tile_shape()[0] *
                                out_tensor.shard_spec()->shape[1] / output_tile.get_tile_shape()[1];
+    uint32_t out_reshard_CB_tiles = out_shard_tiles;
     uint32_t out_reshard_CB_size = out_shard_tiles * output_single_tile_size;
 
     // Page sizes for DRAM reads
@@ -209,126 +223,92 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     uint32_t out_batch_stride_bytes = per_core_M * per_core_N * output_single_tile_size;
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build CBDescriptors
+    //                      ProgramSpec (immutable)
     ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor desc;
+    m2::ProgramSpec spec;
+    spec.name = "matmul_multi_core_reuse_batched_hs_dram_sharded";
 
-    tt::tt_metal::TileDescriptor in0_tile_desc{in0_tile};
-    tt::tt_metal::TileDescriptor in1_tile_desc{in1_tile};
-    tt::tt_metal::TileDescriptor bias_tile_desc{bias_tile};
-    tt::tt_metal::TileDescriptor output_tile_desc{output_tile};
+    const bool has_bias = bias_tensor.has_value();
 
-    // CB 0: in0 (activations) - on all cores in bounding box
-    {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in0_CB_size;
-        cb_desc.core_ranges = all_cores_in_rect_grid;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_0,
-            .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
-            .tile = in0_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
+    // ---- DataflowBufferSpecs (one per legacy local CBDescriptor) ----
+    // c_0: in0 activations (local FIFO on all cores in the bounding box).
+    spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+        .unique_id = m2::DFBSpecName{"in0"},
+        .entry_size = in0_single_tile_size,
+        .num_entries = in0_CB_tiles,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile});
+    // c_1: in1 weights (local FIFO).
+    spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+        .unique_id = m2::DFBSpecName{"in1"},
+        .entry_size = in1_single_tile_size,
+        .num_entries = in1_CB_tiles,
+        .data_format_metadata = in1_data_format,
+        .tile_format_metadata = in1_tile});
+    // c_3: bias (local FIFO, only when fused).
+    if (has_bias) {
+        spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"bias"},
+            .entry_size = bias_single_tile_size,
+            .num_entries = in3_block_tiles,
+            .data_format_metadata = bias_data_format,
+            .tile_format_metadata = bias_tile});
     }
-
-    // CB 1: in1 (weights) - on all cores in bounding box
-    {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in1_CB_size;
-        cb_desc.core_ranges = all_cores_in_rect_grid;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_1,
-            .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
-            .tile = in1_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // CB 2: sharded in0 buffer - on INPUT storage cores, backed by in0_buffer
-    {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in2_CB_size;
-        cb_desc.core_ranges = input_all_storage_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_2,
-            .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
-            .tile = in0_tile_desc});
-        cb_desc.tensor = &in0_tensor;
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // CB 3: bias (if fused) - on all cores in bounding box
-    if (bias_tensor.has_value()) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in3_CB_size;
-        cb_desc.core_ranges = all_cores_in_rect_grid;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_3,
-            .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
-            .tile = bias_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // CB 4 & 5: output and intermediate - on worker cores
-    uint32_t output_cb_index = tt::CBIndex::c_4;
-    uint32_t interm0_cb_index = tt::CBIndex::c_5;
+    // c_4 (out) and c_5 (intermed0). Legacy keeps them as a single CB (one CBDescriptor, two
+    // format_descriptors) when the formats match; that aliasing is expressed as two DFBs sharing
+    // backing memory via advanced_options.alias_with. The out DFB sizing matches the legacy
+    // out_reshard_CB_size; intermed0 uses interm0 tiles. (Both share one L1 region in the aliased
+    // case; their entry_size*num_entries must be equal, which holds because the reshard tile count
+    // equals out_block_tiles for this batch-sharded layout.)
     if (interm0_data_format != output_data_format) {
-        // Separate CBs for output and intermediate
-        {
-            CBDescriptor cb_desc;
-            cb_desc.total_size = out_reshard_CB_size;
-            cb_desc.core_ranges = all_worker_cores;
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = output_cb_index,
-                .data_format = output_data_format,
-                .page_size = output_single_tile_size,
-                .tile = output_tile_desc});
-            desc.cbs.push_back(std::move(cb_desc));
-        }
-        {
-            CBDescriptor cb_desc;
-            cb_desc.total_size = interm0_CB_size;
-            cb_desc.core_ranges = all_worker_cores;
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = interm0_cb_index,
-                .data_format = interm0_data_format,
-                .page_size = interm0_single_tile_size,
-                .tile = output_tile_desc});
-            desc.cbs.push_back(std::move(cb_desc));
-        }
+        spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"out"},
+            .entry_size = output_single_tile_size,
+            .num_entries = out_reshard_CB_tiles,
+            .data_format_metadata = output_data_format,
+            .tile_format_metadata = output_tile});
+        spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"intermed0"},
+            .entry_size = interm0_single_tile_size,
+            .num_entries = interm0_CB_tiles,
+            .data_format_metadata = interm0_data_format,
+            .tile_format_metadata = output_tile});
     } else {
-        // Output and intermediate share the same buffer
-        CBDescriptor cb_desc;
-        cb_desc.total_size = out_reshard_CB_size;
-        cb_desc.core_ranges = all_worker_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_data_format,
-            .page_size = output_single_tile_size,
-            .tile = output_tile_desc});
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = interm0_cb_index,
-            .data_format = interm0_data_format,
-            .page_size = interm0_single_tile_size,
-            .tile = output_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
+        m2::DataflowBufferSpec out_dfb{
+            .unique_id = m2::DFBSpecName{"out"},
+            .entry_size = output_single_tile_size,
+            .num_entries = out_reshard_CB_tiles,
+            .data_format_metadata = output_data_format,
+            .tile_format_metadata = output_tile};
+        out_dfb.advanced_options.alias_with = {m2::DFBSpecName{"intermed0"}};
+        // Aliased: out and intermed0 share one L1 region (legacy single CBDescriptor sized to
+        // out_reshard_CB_size). Alias legality requires entry_size*num_entries equal; here
+        // interm0_data_format == output_data_format so the tile sizes match and intermed0 uses
+        // the same out_reshard_CB_tiles count, matching legacy's shared allocation size.
+        m2::DataflowBufferSpec interm_dfb{
+            .unique_id = m2::DFBSpecName{"intermed0"},
+            .entry_size = interm0_single_tile_size,
+            .num_entries = out_reshard_CB_tiles,
+            .data_format_metadata = interm0_data_format,
+            .tile_format_metadata = output_tile};
+        interm_dfb.advanced_options.alias_with = {m2::DFBSpecName{"out"}};
+        spec.dataflow_buffers.push_back(std::move(out_dfb));
+        spec.dataflow_buffers.push_back(std::move(interm_dfb));
     }
 
-    // CB 6: output reshard buffer - on OUTPUT storage cores, backed by out_buffer
-    {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = out_reshard_CB_size;
-        cb_desc.core_ranges = output_all_storage_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_6,
-            .data_format = output_data_format,
-            .page_size = output_single_tile_size,
-            .tile = output_tile_desc});
-        cb_desc.tensor = &out_tensor;
-        desc.cbs.push_back(std::move(cb_desc));
+    // ---- TensorParameters (one per distinct accessed tensor) ----
+    // a / out provide the storage-core shard L1 base addresses (Case-2 bridge); b / bias provide
+    // the DRAM-bank base addresses. The legacy borrowed CBs c_2/c_6 are subsumed by `a`/`out`.
+    spec.tensor_parameters.push_back(
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"a"}, .spec = in0_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"b"}, .spec = in1_tensor.tensor_spec()});
+    if (has_bias) {
+        spec.tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = m2::TensorParamName{"bias"}, .spec = bias_tensor->tensor_spec()});
     }
+    spec.tensor_parameters.push_back(
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"out"}, .spec = out_tensor.tensor_spec()});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernel defines
@@ -337,7 +317,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 
-    if (bias_tensor.has_value()) {
+    if (has_bias) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         writer_defines["FUSE_BIAS"] = "1";
     }
@@ -367,179 +347,240 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
-    // Helper to convert std::map defines to KernelDescriptor::Defines
-    auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
-        KernelDescriptor::Defines result;
-        result.reserve(m.size());
+    writer_defines["OUT_SHARDED"] = "1";
+
+    // Helper to convert std::map defines to a Metal 2.0 Defines table.
+    auto map_to_defines = [](const std::map<std::string, std::string>& m) -> m2::KernelSpec::CompilerOptions::Defines {
+        m2::KernelSpec::CompilerOptions::Defines result;
         for (const auto& [k, v] : m) {
-            result.emplace_back(k, v);
+            result.insert({k, v});
         }
         return result;
     };
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Compile-time args
+    //                      Subblock / compute parameters
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> in0_reader_compile_args = {
-        (uint32_t)in0_block_tiles,
-        (uint32_t)in0_block_tiles * in0_single_tile_size,
-        (uint32_t)num_blocks,
-        (uint32_t)batches_per_core,
-        (uint32_t)in0_batch_stride_bytes,
-        (uint32_t)in2_CB_size,
-    };
-
-    std::vector<uint32_t> in1_writer_compile_args = {
-        (uint32_t)in1_buffer_page_size,
-        (uint32_t)in1_buffer_num_pages,
-        (uint32_t)per_core_N,
-        (uint32_t)in1_block_tiles,
-        (uint32_t)num_blocks,
-        (uint32_t)out_block_tiles,
-        (uint32_t)batches_per_core,
-        (uint32_t)in1_batch_stride_bytes,
-        (uint32_t)out_batch_stride_bytes,
-        (uint32_t)out_reshard_CB_size,
-    };
-    if (bias_tensor.has_value()) {
-        in1_writer_compile_args.push_back(bias_buffer_page_size);
-        in1_writer_compile_args.push_back(bias_buffer_num_pages);
-        in1_writer_compile_args.push_back(in3_block_tiles);
-    }
-
     uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,
-        in0_num_subblocks,
-        in0_block_tiles,
-        in0_subblock_num_tiles,
-        in1_num_subblocks,
-        in1_block_tiles,
-        per_core_N,
-        num_blocks,
-        1,
-        1,
-        out_subblock_h,
-        out_subblock_w,
-        out_subblock_num_tiles,
-        batches_per_core,
-        out_block_tiles,
-        untilize_out ? 1u : 0u,
-        0u,
-        0u,
-    };
-    if (bias_tensor.has_value()) {
-        compute_kernel_args.push_back(1u);  // row_broadcast_bias: DRAM sharded always uses row broadcast
-    }
-
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build Kernel Descriptors
+    //                      Build KernelSpecs
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
-    writer_defines["OUT_SHARDED"] = "1";
-
     // in0 reader kernel
-    KernelDescriptor in0_reader_kernel_desc;
-    in0_reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in0_sender_dram_sharded_height.cpp";
-    in0_reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    in0_reader_kernel_desc.core_ranges = all_cores_in_rect_grid;
-    in0_reader_kernel_desc.compile_time_args = in0_reader_compile_args;
-    in0_reader_kernel_desc.defines = map_to_defines(reader_defines);
-    in0_reader_kernel_desc.named_compile_time_args = {
-        {"cb_in0", tt::CBIndex::c_0},
+    m2::KernelSpec in0_reader{
+        .unique_id = m2::KernelSpecName{"in0_reader"},
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                                        "reader_bmm_tile_layout_in0_sender_dram_sharded_height.cpp"},
+        .compiler_options = {.defines = map_to_defines(reader_defines)},
+        .compile_time_args =
+            {{"in0_block_num_tiles", in0_block_tiles},
+             {"in0_block_size_bytes", in0_block_tiles * in0_single_tile_size},
+             {"num_blocks", num_blocks},
+             {"num_batches_per_core", batches_per_core},
+             {"in0_tensor_stride_batch_bytes", in0_batch_stride_bytes},
+             {"in0_shard_size_bytes", in2_CB_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"worker_core_type", "input_storage_noc_x", "input_storage_noc_y"}},
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_config =
+                    m2::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
     };
-    in0_reader_kernel_desc.config =
-        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+    in0_reader.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = m2::DFBSpecName{"in0"},
+        .accessor_name = "cb_in0",
+        .endpoint_type = m2::DFBEndpointType::PRODUCER});
+    in0_reader.tensor_bindings.push_back(
+        m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"a"}, .accessor_name = "a"});
 
-    // in1 writer kernel
-    KernelDescriptor in1_writer_kernel_desc;
-    in1_writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in1_sender_dram_sharded_height.cpp";
-    in1_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    in1_writer_kernel_desc.core_ranges = all_cores_in_rect_grid;
-    in1_writer_kernel_desc.compile_time_args = in1_writer_compile_args;
-    in1_writer_kernel_desc.defines = map_to_defines(writer_defines);
-    in1_writer_kernel_desc.named_compile_time_args = {
-        {"cb_in1", tt::CBIndex::c_1},
-        {"cb_bias", tt::CBIndex::c_3},
-        {"cb_out", tt::CBIndex::c_4},
+    // in1 reader / output writer kernel
+    m2::KernelSpec::CompilerOptions::Defines writer_defines_table = map_to_defines(writer_defines);
+    m2::KernelSpec in1_writer{
+        .unique_id = m2::KernelSpecName{"in1_writer"},
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                                        "reader_bmm_tile_layout_in1_sender_dram_sharded_height.cpp"},
+        .compiler_options = {.defines = writer_defines_table},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"is_worker_core", "dram_bank_id", "vc", "output_storage_noc_x", "output_storage_noc_y"}},
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_config =
+                    m2::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
     };
-    in1_writer_kernel_desc.config =
-        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
-
-    // compute kernel
-    KernelDescriptor compute_kernel_desc;
-    compute_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores_in_rect_grid;
-    compute_kernel_desc.compile_time_args = compute_kernel_args;
-    compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
     {
-        KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
-            {"cb_in0", tt::CBIndex::c_0},
-            {"cb_in1", tt::CBIndex::c_1},
-            {"cb_bias", tt::CBIndex::c_3},
-            {"cb_out", tt::CBIndex::c_4},
-            {"cb_intermed0", tt::CBIndex::c_5},
-            {"cb_in0_intermediate", tt::CBIndex::c_8},
-            {"cb_in1_intermediate", tt::CBIndex::c_9},
-            {"cb_in0_transposed", tt::CBIndex::c_10},
-            {"bias_ntiles", per_core_N},
-            // This factory does not pad per_core_N_compute beyond per_core_N_in1_sender, so the
-            // last subblock is always fully valid. Pass out_subblock_w so the compute kernel takes
-            // its original full-width path (last_subblock_padded == false).
-            {"last_subblock_w_valid", out_subblock_w},
-        };
-        if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
-            using ttnn::operations::matmul::utilities::get_activation_params;
-            const auto params = get_activation_params(fused_activation.value());
-            named_compile_args.push_back({"activation_type", static_cast<uint32_t>(params.type)});
-            named_compile_args.push_back({"activation_param0", params.param0});
-            named_compile_args.push_back({"activation_param1", params.param1});
-            named_compile_args.push_back({"activation_param2", params.param2});
+        m2::KernelSpec::CompileTimeArgs writer_cta = {
+            {"in1_page_size", in1_buffer_page_size},
+            {"in1_num_pages", in1_buffer_num_pages},
+            {"in1_block_w", per_core_N},
+            {"in1_block_num_tiles", in1_block_tiles},
+            {"num_blocks", num_blocks},
+            {"out_block_num_tiles", out_block_tiles},
+            {"num_batches_per_core", batches_per_core},
+            {"in1_tensor_stride_batch_bytes", in1_batch_stride_bytes},
+            {"out_tensor_stride_batch_bytes", out_batch_stride_bytes},
+            {"out_shard_size_bytes", out_reshard_CB_size}};
+        if (has_bias) {
+            writer_cta.insert({"in3_page_size", bias_buffer_page_size});
+            writer_cta.insert({"in3_num_pages", bias_buffer_num_pages});
+            writer_cta.insert({"in3_block_tiles", in3_block_tiles});
         }
-        compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
+        in1_writer.compile_time_args = std::move(writer_cta);
     }
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode};
+    in1_writer.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = m2::DFBSpecName{"in1"},
+        .accessor_name = "cb_in1",
+        .endpoint_type = m2::DFBEndpointType::PRODUCER});
+    in1_writer.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = m2::DFBSpecName{"out"},
+        .accessor_name = "cb_out",
+        .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    if (has_bias) {
+        in1_writer.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"bias"},
+            .accessor_name = "cb_bias",
+            .endpoint_type = m2::DFBEndpointType::PRODUCER});
+    }
+    in1_writer.tensor_bindings.push_back(
+        m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"b"}, .accessor_name = "b"});
+    if (has_bias) {
+        in1_writer.tensor_bindings.push_back(
+            m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"bias"}, .accessor_name = "bias"});
+    }
+    in1_writer.tensor_bindings.push_back(
+        m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"out"}, .accessor_name = "out"});
+
+    // compute kernel (forked Metal 2.0 source). CTA layout matches the legacy positional emission
+    // order; num_blocks_w_dim and num_blocks_h_dim are both 1, batch is batches_per_core, and the
+    // in0-transpose / get-batch-from-reader paths are off for this batch-sharded factory.
+    const char* COMPUTE_SRC =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_m2.cpp";
+    m2::KernelSpec::CompileTimeArgs compute_cta = {
+        {"in0_block_w", in0_block_w},
+        {"in0_num_subblocks", in0_num_subblocks},
+        {"in0_block_num_tiles", in0_block_tiles},
+        {"in0_subblock_num_tiles", in0_subblock_num_tiles},
+        {"in1_num_subblocks", in1_num_subblocks},
+        {"in1_block_num_tiles", in1_block_tiles},
+        {"in1_block_w", per_core_N},
+        {"num_blocks_inner_dim", num_blocks},
+        {"num_blocks_w_dim", 1},
+        {"num_blocks_h_dim", 1},
+        {"out_subblock_h", out_subblock_h},
+        {"out_subblock_w", out_subblock_w},
+        {"out_subblock_num_tiles", out_subblock_num_tiles},
+        {"batch", batches_per_core},
+        {"out_block_num_tiles", out_block_tiles},
+        {"untilize_out", untilize_out ? 1u : 0u},
+        {"get_batch_from_reader", 0u},
+        {"in0_transpose_tile", 0u},
+        // bias_ntiles / last_subblock_w_valid are named CTAs read by the compute kernel; this
+        // factory does not pad per_core_N beyond per_core_N (last subblock always fully valid),
+        // so last_subblock_w_valid == out_subblock_w (kernel takes its full-width path).
+        {"bias_ntiles", per_core_N},
+        {"last_subblock_w_valid", out_subblock_w}};
+    if (has_bias) {
+        // row_broadcast_bias: DRAM sharded always uses row broadcast.
+        compute_cta.insert({"row_broadcast_bias", 1u});
+    }
+    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+        using ttnn::operations::matmul::utilities::get_activation_params;
+        const auto params = get_activation_params(fused_activation.value());
+        compute_cta.insert({"activation_type", static_cast<uint32_t>(params.type)});
+        compute_cta.insert({"activation_param0", params.param0});
+        compute_cta.insert({"activation_param1", params.param1});
+        compute_cta.insert({"activation_param2", params.param2});
+    }
+
+    m2::KernelSpec compute{
+        .unique_id = m2::KernelSpecName{"compute"},
+        .source = std::filesystem::path{COMPUTE_SRC},
+        .compiler_options = {.defines = map_to_defines(mm_kernel_defines)},
+        .compile_time_args = std::move(compute_cta),
+        .runtime_arg_schema = {.runtime_arg_names = {"is_worker_core"}},
+        .hw_config =
+            m2::ComputeHardwareConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode},
+    };
+    compute.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = m2::DFBSpecName{"in0"},
+        .accessor_name = "cb_in0",
+        .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    compute.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = m2::DFBSpecName{"in1"},
+        .accessor_name = "cb_in1",
+        .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    compute.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = m2::DFBSpecName{"out"},
+        .accessor_name = "cb_out",
+        .endpoint_type = m2::DFBEndpointType::PRODUCER});
+    // intermed0: PRODUCER + CONSUMER on compute (the kernel spills partials and reloads them — a
+    // real self-loop).
+    compute.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = m2::DFBSpecName{"intermed0"},
+        .accessor_name = "cb_intermed0",
+        .endpoint_type = m2::DFBEndpointType::PRODUCER});
+    compute.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = m2::DFBSpecName{"intermed0"},
+        .accessor_name = "cb_intermed0",
+        .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    if (has_bias) {
+        compute.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"bias"},
+            .accessor_name = "cb_bias",
+            .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+
+    // ---- Kernels + WorkUnitSpec ----
+    // All three kernels run on the full bounding box (workers + idle storage cores). Idle cores
+    // supply only worker_core_type/is_worker_core == 0 and return early. The local DFBs require
+    // their producer & consumer KernelSpecs to share the same WorkUnitSpec, so there is one
+    // WorkUnitSpec hosting in0_reader + in1_writer + compute on all_cores_in_rect_grid.
+    spec.kernels = {in0_reader, in1_writer, compute};
+    spec.work_units = std::vector<m2::WorkUnitSpec>{m2::WorkUnitSpec{
+        .name = "wu",
+        .kernels = {m2::KernelSpecName{"in0_reader"}, m2::KernelSpecName{"in1_writer"}, m2::KernelSpecName{"compute"}},
+        .target_nodes = all_cores_in_rect_grid}};
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Runtime Args (per-core loop)
+    //                      ProgramRunArgs (mutable)
     ////////////////////////////////////////////////////////////////////////////
     std::vector<CoreCoord> all_cores_in_rect_grid_vec = corerange_to_cores(all_cores_in_rect_grid);
     std::set<CoreCoord> worker_cores_set(all_worker_cores_ordered.begin(), all_worker_cores_ordered.end());
 
-    std::vector<uint32_t> bank_ids;
+    m2::ProgramRunArgs run;
+    m2::KernelRunArgs in0_reader_run{.kernel = m2::KernelSpecName{"in0_reader"}};
+    m2::KernelRunArgs in1_writer_run{.kernel = m2::KernelSpecName{"in1_writer"}};
+    m2::KernelRunArgs compute_run{.kernel = m2::KernelSpecName{"compute"}};
 
-    // Idle cores in the bounding box
+    // Idle cores in the bounding box: worker_core_type / is_worker_core == 0, dummy values for the
+    // remaining named args (the kernels return early before reading them).
     for (const auto& core : all_cores_in_rect_grid_vec) {
-        bool is_worker = worker_cores_set.contains(core);
-
-        if (!is_worker) {
-            std::vector<uint32_t> in0_idle_args = {0u};
-            in0_reader_kernel_desc.runtime_args.emplace_back(core, in0_idle_args);
-
-            std::vector<uint32_t> in1_idle_args = {0u};
-            in1_writer_kernel_desc.runtime_args.emplace_back(core, in1_idle_args);
-
-            std::vector<uint32_t> compute_idle_args = {0u};
-            compute_kernel_desc.runtime_args.emplace_back(core, compute_idle_args);
+        if (!worker_cores_set.contains(core)) {
+            in0_reader_run.runtime_arg_values.push_back(
+                {core, {{"worker_core_type", 0u}, {"input_storage_noc_x", 0u}, {"input_storage_noc_y", 0u}}});
+            in1_writer_run.runtime_arg_values.push_back(
+                {core,
+                 {{"is_worker_core", 0u},
+                  {"dram_bank_id", 0u},
+                  {"vc", 0u},
+                  {"output_storage_noc_x", 0u},
+                  {"output_storage_noc_y", 0u}}});
+            compute_run.runtime_arg_values.push_back({core, {{"is_worker_core", 0u}}});
         }
     }
 
     // Worker cores
+    std::vector<uint32_t> bank_ids;
     for (uint32_t worker_idx = 0; worker_idx < all_worker_cores_ordered.size(); ++worker_idx) {
         auto core = all_worker_cores_ordered[worker_idx];
 
@@ -554,62 +595,52 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
             }
         }
 
-        // in0 reader runtime args
-        KernelDescriptor::RTArgList in0_reader_args;
-        in0_reader_args.push_back(uint32_t{1u});
-        in0_reader_args.push_back(uint32_t{input_storage_noc_x[worker_idx]});
-        in0_reader_args.push_back(uint32_t{input_storage_noc_y[worker_idx]});
-        in0_reader_args.push_back(in0_tensor);
-        in0_reader_kernel_desc.emplace_runtime_args(core, in0_reader_args);
-
-        // in1 writer runtime args
-        KernelDescriptor::RTArgList in1_writer_args;
-        in1_writer_args.push_back(uint32_t{1u});
-        in1_writer_args.push_back(in1_tensor);
-        if (bias_tensor.has_value()) {
-            in1_writer_args.push_back(*bias_tensor);
-        } else {
-            in1_writer_args.push_back(uint32_t{0u});
-        }
-        in1_writer_args.push_back(uint32_t{bank_id});
-        in1_writer_args.push_back(uint32_t{vc});
-        in1_writer_args.push_back(uint32_t{output_storage_noc_x[worker_idx]});
-        in1_writer_args.push_back(uint32_t{output_storage_noc_y[worker_idx]});
-        in1_writer_args.push_back(out_tensor);
-        in1_writer_kernel_desc.emplace_runtime_args(core, in1_writer_args);
-
-        // Compute runtime args
-        std::vector<uint32_t> compute_runtime_args = {
-            1u,
-        };
-        compute_kernel_desc.runtime_args.emplace_back(core, compute_runtime_args);
+        in0_reader_run.runtime_arg_values.push_back(
+            {core,
+             {{"worker_core_type", 1u},
+              {"input_storage_noc_x", input_storage_noc_x[worker_idx]},
+              {"input_storage_noc_y", input_storage_noc_y[worker_idx]}}});
+        in1_writer_run.runtime_arg_values.push_back(
+            {core,
+             {{"is_worker_core", 1u},
+              {"dram_bank_id", bank_id},
+              {"vc", vc},
+              {"output_storage_noc_x", output_storage_noc_x[worker_idx]},
+              {"output_storage_noc_y", output_storage_noc_y[worker_idx]}}});
+        compute_run.runtime_arg_values.push_back({core, {{"is_worker_core", 1u}}});
     }
 
-    // Push all kernel descriptors
-    desc.kernels.push_back(std::move(in0_reader_kernel_desc));
-    desc.kernels.push_back(std::move(in1_writer_kernel_desc));
-    desc.kernels.push_back(std::move(compute_kernel_desc));
+    run.kernel_run_args = {in0_reader_run, in1_writer_run, compute_run};
+    run.tensor_args.insert({m2::TensorParamName{"a"}, in0_tensor.mesh_tensor()});
+    run.tensor_args.insert({m2::TensorParamName{"b"}, in1_tensor.mesh_tensor()});
+    if (has_bias) {
+        run.tensor_args.insert({m2::TensorParamName{"bias"}, bias_tensor->mesh_tensor()});
+    }
+    run.tensor_args.insert({m2::TensorParamName{"out"}, out_tensor.mesh_tensor()});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run)};
 }
 
 }  // namespace reuse_batched_hs_dram_sharded_optimized_helpers
 
-ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_program_spec(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& /*core_range_set*/) {
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
-    const auto& output_tensors = tensor_return_value;
+    auto& output_tensors = tensor_return_value;
 
-    const auto& a = input_tensors.at(0).mesh_tensor();
-    const auto& b = input_tensors.at(1).mesh_tensor();
-    auto bias = tt::tt_metal::as_optional_mesh_tensor(optional_input_tensors.at(0));
-    const auto& output = output_tensors.at(0).mesh_tensor();
-    const auto& ashape = a.padded_shape();
-    const auto& bshape = b.padded_shape();
+    const auto& a = input_tensors.at(0);
+    const auto& b = input_tensors.at(1);
+    std::optional<const ttnn::Tensor> bias =
+        optional_input_tensors.empty() ? std::nullopt : optional_input_tensors.at(0);
+    const auto& output = output_tensors.at(0);
+    const auto& a_mesh = a.mesh_tensor();
+    const auto& b_mesh = b.mesh_tensor();
+    [[maybe_unused]] const auto& out_mesh = output.mesh_tensor();
+    const auto& ashape = a_mesh.padded_shape();
+    const auto& bshape = b_mesh.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
     auto in1_tile = b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
@@ -623,12 +654,12 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
 
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;
     if (bias.has_value()) {
-        const auto& c = bias.value();
-        TT_FATAL(&a.device() == &c.device(), "Operands to matmul need to be on the same device!");
-        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
+        const auto& c = bias.value().mesh_tensor();
+        TT_FATAL(&a_mesh.device() == &c.device(), "Operands to matmul need to be on the same device!");
+        bias_data_format = tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
     }
 
-    tt::tt_metal::IDevice* device = &a.mutable_device();
+    tt::tt_metal::IDevice* device = &a_mesh.mutable_device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -639,14 +670,14 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(tt_metal::datatype_to_dataformat_converter(b.dtype()));
 
     TT_FATAL(
-        a.mesh_buffer().device_local_size() % in0_single_tile_size == 0,
+        a_mesh.mesh_buffer().device_local_size() % in0_single_tile_size == 0,
         "Input A buffer size ({}) must be divisible by single tile size ({})",
-        a.mesh_buffer().device_local_size(),
+        a_mesh.mesh_buffer().device_local_size(),
         in0_single_tile_size);
     TT_FATAL(
-        b.mesh_buffer().device_local_size() % in1_single_tile_size == 0,
+        b_mesh.mesh_buffer().device_local_size() % in1_single_tile_size == 0,
         "Input B buffer size ({}) must be divisible by single tile size ({})",
-        b.mesh_buffer().device_local_size(),
+        b_mesh.mesh_buffer().device_local_size(),
         in1_single_tile_size);
 
     TT_FATAL(
@@ -681,7 +712,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
     TT_FATAL(per_core_N == N, "For batch sharding, per_core_N ({}) must equal N ({})", per_core_N, N);
     TT_FATAL(K % in0_block_w == 0, "K ({}) must be divisible by in0_block_w ({})", K, in0_block_w);
 
-    return reuse_batched_hs_dram_sharded_optimized_helpers::create_program_batch_sharded_descriptor(
+    return reuse_batched_hs_dram_sharded_optimized_helpers::create_program_batch_sharded_spec(
         device,
         input_all_cores_storage,
         output_all_cores_storage,

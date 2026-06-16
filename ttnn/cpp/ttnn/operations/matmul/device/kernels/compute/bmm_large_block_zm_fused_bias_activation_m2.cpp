@@ -4,13 +4,14 @@
 
 // Metal 2.0 fork of bmm_large_block_zm_fused_bias_activation.cpp. Forked (not edited in
 // place) because the original is shared by 6 matmul factories (mcast_1d, mcast_2d, two
-// DRAM-sharded variants, sparse, and this reuse-optimized factory) plus a deepseek FFN
-// kernel; only the MatmulMultiCoreReuseOptimized factory's compute kernel moves to the
-// Metal 2.0 named-binding form. Logic, #ifdefs, and loop bounds are identical to the
-// original; only the access mechanism changes: named CB indices
-// (get_named_compile_time_arg_val("cb_*")) -> dfb::* handles, positional CTAs ->
-// get_arg(args::*). The conditionally-bound in0-transpose CB is gated on the
-// IN0_TRANSPOSE_TILE_CB define the factory emits alongside the binding.
+// DRAM-sharded variants, sparse, and the reuse-optimized factory) plus a deepseek FFN
+// kernel. This Metal 2.0 fork is bound by the Metal-2.0-ported matmul factories:
+// MatmulMultiCoreReuseOptimized and MatmulMultiCoreReuseBatchedHSDRAMSharded (the latter
+// defines MATMUL_DRAM_SHARDED, which selects the worker-core RTA gate below). Logic,
+// #ifdefs, and loop bounds are identical to the original; only the access mechanism
+// changes: named CB indices (get_named_compile_time_arg_val("cb_*")) -> dfb::* handles,
+// positional CT/RT args -> get_arg(args::*). The conditionally-bound in0-transpose CB is
+// gated on the IN0_TRANSPOSE_TILE_CB define the factory emits alongside the binding.
 
 #include <cstdint>
 
@@ -160,7 +161,7 @@ inline void reblock_and_untilize(
 void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
-    const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
+    const bool is_worker_core = get_arg(args::is_worker_core) == 1;
     // if not worker core, skip
     if (not is_worker_core) {
         return;

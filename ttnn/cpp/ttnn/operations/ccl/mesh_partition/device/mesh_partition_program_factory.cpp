@@ -141,6 +141,18 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
                 auto descriptor = ttnn::prim::SliceTileTensorArgsProgramFactory::create_descriptor(
                     slice_attrs, slice_tensor_args, tensor_return_value);
                 return Program{descriptor};
+            } else if constexpr (std::is_same_v<Factory, ttnn::prim::SliceRmShardedSpecProgramFactory>) {
+                // The RM HEIGHT-sharded path's spec factory has no create_descriptor; reuse the
+                // descriptor variant of the same work for mesh_partition's MeshWorkload build.
+                auto descriptor = ttnn::prim::SliceRmShardedProgramFactory::create_descriptor(
+                    slice_attrs, slice_tensor_args, tensor_return_value);
+                return Program{descriptor};
+            } else if constexpr (std::is_same_v<Factory, ttnn::prim::SliceRmStrideSpecProgramFactory>) {
+                // The RM strided path's spec factory has no create_descriptor; reuse the descriptor
+                // variant of the same work for mesh_partition's MeshWorkload build.
+                auto descriptor = ttnn::prim::SliceRmStrideProgramFactory::create_descriptor(
+                    slice_attrs, slice_tensor_args, tensor_return_value);
+                return Program{descriptor};
             } else {
                 auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
                 return Program{descriptor};
@@ -181,6 +193,14 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
                     tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
                 } else if constexpr (std::is_same_v<Factory, ttnn::prim::SliceTileTensorArgsSpecProgramFactory>) {
                     auto descriptor = ttnn::prim::SliceTileTensorArgsProgramFactory::create_descriptor(
+                        slice_attrs, slice_tensor_args, tensor_return_value);
+                    tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
+                } else if constexpr (std::is_same_v<Factory, ttnn::prim::SliceRmShardedSpecProgramFactory>) {
+                    auto descriptor = ttnn::prim::SliceRmShardedProgramFactory::create_descriptor(
+                        slice_attrs, slice_tensor_args, tensor_return_value);
+                    tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
+                } else if constexpr (std::is_same_v<Factory, ttnn::prim::SliceRmStrideSpecProgramFactory>) {
+                    auto descriptor = ttnn::prim::SliceRmStrideProgramFactory::create_descriptor(
                         slice_attrs, slice_tensor_args, tensor_return_value);
                     tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
                 } else {

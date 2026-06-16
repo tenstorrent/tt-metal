@@ -35,8 +35,8 @@ struct SliceDeviceOperation {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         SliceRmProgramFactory,
-        SliceRmShardedProgramFactory,
-        SliceRmStrideProgramFactory,
+        SliceRmShardedSpecProgramFactory,
+        SliceRmStrideSpecProgramFactory,
         SliceTileSpecProgramFactory,
         SliceTileTensorArgsSpecProgramFactory>;
 

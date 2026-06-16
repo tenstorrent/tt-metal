@@ -286,10 +286,16 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
             args.output_mem_config.is_sharded() &&
             args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step;
         if (height_sharded_in_out_no_step) {
-            return SliceRmShardedProgramFactory{};
+            // slice's own dispatch uses the Metal 2.0 (ProgramSpec) factory; ccl/mesh_partition still
+            // reuses the legacy SliceRmShardedProgramFactory::create_descriptor directly (see
+            // mesh_partition_program_factory.cpp), so both factory structs are retained.
+            return SliceRmShardedSpecProgramFactory{};
         }
         if (has_step) {
-            return SliceRmStrideProgramFactory{};
+            // slice's own dispatch uses the Metal 2.0 (ProgramSpec) factory; ccl/mesh_partition still
+            // reuses the legacy SliceRmStrideProgramFactory::create_descriptor directly (see
+            // mesh_partition_program_factory.cpp), so both factory structs are retained.
+            return SliceRmStrideSpecProgramFactory{};
         }
         return SliceRmProgramFactory{};
     }

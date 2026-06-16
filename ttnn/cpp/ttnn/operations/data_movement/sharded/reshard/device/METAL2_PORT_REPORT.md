@@ -69,9 +69,67 @@ This section is the authoritative per-factory result after the two porting passe
 |---|---|---|
 | `NdReshardCopyPagesFactory` | **PORTED** (pass 1) | DRAM→DRAM page copy. 1 DFB (reader→writer FIFO), 2 TensorAccessors. |
 | `NdReshardCopyLocalShardFactory<true/false>` | **PORTED** (pass 2) | L1↔DRAM / L1→L1 local-shard copy. No DFB; 2 TensorAccessors. |
-| `ReshardSameHeightFactory<true/false>` | **METAL-BLOCKED** | Raw remote `buffer->address()` through RTA → `AllocatorBank` NOC. |
-| `ReshardSameWidthFactory<true/false>` | **METAL-BLOCKED** | Same remote-address-through-RTA pattern (+ unaligned scratch CB). |
-| `ReshardGenericFactory` | **METAL-BLOCKED** | Raw input `buffer->address()` + manual `UnicastEndpoint` NOC by physical core. |
+| `ReshardSameHeightFactory<true/false>` | **PORTED** (pass 3 — Case-2) | Remote base addr via `TensorAccessor(ta::remote).get_bank_base_address()`; local shard = borrowed self-loop DFB; per-segment tail = varargs. |
+| `ReshardSameWidthFactory<true/false>` | **PORTED** (pass 3 — Case-2) | Same Case-2 remote-addr bridge; + local scratch self-loop DFB on the unaligned reader path (`#ifdef UNALIGNED`). |
+| `ReshardGenericFactory` | **PORTED** (pass 3 — Case-2) | Input base addr via `TensorAccessor(ta::input).get_bank_base_address()`; output = borrowed self-loop DFB; physical-core maps + stride table = varargs. |
+
+### CORRECTION to pass-2 conclusion (pass 3)
+
+Pass 2 marked the three legacy-reshard factories METAL-BLOCKED on the premise that a raw
+`buffer->address()` threaded through an RTA into an `AllocatorBank`/`UnicastEndpoint` NOC primitive
+has no typed channel. **That premise was wrong for data-movement kernels.** Per the updated recipe's
+Case-2 rule, a DM kernel that consumes a tensor's raw base address is **portable**: bind the tensor as a
+normal `TensorParameter`/`TensorBinding` and pull the base kernel-side via
+`TensorAccessor(ta::name).get_bank_base_address()` (which returns the bank-relative base — identical to
+the legacy `buffer->address()` offset, same in every bank), keeping the existing raw `AllocatorBank` +
+`bank_id` / `UnicastEndpoint` + physical-core NOC walk UNCHANGED. None of these reshard kernels are
+COMPUTE (the one Case-2 carve-out that stays blocked), so all three port.
+
+### PORTED — `ReshardSameHeightFactory<local_is_output>` (pass 3)
+
+- **Concept**: `MetalV2FactoryConcept` — `create_program_spec` returning `ProgramArtifacts`. Both template
+  instantiations ported; routing/variant unchanged.
+- **Kernels (forked)**: `reshard_same_height_{reader,writer}.cpp` live in the cross-op dir
+  `sharded/device/kernels/dataflow/` (used only by this factory but outside the op's own dir), so forked
+  to `kernels/reshard_same_height_{reader,writer}_m2.cpp`. Whitelist changes only: positional CTAs/RTAs →
+  `get_arg(args::…)`; local shard CB → `dfb::shard_cb`; remote `base_read_addr`/`base_write_addr` RTA →
+  `TensorAccessor(ta::remote).get_bank_base_address()` (Case-2 bridge). The variable-length per-segment
+  RTA tail (legacy read via `get_arg_addr(5)`) → runtime varargs. All NOC logic, `AllocatorBank`, bank_id,
+  offset arithmetic UNCHANGED.
+- **Spec shape**: 2 KernelSpecs of one source (READER + WRITER role; CT define `read_from_dram`/`write_to_dram`
+  by `local_is_output`), 2 TensorParameters (`local` borrowed, `remote` Case-2), 1 borrowed-memory DFB
+  (`shard_cb`, `borrowed_from = local`) self-looped on both kernels, 1 WorkUnitSpec.
+- **Dropped plumbing**: remote-buffer base-address RTA (slot 3, a `Buffer*`) → Case-2 TensorBinding; CB-index
+  CTA → `dfb::`.
+
+### PORTED — `ReshardSameWidthFactory<local_is_output>` (pass 3)
+
+- Same Case-2 bridge for the remote base address; same borrowed shard self-loop DFB. The **unaligned reader
+  path** uses a second local (non-borrowed) scratch DFB (`scratch_cb`) — bound as a self-loop **only** when
+  `local_is_output && unaligned`, gated kernel-side by `#ifdef UNALIGNED` (the legacy `if constexpr (unaligned)`
+  CTA gate promoted to a preprocessor define so `dfb::scratch_cb` never enters name lookup on the aligned
+  path / the writer source). Per-write tail → varargs.
+- **Spec shape**: 2 KernelSpecs of one source, 2 TensorParameters, 1–2 DFBs (shard always; scratch on the
+  unaligned reader path), 1 WorkUnitSpec.
+- The redundant double `get_bank_ids_from_logical_core` call in the legacy work-split loop was collapsed to
+  the single live call (functionally identical; bank_id recomputed each iteration as before).
+
+### PORTED — `ReshardGenericFactory` (pass 3)
+
+- **Kernels (forked)**: `reshard_reader.cpp` / `reshard_reader_diff_width.cpp` → `kernels/reshard_reader_m2.cpp`
+  / `kernels/reshard_reader_diff_width_m2.cpp`. Input base address (legacy RTA at index `grid.x+grid.y`,
+  back-patched to a `Buffer*`) → `TensorAccessor(ta::input).get_bank_base_address()`. The leading
+  physical-core-coord maps **and** the host-compressed stride(-of-strides) table ride VERBATIM as a runtime
+  vararg block (the kernel still indexes them positionally — `get_arg_val(idx)` → `get_vararg(idx)`); the
+  dropped input-addr slot is erased from the block host-side (`strip_addr`). The manual `UnicastEndpoint{}`
+  NOC reads by physical core coord stay UNCHANGED.
+- **Spec shape**: 2 KernelSpecs of one runtime-selected source (page-size match selects diff-width vs same),
+  2 TensorParameters (`input` Case-2, `output` borrowed), 1 borrowed-memory DFB (`shard_cb`,
+  `borrowed_from = output`) self-looped on both kernels, 1 WorkUnitSpec.
+- **Note**: the legacy `detail::get_runtime_args_for_given_ranges*` helpers (unchanged, out of scope) still
+  take an `input_addr` parameter; the real `input_buffer->address()` is passed in and then immediately
+  stripped before the args reach varargs — it never crosses to the device. The typed binding supplies the
+  base address.
 
 ### PORTED — `NdReshardCopyLocalShardFactory<local_is_input>` (pass 2)
 
@@ -98,57 +156,7 @@ This section is the authoritative per-factory result after the two porting passe
   they hand a raw `buffer->address()` to an `AllocatorBank`/`UnicastEndpoint` NOC primitive, which the
   typed binding cannot supply.
 
-### METAL-BLOCKED — `ReshardSameHeightFactory<local_is_output>`
-
-Raw remote-buffer base address threaded through an RTA into a non-accessor NOC primitive.
-- Host: `reshard_program_factory_same_height.cpp:127,134` push `remote_buffer` (a `Buffer*`) as RTA slot 3.
-- Kernel `…/sharded/device/kernels/dataflow/reshard_same_height_reader.cpp:21,44` and
-  `…/reshard_same_height_writer.cpp:21,44`: `base_read_addr/base_write_addr = get_arg_val<uint32_t>(3)`
-  is fed to `noc.async_read/write(bank, …, {.bank_id=…, .addr=read_offset}, …)` over an
-  `AllocatorBank<bank_type>` — there is no `TensorAccessor` for the remote tensor, so no `ta::` binding can
-  supply the address, and the remote-buffer address is per-dispatch-varying (io tensor), so the
-  CRTA escape valve would go stale on a cache hit. The local sharded CB (`cb.buffer = local_buffer`,
-  `:79`) IS borrowed-memory-DFB-expressible, but the remote address is the hard wall.
-- Off-rules change that would be needed: a kernel-side `TensorAccessor` (or `get_bank_base_address`
-  bridge) for the remote tensor, which would require rewriting the kernel's `AllocatorBank` + bank_id +
-  hand-computed offset NOC loop — outside the kernel-side whitelist.
-
-### METAL-BLOCKED — `ReshardSameWidthFactory<local_is_output>`
-
-Identical remote-address-through-RTA pattern, plus an unaligned-path scratch CB.
-- Host: `reshard_program_factory_same_width.cpp:156` pushes `remote_buffer` as RTA slot 0
-  (`std::vector<std::variant<uint32_t, Buffer*>>` back-patch).
-- Kernel `…/dataflow/reshard_same_width_reader.cpp:24,50,79` / `reshard_same_width_writer.cpp:24,44`:
-  `src_addr/dst_addr = get_arg_val<uint32_t>(0)` → `noc.async_read/write(bank, …, {.bank_id, .addr}, …)`
-  over `AllocatorBank<bank_type>`; no remote `TensorAccessor`. Same stale-on-cache-hit wall as same-height.
-- Additionally the unaligned path uses a second (non-borrowed) scratch CB (`cb_scratch_index`, host `:104`)
-  — that part would self-loop fine, but the remote-address blocker stands.
-
-### METAL-BLOCKED — `ReshardGenericFactory`
-
-Raw input-buffer base address through RTA + fully manual `UnicastEndpoint` NOC by physical core coord.
-- Host: `reshard_program_factory_generic.cpp:785,795` back-patch `input_buffer` (a `Buffer*`) into RTA slot
-  `grid.x + grid.y`; `:746,754,764,774` pass `input_buffer->address()` into the detail RTA builders;
-  `:724-733` precompute physical core x/y coords as leading RTAs.
-- Kernel `…/dataflow/reshard_reader.cpp:23,67` and `reshard_reader_diff_width.cpp:23,85`:
-  `input_shard_addr = get_arg_val<uint32_t>(arg_index)` and `start_x/start_y = get_arg_val(...)` feed
-  `noc.async_read(UnicastEndpoint{}, dst, …, {.noc_x, .noc_y, .addr = input_shard_addr + addr_offset}, …)`.
-  No `TensorAccessor` anywhere; the kernel walks a host-compressed stride table by physical core id and
-  raw base+offset. The typed binding model cannot express the manual physical-core unicast, and the input
-  address is per-dispatch-varying. Output CB (`cb.buffer = output_buffer`, `:692`) is borrowed-memory
-  expressible, but the input-address-by-unicast is the wall.
-- Off-rules change that would be needed: replace the manual `UnicastEndpoint` + packed physical-core RTAs
-  with a `TensorAccessor`-based read, a substantial kernel rewrite far outside the whitelist.
-
-### Common root cause / handoff
-
-All three blocked factories share one shape: a **resident sharded tensor accessed by raw `buffer->address()`
-threaded through an RTA into a non-`TensorAccessor` NOC primitive** (`AllocatorBank` + bank_id, or
-`UnicastEndpoint` + physical core coord). This is the recipe's named genuine blocker ("a raw
-`buffer->address()` threaded through a CTA/RTA to a kernel") and the gaps-doc remote-address blocker. The
-local sharded buffers in all three ARE borrowed-memory-DFB-expressible (`cb.buffer = local/output_buffer`);
-it is exclusively the *remote* tensor's address that has no typed channel. These unblock once a kernel-side
-`TensorAccessor` (or sanctioned bridge) can supply a sharded remote tensor's base address to a bank/unicast
-NOC walk — i.e. a remote-sharded `TensorAccessor` read path. No clever workaround was attempted (per recipe
-§When the discipline doesn't fit); they remain on the legacy `ProgramDescriptorFactoryConcept` and the op
-continues to build and dispatch per-factory.
+> NOTE (superseded by pass 3): the original pass-2 "METAL-BLOCKED" detail sections for SameHeight /
+> SameWidth / Generic that previously followed here have been removed — those three are now **PORTED**
+> via the Case-2 `get_bank_base_address` bridge. See **§Per-factory STATUS (all variants)** above for the
+> authoritative result and the per-factory pass-3 writeups.

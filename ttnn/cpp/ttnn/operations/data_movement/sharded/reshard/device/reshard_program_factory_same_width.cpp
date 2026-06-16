@@ -8,44 +8,21 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-namespace {
-
-// Anonymous-namespace helper unique to reshard same-width to avoid unity-build collisions.
-void push_reshard_same_width_cb_pair(
-    ProgramDescriptor& desc,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t total_size,
-    uint32_t page_size,
-    const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
-    CBDescriptor cb;
-    cb.total_size = total_size;
-    cb.core_ranges = core_ranges;
-    cb.format_descriptors.push_back(CBFormatDescriptor{
-        .buffer_index = static_cast<uint8_t>(cb_index),
-        .data_format = data_format,
-        .page_size = page_size,
-    });
-    cb.buffer = bound_buffer;
-    desc.cbs.push_back(std::move(cb));
-}
-
-}  // namespace
-
 template <bool local_is_output>
-ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output>::create_program_spec(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    const auto& output = output_tensor;
+    auto& output = output_tensor;
     const auto& local_tensor = local_is_output ? output : input;
     const auto& remote_tensor = local_is_output ? input : output;
 
@@ -55,8 +32,6 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
 
     auto remote_core_type = remote_tensor.buffer()->core_type();
-    constexpr uint32_t cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t cb_scratch_index = tt::CBIndex::c_1;
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
     auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
@@ -82,114 +57,206 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
     }
-    const uint32_t total_size = local_units_per_shard * unit_size;
-    const std::string kernel_name =
-        local_is_output
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
-
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
-    auto* local_buffer = local_tensor.buffer();
     auto* remote_buffer = remote_tensor.buffer();
     auto remote_buffer_type = remote_buffer->buffer_type();
 
-    ProgramDescriptor desc;
+    // Names. The local sharded buffer backs a borrowed-memory DFB; the remote tensor flows through the
+    // typed TensorAccessor channel (Case-2 bridge). The unaligned reader path uses a local scratch DFB.
+    const TensorParamName kLocal{"local"};
+    const TensorParamName kRemote{"remote"};
+    const DFBSpecName kShardCb{"shard_cb"};
+    const DFBSpecName kScratchCb{"scratch_cb"};
+    const KernelSpecName kReader{"reader"};
+    const KernelSpecName kWriter{"writer"};
 
-    // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
-    push_reshard_same_width_cb_pair(
-        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
+    // Both KernelDescriptors use the SAME source (selected by local_is_output). Only the reader source has
+    // the unaligned scratch path. The CT define for the bank type differs by name across the two sources.
+    const std::filesystem::path kKernelSource =
+        local_is_output ? std::filesystem::path(
+                              "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/"
+                              "reshard_same_width_reader_m2.cpp")
+                        : std::filesystem::path(
+                              "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/"
+                              "reshard_same_width_writer_m2.cpp");
+    const std::string kDramCtaName = local_is_output ? "read_from_dram" : "write_to_dram";
+    const std::string kNumName = local_is_output ? "num_reads" : "num_writes";
+    const std::string kOffsetName = local_is_output ? "write_offset" : "read_offset";
+    // The scratch DFB only exists on the (reader) unaligned path.
+    const bool use_scratch = local_is_output && unaligned;
 
-    if (unaligned) {
-        // Scratch CB used by kernels when local/remote alignments differ.
-        push_reshard_same_width_cb_pair(
-            desc,
-            cb_scratch_index,
-            data_format,
-            remote_units_per_shard * remote_unit_size_padded,
-            unit_size,
-            all_cores,
-            /*bound_buffer=*/nullptr);
+    ProgramSpec spec;
+    spec.name = "reshard_same_width";
+
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = kLocal, .spec = local_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = kRemote, .spec = remote_tensor.tensor_spec()});
+
+    // Local sharded CB bound to the local buffer: borrowed-memory DFB.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = kShardCb,
+        .entry_size = unit_size,
+        .num_entries = local_units_per_shard,
+        .data_format_metadata = data_format,
+        .borrowed_from = kLocal,
+    });
+    if (use_scratch) {
+        // Local (non-borrowed) scratch DFB used by the unaligned read path. Base-pointer access only.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = kScratchCb,
+            .entry_size = unit_size,
+            .num_entries = remote_units_per_shard * remote_unit_size_padded / unit_size,
+            .data_format_metadata = data_format,
+        });
     }
 
-    // Reader/writer kernels share the same source and compile-time args.
-    std::vector<uint32_t> compile_args = {
-        cb_index,
-        static_cast<uint32_t>(interface_with_dram),
-        static_cast<uint32_t>(unaligned),
-        unit_size,
-        local_unit_size_padded,
-        remote_unit_size_padded,
-        cb_scratch_index};
+    // Self-loop the borrowed shard DFB (and scratch, if present) on both kernels (base-pointer access only).
+    auto bind_self_loops = [&](KernelSpec& k) {
+        k.dfb_bindings = {
+            DFBBinding{
+                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{
+                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::CONSUMER},
+        };
+        if (use_scratch) {
+            k.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = kScratchCb,
+                .accessor_name = "scratch_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            k.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = kScratchCb,
+                .accessor_name = "scratch_cb",
+                .endpoint_type = DFBEndpointType::CONSUMER});
+        }
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.kernel_source = kernel_name;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.compile_time_args = compile_args;
+    auto make_kernel = [&](const KernelSpecName& unique_id, DataMovementRoleHint role) {
+        KernelSpec k;
+        k.unique_id = unique_id;
+        k.source = kKernelSource;
+        k.compile_time_args = {
+            {kDramCtaName, static_cast<uint32_t>(interface_with_dram)},
+            {"unaligned", static_cast<uint32_t>(unaligned)},
+            {"unit_size", unit_size},
+            {"local_unit_size_padded", local_unit_size_padded},
+            {"remote_unit_size_padded", remote_unit_size_padded},
+        };
+        if (use_scratch) {
+            k.compiler_options.defines = {{"UNALIGNED", "1"}};
+        }
+        k.runtime_arg_schema.runtime_arg_names = {kOffsetName, kNumName};
+        bind_self_loops(k);
+        k.tensor_bindings = {TensorBinding{.tensor_parameter_name = kRemote, .accessor_name = "remote"}};
+        k.hw_config = DataMovementHardwareConfig{.role = role};
+        return k;
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.kernel_source = kernel_name;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.compile_time_args = std::move(compile_args);
+    KernelSpec reader = make_kernel(kReader, DataMovementRoleHint::READER);
+    KernelSpec writer = make_kernel(kWriter, DataMovementRoleHint::WRITER);
+
+    // ---- Build per-core, per-kernel runtime args (legacy work split, verbatim). ----
+    // Legacy packed RTA layout per kernel: [remote_addr(dropped), start_offset, num_transfers, then
+    // 3*num_transfers tail]. The remote base address is now supplied by the Case-2 TensorBinding.
+    // We collect, per core, the (start_offset, tail) for kernel_0 (reader) and kernel_1 (writer).
+    struct PerKernelArgs {
+        uint32_t start_offset = 0;
+        uint32_t num_transfers = 0;
+        std::vector<uint32_t> tail;  // [bank_id, offset, units] * num_transfers
+    };
+    std::vector<std::array<PerKernelArgs, 2>> per_core_args(local_cores.size());
 
     uint32_t remote_core_idx = 0;
     uint32_t remote_core_units_rem = remote_units_per_shard;
-    auto bank_id =
-        device->allocator()->get_bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
-
-    std::array<KernelDescriptor*, 2> kernels = {&reader_desc, &writer_desc};
     uint32_t local_units_left = num_units;
+    uint32_t core_pos = 0;
     for (const auto& core : local_cores) {
+        (void)core;
         uint32_t local_units_per_core = std::min(local_units_left, local_units_per_shard);
         local_units_left -= local_units_per_core;
-        uint32_t local_units_per_kernel = tt::div_up(local_units_per_core, static_cast<uint32_t>(kernels.size()));
+        uint32_t local_units_per_kernel = tt::div_up(local_units_per_core, 2u);
         uint32_t local_start_offset = 0;
-        for (auto* kernel : kernels) {
-            // arg 0 is remote-buffer base address (binding via Buffer*).
-            // RTArgList doesn't expose operator[] for back-patching, so we build
-            // a std::vector<variant> here and pass via the vector overload of
-            // emplace_runtime_args.
-            std::vector<std::variant<uint32_t, Buffer*>> kernel_args;
-            kernel_args.emplace_back(remote_buffer);
-            kernel_args.emplace_back(uint32_t{0});
-            kernel_args.emplace_back(uint32_t{0});
+        for (uint32_t kidx = 0; kidx < 2; ++kidx) {
+            PerKernelArgs& ka = per_core_args[core_pos][kidx];
             uint32_t local_units_to_transfer = std::min(local_units_per_core, local_units_per_kernel);
             if (local_units_to_transfer != 0) {
                 uint32_t num_transfers = 0;
-                kernel_args[1] = local_start_offset;
+                ka.start_offset = local_start_offset;
                 local_start_offset += local_units_to_transfer * unit_size;
                 while (local_units_to_transfer > 0) {
                     if (remote_core_units_rem == 0) {
                         remote_core_idx++;
                         remote_core_units_rem = remote_units_per_shard;
-                        bank_id = device->allocator()->get_bank_ids_from_logical_core(
-                            remote_buffer_type, remote_cores[remote_core_idx])[0];
                     }
                     uint32_t units_to_transfer = std::min(remote_core_units_rem, local_units_to_transfer);
-                    bank_id = device->allocator()->get_bank_ids_from_logical_core(
+                    auto bank_id = device->allocator()->get_bank_ids_from_logical_core(
                         remote_buffer_type, remote_cores[remote_core_idx])[0];
-                    kernel_args.emplace_back(bank_id);
-                    kernel_args.emplace_back(
-                        (remote_units_per_shard - remote_core_units_rem) * remote_unit_size_padded);
-                    kernel_args.emplace_back(units_to_transfer);
+                    ka.tail.push_back(static_cast<uint32_t>(bank_id));
+                    ka.tail.push_back((remote_units_per_shard - remote_core_units_rem) * remote_unit_size_padded);
+                    ka.tail.push_back(units_to_transfer);
                     local_units_per_core -= units_to_transfer;
                     local_units_to_transfer -= units_to_transfer;
                     remote_core_units_rem -= units_to_transfer;
                     num_transfers++;
                 }
-                kernel_args[2] = num_transfers;
+                ka.num_transfers = num_transfers;
             }
-            kernel->emplace_runtime_args(core, kernel_args);
         }
+        ++core_pos;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    // Max vararg tail length across cores (per kernel index).
+    uint32_t max_tail = 0;
+    for (const auto& pk : per_core_args) {
+        max_tail = std::max<uint32_t>(max_tail, static_cast<uint32_t>(pk[0].tail.size()));
+        max_tail = std::max<uint32_t>(max_tail, static_cast<uint32_t>(pk[1].tail.size()));
+    }
+    reader.advanced_options.num_runtime_varargs = max_tail;
+    writer.advanced_options.num_runtime_varargs = max_tail;
 
-    return desc;
+    spec.kernels.push_back(reader);
+    spec.kernels.push_back(writer);
+
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "wu",
+        .kernels = {kReader, kWriter},
+        .target_nodes = all_cores,
+    });
+
+    // ---- Run args. ----
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run;
+    reader_run.kernel = kReader;
+    KernelRunArgs writer_run;
+    writer_run.kernel = kWriter;
+    reader_run.runtime_arg_values.reserve(local_cores.size());
+    writer_run.runtime_arg_values.reserve(local_cores.size());
+
+    for (uint32_t i = 0; i < local_cores.size(); ++i) {
+        const NodeCoord node{local_cores[i]};
+        const PerKernelArgs& r = per_core_args[i][0];
+        const PerKernelArgs& w = per_core_args[i][1];
+
+        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
+            .node = node, .args = {{kOffsetName, r.start_offset}, {kNumName, r.num_transfers}}});
+        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
+            .node = node, .args = {{kOffsetName, w.start_offset}, {kNumName, w.num_transfers}}});
+
+        AdvancedKernelRunArgs::Varargs reader_tail = r.tail;
+        AdvancedKernelRunArgs::Varargs writer_tail = w.tail;
+        reader_tail.resize(max_tail, 0u);
+        writer_tail.resize(max_tail, 0u);
+        reader_run.advanced_options.runtime_varargs[node] = std::move(reader_tail);
+        writer_run.advanced_options.runtime_varargs[node] = std::move(writer_tail);
+    }
+
+    run_args.kernel_run_args.push_back(std::move(reader_run));
+    run_args.kernel_run_args.push_back(std::move(writer_run));
+
+    run_args.tensor_args = {
+        {kLocal, local_tensor.mesh_tensor()},
+        {kRemote, remote_tensor.mesh_tensor()},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 // Explicit template instantiations
