@@ -104,6 +104,15 @@ def generate_unpack_unary_operand_combinations(
                             else SUPPORTED_TILE_SIZES
                         )
                         for tile_dims in tile_sizes:
+                            if is_mx_unsupported_tile_dims(
+                                in_fmt, fmt.output_format, tile_dims
+                            ):
+                                continue
+                            if (
+                                unpacker_sel == UnpackerEngine.UnpDest
+                                and tile_dims not in MX_SUPPORTED_TILE_SIZES
+                            ):
+                                continue
                             tile_shape = construct_tile_shape(tile_dims)
                             for dimensions in generate_unary_input_dimensions(
                                 dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
@@ -156,15 +165,6 @@ def test_unpack_unary_operand_quasar(
         input_dimensions,
         tile_dimensions,
     ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
-
-    if is_mx_unsupported_tile_dims(
-        formats.input_format, formats.output_format, tile_dimensions
-    ):
-        pytest.skip("MX formats only support square tile dimensions (num_faces = 1, 4)")
-
-    if unpacker_sel == UnpackerEngine.UnpDest:
-        if tile_dimensions not in MX_SUPPORTED_TILE_SIZES:
-            pytest.skip("Unpack to dest not yet supported for tiny tiles")
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

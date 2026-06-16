@@ -122,6 +122,8 @@ def generate_qsr_pack_combinations(
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 for dest_sync in dest_sync_modes:
                     for tile_dims in SUPPORTED_TILE_SIZES:
+                        if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
+                            continue
                         tile_shape = construct_tile_shape(tile_dims)
                         for dimensions in generate_unary_input_dimensions(
                             dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
@@ -171,11 +173,6 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         relu_type,
         tile_dimensions,
     ) = formats_dest_acc_sync_dims_relu[0]
-
-    if is_mx_unsupported_tile_dims(
-        formats.input_format, formats.output_format, tile_dimensions
-    ):
-        pytest.skip("MX formats only support square tile dimensions (num_faces = 1, 4)")
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

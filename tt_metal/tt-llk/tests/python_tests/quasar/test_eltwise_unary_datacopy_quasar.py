@@ -74,6 +74,10 @@ def generate_eltwise_unary_datacopy_combinations(
             for dest_sync in dest_sync_modes:
                 for data_copy_type in data_copy_types:
                     for tile_dims in SUPPORTED_TILE_SIZES:
+                        if is_mx_unsupported_tile_dims(
+                            in_fmt, fmt.output_format, tile_dims
+                        ):
+                            continue
                         tile_shape = construct_tile_shape(tile_dims)
                         for dimensions in generate_unary_input_dimensions(
                             dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
@@ -151,11 +155,6 @@ def test_eltwise_unary_datacopy_quasar(
         and implied_math_format == ImpliedMathFormat.No
     ):
         pytest.skip("MX formats require implied_math_format=Yes on Quasar")
-
-    if is_mx_unsupported_tile_dims(
-        formats.input_format, formats.output_format, tile_dimensions
-    ):
-        pytest.skip("MX formats only support square tile dimensions (num_faces = 1, 4)")
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
