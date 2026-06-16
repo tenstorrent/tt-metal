@@ -193,10 +193,53 @@ class TtMinistralRMSNorm(RMSNorm):
             state_dict_prefix=args.get_state_dict_prefix("", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
-            is_distributed=args.is_distributed_norm,
+            is_distributed=None,
             add_unit_offset=args.rms_norm_add_unit_offset,
             ccl_topology=args.ccl_topology(),
             tt_ccl=tt_ccl,
+        )
+        self.is_distributed = args.is_distributed_norm
+        if self.is_distributed:
+            self.weight_distributed = self._load_distributed_weight(
+                mesh_device,
+                args,
+                state_dict,
+                weight_key,
+                layer_num,
+                None if args.dummy_weights else weight_cache_path,
+            )
+
+    @staticmethod
+    def _load_distributed_weight(
+        mesh_device,
+        args,
+        state_dict,
+        weight_key: str,
+        layer_num: int | None,
+        weight_cache_path,
+    ):
+        weight_name = f"{args.get_state_dict_prefix('', layer_num)}{weight_key}.weight"
+        torch_weight = (
+            state_dict[weight_name].unsqueeze(0).view(1, 1, args.dim).reshape([1, 1, args.dim // _TILE, _TILE])
+        )
+        if args.rms_norm_add_unit_offset:
+            torch_weight = torch_weight + 1.0
+
+        mesh_shape = list(mesh_device.shape)
+        shard_dims = (None, 2) if mesh_shape[1] > 1 else (2, None)
+        cache_file_name = (
+            None
+            if weight_cache_path is None
+            else weight_cache_path / f"{weight_name}_distributed_{mesh_shape[0]}x{mesh_shape[1]}"
+        )
+        return ttnn.as_tensor(
+            torch_weight,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_file_name,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
 
     def _block_sharded_norm_chunk(

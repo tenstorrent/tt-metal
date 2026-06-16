@@ -15,6 +15,9 @@ import time
 import types
 from pathlib import Path
 
+# Keep normal demo output focused; set TT_LOGGER_LEVEL=warn/Debug externally when debugging TT-Metal.
+os.environ.setdefault("TT_LOGGER_LEVEL", "Error")
+
 import pytest
 import torch
 from loguru import logger

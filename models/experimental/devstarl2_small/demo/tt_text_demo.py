@@ -13,6 +13,9 @@ import types
 from pathlib import Path
 from typing import Any
 
+# Keep normal demo output focused; set TT_LOGGER_LEVEL=warn/Debug externally when debugging TT-Metal.
+os.environ.setdefault("TT_LOGGER_LEVEL", "Error")
+
 import pytest
 import torch
 from loguru import logger
@@ -525,7 +528,6 @@ def main(argv: list[str] | None = None):
                 answer_text = tokenizer.decode(out[0, prompt_len_before_gen:].tolist(), skip_special_tokens=False)
                 logger.info(answer_text)
             else:
-                do_sample = prefer_stochastic_sampling
                 if args.seed is not None:
                     torch.manual_seed(args.seed)
                     if torch.cuda.is_available():

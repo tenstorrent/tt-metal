@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Keep normal demo output focused; set TT_LOGGER_LEVEL=warn/Debug externally when debugging TT-Metal.
+os.environ.setdefault("TT_LOGGER_LEVEL", "Error")
+
 import torch
 import ttnn
 from PIL import Image
