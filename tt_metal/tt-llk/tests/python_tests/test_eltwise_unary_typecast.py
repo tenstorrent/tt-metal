@@ -4,19 +4,10 @@
 """
 LLK SFPU typecast tests.
 
-These exercise the ``calculate_typecast_*`` / ``init_typecast_*`` SFPU kernels
-directly from the tt-llk harness — the coverage gap identified in
-``TYPECAST_TEST_COVERAGE_ANALYSIS.md`` (the tt-llk infra previously had *zero*
-typecast tests, while ttnn covered ~54 dtype pairs end-to-end).
-
-Each test drives ``sources/eltwise_unary_typecast_test.cpp`` which mirrors the
-production typecast compute kernel: copy the input tile into Dest, run the SFPU
-typecast in place, then pack to the output format.
-
-Scope: the SFPU *numeric* conversions (float<->int, int<->int, fp32->fp16b),
-which is exactly what the existing datacopy tests do NOT cover. The pure
-unpacker/packer block-float<->float conversions are already covered by the
-datacopy tests and are intentionally excluded here.
+Scope: the **full ttnn typecast matrix** — every directed dtype pair that
+``ttnn.typecast`` exercises end-to-end. That spans float<->float, float<->int,
+int<->int and all block-float (Bfp8_b / Bfp4_b) conversions. Same-dtype pairs
+and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 """
 
 import pytest
@@ -52,63 +43,51 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-# SFPU typecast pairs that perform real arithmetic in Dest (the coverage gap).
-# Grouped for readability; deduplicated into TYPECAST_PAIRS below.
-_FLOAT_TO_FLOAT = [
-    (DataFormat.Float32, DataFormat.Float16_b),
+# The full ttnn typecast dtype set (analysis doc section 5).
+_TYPECAST_FORMATS = [
+    DataFormat.Float32,
+    DataFormat.Float16_b,
+    DataFormat.Bfp8_b,
+    DataFormat.Bfp4_b,
+    DataFormat.Int32,
+    DataFormat.UInt32,
+    DataFormat.UInt16,
+    DataFormat.UInt8,
 ]
 
-_FLOAT_TO_INT = [
-    (DataFormat.Float32, DataFormat.Int32),
-    (DataFormat.Float32, DataFormat.UInt32),
-    (DataFormat.Float32, DataFormat.UInt16),
-    (DataFormat.Float32, DataFormat.UInt8),
-    (DataFormat.Float16_b, DataFormat.Int32),
-    (DataFormat.Float16_b, DataFormat.UInt32),
-    (DataFormat.Float16_b, DataFormat.UInt16),
-    (DataFormat.Float16_b, DataFormat.UInt8),
-]
+# Pairs the kernel LUT does not implement (and ttnn does not test): int32<->uint32.
+_EXCLUDED_PAIRS = {
+    (DataFormat.Int32, DataFormat.UInt32),
+    (DataFormat.UInt32, DataFormat.Int32),
+}
 
-_INT_TO_FLOAT = [
-    (DataFormat.Int32, DataFormat.Float32),
-    (DataFormat.Int32, DataFormat.Float16_b),
-    (DataFormat.UInt32, DataFormat.Float32),
-    (DataFormat.UInt32, DataFormat.Float16_b),
-    (DataFormat.UInt16, DataFormat.Float32),
-    (DataFormat.UInt16, DataFormat.Float16_b),
-    (DataFormat.UInt8, DataFormat.Float32),
-    (DataFormat.UInt8, DataFormat.Float16_b),
-]
+_BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
 
-_INT_TO_INT = [
-    (DataFormat.UInt16, DataFormat.UInt32),
-    (DataFormat.UInt16, DataFormat.Int32),
-    (DataFormat.UInt32, DataFormat.UInt16),
-    (DataFormat.Int32, DataFormat.UInt16),
-    (DataFormat.UInt32, DataFormat.UInt8),
-    (DataFormat.Int32, DataFormat.UInt8),
-    (DataFormat.UInt16, DataFormat.UInt8),
-    (DataFormat.UInt8, DataFormat.UInt16),
-]
-
+# Every directed pair (54 total) ttnn.typecast exercises end-to-end.
 TYPECAST_PAIRS = [
     InputOutputFormat(in_fmt, out_fmt)
-    for in_fmt, out_fmt in (
-        _FLOAT_TO_FLOAT + _FLOAT_TO_INT + _INT_TO_FLOAT + _INT_TO_INT
-    )
+    for in_fmt in _TYPECAST_FORMATS
+    for out_fmt in _TYPECAST_FORMATS
+    if in_fmt != out_fmt and (in_fmt, out_fmt) not in _EXCLUDED_PAIRS
 ]
 
 
-def _whole_number_float_spec() -> StimuliSpec:
-    """Float stimuli restricted to whole numbers in [0, 200].
+def _is_block_float(fmt: DataFormat) -> bool:
+    return fmt in _BLOCK_FLOAT_FORMATS
 
-    Keeps float->int truncation unambiguous (trunc == round, so this also
-    matches the rounding kernels like fp32->uint16) and stays within the range
-    that bfloat16 represents exactly, so fp32->fp16b is lossless in the golden.
+
+def _whole_number_float_spec(high: int) -> StimuliSpec:
+    """Float stimuli restricted to whole numbers in ``[0, high)``.
+
+    Whole numbers make float->int conversions exact regardless of whether the
+    kernel truncates (int32/uint32) or rounds (uint16/uint8), and keep the
+    values inside the range each format represents exactly so the golden is
+    lossless. A small ``high`` is used when a block-float format is involved so
+    the shared-exponent quantization is (near-)exact within each 16-elem block.
     """
 
     def dist(size, dtype, generator):
-        return torch.randint(0, 201, (size,), generator=generator).to(dtype)
+        return torch.randint(0, high, (size,), generator=generator).to(dtype)
 
     return StimuliSpec(distribution=dist, seed=0)
 
@@ -162,9 +141,20 @@ def test_eltwise_unary_typecast(
 
     dest_acc = _required_dest_acc(formats)
 
-    # Whole-number floats for float inputs (unambiguous truncation, lossless
-    # bf16); integer inputs keep their format-aware default spec.
-    spec_A = None if formats.input_format.is_integer() else _whole_number_float_spec()
+    # Stimuli selection per input/output dtype:
+    #  * integer -> block-float: small ints (0..15) so int->fp16b->bfp is exact
+    #    (full-range ints would differ from the golden by >1 bfp ULP);
+    #  * integer -> anything else: format-aware default spec (exact int/float cmp);
+    #  * float / block-float input: whole numbers so int conversions are exact and
+    #    bf16 is lossless; small range when a block-float is involved so the
+    #    shared-exponent quantization is (near-)exact per 16-elem block.
+    bfp_involved = _is_block_float(formats.input_format) or _is_block_float(
+        formats.output_format
+    )
+    if formats.input_format.is_integer():
+        spec_A = StimuliSpec.uniform(0, 15) if bfp_involved else None
+    else:
+        spec_A = _whole_number_float_spec(16 if bfp_involved else 201)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,

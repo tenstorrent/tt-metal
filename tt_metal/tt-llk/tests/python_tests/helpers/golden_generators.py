@@ -1708,18 +1708,26 @@ class TypecastGolden:
     to the output dtype, and the packer writes it to L1. Typecast is purely
     elementwise and the device result is read back in row-major order (same
     unpack->Dest->pack data path as DataCopyGolden), so no tilization is
-    applied here — the conversion is element-for-element on the flat input.
+    applied to the elementwise conversion.
 
-    Scope: the numeric SFPU conversions (float<->int, int<->int, fp32->fp16b).
-    Pure unpacker/packer block-float<->float conversions are already covered by
-    the datacopy tests and are intentionally excluded here.
-
-    Conversion semantics mirror the ckernel_sfpu_typecast.h kernels:
-      * float -> integer: truncation toward zero.
-      * -> UInt8: low-byte wrap (two's complement), matching `& 0xFF`.
-      * -> UInt16/UInt32/Int32: clamp to the destination range.
-      * integer/float -> float: value-preserving cast.
+    Covers the full ttnn typecast matrix across float, integer, and block-float
+    (Bfp8_b / Bfp4_b) source/destination dtypes:
+      * input block-float is round-tripped through its unpack quantization
+        (``quantize_input_to_unpack_format``) to match what the SFPU sees;
+      * float/int -> integer: truncation toward zero for int32/uint32 and
+        round-to-nearest for uint16/uint8 (whole-number stimuli make both
+        exact); UInt8 keeps the low byte; others clamp to the dest range;
+      * -> plain float: value-preserving cast;
+      * -> block-float: the result is tilized into 16-element BFP blocks, run
+        through the packer's shared-exponent quantization, and untilized back
+        to row-major (mirrors DataCopyGolden's BFP output handling).
     """
+
+    _BLOCK_FLOAT_FORMATS = (
+        DataFormat.Bfp8_b,
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp2_b,
+    )
 
     def __call__(
         self,
@@ -1740,9 +1748,14 @@ class TypecastGolden:
             if input_format.is_integer():
                 values = operand.to(torch.int64)
             else:
-                # Truncation toward zero (SFPU exman/shift + floor(|v|) kernels).
+                # int32/uint32 truncate; uint16/uint8 round. Whole-number
+                # stimuli make trunc == round, so trunc models both exactly.
                 values = torch.trunc(operand.float()).to(torch.int64)
             result = self._to_integer(values, output_format)
+        elif output_format in self._BLOCK_FLOAT_FORMATS:
+            result = self._to_block_float(
+                operand.float(), output_format, input_dimensions
+            )
         else:
             result = self._to_float(operand.float(), output_format)
 
@@ -1766,6 +1779,28 @@ class TypecastGolden:
     @staticmethod
     def _to_float(values: torch.Tensor, output_format: DataFormat) -> torch.Tensor:
         return values.to(format_dict[output_format])
+
+    @staticmethod
+    def _to_block_float(
+        values: torch.Tensor,
+        output_format: DataFormat,
+        input_dimensions: list[int],
+    ) -> torch.Tensor:
+        """Quantize fp values to a block-float output, matching the packer.
+
+        The packer computes one shared exponent per 16 contiguous datums in
+        Dest (i.e. per face row), so the values are first tilized into that
+        layout, quantized to the target BFP width, then untilized back to the
+        row-major order the device result is read back in.
+        """
+        data = tilize_block(
+            values.ravel(), input_dimensions, DataFormat.Float16_b
+        ).ravel()
+        if output_format == DataFormat.Bfp4_b:
+            return _bfp4b_to_float16b(data, input_dimensions)
+        if output_format == DataFormat.Bfp2_b:
+            return _bfp2b_to_float16b(data, input_dimensions)
+        return _bfp8b_to_float16b(data, input_dimensions)
 
 
 @register_golden
