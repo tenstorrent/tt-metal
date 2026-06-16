@@ -15,6 +15,7 @@
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
 #include "waypoint.h"
+#include "internal/hw_thread.h"
 #include "internal/risc_attribs.h"
 #include "internal/debug/dprint_buffer.h"
 
@@ -88,6 +89,31 @@ struct dp_typed_array_t {
     uint32_t* ptr;
     uint16_t type;
     dp_typed_array_t(uint16_t type, uint32_t* ptr) : ptr(ptr), type(type) {}
+};
+
+struct dp_top_callstack_t {
+    std::uintptr_t pc;
+    std::uintptr_t ra;
+    std::uintptr_t skip_frames;
+
+    dp_top_callstack_t(std::uintptr_t pc, std::uintptr_t ra, std::uintptr_t skip_frames) {
+        // We do a few adjustments to make host side parsing easier:
+        //  - subtract the kernel offset from both PC and RA (tt-metal specific)
+        //  - rewind RA by 4 extra bytes so it points at the CALL, not the return address
+        //  - leave 0xF...F untouched: it's the sentinel for an invalid/unknown address
+        std::uint32_t kernel_offset = 0;
+
+#if !defined(ENV_LLK_INFRA)
+        const std::uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+        const auto config = GET_MAILBOX_ADDRESS_DEV(launch[launch_index])->kernel_config;
+        kernel_offset = config.kernel_config_base[ProgrammableCoreType::TENSIX] +
+                        config.kernel_text_offset[internal_::get_hw_thread_idx()];
+#endif
+
+        this->pc = pc == UINTPTR_MAX ? pc : (pc - kernel_offset);
+        this->ra = ra == UINTPTR_MAX ? ra : (ra - kernel_offset - 4);
+        this->skip_frames = skip_frames;
+    }
 };
 
 #ifdef UCK_CHLKC_UNPACK
@@ -964,6 +990,24 @@ struct device_print_type<dp_typed_array_t<len>> {
         for (uint32_t i = 0; i < len; ++i) {
             dst[i + 1] = argument.ptr[i];
         }
+    }
+};
+
+template <>
+struct device_print_type<dp_top_callstack_t> {
+    static_assert(
+        sizeof(uintptr_t) == sizeof(uint32_t) || sizeof(uintptr_t) == sizeof(uint64_t), "Unsupported pointer size");
+
+    static constexpr device_print_type_info value = {
+        sizeof(uintptr_t) == sizeof(uint32_t) ? 'c' : 'C', 3 * sizeof(uintptr_t)};
+
+    static void serialize(
+        device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, dp_top_callstack_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(device_print_buffer + offset) = argument.pc;
+        *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(device_print_buffer + offset + sizeof(uintptr_t)) =
+            argument.ra;
+        *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(device_print_buffer + offset + 2 * sizeof(uintptr_t)) =
+            argument.skip_frames;
     }
 };
 
