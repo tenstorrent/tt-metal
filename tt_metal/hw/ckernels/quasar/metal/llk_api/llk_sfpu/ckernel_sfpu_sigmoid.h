@@ -11,7 +11,10 @@
 namespace ckernel {
 namespace sfpu {
 
-inline void calculate_sigmoid(const int iterations = SFPU_ITERATIONS) { _calculate_sigmoid_(iterations); }
+template <int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_sigmoid() {
+    _calculate_sigmoid_<ITERATIONS>();
+}
 
 }  // namespace sfpu
 }  // namespace ckernel

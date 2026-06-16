@@ -10,6 +10,7 @@
 #include <map>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
@@ -112,8 +113,22 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
                 EXPECT_NE(eth_links.find(eth_conn.src_chan), eth_links.end());
                 EXPECT_EQ(dst_chip, remote_chip);
                 EXPECT_EQ(eth_conn.dst_chan, remote_chan);
+
+                EXPECT_EQ(physical_system_desc.get_port_type(asic, neighbor, eth_conn.src_chan), eth_conn.port_type);
+                EXPECT_TRUE(physical_system_desc.has_port_type(asic, neighbor, eth_conn.port_type));
             }
         }
+
+        std::unordered_set<PortType> expected_port_types;
+        for (auto neighbor : physical_system_desc.get_asic_neighbors(asic)) {
+            for (const auto& eth_conn : physical_system_desc.get_eth_connections(asic, neighbor)) {
+                expected_port_types.insert(eth_conn.port_type);
+            }
+        }
+        auto available_port_types = physical_system_desc.get_available_port_types(asic);
+        std::unordered_set<PortType> actual_port_types(available_port_types.begin(), available_port_types.end());
+        EXPECT_EQ(actual_port_types, expected_port_types)
+            << "get_available_port_types should return unique port types from outgoing links";
     }
 
     // Host to Host Connectivity
@@ -143,6 +158,29 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
             // Verify that remote asic belongs to a neighbor host
             EXPECT_NE(
                 std::find(my_host_neighbors.begin(), my_host_neighbors.end(), remote_host), my_host_neighbors.end());
+
+            EXPECT_EQ(physical_system_desc.get_port_type(src_asic, dst_asic, src_chan), exit_node.eth_conn.port_type);
+            EXPECT_TRUE(physical_system_desc.has_port_type(src_asic, dst_asic, exit_node.eth_conn.port_type));
+        }
+    }
+
+    // Validate port_type is preserved through protobuf serialize/deserialize roundtrip
+    auto serialized_bytes = tt::tt_metal::serialize_physical_system_descriptor_to_bytes(physical_system_desc);
+    auto deserialized_psd = tt::tt_metal::deserialize_physical_system_descriptor_from_bytes(serialized_bytes);
+    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+        for (auto neighbor : physical_system_desc.get_asic_neighbors(asic)) {
+            auto eth_conns = physical_system_desc.get_eth_connections(asic, neighbor);
+            for (const auto& eth_conn : eth_conns) {
+                auto deserialized_conns = deserialized_psd.get_eth_connections(asic, neighbor);
+                auto conn_it =
+                    std::find_if(deserialized_conns.begin(), deserialized_conns.end(), [&](const auto& conn) {
+                        return conn.src_chan == eth_conn.src_chan;
+                    });
+                ASSERT_NE(conn_it, deserialized_conns.end())
+                    << "connection should exist after serialize/deserialize roundtrip";
+                EXPECT_EQ(conn_it->port_type, eth_conn.port_type)
+                    << "port_type should be preserved after serialize/deserialize roundtrip";
+            }
         }
     }
 
@@ -286,21 +324,43 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
             }
         }
 
-        // A Slice is defined as a 2x4 Grid that spans 2 Trays. Each tray contributes a 2x2 Grid to the slice.
-        // Note that this definition corresponds to the tray layout for BH Galaxy Rev A & B
-        const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>> devices_per_slice = {
-            {0,
-             {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
-              {TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
-            {1,
-             {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
-              {TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
-            {2,
-             {{TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
-              {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
-            {3,
-             {{TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
-              {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
+        // A slice is a host-local 2x4 grid that spans 2 trays. These 8-device slices are the canonical building
+        // blocks used to compose 4x2, 4x4, and future wider stages.
+        //
+        // Blackhole Galaxy Rev C swaps UBB tray IDs 2 and 3 relative to Rev A/B. Keep the discovered tray IDs intact
+        // and choose the logical slice composition table based on the discovered PSD revision.
+        const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>>
+            devices_per_slice_rev_ab = {
+                {0,
+                 {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+                  {TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
+                {1,
+                 {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+                  {TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+                {2,
+                 {{TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+                  {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+                {3,
+                 {{TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+                  {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
+
+        const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>>
+            devices_per_slice_rev_c = {
+                {0,
+                 {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+                  {TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
+                {1,
+                 {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+                  {TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+                {2,
+                 {{TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+                  {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+                {3,
+                 {{TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+                  {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
+
+        const auto& devices_per_slice =
+            physical_system_desc.is_bh_galaxy_rev_c() ? devices_per_slice_rev_c : devices_per_slice_rev_ab;
         const auto& pcie_id_to_asic_location = physical_system_desc.get_pcie_id_to_asic_location();
         const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
 

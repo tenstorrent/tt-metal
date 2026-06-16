@@ -117,6 +117,9 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
@@ -172,6 +175,15 @@ def test_unpack_unary_operand_quasar(
             untilize=False,
             input_dimensions=input_dimensions,
         )
+        # TransposeGolden only rearranges; it doesn't round-trip through the
+        # output MX lattice the way DataCopyGolden does. For MxFp4 -> MxInt4
+        # the MxFp4 lattice has 1.5 but MxInt4 (with the realized block scale)
+        # may not, so HW rounds 1.5 -> 2.0 while golden keeps 1.5. Snap golden
+        # to the output lattice here to match.
+        if formats.output_format.is_mx_format():
+            golden_tensor = quantize_mx_tensor_chunked(
+                golden_tensor.to(torch.bfloat16), formats.output_format
+            )
     else:
         generate_golden = get_golden_generator(DataCopyGolden)
         golden_tensor = generate_golden(
@@ -233,5 +245,7 @@ def test_unpack_unary_operand_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

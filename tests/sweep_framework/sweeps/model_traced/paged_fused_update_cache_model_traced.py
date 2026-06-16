@@ -282,8 +282,18 @@ def run(
         step = max(1, (block_size - 1) // max(num_elements_e, 1))
         torch_input_e = torch.arange(num_elements_e, dtype=torch.int32) * step
         torch_input_e = torch_input_e.clamp(0, block_size - 1).reshape(tuple(shape_e))
+        # update_idxs must be INT32 + ROW_MAJOR (C++ validation). When the traced
+        # config is HEIGHT_SHARDED, reproduce that sharding (the op pairs it with
+        # the page_table's per-core layout); otherwise it stays DRAM.
+        _uit_mc = _parse_mem_config(mem_config_e)
+        _uit_sharded = _uit_mc if (_uit_mc is not None and getattr(_uit_mc, "is_sharded", lambda: False)()) else None
         update_idxs_tensor_ttnn = _to_ttnn(
-            torch_input_e, dtype_e, layout_e, mem_config_e, "update_idxs_tensor_tensor_placement"
+            torch_input_e,
+            ttnn.int32,
+            layout_e,
+            mem_config_e,
+            "update_idxs_tensor_tensor_placement",
+            sharded_mem=_uit_sharded,
         )
 
     page_table_ttnn = None
@@ -303,7 +313,23 @@ def run(
         # maps to a unique physical block.
         torch_input_f = torch.arange(num_elements_f, dtype=torch.int32) % max_num_blocks
         torch_input_f = torch_input_f.reshape(tuple(shape_f))
-        page_table_ttnn = _to_ttnn(torch_input_f, dtype_f, layout_f, mem_config_f, "page_table_tensor_placement")
+        # The op's dtype + batch requirements depend on whether the page_table is
+        # sharded (C++ validate):
+        #   sharded   -> UINT16, and shard_height (= padded_shape[0]/num_cores)
+        #                must == input batch (padded_shape[1]).
+        #   unsharded -> INT32,  and padded_shape[0] must == input batch.
+        # The traced config is HEIGHT_SHARDED across N cores with shard_height ==
+        # batch (e.g. 400 rows / 50 cores = 8 == batch). _to_ttnn was creating it
+        # DRAM-interleaved (ignoring the memory_config), which forced the
+        # unsharded branch and a batch mismatch (400 != 8). Reproduce the traced
+        # sharding so shard_height matches the input batch; keep the traced
+        # (UINT16) dtype for the sharded case, else force INT32.
+        _pt_mc = _parse_mem_config(mem_config_f)
+        _pt_sharded = _pt_mc if (_pt_mc is not None and getattr(_pt_mc, "is_sharded", lambda: False)()) else None
+        _pt_dtype = dtype_f if _pt_sharded is not None else ttnn.int32
+        page_table_ttnn = _to_ttnn(
+            torch_input_f, _pt_dtype, layout_f, mem_config_f, "page_table_tensor_placement", sharded_mem=_pt_sharded
+        )
 
     start_time = start_measuring_time()
 

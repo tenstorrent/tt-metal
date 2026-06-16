@@ -23,7 +23,7 @@ import math
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Literal, Union, Callable
+from typing import Optional, Tuple, List, Literal, Union, Callable
 import time
 import pickle
 
@@ -145,6 +145,10 @@ class TrainingConfig(BaseTrainingConfig):
         # Aliases to match expected field names in this example
         self.num_epochs = self.epochs
         self.model_save_interval = self.save_every
+
+        # Deferred Python Parameter init: build with `ttml.lazy_init()` then
+        # `ttml.materialize_module()` immediately (same init ops / order as eager).
+        self.lazy_parameter_init = bool(tc.get("lazy_parameter_init", False))
 
 
 @dataclass
@@ -281,27 +285,36 @@ def read_file_to_str(file_path: str) -> str:
 def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     """Build a named device mesh from DeviceConfig.
 
-    Mirrors the C++ axis-assignment rule in autograd/auto_context.cpp:140-195
-    so that ttml.sync_gradients and mesh.axis_mapper("dp"|"tp", ...) bind to
-    the same physical axes the C++ trainer would.
+    Axis assignment order is ``(dp -> fsdp -> tp)`` — first enabled name claims
+    axis 0, next enabled claims axis 1, etc. This matches PyTorch FSDP2's
+    ``Mesh((replicate, shard), ("replicate", "shard"))`` HSDP convention
+    where the DDP (replicate) axis is outermost and the FSDP (shard) axis
+    is innermost.
 
-    Line topology (at most one mesh dim > 1): exactly one of enable_ddp /
-    enable_tp must be true; that name is assigned to the active (non-trivial)
-    axis.
+    Line topology (at most one mesh dim > 1): exactly one of
+    enable_ddp/enable_fsdp/enable_tp must be true; that name is assigned to
+    the active (non-trivial) axis.
 
-    2D mesh (both dims > 1): the number of enabled parallelisms must equal
-    the number of mesh dims, and assignment order is DP -> TP. CP/PP are
-    out of scope here.
+    Hybrid sharded data parallel (HSDP, ``enable_ddp + enable_fsdp``)
+    requires a 2D mesh ``[D, F]`` — axis 0 = "dp" (size D, the replicate
+    axis), axis 1 = "fsdp" (size F, the shard axis). HSDP+TP (3D mesh
+    ``[D, F, T]``) is not yet supported.
     """
     shape = tuple(int(s) for s in device_config.mesh_shape)
     n = len(shape)
     nontrivial = [i for i, s in enumerate(shape) if s > 1]
     is_line = len(nontrivial) <= 1
-    enabled = (
-        ("dp" if device_config.enable_ddp else None),
-        ("tp" if device_config.enable_tp else None),
-    )
-    enabled_names = tuple(name for name in enabled if name is not None)
+
+    # Ordered list of enabled parallelism axis names. Order is ``(dp -> fsdp -> tp)``;
+    # this is the mapping from "which mesh axis" to "which parallelism", e.g.
+    # ``enable_ddp + enable_fsdp`` -> axis 0 = "dp", axis 1 = "fsdp".
+    enabled_names: List[str] = []
+    if device_config.enable_ddp:
+        enabled_names.append("dp")
+    if device_config.enable_fsdp:
+        enabled_names.append("fsdp")
+    if device_config.enable_tp:
+        enabled_names.append("tp")
 
     axis_names = [f"_{i}" for i in range(n)]
     if not enabled_names:
@@ -310,15 +323,17 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     if is_line:
         if len(enabled_names) != 1:
             raise ValueError(
-                f"Line mesh {shape} requires exactly one of enable_ddp / enable_tp; got enabled={enabled_names}"
+                f"Line mesh {shape} requires exactly one of enable_ddp / enable_fsdp / enable_tp; "
+                f"got enabled={enabled_names}"
             )
         active = nontrivial[0] if nontrivial else 0
         axis_names[active] = enabled_names[0]
     else:
         if len(enabled_names) != n:
-            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
-        # enabled_names is ordered ("dp", "tp") by construction above, matching
-        # the C++ assignment order in auto_context.cpp.
+            raise ValueError(
+                f"Mesh {shape} requires {n} parallelisms enabled "
+                f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
+            )
         for i, name in enumerate(enabled_names):
             axis_names[i] = name
 
@@ -392,10 +407,16 @@ def create_dataset_from_text(
 def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function.
 
-    When the active mesh has a "dp" axis with size > 1, inputs and targets
-    are sharded along the batch dim across that axis (matches main.cpp:551-609
-    Shard{BATCH_DIM}). Otherwise the tensors replicate across whatever mesh
-    is open, which is the right behavior for TP-only and 1x1 cases.
+    Distribution rules (driven by the active mesh's axis names):
+
+    * Pure DDP or pure FSDP (only one of "dp" / "fsdp" has size > 1):
+      shard the batch along that single axis, replicate on every other
+      axis.
+    * HSDP (both "dp" and "fsdp" have size > 1, no "tp" axis): each
+      device gets a unique batch slice ``B / (D * F)``.
+    * TP-only / single-device / no-mesh: replicate the tensors.
+
+    HSDP + TP (3D mesh ``[D, F, T]``) is not supported.
 
     Args:
         samples: List of (sequence, target) tuples.
@@ -412,9 +433,27 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
     targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
     mesh = ttml.mesh()
+    data_axes = [
+        axis_name for axis_name in ("dp", "fsdp") if mesh.has_axis(axis_name) and mesh.axis_size(axis_name) > 1
+    ]
+
     mapper = None
-    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
-        mapper = mesh.axis_mapper("dp", tdim=0)
+    if len(data_axes) == 1:
+        # Pure DDP or pure FSDP: shard along the single batch-parallel axis.
+        mapper = mesh.axis_mapper(data_axes[0], tdim=0)
+    elif len(data_axes) >= 2:
+        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+            raise NotImplementedError("HSDP + TP batch sharding is not supported.")
+        flat_size = int(np.prod([mesh.axis_size(a) for a in data_axes]))
+        if actual_batch_size % flat_size != 0:
+            raise ValueError(
+                f"HSDP batch sharding requires the batch ({actual_batch_size}) to be "
+                f"divisible by D*F ({flat_size}); got data_axes={data_axes}."
+            )
+        # HSDP batch sharding: each device gets a unique batch slice ``B / (D * F)``.
+        # That's what ``cluster_axis=None`` does.
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
 
     data_tensor = ttml.autograd.Tensor.from_numpy(data_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
     targets_tensor = ttml.autograd.Tensor.from_numpy(targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
@@ -531,16 +570,20 @@ def train_step(
 
     if should_step:
         # All-reduce gradients across the "dp" axis (no-op when there is no
-        # mesh, no "dp" axis, or dp size == 1). Mirrors main.cpp:817-823.
+        # mesh, no "dp" axis, or dp size == 1).
+        # Ignore FSDP axis (FSDP reduce-scatter the grads in backward-post)
         ttml.sync_gradients(model.parameters())
 
-        # Gradient clipping. clip_grad_norm is incorrect under TP because
-        # parameters are sharded across the "tp" axis and the per-rank norm
-        # is not the global norm; mirror main.cpp:826-828 with a hard error.
+        # Gradient clipping. clip_grad_norm is incorrect under TP/FSDP because
+        # parameters are sharded across the "tp"/"fsdp" axis and the per-rank
+        # norm is not the global norm;
+        # TODO: Implement this (44021)
         if use_clip_grad_norm:
             mesh = ttml.mesh()
             if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
                 raise ValueError("Clip grad norm is not supported with TP")
+            if mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1:
+                raise ValueError("Clip grad norm is not supported with FSDP")
             # Use ttml.core.clip_grad_norm which works with model parameters directly
             ttml.core.clip_grad_norm(
                 model.parameters(),
@@ -1039,6 +1082,28 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
         raise ValueError(f"Unsupported model type: {model_config.model_type}")
 
 
+def instantiate_model_from_config(
+    model_config: ModelConfig,
+    lazy_init: bool,
+    *,
+    use_tp: bool = False,
+) -> Model:
+    """Create the model; deferred Python parameter allocation when ``lazy_init=True``.
+
+    With ``lazy_init=True`` the returned model still holds
+    :class:`~ttml.modules.parameter.TensorMetadata` for every parameter — the
+    caller must invoke :func:`ttml.materialize_module` once it's finished any
+    pre-materialize transformations on the model (e.g. ``ttml.fsdp.fully_shard``,
+    which rewrites each lazy param's mapper to include the FSDP shard so
+    materialize allocates weights already-sharded). With ``lazy_init=False``
+    parameters are allocated eagerly, exactly as on the non-lazy path.
+    """
+    if lazy_init:
+        with ttml.lazy_init():
+            return create_model_from_config(model_config, use_tp=use_tp)
+    return create_model_from_config(model_config, use_tp=use_tp)
+
+
 def save_checkpoint(
     checkpoint_path: str,
     step: int,
@@ -1318,7 +1383,14 @@ def main():
             "step thereafter. Columns: step,layer,expert,prob."
         ),
     )
-
+    parser.add_argument(
+        "--lazy-parameter-init",
+        action="store_true",
+        help=(
+            "Defer Python Parameter allocation (lazy metadata + materialize). "
+            "Same init as eager when device and seed are unchanged before model build."
+        ),
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -1369,6 +1441,8 @@ def main():
         training_config.clip_grad_norm_max_norm = args.clip_grad_norm
     if args.sequence_length is not None:
         model_config.max_sequence_length = args.sequence_length
+    if args.lazy_parameter_init:
+        training_config.lazy_parameter_init = True
 
     # Only checkpoint when explicitly requested via --model_save_path.
     # No model_path in YAML -> no checkpointing.
@@ -1380,25 +1454,28 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp).
+    # Parse device config from YAML (mesh_shape, enable_ddp, enable_fsdp, enable_tp).
     device_config = DeviceConfig(yaml_config)
 
-    # Mirrors main.cpp:447-451 and lora_llama: TP-sharded parameters cannot be
-    # round-tripped through the script's pickle checkpoint format, so refuse
+    # TP-sharded parameters cannot be round-tripped through the script's pickle checkpoint format, so refuse
     # any save/resume request up front rather than failing partway through.
-    if device_config.enable_tp:
+    # FSDP-sharded weights have the same problem (the saved pickle would contain a per-rank slice of each weight, not the full tensor).
+    # TODO: add support for checkpointing TP and FSDP-sharded weights. (44387)
+    if device_config.enable_tp or device_config.enable_fsdp:
+        guard_name = "tensor parallelism" if device_config.enable_tp else "FSDP"
+        guard_flag = "device_config.enable_tp=true" if device_config.enable_tp else "device_config.enable_fsdp=true"
         if args.model_save_path:
-            raise ValueError(
-                "--model_save_path is not supported with tensor parallelism (device_config.enable_tp=true)."
-            )
+            raise ValueError(f"--model_save_path is not supported with {guard_name} ({guard_flag}).")
         if args.resume:
-            raise ValueError("--resume is not supported with tensor parallelism (device_config.enable_tp=true).")
+            raise ValueError(f"--resume is not supported with {guard_name} ({guard_flag}).")
 
     # Build a named mesh whose axis names match the C++ assignment order
     # (auto_context.cpp:140-195) so ttml.sync_gradients and axis_mapper("dp"|"tp", ...)
-    # bind to the same physical axes the C++ trainer would.
+    # bind to the same physical axes the C++ trainer would. enable_fsdp uses
+    # the axis name "fsdp" instead of "dp" so that grad-sync's per-axis filter
+    # naturally distinguishes replicated from sharded reductions.
     mesh = build_mesh(device_config)
-    if device_config.enable_ddp or device_config.enable_tp:
+    if device_config.enable_ddp or device_config.enable_fsdp or device_config.enable_tp:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_config.device_ids) if device_config.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
@@ -1541,11 +1618,8 @@ def main():
                 tokenizer = loaded_tokenizer
                 seq_len = model_config.max_sequence_length
                 print(f"   - Resumed from step {start_step}")
-                print(
-                    f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
-                )
-                total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
-                print(f"   - Total parameters: {total_params:,}")
+                # ``Model: ...`` and ``Total parameters: ...`` are printed
+                # uniformly in the post-create / post-FSDP block below.
             except Exception as e:
                 print(f"Error loading checkpoint: {e}")
                 print("Starting fresh training instead...")
@@ -1565,22 +1639,27 @@ def main():
             print(f"    Max sequence length: {model_config.max_sequence_length}")
             print(f"    Runner type: {runner_type_str}")
             print(f"    Weight tying: {weight_tying_str}")
+            if training_config.lazy_parameter_init:
+                print("    lazy_parameter_init: True (ttml.lazy_init + materialize_module)")
 
-            # Create model. Pass use_tp so Llama configures ColumnParallelLinear
-            # against the "tp" axis of the active mesh (no-op for non-Llama and
-            # an error for non-Llama with TP).
-            model = create_model_from_config(model_config, use_tp=device_config.enable_tp)
-            if args.print_summary:
-                summary(model)
-
-            # Count parameters
-            total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
-            print(
-                f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
+            # Create model. With ``lazy_parameter_init`` the model comes back
+            # with TensorMetadata-backed parameters — no device storage yet.
+            # We materialize a few lines below, AFTER ``fully_shard`` has had a
+            # chance to rewrite each lazy param's mapper to include the FSDP
+            # shard placement, so materialize allocates weights already-sharded
+            # (the only path that scales to ~70B-param models on a 32-device
+            # mesh; the eager FSDP host-roundtrip OOMs at that size).
+            #
+            # ``use_tp`` configures ColumnParallelLinear against the active
+            # mesh's ``"tp"`` axis (no-op for non-Llama, errors out for
+            # non-Llama with TP).
+            model = instantiate_model_from_config(
+                model_config,
+                lazy_init=training_config.lazy_parameter_init,
+                use_tp=device_config.enable_tp,
             )
-            print(f"   - Total parameters: {total_params:,}")
 
-        # Compute FLOPs per token for throughput reporting (all model types)
+        # Compute FLOPs per token (uses ``model.config``, available pre-materialize)
         flops_per_token = 0
         flops_fn = FLOPS_REGISTRY.get(model_config.model_type)
         if flops_fn is not None:
@@ -1589,7 +1668,38 @@ def main():
         if flops_per_token > 0:
             print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
 
-        # Memory snapshot after model creation
+    # Wrap model with FSDP BEFORE optimizer creation so optimizer state is
+    # allocated against the (already sharded) parameter shapes. Driven by
+    # device_config.enable_fsdp (YAML), matching how enable_ddp/enable_tp work.
+    #
+    # Works on both eager (host roundtrip) and lazy (mapper rewrite —
+    # materialize below allocates weights already FSDP-sharded) parameters.
+    if device_config.enable_fsdp and not inference_only:
+        print("\n   Applying FSDP sharding on 'fsdp' mesh axis...")
+        for block in model.blocks:
+            ttml.fsdp.fully_shard(block)
+        ttml.fsdp.fully_shard(model)
+        print(f"   - FSDP applied: {len(list(model.blocks))} blocks + root module")
+
+    # Materialize any still-lazy parameters. No-op when the model was built
+    # eagerly. Run AFTER FSDP so the lazy + FSDP path gets already-sharded
+    # weights at allocation time.
+    if not inference_only and training_config.lazy_parameter_init:
+        print("\n   Materializing parameters...")
+        ttml.materialize_module(model)
+
+    # Single MODEL_CREATION snapshot covering create + (optional) FSDP wrap +
+    # materialize. Keeps the memory-analysis logs uniform across eager / lazy
+    # / FSDP paths so downstream visualization scripts don't need to special-
+    # case lazy / sharding stages.
+    if not inference_only:
+        if args.print_summary:
+            summary(model)
+        total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+        print(
+            f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
+        )
+        print(f"   - Total parameters: {total_params:,}")
         if args.track_memory:
             MemoryUsageTracker.snapshot("MODEL_CREATION")
 

@@ -61,6 +61,14 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
+inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+    uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
+    if (kernel_size == 0) {
+        return;
+    }
+    invalidate_l2_cache_range(kernel_lma, kernel_size);
+}
+
 void set_deassert_addresses() {
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
@@ -111,10 +119,8 @@ void device_setup() {
     // clock gating
     set_deassert_addresses();
     setup_isr_csrs();
-    // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
-    // enable_cc_stack
     // set_default_sfpu_constant_register_state
 }
 
@@ -130,7 +136,6 @@ inline void run_triscs(uint32_t enables) {
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
-        invalidate_l1_cache();
     }
     DPRINT("DM-FW: running TRISCs {}\n", enables);
     invalidate_trisc_instruction_cache();
@@ -190,9 +195,14 @@ extern "C" uint32_t _start1() {
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        // Originally initalized to WAIT by host firmware initializer.
+        // Will be set back to WAIT immediately before running kernels.
+        (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+    while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
+    }
     WAYPOINT("I");
     DPRINT("DM0-FW: initialized\n");
 
@@ -210,6 +220,10 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
+        // Initialize wait for trisc FW
+        for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
+            mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+        }
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
@@ -231,7 +245,6 @@ extern "C" uint32_t _start1() {
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
-                invalidate_l1_cache();
                 // While the go signal for kernel execution is not sent, check if the worker was signalled
                 // to reset its launch message read pointer.
                 if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
@@ -277,10 +290,11 @@ extern "C" uint32_t _start1() {
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-                // Invalidate the i$ now the kernels have loaded and before running
-                // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-                // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
-                //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
+
+                // Initialize wait for kernels
+                for (uint32_t i = 0; i < MaxNumKernels; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
 
                 run_triscs(enables);
 
@@ -308,9 +322,6 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
-                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
-                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
-                }
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
@@ -323,8 +334,9 @@ extern "C" uint32_t _start1() {
                 if (enables & (1u << index)) {
                     uintptr_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                    asm("FENCE.i");
-                    uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
+                    // Invalidate the i$ now the kernels have loaded and before running
+                    invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
+                    invalidate_l1_icache();
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);
                 } else {
@@ -398,7 +410,8 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
         int index = hartid;
 
-        uintptr_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+        uintptr_t kernel_lma =
+            kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
@@ -413,7 +426,9 @@ extern "C" uint32_t _start1() {
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
             asm("nop; nop; nop; nop; nop");
         }
-        asm("FENCE.i");
+        // Invalidate the i$ now the kernels have loaded and before running
+        invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
+        invalidate_l1_icache();
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
         record_stack_usage(stack_free);

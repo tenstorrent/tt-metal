@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t element_per_stick = 2;  // Each stick contains two bfloat16 values
     const uint32_t n_sticks = stick_size / element_per_stick;
     for (uint32_t i = 0; i < n_sticks; i++) {
-        uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+        uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
         // Read a tick at a time from the source address and write it to the L1 write address.
         noc_async_read(src_noc_addr, l1_write_addr, stick_size);
         noc_async_read_barrier();  // wait for the read to finish

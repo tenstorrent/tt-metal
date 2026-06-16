@@ -48,6 +48,59 @@ jobs:
           # Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A) - GPT-OSS
 
           # Note: This matrix must be kept in sync with the original static matrix
+          #
+          # The two Gemma4-31B vLLM entries below are temporarily disabled —
+          # the full unquantized KV cache for the global-attention layers
+          # runs out of DRAM on both 1x4 (BH-Quietbox-2) and 1x8 (WH-T3K).
+          # Re-enable once KV cache quantization lands — TODO: file follow-up issue.
+          #
+          # Disabled entries preserved verbatim for the re-enable:
+          #
+          #   {
+          #     "name": "[WH-T3K] Gemma4-31B",
+          #     "model": "google/gemma-4-31B-it",
+          #     "server-timeout": 45,
+          #     "benchmark-timeout": 5,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "T3K",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+          #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   },
+          #   {
+          #     "name": "[BH-QB-2] Gemma4-31B",
+          #     "model": "google/gemma-4-31B-it",
+          #     "server-timeout": 20,
+          #     "benchmark-timeout": 5,
+          #     "runner-label": "BH-Quietbox-2",
+          #     "arch": "arch-blackhole",
+          #     "mesh-device": "P150x4",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+          #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   },
+          #
+          # Disabled due to Metal timeout in reduce-scatter async tests
+          # https://github.com/tenstorrent/vllm/issues/416
+          # Originally disabled in:
+          #   https://github.com/tenstorrent/tt-metal/pull/39088
+          #   {
+          #     "name": "[WH-T3K] Multi-process reduce scatter test model",
+          #     "model": "models/vllm_test_utils/t3000_multiproc_test",
+          #     "server-timeout": 4,
+          #     "benchmark-timeout": 4,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "(2, 4)",
+          #     "tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
+          #     "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
+          #     "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
+          #     "multimodal": false,
+          #     "co-owner-1-id": "U08CEGF78ET"
+          #   },
           all_tests='[
             {
               "name": "[WH-T3K] Gemma3-27B",
@@ -81,6 +134,44 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
+              "name": "[WH-N150] Gemma4-E2B",
+              "model": "google/gemma-4-E2B-it",
+              "server-timeout": 10,
+              "benchmark-timeout": 5,
+              "runner-label": "N150",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "N150",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[WH-T3K] Gemma4-26B-A4B",
+              "model": "google/gemma-4-26B-A4B-it",
+              "server-timeout": 30,
+              "benchmark-timeout": 5,
+              "runner-label": "config-t3000",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "T3K",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Gemma4-26B-A4B",
+              "model": "google/gemma-4-26B-A4B-it",
+              "server-timeout": 30,
+              "benchmark-timeout": 5,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
               "model": "openai/gpt-oss-120b",
               "server-timeout": 35,
@@ -112,6 +203,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
+              "sampling-test-timeout": 40,
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -151,26 +243,11 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[BH-DB] Llama-3.1-8B-Instruct with sampling-tests",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "BH-DeskBox",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x2",
-              "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--data_parallel_size 2 --async-scheduling",
-              "structured-output": true,
-              "sampling-tests": true,
-              "multimodal": false,
-              "owner_id": "U08GELBB1AP"
-            },
-            {
-              "name": "[BH-QB-GE] Llama-3.1-8B-Instruct",
+              "name": "[BH-QB-2] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 10,
-              "runner-label": "BH-QB-GE",
+              "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"trace_region_size\": 76000000}",
@@ -181,7 +258,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -191,6 +268,7 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 8 --async-scheduling",
               "structured-output": true,
+              "sampling-tests": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
             },
@@ -273,20 +351,6 @@ jobs:
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
-              "name": "[WH-T3K] Multi-process reduce scatter test model",
-              "model": "models/vllm_test_utils/t3000_multiproc_test",
-              "server-timeout": 4,
-              "benchmark-timeout": 4,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "(2, 4)",
-              "tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
-              "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
-              "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
-              "multimodal": false,
-              "co-owner-1-id": "U08CEGF78ET"
-            },
-            {
               "name": "[WH-T3K] NoOp test model (vLLM overhead)",
               "model": "models/vllm_test_utils/no_op_test",
               "server-timeout": 2,
@@ -294,7 +358,7 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(1, 2)",
-              "tt-config": "{\"register_test_models\": true, \"sample_on_device_mode\": \"all\", \"input_queue_batching_delay\": 0}",
+              "tt-config": "{\"register_test_models\": true, \"input_queue_batching_delay\": 0}",
               "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0",
               "multimodal": false,
@@ -302,11 +366,15 @@ jobs:
             }
           ]'
 
-          # Filter matrix based on model selection
+          # Filter matrix based on model selection. Substring match (not exact)
+          # so a family-level dropdown entry like "google/gemma-4" picks up
+          # every google/gemma-4-*-it variant in the matrix above, while
+          # explicit hub IDs ("meta-llama/Llama-3.1-8B-Instruct") still
+          # trivially match themselves.
           if [ "${{ inputs.model }}" = "all" ]; then
             matrix="$all_tests"
           else
-            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model | contains(\"${{ inputs.model }}\"))]")
           fi
 
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
@@ -323,7 +391,7 @@ jobs:
       - ${{ matrix.test-group.arch }}
       - in-service
       # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
-      - ${{ ((matrix.test-group.runner-label == 'BH-QB-GE' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
+      - ${{ ((matrix.test-group.runner-label == 'BH-Quietbox-2' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -347,9 +415,9 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
         # ``mlperf-read-only`` workflow input toggles ro/rw. Default ro for safety;
         # uncheck the box at dispatch time when a model needs tt_cache first-use
-        # write-through. BH-QB-GE uses a local override path (not the shared
+        # write-through. BH-Quietbox-2 uses a different network mount (/mnt/models, not the shared
         # /mnt/MLPerf) so the same toggle applies to either physical mount source.
-        - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
+        - ${{ (matrix.test-group.runner-label == 'BH-Quietbox-2' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -358,6 +426,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -372,11 +441,10 @@ jobs:
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
-        with:
-          runner-label: ${{ matrix.test-group.runner-label }}
 
       - name: ⬇️ Checkout vLLM
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
@@ -394,6 +462,11 @@ jobs:
             if [ -d vllm/plugins/vllm-tt-plugin ]; then
               uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
             fi
+            # Per-model Python deps when the model directory pins versions that
+            # differ from the docker image (Gemma4 needs transformers==5.5.0).
+            case "${{ matrix.test-group.model }}" in
+              google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
+            esac
           } 2>&1 | tee "${FILE_INSTALL_LOG}"
           exit "${PIPESTATUS[0]}"
 
@@ -541,14 +614,23 @@ jobs:
             "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
             2>&1 | tee ${FILE_BENCHMARK_LOG}
 
-          # If the backend fails, the benchmark will still complete successfully but with all-zero results.
-          # It will contain a warning message, though
-          warning_message="All requests failed"
-          if grep -q "$warning_message" "${FILE_BENCHMARK_LOG}"; then
-            echo "❌ All requests failed"
+          # `vllm bench serve` exits 0 even when individual requests fail (a crashed
+          # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
+          # require EVERY request to complete successfully.
+          RESULT_JSON="output/vllm_result.json"
+          if [ ! -f "$RESULT_JSON" ]; then
+            echo "❌ Benchmark result file not found ($RESULT_JSON) — the benchmark did not complete"
             echo "Check out the server log in a step below."
             exit 1
           fi
+          completed=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['completed'])")
+          expected=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['num_prompts'])")
+          if [ "$completed" != "$expected" ]; then
+            echo "❌ Only $completed/$expected requests completed successfully (require all)"
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
+          echo "✅ All $expected requests completed successfully"
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
@@ -633,7 +715,7 @@ jobs:
           fi
       - name: 🧪 Run sampling tests
         if: ${{ matrix.test-group.sampling-tests }}
-        timeout-minutes: 10
+        timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
         run: |
           {
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
@@ -723,6 +805,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main

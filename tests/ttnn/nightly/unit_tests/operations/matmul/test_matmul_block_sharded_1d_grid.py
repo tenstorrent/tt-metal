@@ -25,6 +25,7 @@ Test cases:
 import pytest
 import torch
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -172,7 +173,7 @@ class TestMatmulBlockSharded1DGrid:
         )
 
         # Should complete without hanging
-        output = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
+        output = ttnn_matmul(tt_a, tt_b, memory_config=memory_config)
         ttnn.synchronize_device(device)
 
         output_torch = ttnn.to_torch(output)
@@ -219,7 +220,7 @@ class TestMatmulBlockSharded1DGrid:
         )
 
         # Should complete without hanging
-        output = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
+        output = ttnn_matmul(tt_a, tt_b, memory_config=memory_config)
         ttnn.synchronize_device(device)
 
         output_torch = ttnn.to_torch(output)
@@ -265,7 +266,7 @@ class TestMatmulBlockSharded1DGrid:
             ),
         )
 
-        output = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
+        output = ttnn_matmul(tt_a, tt_b, memory_config=memory_config)
         ttnn.synchronize_device(device)
 
         output_torch = ttnn.to_torch(output)
@@ -288,7 +289,7 @@ class TestMatmulBlockSharded1DGrid:
         tt_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 
         # matmul without memory_config should work
-        output = ttnn.matmul(tt_a, tt_b)
+        output = ttnn_matmul(tt_a, tt_b)
         ttnn.synchronize_device(device)
 
         output_torch = ttnn.to_torch(output)
@@ -415,7 +416,7 @@ class TestMatmulBlockSharded1DGridEdgeCases:
             ),
         )
 
-        output = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
+        output = ttnn_matmul(tt_a, tt_b, memory_config=memory_config)
         ttnn.synchronize_device(device)
 
         output_torch = ttnn.to_torch(output)
@@ -453,7 +454,7 @@ class TestMatmulBlockSharded1DGridEdgeCases:
             ),
         )
 
-        output = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
+        output = ttnn_matmul(tt_a, tt_b, memory_config=memory_config)
         ttnn.synchronize_device(device)
 
         output_torch = ttnn.to_torch(output)
@@ -491,7 +492,7 @@ class TestMatmulBlockSharded1DGridEdgeCases:
             ),
         )
 
-        output = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
+        output = ttnn_matmul(tt_a, tt_b, memory_config=memory_config)
         ttnn.synchronize_device(device)
 
         output_torch = ttnn.to_torch(output)

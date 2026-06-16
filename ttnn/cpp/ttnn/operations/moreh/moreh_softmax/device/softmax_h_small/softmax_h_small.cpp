@@ -6,7 +6,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
-#include <bit>
 #include <cstdint>
 #include <string>
 
@@ -250,13 +249,11 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxOperation::MorehSoftmaxHSmallFactory
             TT_THROW("Core not in specified core ranges");
         }
 
-        float scaler = 1.0f;
         uint32_t mask_h = input.logical_shape()[-2] % tt::constants::TILE_HEIGHT;
         if (mask_h == 0) {
             mask_h = tt::constants::TILE_HEIGHT;
         }
-        reader_desc.emplace_runtime_args(
-            core, {input.buffer(), num_tiles_per_core, tile_offset, Ht, Wt, std::bit_cast<uint32_t>(scaler), mask_h});
+        reader_desc.emplace_runtime_args(core, {input.buffer(), num_tiles_per_core, tile_offset, Ht, Wt, mask_h});
 
         writer_desc.emplace_runtime_args(core, {output.buffer(), num_tiles_per_core, tile_offset, Ht, Wt});
 

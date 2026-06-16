@@ -20,8 +20,9 @@ on:
           - Qwen/Qwen2.5-VL-72B-Instruct
           - Qwen/Qwen3-VL-32B-Instruct
           - google/gemma-3-27b-it
+          - google/gemma-4
           - openai/gpt-oss-120b
-          - models/vllm_test_utils/t3000_multiproc_test
+          # - models/vllm_test_utils/t3000_multiproc_test
           - models/vllm_test_utils/no_op_test
       platform:
         required: false
@@ -53,12 +54,16 @@ on:
         default: true
         description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
   schedule:
-    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
+    - cron: "0 0 * * *" # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -67,7 +72,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
   vllm-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/vllm-nightly-tests-impl.yaml
     with:

@@ -48,6 +48,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
+#include "impl/buffers/dram_core_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
@@ -55,6 +56,7 @@
 #include <env_lib.hpp>
 
 #include "allocator/l1_banking_allocator.hpp"
+#include "impl/device/mock_allocator.hpp"
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -768,6 +770,20 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
     return *command_queue;
 }
 
+MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(std::optional<uint8_t> cq_id) const {
+    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+
+    // If the mesh device has no local devices, return the dummy mesh command queue.
+    if (this->get_view().get_devices().empty()) {
+        return *mesh_command_queues_[0];
+    }
+
+    TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
+    const auto& command_queue = mesh_command_queues_[id];
+    TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
+    return *command_queue;
+}
+
 DeviceIds MeshDeviceImpl::get_device_ids() const {
     DeviceIds device_ids;
     for (auto* device : this->get_devices()) {
@@ -924,9 +940,24 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_.reset();
     }
 
-    // DRISC L1 arena is torn down here so any GCB-owned allocation handles have
-    // already been released (GCBs are user-owned and the user's invariant is to
-    // destroy them before close).
+    // Drain any in-flight DRAM-core prefetcher kernel and release its state before the
+    // rest of the mesh tears down. If the caller forgot to call StopDramCorePrefetcher
+    // we still wait for the kernel's natural num_layers exit so the GCB / receivers it
+    // touches remain valid until it returns.
+    if (dram_core_prefetcher_) {
+        if (dram_core_prefetcher_->is_active()) {
+            log_warning(
+                tt::LogMetal,
+                "DRAM-core prefetcher was active at MeshDevice close; auto-stopping. Call "
+                "tt::tt_metal::experimental::StopDramCorePrefetcher before close to avoid this.");
+            dram_core_prefetcher_->stop();
+        }
+        dram_core_prefetcher_.reset();
+    }
+
+    // DRISC L1 arena is torn down after the prefetcher manager so any GCB-owned
+    // allocation handles have already been released (GCBs are user-owned and the
+    // user's invariant is to destroy them before close).
     drisc_l1_arena_.reset();
 
     if (is_initialized()) {
@@ -936,6 +967,15 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         is_internal_state_initialized = false;
         if (distributed_context_) {
             distributed_context_.reset();
+        }
+
+        // Release cached pinned-memory entries while MetalContext is still alive
+        // (needs the cluster to map chip -> MMIO IDs). Must run before
+        // destroy_instance below, and only on the first close_impl call.
+        // Skip for mock devices — they never create pinned DMA regions.
+        if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
+            tt::TargetDevice::Mock) {
+            experimental::PinnedMemoryCache::instance().release_for_device(*pimpl_wrapper);
         }
     }
 
@@ -1359,9 +1399,13 @@ bool MeshDeviceImpl::initialize_impl(
     cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator_impl();
+    const auto& alloc_config = allocator->get_config();
+    auto is_mock = MetalContext::instance(context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    auto mesh_allocator =
+        is_mock ? experimental::make_mock_allocator(alloc_config) : std::make_unique<L1BankingAllocator>(alloc_config);
     // SubDeviceManagerTracker needs a MeshDevice pointer.
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        pimpl_wrapper, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+    sub_device_manager_tracker_ =
+        std::make_unique<SubDeviceManagerTracker>(pimpl_wrapper, std::move(mesh_allocator), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ =
@@ -1421,6 +1465,14 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
     return *drisc_l1_arena_;
 }
 
+DramCorePrefetcherManager& MeshDeviceImpl::dram_core_prefetcher(MeshDevice* mesh_device) {
+    if (!dram_core_prefetcher_) {
+        dram_core_prefetcher_ =
+            std::make_unique<DramCorePrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
+    }
+    return *dram_core_prefetcher_;
+}
+
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
     const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
@@ -1447,6 +1499,37 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const 
         "No unused DRAM subchannel found for bank_id={}; all {} subchannels are reserved as worker/eth endpoints",
         bank_id,
         num_subchannels);
+}
+
+std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_id) const {
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+
+    // Sender 0: the free non-endpoint subchannel.
+    const CoreCoord free_core = pick_unused_dram_logical_core(bank_id);
+
+    // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
+    // matching the endpoint's physical (TRANSLATED) coord against this bank's
+    // subchannels (mirrors the loop in pick_unused_dram_logical_core).
+    const CoreCoord noc1_endpoint_phys =
+        soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/static_cast<uint8_t>(1));
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+        const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+        if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
+            const CoreCoord noc1_core =
+                soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+            TT_FATAL(
+                noc1_core != free_core,
+                "DRAM bank {}: NOC1-endpoint subchannel collides with the free subchannel ({}, {})",
+                bank_id,
+                free_core.x,
+                free_core.y);
+            return {free_core, noc1_core};
+        }
+    }
+    TT_THROW("Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={}", bank_id);
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
@@ -1583,7 +1666,6 @@ MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
-    experimental::PinnedMemoryCache::instance().release_for_device(*this);
     pimpl_->close_impl(this);
 }
 

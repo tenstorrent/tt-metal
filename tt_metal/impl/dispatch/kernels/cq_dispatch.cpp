@@ -18,6 +18,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
+#include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -98,6 +99,22 @@ constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
 constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
+// Read and store telemetry values via local variables to avoid L1 reads
+static uint32_t upstream_blocked_counter = 0;
+static uint32_t program_counter = 0;
+
+constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
+constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
+constexpr uint32_t upstream_blocked_count_addr =
+    dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_blocked_count);
+constexpr uint32_t upstream_unblocked_count_addr =
+    dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_unblocked_count);
+using DispatchTelemetryBlockGuard = TelemetryBlockGuard<
+    upstream_blocked_count_addr,
+    upstream_unblocked_count_addr,
+    &upstream_blocked_counter,
+    telemetry_enabled>;
+
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -158,8 +175,12 @@ RelayClientType relay_client;
 struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
+#ifdef ARCH_QUASAR
+        Semaphore<fd_core_type>(sem_id).up(pages);
+#else
         uint32_t sem_addr = get_semaphore<fd_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
+#endif
     }
 };
 
@@ -217,23 +238,18 @@ constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 volatile uint32_t last_event;
 }
 
-
-static GoSignalState go_signal_state_ring_buf[4];
-static uint8_t go_signal_state_wr_ptr = 0;
-static uint8_t go_signal_state_rd_ptr = 0;
-
 static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_read_ptr() {
-    return reinterpret_cast<volatile uint32_t*>(dev_completion_q_rd_ptr);
+    return reinterpret_cast<volatile uint32_t*>(l1_uncached_addr(dev_completion_q_rd_ptr));
 }
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
-    return reinterpret_cast<volatile uint32_t*>(dev_completion_q_wr_ptr);
+    return reinterpret_cast<volatile uint32_t*>(l1_uncached_addr(dev_completion_q_wr_ptr));
 }
 
 FORCE_INLINE volatile uint32_t* get_dispatch_progress_ptr() {
-    return reinterpret_cast<volatile uint32_t*>(dev_dispatch_progress_ptr);
+    return reinterpret_cast<volatile uint32_t*>(l1_uncached_addr(dev_dispatch_progress_ptr));
 }
 
 FORCE_INLINE
@@ -301,9 +317,9 @@ void completion_queue_push_back(uint32_t num_pages) {
 }
 
 void process_write_host_h() {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmd* cmd =
+        reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(l1_uncached_addr(cmd_ptr));
 
-    uint32_t completion_write_ptr;
     // We will send the cmd back in the first X bytes, this makes the logic of reserving/pushing completion queue
     // pages much simpler since we are always sending writing full pages (except for last page)
     uint64_t wlength = cmd->write_linear_host.length;
@@ -318,7 +334,8 @@ void process_write_host_h() {
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
     if (is_event) {
-        last_event = ((uint32_t*)(data_ptr + sizeof(CQDispatchCmd)))[0];
+        last_event =
+            reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(data_ptr + sizeof(CQDispatchCmd)))[0];
     }
     while (wlength != 0) {
         uint32_t length = (wlength > max_batch_size) ? max_batch_size : static_cast<uint32_t>(wlength);
@@ -476,7 +493,8 @@ void relay_to_next_cb(uintptr_t data_ptr, uint64_t wlength) {
 }
 
 void process_write_host_d() {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmd* cmd =
+        reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(l1_uncached_addr(cmd_ptr));
     // Remember: host transfer command includes the command in the payload, don't add it here
     uint64_t length = cmd->write_linear_host.length;
     uintptr_t data_ptr = cmd_ptr;
@@ -485,7 +503,8 @@ void process_write_host_d() {
 }
 
 void relay_write_h() {
-    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd =
+        reinterpret_cast<volatile tt_l1_ptr CQDispatchCmdLarge*>(l1_uncached_addr(cmd_ptr));
     uint64_t length = sizeof(CQDispatchCmdLarge) + cmd->write_linear.length;
     uintptr_t data_ptr = cmd_ptr;
 
@@ -497,7 +516,8 @@ void process_exec_buf_end_d() { relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd))
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
 void process_write_linear(uint32_t num_mcast_dests) {
-    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd =
+        reinterpret_cast<volatile tt_l1_ptr CQDispatchCmdLarge*>(l1_uncached_addr(cmd_ptr));
     bool multicast = num_mcast_dests > 0;
     if (not multicast) {
         num_mcast_dests = 1;
@@ -551,14 +571,16 @@ void process_write_linear(uint32_t num_mcast_dests) {
 }
 
 void process_write() {
-    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd =
+        reinterpret_cast<volatile tt_l1_ptr CQDispatchCmdLarge*>(l1_uncached_addr(cmd_ptr));
     uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
     process_write_linear(num_mcast_dests);
 }
 
 template <bool is_dram>
 void process_write_paged() {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmd* cmd =
+        reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(l1_uncached_addr(cmd_ptr));
 
     uint32_t page_id = cmd->write_paged.start_page;
     uint32_t base_addr = cmd->write_paged.base_addr;
@@ -615,14 +637,15 @@ void process_write_paged() {
 // this command can't be too many pages.  All pages are released at the end
 template <bool mcast, typename WritePackedSubCmd>
 void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
 
     uint32_t count = cmd->write_packed.count;
     ASSERT(count <= (mcast ? packed_write_max_multicast_sub_cmds : packed_write_max_unicast_sub_cmds));
     constexpr uint32_t sub_cmd_size = sizeof(WritePackedSubCmd);
     // Copying in a burst is about a 30% net gain vs reading one value per loop below
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
-        (volatile uint32_t tt_l1_ptr*)(cmd_ptr + sizeof(CQDispatchCmd)),
+        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr + sizeof(CQDispatchCmd))),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
 
@@ -638,7 +661,6 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE) ? 0 : round_up_pow2(xfer_size, L1_ALIGNMENT);
     ASSERT(stride != 0 || data_ptr - cmd_ptr + xfer_size <= dispatch_cb_page_size);
 
-    volatile uint32_t tt_l1_ptr* l1_addr = (uint32_t*)(cmd_ptr + sizeof(CQDispatchCmd));
     cq_noc_async_write_init_state<CQ_NOC_snDL, mcast>(0, dst_addr, xfer_size);
 
     // DPRINT("dispatch_write_packed: xfer_size {} stride {} data_ptr 0x{:08x} count {} dst_addr 0x{:08x}\n",
@@ -742,7 +764,8 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
 //  - so a better practical full size is 3-4 full sets of 4K kernel binaries
 // May eventually want a separate implementation for tensix vs eth dispatch
 void process_write_packed_large(uint32_t* l1_cache) {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
 
     uint32_t count = cmd->write_packed_large.count;
     ASSERT(count <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS);
@@ -754,7 +777,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
     constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeSubCmd);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
-        (volatile uint32_t tt_l1_ptr*)(cmd_ptr + sizeof(CQDispatchCmd)),
+        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr + sizeof(CQDispatchCmd))),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
 
@@ -874,7 +897,8 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
 // Unicast variant of packed large write with uint32_t length and discard support
 void process_write_packed_large_unicast(uint32_t* l1_cache) {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
 
     uint32_t count = cmd->write_packed_large_unicast.count;
     ASSERT(count <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
@@ -886,7 +910,7 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
 
     constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
-        (volatile uint32_t tt_l1_ptr*)(cmd_ptr + sizeof(CQDispatchCmd)),
+        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr + sizeof(CQDispatchCmd))),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
 
@@ -950,7 +974,8 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
 }
 
 static uintptr_t process_debug_cmd(uintptr_t cmd_ptr) {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     return cmd_ptr + cmd->debug.stride;
 }
 
@@ -965,7 +990,8 @@ uint32_t stream_wrap_ge(uint32_t a, uint32_t b) {
 }
 
 static void process_wait() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     auto flags = cmd->wait.flags;
 
     uint32_t barrier = flags & CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER;
@@ -988,7 +1014,7 @@ static void process_wait() {
     uint32_t heartbeat = 0;
     if (wait_memory) {
         uintptr_t addr = cmd->wait.addr;
-        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr));
         // DPRINT("DISPATCH WAIT 0x{:08x} count {}\n", addr, count);
         do {
             invalidate_l1_cache();
@@ -1017,17 +1043,22 @@ static void process_wait() {
             neg_sem_val << REMOTE_DEST_BUF_WORDS_FREE_INC);
     }
     if (notify_prefetch) {
+#ifdef ARCH_QUASAR
+        Semaphore<fd_core_type>(upstream_sync_sem).up(1);
+#else
         noc_semaphore_inc(
             get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_sync_sem)),
             1,
             upstream_noc_index);
+#endif
     }
 
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
 static void process_delay_cmd() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t count = cmd->delay.delay;
     for (volatile uint32_t i = 0; i < count; i++);
     cmd_ptr += sizeof(CQDispatchCmd);
@@ -1035,14 +1066,21 @@ static void process_delay_cmd() {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t stream = cmd->mcast.wait_stream;
     // The location of the go signal embedded in the command does not meet NOC alignment requirements.
     // cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher over NOC.
     // Copy the go signal from an unaligned location to an aligned (cmd_ptr) location. This is safe as long as we
     // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see
     // CQDispatchGoSignalMcastCmd).
-    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
+    // NOC source addresses must be raw L1 byte offsets (cached-alias form), so keep
+    // aligned_go_signal_storage at the cached alias for the NOC sources at lines 1065 and 1108.
+    // CPU writes go through a separate uncached pointer so the value lands in L1 SRAM directly;
+    // the NOC then reads the same physical location via the cached-form source address.
+    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr);
+    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached =
+        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t go_signal_value = cmd->mcast.go_signal;
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
@@ -1055,7 +1093,7 @@ void process_go_signal_mcast_cmd() {
         uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
-        aligned_go_signal_storage[storage_offset] = go_signal_value;
+        aligned_go_signal_storage_uncached[storage_offset] = go_signal_value;
 
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
@@ -1078,7 +1116,7 @@ void process_go_signal_mcast_cmd() {
         WAYPOINT("WCD");
     }
 
-    *aligned_go_signal_storage = go_signal_value;
+    *aligned_go_signal_storage_uncached = go_signal_value;
     if constexpr (virtualize_unicast_cores) {
         // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
         // This chip is virtualizing cores the go signal is unicasted to
@@ -1110,7 +1148,8 @@ void process_go_signal_mcast_cmd() {
 FORCE_INLINE
 void process_notify_dispatch_s_go_signal_cmd() {
     // Update free running counter on dispatch_s, signalling that it's safe to send a go signal to workers
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t wait = cmd->notify_dispatch_s_go_signal.wait;
     // write barrier to wait before sending the go signal
     if (wait) {
@@ -1132,7 +1171,8 @@ void process_notify_dispatch_s_go_signal_cmd() {
             num_go_signals_safe_to_send[set_index]++;
             noc_inline_dw_write(dispatch_s_notify_addr, num_go_signals_safe_to_send[set_index]);
         } else {
-            tt_l1_ptr uint32_t* notify_ptr = (uint32_t tt_l1_ptr*)(dispatch_s_sync_sem_addr);
+            volatile tt_l1_ptr uint32_t* notify_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(dispatch_s_sync_sem_addr));
             *notify_ptr = (*notify_ptr) + 1;
         }
         // Unset the bit
@@ -1143,11 +1183,12 @@ void process_notify_dispatch_s_go_signal_cmd() {
 
 FORCE_INLINE
 void set_go_signal_noc_data() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
     volatile tt_l1_ptr uint32_t* data_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(cmd_ptr + sizeof(CQDispatchCmd)));
     for (uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
@@ -1157,7 +1198,8 @@ void set_go_signal_noc_data() {
 static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache) {
     bool done = false;
 re_run_command:
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     DeviceTimestampedData("process_cmd_d_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
@@ -1212,6 +1254,10 @@ re_run_command:
         case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
             // DPRINT("cmd_notify_dispatch_s_go_signal\n");
             process_notify_dispatch_s_go_signal_cmd();
+            if constexpr (telemetry_enabled) {
+                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                    ->program_count = ++program_counter;
+            }
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
@@ -1257,6 +1303,10 @@ re_run_command:
         case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
             // DPRINT("cmd_send_go_signal\n");
             process_go_signal_mcast_cmd();
+            if constexpr (telemetry_enabled) {
+                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                    ->program_count = ++program_counter;
+            }
             break;
 
         case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
@@ -1282,7 +1332,8 @@ re_run_command:
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));
-            uint32_t* cmd_write_offset = (uint32_t*)(cmd_ptr + sizeof(CQDispatchCmd));
+            volatile uint32_t tt_l1_ptr* cmd_write_offset =
+                reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr + sizeof(CQDispatchCmd)));
 
             for (uint32_t i = 0; i < offset_count; i++) {
                 write_offset[i] = cmd_write_offset[i];
@@ -1323,7 +1374,8 @@ re_run_command:
 static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
     bool done = false;
 
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd =
+        reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
 
     DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
@@ -1417,9 +1469,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
     set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
         upstream_noc_index, posted_writes_delta);
 
-    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
-    *shutdown_sem_addr = 1;
+    Semaphore<fd_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
 
 void kernel_main() {
@@ -1434,8 +1484,12 @@ void kernel_main() {
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
+    init_telemetry<tt::tt_metal::DispatchCoreTelemetry, dispatch_telemetry_base, telemetry_enabled>();
+
     // Initialize local state of any additional nocs used instead of the default
+#ifndef ARCH_QUASAR
     static_assert(my_noc_index != upstream_noc_index);
+#endif
     if constexpr (my_noc_index != upstream_noc_index) {
         noc_local_state_init(upstream_noc_index);
     }
@@ -1507,7 +1561,7 @@ void kernel_main() {
     *get_dispatch_progress_ptr() = dispatch_progress;
 
     while (!done) {
-        dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
+        dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(cmd_ptr);
 
         DeviceZoneScopedN("CQ-DISPATCH");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);

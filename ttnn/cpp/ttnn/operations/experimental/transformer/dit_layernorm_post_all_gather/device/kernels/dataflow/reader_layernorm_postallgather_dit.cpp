@@ -82,7 +82,7 @@ void kernel_main() {
         DPRINT("reserve_back stats on tile_row: {}\n", tile_row);
         uint32_t stats_wr_ptr = get_write_ptr(cb_stats);
         for (uint32_t st = 0; st < stats_tiles_cols; ++st) {
-            noc_async_read_tile(stats_tile_idx, src_stats, stats_wr_ptr);
+            noc_async_read_page(stats_tile_idx, src_stats, stats_wr_ptr);
             stats_wr_ptr += stats_tile_bytes;
             stats_tile_idx++;
         }
@@ -125,7 +125,7 @@ void kernel_main() {
             DPRINT("reserve_back input on tile_row: {} col_tile: {}\n", tile_row, col_tile);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
             for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
-                noc_async_read_tile(input_tile_idx, src_a, inp_wr_ptr);
+                noc_async_read_page(input_tile_idx, src_a, inp_wr_ptr);
                 inp_wr_ptr += src0_tile_bytes;
                 input_tile_idx++;
             }
@@ -141,7 +141,7 @@ void kernel_main() {
                 // Calculate tile offset for this batch
                 uint32_t gamma_batch_offset = gamma_is_batched ? (batch_idx * gamma_batch_stride_tiles) : 0;
                 for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
-                    uint64_t gamma_noc_addr = get_noc_addr(gamma_batch_offset + col_tile + i, addrg);
+                    uint64_t gamma_noc_addr = addrg.get_noc_addr(gamma_batch_offset + col_tile + i);
                     async_read_row_to_tile<gamma_is_row_major, gamma_element_size>(gamma_noc_addr, l1_write_addr_g);
                     l1_write_addr_g += gamma_tile_bytes;
                 }
@@ -158,7 +158,7 @@ void kernel_main() {
                 // Calculate tile offset for this batch
                 uint32_t beta_batch_offset = beta_is_batched ? (batch_idx * beta_batch_stride_tiles) : 0;
                 for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
-                    uint64_t beta_noc_addr = get_noc_addr(beta_batch_offset + col_tile + i, addrb);
+                    uint64_t beta_noc_addr = addrb.get_noc_addr(beta_batch_offset + col_tile + i);
                     async_read_row_to_tile<beta_is_row_major, beta_element_size>(beta_noc_addr, l1_write_addr_b);
                     l1_write_addr_b += beta_tile_bytes;
                 }

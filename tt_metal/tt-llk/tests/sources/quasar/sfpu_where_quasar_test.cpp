@@ -79,10 +79,10 @@ const bool is_int_fpu_en = false;
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_sfpu/ckernel_sfpu_where.h"
+#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_where.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -121,15 +121,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 
-    // Primes the CC stack
-    // to a known-empty lane mask before the first select op.
-    _init_where_();
-
-    // Runs _calculate_where_ over the faces selected by VECTOR_MODE: cond=tile 0,
+    // Runs calculate_where over the faces selected by VECTOR_MODE: cond=tile 0,
     // true_val=tile 1, false_val=tile 2, result written to tile 0. Faces outside
     // the selected set keep whatever the producer wrote into Dest before SFPU ran
     // (the cond tile, here), so the Python test asserts only on the processed faces.
-    _llk_math_eltwise_ternary_sfpu_params_(sfpu::_calculate_where_<false>, 0u, 1u, 2u, 0u, VECTOR_MODE);
+    SFPU_TERNARY_CALL(
+        dest_sync,
+        is_fp32_dest_acc_en,
+        calculate_where,
+        (false /*APPROXIMATION_MODE*/),
+        0u /*DST_IN0*/,
+        1u /*DST_IN1*/,
+        2u /*DST_IN2*/,
+        0u /*DST_OUT*/,
+        VECTOR_MODE);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }

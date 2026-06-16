@@ -158,6 +158,14 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
         operation_attributes.nnz,
         batch_length);
+
+    // When nnz is supplied, the receiver and compute kernels loop exactly nnz times while the in0 sender
+    // only multicasts once per non-zero sparsity entry. The op therefore requires
+    // count_nonzero(sparsity) == nnz; a mismatch deadlocks the device (see issue #45943).
+    // count_nonzero(sparsity) is data-dependent and lives on device, so it cannot be checked here on the
+    // host -- it is the caller's responsibility to pass an exact nnz, and the contract is validated
+    // on-device in reader_bmm_tile_layout_in0_sender_padding.cpp (asserts loudly under watcher instead of
+    // hanging).
 }
 
 SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
