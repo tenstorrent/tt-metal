@@ -51,7 +51,78 @@ Run from repo root on Blackhole Loudbox.
 | Demo | Script | Description | Command |
 |------|--------|-------------|---------|
 | Text LM | `demo/text_demo.py` | Text-only TT prefill/decode + LM head. Override prompt with `DEVSTRAL2_PROMPT`. | `pytest models/experimental/devstral2_123B_instruct/demo/text_demo.py` |
-| Interactive agent | `demo/tt_demo_agent.py` | Multi-turn coding REPL on TT. | `python models/experimental/devstral2_123B_instruct/demo/tt_demo_agent.py --mesh-device T3K` |
+| Interactive agent | `demo/tt_demo_agent.py` | Multi-turn coding REPL on TT with **workspace-only** file tools (see below). | `python models/experimental/devstral2_123B_instruct/demo/tt_demo_agent.py --mesh-device T3K` |
+
+### Interactive agent demo (`tt_demo_agent.py`)
+
+Local REPL that runs Devstral-2-123B on the TT mesh and lets the model call **tools** across
+multiple turns (KV prefix cache for the system/tool rules, traced decode, optional 2CQ). Inference
+is on-device; tool execution is ordinary Python on the host.
+
+**Run** (point `--workspace-root` at a directory you are willing to let the model read/write):
+
+```sh
+python models/experimental/devstral2_123B_instruct/demo/tt_demo_agent.py \
+  --mesh-device T3K \
+  --workspace-root /path/to/your/repo
+```
+
+Useful flags: `--num-layers` (partial model for bring-up), `--max-seq-len`, `--max-context-tokens`,
+`--verbose` (KV/prefill/decode logging). Type `quit` / `exit` to stop; `/clear` resets chat and
+todo state.
+
+**Not in CI:** Blackhole pipelines run `text_demo.py` only. The agent is for interactive/local use.
+
+#### Tools the agent can use
+
+All file paths are resolved under `--workspace-root`; paths that escape that directory are rejected.
+
+| Tool | What it does |
+|------|----------------|
+| `read_file` | Read a slice of a text file (offset/limit). |
+| `write_file` | Create or overwrite (or append) a file under the workspace. |
+| `search_replace` | Find/replace in a file. |
+| `grep` | Regex search over files under a path (in-process; no shell). |
+| `inspect_codebase` | List file paths under a directory (skips `.git`). |
+| `load_skill` | Read a markdown/text “skill” file from the workspace. |
+| `todo` | In-memory task list for the session. |
+| `ask_user_question` | Prompt you in the terminal for clarification. |
+
+Rough equivalents: `inspect_codebase` ≈ `ls`, `read_file` ≈ `cat`, `grep` ≈ ripgrep — but only
+inside the workspace and without spawning a shell.
+
+#### What the agent cannot do
+
+These tools are **intentionally not implemented** (calls return `Unknown tool`):
+
+| Removed capability | Examples that do **not** work |
+|--------------------|-------------------------------|
+| **Shell / terminal** | `ls`, `ps`, `top`, `python script.py`, `git`, `make`, `curl` |
+| **Delegated shell** | `delegate_task` |
+| **Web fetch** | Download arbitrary URLs |
+| **Web search** | DuckDuckGo or other search APIs |
+
+The model may still **`write_file`** a script into the workspace, but the demo **does not execute**
+it. Run builds/tests yourself outside the agent.
+
+#### Why tools are restricted
+
+Earlier prototypes exposed `terminal` / `bash` and network tools. That gives the model **full
+user-level command execution** and **arbitrary HTTP egress** whenever it emits a tool call — without
+per-command approval. Risks include:
+
+- **Prompt injection** in repo content (“run this shell command…”).
+- **Mistakes** (`rm -rf`, bad `git` commands) with your normal OS permissions (sudo not required).
+- **Secret access** — anything readable by your user (`~/.ssh`, `.env`, tokens in the environment).
+- **Data exfiltration** — upload files or hit internal/metadata URLs via `curl` / `web_fetch`.
+
+File-only tools narrow the blast radius to a directory you choose (`--workspace-root`). That is
+enough for coding assistance (read/edit/search the tree) while avoiding “model as remote shell”.
+This matches the hardened Devstral-Small agent demo pattern (shell disabled; no web tools on the
+123B path).
+
+**Operational guidance:** use a dedicated clone or scratch directory as `--workspace-root`, not your
+home directory or a repo with secrets. The agent demo is experimental, not a production coding agent.
 
 ## Environment setup (for performance tests and demos)
 
