@@ -714,17 +714,38 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         else:
             # Validate EVERY populated slot, each over its own populated range: chunks_per_slot[s]
             # chunks and real_len = that slot's actual_end (excludes padding). Multi-user prefill
-            # fills several slots with different-length prompts; each is PCC'd against the shared
-            # golden over only its real (non-pad) positions. _kv_cache_pcc_check raises on a
-            # sub-threshold slot (unless RECORD_ONLY), so any failure aborts here.
+            # fills several slots with different prompts; each is PCC'd against its own golden over
+            # only its real (non-pad) positions. _kv_cache_pcc_check raises on a sub-threshold slot
+            # (unless RECORD_ONLY), so any failure aborts here.
+            #
+            # Per-slot golden: DEEPSEEK_PREFILL_TRACE_PT may be a COMMA-SEPARATED list, one .pt per
+            # slot in slot order (slot s -> golden[s]) — for multi-user runs where each slot holds a
+            # different prompt. A single value (no comma) is the shared golden for every slot (the
+            # _kv_cache_pcc_check default env read handles that case).
+            golden_list = [p.strip() for p in os.environ.get("DEEPSEEK_PREFILL_TRACE_PT", "").split(",") if p.strip()]
+            multi_golden = len(golden_list) > 1
             slots = sorted(chunks_per_slot)
-            logger.info(f"[request] running KV-cache PCC check for {len(slots)} slot(s): {slots}")
+            logger.info(
+                f"[request] running KV-cache PCC check for {len(slots)} slot(s): {slots} "
+                f"(per-slot goldens={multi_golden})"
+            )
             slot_pccs = {}
             for s in slots:
                 real_len = real_end_per_slot.get(s)
                 n_chunks_s = chunks_per_slot[s]
-                logger.info(f"[request]  -> slot={s} n_chunks={n_chunks_s} real_len={real_len}")
-                slot_pccs[s] = _kv_cache_pcc_check(pipeline, s, n_chunks_s, real_len=real_len)
+                if multi_golden:
+                    if s >= len(golden_list):
+                        raise IndexError(
+                            f"slot {s} has no golden: DEEPSEEK_PREFILL_TRACE_PT lists {len(golden_list)} "
+                            f"golden(s) but slot {s} is populated. Provide one .pt per slot in slot order."
+                        )
+                    gpt = golden_list[s]
+                else:
+                    gpt = None  # _kv_cache_pcc_check reads the single DEEPSEEK_PREFILL_TRACE_PT
+                logger.info(
+                    f"[request]  -> slot={s} n_chunks={n_chunks_s} real_len={real_len} golden={gpt or '<shared>'}"
+                )
+                slot_pccs[s] = _kv_cache_pcc_check(pipeline, s, n_chunks_s, pt_path_override=gpt, real_len=real_len)
             logger.success(
                 f"[request] all {len(slots)} slot(s) PASSED KV-cache PCC: "
                 + ", ".join(f"slot{s}={p:.6f}" for s, p in sorted(slot_pccs.items()))
