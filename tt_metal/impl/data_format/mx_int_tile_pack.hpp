@@ -17,7 +17,7 @@
 #include <tt-metalium/tile.hpp>
 
 #include "mx_common.hpp"
-#include "mx_tile_pack.hpp"  // BlockStats / update_block_stats
+#include "mx_tile_pack.hpp"
 
 namespace tt::tt_metal::mx {
 
@@ -33,9 +33,14 @@ inline float rint_ties_even(float x) {
     if (frac > 0.5f) {
         return floor_x + 1.0f;
     }
-    // Exact tie: round to the even neighbour. floor_x is integral, so its
-    // parity decides; std::fmod is nonzero iff floor_x is odd.
-    return (std::fmod(floor_x, 2.0f) == 0.0f) ? floor_x : floor_x + 1.0f;
+    // Exact tie: round to the even neighbour. floor_x is integral; its parity
+    // decides. The int cast is safe because callers only pass finite, block-
+    // scaled magnitudes (|x| <= ~128: scaled in [-2, 2) times elem_int_scale
+    // <= 64; NaN/Inf are handled before this helper), so floor_x fits in int.
+    // For negatives C++ '%' keeps the dividend's sign, so odd values give a
+    // non-zero remainder (even -> 0) for both signs.
+    const int floor_i = static_cast<int>(floor_x);
+    return (floor_i % 2 == 0) ? floor_x : floor_x + 1.0f;
 }
 
 // Quantize a single (already block-scaled) value into an MxInt element: a signed
