@@ -29,6 +29,42 @@ def hf_local_files_only() -> bool:
     return os.getenv("DEVSTRAL2_HF_LOCAL_ONLY", "").lower() in ("1", "true", "yes")
 
 
+def hf_reference_torch_device() -> torch.device:
+    """Torch device for HF reference *inputs* (CPU on machines without a CUDA GPU)."""
+    override = os.getenv("DEVSTRAL2_HF_DEVICE", "").strip()
+    if override:
+        return torch.device(override)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
+def resolve_hf_input_device(causal_lm: PreTrainedModel) -> torch.device:
+    """Device for token/logit tensors fed into a loaded HF model."""
+    override = os.getenv("DEVSTRAL2_HF_DEVICE", "").strip()
+    if override:
+        return torch.device(override)
+    model_device = getattr(causal_lm, "device", None)
+    if model_device is not None:
+        return torch.device(model_device)
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    try:
+        return next(causal_lm.parameters()).device
+    except StopIteration:
+        return torch.device("cpu")
+
+
+def hf_reference_device_map() -> str | dict[str, str]:
+    """``device_map`` for ``from_pretrained`` — CPU + disk offload when no CUDA GPU."""
+    override = os.getenv("DEVSTRAL2_HF_DEVICE_MAP", "").strip()
+    if override:
+        return override
+    if torch.cuda.is_available():
+        return "auto"
+    return "cpu"
+
+
 def apply_fp8_dequantize_compat_patch() -> None:
     """Patch HF FP8 dequant for scalar ``weight_scale_inv`` (same as inference script)."""
     if Fp8Dequantize._dequantize_one is not _ORIGINAL_DEQUANTIZE_ONE:
@@ -97,9 +133,10 @@ def load_devstral2_causal_lm(
     model = AutoModelForCausalLM.from_pretrained(
         DEVSTRAL2_MODEL_ID,
         dtype=torch.bfloat16,
-        device_map="auto",
+        device_map=hf_reference_device_map(),
         offload_folder=str(folder),
         offload_state_dict=True,
+        low_cpu_mem_usage=True,
         quantization_config=quantization_config,
         trust_remote_code=True,
         local_files_only=local_only,
@@ -113,6 +150,15 @@ def prepare_ministral3_backbone_for_pcc(causal_lm: PreTrainedModel):
     ref = causal_lm.model
     ref.config._attn_implementation = "eager"
     return ref
+
+
+def prepare_causal_lm_for_pcc(causal_lm: PreTrainedModel) -> PreTrainedModel:
+    """Eager attention on the full causal LM for deterministic logit PCC."""
+    causal_lm.config._attn_implementation = "eager"
+    if hasattr(causal_lm, "model"):
+        causal_lm.model.config._attn_implementation = "eager"
+    causal_lm.eval()
+    return causal_lm
 
 
 def ministral3_backbone_weight_keys(num_layers: int) -> list[str]:
@@ -176,4 +222,14 @@ def extract_backbone_bf16_state_dict(causal_lm: PreTrainedModel, num_layers: int
     missing = [k for k in expected if k not in out]
     if missing:
         raise KeyError(f"Missing backbone weights after extraction: {missing[:5]}")
+    return out
+
+
+def extract_causal_lm_bf16_state_dict(causal_lm: PreTrainedModel, num_layers: int) -> dict[str, torch.Tensor]:
+    """Backbone bf16 weights plus ``lm_head`` when embeddings are untied."""
+    out = extract_backbone_bf16_state_dict(causal_lm, num_layers)
+    tie = bool(getattr(causal_lm.config, "tie_word_embeddings", False))
+    if not tie and hasattr(causal_lm, "lm_head"):
+        dequant = Fp8Dequantize(hf_quantizer=None)
+        out["lm_head.weight"] = _linear_weight_to_bf16(causal_lm.lm_head, dequant)
     return out
