@@ -136,6 +136,10 @@ int main() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    // Clear any stale NoC write packet tags (transaction IDs) inherited from boot/a prior kernel before running idle
+    // ERISC kernels. The matching handoff assert lives in idle_erisck.cc; without this clear that assert trips on a
+    // stale tag (PR #44425 added the assert here but omitted the paired startup clear that every other RISC got).
+    noc_clear_all_packet_tags();
 
     DEVICE_PRINT_INITIALIZE_LOCK();
     deassert_all_reset();  // Bring all riscs on eth cores out of reset
