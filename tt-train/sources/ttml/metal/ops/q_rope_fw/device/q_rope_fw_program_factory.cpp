@@ -54,8 +54,7 @@ constexpr auto kSinIntermCbIndex = tt::CBIndex::c_26;
 constexpr auto kRopeOutCbIndex = tt::CBIndex::c_16;
 
 constexpr uint32_t kCbDoubleBuffer = 2U;
-constexpr uint32_t kNopeChunkTilesFp32DestAcc = 4U;
-constexpr uint32_t kNopeChunkTilesDefault = 8U;
+constexpr uint32_t kNopeChunkTiles = 4U;
 
 }  // namespace
 
@@ -150,10 +149,9 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
 
     const uint32_t num_blocks = B * Ts;
 
-    const bool fp32_dest_acc_en = args.fp32_dest_acc_en;
     TT_FATAL(
-        Tr <= 8U,
-        "QRopeFw: qk_rope_dim ({}) / TILE_W = {} exceeds max rope tiles (8, head_dim 256).",
+        Tr <= 4U,
+        "QRopeFw: qk_rope_dim ({}) / TILE_W = {} exceeds max rope tiles (4, head_dim 128).",
         args.qk_rope_dim,
         Tr);
 
@@ -166,8 +164,8 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(q_in.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
-    // DST register file capacity in tiles (4 fp32 dest acc, 8 otherwise).
-    const uint32_t max_dst_tiles = fp32_dest_acc_en ? 4U : 8U;
+    // fp32_dest_acc_en=true -> DST holds 4 tiles.
+    constexpr uint32_t max_dst_tiles = 4U;
     // Heads per dst-batch matmul: largest count with dst_batch_heads * Tr <= max_dst_tiles.
     const uint32_t dst_batch_heads = std::max(1U, max_dst_tiles / Tr);
     // q_pe / rotated_in CB depth for one dst batch (fills DST: dst_batch_heads * Tr).
@@ -175,8 +173,8 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     // True when compute batches multiple heads; drives single-buffer q_pe and larger cb_nope.
     const bool dst_batch = dst_batch_heads > 1U;
 
-    // Stream width for read/write_full_row_tiles on q_nope (4 fp32, 8 otherwise).
-    const uint32_t nope_chunk_tiles = fp32_dest_acc_en ? kNopeChunkTilesFp32DestAcc : kNopeChunkTilesDefault;
+    // Stream width for read/write_full_row_tiles on q_nope (4 tiles with fp32 dest acc).
+    constexpr uint32_t nope_chunk_tiles = kNopeChunkTiles;
     // CB slots one head consumes (tail chunk pads up to a full nope_chunk_tiles reserve/push).
     const uint32_t nope_slots_per_head = tt::round_up(Tn, nope_chunk_tiles);
     // Heads whose nope may be in flight while writer waits on rope (capped by actual H).
@@ -241,8 +239,8 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     QRopeFwKernels kernels;
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
-    kernels.compute =
-        create_compute_kernel(program, all_cores, compute_compile_time_args, {}, kComputeKernelPath, fp32_dest_acc_en);
+    kernels.compute = create_compute_kernel(
+        program, all_cores, compute_compile_time_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     assign_per_core_runtime_args(
         program,

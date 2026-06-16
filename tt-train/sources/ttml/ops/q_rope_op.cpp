@@ -8,6 +8,7 @@
 
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "metal/ops/q_rope_fw/q_rope_fw.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -36,7 +37,9 @@ ttnn::Tensor composite_q_rope_bw(
         rope_params.neg_cos_cache,
         rope_params.neg_sin_cache,
         rope_params.trans_mat,
-        /*is_decode_mode=*/false);
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        core::ComputeKernelConfig::precise());
 
     return ttnn::concat(std::vector<ttnn::Tensor>{dL_dq_nope, dL_dq_pe_in}, /*dim=*/3);
 }
@@ -47,16 +50,14 @@ autograd::TensorPtr q_rope(
     const autograd::TensorPtr& q_full,
     const RotaryEmbeddingParams& rope_params,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim,
-    bool fp32_dest_acc_en) {
+    uint32_t qk_rope_dim) {
     auto q_out = ttml::metal::q_rope_fw(
         q_full->get_value(),
         rope_params.cos_cache,
         rope_params.sin_cache,
         rope_params.trans_mat,
         qk_nope_dim,
-        qk_rope_dim,
-        fp32_dest_acc_en);
+        qk_rope_dim);
 
     auto out = autograd::create_tensor(q_out);
 

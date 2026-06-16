@@ -52,8 +52,7 @@ ttnn::Tensor reference_q_rope(
     const ttnn::Tensor& q_in,
     const ttml::ops::RotaryEmbeddingParams& params,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim,
-    bool fp32_dest_acc_en = false) {
+    uint32_t qk_rope_dim) {
     const auto shape = q_in.logical_shape();
     const uint32_t B = shape[0];
     const uint32_t H = shape[1];
@@ -66,20 +65,14 @@ ttnn::Tensor reference_q_rope(
     auto q_pe = ttnn::slice(
         q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, qk_nope_dim}, ttsl::SmallVector<uint32_t>{B, H, S, qk_head}, step);
 
-    ttnn::Tensor q_pe_rot;
-    if (fp32_dest_acc_en) {
-        q_pe_rot = ttnn::experimental::rotary_embedding_llama(
-            q_pe,
-            params.cos_cache,
-            params.sin_cache,
-            params.trans_mat,
-            /*is_decode_mode=*/false,
-            /*memory_config=*/std::nullopt,
-            ttml::core::ComputeKernelConfig::precise());
-    } else {
-        q_pe_rot = ttnn::experimental::rotary_embedding_llama(
-            q_pe, params.cos_cache, params.sin_cache, params.trans_mat, /*is_decode_mode=*/false);
-    }
+    auto q_pe_rot = ttnn::experimental::rotary_embedding_llama(
+        q_pe,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        ttml::core::ComputeKernelConfig::precise());
 
     return ttnn::concat(std::vector<ttnn::Tensor>{q_nope, q_pe_rot}, /*dim=*/3);
 }
@@ -123,55 +116,17 @@ protected:
 
 TEST_P(QRopeParamTest, FusedMatchesReference) {
     const QRopeShape shape = GetParam();
-    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    ASSERT_LE(shape.qk_rope_dim, 128U) << shape.name << ": q_rope_fw requires qk_rope_dim <= 128";
 
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
     auto q_in = make_bf16_4d(shape.batch, shape.n_heads, shape.seq_len, qk_head, /*seed=*/7U);
     auto params = build_params(shape.seq_len, shape.qk_rope_dim);
 
-    const bool fp32_dest_acc_en = shape.qk_rope_dim <= 128U;
     const auto fused = ttml::metal::q_rope_fw(
-        q_in,
-        params.cos_cache,
-        params.sin_cache,
-        params.trans_mat,
-        shape.qk_nope_dim,
-        shape.qk_rope_dim,
-        fp32_dest_acc_en);
-    const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim, fp32_dest_acc_en);
+        q_in, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
+    const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
 
     expect_q_rope_matches_reference(fused, ref, shape, /*label_prefix=*/"");
-}
-
-class QRopeFp32DestAccTest : public ::testing::TestWithParam<QRopeShape> {
-protected:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
-
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
-};
-
-TEST_P(QRopeFp32DestAccTest, FusedMatchesReference) {
-    const QRopeShape shape = GetParam();
-    ASSERT_LE(shape.qk_rope_dim, 128U) << shape.name << ": fp32_dest_acc_en requires qk_rope_dim <= 128";
-
-    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
-    auto q_in = make_bf16_4d(shape.batch, shape.n_heads, shape.seq_len, qk_head, /*seed=*/7U);
-    auto params = build_params(shape.seq_len, shape.qk_rope_dim);
-
-    const auto fused = ttml::metal::q_rope_fw(
-        q_in,
-        params.cos_cache,
-        params.sin_cache,
-        params.trans_mat,
-        shape.qk_nope_dim,
-        shape.qk_rope_dim,
-        /*fp32_dest_acc_en=*/true);
-    const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim, /*fp32_dest_acc_en=*/true);
-
-    expect_q_rope_matches_reference(fused, ref, shape, /*label_prefix=*/"fp32 ");
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -186,7 +141,6 @@ INSTANTIATE_TEST_SUITE_P(
         QRopeShape{
             .name = "asym_rope2", .batch = 2, .seq_len = 64, .n_heads = 4, .qk_nope_dim = 128, .qk_rope_dim = 64},
         QRopeShape{.name = "heads8_s96", .batch = 1, .seq_len = 96, .n_heads = 8, .qk_nope_dim = 64, .qk_rope_dim = 32},
-        // Near-limit coverage (fp32 dest acc off when qk_rope_dim > 128, same as rotary_embedding_llama).
         QRopeShape{
             .name = "large_tr4",
             .batch = 1,
@@ -194,20 +148,6 @@ INSTANTIATE_TEST_SUITE_P(
             .n_heads = 4,
             .qk_nope_dim = 128,
             .qk_rope_dim = 128},  // Tr = 4, Th = 8
-        QRopeShape{
-            .name = "large_tr5",
-            .batch = 1,
-            .seq_len = 32,
-            .n_heads = 4,
-            .qk_nope_dim = 128,
-            .qk_rope_dim = 160},  // Tr = 5
-        QRopeShape{
-            .name = "max_th15",
-            .batch = 1,
-            .seq_len = 32,
-            .n_heads = 2,
-            .qk_nope_dim = 256,
-            .qk_rope_dim = 224},  // Tn = 8, Tr = 7, Th = 15
         // Large Tn: q_nope bypasses compute (reader -> writer); only Tr rope tiles hit DST.
         QRopeShape{
             .name = "chunked_nope_tn35",
@@ -216,35 +156,7 @@ INSTANTIATE_TEST_SUITE_P(
             .n_heads = 2,
             .qk_nope_dim = 1120,
             .qk_rope_dim = 64},  // Tn = 35, Tr = 2
-        QRopeShape{
-            .name = "chunked_nope_tn35_fp32_off",
-            .batch = 1,
-            .seq_len = 32,
-            .n_heads = 2,
-            .qk_nope_dim = 1120,
-            .qk_rope_dim = 160},  // Tn = 35, Tr = 5, fp32 dest acc off
         // B * Ts = 8 blocks: exercises multi-core split and repeated batch-boundary jumps.
         QRopeShape{
             .name = "batch4_st2", .batch = 4, .seq_len = 64, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32}),
-    [](const ::testing::TestParamInfo<QRopeShape>& info) { return info.param.name; });
-
-INSTANTIATE_TEST_SUITE_P(
-    QRopeFp32DestAccShapes,
-    QRopeFp32DestAccTest,
-    ::testing::Values(
-        // Tr = 1: max_chunk_heads = 4 with fp32 DST (4 tile slots).
-        QRopeShape{.name = "small", .batch = 1, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 64, .qk_rope_dim = 32},
-        // Tr = 2: max_chunk_heads = 2.
-        QRopeShape{.name = "mla_like", .batch = 1, .seq_len = 32, .n_heads = 8, .qk_nope_dim = 128, .qk_rope_dim = 64},
-        // Tr = 4 at qk_rope_dim = 128 limit: max_chunk_heads = 1.
-        QRopeShape{
-            .name = "large_tr4", .batch = 1, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 128, .qk_rope_dim = 128},
-        // Large Tn streaming + fp32 compute (Tr = 2, max_chunk_heads = 2).
-        QRopeShape{
-            .name = "chunked_nope_tn35",
-            .batch = 1,
-            .seq_len = 32,
-            .n_heads = 2,
-            .qk_nope_dim = 1120,
-            .qk_rope_dim = 64}),
     [](const ::testing::TestParamInfo<QRopeShape>& info) { return info.param.name; });

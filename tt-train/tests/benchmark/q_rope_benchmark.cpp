@@ -70,7 +70,7 @@ bool can_benchmark_fused(const ModelShape& shape, uint32_t seq_len) {
     if (seq_len % 32U != 0U) {
         return false;
     }
-    if (shape.qk_rope_dim > 256U) {
+    if (shape.qk_rope_dim > 128U) {
         return false;
     }
     const uint32_t Tr = shape.qk_rope_dim / 32U;
@@ -285,7 +285,7 @@ int main(int argc, char** argv) {
             g_sweep_cfg.num_measure);
         fmt::print(
             "Composite: slice + rotary_embedding_llama (ComputeKernelConfig::precise) + concat.\n"
-            "Fused: q_rope_fw with fp32_dest_acc_en=true.\n");
+            "Fused: q_rope_fw (fp32 dest acc, qk_rope_dim <= 128).\n");
 
         benchmark::RegisterBenchmark("QRope", BM_QRope)
             ->DenseRange(0, static_cast<int>(g_cases.size()) - 1, 1)

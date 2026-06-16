@@ -13,7 +13,6 @@ namespace ttml::metal::ops::q_rope_fw::device {
 struct QRopeFwParams {
     uint32_t qk_nope_dim{};
     uint32_t qk_rope_dim{};
-    bool fp32_dest_acc_en = false;
 };
 
 struct QRopeFwInputs {
