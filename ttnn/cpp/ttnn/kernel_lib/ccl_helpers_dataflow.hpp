@@ -153,6 +153,13 @@ public:
      */
     FORCE_INLINE void set_route_unicast(uint32_t num_hops);
 
+    /**
+     * @brief Program a 1-D unicast route from a precomputed route info — the form
+     * all_gather uses (it reads the route from compile-time args). Equivalent to the
+     * num_hops overload. Call BEFORE arm_*.
+     */
+    FORCE_INLINE void set_route_unicast(const ccl_routing_utils::line_unicast_route_info_t& info);
+
     // --- Armed unicast-write channel -------------------------------------------------
     /**
      * @brief Arm the unicast-write channel: program the invariant route + on-wire payload
@@ -192,14 +199,72 @@ public:
      */
     FORCE_INLINE void inc(uint64_t remote_sem_noc_addr);
 
+    // --- Multicast route (for the N-party barrier; e.g. all_gather) -----------------
+    /**
+     * @brief Program a 1-D line-MULTICAST route (start distance + range, in hops).
+     * Stored and applied to the multicast atomic-inc channel by arm_multicast_inc. Route
+     * info comes from the host (ttnn::ccl::get_forward_backward_line_mcast_*). Call before
+     * arm_multicast_inc.
+     */
+    FORCE_INLINE void set_route_multicast(const ccl_routing_utils::line_multicast_route_info_t& info);
+
+    // --- Armed scatter-write channel (<=4 chunks/packet) ----------------------------
+    /**
+     * @brief Arm the scatter-write channel: program the invariant per-chunk sizes + chunk
+     *        count + on-wire payload size onto a dedicated header once (set_state). Helper
+     *        owns the ChunkSizes|PayloadSize mask. Call after set_route_unicast; then issue
+     *        write_scatter().
+     * @param chunk_size_bytes  Per-chunk (per-tile) payload size.
+     * @param num_chunks        Chunks per packet (2..4; the NocUnicastScatterCommandHeader limit).
+     */
+    FORCE_INLINE void arm_scatter_write(uint32_t chunk_size_bytes, uint32_t num_chunks);
+
+    /**
+     * @brief Issue one armed scatter write: pack up to 4 destination NOC addresses into one
+     *        packet from local L1 @c src_l1_addr (with_state, DstAddrs|ChunkSizes|PayloadSize).
+     *        @c num_chunks must match the arm. Requires a prior arm_scatter_write + open.
+     */
+    FORCE_INLINE void write_scatter(const uint64_t* dst_noc_addrs, uint32_t num_chunks, uint32_t src_l1_addr);
+
+    // --- Armed multicast atomic-inc channel (the N-party barrier) --------------------
+    /**
+     * @brief Arm the multicast atomic-inc channel: program the invariant increment value
+     *        (+ flush) + the multicast route onto the inc header once (set_state, Val|Flush).
+     *        Call after set_route_multicast; then issue multicast_inc().
+     * @note Reuses the SAME Pool header as arm_inc — matching all_gather, which reuses one
+     *       sem-inc header for the barrier-multicast phase then re-arms it for the per-chunk
+     *       unicast incs. Arm/issue the barrier (multicast) phase fully before re-arming
+     *       with arm_inc for the unicast counting phase.
+     */
+    FORCE_INLINE void arm_multicast_inc(uint32_t val = 1);
+
+    /**
+     * @brief Multicast atomic-increment @c remote_sem_noc_addr to all peers on the armed
+     *        multicast route by the armed value (with_state, DstAddr). The matching local
+     *        barrier wait/reset (noc_semaphore_wait_min(sem, ring_size-1) + set 0) stays
+     *        op-owned — see the file banner. Requires a prior arm_multicast_inc + open.
+     */
+    FORCE_INLINE void multicast_inc(uint64_t remote_sem_noc_addr);
+
+    // --- Final fabric drain ----------------------------------------------------------
+    /**
+     * @brief Drain outstanding local NoC writes + fabric atomic-incs before close
+     *        (noc_async_write_barrier + noc_async_atomic_barrier). all_gather ends with this;
+     *        p2p doesn't need it (close() drains its single trailing inc).
+     */
+    FORCE_INLINE void drain();
+
 private:
     FabricConnectionManager conn_;
     tt::tt_fabric::WorkerToFabricEdmSender* dir_ = nullptr;  // bound in open()
     volatile PACKET_HEADER_TYPE* payload_hdr_ = nullptr;     // armed by arm_unicast_write
-    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;         // armed by arm_inc
+    volatile PACKET_HEADER_TYPE* scatter_hdr_ = nullptr;     // armed by arm_scatter_write
+    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;         // armed by arm_inc / arm_multicast_inc (shared)
     uint32_t alignment_ = 0;
+    uint32_t scatter_chunk_size_ = 0;  // per-chunk size armed by arm_scatter_write
     bool is_forward_ = true;
     ccl_routing_utils::line_unicast_route_info_t unicast_info_{};
+    ccl_routing_utils::line_multicast_route_info_t multicast_info_{};
 };
 
 }  // namespace dataflow_kernel_lib::ccl
