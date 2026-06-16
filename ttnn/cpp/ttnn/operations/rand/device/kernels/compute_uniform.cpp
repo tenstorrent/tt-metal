@@ -4,9 +4,8 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/rand.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_rand.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_rand.hpp"  // RandTile (owns rand_tile_init via init())
 
 void kernel_main() {
     using namespace compute_kernel_lib;
@@ -26,14 +25,12 @@ void kernel_main() {
 
     init_sfpu(intermed_cb_id, intermed_cb_id);
 
-    // Out-of-band runtime-seed init — the chain's RandTile::init() is a no-op
-    // because the seed can't thread through a static template hook.
-    rand_tile_init(seed);
-
-    // Per-tile chain: RandTile + PackTile. Reconfig: original had no per-iter
-    // reconfig (init_sfpu at boot, plain pack_tile) -> PackTileReconfig::None.
+    // Per-tile chain: RandTile + PackTile. RandTile carries the runtime seed and seeds
+    // the PRNG in its init() (rand_tile_init), which the chain emits once at boot.
+    // Reconfig: original had no per-iter reconfig (init_sfpu at boot, plain pack_tile)
+    // -> PackTileReconfig::None.
     eltwise_chain(
         num_tiles,
-        RandTile<Dst::D0>{f2u_from.u, f2u_scale.u},
+        RandTile<Dst::D0>{f2u_from.u, f2u_scale.u, seed},
         PackTile<intermed_cb_id, OutputLifecycle::Streaming, PackTileReconfig::None>{});
 }
