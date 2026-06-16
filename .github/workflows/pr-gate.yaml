@@ -477,8 +477,12 @@ jobs:
       - llk-build-quasar
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          sparse-checkout: .github
       - name: Check if all jobs passed
-        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
+        uses: ./.github/actions/workflow-status
         with:
           required-jobs: ""
           optional-jobs: >-
