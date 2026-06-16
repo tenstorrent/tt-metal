@@ -58,7 +58,7 @@
   skus:
     bh_loudbox: # P150x8 — the model shards 128 experts across the 8 devices
       timeout: 30
-  owner_id: UNKNOWN_MORITZ_THUENING # TODO(maintainer): set Moritz Thüning's Slack uid before PR
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this model
   team: models
   model-name: mistral-small-4-119b
 
