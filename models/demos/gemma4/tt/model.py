@@ -590,7 +590,17 @@ class Gemma4Model:
         if pli_combined is not None:
             pli_combined_tt = pli_combined
         elif pli_device_tensors is not None:
-            pass  # Pre-computed device tensors provided externally
+            # Pre-computed device tensors provided externally (legacy trace mode).
+            # For PLI models every layer must receive its per-layer input: a short
+            # list would silently run the remaining layers with pli_tt=None, which
+            # drops PLI and produces bad output with no other failure signal. The
+            # normal _compute_per_layer_inputs path treats missing PLI as a hard
+            # error, so enforce the same invariant at this boundary.
+            if self.hidden_size_per_layer_input and len(pli_device_tensors) != len(self.layers):
+                raise ValueError(
+                    f"pli_device_tensors has {len(pli_device_tensors)} entries "
+                    f"but PLI model has {len(self.layers)} layers"
+                )
         else:
             per_layer_inputs = self._compute_per_layer_inputs(input_ids_torch, embeds_torch)
 
@@ -621,8 +631,9 @@ class Gemma4Model:
             if pli_combined_tt is not None:
                 # On-device decode: slice layer i from combined [1, 1, n_layers, pli_size]
                 pli_tt = pli_combined_tt[:, :, i : i + 1, :]
-            elif pli_device_tensors is not None and i < len(pli_device_tensors):
-                # Pre-computed device tensors (legacy trace mode)
+            elif pli_device_tensors is not None:
+                # Pre-computed device tensors (legacy trace mode). Length was
+                # validated to match len(self.layers) for PLI models above.
                 pli_tt = pli_device_tensors[i]
             elif per_layer_inputs is not None and i < len(per_layer_inputs):
                 pli_4d = per_layer_inputs[i].unsqueeze(0).unsqueeze(0)  # [1, 1, seq, pli_size]

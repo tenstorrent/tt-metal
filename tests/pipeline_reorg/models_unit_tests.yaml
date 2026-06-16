@@ -232,7 +232,7 @@
     bh_p150:
       timeout: 10
       tier: 3
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-E4B unit tests
@@ -256,7 +256,7 @@
     bh_quietbox_2:
       timeout: 15
       tier: 3
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-26B-A4B unit tests
@@ -284,7 +284,7 @@
     # bh_galaxy:
     #   timeout: 20
     #   tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-31B unit tests
@@ -310,7 +310,7 @@
     # bh_galaxy:
     #   timeout: 20
     #   tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Shallow UNet unit tests

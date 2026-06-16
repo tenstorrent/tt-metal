@@ -371,7 +371,7 @@
     bh_p150:
       timeout: 5
       tier: 3
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-E4B e2e tests
@@ -394,7 +394,7 @@
     bh_quietbox_2:
       timeout: 15
       tier: 3
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-26B-A4B e2e tests
@@ -421,7 +421,7 @@
     # bh_galaxy_perf:
     #   timeout: 15
     #   tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-31B e2e tests
@@ -445,7 +445,7 @@
     # bh_galaxy_perf:
     #   timeout: 15
     #   tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 # ── Mistral / Mixtral ──────────────────────────────────────────────

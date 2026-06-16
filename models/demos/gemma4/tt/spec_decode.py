@@ -855,10 +855,25 @@ class SpeculativeDecoder:
             if greedy:
                 return self.generate_fused(anchor_token, anchor_pos, max_new_tokens)
 
+            # Sampling mode cannot use the single fused greedy trace because the
+            # draft/verify token selection is non-deterministic (it depends on the
+            # sampled token), so draft and verify must run as two SEPARATE traces
+            # that interleave each iteration. That interleaving is unsafe here:
+            #   1. Deadlock: draft and verify each capture their own multi-device
+            #      CCL (all-gather/reduce-scatter) trace. Replaying two distinct
+            #      CCL traces back-to-back on the same command queue makes one
+            #      trace's collective wait on buffers the other trace still owns,
+            #      so the mesh hangs (the same failure the fused path avoids).
+            #   2. Allocation collision: capturing a second (verify) trace while a
+            #      draft trace is live reuses persistent I/O buffers the draft
+            #      trace still references, corrupting in-flight state.
+            # Greedy sidesteps both by fusing draft+verify into ONE trace; sampling
+            # has no fused equivalent yet, so fall back to the untraced host loop.
             from loguru import logger as _lg
 
             _lg.warning(
-                "Disabling speculative trace for sampling mode; separate draft/verify trace interleaving is unsafe"
+                "Disabling speculative trace for sampling mode; separate draft/verify "
+                "trace interleaving deadlocks the mesh (see generate() for details)"
             )
             self._use_trace = False
             try:
