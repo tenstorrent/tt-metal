@@ -128,6 +128,17 @@ inline uint8_t dfb_hart_participation_count(uint32_t participation_mask) {
     return static_cast<uint8_t>(__builtin_popcount(participation_mask));
 }
 
+// DM1 tile-counter init option (device firmware only):
+//   0 = baseline (default): each remapped producer spins on remapper-enable, then resets its own
+//       tile counter, sets capacity, and publishes its readiness from setup_local_dfb_interfaces.
+//   2 = DM1 enables the remapper first, then resets each remapped producer's tile counter, sets
+//       capacity, and publishes readiness on the producer's behalf (setup_dfb_remapper). The
+//       producer skips its own remapper spin / TC init / publish and waits on the published
+//       signal in DataflowBuffer's ctor (dfb_ensure_ready).
+#ifndef DFB_DM1_TC_INIT_OPTION
+#define DFB_DM1_TC_INIT_OPTION 2
+#endif
+
 // Flag bits for dfb_hart_init_entry_t::flags
 constexpr uint8_t DFB_HART_FLAG_IS_PRODUCER  = (1u << 7);
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_EN  = (1u << 6);
@@ -289,8 +300,13 @@ struct dfb_dm0_txn_descriptor_image_t {
 // Device side: setup_dfb_remapper() writes clientR_val/clientL_val directly to remapper HW
 // registers (no staging through g_remapper_configurator arrays).
 struct dfb_dm0_remapper_slot_t {
-    uint8_t  pair_index;   // remapper pair index for this producer
-    uint8_t  _pad[3];      // pad to 4-byte alignment
+    uint8_t  pair_index;          // remapper pair index for this producer
+    // The following three are only consumed when DFB_DM1_TC_INIT_OPTION != 0, where DM1 resets/
+    // sets-capacity for the producer's tile counter and publishes readiness on its behalf after
+    // enabling the remapper. They occupy former padding bytes (struct stays 16 bytes).
+    uint8_t  packed_tile_counter; // producer's tile counter (tensix_id<<5 | tc_id)
+    uint8_t  capacity;            // producer TC capacity in entries
+    uint8_t  producer_signal_bit; // bit in dfb_signal[logical_dfb_id]; 0xFF = no slot / skip
     uint32_t clientR_val;  // pre-computed ClientR config register value
     uint32_t clientL_val;  // pre-computed ClientL config register value
     uint32_t _pad2;        // pad to 16 bytes
