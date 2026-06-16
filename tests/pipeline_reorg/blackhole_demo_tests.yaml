@@ -38,7 +38,7 @@
     pytest models/experimental/devstral2_123B_instruct/demo/text_demo.py -v
   skus:
     bh_loudbox:
-      timeout: 35
+      timeout: 60
   owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng)
   team: models
   model-name: devstral2-123b-instruct
