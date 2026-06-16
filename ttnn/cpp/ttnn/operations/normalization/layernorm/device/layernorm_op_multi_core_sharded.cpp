@@ -338,24 +338,29 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, y}).y);
     }
 
-    // Sharded LayerNorm does not support a non-tile-aligned width split across multiple cores: its
-    // E[x]-site masking is only wired for a single width shard (num_blocks == 1). RMSNorm instead masks
-    // the per-core squares (each core's mask carries its own validity), so it works when the reduction
-    // is split across cores (num_blocks > 1).
+    // A non-tile-aligned width split across multiple cores is supported on the non-Welford path: each
+    // core masks its own final-tile padding columns with its per-core column mask (CB 19), and the
+    // per-element divide is 1/logical_K (winv*cinv), so the cross-core mean and variance reduce over
+    // exactly the logical width however the width tiles distribute across cores. This holds for both the
+    // non-distributed reduction and the distributed pre/post-all-gather stats. Welford has no such
+    // per-core column mask (it relies on last_block_wt and the reciprocal LUT) and its cross-core
+    // combine does not account for a partial final core, so Welford LayerNorm over a non-tile-aligned
+    // width split across cores is not supported. RMSNorm does not use Welford here.
     TT_FATAL(
-        !col_mask_needed || grid.num_blocks == 1 || rms_norm,
-        "Sharded layer_norm (non-RMS) does not support a non-tile-aligned width ({}) split across "
-        "multiple cores ({}); use a single core for the width or a tile-aligned width.",
+        !col_mask_needed || grid.num_blocks == 1 || rms_norm || !use_welford,
+        "Welford sharded layer_norm does not support a non-tile-aligned width ({}) split across "
+        "multiple cores ({}); use the non-Welford reduction, a single core for the width, or a "
+        "tile-aligned width.",
         logical_K,
         grid.num_blocks);
     // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned final width tile so
     // they do not enter the statistics (E[x] and variance for layernorm, the mean of squares for
     // RMSNorm), except the post-all-gather stage, which reduces gathered stats rather than the input.
-    // The guard above additionally restricts a width split across cores to num_blocks == 1 except for
-    // RMSNorm. The mask is CB 19 at every masking site, generated on-device in the writer
-    // (generate_mask_w<T>) keyed off each core's width position (so no host tensor is needed). CB 14
-    // (E[x] scratch) additionally feeds the non-distributed LayerNorm E[x] site so cb_in stays intact
-    // for the (x - E[x]) pass.
+    // The mask is CB 19 at every masking site, generated on-device in the writer (generate_mask_w<T>)
+    // keyed off each core's width position (so no host tensor is needed), so it carries the correct
+    // validity whether the width lives on one core or is split across many. CB 14 (E[x] scratch)
+    // additionally feeds the non-distributed LayerNorm E[x] site so cb_in stays intact for the
+    // (x - E[x]) pass.
     const bool do_col_mask = col_mask_needed && !use_welford && !is_post_all_gather;
     const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm && !is_pre_all_gather;
 
