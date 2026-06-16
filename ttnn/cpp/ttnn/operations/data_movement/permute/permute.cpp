@@ -52,8 +52,7 @@ ttnn::Tensor permute_impl(
     if (rank > 4) {
         if (a.is_sharded()) {
             // Preserve input's shard layout; compute_output_specs derives a valid spec.
-            auto effective_config = output_mem_config.value_or(
-                MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type()));
+            auto effective_config = output_mem_config.value_or(a.memory_config());
             return ttnn::prim::permute(a, dims, effective_config, std::nullopt, pad_value);
         }
         return prim_permute(a);
@@ -105,8 +104,7 @@ ttnn::Tensor permute_impl(
             output = transpose_cn(formatted_input_tensor);
         } else {
             // Preserve input's shard layout; compute_output_specs derives a valid spec.
-            auto effective_config = output_mem_config.value_or(
-                MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type()));
+            auto effective_config = output_mem_config.value_or(a.memory_config());
             output = ttnn::prim::permute(formatted_input_tensor, dims, effective_config, std::nullopt, pad_value);
         }
     } else {
