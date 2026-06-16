@@ -14,6 +14,16 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
+// DECODE_MODE mirrored as a kernel-local constexpr so branch logic below uses
+// `if constexpr` instead of the preprocessor. (The kernel_main #ifdef stays — the
+// DECODE-only compile-time args / untilize-retilize setup don't exist in non-DECODE,
+// so they can't live in an `if constexpr (false)` branch.)
+#ifdef DECODE_MODE
+inline constexpr bool kDecodeMode = true;
+#else
+inline constexpr bool kDecodeMode = false;
+#endif
+
 // Per-CB-constexpr chain wrapper for `mul(in0, in1) -> out`. Replaces the
 // older raw-LLK ALWI MUL_TILES helper. All three CBs are compile-time
 // (compile-time args) so this resolves to a single eltwise_chain call.
@@ -28,42 +38,41 @@
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain(uint32_t in1_idx) {
     using namespace compute_kernel_lib;
-#ifdef DECODE_MODE
-    cb_wait_front(in0_cb, 1);
-    cb_wait_front(in1_cb, in1_idx + 1);
-    cb_reserve_back(out_cb, 1);
-    eltwise_chain(
-        1u,
-        BinaryFpu<
-            in0_cb,
+    if constexpr (kDecodeMode) {
+        cb_wait_front(in0_cb, 1);
+        cb_wait_front(in1_cb, in1_idx + 1);
+        cb_reserve_back(out_cb, 1);
+        eltwise_chain(
+            1u,
+            BinaryFpu<
+                in0_cb,
+                in1_cb,
+                BinaryFpuOp::Mul,
+                BroadcastDim::Row,
+                InputLifecycle::CallerManaged,
+                InputLifecycle::CallerManaged,
+                BinaryDataFormatReconfig::None,
+                Dst::D0,
+                OperandKind::Scalar,
+                OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
+            PackTile<out_cb, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
+        cb_pop_front(in0_cb, 1);
+        cb_push_back(out_cb, 1);
+        // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
+    } else {
+        (void)in1_idx;  // unused — in1 is per-iter streamed at index 0.
+        mul<in0_cb,
             in1_cb,
-            BinaryFpuOp::Mul,
-            BroadcastDim::Row,
-            InputLifecycle::CallerManaged,
-            InputLifecycle::CallerManaged,
+            out_cb,
+            BroadcastDim::None,
+            InputLifecycle::Streaming,
+            InputLifecycle::Streaming,
+            OutputLifecycle::Streaming,
             BinaryDataFormatReconfig::None,
-            Dst::D0,
-            OperandKind::Scalar,
-            OperandKind::Scalar,
-            compute_kernel_lib::TileOffset::Unset,
-            compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
-        PackTile<out_cb, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
-    cb_pop_front(in0_cb, 1);
-    cb_push_back(out_cb, 1);
-    // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
-#else
-    (void)in1_idx;  // unused — in1 is per-iter streamed at index 0.
-    compute_kernel_lib::mul<
-        in0_cb,
-        in1_cb,
-        out_cb,
-        compute_kernel_lib::BroadcastDim::None,
-        compute_kernel_lib::InputLifecycle::Streaming,
-        compute_kernel_lib::InputLifecycle::Streaming,
-        compute_kernel_lib::OutputLifecycle::Streaming,
-        compute_kernel_lib::BinaryDataFormatReconfig::None,
-        compute_kernel_lib::PackTileReconfig::None>(1u);
-#endif
+            PackTileReconfig::None>(1u);
+    }
 }
 
 template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
@@ -131,11 +140,8 @@ void kernel_main() {
 #endif
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
-#ifdef DECODE_MODE
-            const uint32_t in1_idx = j;
-#else
-            const uint32_t in1_idx = 0;
-#endif
+            // DECODE: read the held retilized sin/cos at runtime offset j; else index 0.
+            const uint32_t in1_idx = kDecodeMode ? j : 0;
             if (j < half_Wt) {
                 // Multiply half of the rotated input by scalar (-1).
                 // Reconfig audit: explicit reconfig_data_format(rotated_in_cb, scalar_cb) +
