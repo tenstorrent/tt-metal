@@ -373,7 +373,7 @@ inline void risc_init() {
     }
 }
 
-inline __attribute__((interrupt, hot)) void handle_interrupt() {
+inline __attribute__((interrupt, hot)) void synchronous_exception_handler() {
     uint64_t mcause;
     asm volatile("csrr %0, mcause" : "=r"(mcause));
     ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
@@ -419,7 +419,7 @@ inline __attribute__((always_inline)) void register_handler_for_interrupt(uint32
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
     // Register handlers for interrupts in the interrupt table
-    register_handler_for_interrupt(SYNC_INTERRUPT_INDEX, handle_interrupt);
+    register_handler_for_interrupt(SYNC_INTERRUPT_INDEX, synchronous_exception_handler);
     register_handler_for_interrupt(ROCC_INTERRUPT_INDEX, dfb_implicit_sync_handler);
     // point mtvec to the interrupt table and verify it
     asm volatile("csrw mtvec, %0" : : "r"(MEM_INTERRUPT_TABLE_BASE | 1));
