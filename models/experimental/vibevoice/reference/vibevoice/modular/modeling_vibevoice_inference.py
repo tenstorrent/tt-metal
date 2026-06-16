@@ -606,6 +606,12 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
             diffusion_start_indices = torch.arange(batch_size, device=device)[
                 ~finished_tags & (next_tokens == generation_config.speech_start_id)
             ]
+            if diffusion_start_indices.numel() > 0:
+                # Match TTNN: full streaming-cache reset at segment start (not only
+                # zero-on-speech_end). Avoids stale causal conv state → boundary clicks.
+                acoustic_cache.clear()
+                semantic_cache.clear()
+
             if diffusion_start_indices.numel() > 0 and kwargs.get("refresh_negative", True):
                 # update attention mask
                 for i, sample_idx in enumerate(diffusion_start_indices.tolist()):
