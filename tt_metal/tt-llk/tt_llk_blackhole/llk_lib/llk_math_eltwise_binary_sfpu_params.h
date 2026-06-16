@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#ifndef TT_SFPU_PARAMS_INTERNAL_USE
+#error "Do not include llk_math_eltwise_binary_sfpu_params.h directly. Include llk_math_eltwise_binary_sfpu_macros.h and use SFPU_BINARY_CALL* macros instead."
+#endif
+
 #include <cstdint>
 #include <utility>
 
@@ -10,6 +14,7 @@
 #include "llk_math_eltwise_sfpu_common.h"
 
 template <typename Callable, typename... Args>
+[[deprecated("Use SFPU_BINARY_CALL, SFPU_BINARY_CALL_MODE, SFPU_BINARY_CALL_FN, or SFPU_BINARY_CALL_CAST from llk_math_eltwise_binary_sfpu_macros.h instead.")]]
 inline void _llk_math_eltwise_binary_sfpu_params_(
     Callable&& sfpu_func,
     std::uint32_t dst_index_in0,

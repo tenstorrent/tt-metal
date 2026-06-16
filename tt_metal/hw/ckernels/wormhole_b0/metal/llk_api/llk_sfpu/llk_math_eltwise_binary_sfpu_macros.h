@@ -8,7 +8,9 @@
 
 #include "llk_assert.h"
 #include "llk_math_eltwise_binary_sfpu_init.h"
+#define TT_SFPU_PARAMS_INTERNAL_USE
 #include "llk_math_eltwise_binary_sfpu_params.h"
+#undef TT_SFPU_PARAMS_INTERNAL_USE
 
 /*
  * Keep macro preconditions outside the tt-llk params wrapper. DST_SYNC and
