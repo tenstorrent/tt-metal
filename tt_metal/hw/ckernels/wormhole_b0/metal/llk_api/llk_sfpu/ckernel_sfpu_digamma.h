@@ -7,6 +7,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_log.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 #include "ckernel_sfpu_piecewise_rational.h"
 
@@ -60,9 +62,32 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_digamma() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+        // Piecewise-rational LUT, fit on [0.01, 102].
         sfpi::vFloat result =
             piecewise_rational_eval<DIGAMMA_NUM_DEGREE, DIGAMMA_DEN_DEGREE, DIGAMMA_NUM_SEGMENTS, DIGAMMA_LUT_SIZE>(
                 DIGAMMA_LUT, x);
+
+        // Large-x asymptotic (Bernoulli series). Above the LUT fit range the rational
+        // extrapolates poorly (issue #45520: "behaves bad for x>1000"); the asymptotic
+        // digamma(x) = ln(x) - 1/(2x) - 1/(12x^2) + 1/(120x^4) - ... is ~exact for large x
+        // (truncation error ~8e-11 at x=102), restoring the (1, inf) support the pre-LUT
+        // composite op provided. Crossover at the LUT's upper bound 102 is seamless.
+        // NOTE: uses the register-free (bf16-grade) log body, so large-x fp32 is only
+        // bf16-accurate. #45520 targets bf16 ULP; an fp32-accurate log here would collide
+        // with the reciprocal's vConstFloatPrgm0, so fp32 large-x is intentionally left as-is.
+        v_if(x > 102.0f) {
+            sfpi::vFloat inv_x = _sfpu_reciprocal_<2>(x);
+            sfpi::vFloat inv_x2 = inv_x * inv_x;
+            // ln(x) - inv_x*0.5 - inv_x2*(1/12 - inv_x2/120)
+            sfpi::vFloat bern = sfpi::vFloat(0.0833333333f) - inv_x2 * sfpi::vFloat(0.0083333333f);
+            result = _calculate_log_body_no_init_(x) - inv_x * sfpi::vFloat(0.5f) - inv_x2 * bern;
+            // digamma(+inf) = +inf; the log approximation clamps inf to a finite value, so
+            // restore it explicitly (exp field all-ones, zero mantissa => infinity).
+            v_if(sfpi::exexp(x) == 128 && sfpi::exman(x) == 0) { result = std::numeric_limits<float>::infinity(); }
+            v_endif;
+        }
+        v_endif;
+
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
