@@ -11,6 +11,8 @@ excludeAgent: "cloud-agent"
 - **Gradient accumulation correctness**: if a change touches backward pass or gradient accumulation, verify that gradients are not silently zeroed, double-counted, or accumulated with wrong scaling.
 - **Optimizer state mutation**: optimizer state tensors (momentum, variance buffers) must be updated in-place consistently. A change that allocates a new tensor instead of updating in-place will silently ignore accumulated statistics.
 - **Config backward compatibility**: renaming or removing fields in YAML training configs breaks downstream consumers (tt-training-service, console). Config name changes require a deprecated-alias mapping that keeps old names working during a transition period (30–60 days minimum).
+- **Training script exit codes**: training scripts and model example scripts (`examples/`, `models/`) must propagate non-zero exit codes on failure. A `main()` that catches all exceptions and exits 0 makes CI appear green on a broken training run — silent success is a footgun in automated pipelines.
+- **`ttnn.all_reduce` tensor placement**: after `ttnn.all_reduce` in multi-device training code (DDP, GRPO, RL loops), verify that the output tensor's `.placement[cluster_axis]` is set to `Replicate`. Missing this causes incorrect gradient synchronization across devices with no error message.
 
 ## 🟡 IMPORTANT
 
@@ -21,6 +23,10 @@ excludeAgent: "cloud-agent"
 - **`ttnn` API stability**: tt-train must track stable ttnn APIs. Flag any use of an `experimental` ttnn op without a comment acknowledging instability risk.
 - **Performance evidence**: changes to training kernels or ops that claim perf improvement must include step-time or loss evidence (even a brief summary) in the PR description.
 - **Stale comments in kernels**: flag comments that describe old behavior after refactoring. Kernel comments about buffer usage, broadcast modes, or dataflow patterns must match the current implementation.
+- **Inf/NaN vs tolerance failures**: SDPA, softmax, and cross-entropy tests that fail with inf/NaN values cannot be fixed by loosening `xt::allclose` tolerances — those indicate overflow (e.g., softmax accumulation past the bf16 range), not precision drift. Do not suggest loosening tolerances on inf/NaN failures; flag them as a separate correctness bug.
+- **Multithreaded RNG flakiness**: tests that use `parallel_generate` or any multithreaded random data generation are flakiness candidates — non-deterministic thread ordering produces non-reproducible failures. Flag these and suggest counter-based or single-threaded RNG as an alternative.
+- **CI tier placement for new tests**: when a PR adds a new test to `tt-train/tests/`, confirm it targets the right tier — smoke (merge-gate, N150 only, fast C++ subset), unit (L2 nightly, all hardware: N150/N300/P100/P150), or perf (L2 nightly Python models). New tests must not be added to `sanity-tests.yaml`; tt-train tests were deliberately removed from sanity.
+- **C++ test device sharing**: C++ tests should use a shared device fixture (one `tt::tt_metal::IDevice*` open for the whole test suite) rather than open/close per test — the per-test pattern was measured at ~2.5× slower and wastes hundreds of hours of N300 machine time per week. Python tests that exercise different mesh shapes/topologies are exempt.
 
 ## Kernel Review (`tt-train/sources/ttml/metal/`)
 
@@ -42,6 +48,8 @@ excludeAgent: "cloud-agent"
 - Use shared test utilities (`test_utils/random_data.hpp`, `make_uniform_xarray`) for test data generation.
 - For ops claiming program-cache reuse, add a cache-hit test variant that exercises `override_runtime_arguments` with changing parameters.
 - APIs must not silently ignore parameters — if a function accepts `mask` but never uses it, either remove the parameter or document the limitation.
+- For numerical computation in training ops, prefer the two-pass variance form `E[(x − mean)²]` over the algebraically equivalent `E[x²] − E[x]²` — the single-pass form suffers catastrophic cancellation in bfloat16. Note the accuracy/performance tradeoff explicitly in the PR description if the slower form is chosen.
+- When including perf evidence, use the standard L2 nightly metrics: `last_loss`, `mfu`, `average_iteration_time_ms`, `step_time_p50`. Compare to the latest scheduled main run. MFU differences of <1–2% between runs may be host-CPU noise rather than a real regression.
 
 ## Review Checklist
 
@@ -53,3 +61,7 @@ excludeAgent: "cloud-agent"
 - [ ] Device op structs have unique descriptive names
 - [ ] Kernel comments match current implementation (no stale descriptions)
 - [ ] No experimental ttnn ops without stability acknowledgment
+- [ ] Training/model scripts propagate non-zero exit code on failure
+- [ ] `ttnn.all_reduce` output tensor placement set to `Replicate` on all cluster axes
+- [ ] New tests assigned to correct CI tier (smoke/unit/perf); not added to sanity-tests.yaml
+- [ ] C++ tests use shared device fixture, not per-test open/close
