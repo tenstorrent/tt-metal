@@ -781,21 +781,20 @@ HostTensor pad_impl(
     const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value) {
-    auto pad_value_ = static_cast<T>(pad_value);
+    T pad_value) {
     auto input_padded_shape = tensor.padded_shape();
     if (input_padded_shape.rank() < 2) {
         input_padded_shape = input_padded_shape.to_rank(2);
     }
     const auto input_strides = tensor.strides();
 
-    auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](
+    auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, pad_value](
                    const HostBuffer& input_host_buffer) {
         const auto input_buffer = input_host_buffer.view_as<T>();
         const auto rank = input_padded_shape.rank();
 
         auto output_buffer = std::vector<T>(output_padded_shape.volume());
-        std::fill(output_buffer.begin(), output_buffer.end(), pad_value_);
+        std::fill(output_buffer.begin(), output_buffer.end(), pad_value);
 
         if (input_padded_shape.volume() == 0) {
             return output_buffer;
@@ -867,32 +866,6 @@ HostTensor pad_impl(
                 tensor.logical_shape(),
                 output_padded_shape)),
         tensor.tensor_topology());
-}
-
-template <>
-HostTensor pad_impl<tensor_impl::bfloat8_b>(
-    const HostTensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value) {
-    return pad_bfloat8_b(tensor, output_padded_shape, input_tensor_start, pad_value);
-}
-
-template <>
-HostTensor pad_impl<tensor_impl::bfloat4_b>(
-    const HostTensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value) {
-    return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
-}
-
-template <>
-HostTensor pad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&, float) {
-    // FP8_E4M3 host-side pad is not wired up; no current op needs it. The generic body
-    // would actually compile (float8_e4m3 is a 1-byte trivially-copyable type with a float
-    // constructor), but leaving this as an explicit throw documents the intentional scope.
-    TT_THROW("pad: FP8_E4M3 is not supported");
 }
 
 template <typename T>
@@ -990,9 +963,21 @@ HostTensor pad(
         "pad_value type {} does not match tensor dtype {}; use float for block-float dtypes",
         convert_to_data_type<T>(),
         tensor.dtype());
-    return tensor_impl::dispatch(tensor.dtype(), [&]<typename StorageT>() {
-        return CMAKE_UNIQUE_NAMESPACE::pad_impl<StorageT>(
-            tensor, output_padded_shape, input_tensor_start, static_cast<float>(pad_value));
+    return tensor_impl::dispatch(tensor.dtype(), [&]<typename StorageT>() -> HostTensor {
+        if constexpr (std::is_same_v<StorageT, tensor_impl::bfloat8_b>) {
+            // T is float by invariant; no roundtrip needed
+            return CMAKE_UNIQUE_NAMESPACE::pad_bfloat8_b(
+                tensor, output_padded_shape, input_tensor_start, static_cast<float>(pad_value));
+        } else if constexpr (std::is_same_v<StorageT, tensor_impl::bfloat4_b>) {
+            return CMAKE_UNIQUE_NAMESPACE::pad_bfloat4_b(
+                tensor, output_padded_shape, input_tensor_start, static_cast<float>(pad_value));
+        } else if constexpr (std::is_same_v<StorageT, float8_e4m3>) {
+            TT_THROW("pad: FP8_E4M3 is not supported");
+        } else {
+            // T == StorageT for all remaining types — static_cast is identity, no float roundtrip
+            return CMAKE_UNIQUE_NAMESPACE::pad_impl<StorageT>(
+                tensor, output_padded_shape, input_tensor_start, static_cast<StorageT>(pad_value));
+        }
     });
 }
 
