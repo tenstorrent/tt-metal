@@ -91,13 +91,16 @@ def create_program_descriptor(
     # large *relative* RMS (the output is a near-zero average of thousands of V
     # vectors). Folding Bkv_t key-tiles per chunk cuts the rescale-round count
     # by Bkv_t — the only lever once the golden pins fp32_dest_acc_en/HiFi.
-    # Gated to long (S_kv>=4096 ⇒ Skv_t>=128), non-causal, tile-aligned shapes
-    # so the causal/edge per-tile paths and the large-D fp32 L1 budget (R4) are
-    # untouched (every long-context workload has D<=128 ⇒ small d_t, so the
-    # Bkv_t-scaled K/V CBs stay well inside L1). Bkv_t==1 recovers Phase-0
-    # behaviour byte-for-byte. Must divide Skv_t evenly (no partial last block).
+    # Gated to long (S_kv>=4096 ⇒ Skv_t>=128), tile-aligned (non-edge) shapes so
+    # the edge per-tile path and the large-D fp32 L1 budget (R4) are untouched
+    # (every long-context workload has D<=128 ⇒ small d_t, so the Bkv_t-scaled
+    # K/V CBs stay well inside L1). Bkv_t==1 recovers Phase-0 behaviour
+    # byte-for-byte. Must divide Skv_t evenly (no partial last block). Causal is
+    # blocked too: only the diagonal block (the last processed) carries a
+    # Bkv_t-wide mask (zeros for past tiles, triangular for the diagonal tile,
+    # −inf for future tiles); earlier blocks are fully past (unmasked).
     def _choose_bkv():
-        if causal or kv_edge or Skv_t < 128:
+        if kv_edge or Skv_t < 128:
             return 1
         for b in (8, 4, 2):
             if Skv_t % b == 0:
@@ -240,8 +243,9 @@ def create_program_descriptor(
         cbs.append(cb(CB_MASK_IN, 2 * Bkv_t, data_format=attn_mask.dtype))
     elif causal:
         # On-device generated triangular bias — always bf16 (it is a generated
-        # bias, not tensor data; added into the fp32/bf16 cb_scores).
-        cbs.append(cb(CB_MASK_IN, 2, data_format=ttnn.bfloat16))
+        # bias, not tensor data; added into the fp32/bf16 cb_scores). R5 — the
+        # diagonal block is Bkv_t-wide (Bkv_t==1 ⇒ Phase-0 sizing).
+        cbs.append(cb(CB_MASK_IN, 2 * Bkv_t, data_format=ttnn.bfloat16))
     if kv_edge:
         # R3 — generated column edge-mask bias (bf16). Added to cb_scores on the
         # last KV chunk for {none, custom} modes; independent of cb_mask_in.

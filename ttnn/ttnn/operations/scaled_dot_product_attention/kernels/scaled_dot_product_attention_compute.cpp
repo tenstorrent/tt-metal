@@ -93,10 +93,10 @@ void kernel_main() {
         // diagonal block (j == qc) and how many KV-chunks to fold (qc+1).
         // Requires S_q == S_kv (causal+cross excluded), so Sq_t == Skv_t.
         const uint32_t qc = (start_unit + u) % Sq_t;
-        // Non-causal: Nkv blocks of Bkv_t tiles each. Causal keeps Bkv_t == 1
-        // (host-enforced) so Nkv == Skv_t and j is a tile index, preserving the
-        // diagonal (j == qc) / edge (j == Skv_t-1) logic verbatim.
-        const uint32_t kv_count = causal ? (qc + 1) : Nkv;
+        // Non-causal: Nkv blocks of Bkv_t tiles each. Causal: ceil((qc+1)/Bkv_t)
+        // blocks; the last (diagonal) block straddles the diagonal tile qc and
+        // carries the Bkv_t-wide triangular bias the reader generated.
+        const uint32_t kv_count = causal ? ((qc + Bkv_t) / Bkv_t) : Nkv;
 
         // 0c. scale Q: cb_q = cb_q_in * scale (folds the softmax scale into Q).
         eltwise_chain(
@@ -138,8 +138,10 @@ void kernel_main() {
                 // Custom mask: one [1, Bkv_t] mask block per KV-chunk.
                 add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(Bkv_t));
             } else if constexpr (causal) {
-                if (j == qc) {
-                    add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(1));
+                // The diagonal block is the last processed chunk; add its
+                // Bkv_t-wide triangular/future bias.
+                if (j == kv_count - 1) {
+                    add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(Bkv_t));
                 }
             }
 
