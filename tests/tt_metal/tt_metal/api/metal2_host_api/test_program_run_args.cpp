@@ -1148,6 +1148,38 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
         << "DFB base addr should refresh to the new MeshTensor's address after UpdateTensorArgs";
 }
 
+// Regression: a kernel that binds a tensor but declares no scalar args (no named/vararg RTAs or
+// CRTAs) may be omitted from kernel_run_args. SetProgramRunArgs must still validate, and must write
+// the binding's base address into that kernel's CRTA buffer via its second pass — the binding
+// address is per-enqueue state that has to reach the device whether or not the user supplies an
+// (otherwise-empty) kernel_run_args entry.
+TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsSucceeds) {
+    // dm_kernel binds a TensorParameter but has an empty RTA/CRTA schema; compute_kernel is empty
+    // too. Neither has scalar args, so neither needs a kernel_run_args entry.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    const std::string tensor_param = "bound_input";
+    spec.tensor_parameters = {MakeMinimalTensorParameter(tensor_param)};
+    BindTensorParameterToKernel(spec.kernels[0], tensor_param, "in_ta");  // kernels[0] == dm_kernel
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Supply the bound tensor via tensor_args, but provide NO kernel_run_args entry for the binding
+    // kernel (the whole point of the relaxation — pre-fix this aborted in ValidateProgramRunArgs).
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs params;
+    params.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor}}};
+
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    // The second pass must have allocated the kernel's CRTA buffer and written the binding address.
+    // MakeMinimalTensorParameter is non-sharded, so the binding is a single address word at offset 0.
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    ASSERT_FALSE(kernel->common_runtime_args().empty())
+        << "binding-only kernel's CRTA buffer should have been allocated by SetProgramRunArgs";
+    EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor.address()))
+        << "binding base address should be written even though the kernel was omitted from kernel_run_args";
+}
+
 // ============================================================================
 // SECTION 5: Gen1 (WH/BH) Tests
 // ============================================================================

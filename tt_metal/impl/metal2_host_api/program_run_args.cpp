@@ -269,13 +269,12 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     }
 
     // Validate that all registered kernels with a non-empty RTA/CRTA schema have parameters.
-    // Kernels whose schema declares no named RTAs, no named CRTAs, no vararg RTAs, no vararg
-    // CRTAs, AND no tensor bindings have nothing to supply per enqueue and do not need a
-    // kernel_run_args entry. Tensor bindings count as "something to supply" because their
-    // base address (and any dynamic accessor fields) are written into the kernel's CRTA buffer
-    // by SetProgramRunArgs from the corresponding TensorArgument — and SetProgramRunArgs
-    // only walks kernels present in params.kernel_run_args, so a kernel with tensor bindings
-    // omitted from kernel_run_args would have its binding CRTAs left uninitialized.
+    // Kernels whose schema declares no named RTAs, no named CRTAs, no vararg RTAs, and no vararg
+    // CRTAs have no scalar runtime arguments to supply per enqueue and do not need a kernel_run_args
+    // entry. This holds even if the kernel binds tensors: a TensorBinding's base address (and any
+    // dynamic accessor fields) is filled automatically by SetProgramRunArgs for every binding-bearing
+    // kernel — including a binding-only kernel omitted from kernel_run_args, via its second pass —
+    // so tensor bindings alone no longer force an (otherwise-empty) kernel_run_args entry.
     auto registered_names = program_impl.get_registered_kernel_names();
     for (const auto& name : registered_names) {
         if (kernels_with_params.contains(KernelSpecName{name})) {
@@ -285,17 +284,13 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         if (schema == nullptr) {
             continue;
         }
-        auto kernel = program_impl.get_kernel_by_spec_name(name);
-        const bool has_tensor_bindings = kernel != nullptr && !kernel->tensor_binding_handles().empty();
-        const bool has_anything_to_supply = !schema->runtime_arg_names.empty() ||
-                                            !schema->common_runtime_arg_names.empty() ||
-                                            !schema->num_runtime_varargs_per_node.empty() ||
-                                            schema->num_common_runtime_varargs > 0 || has_tensor_bindings;
+        const bool has_anything_to_supply =
+            !schema->runtime_arg_names.empty() || !schema->common_runtime_arg_names.empty() ||
+            !schema->num_runtime_varargs_per_node.empty() || schema->num_common_runtime_varargs > 0;
         TT_FATAL(
             !has_anything_to_supply,
             "Kernel '{}' is registered in the Program with a non-empty RTA/CRTA schema but has no "
-            "runtime parameters specified in ProgramRunArgs (the schema is non-empty, or the "
-            "kernel binds tensor parameters whose addresses are filled from kernel_run_args)",
+            "runtime parameters specified in ProgramRunArgs.",
             name);
     }
 
@@ -486,6 +481,23 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
     }
 
+    // Append a kernel's TensorBinding CRTA section to `out`, in binding-handle order. Each binding
+    // contributes (1 + num_runtime_field_crta_words) words: [base address, optional runtime accessor
+    // fields...], sourced from the bound MeshTensor via tensor_by_param. Shared by the main
+    // kernel_run_args loop below and the binding-only second pass after it.
+    auto append_binding_crtas = [&](const auto& binding_handles, std::vector<uint32_t>& out) {
+        for (const auto& handle : binding_handles) {
+            auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
+            TT_FATAL(
+                t_it != tensor_by_param.end(),
+                "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have caught "
+                "this).",
+                handle.tensor_parameter_name);
+            const auto values = ComputeBindingCrtaValues(handle, *t_it->second);
+            out.insert(out.end(), values.begin(), values.end());
+        }
+    };
+
     // Process kernel runtime arguments.
     // Named RTAs/CRTAs and vararg RTAs/CRTAs share a single dispatch buffer each (RTA + CRTA).
     //
@@ -580,16 +592,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 kernel_name);
             combined_crtas.push_back(v_it->second);
         }
-        for (const auto& handle : binding_handles) {
-            auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-            TT_FATAL(
-                t_it != tensor_by_param.end(),
-                "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have caught "
-                "this).",
-                handle.tensor_parameter_name);
-            const auto values = ComputeBindingCrtaValues(handle, *t_it->second);
-            combined_crtas.insert(combined_crtas.end(), values.begin(), values.end());
-        }
+        append_binding_crtas(binding_handles, combined_crtas);
         combined_crtas.insert(
             combined_crtas.end(),
             kernel_common_runtime_varargs(kernel_params).begin(),
@@ -613,6 +616,38 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                     combined_crtas.size());
                 std::memcpy(crta.data(), combined_crtas.data(), combined_crtas.size() * sizeof(uint32_t));
             }
+        }
+    }
+
+    // Second pass: kernels that bind tensors but were omitted from kernel_run_args.
+    // A kernel whose only per-enqueue state is TensorBinding addresses (no named RTAs/CRTAs and no
+    // varargs) is allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop
+    // above only visits kernels present in kernel_run_args, so such a kernel's binding CRTA section
+    // would never be written. Fill it here. This mirrors the fast path UpdateTensorArgs, which
+    // likewise fills bindings for every binding-bearing kernel independent of kernel_run_args.
+    // Kernels without tensor bindings need no CRTA buffer, so this allocates nothing extra for them.
+    std::unordered_set<std::string> kernels_in_run_args;
+    kernels_in_run_args.reserve(params.kernel_run_args.size());
+    for (const auto& kernel_params : params.kernel_run_args) {
+        kernels_in_run_args.insert(kernel_params.kernel.get());
+    }
+    for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
+        if (kernels_in_run_args.contains(kernel_name)) {
+            continue;  // Already filled (and its CRTA buffer allocated) by the loop above.
+        }
+        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+        const auto& binding_handles = kernel->tensor_binding_handles();
+        if (binding_handles.empty()) {
+            continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
+        }
+        // Binding-only kernel: its CRTA buffer is exactly the binding section (it has no named CRTAs
+        // or varargs, else validation would have required a kernel_run_args entry). It was never
+        // visited above, so its CRTA storage is unallocated — assemble and allocate via
+        // set_common_runtime_args (the first-time path), not an in-place patch.
+        std::vector<uint32_t> combined_crtas;
+        append_binding_crtas(binding_handles, combined_crtas);
+        if (!combined_crtas.empty()) {
+            kernel->set_common_runtime_args(combined_crtas);
         }
     }
 
