@@ -36,3 +36,4 @@
 {"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_long_context.py","detail":"5/5 pass incl S=8192 fp32 two-pass clears rms<=0.02 PCC>=0.999; S=4096/512 online unaffected","ts":"2026-06-12T17:24:02+00:00"}
 {"event":"test_run","status":"pass","test":"golden -k 8192/4096/broad","detail":"18 S=8192 (all 6 fp32 pass), 72 S=4096 online unaffected, broad sample 72 pass. golden 1002->1004","ts":"2026-06-12T17:37:44+00:00"}
 {"event":"tool_use","tool":"Agent","subagent":"ttnn-expert-debugger","description":"Localize bf8b fp16-DEST defect","ts":"2026-06-16T12:59:37+00:00"}
+{"event":"test_run","scope":"Refinement 7","result":"pass","detail":"bf8b@fp16-DEST PCC 0.047->0.99967; golden fp16-DEST slice 48 pass/24 xfail(EXCLUSION), True half 54 pass no regression, acceptance 24/24","classification":"complete","ts":"2026-06-16T13:17:22+00:00"}
