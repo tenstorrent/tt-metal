@@ -10,7 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_log.h"
 
@@ -82,7 +82,7 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     // Force sign to 0 (make number positive)
     sfpi::vFloat result = _sfpu_exp_(sfpi::setsgn(val, 0));
 
-    v_if(val < 0) { result = _sfpu_reciprocal_<2>(result); }
+    v_if(val < 0) { result = sfpu_reciprocal_iter<2>(result); }
     v_endif;
 
     // Check valid base range
@@ -123,7 +123,7 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
         } else if constexpr (BINOP == BinaryOp::MUL) {
             result = in0 * in1;
         } else if constexpr (BINOP == BinaryOp::DIV) {
-            result = in0 * _sfpu_reciprocal_<2>(in1);
+            result = in0 * sfpu_reciprocal_iter<2>(in1);
         } else if constexpr (BINOP == BinaryOp::RSUB) {
             result = in1 - in0;
         } else if constexpr (BINOP == BinaryOp::POW) {
@@ -173,7 +173,7 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result = in0 * _sfpu_reciprocal_<2>(in1);
+        sfpi::vFloat result = in0 * sfpu_reciprocal_iter<2>(in1);
 
         v_if(in1 == 0) {
             v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
@@ -199,8 +199,8 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
-        // Initialisation for use of _sfpu_reciprocal_<2> in DIV or POW.
-        _init_sfpu_reciprocal_<false>();
+        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
+        sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
     }
