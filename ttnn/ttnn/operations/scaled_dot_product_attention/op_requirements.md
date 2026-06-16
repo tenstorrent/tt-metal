@@ -226,3 +226,56 @@ online-softmax + Wormhole-SFPU stack — confirm the chosen lever actually clear
 
 **Done when**: the 2 `Q1x1x8192x64` fp32 golden cells pass, with no regression
 to the 414 currently-passing cells and no change to the bf16/bf8b paths.
+
+---
+
+### [ ] Refinement 7 — fp32_dest_acc_en precision axis (fix the bf8b fp16-DEST defect)
+
+**Goal**: add `fp32_dest_acc_en` ([True, False]) to `SUPPORTED` as a precision
+axis and make every `(dtype × fp32_dest_acc_en)` cell honest. `feature_spec.py`
+now declares this TARGET axis, so the golden exercises BOTH DEST modes; the op
+must gate on it in `validate()` and produce correct results where supported.
+
+**Proven facts — do NOT re-derive (baseline experiment, 2026-06-16):**
+- The op default (`compute_kernel_config=None`) is **HiFi2 + fp32 DEST acc**, so
+  every Phase-0 golden cell ran at `fp32_dest_acc_en=True`. That is the only
+  reason bf8b looked green — the fp16-DEST path was never exercised by the golden.
+- **bf8b @ fp16-DEST (`fp32_dest_acc_en=False`) is a real regen kernel/CB-format
+  defect**: PCC ~0.047 (garbage) on `fa_rand`. It is NOT a fundamental block-float
+  or hardware limit. PROOF: the reference SDPA op gets PCC **0.99956** at the
+  IDENTICAL config (bf8b, fp16-DEST, 1×1×1024×128 causal, fa_rand). bf16 @
+  fp16-DEST already works (PCC ~0.9998). The reference is built at
+  `/localdev/dnijemcevic/sdpa_main_baseline/tt-metal` (commit `e61af82`) and is
+  **readable** — diff its compute kernel / program factory against ours; it does
+  dtype→DEST/CB-format correctly. (Reuse gotcha: that clone has its own
+  `python_env`; override the leaked `PYTHON_ENV_DIR` / `TT_METAL_HOME`.)
+
+**Required work:**
+1. `validate()` must accept `compute_kernel_config` and derive the
+   `fp32_dest_acc_en` axis (True when the config is None — the default; else its
+   `.fp32_dest_acc_en`), then add `"fp32_dest_acc_en": [True, False]` to
+   `SUPPORTED`. (Mirrors how the layer_norm_rm op gates this axis.)
+2. **FIX the bf8b fp16-DEST kernel/CB-format defect** so bf8b at
+   `fp32_dest_acc_en=False` matches reference-grade PCC (~0.999). This is the real
+   work — engage `ttnn-static-analyzer` / `ttnn-expert-debugger` and the reference
+   diff.
+3. **FORBIDDEN — do NOT force fp32 DEST for bf8b, and do NOT silently override the
+   caller's `compute_kernel_config`.** That was the prior attempt's masking
+   workaround; it has been reverted. The caller's requested DEST mode must be
+   honored and genuinely produce correct output.
+4. Add `EXCLUSIONS += [{"dtype": ttnn.float32, "fp32_dest_acc_en": False}]` —
+   fp32 input + 16-bit DEST is legal-but-lossy; refuse it op-side (mirrors the
+   softmax precedent). bf16 and bf8b must support BOTH DEST modes.
+5. If you claim to mirror reference behavior, CITE the reference source you
+   actually read — do not assert it.
+
+**Done when** (verified WITHOUT any silent override):
+- `[x]`: bf16 and bf8b pass at BOTH `fp32_dest_acc_en ∈ {True, False}` (the new
+  golden cells go green), bf8b @ False matches reference-grade PCC, fp32 @ False
+  is an EXCLUSION (xfail_expected), no regression to existing cells, and an
+  fp16-DEST bf8b unit test is added under
+  `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/`.
+- `[~]`: only after the cheap-first sequence (minimal repro → static-analyzer /
+  expert-debugger → ≥1 real code lever) — land what works, leave fp16-DEST bf8b
+  RED (NOT excluded — it is provably fixable), and file the sharper next lever.
+  Demoting or excluding bf8b@fp16-DEST is NOT an acceptable outcome.
