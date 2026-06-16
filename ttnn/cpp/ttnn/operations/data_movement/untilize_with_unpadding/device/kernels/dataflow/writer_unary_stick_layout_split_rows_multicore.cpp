@@ -2,34 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 (ProgramSpec) port. This kernel lives in this op's directory and is used only by
+// UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory, so it is ported in place (not forked).
+// Logic, loop bounds and numeric paths are UNCHANGED; only the access mechanism moves to named
+// bindings:
+//   dst address          -> ta::dst (TensorAccessor)
+//   CB id 16             -> dfb::out
+//   FLOAT32_DTYPE / unpadded_X_size CTAs -> named CTAs (get_arg(args::...))
+//   padded_X_size / start_stick_id / n_block_reps fixed RTAs -> named RTAs
+//   per-core block-rep 5-tuples (variable length) -> runtime varargs (get_vararg)
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-    const uint32_t n_block_reps = get_arg_val<uint32_t>(3);
+    const uint32_t padded_X_size = get_arg(args::padded_X_size);
+    const uint32_t start_stick_id = get_arg(args::start_stick_id);
+    const uint32_t n_block_reps = get_arg(args::n_block_reps);
 
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
+    constexpr uint32_t unpadded_X_size = get_arg(args::unpadded_X_size);
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(ta::dst);
 
     Noc noc;
-    CircularBuffer cb_out0(cb_id_out0);
+    DataflowBuffer cb_out0(dfb::out);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
@@ -56,7 +64,9 @@ void kernel_main() {
     };
 
     uint32_t stick_id = start_stick_id;
-    uint32_t rt_arg_idx = 4;
+    // The per-core block-rep tuples are positional runtime varargs (run-length-compressed).
+    // get_vararg(i) indexes from 0 (the named RTA section is invisibly skipped by the helper).
+    uint32_t vararg_idx = 0;
     uint32_t count = 1;
     constexpr int32_t n_mixed_idx = 1;
     constexpr int32_t n_pad_idx = 2;
@@ -65,15 +75,13 @@ void kernel_main() {
     constexpr int32_t num_rt_idx = 5;
 
     for (uint32_t block_rep_idx = 0; block_rep_idx < n_block_reps; ++block_rep_idx) {
-        const uint32_t repeat_count = get_arg_val<uint32_t>(rt_arg_idx + repeat_ct_idx);
-        const uint32_t n_data = get_arg_val<uint32_t>(rt_arg_idx);  // number of full tile-rows
-        const uint32_t n_mixed =
-            get_arg_val<uint32_t>(rt_arg_idx + n_mixed_idx);  // number of rows in a partially filled tile-row
-        const uint32_t n_pads = get_arg_val<uint32_t>(rt_arg_idx + n_pad_idx);  // number of padding tile-rows
-        const uint32_t times =
-            get_arg_val<uint32_t>(rt_arg_idx + times_idx);  // number of times the pattern of tile-rows repeats
+        const uint32_t repeat_count = get_vararg(vararg_idx + repeat_ct_idx);
+        const uint32_t n_data = get_vararg(vararg_idx);                 // number of full tile-rows
+        const uint32_t n_mixed = get_vararg(vararg_idx + n_mixed_idx);  // number of rows in a partially filled tile-row
+        const uint32_t n_pads = get_vararg(vararg_idx + n_pad_idx);     // number of padding tile-rows
+        const uint32_t times = get_vararg(vararg_idx + times_idx);  // number of times the pattern of tile-rows repeats
         if (count == repeat_count) {
-            rt_arg_idx = rt_arg_idx + num_rt_idx;
+            vararg_idx = vararg_idx + num_rt_idx;
             count = 1;
         } else {
             count++;

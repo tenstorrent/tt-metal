@@ -2,6 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port. Used only by the PadTileMulticore factory, so ported in place.
+// Logic, loop bounds and numeric paths are UNCHANGED; only the access mechanism moves to
+// named bindings:
+//   output address                       -> ta::dst (TensorAccessor)
+//   input CB id                          -> dfb::in0
+//   pad-val CB id                        -> dfb::pad
+//   page_size/num_dims/pad_value/element_size CTAs -> get_arg(args::...)
+//   num_pages_to_write/start_offset RTAs -> get_arg(args::...)
+//   per-dim arrays (input_page_shape, output_page_shape, input_id_per_dim,
+//                   output_id_per_dim)   -> runtime varargs (get_vararg)
+//
+// (The legacy output CB id is now carried by the dfb::out self-loop binding on the host and is
+// not referenced here — the kernel never used it as a FIFO.)
+//
+// Vararg note: the legacy kernel read the per-dim arrays via in-place tt_l1_ptr pointers and
+// mutated input_id_per_dim / output_id_per_dim through advance_tensor_index. The m2 vararg API
+// exposes value getters only (no writable pointer into the vararg region), so the per-dim
+// arrays are copied into local stack arrays and mutated there. This is purely an access-mechanism
+// change; the index arithmetic is identical.
+
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
@@ -10,6 +30,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with
 // either the input or padding respectively
@@ -19,30 +40,34 @@
 // [0:2, 0:2, 0:1, 0:1] we wait for the reader to send us the correct tile, and then write it, otherwise we
 // write padding.
 void kernel_main() {
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t pad_val_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(4);
-    constexpr uint32_t pad_value = get_compile_time_arg_val(5);
-    constexpr uint32_t element_size = get_compile_time_arg_val(6);
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t num_dims = get_arg(args::num_dims);
+    constexpr uint32_t pad_value = get_arg(args::pad_value);
+    constexpr uint32_t element_size = get_arg(args::element_size);
     constexpr uint32_t num_elements = page_size / element_size;
 
-    uint32_t rt_ind = 0;
-    const uint32_t output_addr = get_arg_val<uint32_t>(rt_ind++);
-    const uint32_t num_pages_to_write = get_arg_val<uint32_t>(rt_ind++);
-    const uint32_t start_offset = get_arg_val<uint32_t>(rt_ind++);
-    volatile tt_l1_ptr uint32_t* input_page_shape = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_ind));
-    volatile tt_l1_ptr uint32_t* output_page_shape = input_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* input_id_per_dim = output_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* output_id_per_dim = input_id_per_dim + num_dims;
+    const uint32_t num_pages_to_write = get_arg(args::num_pages_to_write);
+    const uint32_t start_offset = get_arg(args::start_offset);
 
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    // Per-dim arrays as runtime varargs (positional):
+    //   [input_page_shape[0..num_dims-1], output_page_shape[0..num_dims-1],
+    //    input_id_per_dim[0..num_dims-1], output_id_per_dim[0..num_dims-1]]
+    // input_id_per_dim / output_id_per_dim are mutated below, so copy all into local stack arrays.
+    uint32_t input_page_shape[num_dims];
+    uint32_t output_page_shape[num_dims];
+    uint32_t input_id_per_dim[num_dims];
+    uint32_t output_id_per_dim[num_dims];
+    for (uint32_t d = 0; d < num_dims; d++) {
+        input_page_shape[d] = get_vararg(d);
+        output_page_shape[d] = get_vararg(num_dims + d);
+        input_id_per_dim[d] = get_vararg(2 * num_dims + d);
+        output_id_per_dim[d] = get_vararg(3 * num_dims + d);
+    }
 
-    const auto s0 = TensorAccessor(dst_args, output_addr);
+    const auto s0 = TensorAccessor(ta::dst);
     Noc noc;
-    CircularBuffer cb_input(input_cb_id);
-    CircularBuffer cb_pad_val(pad_val_cb_id);
+    DataflowBuffer cb_input(dfb::in0);
+    DataflowBuffer cb_pad_val(dfb::pad);
 
     // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
     cb_pad_val.reserve_back(1);

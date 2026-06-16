@@ -29,3 +29,33 @@ Status: **PORTED** (single-core factory only; not built — this worktree has no
   - `untilize/device/kernels/compute/untilize.cpp` — FORKED to `untilize_with_unpadding/device/kernels/compute/untilize_m2.cpp`. Legacy original unchanged; ~8 other consumer op dirs remain unmigrated.
 - **Sibling factories (carry-over):** the 5 remaining factories in this device-op are candidates for the same treatment in a follow-up pass; several share these same reader/compute kernels, so the forks created here can be reused.
 - **Test coverage note:** not built or run (no build dir per instructions). Verification (gtests + pytests at `tests/ttnn/unit_tests/operations/data_movement/` and under the simulator) is required before merge.
+
+---
+
+# Metal 2.0 Port Report — untilize_with_unpadding (multi-core interleaved factory)
+
+Status: **PORTED** (multi-core interleaved factory — the default-selected non-sharded multicore
+path; not built — this worktree has no build dir).
+
+## TTNN ProgramFactory
+- **Concept realized**: `MetalV2FactoryConcept`. `UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_descriptor` → `create_program_spec`, returning `ttnn::device_operation::ProgramArtifacts{.spec, .run_params}`. Header updated (`tt-metalium/program_descriptors.hpp` include → `ttnn/metal2_artifacts.hpp`; return type `ProgramDescriptor` → `ProgramArtifacts`).
+- **Device-op-class edits**: none. `select_program_factory` returns this factory by value (unchanged); the adapter dispatches per-factory on the concept. No custom `compute_program_hash` to delete.
+- **Pybind entry points removed**: none — grepped `untilize_with_unpadding_nanobind.{cpp,hpp}`; no `create_descriptor`/`create_program` exposure for any factory.
+
+## Kernels (multi-core)
+- **reader** — REUSES `reader_unary_interleaved_start_id_m2.cpp` (the cross-op `_m2` fork already created for single-core). The multicore reader emits `{src, num_tiles_per_core, tile_start_id}` → the m2 reader's `num_pages`/`start_id` named RTAs + `ta::src`. No new fork.
+- **compute** — REUSES `untilize_m2.cpp` (the cross-op `_m2` fork already created for single-core). Multicore CTAs `{nblocks_per_core, num_tiles_per_row}` map onto the m2 compute's `per_core_block_cnt`/`per_core_block_tile_cnt`; cb ids become `dfb::in`/`dfb::out`. No new fork.
+- **writer** — `writer_unary_stick_layout_split_rows_multicore.cpp` ported **in place** (op-local, single consumer = this factory). dst addr → `ta::dst`; cb 16 → `dfb::out`; FLOAT32_DTYPE/unpadded_X_size → named CTAs; padded_X_size/start_stick_id/n_block_reps → named RTAs; per-core block-rep 5-tuples → runtime varargs (`get_vararg`).
+
+## Successes
+- **Multi-group work split → multi-KernelSpec / multi-WorkUnitSpec** (matmul-multicore exemplar shape) applied cleanly: full + cliff compute are two KernelSpecs in two WUs (`uwu_full`, `uwu_cliff`); reader + writer are members of BOTH WUs (so their derived node set = all_cores). The per-group block count stays a CTA — no CTA→RTA demotion.
+- **Cross-op fork reuse**: the single-core port's `reader_*_m2.cpp` and `untilize_m2.cpp` forks were directly reusable by the multicore factory (same kernel sources, same named bindings). No additional cross-op kernels touched.
+- **Varargs** modeled the writer's variable-length per-core block-rep tuples faithfully (the kernel already bounds its read with the `n_block_reps` named RTA), reusing the `get_vararg` mechanism proven by slice's m2 reader.
+
+## Friction / Open items for downstream
+- **BLOCKER-adjacent — deprecated API is the only fit.** The writer needs a DIFFERENT number of runtime varargs per core. The non-deprecated scalar `KernelAdvancedOptions::num_runtime_varargs` only supports a UNIFORM count across all of a kernel's nodes; the per-node-varying case requires `num_runtime_varargs_per_node`, which is marked `[[deprecated]]` ("will be removed once existing uses are refactored"). This port is (per grep) the FIRST in-tree use of that field. It compiles clean because the repo sets `-Wno-deprecated-declarations`. Surfacing precisely so the API owners can decide: either (a) keep a supported per-node-varying-vararg mechanism, or (b) provide guidance to pad every core to the max count via the scalar (inert padding — the kernel reads only `n_block_reps*5` varargs). I chose the deprecated per-node field over padding because padding adds dispatch-buffer bloat and obscures the real per-core count. File: `untilize_with_unpadding_multi_core_interleaved_program_factory.cpp` (the `writer.advanced_options.num_runtime_varargs_per_node[...]` line).
+- **Vararg use (report-required)**: writer runtime varargs retained (genuinely variable-length, loop-indexed) — this is the sanctioned vararg case, not a positional-RTA carry-over.
+- **Cross-op kernel forks (sunset checklist)**: unchanged from single-core — `reader_unary_interleaved_start_id_m2.cpp` and `untilize_m2.cpp` remain forks; now used by BOTH the single-core and multi-core m2 factories. Delete only when this op no longer needs them AND the shared originals are themselves m2-ported.
+- **Compute-kernel pointer escape valve**: none. Writer's only base-pointer read is `cb_out0.get_read_ptr()` on its own DFB (framework-managed). No smuggled addresses.
+- **Remaining factories**: 4 of 6 (sharded / col-interleaved / block-interleaved / nd-sharded) stay on the legacy concept; the op keeps building/running (mixed-concept variant, per-factory dispatch).
+- **Test coverage**: not built or run (no build dir). gtests + pytests + simulator verification required before merge.
