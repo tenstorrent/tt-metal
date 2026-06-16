@@ -332,21 +332,36 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SliceDeviceOperation::get_dynamic_r
         return dynamic_args;  // rm_sharded / rm_stride (all already bound)
     }
 
-    // SliceRmProgramFactory: re-derive the buffer-address slots from the CURRENT buffers via the SAME
-    // helper create_descriptor() uses, then re-apply them on every core. The work-core set can grow on a
-    // cache hit, so a build-time noop core may now read its (frozen) address slot — re-apply all of them.
+    // SliceRmProgramFactory bakes EVERY per-dispatch value into raw uint32 reader/writer rt-args (it
+    // registers no Buffer*/CB bindings): not only the buffer addresses (reader/writer arg 0) but also
+    // offset-derived values — the reader's per-core start stick id and misalignment, the writer's
+    // per-core cumulative stick offset — all computed from the live slice start. Re-applying only the
+    // address (as before) left those offset args frozen, so a program-cache hit by a slice with a
+    // DIFFERENT start (two starts that hash to the same cached program) kept the previous start's stick
+    // ids and read/wrote the wrong region (PCC garbage; e.g. ttnn::split's slice-based path). Since the
+    // framework patches nothing on its own here (no bindings), re-apply the COMPLETE per-core reader and
+    // writer arg vectors. They are re-derived from the live tensors via the SAME helper
+    // create_descriptor() uses, so this matches a full rebuild exactly. (#46506)
     Tensor& output = tensor_return_value;
     const auto per_core = ttnn::operations::data_movement::compute_slice_rm_per_core_args(args, input, output);
 
     constexpr uint32_t kReaderKernelIdx = 0;
     constexpr uint32_t kWriterKernelIdx = 1;
-    dynamic_args.reserve(per_core.cores.size() * 2);
+    size_t total_args = 0;
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        total_args += per_core.reader_args[i].size() + per_core.writer_args[i].size();
+    }
+    dynamic_args.reserve(total_args);
     for (size_t i = 0; i < per_core.cores.size(); ++i) {
         const auto& core = per_core.cores[i];
-        dynamic_args.push_back(
-            {kReaderKernelIdx, core, per_core.reader_addr_index, per_core.reader_args[i][per_core.reader_addr_index]});
-        dynamic_args.push_back(
-            {kWriterKernelIdx, core, per_core.writer_addr_index, per_core.writer_args[i][per_core.writer_addr_index]});
+        const auto& reader_args = per_core.reader_args[i];
+        const auto& writer_args = per_core.writer_args[i];
+        for (uint32_t idx = 0; idx < reader_args.size(); ++idx) {
+            dynamic_args.push_back({kReaderKernelIdx, core, idx, reader_args[idx]});
+        }
+        for (uint32_t idx = 0; idx < writer_args.size(); ++idx) {
+            dynamic_args.push_back({kWriterKernelIdx, core, idx, writer_args[idx]});
+        }
     }
     return dynamic_args;
 }

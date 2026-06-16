@@ -164,6 +164,36 @@ def test_slice_rm_cache(cache_device):
     ), f"slice(rm): cache grew past {base} across fresh allocations (addr not patched)"
 
 
+# data_movement / slice -- DIFFERENT windows that program-cache COLLIDE.
+# Regression for #46506: SliceRmProgramFactory folds padded_shape / CB sizing (not the absolute
+# slice start) into compute_program_hash(), so two slices with a different start can hit the SAME
+# cached program. On that hit the reader's start stick id + misalignment (reader args 5/6) and the
+# writer's per-core stick offset are per-call values that must be re-applied; the original fix
+# re-applied only the buffer address (arg 0), leaving the start frozen -> the hit read the previous
+# window's region (PCC garbage). This is the user-visible failure exercised by ttnn.split's
+# slice-based path (test_split.py[shape=(32, 64, 4096) ... ROW_MAJOR], chunksize=1). Drive it via the
+# same path: split a wide row-major last dim into width-1 chunks; later windows cache-HIT earlier
+# ones and every chunk must still match. Assert a hit actually happened (else the test wouldn't probe
+# the bug). PREDICTION: OK (every per-core arg re-applied on each hit).
+def test_slice_rm_split_window_cache(cache_device):
+    torch.manual_seed(0)
+    shape = (32, 64, 4096)  # last dim wide enough that distinct windows collide in the cache
+    ta = torch.rand(shape, dtype=torch.bfloat16)
+    a = ttnn.from_torch(ta, layout=ttnn.ROW_MAJOR_LAYOUT, device=cache_device, dtype=ttnn.bfloat16)
+
+    base = cache_device.num_program_cache_entries()
+    outs = ttnn.split(a, 1, dim=2)  # width-1 chunks -> sequence of slices over distinct windows
+    grew = cache_device.num_program_cache_entries() - base
+
+    assert len(outs) == shape[2]
+    for i, o in enumerate(outs):
+        got = ttnn.to_torch(o).float()
+        ref = ta[:, :, i : i + 1].float()
+        assert torch.allclose(got, ref, atol=0.1), f"slice(rm) window {i} stale on a program-cache hit"
+    # Some windows must have re-used a cached program, or this test never exercised the hit path.
+    assert grew < len(outs), f"expected a cross-window program-cache hit (grew {grew} for {len(outs)} slices)"
+
+
 # ---------------------------------------------------------------------------
 # data_movement / transpose. Invocation copied from test_descriptor_no_rebuild.py
 # (test_transpose_hc_no_rebuild): ttnn.transpose(a, 1, 2) on a TILE tensor (HC tiled factory).
