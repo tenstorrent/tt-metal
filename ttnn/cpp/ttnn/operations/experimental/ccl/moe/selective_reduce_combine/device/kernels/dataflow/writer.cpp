@@ -100,6 +100,19 @@ public:
 
     auto operator*() { return idx; }
 };
+
+template <uint8_t NumBuffers, uint8_t NumDirections>
+void wait_connections_drained(
+    const std::array<bool, NumDirections>& directions,
+    const std::array<WorkerToFabricMuxSender<NumBuffers>, NumDirections>& connections) {
+    for (uint8_t d = 0; d < NumDirections; ++d) {
+        if (directions[d]) {
+            while (connections[d].get_num_free_write_slots() != NumBuffers) {
+            };
+        }
+    }
+}
+
 }  // namespace detail
 
 void kernel_main() {
@@ -166,7 +179,6 @@ void kernel_main() {
     const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const bool is_init_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
-
     const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
 
     // rt_arg_count is incremented
@@ -175,6 +187,15 @@ void kernel_main() {
 
     // rt_arg_count does not get incremented
     MuxSyncCoreArgs sync_args(rt_arg_count);
+
+    // DEBUG (AM)
+    // auto* semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
+    //     auto* termination_sync_semaphore_ptr =
+    //             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
+    //     if (sync_args.is_sync_core){
+    //         ASSERT(*semaphore_ptr==0);
+    //         ASSERT(*termination_sync_semaphore_ptr==0);
+    //     }
 
     std::array<WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>, Num_Directions> fabric_connections;
 
@@ -323,8 +344,13 @@ void kernel_main() {
 
     noc_async_write_barrier(/*noc=*/1);
 
+    // In order to ensure that the barrier semaphores land after all of the data has arrived we must wait for the mux
+    // cores to send off all of their data to the EDM.
+    detail::wait_connections_drained<fabric_mux_num_buffers_per_channel, Num_Directions>(
+        directions, fabric_connections);
+
     if (sync_args.is_sync_core) {
-        auto termination_sync_semaphore_ptr =
+        auto* termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
         noc_semaphore_wait(termination_sync_semaphore_ptr, num_workers_per_link - 1);
@@ -345,10 +371,10 @@ void kernel_main() {
             /*DoubleAntipodalAtomicInc=*/(topology == tt::tt_fabric::Topology::Ring)>(
             fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
 
-        auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-
         noc_async_write_barrier(/*noc=*/1);
         noc_async_atomic_barrier(/*noc=*/1);
+
+        auto* semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
         close_direction_connections<
             Num_Directions,

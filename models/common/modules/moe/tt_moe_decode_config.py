@@ -225,6 +225,7 @@ class ComputeConfig(_TTOpKwargs):
     # (see TTMoEDecodeConfig._shared_experts_per_device) — NOT the logical `num_shared_experts`.
     num_shared_experts_per_device: int
 
+
     @classmethod
     def adopt_fields(cls) -> set[str]:
         return {"cluster_axis", "has_bias", "num_shared_experts_per_device"}

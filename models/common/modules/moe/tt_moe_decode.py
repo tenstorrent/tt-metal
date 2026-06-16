@@ -760,6 +760,7 @@ class TTMoEDecode:
         """
         if not self._needs_fast_reduce_padding:
             return tt_x
+
         num_replicated = self.config.mesh_shape[1 - self.config.cluster_axis]
         chunk = self._post_rs_logical_chunk
         padded_chunk = self._padded_pre_split_chunk * self._num_fast_reduce_outputs // num_replicated
@@ -918,10 +919,12 @@ class TTMoEDecode:
             # has_bias
             # activation_type
             **self.config.compute.model_dump(),
-            optional_output_tensor=self.buffers.tt_combine_output,
-            optional_cross_device_semaphore=self.buffers.combine_global_semaphore,
+            # optional_output_tensor=self.buffers.tt_combine_output,
+            # optional_cross_device_semaphore=self.buffers.combine_global_semaphore,
         )
         ttnn.deallocate(tt_l1_compute_output)
+
+        # ttnn.synchronize_device(tt_x.device())
 
         # unsqueeze
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
