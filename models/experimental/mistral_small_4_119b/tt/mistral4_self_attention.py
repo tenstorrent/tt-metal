@@ -208,6 +208,26 @@ class TtMistral4Attention(LightweightModule):
         # Paged latent KV cache: tokens-per-block. Must be a multiple of TILE_SIZE
         # and of the flash-MLA q/k chunk size (128) so chunk_start_idx alignment holds.
         self.block_size = int(os.environ.get("MISTRAL4_KV_BLOCK_SIZE", "128"))
+        # Latent KV cache dtype. Default bfloat16 (full fidelity). Opt-in bfloat8_b
+        # (MISTRAL4_KV_CACHE=bf8) halves the bytes the single-core flash-MLA decode scans
+        # each step → ~2× faster long-context decode — but it quantizes the image-token KV,
+        # and the multimodal demo measurably DROPS a fine image detail under bf8 (decode-vs-HF
+        # text PCC barely moves, 0.9636→0.9587, but the visual fidelity loss is real and the
+        # text PCC can't see it). So bf8 is opt-in for text-heavy / long-context runs only;
+        # keep bf16 for vision. (DeepSeek-V3's MLA uses bf8, but it's text-only.)
+        self._kv_cache_dtype = (
+            ttnn.bfloat8_b if os.environ.get("MISTRAL4_KV_CACHE", "bf16").lower() == "bf8" else ttnn.bfloat16
+        )
+
+        # Split-V multi-core decode workaround (no kernel change). The flash-MLA decode op's cross-core
+        # reduction is broken whenever the V output is wider than 128 (verified: head_dim_v≤128 is exact
+        # multi-core at every position; 256 collapses to PCC~0.3), so the 256-wide latent V forces decode
+        # onto a single core. Splitting V into two 128-wide halves, running decode once per half (same Q
+        # and same 320-wide K → identical scores) and concatenating the outputs restores a CORRECT
+        # multi-core decode, parallelising the KV scan and removing the long-context decode bottleneck.
+        self._split_v_decode = os.environ.get("MISTRAL4_SPLIT_V_DECODE", "0") == "1"
+        self._v_half = self.kv_lora_rank // 2  # 128; each pass asks for ≤128 V (the safe width)
+        self._v2_cache = None  # second-half latent V cache [.., self._v_half]; built in allocate_kv_cache
 
         if compute_kernel_config is None:
             compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -298,6 +318,7 @@ class TtMistral4Attention(LightweightModule):
         # Height-sharded input mem config required by paged_update_cache (the
         # tensor-indexed, trace-compatible latent-cache write used in decode).
         self._kvpe_update_mem_cfg = self._build_kv_update_mem_cfg(grid, KV_LORA_RANK + QK_ROPE_HEAD_DIM)
+        self._v2_update_mem_cfg = self._build_kv_update_mem_cfg(grid, self._v_half)
 
         p = layer_prefix + "self_attn."
         _cf = (lambda key: str(cache_dir / key)) if cache_dir is not None else (lambda _: None)
@@ -778,7 +799,26 @@ class TtMistral4Attention(LightweightModule):
             start_block = chunk_start_idx // bs
             end_block = (chunk_start_idx + seq_len + bs - 1) // bs
             chunk_pt = ttnn.slice(page_table, [0, start_block], [1, end_block])
-            ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe, chunk_pt, batch_idx=0)
+            # Write a copy at the cache dtype (bf8 by default); keep `kvpe` (bf16) intact
+            # for the first-chunk attention below, which attends the latent directly.
+            if kvpe.dtype != self._kv_cache_dtype:
+                kvpe_fill = ttnn.typecast(kvpe, self._kv_cache_dtype)
+                ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe_fill, chunk_pt, batch_idx=0)
+                ttnn.deallocate(kvpe_fill)
+            else:
+                ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe, chunk_pt, batch_idx=0)
+            if self._split_v_decode:
+                # Mirror the write into the second-half V cache so decode pass 2 has full history.
+                v2_src = ttnn.slice(
+                    kvpe, [0, 0, 0, self._v_half], [1, 1, seq_len, self.kv_lora_rank]
+                )  # latent[v_half:kv_lora_rank]
+                if v2_src.dtype != self._kv_cache_dtype:
+                    v2_fill = ttnn.typecast(v2_src, self._kv_cache_dtype)
+                    ttnn.experimental.paged_fill_cache(self._v2_cache, v2_fill, chunk_pt, batch_idx=0)
+                    ttnn.deallocate(v2_fill)
+                else:
+                    ttnn.experimental.paged_fill_cache(self._v2_cache, v2_src, chunk_pt, batch_idx=0)
+                ttnn.deallocate(v2_src)
             ttnn.deallocate(chunk_pt)
 
         # ── Attention (V = first KV_LORA_RANK dims of the latent) ──────────
@@ -878,7 +918,7 @@ class TtMistral4Attention(LightweightModule):
         num_blocks = (max_seq_len + self.block_size - 1) // self.block_size + 1
         kvpe_cache = ttnn.as_tensor(
             torch.zeros(num_blocks, 1, self.block_size, kvpe_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=self._kv_cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -892,6 +932,17 @@ class TtMistral4Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        if self._split_v_decode:
+            # Second-half latent V (= latent[v_half:kv_lora_rank]) as its own paged cache, so decode
+            # pass 2 can read it as the op's V prefix while pass 1 reuses kvpe_cache[:v_half]. Allocated
+            # device-native (ttnn.zeros, replicated across the mesh) — no host/torch staging.
+            self._v2_cache = ttnn.zeros(
+                [num_blocks, 1, self.block_size, self._v_half],
+                dtype=self._kv_cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         return (kvpe_cache, page_table)
 
     # ------------------------------------------------------------------
@@ -1021,28 +1072,75 @@ class TtMistral4Attention(LightweightModule):
         # kvpe is [1, 1, 1, kvpe_dim] (single KV head); height-shard it and write
         # kvpe → kvpe_cache[0, 0, pos, :].
         kvpe_upd = ttnn.to_memory_config(kvpe, self._kvpe_update_mem_cfg)
+        # Split-V: also stage the second-half latent write (slice BEFORE kvpe is freed).
+        v2_upd = None
+        if self._split_v_decode:
+            v2_src = ttnn.slice(kvpe, [0, 0, 0, self._v_half], [1, 1, 1, self.kv_lora_rank], memory_config=_mem)
+            v2_upd = ttnn.to_memory_config(v2_src, self._v2_update_mem_cfg)
+            ttnn.deallocate(v2_src)
         ttnn.deallocate(kvpe)
+        # paged_update_cache requires the UPDATE tensor to be fp32/bf16 (it casts into the
+        # bf8 cache internally) — so do NOT typecast kvpe_upd here. Matches DeepSeek, whose
+        # decode write passes a bf16 update into its bf8 kvpe cache. (paged_fill_cache in
+        # prefill is different: there the fill must match the cache dtype, so it IS cast.)
         ttnn.experimental.paged_update_cache(
             kvpe_cache, kvpe_upd, update_idxs_tensor=cur_pos_tensor, page_table=page_table
         )
         ttnn.deallocate(kvpe_upd)
+        if self._split_v_decode:
+            ttnn.experimental.paged_update_cache(
+                self._v2_cache, v2_upd, update_idxs_tensor=cur_pos_tensor, page_table=page_table
+            )
+            ttnn.deallocate(v2_upd)
 
         # ── Flash-MLA decode over the paged latent cache ────────────────
         # q_mla [1, N_HEADS, 1, dh] → [1, 1, N_HEADS, dh] (op wants [1, b, nh, dh]).
         q_decode = ttnn.transpose(q_mla, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(q_mla)
-        attn_latent = ttnn.transformer.paged_flash_multi_latent_attention_decode(
-            q_decode,
-            kvpe_cache,
-            None,  # V reuses the kvpe cache (first head_dim_v dims)
-            self.kv_lora_rank,  # head_dim_v
-            page_table,
-            cur_pos_tensor=cur_pos_tensor,
-            scale=self.scale,
-            program_config=self._mla_decode_pc,
-            compute_kernel_config=self.attn_compute_kernel_config,
-            memory_config=_mem,
-        )  # [1, 1, N_HEADS, KV_LORA_RANK]
+        if self._split_v_decode:
+            # Two ≤128-wide V passes (same Q, same 320-wide K → identical scores), concatenated.
+            # Pass 1 V = kvpe_cache[:v_half]; pass 2 V = the second-half cache. Each pass keeps the
+            # op's cross-core reduction in its correct (narrow-V) regime, so this runs multi-core.
+            attn_a = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+                q_decode,
+                kvpe_cache,
+                None,
+                self._v_half,
+                page_table,
+                cur_pos_tensor=cur_pos_tensor,
+                scale=self.scale,
+                program_config=self._mla_decode_pc,
+                compute_kernel_config=self.attn_compute_kernel_config,
+                memory_config=_mem,
+            )  # [1, 1, N_HEADS, v_half]
+            attn_b = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+                q_decode,
+                kvpe_cache,
+                self._v2_cache,
+                self._v_half,
+                page_table,
+                cur_pos_tensor=cur_pos_tensor,
+                scale=self.scale,
+                program_config=self._mla_decode_pc,
+                compute_kernel_config=self.attn_compute_kernel_config,
+                memory_config=_mem,
+            )  # [1, 1, N_HEADS, v_half]
+            attn_latent = ttnn.concat([attn_a, attn_b], dim=-1, memory_config=_mem)
+            ttnn.deallocate(attn_a)
+            ttnn.deallocate(attn_b)
+        else:
+            attn_latent = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+                q_decode,
+                kvpe_cache,
+                None,  # V reuses the kvpe cache (first head_dim_v dims)
+                self.kv_lora_rank,  # head_dim_v
+                page_table,
+                cur_pos_tensor=cur_pos_tensor,
+                scale=self.scale,
+                program_config=self._mla_decode_pc,
+                compute_kernel_config=self.attn_compute_kernel_config,
+                memory_config=_mem,
+            )  # [1, 1, N_HEADS, KV_LORA_RANK]
         ttnn.deallocate(q_decode)
         if _free_pos_tensor:
             ttnn.deallocate(cur_pos_tensor)
