@@ -978,29 +978,26 @@ HostTensor unpad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-template <typename PadT>
+template <typename T>
 HostTensor pad(
     const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
-    PadT pad_value) {
+    T pad_value) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
-    // Block-float dtypes (BFLOAT8_B, BFLOAT4_B) require a float pad_value; all other dtypes
-    // must use the matching C++ type to avoid silent precision loss.
     TT_FATAL(
-        convert_to_data_type<PadT>() == tensor.dtype() ||
-            (is_block_float(tensor.dtype()) && convert_to_data_type<PadT>() == DataType::FLOAT32),
+        is_buffer_type_compatible_with_dtype<T>(tensor.dtype()),
         "pad_value type {} does not match tensor dtype {}; use float for block-float dtypes",
-        convert_to_data_type<PadT>(),
+        convert_to_data_type<T>(),
         tensor.dtype());
-    return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
-        return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(
+    return tensor_impl::dispatch(tensor.dtype(), [&]<typename StorageT>() {
+        return CMAKE_UNIQUE_NAMESPACE::pad_impl<StorageT>(
             tensor, output_padded_shape, input_tensor_start, static_cast<float>(pad_value));
     });
 }
 
-template <typename PadT>
-HostTensor pad_to_tile(const HostTensor& tensor, PadT pad_value) {
+template <typename T>
+HostTensor pad_to_tile(const HostTensor& tensor, T pad_value) {
     uint32_t height = tensor.padded_shape()[-2];
     uint32_t width = tensor.padded_shape()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
