@@ -112,38 +112,49 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             // x = in + b
-            add_tiles_init(cb_in, cb_inb);
             reconfig_data_format(cb_in, cb_inb);
             pack_reconfig_data_format(cb_x);
+            if constexpr (FLOAT32_DTYPE) {
+                copy_tile_to_dst_init_short(cb_in);
+            } else {
+                add_tiles_init(cb_in, cb_inb);
+            }
             for (auto block : generic::blocks(Wt, blk)) {
-                // In/inb come from the reader and need to be
-                // synced on full block size. Keep cb_x aligned
-                // to full block size as well so pre-add/no-pre-add
-                // can be handled the same way.
                 cb_in_obj.wait_front(block.full_block_size());
                 cb_inb_obj.wait_front(block.full_block_size());
-                tile_regs_acquire();
-                for (auto i : block.local()) {
-                    add_tiles(cb_in, cb_inb, i, i, i);
-                }
-                tile_regs_commit();
-                cb_in_obj.pop_front(block.full_block_size());
-                cb_inb_obj.pop_front(block.full_block_size());
-
                 cb_x_obj.reserve_back(block.full_block_size());
                 if constexpr (welford_fp32_alias) {
-                    // Must be done in the compute kernel: on the fuse_pre_add path compute is the
-                    // producer of cb_x via the add_tiles -> pack_tile sequence below; the reader
-                    // never writes cb_x. Push the alias alongside cb_x so Welford's wait_front on
-                    // cb_x_welford sees the tiles.
                     cb_x_welford_obj.reserve_back(block.full_block_size());
                 }
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_x);
+                if constexpr (FLOAT32_DTYPE) {
+                    for (auto i : block.local()) {
+                        tile_regs_acquire();
+                        copy_tile(cb_in, i, 0);
+                        copy_tile_to_dst_init_short_with_dt(cb_in, cb_inb);
+                        copy_tile(cb_inb, i, 1);
+                        add_binary_tile_init();
+                        add_binary_tile(0, 1, 0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(0, cb_x);
+                        tile_regs_release();
+                        copy_tile_to_dst_init_short_with_dt(cb_inb, cb_in);
+                    }
+                } else {
+                    tile_regs_acquire();
+                    for (auto i : block.local()) {
+                        add_tiles(cb_in, cb_inb, i, i, i);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (auto i : block.local()) {
+                        pack_tile(i, cb_x);
+                    }
+                    tile_regs_release();
                 }
-                tile_regs_release();
-                cb_x_obj.push_back(block.full_block_size());  // push the sum into the same buffer
+                cb_in_obj.pop_front(block.full_block_size());
+                cb_inb_obj.pop_front(block.full_block_size());
+                cb_x_obj.push_back(block.full_block_size());
                 if constexpr (welford_fp32_alias) {
                     cb_x_welford_obj.push_back(block.full_block_size());
                 }

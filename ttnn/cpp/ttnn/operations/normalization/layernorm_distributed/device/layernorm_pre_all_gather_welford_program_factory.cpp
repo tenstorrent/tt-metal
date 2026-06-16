@@ -138,19 +138,14 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
 
     // UnpackToDestFp32 routes the unpack to DEST instead of SrcA, preserving FP32 precision.
-    // Unfortunately, that path also uses the math-thread replay buffer, which
-    // collides with Welford's recurrence slots; welford_unpack_fp32_active gates the
-    // post-transpose welford_init<WelfordInitMode::PreserveStats>() that the non-FUSE compute
-    // kernel branch
-    // needs to re-record the SFPU replay buffer with the welford recurrence. The bf16/SrcA
-    // path leaves the replay buffer alone, so the recovery is unnecessary there.
-    // The flag is only set on the non-FUSE kernel branch. In the FUSE_PRE_ADD path, c_0 is
-    // consumed by add_tiles which reads via SrcA/SrcB, and per UnpackToDestMode's contract
-    // setting UnpackToDestFp32 on a CB makes it incompatible with SrcA/B unpacking.
-    // Setting UnpackToDestFp32 on the post-add CB (c_3) would not help either because add_tiles
-    // already truncated the inputs to TF32 on the way into c_3. Therefore, both c_0 (input) and
-    // c_3 (post-add) stay in default mode on the FUSE path.
-    bool welford_unpack_fp32_active = (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en && !fuse_pre_add);
+    // That path uses the math-thread replay buffer, which collides with Welford's recurrence
+    // slots; welford_unpack_fp32_active gates welford_init<WelfordInitMode::PreserveStats>()
+    // after each transpose_wh_tile to re-record the SFPU replay buffer.
+    //
+    // On the FUSE path, pre-add uses copy_tile + add_binary_tile (SFPU), not add_tiles, so
+    // c_0/c_5 can use UnpackToDestFp32 for the copy_tile unpack and c_3 for Welford's
+    // transpose_wh_tile read of the post-add result.
+    bool welford_unpack_fp32_active = (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en);
     std::vector<uint32_t> compute_args = {Wt, W, block_size};
     KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
         {"welford_unpack_fp32_active", welford_unpack_fp32_active ? 1u : 0u},
@@ -244,11 +239,15 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
         "compute kernel config; otherwise precision is silently lost in the unpacker format "
         "conversion.");
 
-    // Set UnpackToDestFp32 on c_0 when welford_unpack_fp32_active is true.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (welford_unpack_fp32_active) {
+    if (welford_unpack_fp32_active && !fuse_pre_add) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (welford_unpack_fp32_active && fuse_pre_add) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_3)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Intermediate scratch CB (c_1) holds data only for the final transpose operation,
@@ -302,7 +301,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
 
     if (fuse_pre_add) {
         // c_5 -> residual b. Sized in residual's own data format so a residual with a different
-        // dtype than the input is read correctly; add_tiles handles the per-operand format.
+        // dtype than the input is read correctly.
         program_descriptor.cbs.push_back(CBDescriptor{
             .total_size = res_tiles * inb_single_tile_size,
             .core_ranges = all_cores,

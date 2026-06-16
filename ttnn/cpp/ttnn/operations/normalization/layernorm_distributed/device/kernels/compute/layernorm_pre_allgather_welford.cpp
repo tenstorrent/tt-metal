@@ -17,6 +17,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
@@ -102,21 +103,40 @@ void kernel_main() {
             // --- Pre-add: cb_in0 + cb_res -> cb_inp (block tiles in one tile_regs scope) ---
             reconfig_data_format(cb_in0, cb_res);
             pack_reconfig_data_format(cb_inp);
-            add_tiles_init(cb_in0, cb_res);
             cb_wait_front(cb_in0, block.size());
             cb_wait_front(cb_res, block.size());
             cb_reserve_back(cb_inp, block.size());
-            tile_regs_acquire();
-            for (auto i : block.local()) {
-                add_tiles(cb_in0, cb_res, i, i, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (auto i : block.local()) {
-                pack_tile(i, cb_inp);
+            if constexpr (welford_unpack_fp32_active) {
+                // SFPU path: copy_tile bypasses SrcA via UnpackToDestEn, preserving full FP32.
+                // add_tiles uses the FPU path which truncates both operands to TF32 via SrcA.
+                copy_tile_to_dst_init_short(cb_in0);
+                for (auto i : block.local()) {
+                    tile_regs_acquire();
+                    copy_tile(cb_in0, i, 0);
+                    copy_tile_to_dst_init_short_with_dt(cb_in0, cb_res);
+                    copy_tile(cb_res, i, 1);
+                    add_binary_tile_init();
+                    add_binary_tile(0, 1, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_inp);
+                    tile_regs_release();
+                    copy_tile_to_dst_init_short_with_dt(cb_res, cb_in0);
+                }
+            } else {
+                add_tiles_init(cb_in0, cb_res);
+                tile_regs_acquire();
+                for (auto i : block.local()) {
+                    add_tiles(cb_in0, cb_res, i, i, i);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_inp);
+                }
+                tile_regs_release();
             }
             cb_push_back(cb_inp, block.size());
-            tile_regs_release();
             cb_pop_front(cb_in0, block.size());
             cb_pop_front(cb_res, block.size());
 
@@ -133,9 +153,17 @@ void kernel_main() {
             welford_restore_state(dst1);
 
             reconfig_data_format_srca(cb_m2_spill, cb_inp);
-            transpose_wh_init_short(cb_inp);
+            if constexpr (!welford_unpack_fp32_active) {
+                transpose_wh_init_short(cb_inp);
+            }
             for (auto i : block.local()) {
+                if constexpr (welford_unpack_fp32_active) {
+                    transpose_wh_init_short(cb_inp);
+                }
                 transpose_wh_tile(cb_inp, i, dst0);
+                if constexpr (welford_unpack_fp32_active) {
+                    welford_init<WelfordInitMode::PreserveStats>();
+                }
                 if (block.to_global(i) < Wt - 1) {
                     welford_update<W>(dst0, start_N, *p_reciprocals);
                 } else {

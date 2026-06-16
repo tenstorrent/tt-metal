@@ -426,13 +426,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // welford-alias index gets unpack_to_dest_mode=UnpackToDestFp32 so welford's
     // transpose_wh_tile reads full fp32 into DEST.
     //
-    // We deliberately disable the alias for the fused-pre-add + large_tensor combination:
-    // cb_x = c_23 there holds the post-add result, which already lost precision through the
-    // FPU add (SrcA Tf32), so an fp32-preserving unpack on the welford side would not recover
-    // any real information, but would require the SFPU replay buffer recovery
-    // (welford_init<WelfordInitMode::PreserveStats>()) after every transpose_wh_tile.
-    const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
-                                    !(fuse_pre_add && large_tensor_needed);
+    const bool welford_fp32_alias =
+        use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
 
     // Separate alias on cb_ex (c_18) and cb_ex2 (c_19) for the mean / M2 sliding-window
     // accumulators in layernorm_large_tensor_welford.cpp::welford_fuse_pre_add. That function
@@ -533,6 +528,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (welford_fp32_alias) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (fuse_pre_add && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_1)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Select compute kernel path.

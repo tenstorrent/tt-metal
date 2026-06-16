@@ -37,7 +37,8 @@ template <
     uint32_t Wt,
     uint32_t tile_width,
     uint32_t W,
-    uint32_t blk>
+    uint32_t blk,
+    bool FLOAT32_DTYPE>
 void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_inb_obj(cb_inb);
@@ -86,29 +87,45 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         cb_ex2_welford_obj.push_back(1);
     }
 
+    pack_reconfig_data_format(cb_interm_pre_add);
+    if constexpr (FLOAT32_DTYPE) {
+        copy_tile_to_dst_init_short(cb_in);
+    }
     for (auto block : generic::blocks(Wt, blk)) {
         // Fused pre-add
         reconfig_data_format(cb_in, cb_inb);
-        add_tiles_init(cb_in, cb_inb);
         cb_in_obj.wait_front(block.full_block_size());
         cb_inb_obj.wait_front(block.full_block_size());
-        tile_regs_acquire();
-        for (auto i : block.local()) {
-            add_tiles(cb_in, cb_inb, i, i, i);
+        cb_interm_pre_add_obj.reserve_back(block.full_block_size());
+        if constexpr (FLOAT32_DTYPE) {
+            for (auto i : block.local()) {
+                tile_regs_acquire();
+                copy_tile(cb_in, i, 0);
+                copy_tile_to_dst_init_short_with_dt(cb_in, cb_inb);
+                copy_tile(cb_inb, i, 1);
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_interm_pre_add);
+                tile_regs_release();
+                copy_tile_to_dst_init_short_with_dt(cb_inb, cb_in);
+            }
+        } else {
+            add_tiles_init(cb_in, cb_inb);
+            tile_regs_acquire();
+            for (auto i : block.local()) {
+                add_tiles(cb_in, cb_inb, i, i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (auto i : block.local()) {
+                pack_tile(i, cb_interm_pre_add);
+            }
+            tile_regs_release();
         }
-        tile_regs_commit();
         cb_in_obj.pop_front(block.full_block_size());
         cb_inb_obj.pop_front(block.full_block_size());
-
-        // Pack to intermediate CB (needed
-        // to workaround transpose_wh_dest bug)
-        pack_reconfig_data_format(cb_interm_pre_add);
-        cb_interm_pre_add_obj.reserve_back(block.full_block_size());
-        tile_regs_wait();
-        for (auto i : block.local()) {
-            pack_tile(i, cb_interm_pre_add);
-        }
-        tile_regs_release();
         cb_interm_pre_add_obj.push_back(block.full_block_size());
 
         // Now run Welfords in these blk number of tiles
@@ -416,7 +433,8 @@ void kernel_main() {
                 Wt,
                 tile_width,
                 W,
-                blk>(*p_reciprocals);
+                blk,
+                FLOAT32_DTYPE>(*p_reciprocals);
         } else {
             welford_no_fuse_pre_add<
                 cb_in,

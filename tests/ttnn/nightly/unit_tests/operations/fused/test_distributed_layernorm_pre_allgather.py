@@ -924,7 +924,9 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
 
 @pytest.mark.parametrize("use_residual", [False, True])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
-@pytest.mark.parametrize("inp_shape", [(1, 1, 32, 128)])
+@pytest.mark.parametrize(
+    "inp_shape", [(1, 1, 32, 128), (1, 1, 32, 1024), (1, 5, 30, 72), (1, 1, 32, 2048), (4, 1, 64, 128)]
+)
 def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offset, use_residual):
     """Welford pre_all_gather stats are accurate for Float32 input regardless of mean offset.
 
@@ -942,11 +944,6 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     ULP (~512) dwarfs the underlying randn variation (~1), so the variance signal is destroyed
     inside the add before welford runs.
     """
-    if use_residual:
-        pytest.xfail(
-            "FUSE_PRE_ADD TF32 floor on add_tiles: variance signal is destroyed inside the add before welford runs. Issue #45231."
-        )
-
     torch.manual_seed(0)
     torch_input = torch.randn(inp_shape, dtype=torch.float32) + offset
 

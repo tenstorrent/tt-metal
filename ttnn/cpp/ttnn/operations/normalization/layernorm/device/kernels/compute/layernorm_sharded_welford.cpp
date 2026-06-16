@@ -11,6 +11,8 @@
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "api/dataflow/circular_buffer.h"
@@ -250,30 +252,46 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
-    add_tiles_init(cb_in0, cb_in1);
     cb_in_obj.reserve_back(num_tiles_per_block);
     if constexpr (welford_fp32_alias) {
-        // Must be done in the compute kernel: on the fused path compute is the producer of cb_in
-        // via the add_tiles -> pack_tile sequence below; the reader never writes cb_in.
-        // cb_x_welford shares cb_in's SRAM but has its own read/write pointers, so reserve and push
-        // both indices side by side. pack_tile writes once via cb_in's wr_ptr; the alias lets the
-        // welford section wait_front on c_29 independently of cb_in.
         cb_x_welford_obj.reserve_back(num_tiles_per_block);
+    }
+    if constexpr (FLOAT32_DTYPE) {
+        copy_tile_to_dst_init_short(cb_in0);
+    } else {
+        add_tiles_init(cb_in0, cb_in1);
     }
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_wt; w++) {
-                index = w + index_subblock_w_offset + index_h_offset;
-                add_tiles(cb_in0, cb_in1, index, index, w);
+            if constexpr (FLOAT32_DTYPE) {
+                for (uint32_t w = 0; w < subblock_wt; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    tile_regs_acquire();
+                    copy_tile(cb_in0, index, 0);
+                    copy_tile_to_dst_init_short_with_dt(cb_in0, cb_in1);
+                    copy_tile(cb_in1, index, 1);
+                    add_binary_tile_init();
+                    add_binary_tile(0, 1, w);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(w, cb_in);
+                    tile_regs_release();
+                    copy_tile_to_dst_init_short_with_dt(cb_in1, cb_in0);
+                }
+            } else {
+                tile_regs_acquire();
+                for (uint32_t w = 0; w < subblock_wt; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    add_tiles(cb_in0, cb_in1, index, index, w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                    pack_tile(sbi, cb_in);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                pack_tile(sbi, cb_in);
-            }
-            tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
         index_h_offset += block_wt;

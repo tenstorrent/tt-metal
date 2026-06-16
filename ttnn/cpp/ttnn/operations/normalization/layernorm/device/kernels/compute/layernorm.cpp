@@ -10,6 +10,8 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/layernorm.h"
 #ifdef TILIZE_IN
 #include "api/compute/tilize.h"
@@ -132,33 +134,44 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         reconfig_data_format(cb_in, cb_inb);
         pack_reconfig_data_format(cb_x);
-        add_tiles_init(cb_in, cb_inb);
+        if constexpr (FLOAT32_DTYPE) {
+            copy_tile_to_dst_init_short(cb_in);
+        } else {
+            add_tiles_init(cb_in, cb_inb);
+        }
         for (auto block : generic::blocks(Wt, block_size)) {
-            // In/inb come from the reader and need to be
-            // synced on full block size. Keep cb_x aligned
-            // to full block size as well so pre-add/no-pre-add
-            // can be handled the same way.
             cb_in_obj.wait_front(block.full_block_size());
             cb_inb_obj.wait_front(block.full_block_size());
-
-            tile_regs_acquire();
-            for (auto i : block.local()) {
-                add_tiles(cb_in, cb_inb, i, i, i);
+            cb_x_obj.reserve_back(block.full_block_size());
+            if constexpr (FLOAT32_DTYPE) {
+                for (auto i : block.local()) {
+                    tile_regs_acquire();
+                    copy_tile(cb_in, i, 0);
+                    copy_tile_to_dst_init_short_with_dt(cb_in, cb_inb);
+                    copy_tile(cb_inb, i, 1);
+                    add_binary_tile_init();
+                    add_binary_tile(0, 1, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_x);
+                    tile_regs_release();
+                    copy_tile_to_dst_init_short_with_dt(cb_inb, cb_in);
+                }
+            } else {
+                tile_regs_acquire();
+                for (auto i : block.local()) {
+                    add_tiles(cb_in, cb_inb, i, i, i);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_x);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-
             cb_in_obj.pop_front(block.full_block_size());
             cb_inb_obj.pop_front(block.full_block_size());
-
-            cb_x_obj.reserve_back(block.full_block_size());
-
-            tile_regs_wait();
-            for (auto i : block.local()) {
-                pack_tile(i, cb_x);
-            }
-            tile_regs_release();
-
-            cb_x_obj.push_back(block.full_block_size());  // push the sum into the same buffer
+            cb_x_obj.push_back(block.full_block_size());
         }
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);

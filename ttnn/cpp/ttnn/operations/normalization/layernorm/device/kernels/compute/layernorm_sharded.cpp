@@ -8,6 +8,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
@@ -129,22 +130,43 @@ void kernel_main() {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
-    add_tiles_init(cb_in0, cb_in1);
     cb_in_obj.reserve_back(num_tiles_per_block);
+    if constexpr (FLOAT32_DTYPE) {
+        copy_tile_to_dst_init_short(cb_in0);
+    } else {
+        add_tiles_init(cb_in0, cb_in1);
+    }
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset + index_h_offset;
-                add_tiles(cb_in0, cb_in1, index, index, w);
+            if constexpr (FLOAT32_DTYPE) {
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    tile_regs_acquire();
+                    copy_tile(cb_in0, index, 0);
+                    copy_tile_to_dst_init_short_with_dt(cb_in0, cb_in1);
+                    copy_tile(cb_in1, index, 1);
+                    add_binary_tile_init();
+                    add_binary_tile(0, 1, w);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(w, cb_in);
+                    tile_regs_release();
+                    copy_tile_to_dst_init_short_with_dt(cb_in1, cb_in0);
+                }
+            } else {
+                tile_regs_acquire();
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    add_tiles(cb_in0, cb_in1, index, index, w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    pack_tile(w, cb_in);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, cb_in);
-            }
-            tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
         index_h_offset += block_w;
