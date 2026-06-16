@@ -122,10 +122,7 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
         .size = config_buffer_size,
     };
 
-    // If `recv_core_` lives on a claimed service core, the worker-grid BankManager
-    // can't reach its L1. Detect that here and allocate from the service-core's
-    // per-core allocator instead; pass the resulting address through to
-    // MeshBuffer::create as an explicit-address view. Cleanup in the dtor.
+    // On a claimed service core the worker-grid BankManager can't reach L1; allocate from the service-core allocator.
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
@@ -146,12 +143,6 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
         return;
     }
 
-    // Service-core path: if recv_core is a claimed service core, allocate from
-    // its per-core service allocator. Mirror the BankManager path's alignment
-    // trick — request `fifo_size_ + pcie_alignment` bytes (headroom) and let
-    // `aligned_data_buf_start_` be the aligned-up offset inside the allocation.
-    // This frees the service allocator from a PCIe-alignment guarantee on the
-    // returned base address.
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
     if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
@@ -176,7 +167,6 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
         return;
     }
 
-    // Worker-grid path (unchanged).
     auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
     auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
 
@@ -204,12 +194,7 @@ void H2DSocket::write_socket_metadata(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const PinnedBufferInfo& bytes_acked_info,
     const PinnedBufferInfo& data_info) {
-    // init_config_buffer hardcodes num_cores = 1, so the config buffer always
-    // has exactly one slot at index 0. The previous lookup through
-    // `get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id` was a
-    // no-op dance — and it segfaults on the explicit-address service-core path,
-    // since MeshBuffer::create with an address doesn't construct a backing
-    // buffer (see mesh_buffer.cpp's address-provided branch).
+    // init_config_buffer hardcodes num_cores = 1, so the config buffer always has exactly one slot at index 0.
     std::vector<receiver_socket_md> config_data(
         config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
@@ -227,16 +212,7 @@ void H2DSocket::write_socket_metadata(
     md.h2d.pcie_xy_enc = bytes_acked_info.pcie_xy_enc;
 
     if (svc_config_l1_addr_.has_value()) {
-        // Service-core path: MeshCommandQueue dispatch has no context of
-        // service cores, so WriteShard would silently miss. Write directly
-        // to the receiver core's L1 via the synchronous WriteToDeviceL1
-        // helper. The receiver_socket_md is a POD; reinterpret as raw bytes
-        // for WriteToDeviceL1's span overload.
-        //
-        // NB: pull the address from `config_buffer_` directly — the ctor only
-        // assigns `config_buffer_address_` AFTER write_socket_metadata returns,
-        // so it's still 0 here. The previous WriteShard path didn't notice
-        // because it used `config_buffer_` (the shared_ptr) directly.
+        // WriteShard can't reach service cores, so write L1 directly. config_buffer_address_ isn't assigned yet.
         auto* device = mesh_device->get_device(recv_core_.device_coord);
         std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(&md), sizeof(md));
         tt::tt_metal::detail::WriteToDeviceL1(
@@ -435,11 +411,6 @@ H2DSocket::H2DSocket(
 }
 
 H2DSocket::~H2DSocket() noexcept {
-    // Drain any outstanding host writes before teardown. `barrier()` reads
-    // `bytes_sent` from `connector_state_` (SHM) on entry, so this is correct
-    // whether the socket was used in-process or shared with a remote driver
-    // via an exported descriptor — in both cases we drain whatever the latest
-    // pusher actually flushed.
     try {
         barrier(1000);
     } catch (const std::exception& e) {
@@ -447,10 +418,7 @@ H2DSocket::~H2DSocket() noexcept {
     } catch (...) {
         log_warning(LogMetal, "H2DSocket destructor: barrier failed with unknown exception");
     }
-    // Release service-core L1 allocations made in init_config_buffer / init_data_buffer.
-    // Order: drop the MeshBuffer views before deallocating the underlying L1 region so
-    // there's no Buffer outliving its memory. Wrapped in try/catch to avoid throwing
-    // from a noexcept dtor if the mesh_device has already been torn down.
+    // Drop the MeshBuffer views before deallocating their L1 so no Buffer outlives its memory.
     if (svc_config_l1_addr_.has_value() || svc_data_l1_addr_.has_value()) {
         try {
             config_buffer_.reset();
@@ -552,14 +520,7 @@ void H2DSocket::set_page_size(uint32_t page_size) {
 }
 
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
-    // Sync `bytes_sent_` from the SHM connector-state. Necessary for cross-
-    // process attachment: a separate connector process may have pushed bytes
-    // through this socket (updating SHM's bytes_sent via push_bytes), but
-    // this side's local `bytes_sent_` is stale. Without this read, the loop
-    // below compares a stale local count against the device-ack count and
-    // spins forever once the connector has overtaken us. For in-process use,
-    // SHM's bytes_sent equals our local value (push_bytes writes both), so
-    // this is a no-op.
+    // Sync bytes_sent_ from SHM so a separate connector process's pushes are visible.
     if (connector_state_) {
         tt_driver_atomics::mfence();
         bytes_sent_ = connector_state_->bytes_sent;
@@ -671,13 +632,7 @@ std::unique_ptr<H2DSocket> H2DSocket::connect_from_descriptor(const HDSocketDesc
     socket->fifo_size_ = desc.fifo_size;
     socket->config_buffer_address_ = desc.config_buffer_address;
     socket->pcie_alignment_ = desc.pcie_alignment;
-    // recv_core_ carries (device_coord, on-device core). `device_coord` must
-    // match the owner-side coord so that connector-side iteration of sockets
-    // via `get_active_cores()` returns the right coord — `forward_to_tensor`
-    // uses it to look up the per-shard buffer in the DistributedHostBuffer.
-    // The owner serialized this into `desc.mesh_coord` via populate_from_owner;
-    // pre-mesh-coord descriptors (empty vector) default to (0, 0) so a 1-D
-    // single-device socket still connects without explicit coord plumbing.
+    // Must match the owner-side coord; empty mesh_coord (pre-mesh-coord descriptors) defaults to (0, 0).
     MeshCoordinate device_coord = desc.mesh_coord.empty()
         ? MeshCoordinate(0, 0)
         : MeshCoordinate(ttsl::SmallVector<uint32_t>(desc.mesh_coord.begin(), desc.mesh_coord.end()));

@@ -29,10 +29,7 @@ public:
 
     static TensorToMesh create(const MeshDevice& mesh_device, const MeshMapperConfig& config);
 
-    // Shape-only overload. Useful when the caller does not hold a `MeshDevice`
-    // handle — e.g. a remote process attaching to an exported H2DStreamService
-    // through shared memory. The mapper's distribution logic depends only on
-    // the mesh shape and placements; no device state is required.
+    // Shape-only overload for callers that do not hold a `MeshDevice` handle.
     static TensorToMesh create(const MeshShape& mesh_shape, const MeshMapperConfig& config);
 
     // Maps a tensor onto a mesh.
@@ -63,10 +60,7 @@ private:
 // Creates an ND mesh mapper that distributes a tensor according to the `config`.
 std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config);
 
-// Shape-only overload. The returned mapper does not retain any device-side
-// state; it can be used in processes that do not (or cannot) hold a
-// `MeshDevice` handle, e.g. an external feeder attaching to an exported
-// `H2DStreamService` over shared memory.
+// Shape-only overload; the returned mapper retains no device-side state.
 std::unique_ptr<TensorToMesh> create_mesh_mapper(const MeshShape& mesh_shape, const MeshMapperConfig& config);
 
 // Creates a mapper that replicates a tensor across all devices.

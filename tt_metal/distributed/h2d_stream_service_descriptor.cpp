@@ -22,10 +22,6 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
-// Builds the embedded HDSocketDescriptor flatbuffer offset from a populated
-// C++ HDSocketDescriptor. Mirrors the field-for-field copy in
-// HDSocketDescriptor::write_to_file, but here the result is an offset to be
-// embedded inside the H2DStreamServiceDescriptor instead of a root table.
 flatbuffers::Offset<flatbuffer::HDSocketDescriptor> build_socket_descriptor_offset(
     flatbuffers::FlatBufferBuilder& builder, const HDSocketDescriptor& src) {
     auto fb_socket_type = builder.CreateString(src.socket_type);
@@ -54,8 +50,7 @@ flatbuffers::Offset<flatbuffer::HDSocketDescriptor> build_socket_descriptor_offs
         fb_mesh_coord);
 }
 
-// Mirrors HDSocketDescriptor::read_from_file's flatbuffer -> struct copy, but
-// reads from an inline embedded sub-table rather than a root table.
+// Like HDSocketDescriptor::read_from_file but decodes an embedded sub-table rather than a root table.
 HDSocketDescriptor decode_socket_descriptor(const flatbuffer::HDSocketDescriptor& fb) {
     HDSocketDescriptor desc;
     desc.socket_type = fb.socket_type() ? fb.socket_type()->str() : "";
@@ -82,7 +77,6 @@ HDSocketDescriptor decode_socket_descriptor(const flatbuffer::HDSocketDescriptor
     return desc;
 }
 
-// Encode a MeshMapperConfig::Placement to (kind, dim).
 std::pair<flatbuffer::PlacementKind, int32_t> encode_placement(
     const MeshMapperConfig::Placement& p) {
     return std::visit(
@@ -113,16 +107,13 @@ MeshMapperConfig::Placement decode_placement(const flatbuffer::Placement& fb) {
 void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
     flatbuffers::FlatBufferBuilder builder(2048);
 
-    // global_spec
     std::vector<uint32_t> shape_vec(global_shape.cbegin(), global_shape.cend());
     auto fb_shape = builder.CreateVector(shape_vec);
     auto fb_spec = flatbuffer::CreateTensorSpecLite(builder, fb_shape, static_cast<uint32_t>(global_dtype));
 
-    // mesh_shape
     std::vector<uint32_t> mesh_shape_vec(mesh_shape.cbegin(), mesh_shape.cend());
     auto fb_mesh_shape = builder.CreateVector(mesh_shape_vec);
 
-    // mapper placements + optional shape override
     std::vector<flatbuffers::Offset<flatbuffer::Placement>> placement_offsets;
     placement_offsets.reserve(mapper_config.placements.size());
     for (const auto& p : mapper_config.placements) {
@@ -138,7 +129,6 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
     }
     auto fb_shape_override = builder.CreateVector(shape_override_vec);
 
-    // per-coord entries (each carries an embedded HDSocketDescriptor)
     std::vector<flatbuffers::Offset<flatbuffer::PerCoordEntry>> entry_offsets;
     entry_offsets.reserve(per_coord_entries.size());
     for (const auto& [coord, socket_desc] : per_coord_entries) {
@@ -213,7 +203,6 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
 
     H2DStreamServiceDescriptor desc;
 
-    // global_spec
     const auto* fb_spec = fb->global_spec();
     TT_FATAL(fb_spec != nullptr, "Service descriptor missing global_spec");
     {
@@ -224,7 +213,6 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
         desc.global_dtype = static_cast<DataType>(fb_spec->dtype());
     }
 
-    // mesh_shape
     {
         const auto* fb_mesh_shape = fb->mesh_shape();
         TT_FATAL(fb_mesh_shape != nullptr, "Service descriptor missing mesh_shape");
@@ -232,7 +220,6 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
             MeshShape(tt::stl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
     }
 
-    // mapper config
     {
         ttsl::SmallVector<MeshMapperConfig::Placement> placements;
         const auto* fb_placements = fb->mapper_placements();
@@ -257,7 +244,6 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     desc.socket_buffer_type = static_cast<BufferType>(fb->socket_buffer_type());
     desc.socket_mode = static_cast<H2DMode>(fb->socket_mode());
 
-    // per-coord entries
     const auto* fb_entries = fb->per_coord_entries();
     TT_FATAL(fb_entries != nullptr, "Service descriptor missing per_coord_entries");
     desc.per_coord_entries.reserve(fb_entries->size());

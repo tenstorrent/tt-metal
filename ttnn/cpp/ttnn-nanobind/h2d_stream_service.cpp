@@ -32,17 +32,6 @@ void py_module_types(nb::module_& mod) {
     nb::class_<tt::tt_metal::H2DStreamService>(mod, "H2DStreamService")
         .def(
             "__init__",
-            // Builds H2DStreamService::Config inline from kwargs, then placement-new
-            // constructs the service. Config isn't separately exposed to Python —
-            // the service ctor is the single entry point.
-            //
-            // `mapper` is taken as a plain `std::unique_ptr<TensorToMesh>` — nanobind
-            // surrenders ownership directly into this type and invalidates the
-            // Python-side wrapper as part of the transfer (no separate `release()`
-            // / re-wrap step needed, which would skip nanobind's wrapper-tracking
-            // cleanup and leak the Python wrapper). If None is passed the
-            // unique_ptr arrives null and the C++ ctor synthesises a
-            // replicate-on-every-mesh-dim default.
             [](tt::tt_metal::H2DStreamService* self,
                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
                const tt::tt_metal::TensorSpec& global_spec,
@@ -161,10 +150,6 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "forward_to_tensor_bytes",
-            // Raw-bytes path. The service distributes via its internal mapper, so
-            // the input is the un-sharded global tensor as raw bytes. The ndarray's
-            // total nbytes must equal global_spec.compute_packed_buffer_size_bytes().
-            // ROW_MAJOR-only constraint is enforced inside the C++ service.
             [](tt::tt_metal::H2DStreamService& self,
                const nb::ndarray<nb::c_contig, nb::device::cpu>& data,
                const nb::bytes& metadata) {
@@ -368,7 +353,6 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     str: Full path to the written descriptor file.
-
             )doc")
         .def_static(
             "connect",

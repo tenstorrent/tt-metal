@@ -18,7 +18,6 @@ void kernel_main() {
         (*counter)++;
     }
 
-    // Signal host that the kernel has exited. We use a dedicated L1 word rather than
-    // go_msg->signal because that is co-opted above for FD dispatch signaling.
+    // Signal host that the kernel has exited
     *service_done = 1;
 }

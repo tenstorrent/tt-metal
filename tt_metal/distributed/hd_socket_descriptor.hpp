@@ -53,10 +53,7 @@ struct HDSocketDescriptor {
     uint32_t core_x = 0;     // Logical core coordinate X
     uint32_t core_y = 0;     // Logical core coordinate Y
 
-    // Mesh coordinate of the owning device. Self-contained on the socket
-    // descriptor so a connector reading it back can reconstruct the
-    // `MeshCoreCoord` (mesh + on-chip) without an external map. Variable-
-    // length: a 1-D mesh has 1 entry, 2-D has 2, etc.
+    // Owning device's mesh coordinate (1 entry per mesh dim), so the connector can rebuild the MeshCoreCoord.
     std::vector<uint32_t> mesh_coord;
 
     // --- Pre-resolved transport info (connector uses these to bypass MetalContext) ---

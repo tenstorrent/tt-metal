@@ -35,66 +35,18 @@ class MeshBuffer;
 namespace tt::tt_metal {
 
 // Persistent host-to-device streaming service backed by a fixed device tensor.
-//
-// At construction the service:
-//   * takes ownership of the caller-provided `Config::mapper` (or synthesises a
-//     replicate-on-every-mesh-dim default if none is supplied),
-//   * runs the mapper once on a zero-filled host tensor with `Config::global_spec`
-//     to obtain both the per-shard TensorSpec and the TensorTopology (which mesh
-//     coords participate and how the placement looks),
-//   * allocates the device tensor with that derived per-shard spec & topology,
-//   * claims one service core per participating device via
-//     `tt::tt_metal::internal::ServiceCoreManager` — each device's persistent
-//     receiver kernel, socket FIFO, and termination signal live on that
-//     core, off the worker grid,
-//   * creates one H2DSocket per mesh coord pointing at that coord's service
-//     core (the socket auto-detects service cores and allocates its config /
-//     data buffers from the per-core service allocator),
-//   * allocates a per-device termination word (uint32) at a service-core L1
-//     address via `ServiceCoreManager::allocate_l1` and zero-initialises it,
-//   * builds one persistent receiver Program per recv core (fixed-shape, fixed
-//     output address, fixed chunking — see persistent_h2d_receiver.cpp), bundles
-//     them into one MeshWorkload, and enqueues it non-blocking. The kernels then
-//     run for the lifetime of the service, draining one full tensor's worth of
-//     data from their socket on every outer-loop iteration.
-//
-// `forward_to_tensor` calls only need to push bytes into the FIFOs; no per-call
-// program build, dispatch, or kernel launch.
-//
-// At destruction the service:
-//   * `barrier()`s every socket so no host writes are still in flight,
-//   * flips the termination signal to 1, which kicks the kernels out of their
-//     socket-wait poll loops,
-//   * drains the mesh CQ so the workload actually completes before we tear down
-//     the sockets / device tensor.
-//
-// Two write paths are exposed:
-//   * forward_to_tensor(span<const std::byte>) treats the bytes as the GLOBAL
-//     un-sharded tensor and uses the mapper to split / replicate before
-//     streaming per-shard bytes through the sockets.
-//   * forward_to_tensor(const Tensor&) takes an already-distributed host tensor
-//     whose spec matches the backing tensor; the per-coord shards are streamed
-//     through the sockets verbatim.
+// Builds persistent receiver kernels once; forward_to_tensor calls only push
+// bytes into per-coord socket FIFOs (no per-call dispatch).
 class H2DStreamService {
 public:
     struct Config {
-        // Logical shape & layout of the un-sharded source tensor. Drives the
-        // mapper input shape, the size check in the raw-bytes write path, AND
-        // the per-shard device tensor's layout (the mapper preserves layout and
-        // only resizes the shape).
+        // Logical shape & layout of the un-sharded source tensor.
         TensorSpec global_spec;
 
-        // Pre-built TensorToMesh describing how the global tensor is split /
-        // replicated across the mesh device. Ownership is transferred into the
-        // service at construction time; the per-shard TensorSpec is derived
-        // from `global_spec` + this mapper by running it once on a dummy host
-        // tensor.
-        //
-        // Optional: if left null, defaults to replicate-on-every-mesh-dim,
-        // which is the identity on a 1x1 mesh and "full tensor on every device"
-        // on a larger mesh. Sharded distributions must supply a mapper
-        // explicitly. Construct via
-        // `ttnn::distributed::create_mesh_mapper(mesh_device, mapper_config)`.
+        // TensorToMesh describing how the global tensor is split/replicated.
+        // Ownership transferred at construction. Optional: defaults to
+        // replicate-on-every-mesh-dim when null; sharded distributions must
+        // supply one (build via ttnn::distributed::create_mesh_mapper).
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
 
         // Socket / scratch CB sizing. All required.
@@ -103,71 +55,20 @@ public:
         uint32_t scratch_cb_size_bytes = 0;
         distributed::H2DMode socket_mode = distributed::H2DMode::DEVICE_PULL;
 
-        // Optional worker-core sync handshake. When set, after each transfer
-        // the persistent receiver kernel:
-        //   1. Multicasts a `noc_semaphore_inc_multicast` (inc=1, num_dests =
-        //      number of cores in `worker_cores`) to a GlobalSemaphore on
-        //      `worker_cores` (workers poll their local copy).
-        //   2. Waits for every worker to ack consumption via an atomic-inc to
-        //      a per-coord L1 counter on the service core, then proceeds to
-        //      drain the next transfer.
-        // The CoreRange must be uniform across every participating device
-        // (same logical cores, same NoC layout). When unset, the kernel
-        // bypasses the sync block entirely via a `worker_sync_enabled = 0`
-        // compile-time arg — no host-side allocations either.
+        // Optional worker-core sync handshake. When set, after each transfer the
+        // kernel multicasts a data-ready inc to a GlobalSemaphore on these cores
+        // and waits for every worker to ack via a per-coord L1 counter. The
+        // CoreRange must be uniform across every participating device.
         std::optional<CoreRange> worker_cores;
 
-        // Optional inline metadata multicast. When non-zero, every transfer
-        // (every `forward_to_tensor` call) ships an extra `metadata_size_bytes`
-        // worth of caller-defined bytes appended to the data stream. The
-        // service kernel multicasts those bytes to a fixed L1 address on every
-        // worker core in `worker_cores` (allocated by the service as an
-        // L1-sharded Buffer across the worker grid; address retrievable via
-        // `get_metadata_addr()`). The metadata multicast lands BEFORE the
-        // data_ready_sem flip, so when workers observe data_ready, both the
-        // backing tensor (DRAM) and the metadata (L1) are valid.
-        //
-        // Constraints (enforced at construction):
-        //   * metadata_size_bytes > 0 requires `worker_cores` to be set.
-        //   * metadata_size_bytes <= derived socket_page_size (single metadata
-        //     page on the wire; multi-page metadata is a future extension).
-        //
-        // Per-call: `forward_to_tensor`'s `metadata` arg size must equal
-        // `metadata_size_bytes` exactly when enabled, empty otherwise. The
-        // host transparently pads the metadata to socket_page_size before
-        // pushing — the caller never sees the padding.
+        // Optional inline metadata multicast. When non-zero, every transfer ships
+        // these extra bytes to a fixed L1 address (get_metadata_addr()) on every
+        // worker core before flipping data_ready. Requires worker_cores; must be
+        // <= the socket page size. Per-call metadata must be exactly this size.
         uint32_t metadata_size_bytes = 0;
 
-        // Optional host-side preprocessing hook. When set, every
-        // `forward_to_tensor(bytes, metadata)` call:
-        //   1. Copies `bytes` into a service-owned scratch buffer of size
-        //      `payload_size_bytes()`.
-        //   2. Invokes the preprocessor with that scratch buffer
-        //      (mutable, in-place) and the `metadata` span (read-only —
-        //      the same bytes the service multicasts to worker L1
-        //      afterward, so host preprocessor and device worker kernel
-        //      can share one metadata schema).
-        //   3. Hands the now-mutated scratch buffer to the mapper as if
-        //      it were the original input.
-        //
-        // Contract:
-        //   * Length-preserving. The hook must not resize `bytes`.
-        //   * In-place. The hook mutates the scratch buffer; the service
-        //     does not consume a return value.
-        //   * Exceptions propagate — preprocessor throws, the
-        //     `forward_to_tensor` call throws.
-        //   * Only runs on the raw-bytes overload. The
-        //     `forward_to_tensor(const Tensor&, ...)` overload skips the
-        //     hook (the caller has already shaped the data).
-        //
-        // Use case: per-call transforms that derive their parameters from
-        // the same `metadata` the device-side worker kernel reads.
-        // Example: the ring-SDPA prefill reshuffle reads
-        // `chunk_P_aligned` out of the metadata and rotates the
-        // token-ID array so the existing TensorToMesh mapper distributes
-        // each rotated slice to the column that owns those slot
-        // positions in the KV cache (see
-        // `models/demos/deepseek_v3_b1/docs/ring_sdpa_prefill_reshuffling.md`).
+        // Optional host-side hook applied in place to a copy of `bytes` before the
+        // mapper runs (raw-bytes overload only). Must be length-preserving.
         std::function<void(ttsl::Span<std::byte> bytes,
                            ttsl::Span<const std::byte> metadata)> preprocessor;
     };
@@ -189,39 +90,29 @@ public:
         ttsl::Span<const std::byte> bytes,
         ttsl::Span<const std::byte> metadata = {});
 
-    // Distributed host tensor path. `host_tensor` must:
-    //   * be a host tensor (storage_type == HOST),
-    //   * have `tensor_spec() == get_per_shard_spec()` (already distributed by a
-    //     mapper equivalent to the one passed via `Config::mapper`),
-    //   * have a populated shard at every mesh coord this service covers.
-    //
-    // Streams the per-coord shards through the sockets verbatim. Returns once
-    // all bytes are in the socket FIFOs; the caller must `barrier()` (or
-    // destruct the service) to know the kernels have drained them.
+    // Distributed host tensor path. `host_tensor` must be a host tensor with
+    // `tensor_spec() == get_per_shard_spec()` and a populated shard at every
+    // covered coord. Streams the per-coord shards through the sockets verbatim;
     // `metadata` follows the same per-call contract as the bytes overload.
     void forward_to_tensor(
         const Tensor& host_tensor,
         ttsl::Span<const std::byte> metadata = {});
 
     // Block until every in-flight host->socket write has been ACKed by the
-    // device-side kernel. Call before reading the backing tensor, before
-    // destruction, or any time a caller needs flow-control synchronisation.
+    // device-side kernel.
     void barrier();
 
     const Tensor& get_backing_tensor() const;
 
-    // The per-shard TensorSpec produced by the mapper. This is the single source
-    // of truth for the device tensor's per-coord spec; same as
+    // The per-shard TensorSpec produced by the mapper; same as
     // `get_backing_tensor().tensor_spec()`.
     const TensorSpec& get_per_shard_spec() const;
 
-    // ===== Tensor-free size accessors =====
-    // Bytes-only callers (e.g. cross-process connectors that don't link any
-    // tensor headers) use these to size their `forward_to_tensor(bytes, ...)`
-    // arguments without pulling `TensorSpec` into their compile unit.
+    // Size accessors let bytes-only callers size their forward_to_tensor(bytes)
+    // arguments without pulling TensorSpec into their compile unit.
 
-    // Bytes the caller must hand to `forward_to_tensor(bytes[, metadata])`
-    // per call — equal to the packed size of one full global tensor.
+    // Bytes the caller must hand to `forward_to_tensor(bytes[, metadata])` per
+    // call — the packed size of one full global tensor.
     std::size_t payload_size_bytes() const;
 
     // Bytes of metadata that must be attached to each call. Zero means the
@@ -231,89 +122,42 @@ public:
 
     std::vector<distributed::H2DSocket*> get_sockets() const;
 
-    // ===== Worker-sync handshake accessors =====
-    // Only meaningful when `Config::worker_cores` was set. Both address getters
-    // TT_FATAL if worker-sync wasn't enabled at construction.
+    // Worker-sync handshake accessors. Only meaningful when Config::worker_cores
+    // was set; each TT_FATALs otherwise.
 
-    // Worker CoreRange the service synchronizes with. Same grid that was
-    // passed via `Config::worker_cores` at construction. Consumers building
-    // a peer MeshWorkload around the service use this to size their
-    // `pages_per_worker` partitioning and to multicast destinations.
-    // TT_FATALs if `Config::worker_cores` was not set.
+    // Worker CoreRange the service synchronizes with (== Config::worker_cores).
     CoreRange get_worker_cores() const;
 
-    // L1 address of the data-ready GlobalSemaphore on every worker core in
-    // Config::worker_cores. Same value across (device, worker core) by
-    // mesh-wide GlobalSemaphore construction. Workers poll their local copy
-    // here; the persistent service kernel multicasts atomic-inc to it after
-    // each transfer.
+    // L1 address of the data-ready GlobalSemaphore, uniform across every worker
+    // core. Workers poll it; the service kernel multicasts an inc each transfer.
     DeviceAddr get_data_ready_sem_addr() const;
 
-    // L1 address of the consumed-counter on this coord's service core.
-    // Workers send NoC atomic-incs here (one per consumed iteration); the
-    // persistent kernel polls it locally to know when all workers have
-    // acknowledged the iteration. Per-coord because each device's service
-    // core is independent (possibly different cores per coord).
+    // L1 address of the consumed-counter on this coord's service core. Workers
+    // atomic-inc it once per consumed iteration; the kernel polls it locally.
+    // Per-coord because each device's service core may differ.
     DeviceAddr get_consumed_counter_addr(const distributed::MeshCoordinate& coord) const;
 
-    // Logical CoreCoord of the service core on this coord's device. Combine
-    // with `get_consumed_counter_addr` to build the NoC destination workers
-    // atomic-inc into; the caller converts logical -> physical via the mesh
-    // device's `worker_core_from_logical_core` at workload setup time.
+    // Logical CoreCoord of the service core on this coord's device. Combine with
+    // get_consumed_counter_addr to build the NoC destination workers inc into.
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
 
-    // L1 address of the metadata destination on every worker core in
-    // `Config::worker_cores`. Same address across (device, worker core) by
-    // mesh-wide L1-sharded Buffer construction. Workers read their local
-    // copy; the service kernel multicasts the first `metadata_size_bytes`
-    // of the trailing metadata page here each transfer. TT_FATALs if
-    // `Config::metadata_size_bytes` was 0.
+    // L1 address of the metadata destination, uniform across every worker core.
     DeviceAddr get_metadata_addr() const;
 
-    // ===== Cross-process attachment =====
-
-    // Export a service descriptor to /dev/shm/ so a remote process can attach
-    // via `H2DStreamService::connect(service_id, ...)` and drive
-    // `forward_to_tensor` calls into the same backing tensor. The descriptor
-    // bundles the per-coord socket descriptors inline — the remote does a
-    // single file read and reconstructs every socket in-memory via
-    // `H2DSocket::connect_from_descriptor`, avoiding any race between
-    // service- and socket-level descriptor files becoming visible on disk.
-    //
-    // The descriptor also carries the chunk plan, the mapper config, the mesh
-    // shape, the global tensor spec, the metadata size, and the socket-level
-    // config so the connector reconstructs an equivalent service handle
-    // without needing a `MeshDevice` of its own.
-    //
-    // Returns the descriptor file path. Owner-only; TT_FATALs in connector
-    // mode.
+    // Export a service descriptor to /dev/shm/ so a remote process can connect()
+    // and drive forward_to_tensor into the same backing tensor. Returns the
+    // descriptor file path. Owner-only; TT_FATALs in connector mode.
     std::string export_descriptor(const std::string& service_id);
 
-    // Attach to an exported H2DStreamService from another process.
-    //
-    // Waits for the descriptor file at the conventional `/dev/shm/` path
-    // (`tt_h2d_stream_service_<service_id>.bin`), reads it, reconstructs the
-    // mapper via the shape-only `create_mesh_mapper(mesh_shape, mapper_config)`
-    // overload, and attaches every per-coord H2DSocket inline from the
-    // embedded socket descriptors. NO `MeshDevice` handle is acquired — the
-    // connector talks to the device only through the existing PCIeCoreWriter
-    // path inside each H2DSocket.
-    //
-    // The returned service supports `forward_to_tensor`, `barrier`, and
-    // `get_per_shard_spec`. Owner-only methods (e.g. `get_backing_tensor`, the
-    // worker-sync getters, `export_descriptor`) TT_FATAL on the returned
-    // instance.
+    // Attach to an exported H2DStreamService from another process; reconstructs
+    // the mapper and every per-coord H2DSocket without acquiring a MeshDevice.
+    // The returned service supports forward_to_tensor, barrier, and
+    // get_per_shard_spec; owner-only methods TT_FATAL on it.
     //
     // @param service_id Identifier the owner passed to `export_descriptor`.
     // @param timeout_ms Max wait time for the descriptor file (default 10s).
-    // @param preprocessor Optional host-side hook installed into the
-    //     connector-side service's `Config::preprocessor`. The preprocessor
-    //     is process-local executable code; it is NOT shipped through the
-    //     descriptor. The connector must install whatever transform it wants
-    //     applied to its outgoing bytes BEFORE the mapper distributes shards.
-    //     Same contract as `Config::preprocessor` on the in-process path:
-    //     in-place, length-preserving, gets the same `metadata` span the
-    //     service will multicast to workers. Pass nullptr (default) to skip.
+    // @param preprocessor Optional process-local hook; same contract as
+    //     `Config::preprocessor`.
     static std::unique_ptr<H2DStreamService> connect(
         const std::string& service_id,
         std::optional<uint32_t> timeout_ms = std::nullopt,
@@ -321,39 +165,20 @@ public:
                            ttsl::Span<const std::byte> metadata)> preprocessor = nullptr);
 
 private:
-    // Connector-mode ctor. Called by the static `connect()` factory after it
-    // has:
-    //   * read the exported service descriptor,
-    //   * built a Config-equivalent payload (global_spec reconstructed from
-    //     the descriptor, mapper built via the shape-only
-    //     `create_mesh_mapper(mesh_shape, mapper_config)`),
-    //   * attached every per-coord socket via `H2DSocket::connect_from_descriptor`.
-    //
-    // The ctor stitches everything together: claims ownership of `cfg.mapper`,
-    // installs the connected sockets, sets the cached chunk plan, derives
-    // `per_shard_spec_` by running the mapper on a zero host tensor, and
-    // allocates the per-call metadata scratch buffer.
-    //
-    // `mesh_device_` stays null on the connector — no device handle is held.
-    // Arity disambiguates this from the public owner ctor (2 args vs 4 args).
+    // Connector-mode ctor used by connect(): `mesh_device_` stays null; arity
+    // disambiguates it from the public owner ctor.
     H2DStreamService(
         Config cfg,
         std::vector<std::unique_ptr<distributed::H2DSocket>> sockets,
         uint32_t socket_page_size,
         uint32_t num_socket_pages);
 
-    // Flip the termination signal from 0 to 1, kicking every persistent
-    // receiver kernel out of its socket-wait poll loop on the next iteration.
-    // Idempotent — safe to call multiple times.
+    // Flip the termination signal 0 -> 1 so each persistent receiver kernel exits
+    // on its next poll. Idempotent.
     void signal_termination();
 
-    // True for services constructed by the public `Config`-based ctor (the
-    // process that owns the device tensor, the service-core claim, the
-    // persistent kernel, and the worker-sync / metadata allocations).
-    // False for services produced by the `connect()` factory — those
-    // attach to an exported descriptor via shared memory and do NOT own
-    // device-side resources. The dtor branches on this flag to skip owner-only
-    // teardown when the service is a connector.
+    // True for owner services (own all device-side resources), false for
+    // connector services. The dtor branches on it.
     bool is_owner_ = true;
 
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
@@ -363,99 +188,44 @@ private:
     Tensor device_tensor_;
 
     // Per-shard tensor spec produced by the mapper. Cached so owner and
-    // connector run the same Tensor-overload validation. Populated:
-    //   * Owner: from `device_tensor_.tensor_spec()` once the device tensor
-    //     is allocated.
-    //   * Connector: by running the mapper on a zero host tensor sized to
-    //     `cfg_.global_spec` — the same trick the owner ctor uses to derive
-    //     the per-shard spec before allocating its device tensor.
+    // connector run the same Tensor-overload validation.
     std::optional<TensorSpec> per_shard_spec_;
 
     std::vector<std::unique_ptr<distributed::H2DSocket>> sockets_;
 
-    // Per-coord service core claimed via ServiceCoreManager at construction.
-    // The receiver kernel + socket FIFO + termination signal for that coord
-    // all live on this core. Different coords may have different cores (each
-    // device has its own free dispatch-column cores).
+    // Per-coord service core claimed via ServiceCoreManager. May differ per coord.
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores_;
 
-    // Per-coord termination signal for the persistent receiver kernels. One
-    // uint32 in L1 per device, at an address allocated from that device's
-    // service core (via ServiceCoreManager::allocate_l1). Initialised to 0
-    // in the ctor (raw `WriteToDeviceL1`); flipped to 1 in
-    // `signal_termination`; deallocated in the dtor. No GlobalSemaphore
-    // wrapper — `GlobalSemaphore::reset_semaphore_value` requires a
-    // MeshBuffer-backed AnyBuffer and crashes on the single-IDevice path we
-    // need here (per-coord service cores can differ across devices, so we
-    // can't use a single mesh-wide semaphore).
+    // Per-coord termination signal (one uint32 in L1 on the service core),
+    // written directly rather than via a GlobalSemaphore (which can't target
+    // per-coord service cores).
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs_;
 
-    // Optional worker-sync state. All populated together; all empty when
-    // `cfg_.worker_cores` is unset.
-    //
-    // * `data_ready_sem_` — single mesh-wide GlobalSemaphore on the worker
-    //   CoreRangeSet derived from cfg_.worker_cores. Lives on the worker grid
-    //   (BankManager-backed); same L1 address on every (device, worker core).
-    //   The service kernel multicasts an atomic-inc each iteration; workers
-    //   poll their local copy.
-    // * `consumed_addrs_` — per-coord L1 word on the service core (allocated
-    //   via ServiceCoreManager::allocate_l1, zero-init via WriteToDeviceL1).
-    //   Each worker NoC-atomic-incs this once per consumed iteration; the
-    //   service kernel polls it locally. Deallocated in the dtor.
-    // * `num_workers_` — count of cores in cfg_.worker_cores. Uniform across
-    //   the mesh by design (asserted).
+    // Optional worker-sync state; all empty when cfg_.worker_cores is unset.
     std::optional<GlobalSemaphore> data_ready_sem_;
     std::map<distributed::MeshCoordinate, DeviceAddr> consumed_addrs_;
     uint32_t num_workers_ = 0;
 
-    // Metadata multicast state. Populated only when `cfg_.metadata_size_bytes > 0`.
-    //
-    // * `metadata_buffer_` — owning mesh-wide L1-sharded Buffer allocated
-    //   across `cfg_.worker_cores`. REPLICATED across the mesh (every device
-    //   gets its own backing allocation at the same L1 address) and
-    //   HEIGHT_SHARDED across the worker_cores CoreRangeSet (every worker
-    //   core gets one shard at the same in-core offset). Destruction
-    //   deallocates the L1 region.
-    // * `metadata_l1_addr_` — cached `metadata_buffer_->address()` so the
-    //   kernel CT args and multicast destination don't need to redereference
-    //   the Buffer per call. 0 when metadata is disabled.
+    // Metadata multicast state; populated only when cfg_.metadata_size_bytes > 0.
     std::shared_ptr<distributed::MeshBuffer> metadata_buffer_;
     DeviceAddr metadata_l1_addr_ = 0;
 
-    // Path to the exported service descriptor (set by `export_descriptor`,
-    // empty otherwise). The dtor mirrors `H2DSocket::~H2DSocket`: when non-
-    // empty, the file is unlinked and untracked so it does not linger in
-    // `ShmResourceTracker` until process exit.
+    // Path to the exported service descriptor (empty otherwise); the dtor unlinks it.
     std::string descriptor_path_;
 
-    // Per-service host scratch buffer for the trailing metadata page. Sized
-    // to socket_page_size_ at construction (when metadata is enabled), reused
-    // across every forward_to_tensor call: each call copies the caller's
-    // metadata into the head and pushes the whole page through every socket.
-    // Empty when metadata is disabled.
+    // Host scratch reused across calls; empty when metadata is disabled.
     std::vector<std::byte> metadata_scratch_;
 
-    // Per-service host scratch buffer for the optional preprocessor hook.
-    // Lazy-allocated to `payload_size_bytes()` on the first
-    // `forward_to_tensor(bytes,...)` call after `Config::preprocessor` was
-    // set; reused across every subsequent call. Empty when no preprocessor
-    // is registered, so callers that don't opt in pay zero memory cost.
+    // Host scratch reused across calls; empty when no preprocessor is registered.
     std::vector<std::byte> preprocess_scratch_;
 
-    // Persistent receiver workload — built and enqueued once in the ctor,
-    // drained in the dtor after termination is signalled. Held by unique_ptr
-    // so the connector path doesn't pay for default-constructing a
-    // `MeshWorkload` at member-init time — `MeshWorkloadImpl`'s ctor calls
-    // `MetalContext::instance()` to size kernel/kernel-group tables, which
-    // lazy-initializes the Cluster and acquires the exclusive PCIe chip lock.
-    // On the connector that collides with the owner's hold of the lock and
-    // deadlocks. Owner-only construction via `make_unique<MeshWorkload>()`;
-    // connector leaves this null.
+    // Held by unique_ptr so the connector (which never builds one) avoids
+    // default-constructing a MeshWorkload, whose ctor would acquire the PCIe chip
+    // lock and deadlock against the owner.
     std::unique_ptr<distributed::MeshWorkload> workload_;
 
-    // Chunk plan, cached in the ctor and consumed by every `forward_to_tensor`
-    // call. The same values are baked into the kernels' CT args so they must
-    // stay constant for the service's lifetime.
+    // Chunk plan baked into the kernels' CT args, so it must stay constant for
+    // the service's lifetime.
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
 };

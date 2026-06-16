@@ -77,12 +77,8 @@ public:
      * and sets up device-side config and data buffers. The socket can be exported
      * via export_descriptor() for cross-process attachment.
      *
-     * If `recv_core.core_coord` has been claimed on `recv_core.device_coord` via
-     * `tt::tt_metal::internal::ServiceCoreManager`, the device-side config (and,
-     * for HOST_PUSH, data) buffers are allocated from that core's service-core L1
-     * region instead of the worker-grid BankManager — required because the
-     * BankManager doesn't allocate into service-core L1. Detection is automatic;
-     * cleanup happens in the destructor.
+     * If `recv_core` is a claimed service core, the device-side buffers are allocated
+     * from that core's service-core L1 region instead of the worker-grid BankManager.
      *
      * @param mesh_device The mesh device containing the target core.
      * @param recv_core The target core coordinate (device + core) to receive data.
@@ -116,15 +112,8 @@ public:
     /**
      * @brief Connects to an H2DSocket from a pre-loaded descriptor.
      *
-     * Behaves identically to `connect(socket_id, ...)` except the descriptor is
-     * supplied directly rather than read from `/dev/shm/`. Used by callers that
-     * have aggregated multiple socket descriptors in a higher-level container
-     * (e.g. an `H2DStreamServiceDescriptor` that embeds the per-coord socket
-     * descriptors inline) and want to avoid N additional file reads.
-     *
-     * The descriptor is self-describing — it carries the owner-side mesh
-     * coord — so the resulting connector socket's `get_active_cores()` will
-     * report the right coord without the caller having to plumb it through.
+     * Like `connect(socket_id, ...)` but takes the descriptor directly rather than reading
+     * it from `/dev/shm/`, for callers that aggregate descriptors in a higher-level container.
      *
      * @param desc A populated socket descriptor.
      * @return A connected H2DSocket ready for data transfer.
@@ -146,11 +135,8 @@ public:
     /**
      * @brief Populate a descriptor for this socket without writing to disk.
      *
-     * Returns a fully-populated HDSocketDescriptor identical to what
-     * `export_descriptor` would write, but does no file I/O. Used by higher-
-     * level containers (e.g. `H2DStreamServiceDescriptor`) that embed per-
-     * socket descriptors inline and want a single-file write at the container
-     * level. Only callable on the owner-side socket.
+     * Returns the same HDSocketDescriptor `export_descriptor` would write, but does no
+     * file I/O. Only callable on the owner-side socket.
      */
     HDSocketDescriptor populate_descriptor() const;
 
@@ -255,10 +241,7 @@ private:
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
-    // When the config/data buffers were allocated from a service core's L1
-    // (i.e. `recv_core_` was a claimed service core at construction time),
-    // record the addresses so the dtor can release them back to the
-    // per-core service allocator. Empty otherwise.
+    // Set only when recv_core_ is a claimed service core; the dtor releases them to the per-core allocator.
     std::optional<DeviceAddr> svc_config_l1_addr_;
     std::optional<DeviceAddr> svc_data_l1_addr_;
     MeshCoreCoord recv_core_;

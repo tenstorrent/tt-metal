@@ -110,9 +110,7 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
 
 class TensorToMesh::Impl {
 public:
-    // MeshDevice-aware ctor: retains the device view so that
-    // `DistributedHostBuffer::create(view)` can honour multi-host distribution
-    // (remote shards are deallocated on each host).
+    // Retains the device view so multi-host distribution drops remote shards on each host.
     Impl(
         const MeshDevice& mesh_device,
         DistributionMode distribution_mode,
@@ -125,11 +123,7 @@ public:
         distribution_shape_(distribution_shape),
         config_(config) {}
 
-    // Shape-only ctor: used by callers that do not hold a `MeshDevice` handle
-    // (e.g. processes attaching to an exported H2DStreamService over shared
-    // memory). The resulting buffer creation falls back to the single-host
-    // `DistributedHostBuffer::create(MeshShape)` overload — multi-host
-    // distribution is not available without a `MeshDeviceView`.
+    // Shape-only ctor for callers without a `MeshDevice` handle; single-host buffer creation only.
     Impl(
         const MeshShape& mesh_shape,
         DistributionMode distribution_mode,
@@ -142,19 +136,8 @@ public:
         distribution_shape_(distribution_shape),
         config_(config) {}
 
-    // Pick the multi-host-aware path when a view is available; otherwise the
-    // shape-only path.
-    //
-    // The shape-only branch deliberately routes through the 4-arg
-    // `DistributedHostBuffer::create(global, local, offset, context)` overload
-    // with a nullptr context, NOT the 1-arg `create(MeshShape)` shortcut. The
-    // shortcut pulls the host-local context out of `MetalContext::instance()`,
-    // which lazy-initializes the `Cluster` and acquires the exclusive PCIe
-    // chip lock — fatal in connector processes that attach to an exported
-    // `H2DStreamService` via shared memory without ever opening a device.
-    // The resulting buffer's `context()` returns nullptr, which is fine for
-    // the streaming path; only `host_ccl.cpp` reads `dhb.context()` and that
-    // call site is not on the streaming pipeline.
+    // Shape-only path passes a nullptr context to avoid the 1-arg shortcut, which acquires the
+    // exclusive PCIe chip lock via MetalContext::instance().
     tt::tt_metal::DistributedHostBuffer make_distributed_host_buffer() const {
         if (mesh_device_view_.has_value()) {
             return tt::tt_metal::DistributedHostBuffer::create(*mesh_device_view_);
@@ -415,13 +398,7 @@ private:
         return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), shard_spec, tensor_topology));
     }
 
-    // Mesh parameters. `mesh_device_view_` is populated when the caller has a
-    // live `MeshDevice` (the common case); it enables multi-host-aware
-    // `DistributedHostBuffer::create(view)`, which deallocates shards remote
-    // to this host. When constructed from a `MeshShape` only (e.g. an external
-    // process attaching to an exported H2DStreamService), the view is empty
-    // and `make_distributed_host_buffer()` falls back to the single-host
-    // shape-only overload.
+    // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.
     std::optional<MeshDeviceView> mesh_device_view_;
     MeshShape mesh_shape_;
     MeshCoordinateRange global_range_;
@@ -596,8 +573,6 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
         distributed_shape,
         config);
 
-    // Multi-host-aware path: retain the device view so remote shards are
-    // identified and skipped per host.
     return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
         mesh_device,
         compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()),
