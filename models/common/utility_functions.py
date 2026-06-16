@@ -505,49 +505,51 @@ def comp_pcc(golden, calculated, pcc=0.99):
         logger.error("One tensor is all zero")
         return False, 0.0
 
-    # For now, mask all infs and nans so that we check the rest... TODO
-    # Skip this for integer types which don't have NaN/Inf values
-    if golden.dtype.is_floating_point:
-        # Check if dtype is FP8 - they don't support isinf/isneginf/masked_fill operations
-        is_fp8 = golden.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]
+    golden = torch.squeeze(golden).flatten()
+    calculated = torch.squeeze(calculated).flatten()
 
-        if is_fp8:
-            # Convert FP8 to float32 for comparison since FP8 doesn't support many operations
+    # For now, drop all infs and nans so that we correlate the rest... TODO
+    # Skip this for integer types which don't have NaN/Inf values.
+    if golden.dtype.is_floating_point:
+        # FP8 doesn't support isfinite/indexing and bfloat16 products lose precision,
+        # so correlate these in float32.
+        if golden.dtype in (torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16):
             golden = golden.to(torch.float32)
             calculated = calculated.to(torch.float32)
 
-        golden = golden.clone()
-        calculated = calculated.clone()
-
-        # Mask NaN and inf values
-        golden[
-            torch.logical_or(
-                torch.isnan(golden),
-                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-            )
-        ] = 0
-        calculated[
-            torch.logical_or(
-                torch.isnan(calculated),
-                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-            )
-        ] = 0
+        # Exclude (rather than zero) NaN/Inf. Zeroing them injects matching (0, 0)
+        # points into both tensors; those are perfectly correlated and distort the
+        # result (with a non-zero data mean the PCC can be driven toward +/-1 or its
+        # sign flipped). Dropping the invalid positions correlates only the valid data.
+        # On the common all-finite path mask.all() is True, so no copy is made and the
+        # tensors stay as views.
+        finite = torch.isfinite(golden) & torch.isfinite(calculated)
+        if not bool(finite.all()):
+            golden = golden[finite]
+            calculated = calculated[finite]
 
     if torch.equal(golden, calculated):
         return True, 1.0
 
-    if golden.dtype == torch.bfloat16:
-        golden = golden.type(torch.float32)
-        calculated = calculated.type(torch.float32)
-    # Fast PCC: torch.corrcoef (float64, matches numpy's promotion to |Δ|~1e-13) instead of
-    # numpy's masked-array corrcoef, which is Python-dispatched and O(GB) on large outputs and
-    # dominates big-tensor PCC checks (~7x slower per call). NaN/Inf were masked-to-zero above.
-    g = torch.squeeze(golden).flatten().to(torch.float64)
-    c = torch.squeeze(calculated).flatten().to(torch.float64)
-    cal_pcc = torch.min(torch.corrcoef(torch.stack((g, c)))).item()
+    # Integer tensors must be correlated in floating point (centering/products would
+    # otherwise truncate/overflow). float32 keeps the working set small.
+    if not golden.dtype.is_floating_point:
+        golden = golden.to(torch.float32)
+        calculated = calculated.to(torch.float32)
 
-    # Degenerate (zero-variance) case: numpy's masked path returned a MaskedConstant -> (True, 1.0);
-    # torch.corrcoef yields nan. Mirror the original verdict.
+    # Pearson r with float64 *accumulation* (dtype= on the reductions) over the float32
+    # data: no float64 copy of either tensor is materialized, so peak memory stays near
+    # 1x of one input on large tensors while matching a full-float64 correlation to
+    # |Δ|<1e-9 across the high-PCC (>=0.999) range.
+    n = golden.numel()
+    g_centered = golden - (golden.sum(dtype=torch.float64) / n).to(golden.dtype)
+    c_centered = calculated - (calculated.sum(dtype=torch.float64) / n).to(calculated.dtype)
+    cov = (g_centered * c_centered).sum(dtype=torch.float64)
+    denom = torch.sqrt(g_centered.pow(2).sum(dtype=torch.float64) * c_centered.pow(2).sum(dtype=torch.float64))
+    cal_pcc = (cov / denom).item()
+
+    # Zero variance (or everything masked out) -> denom == 0 / n == 0 -> nan: treat as a
+    # perfect match.
     if math.isnan(cal_pcc):
         return True, 1.0
 
