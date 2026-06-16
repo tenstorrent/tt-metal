@@ -30,12 +30,12 @@ void kernel_main() {
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
 
-    PREPROCESS(RHS, cb_pre_rhs_id, cb_post_rhs.get_cb_id(), cb_out.get_cb_id(), 1);
+    PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, 1);
     cb_post_rhs.wait_front(1);
 
     // Inline lambda to process n tiles with the scalar value
     auto process_tiles = [&](uint32_t n) {
-        PREPROCESS(LHS, cb_pre_lhs_id, cb_post_lhs.get_cb_id(), cb_out.get_cb_id(), n);
+        PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
         cb_post_lhs.wait_front(n);
 
         cb_out.reserve_back(n);

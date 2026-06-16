@@ -39,10 +39,10 @@ FORCE_INLINE void process_sfpu_tiles(
     CircularBuffer cb_post_rhs(cb_post_rhs_id);
     CircularBuffer cb_out(cb_out_id);
 
-    PREPROCESS(LHS, cb_pre_lhs_id, cb_post_lhs.get_cb_id(), cb_out.get_cb_id(), n);
+    PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
     cb_post_lhs.wait_front(n);
 
-    PREPROCESS(RHS, cb_pre_rhs_id, cb_post_rhs.get_cb_id(), cb_out.get_cb_id(), n);
+    PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
     cb_post_rhs.wait_front(n);
 
     cb_out.reserve_back(n);
