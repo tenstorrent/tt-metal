@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_eltwise_ternary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Ternary ALIAS ttnn_op_eltwise_ternary)
 
-tt_reuse_precompile_headers(ttnn_op_eltwise_ternary TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_ternary TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_ternary)
 set_target_properties(
     ttnn_op_eltwise_ternary

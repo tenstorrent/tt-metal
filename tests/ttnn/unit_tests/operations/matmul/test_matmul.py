@@ -13,7 +13,6 @@ import ttnn
 from models.common.utility_functions import (
     is_blackhole,
     is_llk_assert_enabled,
-    skip_for_blackhole,
     skip_for_slow_dispatch,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
@@ -424,7 +423,6 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -1128,7 +1126,6 @@ def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize(
     "m,k,n,tile_h,tile_w,transpose_tile",
     [
@@ -1159,7 +1156,6 @@ def test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile(mesh_device, m, k, n
     )
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize(
     "m,k,n,tile_h,tile_w,transpose_tile",
     [
@@ -1190,7 +1186,6 @@ def test_linear_fused_non_broadcast_bias_1d_mcast_tiny_tile(mesh_device, m, k, n
     )
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("m,k,n", [(32, 32, 32), (32, 64, 32)])
 @pytest.mark.parametrize("transpose_mcast", [False, True])
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)

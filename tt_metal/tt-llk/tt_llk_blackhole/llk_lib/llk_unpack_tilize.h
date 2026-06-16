@@ -280,22 +280,18 @@ inline void _llk_unpack_tilize_(
 /**
  * @brief Restore unpacker state after a tilize operation.
  *
- * Reverts the X-dimension datum counts and the tile descriptor Z-dimension to defaults and
- * rewrites the unpack config (clearing tileize mode) so subsequent ops see a normal tile layout.
+ * Reverts the tile descriptor Z-dimension to default and rewrites the unpack config (clearing
+ * tilize mode) so subsequent ops see a normal tile layout. x-start/x-end is transient and
+ * reprogrammed by the next operation's init (see tt-llk#1036), so it is not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @param num_faces: Number of faces, used to restore the Z dimension, valid values = <1, 2, 4>.
- * @param face_r_dim: Rows per face, used to compute the restored datum count.
  * @note Call @ref _llk_unpack_tilize_init_ before this function.
  */
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces, const std::uint32_t face_r_dim)
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    // Revert X dim value to default.
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 
     // Revert Z dim value back to default.
     const std::uint32_t Tile_z_dim = num_faces;
@@ -526,20 +522,16 @@ inline void _llk_unpack_tilizeA_B_(
 /**
  * @brief Restore unpacker state after a tilize-A-with-unpack-B operation.
  *
- * Reverts the SrcA/SrcB X-dimension datum counts and the SrcA Y counter, and rewrites the unpack
- * config and tile X-dim back to the default 16x16 face layout.
+ * Reverts the SrcA Y counter and rewrites the unpack config and tile X-dim back to the default
+ * 16x16 face layout. x-start/x-end is transient and reprogrammed by the next operation's init
+ * (see tt-llk#1036), so it is not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
- * @param face_r_dim: Rows per face, used to compute the restored datum count.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
  */
-inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
+inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
 {
-    // Revert X dim value to default.
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 
     // _llk_unpack_tilizeA_B uses y-stride and updates y counter
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);

@@ -214,9 +214,11 @@ void MetalContext::initialize(
     // Initialize inspector
     if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         std::optional<int> rank;
-        auto world_context = distributed::multihost::DistributedContext::get_world_context();
-        if (*(world_context->size()) > 1) {
-            rank = *world_context->rank();
+        if (distributed::multihost::DistributedContext::is_initialized()) {
+            auto world_context = distributed::multihost::DistributedContext::get_world_context();
+            if (*(world_context->size()) > 1) {
+                rank = *world_context->rank();
+            }
         }
         inspector_data_ = Inspector::initialize(rank);
         // Set fw_compile_hash for Inspector RPC build environment info

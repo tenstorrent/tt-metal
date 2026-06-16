@@ -39,15 +39,21 @@ struct pack_config_t
     // word 1
     std::uint32_t l1_dest_addr : 32;
     // word 2
-    std::uint32_t uncompress              : 1;
-    std::uint32_t add_l1_dest_addr_offset : 1;
-    std::uint32_t reserved_0              : 2;
-    std::uint32_t out_data_format : DATA_FORMAT_BIT_COUNT;
-    std::uint32_t in_data_format : DATA_FORMAT_BIT_COUNT;
-    std::uint32_t reserved_1        : 4;
-    std::uint32_t src_if_sel        : 1;
-    std::uint32_t pack_per_xy_plane : 7;
-    std::uint32_t l1_src_addr       : 8;
+    std::uint32_t uncompress              : 1;             // bit0  Disable_zero_compress
+    std::uint32_t add_l1_dest_addr_offset : 1;             // bit1
+    std::uint32_t addr_cnt_context        : 2;             // bits2-3
+    std::uint32_t out_data_format : DATA_FORMAT_BIT_COUNT; // bits4-7
+    std::uint32_t in_data_format : DATA_FORMAT_BIT_COUNT;  // bits8-11
+    std::uint32_t dis_shared_exp_assembler            : 1; // bit12
+    std::uint32_t force_pack_per_max_xy_plane         : 1; // bit13
+    std::uint32_t enable_out_fifo                     : 1; // bit14
+    std::uint32_t sub_l1_tile_header_size             : 1; // bit15
+    std::uint32_t src_if_sel                          : 1; // bit16  Source_interface_selection
+    std::uint32_t all_pack_disable_zero_compress      : 4; // bits17-20
+    std::uint32_t all_pack_disable_zero_compress_ovrd : 1; // bit21
+    std::uint32_t add_tile_header_size                : 1; // bit22
+    std::uint32_t reserved_1                          : 1; // bit23 unused
+    std::uint32_t l1_src_addr                         : 8; // bits24-31
     // word 3
     std::uint32_t downsample_mask                    : 16;
     std::uint32_t downsample_shift_count             : 3;
@@ -380,10 +386,9 @@ inline void set_packer_config(
             ? 0
             : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
-    config.f.uncompress        = 1;
-    config.f.out_data_format   = pack_dst_format;
-    config.f.in_data_format    = pack_src_format;
-    config.f.pack_per_xy_plane = 1;
+    config.f.uncompress      = 1;
+    config.f.out_data_format = pack_dst_format;
+    config.f.in_data_format  = pack_src_format;
 
     config.f.exp_threshold_en = 0;
     config.f.exp_threshold    = 0;
@@ -405,12 +410,18 @@ inline void set_packer_config(
     //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];
     // THCON_SEC0_REG1_Disable_zero_compress = cfg_reg_array[1][64 +: 1];
     // THCON_SEC0_REG1_Add_l1_dest_addr_offset = cfg_reg_array[1][65 +: 1];
-    // THCON_SEC0_REG1_Unused0 = cfg_reg_array[1][66 +: 2];
+    // THCON_SEC0_REG1_Addr_cnt_context = cfg_reg_array[1][66 +: 2];
     // THCON_SEC0_REG1_Out_data_format = cfg_reg_array[1][68 +: 4];
     // THCON_SEC0_REG1_In_data_format = cfg_reg_array[1][72 +: 4];
-    // THCON_SEC0_REG1_Unused00 = cfg_reg_array[1][76 +: 4];
+    // THCON_SEC0_REG1_Dis_shared_exp_assembler = cfg_reg_array[1][76 +: 1];
+    // THCON_SEC0_REG1_Force_pack_per_max_xy_plane = cfg_reg_array[1][77 +: 1];
+    // THCON_SEC0_REG1_Enable_out_fifo = cfg_reg_array[1][78 +: 1];
+    // THCON_SEC0_REG1_Sub_l1_tile_header_size = cfg_reg_array[1][79 +: 1];
     // THCON_SEC0_REG1_Source_interface_selection = cfg_reg_array[1][80 +: 1];
-    // THCON_SEC0_REG1_Packs_per_xy_plane = cfg_reg_array[1][81 +: 7];
+    // THCON_SEC0_REG1_All_pack_disable_zero_compress = cfg_reg_array[1][81 +: 4];
+    // THCON_SEC0_REG1_All_pack_disable_zero_compress_ovrd = cfg_reg_array[1][85 +: 1];
+    // THCON_SEC0_REG1_Add_tile_header_size = cfg_reg_array[1][86 +: 1];
+    // THCON_SEC0_REG1_Unused00 = cfg_reg_array[1][87 +: 1];
     // THCON_SEC0_REG1_L1_source_addr = cfg_reg_array[1][88 +: 8];
     // THCON_SEC0_REG1_Downsample_mask = cfg_reg_array[1][96 +: 16];
     // THCON_SEC0_REG1_Downsample_shift_count = cfg_reg_array[1][112 +: 3];
@@ -670,18 +681,22 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides(pack_src_format);
+
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
+    // is pack_mode-dependent (Untilize vs Default) and is owned by _llk_pack_init_, which runs after this
+    // reconfig for the specific op/mode.
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size   = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
-    const bool narrow_tile          = false,
-    const std::uint32_t relu_config = 0)
+    const std::uint32_t tile_size           = 0,
+    const std::uint32_t face_r_dim          = FACE_R_DIM,
+    const std::uint32_t num_faces           = 4,
+    const bool partial_face                 = false,
+    [[maybe_unused]] const bool narrow_tile = false,
+    const std::uint32_t relu_config         = 0)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -721,12 +736,17 @@ inline void configure_pack(
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
 
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
+    // is pack_mode-dependent (Untilize packs a single face row, Default a full face) and hw-configure
+    // always runs in PackMode::Default, so it cannot establish the Untilize value. _llk_pack_init_ owns
+    // this counter and runs after hw-configure for the specific op/mode.
+
     // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
     // PACK_COUNTERS_SEC0_pack_xys_per_tile = cfg_reg_array[3][16 +: 7];
     // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
     pack_counters_u pack_counters;
-    pack_counters.val                       = 0;
+    pack_counters.val = 0;
     pack_counters.f.pack_reads_per_xy_plane =
         1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
@@ -746,14 +766,6 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
-
-    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
-
-    // To untilize narrow tile (32x16) we just pack 2 faces back to back
-    // Number of datums to pack per row
-    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
-
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
 inline std::uint8_t get_packer_dest_offset_index()

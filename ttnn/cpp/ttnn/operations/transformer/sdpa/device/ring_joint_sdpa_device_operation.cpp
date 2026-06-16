@@ -29,7 +29,9 @@ namespace {
 
 void validate_ring_joint_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& operation_attributes,
-    const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args) {
+    const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args,
+    // Single-slot gather writes one cache slot to gathered slot 0, so allow a batch-1 output.
+    bool allow_single_slot_output) {
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
@@ -106,6 +108,14 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
                         output_shape[d],
                         expected_output_shape[d],
                         operation_attributes.ring_size);
+                } else if (allow_single_slot_output && d == 0) {
+                    // Single-slot gather targets gathered slot 0: batch-1 expected, full-batch also ok.
+                    TT_FATAL(
+                        output_shape[d] == 1 || output_shape[d] == expected_output_shape[d],
+                        "Output tensor {} batch dim must be 1 (single-slot gather) or {}: got {}",
+                        i,
+                        expected_output_shape[d],
+                        output_shape[d]);
                 } else {
                     TT_FATAL(
                         output_shape[d] == expected_output_shape[d],
@@ -209,7 +219,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     validate_ring_joint_all_gather_on_program_cache_miss(
-        args.all_gather_operation_attributes, args.all_gather_tensor_args);
+        args.all_gather_operation_attributes, args.all_gather_tensor_args, args.has_indexed_kv_cache());
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -244,7 +254,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool is_chunked = tensor_args.is_chunked();
 
     const auto dtype = input_tensor_q.dtype();
-    if (!args.is_causal && !is_chunked) {
+    if ((!args.is_causal && !is_chunked) || args.is_cross) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
                 tensor.dtype() == dtype,
@@ -298,12 +308,27 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_kv);
 
     TT_FATAL(
-        !is_chunked || args.is_causal,
-        "Chunked-prefill (N_local_q < N_local_kv) is mathematically causal; callers must pass is_causal=True. "
-        "Got N_local_q={}, N_local_kv={}, is_causal={}",
+        !is_chunked || args.is_causal || args.is_cross,
+        "Chunked-shaped prefill (N_local_q < N_local_kv) must be causal (incremental prefill) or cross "
+        "(is_cross=True, non-causal short-Q/long-K). Got N_local_q={}, N_local_kv={}, is_causal={}, is_cross={}",
         N_local_q,
         N_local_kv,
-        args.is_causal);
+        args.is_causal,
+        args.is_cross);
+
+    // Cross is the non-causal short-Q/long-K/V path: requires is_chunked, excludes is_causal and
+    // balanced (causal-only) zigzag.
+    if (args.is_cross) {
+        TT_FATAL(
+            is_chunked,
+            "is_cross requires per-device Q seq length < K/V seq length; use the full-prefill non-causal "
+            "path for equal lengths. Got N_local_q={}, N_local_kv={}",
+            N_local_q,
+            N_local_kv);
+        TT_FATAL(
+            !args.is_causal, "is_cross and is_causal are mutually exclusive (cross attention applies no triangle)");
+        TT_FATAL(!args.is_balanced, "is_cross is non-causal; balanced zigzag load-balancing is causal-only");
+    }
 
     // Value checks for the runtime-patched scalars (kv_cache_batch_idx, logical_n, kv_actual_isl).
     // Also invoked on every program-cache hit, where these values vary but the rest is hash-pinned.
@@ -374,16 +399,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "mode requires Q batch size 1. Got Q batch size {}",
             B);
         // kv_cache_batch_idx bounds are value checks → validate_runtime_patched_scalars (runs on hits too).
+        // Single-slot gather writes cache slot kv_cache_batch_idx to gathered slot 0: a batch-1 buffer
+        // is the efficient shape; a full-batch buffer is also accepted (only slot 0 is used).
         TT_FATAL(
-            k_shape[0] == K_cache_batch,
-            "Gathered K cache batch must match input K cache batch. Got gathered K: {}, input K: {}",
-            k_shape[0],
-            K_cache_batch);
+            k_shape[0] == 1 || k_shape[0] == K_cache_batch,
+            "Gathered K batch must be 1 (single-slot gather) or match input K cache batch {}. Got gathered K: {}",
+            K_cache_batch,
+            k_shape[0]);
         TT_FATAL(
-            v_shape[0] == V_cache_batch,
-            "Gathered V cache batch must match input V cache batch. Got gathered V: {}, input V: {}",
-            v_shape[0],
-            V_cache_batch);
+            v_shape[0] == 1 || v_shape[0] == V_cache_batch,
+            "Gathered V batch must be 1 (single-slot gather) or match input V cache batch {}. Got gathered V: {}",
+            V_cache_batch,
+            v_shape[0]);
     } else {
         TT_FATAL(k_shape[0] == B, "K batch size must match Q. Got Q: {}, K: {}", B, k_shape[0]);
         TT_FATAL(v_shape[0] == B, "V batch size must match Q. Got Q: {}, V: {}", B, v_shape[0]);
@@ -399,7 +426,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     // Chunked-prefill targets MLA (K head dim == Q != V) — use is_causal's relaxed K-only check.
-    if (!args.is_causal && !is_chunked) {
+    // Cross is full attention (V head dim must equal Q), so it takes the strict check.
+    if ((!args.is_causal && !is_chunked) || args.is_cross) {
         TT_FATAL(
             k_shape[3] == DH && VDH == DH, "Head dimensions must match. Got Q: {}, K: {}, V: {}", DH, k_shape[3], VDH);
         if (has_joint_tensors) {
@@ -576,6 +604,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.scale,
         args.is_causal,
         args.is_balanced,
+        args.is_cross,
         cache_key_logical_n,
         args.ring_size,
         args.compute_kernel_config,
@@ -667,6 +696,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const bool is_causal,
     const bool is_balanced,
+    const bool is_cross,
     const std::optional<float> scale,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
@@ -742,6 +772,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         scale,
         is_causal,
         is_balanced,
+        is_cross,
         logical_n,
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_dram_core_prefetcher ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::DramCorePrefetcher ALIAS ttnn_op_experimental_dram_core_prefetcher)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_dram_core_prefetcher TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_dram_core_prefetcher TTNN::PCHLean)
 
 set_target_properties(
     ttnn_op_experimental_dram_core_prefetcher

@@ -11,16 +11,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: t3k_LLM_falcon7b_model_perf_tests
-  cmd: run_t3000_falcon7b_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 75
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: falcon7b
-  model-type: LLM
-
 - name: t3k_CNN_resnet50_model_perf_tests
   cmd: run_t3000_resnet50_tests
   skus:

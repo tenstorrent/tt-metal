@@ -90,27 +90,4 @@ inline void _llk_math_sfpu_init_()
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
-/**
- * @brief Runs SFPU operation for a tile (default 32x32)
- * @param: sfpu_func: function pointer to the sfpu functions to run, can look at list of functions here: common/inc/sfpu/cmath_sfpu*
- * @param: dst_tile_index: Starting tile index in the destination register, values = 0 - 15
- * @param: args: variable number of args can be passed into this function, that will be passed
- * to the SFPU function pointer
- */
-template <class F, class... ARGS>
-inline void _llk_math_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, ARGS&&... args)
-{
-    _llk_math_sfpu_start_(dst_tile_index);
-
-    for (std::uint32_t face = 0; face < NUM_FACES; face++)
-    {
-        sfpu_func(std::forward<ARGS>(args)...);
-
-        // Move to the next face
-        _llk_math_sfpu_inc_dst_face_addr_();
-    }
-
-    _llk_math_sfpu_done_();
-}
-
 } // namespace ckernel

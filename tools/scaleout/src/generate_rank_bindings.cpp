@@ -16,6 +16,9 @@
 #include <tuple>
 #include <vector>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <cxxopts.hpp>
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -248,6 +251,28 @@ TopologyMappingResult run_topology_mapping(
     const auto& pinnings = mgd.get_pinnings();
     for (const auto& [pos, fabric_node] : pinnings) {
         config.pinnings.emplace_back(pos, fabric_node);
+    }
+
+    // Apply the same galaxy corner pinnings as the control plane (Phase 2) so Phase 1 and Phase 2 place
+    // the galaxy pins identically. Full galaxies (per-host slice >= 32) pin all four corners; sub-galaxy
+    // slices pin only the NW corner (a single-position pin the solver can satisfy on a small slice).
+    if (cluster.is_ubb_galaxy()) {
+        const int world_size =
+            static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
+        for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+            const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+            const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+            if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
+                const bool sub_galaxy_sliced = mesh_graph.get_mesh_shape(mesh_id, MeshHostRankId{0}).mesh_size() < 32;
+                auto mesh_pinnings = get_galaxy_fixed_asic_position_pinnings_for_mesh(
+                    mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/sub_galaxy_sliced);
+                for (const auto& [fabric_node, positions] : mesh_pinnings) {
+                    for (const auto& position : positions) {
+                        config.pinnings.emplace_back(position, fabric_node);
+                    }
+                }
+            }
+        }
     }
 
     // Set per-mesh validation modes based on mesh graph policy
@@ -669,6 +694,32 @@ int main(int argc, char** argv) {
                     "Successfully wrote: {} (cluster descriptors used during allocation)",
                     phase2_mock_path.string());
             }
+
+            // Flush all output files to storage before signaling peers via barrier.
+            // std::ofstream::close() only drains the C++ stream buffer to the OS page cache.
+            // Without fsync(), NFS peers (and local readers) may see stale or absent files
+            // even after generate_rank_bindings exits.  We fsync each file and its parent
+            // directory so that both data and directory entries are durable before we call
+            // barrier() below — making the barrier the authoritative "writes are visible"
+            // signal and allowing ttrun.py to skip any blind sleep after this subprocess.
+            auto fsync_path = [](const std::filesystem::path& p) noexcept {
+                int fd = ::open(p.c_str(), O_RDONLY);
+                if (fd >= 0) {
+                    ::fsync(fd);
+                    ::close(fd);
+                }
+                int dir_fd = ::open(p.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+                if (dir_fd >= 0) {
+                    ::fsync(dir_fd);
+                    ::close(dir_fd);
+                }
+            };
+            fsync_path(output_file);
+            fsync_path(rankfile_path);
+            if (!mpi_rank_to_cluster_desc_path.empty()) {
+                fsync_path(output_dir / "phase2_mock_mapping.yaml");
+            }
+            log_info(tt::LogFabric, "Fsynced output files; barrier will signal peers that writes are visible.");
 
             log_info(tt::LogFabric, "Rank bindings generation complete!");
         } else {

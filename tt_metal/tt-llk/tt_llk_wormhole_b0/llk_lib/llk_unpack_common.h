@@ -48,8 +48,6 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
     return result;
 }
 
-// TODO NC: Remove disable_src_zero_flag parameter from here, configure_unpack_AB and
-// llk_unpack_hw_configure as the part of #966
 /**
  * @brief Configure the unpacker hardware for both operands A and B.
  *
@@ -57,7 +55,6 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
  * configure_unpack_AB, and stores the per-operand tile sizes into the unpack GPRs.
  *
  * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
- * @tparam disable_src_zero_flag: Disable the source zero-substitution flag.
  * @param unpA_src_format: Source data format of operand A in L1.
  * @param unpB_src_format: Source data format of operand B in L1.
  * @param unpA_dst_format: Destination data format operand A is converted to.
@@ -69,7 +66,7 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
  * @param unpA_tile_size: Tile size of operand A stored to the tile-size GPR.
  * @param unpB_tile_size: Tile size of operand B stored to the tile-size GPR.
  */
-template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
@@ -84,7 +81,7 @@ inline void _llk_unpack_hw_configure_(
 {
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
-    configure_unpack_AB<is_fp32_dest_acc_en, false, false, false, disable_src_zero_flag>(
+    configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
         unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_face_r_dim, unpB_face_r_dim, 0, unpA_num_faces, unpB_num_faces);
 
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
@@ -172,8 +169,6 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
         // Set Z-dim to number of faces
         cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
-
-        TT_SETADCXX(p_setadc::UNP_A, (unpack_face_r_dim << 4) - 1, 0x0);
     }
 }
 
@@ -232,33 +227,9 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 
         // Set Z-dim to number of faces
         cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
-
-        TT_SETADCXX(p_setadc::UNP_B, (unpack_face_r_dim << 4) - 1, 0x0);
     }
 }
 
-/**
- * @brief Update the source zero-substitution flag after a data-format reconfig.
- *
- * The zero-src flag causes the hardware to substitute 0 for values whose bit pattern matches
- * -0.0f in bfloat16 (e.g. 0x8000). configure_unpack_AB disables the flag whenever either dest
- * format is uint16, because 0x8000 is a valid uint16 value (32768) that must not be zeroed. The
- * same adjustment is needed every time formats are reconfigured.
- *
- * @param srca_dst_format: Destination data format of operand A after reconfig.
- * @param srcb_dst_format: Destination data format of operand B after reconfig.
- * @note Only disables the flag (writes 1) when transitioning TO uint16; it never re-enables it
- *       (writes 0) for non-uint16 transitions, since other LLK ops (e.g. reduce init with
- *       enforce_fp32_accumulation) may have disabled it for unrelated reasons (MOVB2D hi16/lo16),
- *       and overwriting that state breaks float32 accumulation.
- */
-inline void _llk_unpack_reconfig_zero_src_flag_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
-{
-    if ((srca_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (srcb_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)))
-    {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
-}
 
 /**
  * @brief Enable Int8 math on the FPU.

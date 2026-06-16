@@ -23,7 +23,7 @@ namespace tt::tt_metal::experimental {
 Program MakeProgramFromSpec(
     const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
 
-// Configure the mutable parameters of an existing Program
+// Configure the arguments (mutable parameters) of an existing Program
 // (This will become a member function for the Program class)
 // This performs a copy from the ProgramRunArgs to the Program's internal data structures.
 //
@@ -32,7 +32,34 @@ Program MakeProgramFromSpec(
 //
 // For high-performance inner loops, prefer the power user APIs below.
 // If stateful behavior of parameters is required, use the power user APIs.
-void SetProgramRunArgs(Program& program, const ProgramRunArgs& params);
+void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
+
+// Fast-path partial update: refresh ONLY a subset of arguments for an existing Program.
+// All other arguments exhibit STATEFUL behavior: they retain their values from whatever they
+// were most recently set to.
+//
+// PRE-CONDITION: SetProgramRunArgs must have been called previously.
+//
+// CAUTION: It is the caller's responsibility to ensure that the stateful, enqueue-invariant
+// tensor and runtime arguments being retained are still valid in the new execution context.
+//
+// COMPLETENESS: Only those tensor and runtime arguments that have been specified in the
+// ProgramSpec as enqueue-loop invariant (via the AdvancedOptions fields) may be omitted
+// when calling UpdateProgramRunArgs. All regular arguments must be specified. This is enforced
+// by runtime validation checks.
+//
+// USE CASE: Program re-enqueue loops where only a subset of ProgramRunArgs need to be mutated
+// per iteration. This saves the host overhead of re-computing, re-specifying and re-validating
+// the full ProgramRunArgs if only a few arguments change per iteration. The onus is on the
+// programmer to ensure that the retained arguments remain valid across iterations.
+//
+// NOTE: If DFB size overrides are unspecified, they revert to the ProgramSpec-defined defaults.
+void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
+
+//////////////////////////////////////////////////////////////////////////////////////
+// NOTE: UpdateProgramRunArgs supersedes UpdateTensorArgs. I plan to remove it.
+//       (or require that all non-tensor args are enqueue-loop invariant.)
+//////////////////////////////////////////////////////////////////////////////////////
 
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
 // All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their values

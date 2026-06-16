@@ -39,6 +39,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4" -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_galaxy -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_deepseek_v3_mla_perf_galaxy -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_kimi_mla_chunked_perf_galaxy -vvv --tb=short
   model: deepseek_prefill
   skus:
     bh_galaxy:
@@ -81,7 +82,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2 and pcc_check and fabric2d' -vvv --tb=short
   model: deepseek_prefill
   skus:
-    bh_llmbox:
+    bh_quietbox_2:
       timeout: 40
   owner_id: U08E1JCMAJF
   team: models

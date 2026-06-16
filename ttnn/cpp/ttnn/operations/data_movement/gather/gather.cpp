@@ -59,7 +59,7 @@ Tensor pre_gather_transform_tensor(
 
     if (padding_index_tensor) {
         // Index tensor padding
-        return ttnn::fill_implicit_tile_padding(transformed_tensor, 0);
+        return ttnn::fill_implicit_tile_padding(transformed_tensor, 0.0f);
     }
 
     // Input tensor processing

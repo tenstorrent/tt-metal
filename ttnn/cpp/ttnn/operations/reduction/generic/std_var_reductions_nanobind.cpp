@@ -34,7 +34,7 @@ static std::string get_std_var_reduction_doc(const char* op_name, const char* qu
             scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
             correction (bool, optional): Whether to apply Bessel's correction (i.e. N-1). Defaults to `True`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Subcore grids to use for the operation. Defaults to `None`, which will use all cores.
-            use_legacy (bool, optional): When True, uses the legacy two-pass implementation. When False, uses the numerically stable Welford algorithm. Defaults to `False`.
+            use_legacy (bool, optional): Deprecated and non-functional. The numerically stable Welford algorithm is always used. This argument is ignored and will be removed at some point. Defaults to False.
 
         Returns:
             ttnn.Tensor: the output tensor.

@@ -192,7 +192,16 @@ Tensor reduce(
     // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
-    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
+    //
+    // INT32 SFPU max/min has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
+    // W-then-H. Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
+    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX and MIN (MIN via negate).
+    const bool use_two_step_hw_sfpu_reduce = (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
+                                             (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
+                                             (reduce_math == tt::tt_metal::ReduceOpMath::MAX);
+
+    if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
+        (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
         // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());

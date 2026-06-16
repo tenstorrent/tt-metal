@@ -92,12 +92,12 @@ void process_and_sort_tiles(
 
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
+        tile_regs_commit();
 
+        tile_regs_wait();
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores);
         cb_reserve_back(cb_sorted_group_scores, 1);
-        tile_regs_commit();
-        tile_regs_wait();
         pack_tile(0, cb_sorted_group_scores);
         cb_push_back(cb_sorted_group_scores, 1);
 
@@ -130,18 +130,21 @@ void sum_top_experts_per_group(
     add_tiles_init(cb_top_experts_per_group, cb_top_experts_per_group, true);
     cb_wait_front(cb_top_experts_per_group, summed_experts_per_group);
 
-    cb_reserve_back(cb_group_summed_scores, 1);
     tile_regs_acquire();
     for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
         add_tiles(cb_top_experts_per_group, cb_top_experts_per_group, i, i + 1, 0);
     }
     tile_regs_commit();
+
+    cb_pop_front(cb_top_experts_per_group, summed_experts_per_group);
+
+    cb_reserve_back(cb_group_summed_scores, 1);
+
     tile_regs_wait();
     pack_tile(0, cb_group_summed_scores);
     tile_regs_release();
 
     cb_push_back(cb_group_summed_scores, 1);
-    cb_pop_front(cb_top_experts_per_group, summed_experts_per_group);
 }
 
 void topk_group_scores(
@@ -152,14 +155,13 @@ void topk_group_scores(
     bool ascending,
     int log_topk_groups) {
     topk_tile_init();
-    cb_reserve_back(cb_sorted_group_order, 1);
 
     // Sort single input and index tile that have already ben transposed.
-    tile_regs_acquire();
     // local sort into k groups
     cb_wait_front(cb_group_summed_scores, 1);
     cb_wait_front(cb_group_index_template, 1);
 
+    tile_regs_acquire();
     // copy scores tiles to dest reg 0 and index tiles to dest reg 2
     copy_tile_to_dst_init_short(cb_group_summed_scores);
     copy_tile(cb_group_summed_scores, 0, 0);
@@ -170,12 +172,16 @@ void topk_group_scores(
     ckernel::topk_local_sort(0, (int)ascending, log_topk_groups);
 
     tile_regs_commit();
+
+    cb_pop_front(cb_group_summed_scores, 1);
+    // don't pop group indices as it gets reused for the next tile heights
+
+    cb_reserve_back(cb_sorted_group_order, 1);
+
     tile_regs_wait();
     // pack index tile into cb_sorted_group_order
     pack_reconfig_data_format(cb_sorted_group_order);
     pack_tile(2, cb_sorted_group_order);
-    cb_pop_front(cb_group_summed_scores, 1);
-    // don't pop group indices as it gets reused for the next tile heights
     tile_regs_release();
 
     cb_push_back(cb_sorted_group_order, 1);
@@ -186,18 +192,21 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     transpose_wh_init_short(input_cb_index);
     pack_reconfig_data_format(output_cb_index);
     for (uint32_t i = 0; i < tiles; i++) {
-        tile_regs_acquire();
         cb_wait_front(input_cb_index, 1);
+
+        tile_regs_acquire();
         transpose_wh_tile(input_cb_index, 0, 0);
         tile_regs_commit();
-        tile_regs_wait();
-        cb_reserve_back(output_cb_index, 1);
-
-        pack_tile(0, output_cb_index);
-        tile_regs_release();
-        cb_push_back(output_cb_index, 1);
 
         cb_pop_front(input_cb_index, 1);
+
+        cb_reserve_back(output_cb_index, 1);
+
+        tile_regs_wait();
+        pack_tile(0, output_cb_index);
+        tile_regs_release();
+
+        cb_push_back(output_cb_index, 1);
     }
 }
 
@@ -215,9 +224,10 @@ void topk(
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
     topk_tile_init();
-    tile_regs_acquire();
     cb_wait_front(cb_winning_group_scores, tiles);
     cb_wait_front(cb_winning_group_indices, tiles);
+
+    tile_regs_acquire();
     // local sort first two tiles:
 
     // transpose and unpack into dest regs
@@ -251,42 +261,46 @@ void topk(
     }
     ckernel::topk_rebuild(0, (int)ascending, 0, 32, 5, true);
     tile_regs_commit();
-    tile_regs_wait();
-    cb_reserve_back(cb_final_indices_transposed, 1);
-    pack_reconfig_data_format(cb_final_indices_transposed);
-    pack_tile(2, cb_final_indices_transposed);
-    tile_regs_release();
-    cb_push_back(cb_final_indices_transposed, 1);
-
-    transpose_and_pack(cb_final_indices_transposed, cb_out_indices, 1);
 
     cb_pop_front(cb_winning_group_scores, tiles);
     cb_pop_front(cb_winning_group_indices, tiles);
+
+    cb_reserve_back(cb_final_indices_transposed, 1);
+
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_final_indices_transposed);
+    pack_tile(2, cb_final_indices_transposed);
+    tile_regs_release();
+
+    cb_push_back(cb_final_indices_transposed, 1);
+
+    transpose_and_pack(cb_final_indices_transposed, cb_out_indices, 1);
 }
 
-void normalize_scores(
-    const uint32_t cb_gathered_sigmoid,
-    const uint32_t cb_reduce_ones_scalar,
-    const uint32_t cb_reduce_intermediate,
-    const uint32_t cb_reciprocal_sums,
-    const uint32_t cb_epsilon_scalar,
-    const uint32_t cb_normalized_scores) {
+template <
+    uint32_t cb_gathered_sigmoid,
+    uint32_t cb_reduce_ones_scalar,
+    uint32_t cb_reduce_intermediate,
+    uint32_t cb_reciprocal_sums,
+    uint32_t cb_epsilon_scalar,
+    uint32_t cb_normalized_scores>
+void normalize_scores() {
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    compute_kernel_lib::
-        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-            cb_gathered_sigmoid,
-            cb_reduce_ones_scalar,
-            cb_reduce_intermediate,
-            compute_kernel_lib::ReduceInputBlockShape::single());
+    compute_kernel_lib::reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        cb_gathered_sigmoid,
+        cb_reduce_ones_scalar,
+        cb_reduce_intermediate,
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(compute_kernel_lib::ReduceInputBlockShape::single());
 
     // 2. Add epsilon to intermediate results
-    tile_regs_acquire();
     cb_wait_front(cb_epsilon_scalar, 1);
     cb_wait_front(cb_reduce_intermediate, 1);
 
     reconfig_data_format(cb_reduce_intermediate, cb_epsilon_scalar);
-    pack_reconfig_data_format(cb_reciprocal_sums);
 
+    tile_regs_acquire();
     add_bcast_scalar_init_short(cb_reduce_intermediate, cb_epsilon_scalar);
     add_tiles_bcast<BroadcastType::SCALAR>(cb_reduce_intermediate, cb_epsilon_scalar, 0, 0, 0);
 
@@ -297,28 +311,35 @@ void normalize_scores(
 
     cb_pop_front(cb_reduce_intermediate, 1);
 
+    cb_reserve_back(cb_reciprocal_sums, 1);
+
     // 5. Pack reciprocals
     tile_regs_wait();
-    cb_reserve_back(cb_reciprocal_sums, 1);
+    pack_reconfig_data_format(cb_reciprocal_sums);
     pack_tile(0, cb_reciprocal_sums);
-    cb_push_back(cb_reciprocal_sums, 1);
     tile_regs_release();
 
+    cb_push_back(cb_reciprocal_sums, 1);
+
     // 6. Broadcast multiply
-    tile_regs_acquire();
     cb_wait_front(cb_reciprocal_sums, 1);
+
+    tile_regs_acquire();
     mul_bcast_cols_init_short(cb_gathered_sigmoid, cb_reciprocal_sums);
     mul_tiles_bcast<BroadcastType::COL>(cb_gathered_sigmoid, cb_reciprocal_sums, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     tile_regs_commit();
+
     cb_pop_front(cb_reciprocal_sums, 1);
     cb_pop_front(cb_gathered_sigmoid, 1);
 
-    tile_regs_wait();
     cb_reserve_back(cb_normalized_scores, 1);
+
+    tile_regs_wait();
     pack_reconfig_data_format(cb_normalized_scores);
     pack_tile(0, cb_normalized_scores);
-    cb_push_back(cb_normalized_scores, 1);
     tile_regs_release();
+
+    cb_push_back(cb_normalized_scores, 1);
 }
 
 void scale(const uint32_t cb_normalized_scores, const uint32_t cb_route_scale_scalar, const uint32_t cb_out_weights) {
@@ -327,17 +348,18 @@ void scale(const uint32_t cb_normalized_scores, const uint32_t cb_route_scale_sc
     mul_tiles_bcast_scalar_init_short(cb_normalized_scores, cb_route_scale_scalar);
 
     tile_regs_acquire();
-
     mul_tiles_bcast<BroadcastType::SCALAR>(cb_normalized_scores, cb_route_scale_scalar, 0, 0, 0);
     tile_regs_commit();
 
+    cb_pop_front(cb_normalized_scores, 1);
+
     cb_reserve_back(cb_out_weights, 1);
+
     tile_regs_wait();
     pack_tile(0, cb_out_weights);
-    cb_push_back(cb_out_weights, 1);
     tile_regs_release();
 
-    cb_pop_front(cb_normalized_scores, 1);
+    cb_push_back(cb_out_weights, 1);
 }
 
 }  // namespace blocks
@@ -418,13 +440,13 @@ void kernel_main() {
             log_topk_groups,
             n_activated_experts,
             log_n_activated_experts);
-        blocks::normalize_scores(
+        blocks::normalize_scores<
             cb_gathered_sigmoid,
             cb_reduce_ones_scalar,
             cb_reduce_intermediate,
             cb_reciprocal_sums,
             cb_epsilon_scalar,
-            cb_normalized_scores);
+            cb_normalized_scores>();
         blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
     }
 }
