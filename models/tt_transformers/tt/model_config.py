@@ -596,7 +596,7 @@ class ModelArgs:
 
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
-
+        # TODO: Enable batched_prefill once this is fixed: https://github.com/tenstorrent/tt-metal/issues/47238
         # Qwen3-32B prefill logits are batch-variant on multi-chip Blackhole: the
         # float-reduction order in the prefill matmul/attention depends on the
         # batched-token count, so identical same-seed requests that land in
