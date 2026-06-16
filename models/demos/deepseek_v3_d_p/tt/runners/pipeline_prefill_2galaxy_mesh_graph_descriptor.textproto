@@ -46,10 +46,14 @@ pinnings {
   physical_asic_position { tray_id: 1 asic_location: 1 }
 }
 
-# Group the two meshes with no connections -> independent meshes (host transport only).
+# One FABRIC graph holding the two meshes with NO connections: each galaxy trains only its
+# own intra-mesh 8x4 fabric, there is no inter-galaxy fabric, and cross-rank activations go
+# host->host. MGD 1.0 requires the single top graph to be type FABRIC
+# (mesh_graph_descriptor.cpp validate_graph_topology_and_connections) but requires no
+# connections — a connectionless multi-mesh graph is the correct independent-galaxy topology.
 graph_descriptors {
   name: "G0"
-  type: "POD"
+  type: "FABRIC"
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
 }
