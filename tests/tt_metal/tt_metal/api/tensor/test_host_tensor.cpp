@@ -338,9 +338,9 @@ TEST(HostTensorPadTest, PadUint32FillsCorrectValue) {
     EXPECT_EQ(data[3], 42u);
 }
 
-TEST(HostTensorPadTest, PadDefaultValueIsZero) {
+TEST(HostTensorPadTest, PadZeroFill) {
     auto t = make_tensor<float>({5.0f}, Shape{1, 1}, DataType::FLOAT32);
-    auto padded = pad<float>(t, Shape{1, 4}, Shape{0, 0});
+    auto padded = pad<float>(t, Shape{1, 4}, Shape{0, 0}, 0.0f);
     auto data = padded.to_vector<float>();
     ASSERT_EQ(data.size(), 4u);
     EXPECT_FLOAT_EQ(data[1], 0.0f);
@@ -367,10 +367,10 @@ TEST(HostTensorPadToTileTest, PadToTileFloat32ShapeAndFill) {
     }
 }
 
-TEST(HostTensorPadToTileTest, PadToTileDefaultValueIsZero) {
+TEST(HostTensorPadToTileTest, PadToTileZeroFill) {
     std::vector<float> data(4, 7.0f);
     auto t = make_tensor<float>(data, Shape{1, 4}, DataType::FLOAT32);
-    auto padded = pad_to_tile<float>(t);
+    auto padded = pad_to_tile<float>(t, 0.0f);
     auto out = padded.to_vector<float>();
     ASSERT_EQ(out.size(), 32u);
     EXPECT_FLOAT_EQ(out[4], 0.0f);

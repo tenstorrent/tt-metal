@@ -130,12 +130,12 @@ HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 
 template <typename T>
 HostTensor pad(
-    const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, T pad_value = T{});
+    const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, T pad_value);
 
 HostTensor unpad(const HostTensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
 
 template <typename T>
-HostTensor pad_to_tile(const HostTensor& input_tensor, T pad_value = T{});
+HostTensor pad_to_tile(const HostTensor& input_tensor, T pad_value);
 
 HostTensor unpad_from_tile(const HostTensor& input_tensor, const Shape& output_tensor_shape);
 
