@@ -67,8 +67,9 @@ void pack_first_op_scalars(
                 if (input_dtype == DataType::BFLOAT16) {
                     if (eps <= 0.5f) {
                         const float eps_bf = static_cast<float>(bfloat16(eps));
-                        lo = static_cast<float>(bfloat16(std::min(eps_bf, 1.0f - eps_bf)));
-                        hi = static_cast<float>(bfloat16(std::max(eps_bf, 1.0f - eps_bf)));
+                        const float one_minus_eps_bf = 1.0f - eps_bf;
+                        lo = static_cast<float>(bfloat16(std::min(eps_bf, one_minus_eps_bf)));
+                        hi = static_cast<float>(bfloat16(std::max(eps_bf, one_minus_eps_bf)));
                     } else {
                         lo = static_cast<float>(bfloat16(lo));
                         hi = static_cast<float>(bfloat16(hi));
