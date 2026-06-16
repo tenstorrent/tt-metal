@@ -6,6 +6,7 @@
 import pytest
 import torch
 from diffusers import LMSDiscreteScheduler
+from loguru import logger
 from tqdm.auto import tqdm
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -19,7 +20,7 @@ from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs im
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -149,4 +150,7 @@ def test_unet_2d_condition_model_512x512(
         signpost(header="stop")
 
     ttnn_output = ttnn.to_torch(ttnn_output)
+    # Log the achieved PCC on every run (pass or fail) to aid triage of borderline/flaky runs.
+    pcc_passed, pcc_message = comp_pcc(torch_output, ttnn_output, 0.995)
+    logger.info(f"UNet2D 512x512 PCC: {pcc_message} (passed={pcc_passed}, threshold=0.995)")
     assert_with_pcc(torch_output, ttnn_output, 0.995)
