@@ -223,31 +223,14 @@ constexpr const char* tensor_shape_dim_name(const std::uint8_t dim)
 // preserving the host-side parser contract. The table covers the 20 valid shapes
 // plus slack for out-of-bounds regressions.
 #define LLK_DPRINT_DEDUP_MAX 32
-#define LLK_DPRINT_TENSOR_SHAPE(fn, ts)                                                                                                                     \
-    do                                                                                                                                                      \
-    {                                                                                                                                                       \
-        static std::uint32_t _llk_dprint_seen[LLK_DPRINT_DEDUP_MAX] = {0};                                                                                  \
-        static std::uint8_t _llk_dprint_count                       = 0;                                                                                    \
-        const std::uint32_t _llk_dprint_key = (static_cast<std::uint32_t>((ts).face_r_dim) << 24) | (static_cast<std::uint32_t>((ts).face_c_dim) << 16) |   \
-                                              (static_cast<std::uint32_t>((ts).num_faces_r_dim) << 8) | (static_cast<std::uint32_t>((ts).num_faces_c_dim)); \
-        bool _llk_dprint_already_seen = false;                                                                                                              \
-        for (std::uint8_t _llk_dprint_i = 0; _llk_dprint_i < _llk_dprint_count; ++_llk_dprint_i)                                                            \
-        {                                                                                                                                                   \
-            if (_llk_dprint_seen[_llk_dprint_i] == _llk_dprint_key)                                                                                         \
-            {                                                                                                                                               \
-                _llk_dprint_already_seen = true;                                                                                                            \
-                break;                                                                                                                                      \
-            }                                                                                                                                               \
-        }                                                                                                                                                   \
-        if (!_llk_dprint_already_seen && _llk_dprint_count < LLK_DPRINT_DEDUP_MAX)                                                                          \
-        {                                                                                                                                                   \
-            _llk_dprint_seen[_llk_dprint_count++] = _llk_dprint_key;                                                                                        \
-            LLK_DPRINT_TENSOR_SHAPE_EMIT_(fn, ts);                                                                                                          \
-            if (!::ckernel::coverage::is_tensor_shape_covered(fn, ts))                                                                                      \
-            {                                                                                                                                               \
-                ::ckernel::assert_tensor_shape_unobserved_();                                                                                               \
-            }                                                                                                                                               \
-        }                                                                                                                                                   \
+#define LLK_DPRINT_TENSOR_SHAPE(fn, ts)                            \
+    do                                                             \
+    {                                                              \
+        if (!::ckernel::coverage::is_tensor_shape_covered(fn, ts)) \
+        {                                                          \
+            LLK_DPRINT_TENSOR_SHAPE_EMIT_(fn, ts);                 \
+            ::ckernel::assert_tensor_shape_unobserved_();          \
+        }                                                          \
     } while (0)
 
 #else
