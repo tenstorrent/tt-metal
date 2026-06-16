@@ -52,7 +52,7 @@ def run_bert_question_and_answering_inference(
     iterations,
 ):
     model = str(model_location_generator(model_name, model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model)
     hugging_face_reference_model.eval()
 
     # set up tokenizer
@@ -75,7 +75,7 @@ def run_bert_question_and_answering_inference(
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name, torchscript=False
+            model_name
         ).eval(),
         custom_preprocessor=bert.custom_preprocessor,
         device=device,
@@ -185,7 +185,7 @@ def run_bert_question_and_answering_inference_squad_v2(
     n_iterations,
 ):
     model = str(model_location_generator(model_name, model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model)
     hugging_face_reference_model.eval()
 
     # set up tokenizer
@@ -206,7 +206,7 @@ def run_bert_question_and_answering_inference_squad_v2(
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name, torchscript=False
+            model_name
         ).eval(),
         custom_preprocessor=bert.custom_preprocessor,
         device=device,

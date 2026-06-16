@@ -46,7 +46,7 @@ def run_perf_bert11(
     second_run_accum_key = "second_run_accum"
     cpu_key = "ref_key"
 
-    HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False, low_cpu_mem_usage=True)
+    HF_model = BertForQuestionAnswering.from_pretrained(model_name, low_cpu_mem_usage=True)
     HF_model.eval()
     tt_model = TtBertBatchDram(
         HF_model.config,

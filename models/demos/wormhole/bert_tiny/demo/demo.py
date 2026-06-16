@@ -48,7 +48,7 @@ def run_bert_question_and_answering_inference(
     input_path,
 ):
     model = str(model_location_generator(model_name, model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model)
     pytorch_model = hugging_face_reference_model.eval()
 
     tokenizer_name = str(model_location_generator(model_name, model_subdir="Bert"))
@@ -164,7 +164,7 @@ def run_bert_question_and_answering_inference_squad_v2(
     n_iterations,
 ):
     model = str(model_location_generator(model_name, model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model)
     pytorch_model = hugging_face_reference_model.eval()
 
     # set up tokenizer

@@ -56,7 +56,7 @@ def run_bert_question_and_answering_inference_squadv2(
 
     # set up huggingface model - TT model will use weights from this model
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
     hugging_face_reference_model.eval()
 
     # set up tokenizer
@@ -182,7 +182,7 @@ def run_bert_question_and_answering_inference(
 
     # set up huggingface model - TT model will use weights from this model
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
     hugging_face_reference_model.eval()
 
     # set up tokenizer

@@ -189,6 +189,7 @@ def get_logits_processor(input_ids, config):
 
 def run_generate(input_sentance, run_tt_model, device):
     tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
+    # NOTE(transformers-5.x): `torchscript=` was removed from transformers configs in 5.x; drop it (a default no-op) when running this experimental model under 5.x.
     hf_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hf_reference_model.eval()
 

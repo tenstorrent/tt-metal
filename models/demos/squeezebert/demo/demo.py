@@ -48,7 +48,7 @@ def run_squeezebert_question_and_answering_inference(
     squeezebert,
     input_path,
 ):
-    hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
 
@@ -162,7 +162,7 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
     squeezebert,
     n_iterations,
 ):
-    hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
 
