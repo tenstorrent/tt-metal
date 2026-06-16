@@ -864,13 +864,15 @@ std::string get_ubb(IDevice* device) {
 
 std::string get_locinfo(IDevice* sdev, CoreCoord score, IDevice* rdev, CoreCoord rcore, DataMovementProcessor proc) {
     return fmt::format(
-        "sdev: [{} ({})], rdev: [{} ({})]"
+        "sdev: [{} ({}), {}], rdev: [{} ({}), {}]"
         ", score: [{}], rcore: [{}]"
         ", processor: [{}], link: [{}]",
         sdev->id(),
         pci_bdf_for_device_id(sdev->id()),
+        get_ubb(sdev),
         rdev->id(),
         pci_bdf_for_device_id(rdev->id()),
+        get_ubb(rdev),
         score,
         rcore,
         proc,
