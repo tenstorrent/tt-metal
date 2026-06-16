@@ -75,7 +75,7 @@ def test_get_moe_tilize_drain_core_structural(device):
     combine_set = {(c.x, c.y) for c in cores}
     assert (drain_core.x, drain_core.y) not in combine_set, "drain core must not overlap combine cores"
 
-    assert drain_core.y >= grid.y - 2, "drain core should be in the bottom two worker rows (tilize region)"
+    assert drain_core.y >= grid.y - 2, "drain core should be in the top two worker rows (tilize region)"
 
 
 def test_get_moe_combine_cores_avoids_mux_cores(device):

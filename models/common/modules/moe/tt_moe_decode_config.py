@@ -401,11 +401,10 @@ class BuffersConfig(_TTOpKwargs):
     hidden_size: int
     effective_experts_k: int
     shard_dim: int = 0
-    # Tilize drain core for the MoE compute op.  When None (default),
-    # TTMoEDecode.__init__() resolves it dynamically via the C++
-    # ttnn.experimental.get_moe_tilize_drain_core() placement API, which accounts
-    # for the actual device grid, mux exclusion zones, and hidden-size-dependent
-    # core layout.  Callers can still pin an explicit core.
+    # Tilize drain core for the MoE compute op.  Must be None (default); TTMoEDecode
+    # resolves it dynamically via ttnn.experimental.get_moe_tilize_drain_core(), which
+    # accounts for the actual device grid, mux exclusion zones, and hidden-size-dependent
+    # core layout.  Pinning an explicit core is not supported.
     compute_tilize_drain_core: Optional[CoreCoord] = None
 
     @classmethod

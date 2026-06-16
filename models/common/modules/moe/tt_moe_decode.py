@@ -729,6 +729,10 @@ class TTMoEDecode:
                 config.hidden_size,
                 mux_core_range_set=config.compute.mux_core_range_set,
             )
+        else:
+            raise ValueError(
+                "compute_tilize_drain_core is not user-configurable; omit it to resolve dynamically at runtime"
+            )
         self.buffers = _TTMoEDecodeBuffers(mesh_device, **buffers_dict)
 
     @property
