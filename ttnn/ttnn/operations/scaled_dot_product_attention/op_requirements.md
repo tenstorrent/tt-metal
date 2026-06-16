@@ -147,7 +147,7 @@ subtle part — verify against the `47`/`50`/`100`/`33` non-aligned INPUTS.
 `Q1x1x47x64`, `Q1x12x33x50`) move from `xfail_expected` to `supported_pass`
 (minus any bf8b+non-aligned cells parked in EXCLUSIONS), no `xpass_drift`.
 
-### [ ] Refinement 4 — fp32 L1 budget: bound per-core CB footprint for D=1024
+### [x] Refinement 4 — fp32 L1 budget: bound per-core CB footprint for D=1024
 
 **Goal**: fp32 input @ `D=1024` (`d_t=32`) OOMs L1 — the input CBs
 (`cb_q_in/k_in/v_in`, sized `2*d_t` pages) plus the fp32 accumulators

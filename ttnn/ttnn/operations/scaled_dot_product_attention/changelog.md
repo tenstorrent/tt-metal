@@ -176,3 +176,41 @@
   zero partial scaler yields max(·,0), not −inf). Same intent, simpler.
 - **Tests added**: `test_scaled_dot_product_attention_non_aligned.py`
   (`test_non_aligned` 80 cases + `test_bfloat8_b_w_non_aligned_excluded`).
+
+## Refinement 4 — fp32 L1 budget: bound per-core CB footprint for D=1024
+- **Date**: 2026-06-16
+- **What was done**: The input/output CBs (`cb_q_in/k_in/v_in/cb_out`, sized
+  `io_factor*d_t` pages) and the fp32 accumulators (`cb_o/cb_pv/cb_o_resc/cb_q`,
+  `d_t` pages each) all **scale with `d_t`**. With fp32 tiles (4 KB) at D=1024
+  (`d_t=32`) the double-buffered (`io_factor=2`) footprint is ~1.58 MB, over the
+  1.5 MB L1 budget → `RuntimeError: circular buffers grow beyond max L1 size`
+  (program.cpp). Added a host-side `_footprint(io_factor)` projection in
+  `scaled_dot_product_attention_program_descriptor.py`: when the double-buffered
+  layout would exceed `L1_BUDGET - 64 KB`, drop the input/output double-buffer
+  (`io_factor 2 → 1`), removing a `d_t`-scaling term and bringing D=1024 fp32 to
+  ~1.04 MB (~400 KB headroom). This is the §9 host-dispatch pattern: shapes that
+  fit keep their reader↔compute pipelining double-buffer (no perf regression);
+  only the over-budget large-D fp32 shapes single-buffer. The verifier's
+  explicitly-offered "drop input-CB double-buffer for fp32" lever — chosen over a
+  full head-dim chunking rewrite (which would risk all 674+ passing golden cells
+  and is unnecessary since D≤1024 in every real workload per feature_spec.py).
+- **Accuracy achieved**: PCC ≥ 0.99 (gate) on D=1024 fp32 {none,custom} ×
+  {auto,explicit} (HiFi4 + fp32_dest_acc_en=True default); D=512 fp32 control +
+  bf16 D=1024 regression guard also pass.
+- **Golden test progress**: D=1024 slice (`-k 128x1024`) **30 passed, 6 xfailed,
+  0 failures, 0 xpass_drift**. The 4 `Q1x1x128x1024_KV1x1x128x1024 × {fp32,
+  acc=True} × {none,custom} × {auto,explicit}` cells flipped from
+  `RuntimeError` (OOM) to passing; the 6 xfails are the pre-existing bf8b +
+  fp32-acc=False EXCLUSIONS. Acceptance suite 24/24 green.
+- **Issues encountered**: None. The double-buffer footprint math predicted the
+  fit exactly (1.58 MB → 1.04 MB) and D=1024 fp32 passed on the first device run.
+- **Known boundary (not a regression, out of golden scope)**: the footprint
+  still scales with `d_t` — `io_factor=1` cannot save D≥2048 fp32 (the
+  `d_t`-scaling accumulators `cb_o/cb_pv/cb_o_resc/cb_q` alone would exceed the
+  budget). A true constant-bounded kernel would require head-dim chunking of the
+  online-softmax recurrence (chunked QK^T K-blocking + per-output-block PV).
+  D≤1024 in every real workload (feature_spec.py note), so no golden cell hits
+  this; not filed as a follow-up.
+- **Tests added**: `test_scaled_dot_product_attention_l1_budget.py`
+  (`test_fp32_large_d_no_oom` 4 cases, `test_fp32_large_d_custom_mask` 2 cases,
+  `test_bf16_large_d_still_works`). 7 cases, all pass (--dev + non-dev).

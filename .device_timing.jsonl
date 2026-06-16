@@ -77,3 +77,4 @@
 {"source":"run_safe_pytest","pid":222966,"started_at_ms":1781643655150,"wait_ms":1,"run_ms":14252,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_l1_budget.py","exit_code":0}
 {"source":"run_safe_pytest","pid":223557,"started_at_ms":1781643674339,"wait_ms":1,"run_ms":13399,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_l1_budget.py","exit_code":0}
 {"source":"run_safe_pytest","pid":224157,"started_at_ms":1781643702598,"wait_ms":2,"run_ms":8740,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
+{"source":"run_safe_pytest","pid":225068,"started_at_ms":1781643737405,"wait_ms":2,"run_ms":56705,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":0}
