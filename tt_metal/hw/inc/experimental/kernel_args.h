@@ -42,7 +42,9 @@
 #endif
 
 // TT_KERNEL: marks the named-arg entry point; the JIT generates kernel_main() from its signature.
-#define TT_KERNEL FORCE_INLINE
+// `static` gives the entry internal linkage (it is private to the kernel TU — only the generated
+// kernel_main() shim, in the same TU, ever calls it); FORCE_INLINE folds it into that shim.
+#define TT_KERNEL static FORCE_INLINE
 
 namespace experimental {
 
