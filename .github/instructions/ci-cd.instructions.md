@@ -26,6 +26,38 @@ excludeAgent: "cloud-agent"
 - Step names should be descriptive enough to identify failures in the GitHub UI without opening logs.
 - `timeout-minutes` on any job that could hang (hardware-in-loop tests, long compile steps).
 
+## Test Yaml Validation (`tests/pipeline_reorg/`)
+
+Test yamls define what runs in CI. Every test entry must include all required keys:
+
+| Key | Purpose |
+|-----|---------|
+| `name` | Display name in GitHub Actions UI |
+| `cmd` | Exact command to run |
+| `sku` | Machine type target — must match an entry in `.github/sku_config.yaml` |
+| `owner_id` | Slack user ID for failure notification |
+| `team` | Owning team (used for time budget allocation) |
+| `timeout` | Maximum job runtime in minutes |
+
+Flag any test entry missing a required key, or using a `sku` value not defined in `sku_config.yaml`.
+
+## Pipeline Level Semantics
+
+Tests must be placed in the pipeline matching their intent and runtime:
+
+| Level | Intent | Runtime expectation |
+|-------|--------|-------------------|
+| `smoke` | Basic functionality sanity on merge attempt | Seconds (< 1 min per test) |
+| `sanity` | Happy-path coverage, post-commit | Short (< 5 min per test) |
+| `unit` | Single component (one op, one module) | Short |
+| `integration` | Multiple components interacting | Medium |
+| `e2e` | End-to-end system | Long |
+| `performance` | Perf measurement (performance mode enabled) | Variable |
+| `stress` | Repeated execution, no perf measurement | Long, infrequent |
+| `sweep` | Parameter sweep/schmoo | Very long, infrequent |
+
+Flag a test that violates its pipeline's runtime contract (e.g., a 10-minute test in a `smoke` yaml).
+
 ## Review Checklist
 
 - [ ] All `uses:` pinned to full SHA with version comment
@@ -33,3 +65,6 @@ excludeAgent: "cloud-agent"
 - [ ] `permissions:` block present and minimal
 - [ ] `time_budget.yaml` changes justified
 - [ ] `fetch-depth: 1` unless full history required
+- [ ] Test yaml entries have all required keys (`name`, `cmd`, `sku`, `owner_id`, `team`, `timeout`)
+- [ ] `sku` values match `.github/sku_config.yaml`
+- [ ] Tests are in a pipeline level appropriate for their runtime
