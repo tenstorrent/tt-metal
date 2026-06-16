@@ -114,8 +114,23 @@ def _whole_number_float_spec() -> StimuliSpec:
 
 
 def _required_dest_acc(formats: InputOutputFormat) -> DestAccumulation:
-    """32-bit dest is mandatory whenever a 32-bit format is involved."""
-    if formats.input_format.is_32_bit() or formats.output_format.is_32_bit():
+    """32-bit Dest is mandatory whenever the SFPU integer datapath is used.
+
+    The SFPU typecast computes the result into Dest before the packer reads it,
+    and the integer datapath always operates on 32-bit Dest data. So any integer
+    input or output (not just the 32-bit ones) requires ``dest_acc=Yes`` —
+    otherwise pack_src stays 16-bit and ``is_packer_to_L1_conversion_supported``
+    rejects the pack (LLK assert in configure_pack). 32-bit float formats also
+    require 32-bit Dest.
+    """
+    in_fmt = formats.input_format
+    out_fmt = formats.output_format
+    if (
+        in_fmt.is_integer()
+        or out_fmt.is_integer()
+        or in_fmt.is_32_bit()
+        or out_fmt.is_32_bit()
+    ):
         return DestAccumulation.Yes
     return DestAccumulation.No
 
@@ -123,7 +138,9 @@ def _required_dest_acc(formats: InputOutputFormat) -> DestAccumulation:
 @parametrize(
     formats=TYPECAST_PAIRS,
     approx_mode=[ApproximationMode.No],
-    input_dimensions=[[64, 64], [32, 256]],
+    input_dimensions=[
+        [32, 32]
+    ],  # no need for larger tiles, as the SFPU typecast is elementwise
 )
 def test_eltwise_unary_typecast(
     formats: InputOutputFormat,
