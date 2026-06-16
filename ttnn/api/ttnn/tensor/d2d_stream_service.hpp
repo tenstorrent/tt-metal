@@ -94,6 +94,16 @@ struct D2DStreamConfig {
     // trap for a naive standalone caller. Set false when there are no competing
     // fabric ops.
     bool share_fabric_links = true;
+
+    // Max number of parallel sender lanes (fabric links) the service may use per
+    // device. The sender fans its transfer across up to this many links, one RISC +
+    // one link per lane (lane 0 = master on RISCV_0/NOC_0, lane 1 = sub on
+    // RISCV_1/NOC_1). The actual lane count per coord is
+    // min(max_sender_lanes, forwarding links sender->receiver); on Blackhole there
+    // are up to 2 links between adjacent chips. 1 = single-lane (the original
+    // behavior). Both meshes derive the same per-coord lane count from the symmetric
+    // link topology, so the receiver knows how many data-landed increments to await.
+    uint32_t max_sender_lanes = 2;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
@@ -318,6 +328,7 @@ private:
         const std::shared_ptr<distributed::MeshDevice>& mesh,
         distributed::MeshSocket socket,
         std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
+        std::map<distributed::MeshCoordinate, DeviceAddr> receiver_tensor_addrs,
         Tensor backing,
         const D2DStreamConfig& cfg);
     static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(
