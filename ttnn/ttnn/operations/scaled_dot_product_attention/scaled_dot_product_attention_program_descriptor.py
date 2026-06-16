@@ -49,9 +49,19 @@ def create_program_descriptor(
 
     total_units = B * H_q * Sq_t
 
-    tile_size = ttnn.tile_size(ttnn.bfloat16)
     q_page = query.buffer_page_size()
     out_page = output.buffer_page_size()
+
+    # Intermediate / accumulator CB format (R1 — numeric configurability).
+    # The online-softmax running statistics (cb_o, cb_l, cb_m) and the
+    # per-iteration accumulation temporaries (cb_pv, cb_o_resc, cb_scores,
+    # cb_p, cb_q, ...) must be stored in fp32 when the DEST accumulator is
+    # fp32, so the recurrence stops re-rounding to bf16 every KV-chunk.
+    # When fp32_dest_acc_en is False the DEST accumulates in 16-bit, so the
+    # intermediate carries no extra precision — keep it bf16 (never bf8b:
+    # block-float is unsuitable for accumulators). Input/output/mask CBs
+    # always follow their own tensor dtype.
+    acc_format = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
 
     scale_bits = _f32_bits(scale)
 
@@ -80,7 +90,9 @@ def create_program_descriptor(
     CB_OUT = 16
     CB_Q, CB_SCORES, CB_M_CUR, CB_M, CB_M_NEW, CB_L, CB_L_CUR, CB_CORR = 24, 25, 26, 27, 28, 29, 30, 31
 
-    def cb(index, num_pages, page_size=tile_size, data_format=ttnn.bfloat16):
+    def cb(index, num_pages, page_size=None, data_format=ttnn.bfloat16):
+        if page_size is None:
+            page_size = ttnn.tile_size(data_format)
         return ttnn.CBDescriptor(
             total_size=num_pages * page_size,
             core_ranges=all_cores,
@@ -90,28 +102,32 @@ def create_program_descriptor(
         )
 
     cbs = [
+        # Input-side CBs — follow their own tensor dtype.
         cb(CB_Q_IN, 2 * d_t, q_page, query.dtype),
         cb(CB_K_IN, 2 * d_t, q_page, key.dtype),
         cb(CB_V_IN, 2 * d_t, q_page, value.dtype),
+        # Reduce scalers — always bf16 (pool-type-aware fill in the reader).
         cb(CB_SCALER_MAX, 1),
         cb(CB_SCALER_SUM, 1),
-        cb(CB_P, 1),
-        cb(CB_O, d_t),
-        cb(CB_PV, d_t),
-        cb(CB_O_RESC, d_t),
-        cb(CB_RECIP_L, 1),
+        # Intermediate / accumulator CBs — acc_format (fp32 with fp32 DEST acc).
+        cb(CB_P, 1, data_format=acc_format),
+        cb(CB_O, d_t, data_format=acc_format),
+        cb(CB_PV, d_t, data_format=acc_format),
+        cb(CB_O_RESC, d_t, data_format=acc_format),
+        cb(CB_RECIP_L, 1, data_format=acc_format),
+        # Output-side CB — follows the output tensor dtype.
         cb(CB_OUT, 2 * d_t, out_page, output.dtype),
-        cb(CB_Q, d_t),
-        cb(CB_SCORES, 1),
-        cb(CB_M_CUR, 1),
-        cb(CB_M, 1),
-        cb(CB_M_NEW, 1),
-        cb(CB_L, 1),
-        cb(CB_L_CUR, 1),
-        cb(CB_CORR, 1),
+        cb(CB_Q, d_t, data_format=acc_format),
+        cb(CB_SCORES, 1, data_format=acc_format),
+        cb(CB_M_CUR, 1, data_format=acc_format),
+        cb(CB_M, 1, data_format=acc_format),
+        cb(CB_M_NEW, 1, data_format=acc_format),
+        cb(CB_L, 1, data_format=acc_format),
+        cb(CB_L_CUR, 1, data_format=acc_format),
+        cb(CB_CORR, 1, data_format=acc_format),
     ]
     if has_mask:
-        cbs.append(cb(CB_MASK_IN, 2, tile_size, attn_mask.dtype))
+        cbs.append(cb(CB_MASK_IN, 2, data_format=attn_mask.dtype))
 
     # --- Reader kernel ---
     reader_ct = [H_q, H_kv, Sq_t, Skv_t, d_t, group, has_mask, mask_H, mask_B]

@@ -1,0 +1,2 @@
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-06-16T18:29:33+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_precision_matrix.py::test_exclusion_fp32_no_acc + test_bfloat8_b_supported","details":"EXCLUSION raises NotImplementedError; bf8b PCC=0.9999","ts":"2026-06-16T18:33:27+00:00"}

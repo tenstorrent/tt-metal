@@ -67,7 +67,7 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
@@ -79,10 +79,15 @@ SUPPORTED = {
 
 
 # ---------------------------------------------------------------------------
-# 3. EXCLUSIONS  (Phase 0: none)
+# 3. EXCLUSIONS  (cell-shaped refusals inside cartesian(SUPPORTED))
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # float32 input (maxed precision) with 16-bit DEST accumulation is
+    # legal-but-lossy and refused — a maxed input demands the maxed DEST
+    # accumulator. (mirrors softmax; R1 numeric-formats contract).
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+]
 
 
 # ---------------------------------------------------------------------------
