@@ -268,6 +268,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Dropout
+        TTNN::Ops::Experimental::H2dSocketSync
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
@@ -538,6 +539,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tili
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce)
 add_subdirectory(cpp/ttnn/operations/experimental/tensor_prefetcher)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
+add_subdirectory(cpp/ttnn/operations/experimental/h2d_socket_sync)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
