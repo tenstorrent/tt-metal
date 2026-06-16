@@ -24,7 +24,7 @@
         "displayName": "Slim Config",
         "description": "Like Default.  But less.  And less is more.",
         "cacheVariables": {
-          "TT_METAL_BUILD_TESTS": {"value": "FALSE"},
+          "TT_METAL_BUILD_TESTS": {"value": "TRUE"},
           "TTNN_BUILD_TESTS": {"value": "FALSE"},
           "TT_UMD_BUILD_TESTS": {"value": "FALSE"},
           "TT_USE_SYSTEM_SFPI": {"value": "FALSE"},

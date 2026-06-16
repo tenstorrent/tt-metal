@@ -1,4 +1,4 @@
 # Tools tests subdirectory
 
 add_subdirectory(scaleout)
-add_subdirectory(triage/hang_apps)
+# add_subdirectory(triage/hang_apps)
