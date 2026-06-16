@@ -2077,39 +2077,25 @@ ALWI void elem_push_per_row(const E& e) {
 
 }  // namespace detail
 
-template <class... Es>
-ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
+// Shared per-tile walk used by run() and body(). `EmitMathInit`/`EmitSfpuInit` control whether
+// the per-element compute init is emitted inside the loop: run() passes `!hoist_*` (so a hoistable
+// chain emits nothing here — it was hoisted to boot — and a non-hoistable chain re-inits per tile);
+// body() passes false/false (the caller already ran hoist_init()).
+template <bool EmitMathInit, bool EmitSfpuInit, class... Es>
+ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
-
-    // ---- Compile-time invariant checks ----
-    static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
-                  "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
-    static_assert(!chain_pack_writes_collide_v<Chain>,
-                  "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
-
-    // Per-cohort hoist decisions. The dispatcher picks the most aggressive safe
-    // emission shape — math-MOP init can be hoisted at boot even when SFPU isn't
-    // uniform; the SFPU side then re-inits per tile.
-    constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
-    constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
-
     // Block size lives on the shape. The DEST footprint is block_size * chain_lane_width;
-    // the chain clamps block_size so it can never overflow DEST (see below).
+    // the chain clamps block_size so it can never overflow DEST.
     constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
     uint32_t block_size = shape.block_size;
-    // InputLifecycle::Streaming CB-reader chains can't multi-tile their DEST window (WaitAndPop /
-    // WaitNoPop / InputLifecycle::NoWaitPop consume one tile per iter). Force block_size to 1 in that
-    // case — compile-time gated, so the override path emits no code when the chain
-    // supports block-mode.
+    // InputLifecycle::Streaming CB-reader chains can't multi-tile their DEST window — force
+    // block_size to 1 (compile-time gated, so the override emits no code for block-capable chains).
     if constexpr (!chain_supports_block_v<Chain>) {
         block_size = 1;
     } else {
         // Clamp the runtime block_size to the chain's compile-time DEST capacity
-        // (chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width). block_size is a
-        // runtime field so a static_assert isn't possible; an oversized value would
-        // otherwise silently overflow DEST. Clamping down is correctness-safe — it
-        // only makes the outer loop take more iterations; total tile coverage is
-        // unchanged.
+        // (chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width). Clamping down is
+        // correctness-safe — more outer iters, same total tile coverage.
         constexpr uint32_t max_block = chain_max_block_v<Chain>;
         if (block_size > max_block) {
             block_size = max_block;
@@ -2117,25 +2103,15 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     }
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
-
-    // Pack-cohort boot init — always hoisted.
-    detail::pack_init_for_each<Es...>(IdxSeq{});
-
-    // Compute-cohort boot init — filtered per cohort.
-    detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
-
     const uint32_t Ht = shape.Ht;
     const uint32_t Wt = shape.Wt;
 
     // Upfront output reserve — fires once for the whole Ht*Wt window for the upfront-reserve
-    // policies (Bulk, BulkReservePerTile, BulkReservePerChunk), mirroring the end-of-chain
-    // push/pop folds below. Per-tile / per-chunk-reserve policies emit nothing here.
+    // policies (Bulk, BulkReservePerTile, BulkReservePerChunk), mirroring the end-of-chain folds.
     (detail::elem_reserve_upfront(elts, Ht, Wt), ...);
 
-    // Outer 2D loop. `flat_base = ht * Wt + wt_base` is computed once per (ht, wt_base)
-    // pair — single MUL on the inner-W path. Block-mode elements consume `flat_base + j`
-    // directly; bcast-mode elements read `ht` or `wt = wt_base + j` instead. No
-    // per-tile multiplication inside the element's exec.
+    // Outer 2D loop. `flat_base = ht * Wt + wt_base` is computed once per (ht, wt_base) pair.
+    // Block-mode elements consume `flat_base + j`; bcast-mode read `ht` / `wt = wt_base + j`.
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         const uint32_t row_base = ht * Wt;
         // Outer-axis streamed operands (InputLifecycle/OutputLifecycle::OuterStream): wait the
@@ -2148,8 +2124,7 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
                 (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
             const uint32_t i_flat = row_base + wt_base;
             tile_regs_acquire();
-            detail::apply_compute_phase</*EmitMathInit=*/!hoist_math,
-                                            /*EmitSfpuInit=*/!hoist_sfpu>(
+            detail::apply_compute_phase<EmitMathInit, EmitSfpuInit>(
                 IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
             tile_regs_commit();
             tile_regs_wait();
@@ -2164,6 +2139,54 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     // End-of-chain upfront-policy lifecycle.
     (detail::elem_pop_upfront_end(elts, Ht, Wt), ...);
     (detail::elem_push_at_end(elts, Ht, Wt), ...);
+}
+
+// hoist_init: emit the chain's hoistable init ONCE (pack boot init + per-element compute MOP /
+// reconfig). This is the init the chain normally re-emits at the start of every run() — exposing
+// it lets a kernel keep its own loop and lift the init out. NOT the caller's BIG hw init
+// (compute_kernel_hw_startup / unary_op_init_common), which the kernel still owns separately.
+// Requires a hoistable chain (uniform math MOP + SFPU) — else body() would drop a needed init.
+template <class... Es>
+ALWI void eltwise_chain_hoist_init_impl(Es... elts) {
+    using Chain = EltwiseChain<Es...>;
+    static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
+                  "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
+    static_assert(!chain_pack_writes_collide_v<Chain>,
+                  "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
+    static_assert(chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain>,
+                  "eltwise_chain hoist_init()/body() require a hoistable chain (uniform math MOP + "
+                  "SFPU init). Use run() for chains whose init must re-emit per tile.");
+    using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
+    detail::pack_init_for_each<Es...>(IdxSeq{});
+    detail::hoist_compute_init<true, true>(IdxSeq{}, elts...);
+}
+
+// body: the per-tile walk assuming hoist_init() already ran — emits NO init in the loop.
+template <class... Es>
+ALWI void eltwise_chain_body_impl(EltwiseShape shape, Es... elts) {
+    using Chain = EltwiseChain<Es...>;
+    static_assert(chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain>,
+                  "eltwise_chain body() requires a hoistable chain (pair with hoist_init()); use run() otherwise.");
+    chain_run_loop</*EmitMathInit=*/false, /*EmitSfpuInit=*/false>(shape, elts...);
+}
+
+// run (== prior eltwise_chain_impl): the standalone all-in-one — hoist the init, then walk. Works
+// for non-hoistable chains too (init folds into the loop per the hoist flags).
+template <class... Es>
+ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
+    using Chain = EltwiseChain<Es...>;
+    static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
+                  "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
+    static_assert(!chain_pack_writes_collide_v<Chain>,
+                  "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
+    // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
+    // uniform; the SFPU side then re-inits per tile.
+    constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
+    constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
+    using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
+    detail::pack_init_for_each<Es...>(IdxSeq{});
+    detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
+    chain_run_loop<!hoist_math, !hoist_sfpu>(shape, elts...);
 }
 
 // =============================================================================
@@ -2204,6 +2227,42 @@ template <class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     auto kept = std::tuple_cat(chain_keep(elts)...);
     chain_dispatch(shape, kept, std::make_index_sequence<std::tuple_size_v<decltype(kept)>>{});
+}
+
+// ---- Chain object (make_chain) — same std::get expansion as above (no std::apply) ----
+template <class Tup, std::size_t... I>
+ALWI void chain_dispatch_hoist_init(Tup tup, std::index_sequence<I...>) {
+    eltwise_chain_hoist_init_impl(std::get<I>(tup)...);
+}
+template <class Tup, std::size_t... I>
+ALWI void chain_dispatch_body(EltwiseShape shape, Tup tup, std::index_sequence<I...>) {
+    eltwise_chain_body_impl(shape, std::get<I>(tup)...);
+}
+
+// Compile-time chain object. Name the elements once, then either:
+//   chain.hoist_init();  for (...) chain.body(shape);   // hoist the chain init out of your loop
+//   chain.run(shape);                                   // standalone == eltwise_chain(shape, elts...)
+// Holds the kept elements by value (disabled OptionalChainElements already stripped). The BIG hw
+// init (compute_kernel_hw_startup / unary_op_init_common) stays caller-owned; hoist_init() emits
+// only the chain's own per-element MOP / pack / reconfig init.
+template <class... Es>
+struct EltwiseChainRunner {
+    std::tuple<Es...> elts;
+    static constexpr auto seq() { return std::make_index_sequence<sizeof...(Es)>{}; }
+    ALWI void hoist_init() const { chain_dispatch_hoist_init(elts, seq()); }
+    ALWI void body(EltwiseShape shape) const { chain_dispatch_body(shape, elts, seq()); }
+    ALWI void run(EltwiseShape shape) const { chain_dispatch(shape, elts, seq()); }
+};
+
+template <class... KeptEs>
+ALWI auto make_chain_from_kept(std::tuple<KeptEs...> kept) {
+    return EltwiseChainRunner<KeptEs...>{kept};
+}
+
+// Build a chain object from elements, stripping disabled OptionalChainElements (like eltwise_chain).
+template <class... Es>
+ALWI auto make_chain(Es... elts) {
+    return make_chain_from_kept(std::tuple_cat(chain_keep(elts)...));
 }
 
 // =============================================================================
