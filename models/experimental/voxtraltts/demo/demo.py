@@ -704,8 +704,13 @@ def run_demo(args: DemoArgs) -> None:
         pipe = _load_pipeline(runtime.compute_device, args)
         logger.info(f"Pipeline ready in {(perf_counter() - t0) * 1000:.1f} ms")
 
-        for w in range(args.data.warmup_iters + 1):
-            is_warmup = w < args.data.warmup_iters
+        # skip warmup when trace disabled
+        from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_enabled
+
+        warmup_iters = args.data.warmup_iters if decode_trace_enabled() else 0
+
+        for w in range(warmup_iters + 1):
+            is_warmup = w < warmup_iters
             tag = "warmup" if is_warmup else "run"
 
             for item in items:
