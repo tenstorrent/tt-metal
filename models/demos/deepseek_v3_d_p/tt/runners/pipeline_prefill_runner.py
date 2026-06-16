@@ -223,6 +223,12 @@ def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, prod
     return out
 
 
+def _subcontext_id() -> int:
+    """0 when not launched under an MPI sub-context — subcontext_id() returns None there."""
+    sub_id = ttnn.distributed_context_subcontext_id()
+    return int(sub_id) if sub_id is not None else 0
+
+
 def _transport_mode() -> str:
     mode = os.environ.get("PREFILL_PP_TRANSPORT", "host")
     if mode not in ("host", "placeholder"):
@@ -271,7 +277,7 @@ def _first_rank_chunk_tokens(runtime: TtPrefillRuntime, token_ids: list[int], kv
 
 def run_standalone_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int) -> None:
     cfg = runtime.config
-    subctx = int(ttnn.distributed_context_subcontext_id())
+    subctx = _subcontext_id()
     token_ids = _load_token_ids()
     actual_isl = len(token_ids)
     slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % cfg.num_users
@@ -353,7 +359,10 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
 
-    # tt-run pre-initializes the distributed context; bind the Python handle.
+    # tt-run launches the MPI ranks but does not stand up the distributed context;
+    # do it here before reading rank/size (idempotent across re-entry).
+    if not ttnn.distributed_context_is_initialized():
+        ttnn.init_distributed_context()
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
 

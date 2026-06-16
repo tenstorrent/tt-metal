@@ -46,6 +46,11 @@ global_env:
   # Turn on the per-rank KV-cache PCC gate (default off).
   PREFILL_STANDALONE_PCC: "1"
 
+  # 4 chunks x 5120 = 20480 tokens = the full per-user cache (max_seq_len = 4*chunk). Exercises
+  # the multi-chunk cross-host wavefront. The default (ceil(isl/chunk) for the 56320-token trace
+  # -> 11) would exceed the cache; keep this <= 4 unless PREFILL_MAX_SEQ_LEN is raised too.
+  PREFILL_STANDALONE_NCHUNKS: "4"
+
   # Everything else uses the runner's built-in defaults today: variant deepseek_v3_d_p,
   # PREFILL_SP=8 / PREFILL_TP=4 / NUM_LAYERS=61 / CHUNK_SIZE=5120 / MAX_SEQ_LEN=4*chunk /
   # NUM_USERS=2, PREFILL_PP_TRANSPORT=host, even 31/30 layer split, and the variant's HF
