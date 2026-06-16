@@ -29,7 +29,7 @@
     bh_p150b_civ2:
       timeout: 150
   owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ops
+  team: ttnn
   category: conv
 
 - name: ttnn nightly matmul tests
@@ -44,7 +44,7 @@
     bh_p150b_civ2:
       timeout: 50
   owner_id: U084B1CES7M # Borys Bradel
-  team: ops
+  team: ttnn
   category: matmul
 
 - name: ttnn nightly fused tests
@@ -59,7 +59,7 @@
     bh_p150b_civ2:
       timeout: 65
   owner_id: U084B1CES7M # Borys Bradel
-  team: ops
+  team: ttnn
   category: fused
 
 - name: ttnn nightly reduction tests
@@ -74,7 +74,7 @@
     bh_p150b_civ2:
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
-  team: ops
+  team: ttnn
   category: reduction
 
 - name: ttnn nightly experimental tests (wormhole)
@@ -86,7 +86,7 @@
     wh_n300:
       timeout: 65
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: ops
+  team: ttnn
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole)
@@ -97,7 +97,7 @@
     bh_p150b_civ2:
       timeout: 35
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: ops
+  team: ttnn
   category: experimental
 
 - name: ttnn nightly pool tests
@@ -112,7 +112,7 @@
     bh_p150b_civ2:
       timeout: 90
   owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ops
+  team: ttnn
   category: pool
 
 - name: ttnn nightly eltwise tests group 1
@@ -127,7 +127,7 @@
     bh_p150b_civ2:
       timeout: 50
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  team: ops
+  team: ttnn
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 2
@@ -142,7 +142,7 @@
     bh_p150b_civ2:
       timeout: 30
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  team: ops
+  team: ttnn
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 3
@@ -157,7 +157,7 @@
     bh_p150b_civ2:
       timeout: 30
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  team: ops
+  team: ttnn
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 4
@@ -172,7 +172,7 @@
     bh_p150b_civ2:
       timeout: 35
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  team: ops
+  team: ttnn
   category: eltwise
 
 - name: ttnn nightly transformers tests
@@ -187,7 +187,7 @@
     bh_p150b_civ2:
       timeout: 30
   owner_id: U08JFM3CFA4 # Gongyu Wang
-  team: ops
+  team: ttnn
   category: transformers
 
 - name: ttnn nightly moreh tests
@@ -202,7 +202,7 @@
     bh_p150b_civ2:
       timeout: 25
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: ops
+  team: ttnn
   category: moreh
 
 - name: ttnn nightly misc (rand and ssm) tests
@@ -217,7 +217,7 @@
     bh_p150b_civ2:
       timeout: 15
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: ops
+  team: ttnn
   category: misc
 
 - name: ttnn nightly sdpa tests
@@ -236,7 +236,7 @@
     bh_p150b_civ2:
       timeout: 90
   owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ops
+  team: ttnn
   category: sdpa
 
 - name: ttnn nightly sdpa stress tests
@@ -252,7 +252,7 @@
     bh_p150b_civ2:
       timeout: 55
   owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ops
+  team: ttnn
   category: sdpa
 
 - name: ttnn nightly data_movement tests
@@ -267,7 +267,7 @@
     bh_p150b_civ2:
       timeout: 40
   owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ops
+  team: ttnn
   category: data_movement
 
 - name: ttnn nightly data_movement ccl tests group 1
@@ -284,7 +284,7 @@
     bh_p150b_civ2:
       timeout: 35
   owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ops
+  team: ttnn
   category: data_movement
 
 - name: ttnn nightly data_movement ccl tests group 2
@@ -299,7 +299,7 @@
     bh_p150b_civ2:
       timeout: 35
   owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ops
+  team: ttnn
   category: data_movement
 
 - name: ttnn nightly data_movement ccl tests group 3
@@ -314,7 +314,7 @@
     bh_p150b_civ2:
       timeout: 35
   owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ops
+  team: ttnn
   category: data_movement
 
 - name: ttnn nightly docs examples tests
@@ -330,7 +330,7 @@
     bh_p150b_civ2_viommu:
       timeout: 20
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: ops
+  team: ttnn
   category: docs_examples
 
 # --- C++ ttnn unit tests ---
@@ -347,7 +347,7 @@
     bh_p150b_civ2_viommu:
       timeout: 45
   owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ops
+  team: ttnn
   category: cpp_accessor
 
 - name: Nightly TTNN university lab examples
@@ -362,5 +362,5 @@
     bh_p150b_civ2_viommu:
       timeout: 45
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: ops
+  team: ttnn
   category: cpp_lab_examples

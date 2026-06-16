@@ -1,9 +1,12 @@
-name: "[internal] ttnn cnn unit tests impl"
+name: "[internal] ttsim unit tests impl"
 
 on:
   workflow_call:
     inputs:
       docker-image:
+        required: true
+        type: string
+      build-artifact-name:
         required: true
         type: string
       wheel-artifact-name:
@@ -12,14 +15,17 @@ on:
       enabled-skus:
         required: true
         type: string
+        description: "Comma-separated SKUs (see .github/sku_config.yaml)."
       additional_test_categories:
         required: false
         type: string
         default: ''
-      enable-watcher:
+        description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
+      ttsim-version:
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: "v1.4.6"
+        description: "Tag of the tenstorrent/ttsim release to download the libttsim_<arch>.so binary from."
       enable-llk-asserts:
         required: false
         type: boolean
@@ -31,7 +37,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_cnn_unit_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_unit_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -69,9 +75,36 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-  cnn-unit-tests:
+  fetch-ttsim:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download wormhole_b0 ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: libttsim_wh.so
+          out-file-path: /tmp/ttsim
+      - name: Download blackhole ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: libttsim_bh.so
+          out-file-path: /tmp/ttsim
+      - name: Upload ttsim binaries artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ttsim-binaries
+          path: /tmp/ttsim/
+          if-no-files-found: error
+          retention-days: 1
+
+  ttsim-unit-tests:
+    needs: [load-test-matrix, fetch-ttsim]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && needs.fetch-ttsim.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -81,14 +114,14 @@ jobs:
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
-        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
-        LOGURU_LEVEL: INFO
-        TT_LOGGER_LEVEL: warn
+        TT_METAL_HOME: /work
         PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'blackhole') && 'blackhole' || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: "--label runner-mode=sim"
     defaults:
       run:
         shell: bash
@@ -96,7 +129,6 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -104,9 +136,14 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher || false }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      - name: ⬇️  Setup TTSim
+        uses: ./docker-job/.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ matrix.test-group.sku }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

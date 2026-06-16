@@ -1,4 +1,4 @@
-# This file defines the test matrix for the ops integration tests pipeline.
+# This file defines the test matrix for the ttsim unit tests pipeline.
 
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -13,15 +13,19 @@
 #     category appears in the comma-separated list; on schedule the filter is
 #     bypassed and every entry runs.
 
+# Entries use sim_<arch> SKUs (sim_wormhole_b0, sim_blackhole) and run under
+# the ttsim simulator on ubuntu-latest; the impl invokes setup-ttsim.
+# See .github/actions/setup-ttsim/action.yml.
+
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: ttnn ops docs check
-  # Verifies every TTNN op registered in the codebase has a documentation
-  # entry in the API reference.
-  cmd: 'python3 scripts/detect_undocumented_ttnn_ops.py'
+- name: ttnn compute-fused validation tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=600'
   skus:
-    wh_n150_civ2:
-      timeout: 30
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: ttnn
-  category: ops_docs_check
+    sim_wormhole_b0:
+      timeout: 15
+    sim_blackhole:
+      timeout: 15
+  owner_id: U076Z1JJUQZ # Edwin Lee
+  team: ttsim
+  category: compute_fused

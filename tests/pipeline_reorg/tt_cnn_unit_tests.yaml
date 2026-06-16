@@ -21,7 +21,7 @@
     wh_n150_civ2:
       timeout: 10
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: cnn
+  team: ttnn
   category: cnn_pipeline
 
 - name: tt-cnn builder unit tests
@@ -30,5 +30,5 @@
     wh_n150_civ2:
       timeout: 10
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  team: cnn
+  team: ttnn
   category: cnn_builder

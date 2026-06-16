@@ -2,9 +2,10 @@
 #
 # After the ttnn-team reorg, the 22 ttnn ops entries that used to live here
 # moved to ops_unit_tests.yaml / ops_integration_tests.yaml /
-# ttnn_integration_tests.yaml / cnn_unit_tests.yaml. This file retains the
-# models (sdxl), tt-train, and ttsim entries that still need an l2-budgeted
-# home until those teams reorg their own buckets.
+# ttnn_integration_tests.yaml / tt_cnn_unit_tests.yaml. The ttsim
+# compute-fused entry moved to ttsim_unit_tests.yaml. This file retains the
+# models (sdxl) and tt-train entries that still need an l2-budgeted home
+# until those teams reorg their own buckets.
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -18,10 +19,6 @@
 #     dispatch input. On dispatch the impl filters this matrix to entries whose
 #     category appears in the comma-separated list; on schedule the filter is
 #     bypassed and every entry runs.
-#
-# Entries using sim_<arch> SKUs (sim_wormhole_b0, sim_blackhole) run under the
-# ttsim simulator on ubuntu-latest; the impl invokes setup-ttsim on those.
-# See .github/actions/setup-ttsim/action.yml.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
 

@@ -5,11 +5,16 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
-      architecture:
-        description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
+      run_wormhole:
+        description: "Run wormhole tests"
         required: false
-        type: string
-        default: '["blackhole", "wormhole_b0"]'
+        type: boolean
+        default: true
+      run_blackhole:
+        description: "Run blackhole tests"
+        required: false
+        type: boolean
+        default: true
       run_didt_tests:
         description: "Run DIDT tests"
         required: false
@@ -57,11 +62,6 @@ on:
         required: false
         type: string
         default: ""
-      timeout:
-        description: "Test timeout in minutes"
-        required: false
-        type: number
-        default: 150
       platform:
         required: false
         type: choice
@@ -113,49 +113,21 @@ jobs:
   generate-arch-matrix:
     runs-on: ubuntu-latest
     outputs:
-      # Comma-separated SKU string spanning every SKU referenced by L2 nightly
-      # test yamls (HW + viommu + sim). Downstream impls intersect this against
-      # the SKUs declared in their test yaml entries.
       l2-nightly-skus: ${{ steps.parse.outputs.l2-nightly-skus }}
     steps:
       - id: parse
         run: |
-          arch='${{ inputs.architecture }}'
-
-          # Default to running all if empty or not provided (scheduled runs)
-          if [[ -z "$arch" || "$arch" == "" ]]; then
-            arch='["blackhole", "wormhole_b0"]'
+          # Scheduled runs always cover both archs; workflow_dispatch reflects checkbox state.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            run_wormhole=true
+            run_blackhole=true
+          else
+            run_wormhole='${{ inputs.run_wormhole }}'
+            run_blackhole='${{ inputs.run_blackhole }}'
           fi
 
-          # Validate JSON format
-          if ! echo "$arch" | jq -e 'type == "array"' > /dev/null 2>&1; then
-            echo "❌ Error: Invalid JSON format. Input must be a JSON array."
-            echo "   Received input: $arch"
-            echo "   Valid format: [\"blackhole\", \"wormhole_b0\"]"
-            exit 1
-          fi
-
-          # Validate each architecture name using jq for exact matching
-          valid_archs='["blackhole", "wormhole_b0"]'
-          invalid_archs=$(echo "$arch" | jq -r --argjson valid "$valid_archs" '.[] | select(. as $a | $valid | index($a) | not)')
-          if [[ -n "$invalid_archs" ]]; then
-            echo "❌ Error: Invalid architecture(s) found:"
-            echo "$invalid_archs" | while read -r invalid; do
-              echo "   - '$invalid'"
-            done
-            echo "   Valid values are: blackhole, wormhole_b0"
-            echo "   Received input: $arch"
-            exit 1
-          fi
-
-          # Check for each architecture using jq for exact matching
-          run_wormhole=$(echo "$arch" | jq -r 'if index("wormhole_b0") then "true" else "false" end')
-          run_blackhole=$(echo "$arch" | jq -r 'if index("blackhole") then "true" else "false" end')
-
-          # Ensure at least one valid architecture was specified
-          if [[ "$run_wormhole" == "false" && "$run_blackhole" == "false" ]]; then
-            echo "❌ Error: No valid architectures found in input: $arch"
-            echo "   Valid values are: blackhole, wormhole_b0"
+          if [[ "$run_wormhole" != "true" && "$run_blackhole" != "true" ]]; then
+            echo "❌ Error: Neither wormhole nor blackhole was selected."
             exit 1
           fi
 
@@ -178,7 +150,9 @@ jobs:
       dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       basic-ttnn-runtime-docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
 
-  ### General team
+  # =============================================================================
+  # No Team determinated
+  # =============================================================================
   tt-metal-l2-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -193,22 +167,50 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
-        ${{ github.event_name == 'schedule' && 'sdxl,train,compute_fused'
+        ${{ github.event_name == 'schedule' && 'sdxl,train'
         || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  
-  ### Syseng team
-  syseng-didt-tests:
+
+  # =============================================================================
+  # ttsim team
+  # =============================================================================
+  ttsim-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
+    if: |
+      needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
+        github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,')
+      )
+    secrets: inherit
+    uses: ./.github/workflows/ttsim-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
-        ${{ (github.event_name == 'schedule' &&
-        'conv,matmul,fused,reduction,experimental,pool,eltwise,transformers,moreh,misc,sdpa,data_movement,docs_examples,cpp_accessor,cpp_lab_examples')
-        || (inputs.run_cpp_tests && format('{0},cpp_accessor,cpp_lab_examples', inputs.additional_test_categories))
+        ${{ github.event_name == 'schedule' && 'compute_fused'
         || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  
-  ### TTNN team
+
+  # =============================================================================
+  # Syseng team
+  # =============================================================================
+  syseng-didt-tests:
+    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_didt_tests) &&
+      needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
+    secrets: inherit
+    uses: ./.github/workflows/syseng-didt-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
+
+  # =============================================================================
+  # TTNN team 
+  # =============================================================================
   ops-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -221,6 +223,13 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
+      additional_test_categories: >-
+        ${{ (github.event_name == 'schedule' &&
+        'conv,matmul,fused,reduction,experimental,pool,eltwise,transformers,moreh,misc,sdpa,data_movement,docs_examples,cpp_accessor,cpp_lab_examples')
+        || (inputs.run_cpp_tests && format('{0},cpp_accessor,cpp_lab_examples', inputs.additional_test_categories))
+        || inputs.additional_test_categories }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ops-integration-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -265,8 +274,9 @@ jobs:
       additional_test_categories: cnn_pipeline,cnn_builder
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
-  
-  ### TT-Train team
+  # =============================================================================
+  # tt-train team
+  # =============================================================================
   tt-train-unit-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
@@ -296,7 +306,9 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
-  ### Models team
+  # =============================================================================
+  # Models team
+  # =============================================================================
   models-unit-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
@@ -311,7 +323,9 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
-  ### Triage team
+  # =============================================================================
+  # Triage team
+  # =============================================================================
   triage-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: ${{ contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150') }}
@@ -325,7 +339,10 @@ jobs:
       run-hang-report-test: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   
-  ### LLK Team
+  # =============================================================================
+  # LLK team
+  # =============================================================================
+
   # LLK Unit Tests — runs the full LLK gtest binary in slow dispatch as a comprehensive
   # nightly regression. The PR gate covers two narrower slices (FD path via
   # llk-fd-unit-tests-* and a Quasar+SD-only slice via llk-sd-unit-tests-*); this job is the
