@@ -274,7 +274,20 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
 @pytest.mark.parametrize("dim_6", [6])
 @pytest.mark.parametrize("dim_7", [7])
 @pytest.mark.parametrize("dim_8", [8, 32, 63])
-@pytest.mark.parametrize("dim", [[3, 7]])
+def _sum_8d_expected_atol(dim, dim_8):
+    if dim == [3, 7]:
+        return 0.03
+
+    # Issue #46472 observed a smaller absolute envelope for dim_8=8 than for
+    # the larger HW reductions, so keep the threshold as tight as the logs
+    # support for each shape.
+    if dim_8 == 8:
+        return 0.125
+
+    return 0.25
+
+
+@pytest.mark.parametrize("dim", [[3, 7], [6, 7], [-2, -1]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):
     torch.manual_seed(0)
@@ -296,7 +309,7 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         output_tensor,
         pcc_threshold=0.999,
         rtol=0.01,
-        atol=0.03,
+        atol=_sum_8d_expected_atol(dim, dim_8),
         frobenius_threshold=0.003,
     )
 
