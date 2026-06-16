@@ -120,7 +120,7 @@ formats. Unblocks the 4 `test_gqa_mqa_forward` regression failures.
 is armed; the GQA/MQA and causal golden cells move from `xfail_expected` to
 `supported_pass` with no `xpass_drift`.
 
-### [ ] Refinement 3 — Non-tile-aligned shapes (S_q / S_kv / D)
+### [x] Refinement 3 — Non-tile-aligned shapes (S_q / S_kv / D)
 
 **Goal**: add `"w_non_aligned"` (D % 32 ≠ 0) and `"h_non_aligned"`
 (S_q % 32 ≠ 0, D aligned) to `SUPPORTED["alignment"]` via **in-kernel** edge

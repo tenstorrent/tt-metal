@@ -15,3 +15,6 @@
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-06-16T20:05:14+00:00"}
 {"event":"hypothesis","note":"Non-aligned needs ceil tile counts + zero-pad reliance for D; edge -inf mask on last KV chunk (cols>=S_kv%32) for none/custom; causal handled by triangular; S_q padding rows produce discarded garbage rows (no NaN since l>0).","ts":"2026-06-16T20:09:52+00:00"}
 {"event":"test_run","status":"pass","test":"test_non_aligned bf16 mask_none scale_auto (10 shapes)","detail":"all 10 non-aligned shapes pass PCC>=0.995","ts":"2026-06-16T20:13:19+00:00"}
+{"event":"device_print_observation","note":"bf8b + non-aligned (47) fails at allocate_tensor_on_device (TypeError incompatible args) out of the box; tile-aligned bf8b works (R1). Confirms EXCLUSION for bf8b+{w,h}_non_aligned is structural, not kernel.","ts":"2026-06-16T20:15:49+00:00"}
+{"event":"test_run","status":"pass","test":"test_non_aligned full suite","detail":"81 passed (10 shapes x bf16/fp32 x {none,custom} x {auto,explicit} + bf8b exclusion test)","ts":"2026-06-16T20:17:52+00:00"}
+{"event":"test_run","status":"pass","test":"golden non_aligned","detail":"174 passed, 186 xfailed (bf8b excl + R1 fp32/acc=False), 0 xpass drift, 0 fail. Includes causal non-aligned self cells.","ts":"2026-06-16T20:23:54+00:00"}

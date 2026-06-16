@@ -129,3 +129,50 @@
   (6 ratios), `test_gqa_with_custom_mask`, `test_causal_cross_rejected`
   (EXCLUSION → NotImplementedError), `test_causal_and_mask_mutually_exclusive`
   (ValueError). 24 cases, all pass (--dev + non-dev).
+
+## Refinement 3 — Non-tile-aligned shapes (S_q / S_kv / D)
+- **Date**: 2026-06-16
+- **What was done**:
+  - `SUPPORTED["alignment"]` extended to `[tile_aligned, w_non_aligned,
+    h_non_aligned]`. `EXCLUSIONS` += `{bfloat8_b, w_non_aligned}` and
+    `{bfloat8_b, h_non_aligned}`.
+  - **Program descriptor**: tile counts switched from floor to **ceil**
+    (`Sq_t/Skv_t/d_t = -(-S//32)`) so the physically tile-padded DRAM buffer is
+    fully indexed (floor silently dropped the last partial tile). Compute
+    `kv_valid_last = S_kv % 32` and `kv_edge = (kv_valid_last != 0 and not
+    causal)`; allocate a new `cb_edge_mask` (bf16) when `kv_edge`. New CT args
+    threaded to reader (`kv_edge`, `kv_valid_last`) and compute (`kv_edge`).
+  - **D non-alignment (w_non_aligned)**: handled by ttnn's zero-fill of the tile
+    padding — the padded D columns of Q/K contribute 0 to the QK^T contraction
+    (0·0) and V's padded D columns give 0 in the PV output. No masking needed.
+  - **KV-sequence non-alignment**: on-device column edge-mask (`gen_edge_mask_tile`:
+    0 for valid key cols, −1e30 for padding cols) added to the score tile on the
+    **last KV chunk** for `{none, custom}` modes. Forces padding keys to −inf so
+    they drop out of the softmax row-max (max ignores −inf) and row-sum
+    (exp(−inf−max)→0) in one op. Causal needs no edge mask: it requires S_q==S_kv,
+    the padding KV chunk is only ever the diagonal block, and the triangular −inf
+    bias already masks col>row ⊇ the padding columns for every valid query row.
+  - **S_q non-alignment (query padding rows)**: produce garbage output rows that
+    are discarded by the logical output shape; no NaN risk (row-sum l ≥ 1 since
+    every padding query row still attends ≥ 1 valid key after edge masking).
+- **Accuracy achieved**: PCC ≥ 0.995 (bf16) / ≥ 0.999 (fp32) on all 10 golden
+  non-aligned shapes × {none,custom} × {auto,explicit}
+  (`test_scaled_dot_product_attention_non_aligned.py`, 81 cases incl. cross +
+  GQA/MQA + both-non-aligned).
+- **Golden test progress**: non-aligned slice **174 passed, 186 xfailed, 0
+  xpass-drift, 0 fail** (80s). The 186 xfails are the EXCLUDED bf8b non-aligned
+  cells + the R1 `{fp32, acc=False}` cells. Causal non-aligned self cells pass.
+- **Issues encountered**: bf8b + non-aligned fails **out of the box** at
+  `ttnn.allocate_tensor_on_device` (TypeError — incompatible args) for the
+  non-tile-aligned output shape; tile-aligned bf8b works (R1). This is a
+  structural allocator gap, not a kernel issue, so both `bfloat8_b` non-aligned
+  cells are parked in `EXCLUSIONS` per the /numeric-formats-metal bf8b+non-aligned
+  rule (refinement explicitly authorizes excluding h_non_aligned "if it fails out
+  of the box").
+- **Advisory deviation**: used the on-device −inf column edge-mask instead of the
+  verifier-suggested `prepare_partial_reduce_scalers` / `ReducePartialScaler`. The
+  −inf approach masks both row-max and row-sum at once, reuses the existing
+  causal/custom mask-add path, and sidesteps the MAX-reduce zero-scaler issue (a
+  zero partial scaler yields max(·,0), not −inf). Same intent, simpler.
+- **Tests added**: `test_scaled_dot_product_attention_non_aligned.py`
+  (`test_non_aligned` 80 cases + `test_bfloat8_b_w_non_aligned_excluded`).
