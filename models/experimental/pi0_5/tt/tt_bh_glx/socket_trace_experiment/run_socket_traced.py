@@ -19,6 +19,15 @@ no manual `source` needed — set any flag explicitly to override):
 import os
 import sys
 
+for _k, _v in {
+    "TRACE_SCOPE": "full",
+    "FIXED_NOISE": "1",
+    "PI05_E2E_PCC": "1",
+    "PI05_SOCK_CONN": "2",
+    "PERF_ITERS": "20",
+}.items():
+    os.environ.setdefault(_k, _v)
+
 
 def _apply_production_env_defaults():
     """Source _bench_runs/pi05_production.env as DEFAULTS so this test runs the
