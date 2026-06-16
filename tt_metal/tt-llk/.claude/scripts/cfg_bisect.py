@@ -48,16 +48,26 @@ PASS, FAIL, HANG = "PASS", "FAIL", "HANG"
 _CFG_STATE_SIZE = {"blackhole": 56, "wormhole": 47}
 _BOOT_OWNED = {"blackhole": set(), "wormhole": {158, 159, 160, 161}}
 
-# Mirror of cfg_pollution._LIVE_ADDR32: the reconfigurable surface (addr32 words some reachable
-# LLK/Metal op writes). Default bisection universe — failures here are candidate ACTIONABLE
-# escapes, not reliance on never-written reset defaults. Keep in sync with cfg_pollution.py.
-_LIVE_ADDR32 = {
-    "blackhole": [
-        0, 1, 2, 5, 7, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 28, 29, 30, 31, 32, 33,
-        34, 35, 37, 38, 39, 40, 41, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 64, 68, 69,
-        70, 71, 72, 73, 76, 77, 84, 86, 92, 93, 97, 112, 117, 119, 120, 124, 125, 140, 141, 145,
-        180, 186, 209, 211, 220,
-    ],
+# Mirror of cfg_pollution._LIVE_MASK: bit-granular reconfigurable surface {addr32: written-bit
+# mask} — the bits some reachable LLK/Metal op writes. The live universe poisons only these bits,
+# so failures are candidate ACTIONABLE escapes, not reliance on never-written fields (e.g. word 71
+# excludes Downsample). Keep in sync with cfg_pollution.py.
+_LIVE_MASK = {
+    "blackhole": {
+        0: 0x0000FFFF, 1: 0xFFFFFFFF, 2: 0xFFFFFFFF, 5: 0x0000FFFF, 7: 0x0000FFFF, 12: 0xFFFFFFFF,
+        13: 0xFFFFFFFF, 14: 0xFFFFFFFF, 15: 0xFFFFFFFF, 16: 0x0000FFFF, 17: 0xFFFFFFFF, 18: 0xFFFFFFFF,
+        19: 0x0000FFFF, 20: 0xFFFFFFFF, 21: 0xFFFFFFFF, 22: 0x0000FFFF, 23: 0x0000FFFF, 24: 0xFFFFFFFF,
+        25: 0xFFFFFFFF, 26: 0x0000FFFF, 27: 0x0000FFFF, 28: 0x0000FFFF, 29: 0x0000FFFF, 30: 0x0000FFFF,
+        31: 0x0000FFFF, 32: 0x0000FFFF, 33: 0x0000FFFF, 34: 0x0000FFFF, 35: 0x0000FFFF, 37: 0x0000FFFF,
+        38: 0x0000FFFF, 39: 0x0000FFFF, 40: 0x0000FFFF, 41: 0x0000FFFF, 47: 0x0000FFFF, 48: 0x0000FFFF,
+        49: 0x0000FFFF, 50: 0xFFFFFFFF, 51: 0x0000FFFF, 52: 0x0000FFFF, 53: 0x0000FFFF, 54: 0x0000FFFF,
+        55: 0x0000FFFF, 56: 0xFFFFFFFF, 57: 0xFFFFFFFF, 59: 0xFFFFFFFF, 64: 0xFFFF000F, 65: 0xFFFFFFFF,
+        68: 0xFFFFFFFF, 69: 0xFFFFFFFF, 70: 0xFFFFFFFF, 71: 0xFFC80000, 72: 0xFFFFFFFF, 73: 0x00000030,
+        76: 0xFFFFFFFF, 77: 0xFFFFFFFF, 84: 0xFFFFFFFF, 86: 0xFFFFFFFF, 92: 0xFFFFFFFF, 93: 0xFFFFFFFF,
+        112: 0xFFFF000F, 113: 0xFFFF0000, 119: 0x00400000, 120: 0x0000000F, 124: 0xFFFFFFFF, 125: 0xFFFFFFFF,
+        140: 0xFFFFFFFF, 141: 0xFFFFFFFF, 180: 0xFFFFFFFF, 181: 0xFFFFFFFF, 182: 0xFFFFFFFF, 183: 0xFFFFFFFF,
+        186: 0xFFFFFFFF, 209: 0xFFFFFFFF, 211: 0xFFFFFFFF, 220: 0x0000000B,
+    },
 }
 
 # cfg_defines.h relative to the tt-llk worktree (tt-metal/tt_metal/tt-llk); hw/inc is one up.
@@ -114,20 +124,25 @@ def _run_trial(args, env_extra):
 def candidate_items(arch, states, universe="live"):
     """The (state, addr32) bisection universe.
 
-    universe="live": only the reconfigurable surface (_LIVE_ADDR32) — failures are candidate
+    universe="live": only the reconfigurable surface (_LIVE_MASK keys) — failures are candidate
     actionable escapes. universe="thread": the whole kernel-owned config space.
     """
     if universe == "live":
-        if arch not in _LIVE_ADDR32:
+        if arch not in _LIVE_MASK:
             raise SystemExit(f"no live set for arch {arch}; use --universe thread")
-        addr32 = list(_LIVE_ADDR32[arch])
+        addr32 = list(_LIVE_MASK[arch])
     else:
         addr32 = [a for a in range(_CFG_STATE_SIZE[arch] * 4) if a not in _BOOT_OWNED[arch]]
     return [(s, a) for s in states for a in addr32]
 
 
-def make_test(args, seed, plan_path, memo, preserve):
-    """test(items)->bool: reset, poison exactly `items` at launch, run; True iff it reproduces."""
+def make_test(args, seed, plan_path, memo, preserve, wmask):
+    """test(items)->bool: reset, poison exactly `items` at launch, run; True iff it reproduces.
+
+    `wmask` is {addr32: written-bit mask} (the live mask) — each polluted word is restricted to
+    those bits, so bisection stays bit-granular (never-written bits are left at reset default).
+    Empty wmask => whole-word pollution (thread universe).
+    """
 
     def test(items):
         key = frozenset((s, a) for s, a in items)
@@ -135,7 +150,7 @@ def make_test(args, seed, plan_path, memo, preserve):
             return memo[key]
         plan = {
             "seed": seed,
-            "pollute": [[s, a] for s, a in items],
+            "pollute": [([s, a, wmask[a]] if a in wmask else [s, a]) for s, a in items],
         }  # no snapshot => no restore
         if preserve:
             plan["preserve"] = [
@@ -263,7 +278,8 @@ def main():
         )
 
     memo = {}
-    test = make_test(args, seed, plan_path, memo, preserve)
+    wmask = _LIVE_MASK.get(args.arch, {}) if args.universe == "live" else {}
+    test = make_test(args, seed, plan_path, memo, preserve, wmask)
 
     # Find ALL independent dependencies, not just the first. Each round: if poisoning the
     # remaining universe still reproduces, ddmin to a minimal failing set, record it, then

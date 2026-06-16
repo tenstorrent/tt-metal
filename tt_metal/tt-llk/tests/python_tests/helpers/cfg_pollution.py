@@ -82,36 +82,53 @@ def _thread_words(arch: ChipArchitecture) -> list[int]:
     return [a for a in range(0, _CFG_STATE_SIZE[arch] * 4) if a not in excluded]
 
 
-# The "live" config-write surface: addr32 words that some reachable LLK/Metal op actually
-# WRITES (from the static sweep in cfg_state_map.md). Polluting only these targets the
-# *reconfigurable* state — the registers a prior op can leave dirty — so a failure is a
-# candidate actionable reconfig-escape, not a reliance on a never-written reset-default
-# (e.g. DEST_REGW_BASE @6, which is absent here). This is the whole-space "thread" sweep
-# minus latent/never-written words. Bit-level over-reach (DISABLE_RISC_BP in word 2) is still
-# masked by _PRESERVE_BITS, so word 2 stays in the set (its ALU/RELU bits are live).
-# Regenerate (Blackhole): resolve each register written at a CFG-write site to its _ADDR32
-# (see cfg_state_map.md). WH set differs (different addr32 numbering) — TODO.
-_LIVE_ADDR32 = {
-    ChipArchitecture.BLACKHOLE: [
-        0, 1, 2, 5, 7, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 28, 29, 30, 31, 32, 33,
-        34, 35, 37, 38, 39, 40, 41, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 64, 68, 69,
-        70, 71, 72, 73, 76, 77, 84, 86, 92, 93, 97, 112, 117, 119, 120, 124, 125, 140, 141, 145,
-        180, 186, 209, 211, 220,
-    ],
+# The "live" config-write surface, BIT-GRANULAR: {addr32: written-bit mask} where the mask is
+# the union of bits some *reachable* LLK/Metal op actually writes (per the static sweep in
+# cfg_state_map.md). Polluting only these bits targets the *reconfigurable* state — what a prior
+# op can leave dirty — and crucially leaves never-written FIELDS at their reset default, so a
+# failure is a candidate actionable reconfig-escape rather than reliance on a register/field
+# nothing dirties. E.g. word 71 = 0xFFC80000 excludes Downsample (bits 0-18, never written) but
+# keeps Pack_L1_Acc/LF8/Exp_threshold; word 6 (DEST_REGW_BASE) and the dead-writer PCK0_ADDR_BASE
+# (word 16 high bits) are absent. DISABLE_RISC_BP (word 2 bits 22-31) is still masked by
+# _PRESERVE_BITS. Regenerate (Blackhole) by parsing CFG-write sites for the target+mask of each
+# write primitive (WRCFG/cfg[]=->whole word, SETC16/addr_mod->0xFFFF, cfg_reg_rmw_tensix->field
+# mask), excluding comments and dead code. WH set differs (different addr32 numbering) — TODO.
+_LIVE_MASK = {
+    ChipArchitecture.BLACKHOLE: {
+        0: 0x0000FFFF, 1: 0xFFFFFFFF, 2: 0xFFFFFFFF, 5: 0x0000FFFF, 7: 0x0000FFFF, 12: 0xFFFFFFFF,
+        13: 0xFFFFFFFF, 14: 0xFFFFFFFF, 15: 0xFFFFFFFF, 16: 0x0000FFFF, 17: 0xFFFFFFFF, 18: 0xFFFFFFFF,
+        19: 0x0000FFFF, 20: 0xFFFFFFFF, 21: 0xFFFFFFFF, 22: 0x0000FFFF, 23: 0x0000FFFF, 24: 0xFFFFFFFF,
+        25: 0xFFFFFFFF, 26: 0x0000FFFF, 27: 0x0000FFFF, 28: 0x0000FFFF, 29: 0x0000FFFF, 30: 0x0000FFFF,
+        31: 0x0000FFFF, 32: 0x0000FFFF, 33: 0x0000FFFF, 34: 0x0000FFFF, 35: 0x0000FFFF, 37: 0x0000FFFF,
+        38: 0x0000FFFF, 39: 0x0000FFFF, 40: 0x0000FFFF, 41: 0x0000FFFF, 47: 0x0000FFFF, 48: 0x0000FFFF,
+        49: 0x0000FFFF, 50: 0xFFFFFFFF, 51: 0x0000FFFF, 52: 0x0000FFFF, 53: 0x0000FFFF, 54: 0x0000FFFF,
+        55: 0x0000FFFF, 56: 0xFFFFFFFF, 57: 0xFFFFFFFF, 59: 0xFFFFFFFF, 64: 0xFFFF000F, 65: 0xFFFFFFFF,
+        68: 0xFFFFFFFF, 69: 0xFFFFFFFF, 70: 0xFFFFFFFF, 71: 0xFFC80000, 72: 0xFFFFFFFF, 73: 0x00000030,
+        76: 0xFFFFFFFF, 77: 0xFFFFFFFF, 84: 0xFFFFFFFF, 86: 0xFFFFFFFF, 92: 0xFFFFFFFF, 93: 0xFFFFFFFF,
+        112: 0xFFFF000F, 113: 0xFFFF0000, 119: 0x00400000, 120: 0x0000000F, 124: 0xFFFFFFFF, 125: 0xFFFFFFFF,
+        140: 0xFFFFFFFF, 141: 0xFFFFFFFF, 180: 0xFFFFFFFF, 181: 0xFFFFFFFF, 182: 0xFFFFFFFF, 183: 0xFFFFFFFF,
+        186: 0xFFFFFFFF, 209: 0xFFFFFFFF, 211: 0xFFFFFFFF, 220: 0x0000000B,
+    },
 }
+
+
+def live_items(arch: ChipArchitecture, states=(0, 1)) -> list:
+    """Bit-granular live items [(state, addr32, mask), ...] — pollute only written bits."""
+    if arch not in _LIVE_MASK:
+        raise ValueError(f"no live CFG mask for {arch.value} (only Blackhole so far)")
+    return [(s, a, m) for s in states for a, m in _LIVE_MASK[arch].items()]
+
 
 # Named addr32 groups within the per-state thread-config region.
 # "alu" is the 3-word ALU config block (addr32 0,1,2) — a small, targeted probe.
 # "thread" is the whole shadowed config register space (minus boot-owned words): every
 # register defined in cfg_defines.h fits inside one state (see module docstring), so
 # this is the complete kernel-owned config-register sweep.
-# "live" is the reconfigurable surface only (see _LIVE_ADDR32) — the right target for
-# hunting actionable reconfig-escapes across LLKs.
+# ("live" is handled separately — it is bit-granular, see _LIVE_MASK / live_items.)
 _GROUPS = {
     ChipArchitecture.BLACKHOLE: {
         "alu": [0, 1, 2],
         "thread": _thread_words(ChipArchitecture.BLACKHOLE),
-        "live": _LIVE_ADDR32[ChipArchitecture.BLACKHOLE],
     },
     ChipArchitecture.WORMHOLE: {
         "alu": [0, 1, 2],
@@ -423,19 +440,30 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
 
     seed_env = os.environ.get("LLK_POLLUTE_SEED")
     seed = int(seed_env, 0) if seed_env else random.getrandbits(32)
-    if "," in spec or spec.strip().isdigit():
-        words = [int(tok, 0) for tok in spec.split(",") if tok.strip()]
-    else:
-        words = spec
 
-    log = pollute_cfg(
-        location,
-        words,
-        seed=seed,
-        extra_preserve=env_preserve,
-        device_id=device_id,
-        context=context,
-    )
+    if spec.strip() == "live":
+        # Bit-granular: pollute only the written bits of each live word (see _LIVE_MASK).
+        log = pollute_items(
+            location,
+            live_items(arch),
+            seed=seed,
+            extra_preserve=env_preserve,
+            device_id=device_id,
+            context=context,
+        )
+    else:
+        if "," in spec or spec.strip().isdigit():
+            words = [int(tok, 0) for tok in spec.split(",") if tok.strip()]
+        else:
+            words = spec
+        log = pollute_cfg(
+            location,
+            words,
+            seed=seed,
+            extra_preserve=env_preserve,
+            device_id=device_id,
+            context=context,
+        )
     addr32_set = sorted({e["addr32"] for e in log})
     pres = f" preserve={sorted(env_preserve)}" if env_preserve else ""
     _log_landed(
