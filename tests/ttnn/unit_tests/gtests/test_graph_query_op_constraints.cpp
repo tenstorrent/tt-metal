@@ -1139,6 +1139,10 @@ TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
 }
 
 TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::WORMHOLE_B0) {
+        GTEST_SKIP() << "Skipping on Wormhole due to fabric link issues - refs #issue";
+    }
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
     auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
@@ -1169,6 +1173,10 @@ TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
 }
 
 TYPED_TEST(DistributedTensorOpIfTest, ReduceScatterWithShardedTopology) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::WORMHOLE_B0) {
+        GTEST_SKIP() << "Skipping on Wormhole due to fabric link issues - refs #issue";
+    }
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
     auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
@@ -1200,6 +1208,10 @@ TYPED_TEST(DistributedTensorOpIfTest, ReduceScatterWithShardedTopology) {
 }
 
 TYPED_TEST(DistributedTensorOpIfTest, AllReduceWithShardedTopology) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::WORMHOLE_B0) {
+        GTEST_SKIP() << "Skipping on Wormhole due to fabric link issues - refs #issue";
+    }
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
     auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
@@ -1228,6 +1240,10 @@ TYPED_TEST(DistributedTensorOpIfTest, AllReduceWithShardedTopology) {
 }
 
 TYPED_TEST(DistributedTensorOpIfTest, AllBroadcastWithShardedTopology) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::WORMHOLE_B0) {
+        GTEST_SKIP() << "Skipping on Wormhole due to fabric link issues - refs #issue";
+    }
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
     auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
@@ -1256,6 +1272,10 @@ TYPED_TEST(DistributedTensorOpIfTest, AllBroadcastWithShardedTopology) {
 }
 
 TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::WORMHOLE_B0) {
+        GTEST_SKIP() << "Skipping on Wormhole due to fabric link issues - refs #issue";
+    }
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
     auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
@@ -1285,6 +1305,10 @@ TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
 }
 
 TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::WORMHOLE_B0) {
+        GTEST_SKIP() << "Skipping on Wormhole due to fabric link issues - refs #issue";
+    }
     // fused_rms_minimal requirements (from validate_on_program_cache_miss):
     //   - input shape (1,1,M,N): M<=32, N%32==0, TILE, WIDTH_SHARDED ROW_MAJOR
     //   - block_w * tile_width(32) == shard_spec.shape[1]
