@@ -20,6 +20,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     _decode_down_proj_input_memory_config,
     _decode_gate_up_dram_sharded_program_config,
     _decode_gate_up_col_dram_sharded_program_config,
+    _decode_linear_output_memory_config,
     _l1_width_sharded_mem_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
@@ -150,7 +151,11 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             )
             return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
-        matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        matmul_mc = (
+            _decode_linear_output_memory_config(self.device, input_shape)
+            if needs_ccl
+            else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        )
         # Fuse bias into the matmul kernel on single-device (no CCL would scale
         # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
         fused_bias = None if needs_ccl else self.tt_bias
@@ -173,7 +178,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
                 dim=3,
                 num_links=_ccl_num_links(self.device),
                 cluster_axis=1,
-                memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=output_memory_config or _decode_linear_output_memory_config(self.device, input_shape),
                 topology=ttnn.Topology.Linear,
                 **_ccl_worker_kwargs("reduce_scatter"),
             )
@@ -300,8 +305,12 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             )
             return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
-        matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
-        output_mc = output_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        matmul_mc = (
+            _decode_linear_output_memory_config(self.device, input_shape)
+            if needs_ccl
+            else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        )
+        output_mc = output_memory_config or _decode_linear_output_memory_config(self.device, input_shape)
 
         # Prefill down_proj (K=8960, N=1536): ttnn.matmul's auto-heuristic picks a degenerate
         # config for this huge-K / small-N shape (~16 ms, ~5% compute, ~0.2% BW). minimal_matmul

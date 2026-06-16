@@ -276,8 +276,13 @@ def _dp_matmul_program_config(device, input_shape, weight_shape):
 
 
 def _decode_linear_output_memory_config(device, input_shape):
-    if _tp_requires_ccl(device):
-        return ttnn.DRAM_MEMORY_CONFIG
+    # Decode (M<=32, single-token) linear/CCL outputs go to L1 to avoid the DRAM
+    # round-trip between the per-token matmul -> reduce_scatter/all_gather chain
+    # (the tensors are tiny at decode). Prefill (large M) stays DRAM -- an L1
+    # output of an 11264-row tensor would OOM. The CCL case used to force DRAM
+    # unconditionally; it is now decode-conditional too (CCL L1-interleaved output
+    # is supported and keeps the decode hidden state resident across the layer).
+    _ = device
     return ttnn.L1_MEMORY_CONFIG if int(input_shape[-2]) <= 32 else ttnn.DRAM_MEMORY_CONFIG
 
 
@@ -729,7 +734,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
                 dim=3,
                 num_links=_ccl_num_links(self.device),
                 cluster_axis=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_decode_linear_output_memory_config(self.device, input_shape),
                 topology=ttnn.Topology.Linear,
                 **_ccl_worker_kwargs("reduce_scatter"),
             )
@@ -833,7 +838,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
                 dim=3,
                 num_links=num_links,
                 cluster_axis=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_decode_linear_output_memory_config(self.device, input_shape),
                 topology=ttnn.Topology.Linear,
                 **_ccl_worker_kwargs("reduce_scatter"),
             )
@@ -846,7 +851,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
                 dim=3,
                 num_links=num_links,
                 cluster_axis=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_decode_linear_output_memory_config(self.device, input_shape),
                 topology=ttnn.Topology.Linear,
                 **_ccl_worker_kwargs("all_gather"),
             )

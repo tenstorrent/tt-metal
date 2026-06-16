@@ -716,6 +716,13 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
         head_dim=head_dim,
         config=config,
         device=None,
+        # KV cache stays BF16. A BFP8/BFP4 cache would ~halve the K/V DRAM read that
+        # bounds paged_sdpa_decode (sweep 2026-06-15: BFP8 ~-40%, would hit <8 us), and
+        # the SDPA read + cache alloc accept it -- BUT paged_update_cache only takes
+        # BF16/FP32 input and does NOT convert it to a BFP8 cache (it writes BF16 bytes
+        # into BFP8 tile slots -> garbled output, confirmed in-model for both all-BFP8
+        # and V-only-BFP8). So a sub-BF16 cache needs a kernel that converts-on-write
+        # (or a BFP8-input update); not a config change. Keep BF16.
     ).to_device(device)
 
 

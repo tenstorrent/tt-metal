@@ -242,7 +242,7 @@ class _TTNNDotsOCRQKVColParallel(TTNNLinearLLamaIReplicatedWColSharded):
                 dim=len(tt_output.shape) - 1,
                 num_links=_ccl_num_links(self.device),
                 cluster_axis=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_decode_linear_output_memory_config(self.device, input_shape),
                 topology=ttnn.Topology.Linear,
             )
         return tt_output
@@ -407,6 +407,10 @@ class TTNNDotsOCRAttention(TTNNModule):
                 k_chunk_size=256,
                 exp_approx_mode=False,
             )
+            # Decode SDPA: keep the auto (0/0) chunk schedule. A standalone sweep
+            # suggested k_chunk=64 (-14%), but in the real paged-decode shape it
+            # REGRESSED the op (10 -> 12 us) -- the standalone (B32/H12/pos1024) does
+            # not transfer, and the kernel's auto scheduler wins in-model. Reverted.
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
                 q_chunk_size=0,
