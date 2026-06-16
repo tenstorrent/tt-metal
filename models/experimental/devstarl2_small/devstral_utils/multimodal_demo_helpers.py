@@ -477,7 +477,11 @@ def devstral_supports_on_device_sampling(model_args: ModelArgs, mesh_device) -> 
     mesh_shape = list(mesh_device.shape)
     if min(mesh_shape) > 1:
         return False
-    vocab_size = int(getattr(model_args, "padded_vocab_size", None) or model_args.vocab_size)
+    vocab_size = int(
+        model_args.vocab_size
+        if mesh_shape == [1, 1]
+        else getattr(model_args, "padded_vocab_size", None) or model_args.vocab_size
+    )
     sampling_splits = 2 if mesh_shape == [1, 1] else max(mesh_shape)
     return vocab_size % sampling_splits == 0 and vocab_size // sampling_splits <= 64 * 1024
 
@@ -489,8 +493,12 @@ class DevstralSampling1DAdapter:
         self.mesh_device = mesh_device
         self.cq_id = cq_id
         self.max_batch_size = 32
+        mesh_shape = list(mesh_device.shape)
+        self.vocab_size = int(
+            args.vocab_size if mesh_shape == [1, 1] else getattr(args, "padded_vocab_size", None) or args.vocab_size
+        )
         self.sampler = Sampling1D(
-            vocab_size=int(getattr(args, "padded_vocab_size", None) or args.vocab_size),
+            vocab_size=self.vocab_size,
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             max_batch_size=self.max_batch_size,
@@ -548,7 +556,24 @@ class DevstralSampling1DAdapter:
         if self._kpt is None:
             raise RuntimeError("Call reset_sampling_params before sample().")
         k, p, temp = self._kpt
-        return self.sampler.decode_forward(logits, k=k, p=p, temp=temp, tt_out_tok=tt_out_tok)
+        logits_for_sampling = logits
+        owns_logits_for_sampling = False
+        if int(logits.shape[-1]) > self.vocab_size:
+            # 1x1 LM head may produce padded logits; slice to the real vocab so Sampling1D stays on device.
+            end = list(logits.shape)
+            end[-1] = self.vocab_size
+            logits_for_sampling = ttnn.slice(
+                logits,
+                tuple(0 for _ in end),
+                tuple(end),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            owns_logits_for_sampling = True
+        try:
+            return self.sampler.decode_forward(logits_for_sampling, k=k, p=p, temp=temp, tt_out_tok=tt_out_tok)
+        finally:
+            if owns_logits_for_sampling:
+                ttnn.deallocate(logits_for_sampling)
 
     def capture_trace(self, logits, *, tt_out_tok=None, skip_precompile=False):
         if not skip_precompile:
@@ -633,6 +658,11 @@ class TtDecodeTraceContext:
     output_logits: Optional[ttnn.Tensor] = None
     output_hidden: Optional[ttnn.Tensor] = None
     sampling: Optional[DevstralSampling1DAdapter] = None
+    enable_trace: bool = True
+    tt_lm: Optional["TtMinistral3Model"] = None
+    model_args: Optional[ModelArgs] = None
+    tt_lm_head: Optional[LMHead] = None
+    page_table: Optional[ttnn.Tensor] = None
 
 
 # Reused host staging for decode buffer updates (avoids per-step torch alloc).
@@ -760,6 +790,7 @@ def tt_capture_decode_trace(
     sampling: Optional[DevstralSampling1DAdapter] = None,
     page_table: Optional[ttnn.Tensor] = None,
     prewarmed: bool = False,
+    enable_trace: bool = True,
 ) -> TtDecodeTraceContext:
     """Capture decode (+ optional LM head / sampling trace); prime buffers first.
 
@@ -767,7 +798,7 @@ def tt_capture_decode_trace(
     into the trace as a fixed input (only the per-step token/position buffers are updated).
     """
     tokens_out_prealloc = None
-    if sampling is not None and tt_lm_head is not None:
+    if enable_trace and sampling is not None and tt_lm_head is not None:
         sampling_batch = int(sampling.max_batch_size)
         tokens_out_prealloc = ttnn.from_torch(
             torch.zeros((1, 1, 1, sampling_batch), dtype=torch.int32),
@@ -787,6 +818,17 @@ def tt_capture_decode_trace(
             tt_lm_head=tt_lm_head,
             sampling=sampling,
             sampling_output=tokens_out_prealloc,
+            page_table=page_table,
+        )
+
+    if not enable_trace:
+        return TtDecodeTraceContext(
+            trace_id=-1,
+            buffers=buffers,
+            enable_trace=False,
+            tt_lm=tt_lm,
+            model_args=model_args,
+            tt_lm_head=tt_lm_head,
             page_table=page_table,
         )
 
@@ -817,6 +859,28 @@ def tt_capture_decode_trace(
 
 def tt_execute_decode_trace(mesh_device, ctx: TtDecodeTraceContext) -> None:
     """Replay decode trace (cq 0); run sampling trace when configured."""
+    if not ctx.enable_trace:
+        if ctx.tt_lm is None or ctx.model_args is None:
+            raise RuntimeError("Untraced decode context is missing model handles.")
+        hidden = ctx.tt_lm.forward_decode_from_device_tensors(
+            ctx.buffers.token_ids,
+            ctx.buffers.pos_uint32,
+            ctx.buffers.pos_int32,
+            page_table=ctx.page_table,
+        )
+        if ctx.tt_lm_head is None:
+            if ctx.output_hidden is not None:
+                ttnn.deallocate(ctx.output_hidden)
+            ctx.output_hidden = hidden
+            return
+
+        logits = _tt_decode_lm_head_logits(hidden, ctx.model_args, ctx.tt_lm_head)
+        ttnn.deallocate(hidden)
+        if ctx.output_logits is not None:
+            ttnn.deallocate(ctx.output_logits)
+        ctx.output_logits = logits
+        return
+
     ttnn.execute_trace(mesh_device, ctx.trace_id, cq_id=0, blocking=False)
     if ctx.sampling is not None and ctx.output_tokens is not None and ctx.output_logits is not None:
         ctx.sampling.sample(ctx.output_logits, enable_trace=True, tt_out_tok=ctx.output_tokens)
@@ -824,7 +888,8 @@ def tt_execute_decode_trace(mesh_device, ctx: TtDecodeTraceContext) -> None:
 
 def tt_release_decode_trace(mesh_device, ctx: TtDecodeTraceContext) -> None:
     """Release the trace handle and deallocate the trace-managed output tensors."""
-    ttnn.release_trace(mesh_device, ctx.trace_id)
+    if ctx.enable_trace:
+        ttnn.release_trace(mesh_device, ctx.trace_id)
     if ctx.sampling is not None:
         ctx.sampling.reset_trace()
     if ctx.output_tokens is not None:

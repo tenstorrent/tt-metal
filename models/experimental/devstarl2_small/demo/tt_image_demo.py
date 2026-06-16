@@ -35,8 +35,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_capture_decode_trace,
     tt_execute_decode_trace,
     tt_lm_head_logits_block,
-    tt_read_decode_traced_hidden,
-    tt_read_decode_traced_logits,
     tt_read_decode_traced_token,
     tt_release_decode_trace,
     tt_sampling_output_token_id,
@@ -380,11 +378,9 @@ def run_tt(
     greedy: bool,
     temperature: float,
     seed: int | None,
-    lm_head_cpu: bool,
     lm_head_max_device_cols: int | None,
     vision_max_edge: int,
     vision_square_pixels: int | None,
-    cpu_sampling: bool,
     prefill_chunk_size: int = 8192,
     clear_weight_cache: bool = False,
     perf: bool = False,
@@ -543,61 +539,39 @@ def run_tt(
         if out_key not in meta_state_dict:
             raise RuntimeError(f"Missing {out_key!r} in meta state dict (required for LM head).")
 
-        lm_head_weight_cpu: torch.Tensor | None = None
-        tt_lm_head: LMHead | None = None
-        if lm_head_cpu:
-            lm_head_weight_cpu = meta_state_dict[out_key].detach().to(torch.bfloat16).cpu().contiguous()
-        else:
-            lm_head_max_cols = _tt_demo.demo_lm_head_max_columns_per_device(model_args, cli_cap=lm_head_max_device_cols)
-            tt_lm_head = LMHead(
-                args=model_args,
-                mesh_device=mesh_device,
-                tt_ccl=TT_CCL(mesh_device),
-                dtype=lm_head_dtype,
-                state_dict=meta_state_dict,
-                state_dict_prefix=sd_prefix,
-                weight_cache_path=model_args.weight_cache_path(lm_head_dtype),
-                max_columns_per_device=lm_head_max_cols,
-            )
-
-        use_device_sampling = (
-            not lm_head_cpu
-            and not cpu_sampling
-            and tt_lm_head is not None
-            and devstral_supports_on_device_sampling(model_args, mesh_device)
+        lm_head_max_cols = _tt_demo.demo_lm_head_max_columns_per_device(model_args, cli_cap=lm_head_max_device_cols)
+        tt_lm_head = LMHead(
+            args=model_args,
+            mesh_device=mesh_device,
+            tt_ccl=TT_CCL(mesh_device),
+            dtype=lm_head_dtype,
+            state_dict=meta_state_dict,
+            state_dict_prefix=sd_prefix,
+            weight_cache_path=model_args.weight_cache_path(lm_head_dtype),
+            max_columns_per_device=lm_head_max_cols,
         )
-        if (
-            tt_lm_head is not None
-            and not cpu_sampling
-            and not lm_head_cpu
-            and not devstral_supports_on_device_sampling(model_args, mesh_device)
-        ):
-            logger.warning(
-                "Vocab size / mesh splits exceed on-device sampling limit (64k per split); "
-                "using PyTorch softmax / argmax on host logits."
-            )
 
-        sampling: DevstralSampling1DAdapter | None = None
-        sampling_empty_slots: list[int] | None = None
-        if use_device_sampling:
-            sampling = DevstralSampling1DAdapter(
-                args=model_args,
-                mesh_device=mesh_device,
-                tt_ccl=TT_CCL(mesh_device),
+        if not devstral_supports_on_device_sampling(model_args, mesh_device):
+            raise RuntimeError("On-device Sampling1D is required but unsupported for this vocab/mesh.")
+
+        sampling = DevstralSampling1DAdapter(
+            args=model_args,
+            mesh_device=mesh_device,
+            tt_ccl=TT_CCL(mesh_device),
+        )
+        sampling_empty_slots = list(range(sampling.max_batch_size))
+        seed_for_params = seed if seed is not None else None
+        if not do_sample:
+            sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=1.0, seed=seed_for_params)
+        else:
+            sampling_in = SamplingParams(
+                temperature=float(gen_temperature),
+                top_k=32,
+                top_p=1.0,
+                seed=seed_for_params,
             )
-            sampling_empty_slots = list(range(sampling.max_batch_size))
-            seed_for_params = seed if seed is not None else None
-            if not do_sample:
-                sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=1.0, seed=seed_for_params)
-            else:
-                sampling_in = SamplingParams(
-                    temperature=float(gen_temperature),
-                    top_k=32,
-                    top_p=1.0,
-                    seed=seed_for_params,
-                )
-            formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
-            sampling.reset_sampling_params(formatted_sampling)
+        formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
+        sampling.reset_sampling_params(formatted_sampling)
 
         tokenizer = getattr(processor, "tokenizer", None)
         if tokenizer is None:
@@ -660,42 +634,18 @@ def run_tt(
 
         def _sample_from_tt_out(tt_out, seq_last_idx):
             """Sample next token at ``seq_last_idx``; update ``stats`` lm-head/sample timings."""
-            if sampling is not None:
-                assert tt_lm_head is not None
-                tok_slot = seq_last_idx % 32
-                t0 = time.perf_counter()
-                logits_tt = tt_lm_head_logits_block(tt_out, seq_last_idx, model_args, tt_lm_head)
-                stats["lmhead_s"] += time.perf_counter() - t0
-                t0 = time.perf_counter()
-                sample_result = sampling.sample(logits_tt, enable_trace=False)
-                tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
-                next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
-                ttnn.deallocate(logits_tt)
-                ttnn.deallocate(tt_out)
-                nid = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
-                stats["sample_post_s"] += time.perf_counter() - t0
-            else:
-                t0 = time.perf_counter()
-                if lm_head_cpu:
-                    assert lm_head_weight_cpu is not None
-                    logits_row = _tt_demo.cpu_lm_head_logits_last_token(
-                        tt_out, seq_last_idx, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
-                    )
-                else:
-                    assert tt_lm_head is not None
-                    logits_row = _tt_demo.tt_lm_head_logits_last_token(
-                        tt_out, seq_last_idx, mesh_device, model_args, tt_lm_head
-                    )
-                stats["lmhead_s"] += time.perf_counter() - t0
-                t0 = time.perf_counter()
-                ttnn.deallocate(tt_out)
-                if do_sample:
-                    probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
-                    nid = torch.multinomial(probs, num_samples=1).view(1, 1)
-                else:
-                    nid = logits_row.argmax(dim=-1, keepdim=True)
-                nid = nid.to(id_device)
-                stats["sample_post_s"] += time.perf_counter() - t0
+            tok_slot = seq_last_idx % 32
+            t0 = time.perf_counter()
+            logits_tt = tt_lm_head_logits_block(tt_out, seq_last_idx, model_args, tt_lm_head)
+            stats["lmhead_s"] += time.perf_counter() - t0
+            t0 = time.perf_counter()
+            sample_result = sampling.sample(logits_tt, enable_trace=False)
+            tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
+            next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
+            ttnn.deallocate(logits_tt)
+            ttnn.deallocate(tt_out)
+            nid = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
+            stats["sample_post_s"] += time.perf_counter() - t0
             return nid
 
         try:
@@ -732,7 +682,7 @@ def run_tt(
             warm_out,
             warm_sample_idx,
             model_args,
-            None if lm_head_cpu else tt_lm_head,
+            tt_lm_head,
             sampling=sampling,
         )
 
@@ -744,7 +694,7 @@ def run_tt(
                 tt_lm,
                 model_args,
                 decode_buffers,
-                tt_lm_head=None if lm_head_cpu else tt_lm_head,
+                tt_lm_head=tt_lm_head,
                 sampling=sampling,
                 page_table=page_table_tt,
             )
@@ -801,7 +751,7 @@ def run_tt(
                 tt_lm,
                 model_args,
                 decode_buffers,
-                tt_lm_head=None if lm_head_cpu else tt_lm_head,
+                tt_lm_head=tt_lm_head,
                 sampling=sampling,
                 page_table=page_table_tt,
                 prewarmed=True,
@@ -825,20 +775,8 @@ def run_tt(
                 if decode_trace_ctx.output_tokens is not None:
                     next_id_scalar = tt_read_decode_traced_token(decode_trace_ctx, batch_slot=0)
                     stats["sample_post_s"] += time.perf_counter() - t0
-                elif decode_trace_ctx.output_logits is not None:
-                    logits_row = tt_read_decode_traced_logits(decode_trace_ctx, mesh_device, model_args, batch_slot=0)
-                    stats["lmhead_s"] += time.perf_counter() - t0
-                    t0 = time.perf_counter()
-                    if do_sample:
-                        probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
-                        next_id_scalar = int(torch.multinomial(probs, num_samples=1).item())
-                    else:
-                        next_id_scalar = int(logits_row.argmax(dim=-1).item())
-                    stats["sample_post_s"] += time.perf_counter() - t0
                 else:
-                    h_clone = tt_read_decode_traced_hidden(decode_trace_ctx, mesh_device, batch_slot=0)
-                    nid = _sample_from_tt_out(h_clone, 0)
-                    next_id_scalar = int(nid.item())
+                    raise RuntimeError("Decode trace did not produce on-device sampled tokens.")
 
                 if stats["first_traced_step_s"] is None:
                     stats["first_traced_step_s"] = time.perf_counter() - step_t0
@@ -1000,13 +938,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--greedy", action="store_true")
     parser.add_argument("--temperature", type=float, default=_DEFAULT_SAMPLE_TEMPERATURE)
-    parser.add_argument("--lm-head-cpu", action="store_true")
     parser.add_argument("--lm-head-max-device-cols", type=int, default=None)
-    parser.add_argument(
-        "--cpu-sampling",
-        action="store_true",
-        help="Use PyTorch softmax/multinomial/argmax on host logits instead of on-device Sampling1D.",
-    )
     parser.add_argument(
         "--vision-max-edge",
         type=int,
@@ -1050,11 +982,9 @@ def main(argv: list[str] | None = None) -> None:
             greedy=args.greedy,
             temperature=args.temperature,
             seed=args.seed,
-            lm_head_cpu=args.lm_head_cpu,
             lm_head_max_device_cols=args.lm_head_max_device_cols,
             vision_max_edge=args.vision_max_edge,
             vision_square_pixels=args.vision_square_pixels,
-            cpu_sampling=args.cpu_sampling,
             prefill_chunk_size=args.prefill_chunk_size,
             clear_weight_cache=args.clear_weight_cache,
             perf=args.perf,

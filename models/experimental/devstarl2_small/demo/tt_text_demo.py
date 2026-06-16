@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Tenstorrent demo: Devstral Small 2 (Mistral3) **text** LM on TT, with **autoregressive generation** using **TT** ``embed_tokens`` and **TT** ``TtMinistral3RotaryEmbedding`` inside ``TtMinistral3Model`` (via ``forward_prefill``), **TT** ``LMHead`` or ``--lm-head-cpu`` chunked torch logits, and sampling either via **SamplingGenerator** on device (mirroring ``Transformer`` + ``format_sampling_params`` / ``seed_manager``) or PyTorch softmax/multinomial on the host when ``--cpu-sampling`` is set o...
+# Tenstorrent demo: Devstral Small 2 (Mistral3) **text** LM on TT, with **autoregressive generation** using **TT** ``embed_tokens`` and **TT** ``TtMinistral3RotaryEmbedding`` inside ``TtMinistral3Model`` (via ``forward_prefill``), **TT** ``LMHead``, and on-device ``Sampling1D``.
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost as _profiler_signpost
 from transformers import AutoProcessor
 from transformers.masking_utils import create_causal_mask
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
@@ -31,7 +32,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     resolve_rope_parameters,
     apply_fp8_dequantize_compat,
     close_devstral_demo_mesh,
-    cpu_lm_head_logits_last_token,
     demo_lm_head_max_columns_per_device,
     devstral_supports_on_device_sampling,
     eos_token_ids,
@@ -43,10 +43,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_execute_decode_trace,
     tt_forward_prefill_from_device_ids,
     tt_lm_head_logits_block,
-    tt_lm_head_logits_last_token,
     tt_prefill_hidden_states_from_ids,
-    tt_read_decode_traced_hidden,
-    tt_read_decode_traced_logits,
     tt_read_decode_traced_token,
     tt_release_decode_trace,
     tt_sampling_output_token_id,
@@ -223,7 +220,7 @@ def main(argv: list[str] | None = None):
     ref_do_sample = bool(DEFAULT_GENERATE_KWARGS["do_sample"])
 
     parser = argparse.ArgumentParser(
-        description="Devstral-2 on TT: Ministral3 prefill + LMHead; on-device Sampling1D when supported, else CPU logits sampling."
+        description="Devstral-2 on TT: Ministral3 prefill + TT LMHead + on-device Sampling1D."
     )
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="HF repo id (also set HF_MODEL).")
     parser.add_argument(
@@ -280,20 +277,10 @@ def main(argv: list[str] | None = None):
         help="Torch/CUDA RNG seed before generation (recommended for sampling).",
     )
     parser.add_argument(
-        "--lm-head-cpu",
-        action="store_true",
-        help="LM head as chunked torch matmul on CPU (avoids Wormhole L1 static CB limits on TT lm_head).",
-    )
-    parser.add_argument(
         "--lm-head-max-device-cols",
         type=int,
         default=None,
         help="On-device LMHead: max vocab columns per matmul shard (default 4096; try 2048 if L1 error remains).",
-    )
-    parser.add_argument(
-        "--cpu-sampling",
-        action="store_true",
-        help="Force PyTorch softmax/argmax on host from TT logits (disables on-device Sampling1D).",
     )
     parser.add_argument(
         "--messages-json",
@@ -445,59 +432,39 @@ def main(argv: list[str] | None = None):
         out_key = f"{sd_prefix}output.weight"
         if out_key not in meta_state_dict:
             raise RuntimeError(f"Missing {out_key!r} in meta state dict (required for LM head).")
-        lm_head_weight_cpu: torch.Tensor | None = None
-        tt_lm_head: LMHead | None = None
-        if args.lm_head_cpu:
-            lm_head_weight_cpu = meta_state_dict[out_key].detach().to(torch.bfloat16).cpu().contiguous()
-        else:
-            lm_head_max_cols = demo_lm_head_max_columns_per_device(model_args, cli_cap=args.lm_head_max_device_cols)
-            tt_lm_head = LMHead(
-                args=model_args,
-                mesh_device=mesh_device,
-                tt_ccl=shared_tt_ccl,
-                dtype=dtype_tt,
-                state_dict=meta_state_dict,
-                state_dict_prefix=sd_prefix,
-                weight_cache_path=model_args.weight_cache_path(dtype_tt),
-                max_columns_per_device=lm_head_max_cols,
-            )
-
-        use_device_sampling = (
-            not args.lm_head_cpu
-            and not args.cpu_sampling
-            and tt_lm_head is not None
-            and devstral_supports_on_device_sampling(model_args, mesh_device)
+        lm_head_max_cols = demo_lm_head_max_columns_per_device(model_args, cli_cap=args.lm_head_max_device_cols)
+        tt_lm_head = LMHead(
+            args=model_args,
+            mesh_device=mesh_device,
+            tt_ccl=shared_tt_ccl,
+            dtype=dtype_tt,
+            state_dict=meta_state_dict,
+            state_dict_prefix=sd_prefix,
+            weight_cache_path=model_args.weight_cache_path(dtype_tt),
+            max_columns_per_device=lm_head_max_cols,
         )
-        if (
-            tt_lm_head is not None
-            and not args.cpu_sampling
-            and not devstral_supports_on_device_sampling(model_args, mesh_device)
-        ):
-            logger.warning(
-                "Vocab size / mesh splits exceed on-device sampling limit (64k per split); using CPU softmax on logits."
-            )
 
-        sampling: DevstralSampling1DAdapter | None = None
-        sampling_empty_slots: list[int] | None = None
-        if use_device_sampling:
-            sampling = DevstralSampling1DAdapter(
-                args=model_args,
-                mesh_device=mesh_device,
-                tt_ccl=shared_tt_ccl,
+        if not devstral_supports_on_device_sampling(model_args, mesh_device):
+            raise RuntimeError("On-device Sampling1D is required but unsupported for this vocab/mesh.")
+
+        sampling = DevstralSampling1DAdapter(
+            args=model_args,
+            mesh_device=mesh_device,
+            tt_ccl=shared_tt_ccl,
+        )
+        sampling_empty_slots = list(range(sampling.max_batch_size))
+        seed_for_params = args.seed if args.seed is not None else None
+        if not prefer_stochastic_sampling:
+            sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=1.0, seed=seed_for_params)
+        else:
+            sampling_in = SamplingParams(
+                temperature=float(args.temperature),
+                top_k=32,
+                top_p=1.0,
+                seed=seed_for_params,
             )
-            sampling_empty_slots = list(range(sampling.max_batch_size))
-            seed_for_params = args.seed if args.seed is not None else None
-            if not prefer_stochastic_sampling:
-                sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=1.0, seed=seed_for_params)
-            else:
-                sampling_in = SamplingParams(
-                    temperature=float(args.temperature),
-                    top_k=32,
-                    top_p=1.0,
-                    seed=seed_for_params,
-                )
-            formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
-            sampling.reset_sampling_params(formatted_sampling)
+        formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
+        sampling.reset_sampling_params(formatted_sampling)
 
         input_ids = input_ids.to(hf_inner.get_input_embeddings().weight.device)
         seq_len_lm = int(input_ids.shape[1])
@@ -585,11 +552,9 @@ def main(argv: list[str] | None = None):
                         layout=ttnn.ROW_MAJOR_LAYOUT,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                     )
-                pad_row = (
-                    hf_inner.get_input_embeddings()(torch.tensor([[pad_token_id]], device=input_ids.device))[0, 0]
-                    .detach()
-                    .cpu()
-                )
+                pad_row = hf_inner.get_input_embeddings()(torch.tensor([[pad_token_id]], device=input_ids.device))[
+                    0, 0
+                ].detach()
                 # Keep token history on host: growing ids_tt_gen during trace risks allocator overlap with trace outputs.
                 generated_token_ids: list[int] = []
 
@@ -609,37 +574,15 @@ def main(argv: list[str] | None = None):
                 def _sample_from_prefill_out(tt_out: ttnn.Tensor, last_token_index: int) -> int:
                     """Sample next token at ``last_token_index``; update ``stats`` lm-head/sample timings."""
                     tok_slot = last_token_index % 32
-                    if sampling is not None:
-                        assert tt_lm_head is not None
-                        t0 = time.perf_counter()
-                        logits_tt = tt_lm_head_logits_block(tt_out, last_token_index, model_args, tt_lm_head)
-                        stats["lmhead_s"] += time.perf_counter() - t0
-                        t0 = time.perf_counter()
-                        sample_result = sampling.sample(logits_tt, enable_trace=False)
-                        tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
-                        out = tt_sampling_output_token_id(tt_next, tok_slot)
-                        ttnn.deallocate(logits_tt)
-                        stats["sample_post_s"] += time.perf_counter() - t0
-                    else:
-                        t0 = time.perf_counter()
-                        if args.lm_head_cpu:
-                            assert lm_head_weight_cpu is not None
-                            logits_row = cpu_lm_head_logits_last_token(
-                                tt_out, last_token_index, mesh_device, lm_head_weight_cpu, int(model_args.vocab_size)
-                            )
-                        else:
-                            assert tt_lm_head is not None
-                            logits_row = tt_lm_head_logits_last_token(
-                                tt_out, last_token_index, mesh_device, model_args, tt_lm_head
-                            )
-                        stats["lmhead_s"] += time.perf_counter() - t0
-                        t0 = time.perf_counter()
-                        if do_sample:
-                            probs = torch.softmax(logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1)
-                            out = int(torch.multinomial(probs, num_samples=1).item())
-                        else:
-                            out = int(logits_row.argmax(dim=-1).item())
-                        stats["sample_post_s"] += time.perf_counter() - t0
+                    t0 = time.perf_counter()
+                    logits_tt = tt_lm_head_logits_block(tt_out, last_token_index, model_args, tt_lm_head)
+                    stats["lmhead_s"] += time.perf_counter() - t0
+                    t0 = time.perf_counter()
+                    sample_result = sampling.sample(logits_tt, enable_trace=False)
+                    tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
+                    out = tt_sampling_output_token_id(tt_next, tok_slot)
+                    ttnn.deallocate(logits_tt)
+                    stats["sample_post_s"] += time.perf_counter() - t0
                     ttnn.deallocate(tt_out)
                     return out
 
@@ -671,7 +614,7 @@ def main(argv: list[str] | None = None):
                         warm_out,
                         warm_sample_idx,
                         model_args,
-                        None if args.lm_head_cpu else tt_lm_head,
+                        tt_lm_head,
                         sampling=sampling,
                     )
 
@@ -683,12 +626,13 @@ def main(argv: list[str] | None = None):
                             tt_model,
                             model_args,
                             decode_buffers,
-                            tt_lm_head=None if args.lm_head_cpu else tt_lm_head,
+                            tt_lm_head=tt_lm_head,
                             sampling=sampling,
                             page_table=page_table_tt,
                         )
 
                     run_t0 = time.perf_counter()
+                    _profiler_signpost("prefill-start")
                     t0 = time.perf_counter()
                     if use_paged:
                         assert page_table_tt is not None and page_table_host is not None
@@ -715,6 +659,7 @@ def main(argv: list[str] | None = None):
                     t0 = time.perf_counter()
                     next_scalar = _sample_from_prefill_out(tt_out, sample_idx)
                     stats["first_sample_s"] = time.perf_counter() - t0
+                    _profiler_signpost("prefill-end")
                     stats["ttft_s"] = time.perf_counter() - run_t0
                     stats["steps"] = 1
 
@@ -729,19 +674,22 @@ def main(argv: list[str] | None = None):
                         if decode_buffers is None:
                             decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
                         tt_update_decode_input_buffers(mesh_device, decode_buffers, int(next_scalar), gen_sl - 1)
+                        _profiler_signpost("trace-capture-start")
                         t_capture = time.perf_counter()
                         decode_trace_ctx = tt_capture_decode_trace(
                             mesh_device,
                             tt_model,
                             model_args,
                             decode_buffers,
-                            tt_lm_head=None if args.lm_head_cpu else tt_lm_head,
+                            tt_lm_head=tt_lm_head,
                             sampling=sampling,
                             page_table=page_table_tt,
                             prewarmed=True,
                         )
                         stats["trace_capture_s"] = time.perf_counter() - t_capture
+                        _profiler_signpost("trace-capture-end")
 
+                        _profiler_signpost("decode-loop-start")
                         for _ in range(1, args.max_new_tokens):
                             if next_scalar in eos_set:
                                 break
@@ -759,23 +707,8 @@ def main(argv: list[str] | None = None):
                             if decode_trace_ctx.output_tokens is not None:
                                 next_scalar = tt_read_decode_traced_token(decode_trace_ctx, batch_slot=0)
                                 stats["sample_post_s"] += time.perf_counter() - t0
-                            elif decode_trace_ctx.output_logits is not None:
-                                logits_row = tt_read_decode_traced_logits(
-                                    decode_trace_ctx, mesh_device, model_args, batch_slot=0
-                                )
-                                stats["lmhead_s"] += time.perf_counter() - t0
-                                t0 = time.perf_counter()
-                                if do_sample:
-                                    probs = torch.softmax(
-                                        logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1
-                                    )
-                                    next_scalar = int(torch.multinomial(probs, num_samples=1).item())
-                                else:
-                                    next_scalar = int(logits_row.argmax(dim=-1).item())
-                                stats["sample_post_s"] += time.perf_counter() - t0
                             else:
-                                h_clone = tt_read_decode_traced_hidden(decode_trace_ctx, mesh_device)
-                                next_scalar = _sample_from_prefill_out(h_clone, 0)
+                                raise RuntimeError("Decode trace did not produce on-device sampled tokens.")
 
                             if stats["first_traced_step_s"] is None:
                                 stats["first_traced_step_s"] = time.perf_counter() - step_t0
@@ -785,6 +718,7 @@ def main(argv: list[str] | None = None):
                             generated_token_ids.append(next_scalar)
                             gen_sl += 1
                             stats["steps"] += 1
+                        _profiler_signpost("decode-loop-end")
 
                     stats["wall_s"] = time.perf_counter() - run_t0
 

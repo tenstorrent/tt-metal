@@ -1,21 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Tenstorrent variant of the CPU agent demo: same interactive agent tools and chat loop inlined below, via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM), then LM head and ``SamplingGenerator`` / CPU logits (``tt_text_demo`` / ``tt_image_demo``). **Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a **traced TT decode** for each new token. The single-token decode trace is captured...
+# Tenstorrent image/text chat demo via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM), TT LM head, and on-device Sampling1D. **Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a **traced TT decode** for each new token. The single-token decode trace is captured once per session and reused after each prefill refreshes KV contents.
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import fnmatch
-import re
 import shlex
 import types
-import urllib.error
-import urllib.parse
-import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -35,7 +29,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     apply_devstral_hf_trust_patches,
     apply_fp8_dequantize_compat,
     close_devstral_demo_mesh,
-    cpu_lm_head_logits_last_token,
     demo_lm_head_max_columns_per_device,
     devstral_supports_on_device_sampling,
     eos_token_ids,
@@ -47,9 +40,6 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_execute_decode_trace,
     tt_forward_prefill_from_device_ids,
     tt_lm_head_logits_block,
-    tt_lm_head_logits_last_token,
-    tt_read_decode_traced_hidden,
-    tt_read_decode_traced_logits,
     tt_read_decode_traced_token,
     tt_release_decode_trace,
     tt_replicated_ids_to_torch_long,
@@ -66,33 +56,11 @@ from models.tt_transformers.tt.model_config import ModelArgs
 
 apply_fp8_dequantize_compat()
 
-# --- Agent tool scaffolding (inlined from demo_agent.py; TT path replaces HF generate only) ---
+# --- Interactive text/image chat scaffolding ---
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Devstral Agent, a concise and practical coding assistant. "
-    "Help with debugging, implementation, and code review in a local repository."
+    "You are Devstral Agent, a concise and practical assistant. " "Answer text and image questions directly."
 )
-DEFAULT_AGENT_RULES = """
-You have these tools available:
-- read_file(path, offset=1, limit=200)
-- write_file(path, content, append=false)
-- search_replace(path, search, replace, max_replacements=0)
-- grep(pattern, path=".", glob="*", case_insensitive=false, max_results=200)
-- web_search(query, max_results=5)
-- web_fetch(url, max_chars=12000)
-- todo(action, id="", content="", status="", items=[])
-- ask_user_question(question)
-- load_skill(path)
-- inspect_codebase(path=".", max_entries=300)
-
-Tool-call format (only this content when calling a tool):
-<tool_call>
-{"name":"tool_name","arguments":{"arg":"value"}}
-</tool_call>
-
-When you receive <tool_result>, use it and continue.
-Use read_file/write_file/search_replace/grep/inspect_codebase for repository tasks (shell/terminal tools are not available).
-"""
 
 
 @dataclass
@@ -104,293 +72,6 @@ class ChatConfig:
     do_sample: bool
     device: str
     system_prompt: str
-    workspace_root: str
-    command_timeout_sec: int
-    max_tool_calls_per_turn: int
-
-
-@dataclass
-class AgentState:
-    todos: List[Dict[str, str]] = field(default_factory=list)
-
-
-def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
-    match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, flags=re.DOTALL)
-    if not match:
-        return None
-    try:
-        payload = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
-def _limit_text(text: str, max_chars: int = 12000) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "\n... [truncated]"
-
-
-def _resolve_workspace_path(workspace_root: str, raw_path: str) -> Path:
-    root = Path(workspace_root).resolve()
-    candidate = Path(raw_path)
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    candidate = candidate.resolve()
-    if root not in candidate.parents and candidate != root:
-        raise ValueError("Path escapes workspace_root.")
-    return candidate
-
-
-_SHELL_DISABLED_MSG = (
-    "Shell execution is disabled in this demo for security. "
-    "Use read_file, write_file, search_replace, grep, or inspect_codebase instead."
-)
-
-
-def _tool_shell_disabled() -> Dict[str, Any]:
-    return {"ok": False, "exit_code": None, "output": "", "error": _SHELL_DISABLED_MSG}
-
-
-def tool_read_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
-    try:
-        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
-        offset = int(args.get("offset", 1))
-        limit = int(args.get("limit", 200))
-        lines = path.read_text(encoding="utf-8").splitlines()
-        start = max(offset - 1, 0)
-        end = min(start + max(limit, 1), len(lines))
-        rendered = "\n".join(f"{idx + 1}|{lines[idx]}" for idx in range(start, end))
-        return {"ok": True, "path": str(path), "output": _limit_text(rendered)}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def tool_write_file(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
-    try:
-        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
-        content = str(args.get("content", ""))
-        append = bool(args.get("append", False))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        mode = "a" if append else "w"
-        with path.open(mode, encoding="utf-8") as f:
-            f.write(content)
-        return {"ok": True, "path": str(path), "bytes_written": len(content.encode("utf-8"))}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def tool_search_replace(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
-    try:
-        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
-        search = str(args.get("search", ""))
-        replace = str(args.get("replace", ""))
-        max_replacements = int(args.get("max_replacements", 0))
-        text = path.read_text(encoding="utf-8")
-        if max_replacements <= 0:
-            count = text.count(search)
-            updated = text.replace(search, replace)
-        else:
-            updated = text.replace(search, replace, max_replacements)
-            count = min(text.count(search), max_replacements)
-        path.write_text(updated, encoding="utf-8")
-        return {"ok": True, "path": str(path), "replacements": count}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def tool_grep(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
-    pattern = str(args.get("pattern", ""))
-    rel_path = str(args.get("path", "."))
-    glob_pattern = str(args.get("glob", "*"))
-    case_insensitive = bool(args.get("case_insensitive", False))
-    max_results = int(args.get("max_results", 200))
-    if not pattern:
-        return {"ok": False, "error": "pattern is required"}
-    try:
-        flags = re.IGNORECASE if case_insensitive else 0
-        regex = re.compile(pattern, flags)
-    except re.error as exc:
-        return {"ok": False, "error": f"invalid pattern: {exc}"}
-    try:
-        root = Path(config.workspace_root).resolve()
-        target = _resolve_workspace_path(config.workspace_root, rel_path)
-        paths = [target] if target.is_file() else sorted(p for p in target.rglob("*") if p.is_file())
-        hits: List[str] = []
-        for path in paths:
-            if ".git" in path.parts:
-                continue
-            try:
-                rel = path.relative_to(root)
-            except ValueError:
-                continue
-            if not fnmatch.fnmatch(str(rel), glob_pattern) and not fnmatch.fnmatch(path.name, glob_pattern):
-                continue
-            try:
-                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError as exc:
-                continue
-            for lineno, line in enumerate(lines, 1):
-                if regex.search(line):
-                    hits.append(f"{path}:{lineno}:{line}")
-                    if len(hits) >= max_results:
-                        break
-            if len(hits) >= max_results:
-                break
-        return {"ok": True, "output": _limit_text("\n".join(hits))}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def tool_web_fetch(args: Dict[str, Any]) -> Dict[str, Any]:
-    url = str(args.get("url", ""))
-    max_chars = int(args.get("max_chars", 12000))
-    if not url:
-        return {"ok": False, "error": "url is required"}
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "devstral-demo-agent/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-        return {"ok": True, "url": url, "output": _limit_text(body, max_chars=max_chars)}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def tool_web_search(args: Dict[str, Any]) -> Dict[str, Any]:
-    query = str(args.get("query", "")).strip()
-    max_results = int(args.get("max_results", 5))
-    if not query:
-        return {"ok": False, "error": "query is required"}
-    encoded = urllib.parse.quote_plus(query)
-    url = f"https://duckduckgo.com/html/?q={encoded}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "devstral-demo-agent/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-        matches = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html)
-        results: List[Dict[str, str]] = []
-        for href, title_html in matches[:max_results]:
-            title = re.sub(r"<.*?>", "", title_html)
-            results.append({"title": title, "url": href})
-        return {"ok": True, "query": query, "results": results}
-    except urllib.error.URLError as exc:
-        return {"ok": False, "error": f"Search failed: {exc}"}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def tool_todo(args: Dict[str, Any], state: AgentState) -> Dict[str, Any]:
-    action = str(args.get("action", "list")).lower()
-    if action == "list":
-        return {"ok": True, "todos": state.todos}
-    if action == "clear":
-        state.todos = []
-        return {"ok": True, "todos": state.todos}
-    if action == "add":
-        item = {
-            "id": str(args.get("id", f"todo-{len(state.todos) + 1}")),
-            "content": str(args.get("content", "")),
-            "status": str(args.get("status", "pending")),
-        }
-        state.todos.append(item)
-        return {"ok": True, "todos": state.todos}
-    if action == "update":
-        todo_id = str(args.get("id", ""))
-        for item in state.todos:
-            if item["id"] == todo_id:
-                if "content" in args:
-                    item["content"] = str(args["content"])
-                if "status" in args:
-                    item["status"] = str(args["status"])
-                return {"ok": True, "todos": state.todos}
-        return {"ok": False, "error": f"Todo id not found: {todo_id}"}
-    if action == "set":
-        raw_items = args.get("items", [])
-        if not isinstance(raw_items, list):
-            return {"ok": False, "error": "items must be a list"}
-        parsed: List[Dict[str, str]] = []
-        for raw in raw_items:
-            if not isinstance(raw, dict):
-                continue
-            parsed.append(
-                {
-                    "id": str(raw.get("id", f"todo-{len(parsed) + 1}")),
-                    "content": str(raw.get("content", "")),
-                    "status": str(raw.get("status", "pending")),
-                }
-            )
-        state.todos = parsed
-        return {"ok": True, "todos": state.todos}
-    return {"ok": False, "error": f"Unsupported todo action: {action}"}
-
-
-def tool_ask_user_question(args: Dict[str, Any]) -> Dict[str, Any]:
-    question = str(args.get("question", "Please provide more detail:")).strip()
-    answer = input(f"[Agent question] {question}\nYour answer: ").strip()
-    return {"ok": True, "question": question, "answer": answer}
-
-
-def tool_load_skill(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
-    try:
-        path = _resolve_workspace_path(config.workspace_root, str(args.get("path", "")))
-        content = path.read_text(encoding="utf-8")
-        return {"ok": True, "path": str(path), "content": _limit_text(content)}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def tool_inspect_codebase(args: Dict[str, Any], config: ChatConfig) -> Dict[str, Any]:
-    try:
-        base = _resolve_workspace_path(config.workspace_root, str(args.get("path", ".")))
-        max_entries = int(args.get("max_entries", 300))
-        entries: List[str] = []
-        for p in sorted(base.rglob("*")):
-            if ".git" in p.parts:
-                continue
-            entries.append(str(p.relative_to(config.workspace_root)))
-            if len(entries) >= max_entries:
-                break
-        return {"ok": True, "path": str(base), "entries": entries}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
-
-
-def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: AgentState) -> Dict[str, Any]:
-    name = str(tool_call.get("name", ""))
-    args = tool_call.get("arguments", {})
-    if not isinstance(args, dict):
-        return {"ok": False, "error": "arguments must be an object"}
-
-    if name in ("terminal", "bash"):
-        return _tool_shell_disabled()
-    if name == "read_file":
-        return tool_read_file(args, config)
-    if name == "write_file":
-        return tool_write_file(args, config)
-    if name == "search_replace":
-        return tool_search_replace(args, config)
-    if name == "grep":
-        return tool_grep(args, config)
-    if name == "web_search":
-        return tool_web_search(args)
-    if name == "web_fetch":
-        return tool_web_fetch(args)
-    if name == "todo":
-        return tool_todo(args, state)
-    if name == "ask_user_question":
-        return tool_ask_user_question(args)
-    if name == "load_skill":
-        return tool_load_skill(args, config)
-    if name == "inspect_codebase":
-        return tool_inspect_codebase(args, config)
-    if name == "delegate_task":
-        result = _tool_shell_disabled()
-        result["description"] = str(args.get("description", ""))
-        result["delegated"] = True
-        return result
-    return {"ok": False, "error": f"Unknown tool: {name}"}
 
 
 # Tell the instruct model that Pixtral inputs are real in this demo; otherwise it mimics a text-only agent.
@@ -407,9 +88,7 @@ class TTAgentConfig(ChatConfig):
 
     mesh_width: int = 1
     text_layers: Optional[int] = None
-    lm_head_cpu: bool = False
     lm_head_max_device_cols: Optional[int] = None
-    cpu_sampling: bool = False
     max_seq_len: Optional[int] = None
     max_context_tokens: int = 8192
     seed: Optional[int] = None
@@ -427,10 +106,9 @@ class TtAgentRuntime:
     tt_language_model: TtMinistral3Model
     hf_full: torch.nn.Module
     hf_inner: Mistral3Model
-    tt_lm_head: Optional[LMHead]
-    lm_head_weight_cpu: Optional[torch.Tensor]
-    sampling: Optional[DevstralSampling1DAdapter]
-    sampling_empty_slots: Optional[List[int]]
+    tt_lm_head: LMHead
+    sampling: DevstralSampling1DAdapter
+    sampling_empty_slots: List[int]
     shared_tt_ccl: TT_CCL
     pad_token_id: int
     pad_row_1d: torch.Tensor
@@ -457,17 +135,12 @@ def _tokenizer_apply_messages(
 
 
 def _inject_image_into_first_human_user(messages: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-    """Upgrade the first real ``user`` turn to Pixtral-style image+text.
-
-    Skip rows whose content starts with ``<tool_result>``."""
+    """Upgrade the first user turn to Pixtral-style image+text."""
     out: List[Dict[str, Any]] = []
     image_done = False
     for m in messages:
         if m["role"] == "user" and not image_done:
             c = m.get("content", "")
-            if isinstance(c, str) and c.lstrip().startswith("<tool_result>"):
-                out.append(dict(m))
-                continue
             image_done = True
             out.append({"role": "user", "content": [{"type": "image"}, {"type": "text", "text": c}]})
         else:
@@ -662,57 +335,39 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         if out_key not in meta_state_dict:
             raise RuntimeError(f"Missing {out_key!r} in meta state dict (required for LM head).")
 
-        lm_head_weight_cpu: Optional[torch.Tensor] = None
-        tt_lm_head: Optional[LMHead] = None
-        if config.lm_head_cpu:
-            lm_head_weight_cpu = meta_state_dict[out_key].detach().to(torch.bfloat16).cpu().contiguous()
-        else:
-            lm_max = demo_lm_head_max_columns_per_device(model_args, cli_cap=config.lm_head_max_device_cols)
-            tt_lm_head = LMHead(
-                args=model_args,
-                mesh_device=mesh_device,
-                tt_ccl=shared_tt_ccl,
-                dtype=dtype_tt,
-                state_dict=meta_state_dict,
-                state_dict_prefix=sd_prefix,
-                weight_cache_path=model_args.weight_cache_path(dtype_tt),
-                max_columns_per_device=lm_max,
-            )
-
-        use_device_sampling = (
-            not config.lm_head_cpu
-            and not config.cpu_sampling
-            and tt_lm_head is not None
-            and devstral_supports_on_device_sampling(model_args, mesh_device)
+        lm_max = demo_lm_head_max_columns_per_device(model_args, cli_cap=config.lm_head_max_device_cols)
+        tt_lm_head = LMHead(
+            args=model_args,
+            mesh_device=mesh_device,
+            tt_ccl=shared_tt_ccl,
+            dtype=dtype_tt,
+            state_dict=meta_state_dict,
+            state_dict_prefix=sd_prefix,
+            weight_cache_path=model_args.weight_cache_path(dtype_tt),
+            max_columns_per_device=lm_max,
         )
-        if (
-            tt_lm_head is not None
-            and not config.cpu_sampling
-            and not devstral_supports_on_device_sampling(model_args, mesh_device)
-        ):
-            print("Warning: using CPU softmax / multinomial on TT logits (on-device sampling unsupported).")
 
-        sampling: Optional[DevstralSampling1DAdapter] = None
-        sampling_empty_slots: Optional[List[int]] = None
-        if use_device_sampling:
-            sampling = DevstralSampling1DAdapter(
-                args=model_args,
-                mesh_device=mesh_device,
-                tt_ccl=shared_tt_ccl,
+        if not devstral_supports_on_device_sampling(model_args, mesh_device):
+            raise RuntimeError("On-device Sampling1D is required but unsupported for this vocab/mesh.")
+
+        sampling = DevstralSampling1DAdapter(
+            args=model_args,
+            mesh_device=mesh_device,
+            tt_ccl=shared_tt_ccl,
+        )
+        sampling_empty_slots = list(range(sampling.max_batch_size))
+        seed_for_params = config.seed
+        if not config.do_sample:
+            sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=float(config.top_p), seed=seed_for_params)
+        else:
+            sampling_in = SamplingParams(
+                temperature=float(config.temperature),
+                top_k=32,
+                top_p=float(config.top_p),
+                seed=seed_for_params,
             )
-            sampling_empty_slots = list(range(sampling.max_batch_size))
-            seed_for_params = config.seed
-            if not config.do_sample:
-                sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=float(config.top_p), seed=seed_for_params)
-            else:
-                sampling_in = SamplingParams(
-                    temperature=float(config.temperature),
-                    top_k=32,
-                    top_p=float(config.top_p),
-                    seed=seed_for_params,
-                )
-            formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
-            sampling.reset_sampling_params(formatted_sampling)
+        formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
+        sampling.reset_sampling_params(formatted_sampling)
 
         return TtAgentRuntime(
             mesh_device=mesh_device,
@@ -723,7 +378,6 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             hf_full=hf_full,
             hf_inner=hf_inner,
             tt_lm_head=tt_lm_head,
-            lm_head_weight_cpu=lm_head_weight_cpu,
             sampling=sampling,
             sampling_empty_slots=sampling_empty_slots,
             shared_tt_ccl=shared_tt_ccl,
@@ -753,7 +407,7 @@ def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos
         rt.tt_language_model,
         rt.model_args,
         decode_buffers,
-        tt_lm_head=None if rt.cfg.lm_head_cpu else rt.tt_lm_head,
+        tt_lm_head=rt.tt_lm_head,
         sampling=rt.sampling,
     )
     rt.decode_trace_ctx = tt_capture_decode_trace(
@@ -761,7 +415,7 @@ def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos
         rt.tt_language_model,
         rt.model_args,
         decode_buffers,
-        tt_lm_head=None if rt.cfg.lm_head_cpu else rt.tt_lm_head,
+        tt_lm_head=rt.tt_lm_head,
         sampling=rt.sampling,
         prewarmed=True,
     )
@@ -770,28 +424,12 @@ def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos
 
 def _sample_from_prefill_out_tt_agent(rt: TtAgentRuntime, tt_out: ttnn.Tensor, last_token_index: int) -> int:
     """Sample a single token id from the prefill hidden-states block at ``last_token_index``."""
-    if rt.sampling is not None:
-        assert rt.tt_lm_head is not None
-        logits_tt = tt_lm_head_logits_block(tt_out, last_token_index, rt.model_args, rt.tt_lm_head)
-        sample_result = rt.sampling.sample(logits_tt, enable_trace=False)
-        tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
-        out = tt_sampling_output_token_id(tt_next, last_token_index % 32)
-        ttnn.deallocate(logits_tt)
-        return out
-    if rt.cfg.lm_head_cpu:
-        assert rt.lm_head_weight_cpu is not None
-        logits_row = cpu_lm_head_logits_last_token(
-            tt_out, last_token_index, rt.mesh_device, rt.lm_head_weight_cpu, int(rt.model_args.vocab_size)
-        )
-    else:
-        assert rt.tt_lm_head is not None
-        logits_row = tt_lm_head_logits_last_token(
-            tt_out, last_token_index, rt.mesh_device, rt.model_args, rt.tt_lm_head
-        )
-    if bool(rt.cfg.do_sample):
-        probs = torch.softmax(logits_row.float().squeeze(0) / max(float(rt.cfg.temperature), 1e-6), dim=-1)
-        return int(torch.multinomial(probs, num_samples=1).item())
-    return int(logits_row.argmax(dim=-1).item())
+    logits_tt = tt_lm_head_logits_block(tt_out, last_token_index, rt.model_args, rt.tt_lm_head)
+    sample_result = rt.sampling.sample(logits_tt, enable_trace=False)
+    tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
+    out = tt_sampling_output_token_id(tt_next, last_token_index % 32)
+    ttnn.deallocate(logits_tt)
+    return out
 
 
 def _sample_next_from_decode_trace(rt: TtAgentRuntime) -> int:
@@ -800,17 +438,7 @@ def _sample_next_from_decode_trace(rt: TtAgentRuntime) -> int:
     assert ctx is not None
     if ctx.output_tokens is not None:
         return tt_read_decode_traced_token(ctx, batch_slot=0)
-    if ctx.output_logits is not None:
-        logits_row = tt_read_decode_traced_logits(ctx, rt.mesh_device, rt.model_args, batch_slot=0)
-        if bool(rt.cfg.do_sample):
-            probs = torch.softmax(logits_row.float().squeeze(0) / max(float(rt.cfg.temperature), 1e-6), dim=-1)
-            return int(torch.multinomial(probs, num_samples=1).item())
-        return int(logits_row.argmax(dim=-1).item())
-    h_clone = tt_read_decode_traced_hidden(ctx, rt.mesh_device)
-    try:
-        return _sample_from_prefill_out_tt_agent(rt, h_clone, 0)
-    finally:
-        ttnn.deallocate(h_clone)
+    raise RuntimeError("Decode trace did not produce on-device sampled tokens.")
 
 
 def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]], config: TTAgentConfig) -> str:
@@ -953,9 +581,8 @@ def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]
 
 
 def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
-    system_content = (f"{config.system_prompt}\n\n{DEFAULT_AGENT_RULES}\n\n{TT_AGENT_MULTIMODAL_SYSTEM_APPEND}").strip()
+    system_content = (f"{config.system_prompt}\n\n{TT_AGENT_MULTIMODAL_SYSTEM_APPEND}").strip()
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_content}]
-    state = AgentState()
 
     print(
         "\n--- Devstral2 Small Agent Demo (Tenstorrent)"
@@ -963,7 +590,7 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
         + " ---"
     )
     print(
-        "Type 'quit' or 'exit' to stop. '/clear' resets chat + tools (image stays; use '/noimage' to drop). "
+        "Type 'quit' or 'exit' to stop. '/clear' resets chat (image stays; use '/noimage' to drop). "
         "'/image PATH [prompt…]' attaches an image; optional words after the path are your question this turn.\n"
     )
 
@@ -981,8 +608,7 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
             break
         if user_input.lower() == "/clear":
             messages = [{"role": "system", "content": system_content}]
-            state = AgentState()
-            print("Conversation history and todo state cleared.\n")
+            print("Conversation history cleared.\n")
             continue
         if user_input.lower() == "/noimage":
             runtime_clear_image(rt)
@@ -1005,87 +631,11 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
             user_input = same_turn_prompt
 
         messages.append({"role": "user", "content": user_input})
-        final_response: Optional[str] = None
-        last_tool_result: Optional[Dict[str, Any]] = None
-        last_tool_name: Optional[str] = None
-        last_tool_signature: Optional[str] = None
-        repeated_tool_calls = 0
-
-        py_cfg = ChatConfig(
-            model_id=config.model_id,
-            max_new_tokens=config.max_new_tokens,
-            temperature=config.temperature,
-            top_p=config.top_p,
-            do_sample=config.do_sample,
-            device="cpu",
-            system_prompt=config.system_prompt,
-            workspace_root=config.workspace_root,
-            command_timeout_sec=config.command_timeout_sec,
-            max_tool_calls_per_turn=config.max_tool_calls_per_turn,
-        )
-
-        for _ in range(config.max_tool_calls_per_turn):
-            try:
-                assistant_text = generate_assistant_text_tt(rt, messages, config)
-            except RuntimeError as exc:
-                final_response = f"[TT generation error] {exc}"
-                messages.append({"role": "assistant", "content": final_response})
-                break
-
-            tool_call = parse_tool_call(assistant_text)
-
-            if tool_call is None:
-                final_response = assistant_text
-                messages.append({"role": "assistant", "content": assistant_text})
-                break
-
-            messages.append({"role": "assistant", "content": assistant_text})
-            call_signature = json.dumps(tool_call, sort_keys=True, ensure_ascii=True)
-            if call_signature == last_tool_signature:
-                repeated_tool_calls += 1
-            else:
-                repeated_tool_calls = 0
-            last_tool_signature = call_signature
-
-            tool_result = execute_tool_call(tool_call, py_cfg, state)
-            last_tool_result = tool_result
-            last_tool_name = str(tool_call.get("name", ""))
-            result_content = f"<tool_result>\n{json.dumps(tool_result, ensure_ascii=True)}\n</tool_result>"
-            messages.append({"role": "user", "content": result_content})
-
-            if repeated_tool_calls >= 1:
-                if tool_result.get("ok", False):
-                    output = str(tool_result.get("output", "")).strip()
-                    if output:
-                        final_response = output
-                    else:
-                        final_response = f"Completed `{last_tool_name}` successfully."
-                else:
-                    err = str(tool_result.get("error", "")).strip()
-                    out = str(tool_result.get("output", "")).strip()
-                    details = err if err else out
-                    final_response = f"`{last_tool_name}` failed." + (f" Details: {details}" if details else "")
-                messages.append({"role": "assistant", "content": final_response})
-                break
-
-        if final_response is None:
-            if last_tool_result is not None:
-                if last_tool_result.get("ok", False):
-                    output = str(last_tool_result.get("output", "")).strip()
-                    final_response = output if output else "Tool execution completed successfully."
-                else:
-                    err = str(last_tool_result.get("error", "")).strip()
-                    out = str(last_tool_result.get("output", "")).strip()
-                    details = err if err else out
-                    final_response = "Tool execution did not complete cleanly." + (
-                        f" Details: {details}" if details else ""
-                    )
-            else:
-                final_response = (
-                    "I reached the per-turn tool-call limit before producing a final answer. "
-                    "Try narrowing the request."
-                )
-            messages.append({"role": "assistant", "content": final_response})
+        try:
+            final_response = generate_assistant_text_tt(rt, messages, config)
+        except RuntimeError as exc:
+            final_response = f"[TT generation error] {exc}"
+        messages.append({"role": "assistant", "content": final_response})
 
         print(f"\nAssistant: {final_response}\n")
 
@@ -1097,22 +647,17 @@ def parse_tt_args() -> TTAgentConfig:
     )
     p.add_argument("--model", default=DEFAULT_MODEL_ID, help=f"HF model id (default {DEFAULT_MODEL_ID})")
 
-    # Agent (CLI parity with demo_agent.py)
+    # Chat
     p.add_argument("--max-new-tokens", type=int, default=256, help="Max new tokens per model call")
     p.add_argument("--temperature", type=float, default=0.15)
     p.add_argument("--top-p", type=float, default=0.95)
     p.add_argument("--no-sample", action="store_true", help="Greedy decoding")
     p.add_argument("--system-prompt", default=DEFAULT_SYSTEM_PROMPT)
-    p.add_argument("--workspace-root", default=str(Path.cwd()))
-    p.add_argument("--command-timeout-sec", type=int, default=20)
-    p.add_argument("--max-tool-calls-per-turn", type=int, default=6)
 
     # TT
     p.add_argument("--mesh-width", type=int, default=1)
     p.add_argument("--text-layers", type=int, default=None)
-    p.add_argument("--lm-head-cpu", action="store_true")
     p.add_argument("--lm-head-max-device-cols", type=int, default=None)
-    p.add_argument("--cpu-sampling", action="store_true")
     p.add_argument(
         "--max-seq-len",
         type=int,
@@ -1156,16 +701,11 @@ def parse_tt_args() -> TTAgentConfig:
         temperature=a.temperature,
         top_p=a.top_p,
         do_sample=not a.no_sample,
-        device="cpu",
+        device="tt",
         system_prompt=a.system_prompt,
-        workspace_root=str(Path(a.workspace_root).resolve()),
-        command_timeout_sec=a.command_timeout_sec,
-        max_tool_calls_per_turn=a.max_tool_calls_per_turn,
         mesh_width=a.mesh_width,
         text_layers=a.text_layers,
-        lm_head_cpu=a.lm_head_cpu,
         lm_head_max_device_cols=a.lm_head_max_device_cols,
-        cpu_sampling=a.cpu_sampling,
         max_seq_len=a.max_seq_len,
         max_context_tokens=a.max_context_tokens,
         seed=a.seed,
