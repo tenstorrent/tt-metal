@@ -607,6 +607,7 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k schnell
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k schnell
   model: flux.1-schnell
   skus:
     bh_quietbox_2:
