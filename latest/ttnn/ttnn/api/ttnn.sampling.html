@@ -84,6 +84,7 @@
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.sampling</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.std.html">ttnn.std</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sum.html">ttnn.sum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.topk_large_indices.html">ttnn.experimental.topk_large_indices</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.var.html">ttnn.var</a></li>
 </ul>
@@ -277,17 +278,21 @@ UINT32 on Wormhole/Blackhole, and INT32 otherwise.</p>
 <dd>
 <ul class="simple">
 <li><p>Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.</p></li>
-<li><p>The input tensors must represent exactly <cite>32 users</cite> based on their shape (i.e. N*C*H = 32).</p></li>
-<li><p>The last dimension of:attr:<cite>input_values_tensor</cite> must be padded to a multiple of 32</p></li>
+<li><p>Input dims 0 and 1 (<code class="docutils literal notranslate"><span class="pre">N</span></code>, <code class="docutils literal notranslate"><span class="pre">C</span></code>) must equal 1</p></li>
+<li><p>Input dim 2 (<code class="docutils literal notranslate"><span class="pre">H</span></code>) represents the number of users, which must be in
+the range <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">32]</span></code>. The op runs one core per user, so <code class="docutils literal notranslate"><span class="pre">num_users</span></code> cores are used.</p></li>
+<li><p>The last dimension of:attr:<cite>input_values_tensor</cite> (<code class="docutils literal notranslate"><span class="pre">W</span></code>) must be padded to a multiple of 32</p></li>
 <li><p>The number of tiles along the last dimension, <code class="docutils literal notranslate"><span class="pre">Wt</span> <span class="pre">=</span> <span class="pre">W</span> <span class="pre">/</span> <span class="pre">32</span></code>, must be a power of 2
 (i.e. <code class="docutils literal notranslate"><span class="pre">W</span></code> must be a power-of-2 multiple of 32: 32, 64, 128, 256, …). The internal
 top-k stage uses a bitonic merge tree that assumes a power-of-2 tile count; a
 non-power-of-2 <code class="docutils literal notranslate"><span class="pre">Wt</span></code> is rejected. Pad <code class="docutils literal notranslate"><span class="pre">W</span></code> up to the next power-of-2 multiple of 32
 (e.g. with <code class="docutils literal notranslate"><span class="pre">-inf</span></code> values and dummy indices) if needed.</p></li>
 <li><p>The overall shape of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_values_tensor</span></code> must match that of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_indices_tensor</span></code>.</p></li>
-<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code>: Must contain 32 values, in the range  ‘(0,32]’.</p></li>
-<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">p</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">temp</span></code>: Must contain 32 values in the range <cite>[0.0, 1.0]</cite>.</p></li>
-<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code> (if provided): number of cores must equal the number of users (which is constrained to 32).</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code>: Must be a 1D tensor of shape <code class="docutils literal notranslate"><span class="pre">[num_users]</span></code> (one value per user), in the range ‘(0,32]’.</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">p</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">temp</span></code>: Must be 1D tensors of shape <code class="docutils literal notranslate"><span class="pre">[num_users]</span></code> (one value per user);
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">p</span></code> values must be in the range <cite>[0.0, 1.0]</cite>.</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code> (if provided): must supply at least <code class="docutils literal notranslate"><span class="pre">num_users</span></code> cores (1 to 32);
+only the first <code class="docutils literal notranslate"><span class="pre">num_users</span></code> cores are used and any extras are ignored.</p></li>
 </ul>
 </dd>
 </dl>
