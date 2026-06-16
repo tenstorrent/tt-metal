@@ -46,10 +46,9 @@ def check_binary_integrity(
     )
     if os.path.exists(dispatcher_core_data.firmware_path):
         elf_file = elfs_cache[dispatcher_core_data.firmware_path]
-        elf_file = elfs_cache[dispatcher_core_data.firmware_path]
         sections_to_verify = [".text"]
         for section_name in sections_to_verify:
-            section = elf_file.sections.get(section_name)
+            section = elf_file.get_section_by_name(section_name)
             if section is None:
                 log_check_risc(
                     risc_name,
@@ -88,7 +87,7 @@ def check_binary_integrity(
             elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path]
             sections_to_verify = [".text"]
             for section_name in sections_to_verify:
-                section = elf_file.sections.get(section_name)
+                section = elf_file.get_section_by_name(section_name)
                 if section is None:
                     log_check_risc(
                         risc_name,
