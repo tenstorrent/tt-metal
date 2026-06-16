@@ -919,12 +919,10 @@ class TTMoEDecode:
             # has_bias
             # activation_type
             **self.config.compute.model_dump(),
-            # optional_output_tensor=self.buffers.tt_combine_output,
-            # optional_cross_device_semaphore=self.buffers.combine_global_semaphore,
+            optional_output_tensor=self.buffers.tt_combine_output,
+            optional_cross_device_semaphore=self.buffers.combine_global_semaphore,
         )
         ttnn.deallocate(tt_l1_compute_output)
-
-        # ttnn.synchronize_device(tt_x.device())
 
         # unsqueeze
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
