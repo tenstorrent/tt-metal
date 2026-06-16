@@ -572,6 +572,9 @@ bool Device::close() {
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
+    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+    this->optimal_dram_bank_to_logical_worker_assignment_noc_.reset();
+    this->optimal_dram_bank_to_logical_worker_assignment_grid_size_.reset();
 
     // Clean up shared memory stats provider
     this->shm_stats_provider_.reset();
@@ -877,16 +880,16 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
     // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
     // based on architecture specific logic and Physical Grid configuration.
     const auto noc_tag = static_cast<std::uint8_t>(noc);
+    auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
     if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
-        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag) {
+        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
+        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
         return this->optimal_dram_bank_to_logical_worker_assignment_;
     }
     this->optimal_dram_bank_to_logical_worker_assignment_.clear();
 
     uint32_t full_grid_size_x = this->grid_size().x;
     uint32_t full_grid_size_y = this->grid_size().y;
-
-    auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Get physical coordinates of DRAM Controller NOC end-points
@@ -966,6 +969,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         this->optimal_dram_bank_to_logical_worker_assignment_.push_back(CoreCoord(logical_x, logical_y));
     }
     this->optimal_dram_bank_to_logical_worker_assignment_noc_ = noc_tag;
+    this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ = compute_with_storage_grid_size;
     return this->optimal_dram_bank_to_logical_worker_assignment_;
 }
 
