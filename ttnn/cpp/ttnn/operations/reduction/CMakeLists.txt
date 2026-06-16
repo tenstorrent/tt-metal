@@ -15,15 +15,18 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    accumulation/device/kernels/*
-    accumulation/ema/kernels/*
-    argmax/device/kernels/*
-    generic/device/kernels/*
-    moe/device/kernels/*
-    prod/device/kernels/*
-    sampling/device/kernels/*
-    topk/device/kernels/*
-    manual_seed/device/kernels/*
+    accumulation/device/kernels/*.hpp
+    accumulation/ema/kernels/*.cpp
+    argmax/device/kernels/*.cpp
+    argmax/device/kernels/*.hpp
+    generic/device/kernels/*.cpp
+    moe/device/kernels/*.cpp
+    prod/device/kernels/*.cpp
+    prod/device/kernels/*.hpp
+    sampling/device/kernels/*.cpp
+    topk/device/kernels/*.cpp
+    topk/device/kernels/*.hpp
+    manual_seed/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_reduction

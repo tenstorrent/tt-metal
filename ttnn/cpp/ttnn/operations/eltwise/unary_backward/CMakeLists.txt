@@ -12,9 +12,9 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE tanh_bw_kernels tanh_bw/device/kernels/*)
+file(GLOB_RECURSE tanh_bw_kernels tanh_bw/device/kernels/*.cpp)
 
-file(GLOB_RECURSE kernels gelu_bw/device/kernels/*)
+file(GLOB_RECURSE kernels gelu_bw/device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_eltwise_unary_backward

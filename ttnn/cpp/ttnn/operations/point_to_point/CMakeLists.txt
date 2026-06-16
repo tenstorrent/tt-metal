@@ -14,7 +14,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*.hpp)
 target_sources(
     ttnn_op_point_to_point
     PUBLIC
