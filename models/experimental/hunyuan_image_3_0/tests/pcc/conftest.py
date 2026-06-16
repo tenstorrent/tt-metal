@@ -19,6 +19,8 @@ def device():
     """One TTNN device shared across the test session (open is expensive)."""
     import ttnn
 
-    dev = ttnn.open_device(device_id=0)
+    # l1_small_size is required by conv2d (halo/sliding-window scratch buffers);
+    # harmless for the conv-free tests that share this fixture.
+    dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     yield dev
     ttnn.close_device(dev)
