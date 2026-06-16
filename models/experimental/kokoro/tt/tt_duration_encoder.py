@@ -26,7 +26,7 @@ import torch.nn as nn
 import ttnn
 
 from .tt_ada_layer_norm import TTAdaLayerNorm, TTAdaLayerNormParams, preprocess_tt_ada_layer_norm
-from .tt_lstm import TTLSTMParams, preprocess_tt_lstm_1layer, tt_bilstm_nlc
+from .tt_lstm import TTLSTMParams, build_fused_recurrent_weight, preprocess_tt_lstm_1layer, tt_bilstm_nlc
 
 
 def _cast_if_needed(x: ttnn.Tensor, dtype, *, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -74,6 +74,9 @@ class TTDurationEncoderLayerParams:
     lstm_fwd: TTLSTMParams
     lstm_rev: TTLSTMParams
     adaln: TTAdaLayerNormParams
+    # Direction-fused recurrent weight (None for unidirectional); halves per-step LSTM ops on
+    # the unpadded path. bf16 state -> bit-exact (see ``build_fused_recurrent_weight``).
+    lstm_w_h_block: "ttnn.Tensor | None" = None
 
 
 @dataclass(frozen=True)
@@ -93,16 +96,25 @@ def preprocess_tt_duration_encoder(
     layers: list[TTDurationEncoderLayerParams] = []
     pending_fwd: TTLSTMParams | None = None
     pending_rev: TTLSTMParams | None = None
+    pending_w_h_block: "ttnn.Tensor | None" = None
 
     for block in duration_encoder.lstms:
         if isinstance(block, nn.LSTM):
             fwd, rev = preprocess_tt_lstm_1layer(block, device, weights_dtype=weights_dtype)
             assert rev is not None
             pending_fwd, pending_rev = fwd, rev
+            pending_w_h_block = build_fused_recurrent_weight(block, device, weights_dtype=weights_dtype)
         else:
             assert pending_fwd is not None and pending_rev is not None
             adaln = preprocess_tt_ada_layer_norm(block, device, weights_dtype=weights_dtype)
-            layers.append(TTDurationEncoderLayerParams(lstm_fwd=pending_fwd, lstm_rev=pending_rev, adaln=adaln))
+            layers.append(
+                TTDurationEncoderLayerParams(
+                    lstm_fwd=pending_fwd,
+                    lstm_rev=pending_rev,
+                    adaln=adaln,
+                    lstm_w_h_block=pending_w_h_block,
+                )
+            )
             pending_fwd, pending_rev = None, None
 
     assert pending_fwd is None and pending_rev is None, "DurationEncoder lstms must end with AdaLayerNorm"
@@ -180,6 +192,7 @@ class TTDurationEncoder:
                 compute_kernel_config=compute_kernel_config,
                 memory_config=memory_config,
                 sequence_lengths=lengths_list,
+                w_h_block=layer.lstm_w_h_block,
             )
             ttnn.deallocate(x_in)
             x_lstm, owns_cast = _cast_if_needed(x_lstm, wire_dtype, memory_config=memory_config)
