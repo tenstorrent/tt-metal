@@ -72,12 +72,15 @@ struct BinaryNgDeviceOperation {
             tensor_return_value_t& c);
     };
 
-    // Metal 2.0 factory. Currently handles ONLY the simplest path:
-    //   no-broadcast (SubtileBroadcastType::NONE) x tile layout x FPU x tensor-b-present x
-    //   interleaved x no activations. select_program_factory() routes only that exact case
-    //   here; every other path stays on the legacy ProgramFactory above. The remaining paths
-    //   (row-major, all broadcast types, SFPU, where-op, scalar-b, sharded) are enumerated in
-    //   METAL2_PORT_REPORT.md for a follow-up pass.
+    // Metal 2.0 factory. Handles the interleaved x no-activation x no-typecast x plain ADD/SUB/MUL
+    // x non-where x non-quant cases across these axes (select_program_factory routes only these):
+    //   TILE:  NONE bcast {tensor-b FPU, tensor-b SFPU, scalar-b FPU, scalar-b SFPU};
+    //          SCALAR/ROW/COL bcast {tensor-b FPU}, LLK-bcast subset only (legacy use_llk_bcast).
+    //   ROW_MAJOR: NONE bcast {tensor-b FPU}.
+    // Every other path stays on the legacy ProgramFactory above. The remaining paths (sharded,
+    // activations, typecast, where-op, quant-op, scalar-b broadcast, software-fallback broadcast
+    // tuples, mixed row+col bcast, RM broadcast/scalar-op, SFPU broadcast) are enumerated in
+    // METAL2_PORT_REPORT.md for follow-up passes.
     struct ProgramSpecFactory {
         static ttnn::device_operation::ProgramArtifacts create_program_spec(
             const operation_attributes_t& operation_attributes,

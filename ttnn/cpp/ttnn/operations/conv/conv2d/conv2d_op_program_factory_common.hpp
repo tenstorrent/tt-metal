@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 
+#include <tt_stl/assert.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
 #include "tt-metalium/buffer.hpp"
@@ -15,6 +16,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 namespace ttnn::prim {
 
@@ -156,5 +160,56 @@ void post_conv2d_op_memory_checks_descriptor(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
     std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+
+// ----------------------------------------------------------------------------
+// Metal 2.0 shared DFB / TensorParameter names (sharded + width-sharded factories)
+//
+// Both conv2d Metal 2.0 program factories (Conv2dShardedProgramFactory and
+// Conv2dWidthShardedProgramFactory) compile into one CMake target and may share a
+// unity translation unit. Defining these constants and dfb_name_for() at namespace
+// scope in BOTH .cpp files would be an ODR redefinition under a unity build, so they
+// live here once as `inline` definitions and are included from both factory .cpp's.
+//
+// The DFBSpecName strings mirror the kernel-side dfb:: accessor tokens; one per
+// (non-zero-page) Conv2dCb the kernels reference.
+// ----------------------------------------------------------------------------
+namespace m2 = tt::tt_metal::experimental;
+
+inline const m2::DFBSpecName DFB_ACT_SHARDED{"act_sharded"};
+inline const m2::DFBSpecName DFB_ACT{"act"};
+inline const m2::DFBSpecName DFB_ACT_ROW_MAJOR{"act_row_major"};
+inline const m2::DFBSpecName DFB_ACT_SECOND_READER{"act_second_reader"};
+inline const m2::DFBSpecName DFB_ACT_TILIZED{"act_tilized"};
+inline const m2::DFBSpecName DFB_WEIGHTS{"weights"};
+inline const m2::DFBSpecName DFB_BIAS{"bias"};
+inline const m2::DFBSpecName DFB_READER_INDICES{"reader_indices"};
+inline const m2::DFBSpecName DFB_L1_ARRAY{"l1_array"};
+inline const m2::DFBSpecName DFB_MATMUL_PARTIALS{"matmul_partials"};
+inline const m2::DFBSpecName DFB_OUT{"out"};
+
+inline const m2::TensorParamName TP_WEIGHTS{"weights"};
+inline const m2::TensorParamName TP_BIAS{"bias"};
+inline const m2::TensorParamName TP_READER_INDICES{"reader_indices"};
+inline const m2::TensorParamName TP_ACT_SHARDED{"act_sharded"};
+inline const m2::TensorParamName TP_OUT{"out"};
+
+// Map a Conv2dCb to the DFBSpecName the kernels reference. Used only for the
+// (non-zero-page) CBs a sharded conv2d path actually allocates.
+inline m2::DFBSpecName dfb_name_for(Conv2dCb cb) {
+    switch (cb) {
+        case Conv2dCb::ACT_SHARDED: return DFB_ACT_SHARDED;
+        case Conv2dCb::ACT: return DFB_ACT;
+        case Conv2dCb::ACT_ROW_MAJOR_BFLOAT16: return DFB_ACT_ROW_MAJOR;
+        case Conv2dCb::ACT_SECOND_READER: return DFB_ACT_SECOND_READER;
+        case Conv2dCb::ACT_TILIZED: return DFB_ACT_TILIZED;
+        case Conv2dCb::WEIGHTS: return DFB_WEIGHTS;
+        case Conv2dCb::BIAS: return DFB_BIAS;
+        case Conv2dCb::READER_INDICES: return DFB_READER_INDICES;
+        case Conv2dCb::L1_ARRAY: return DFB_L1_ARRAY;
+        case Conv2dCb::MATMUL_PARTIALS: return DFB_MATMUL_PARTIALS;
+        case Conv2dCb::OUT: return DFB_OUT;
+        default: TT_THROW("Unexpected Conv2dCb in sharded Metal 2.0 spec: {}", static_cast<int>(cb));
+    }
+}
 
 }  // namespace ttnn::prim

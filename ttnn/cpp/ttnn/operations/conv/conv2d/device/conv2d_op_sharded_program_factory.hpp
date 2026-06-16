@@ -3,23 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 
 namespace ttnn::prim {
 
 struct Conv2dShardedProgramFactory {
-    // Builds the workload in one call (cache miss).  The intermediate
-    // conv_reader_indices tensor — which must outlive the cached program — is
-    // allocated here and parked on the WorkloadDescriptor's `buffers` vector
-    // (wrapped in `shared_ptr<Tensor>` so `~Tensor` cannot force-deallocate the
-    // device memory while the cached program is still alive).
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
-        const Conv2dParams& operation_attributes,
-        const Conv2dInputs& tensor_args,
-        Tensor& output_tensor,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    // Metal 2.0 program factory (ProgramSpecFactoryConcept). Produces the immutable
+    // ProgramSpec, its mutable ProgramRunArgs, and the op-owned conv_reader_indices
+    // tensor (host-populated index table backing the READER_INDICES borrowed-memory
+    // DFB). Ports the dense / height-sharded L1 config-tensor path only:
+    //   - config_tensors_in_dram == false (the in-DRAM path threads a raw buffer
+    //     address through a CTA -> Metal 2.0 framework blocker; TT_FATALs here).
+    //   - HEIGHT_SHARDED, non-1D-depthwise (BLOCK_SHARDED / depthwise / the
+    //     input_cores != output_cores noop-core path TT_FATAL here; they remain on
+    //     the legacy concept and would be ported separately).
+    static ttnn::device_operation::ProgramArtifacts create_program_spec(
+        const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim

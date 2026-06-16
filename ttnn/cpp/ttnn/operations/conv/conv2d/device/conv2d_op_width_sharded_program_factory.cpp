@@ -55,49 +55,16 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
 
 namespace {
 
-// Metal 2.0 DFB unique-ids, one per (non-zero-page) Conv2dCb the width-sharded
-// kernels reference. Naming mirrors the kernel-side dfb:: accessor tokens.
-const m2::DFBSpecName DFB_ACT_SHARDED{"act_sharded"};
-const m2::DFBSpecName DFB_ACT{"act"};
-const m2::DFBSpecName DFB_ACT_ROW_MAJOR{"act_row_major"};
-const m2::DFBSpecName DFB_ACT_TILIZED{"act_tilized"};
-const m2::DFBSpecName DFB_WEIGHTS{"weights"};
-const m2::DFBSpecName DFB_BIAS{"bias"};
-const m2::DFBSpecName DFB_READER_INDICES{"reader_indices"};
-const m2::DFBSpecName DFB_L1_ARRAY{"l1_array"};
-const m2::DFBSpecName DFB_MATMUL_PARTIALS{"matmul_partials"};
-const m2::DFBSpecName DFB_OUT{"out"};
-
-const m2::TensorParamName TP_WEIGHTS{"weights"};
-const m2::TensorParamName TP_BIAS{"bias"};
-const m2::TensorParamName TP_READER_INDICES{"reader_indices"};
-const m2::TensorParamName TP_ACT_SHARDED{"act_sharded"};
-const m2::TensorParamName TP_OUT{"out"};
-
+// Shared Metal 2.0 DFB / TensorParameter names + dfb_name_for() live in
+// conv2d_op_program_factory_common.hpp (inline) to avoid a unity-build ODR clash
+// with the sibling Conv2dShardedProgramFactory .cpp. Only the per-factory kernel
+// and semaphore names are declared here.
 const m2::KernelSpecName K_ACT{"act_reader"};
 const m2::KernelSpecName K_WEIGHTS{"weights_reader"};
 const m2::KernelSpecName K_COMPUTE{"compute"};
 
 const m2::SemaphoreSpecName SEM_SENDER{"act_mcast_sender"};
 const m2::SemaphoreSpecName SEM_RECEIVER{"act_mcast_receiver"};
-
-// Map a Conv2dCb to the DFBSpecName the kernels reference. Used only for the
-// (non-zero-page) CBs the width-sharded path actually allocates.
-m2::DFBSpecName dfb_name_for(Conv2dCb cb) {
-    switch (cb) {
-        case Conv2dCb::ACT_SHARDED: return DFB_ACT_SHARDED;
-        case Conv2dCb::ACT: return DFB_ACT;
-        case Conv2dCb::ACT_ROW_MAJOR_BFLOAT16: return DFB_ACT_ROW_MAJOR;
-        case Conv2dCb::ACT_TILIZED: return DFB_ACT_TILIZED;
-        case Conv2dCb::WEIGHTS: return DFB_WEIGHTS;
-        case Conv2dCb::BIAS: return DFB_BIAS;
-        case Conv2dCb::READER_INDICES: return DFB_READER_INDICES;
-        case Conv2dCb::L1_ARRAY: return DFB_L1_ARRAY;
-        case Conv2dCb::MATMUL_PARTIALS: return DFB_MATMUL_PARTIALS;
-        case Conv2dCb::OUT: return DFB_OUT;
-        default: TT_THROW("Unexpected Conv2dCb in width-sharded Metal 2.0 spec: {}", static_cast<int>(cb));
-    }
-}
 
 }  // namespace
 

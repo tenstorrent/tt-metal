@@ -2,12 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of transpose/device/kernels/compute/transpose_wh_rm.cpp. The legacy source is also
-// used by the (unmigrated) transpose_wh_sharded_rm factory; this copy is named-binding ported for
-// the transpose WH (RM, interleaved) compute kernel only. Keep the two in sync until the legacy copy's
-// last consumer ports. The SHARDED path below is dead for this factory (never defines SHARDED) and is
-// preserved verbatim, #ifdef-gated, so its CB tokens (c_24/c_25/c_27) are never name-looked-up in this
-// build — the non-SHARDED path's CB indices are bound as DFBs (dfb::src0 / dfb::tilize / dfb::out).
+// Metal 2.0 fork of transpose/device/kernels/compute/transpose_wh_rm.cpp, serving BOTH the transpose WH
+// (RM, interleaved) compute kernel (non-SHARDED) and the transpose WH (RM, sharded) compute kernel
+// (SHARDED). The legacy source remained shared by other consumers when this fork was created; keep the
+// two in sync until the legacy copy's last consumer ports.
+//   non-SHARDED: dfb::src0 (input), dfb::tilize (intermediate self-loop), dfb::out (output).
+//   SHARDED:     dfb::in_scratch (c_24), dfb::tilize (c_25); output is dfb::out_stage (c_27) when Ht > 8
+//                else dfb::out (c_16). The legacy "(Ht > 8) ? c_27 : c_16" compile-time ternary is
+//                promoted to the OUT_STAGE preprocessor define so the unbound token never enters name
+//                lookup. All SHARDED CB indices are now framework-assigned DFBs (no raw tt::CBIndex).
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -108,12 +111,12 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto HtWt = get_arg(args::HtWt);
 #ifdef SHARDED
-    constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t last_output_row_num_datums = get_compile_time_arg_val(4);
-    constexpr uint32_t pack_num_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t pack_num_pages_last_col = get_compile_time_arg_val(6);
-    constexpr uint32_t pack_num_pages_last_row = get_compile_time_arg_val(7);
-    constexpr uint32_t pack_num_pages_last_row_col = get_compile_time_arg_val(8);
+    constexpr uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
+    constexpr uint32_t last_output_row_num_datums = get_arg(args::last_output_row_num_datums);
+    [[maybe_unused]] constexpr uint32_t pack_num_pages = get_arg(args::pack_num_pages);
+    constexpr uint32_t pack_num_pages_last_col = get_arg(args::pack_num_pages_last_col);
+    [[maybe_unused]] constexpr uint32_t pack_num_pages_last_row = get_arg(args::pack_num_pages_last_row);
+    constexpr uint32_t pack_num_pages_last_row_col = get_arg(args::pack_num_pages_last_row_col);
     // In order to support full_ct_dim > block_ct_dim, we would need to change use_narrow_row and row_size conditions to
     // be:
     //
@@ -131,10 +134,13 @@ void kernel_main() {
 #endif
 
 #ifdef SHARDED
-    constexpr auto cb_in = tt::CBIndex::c_24;
-    constexpr auto cb_tilize = tt::CBIndex::c_25;
-    constexpr auto cb_out_idx =
-        (Ht > 8) ? tt::CBIndex::c_27 : tt::CBIndex::c_16;  // temporary fix until pack_untilize is fully fixed
+    constexpr auto cb_in = dfb::in_scratch;
+    constexpr auto cb_tilize = dfb::tilize;
+#ifdef OUT_STAGE
+    constexpr auto cb_out_idx = dfb::out_stage;  // temporary fix until pack_untilize is fully fixed (Ht > 8)
+#else
+    constexpr auto cb_out_idx = dfb::out;
+#endif
 #else
     constexpr auto cb_in = dfb::src0;
     constexpr auto cb_tilize = dfb::tilize;

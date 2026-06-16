@@ -2,28 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port (in place — used only by the TransposeHCRM factory). Logic UNCHANGED; only the
+// access mechanism moves to named bindings:
+//   - output CB c_0       -> dfb::src0  (the single shared DFB; reader produces, writer consumes)
+//   - output buffer addr  -> ta::output (TensorAccessor binding; legacy RTA slot 0 + TensorAccessorArgs)
+//   - positional CTAs / RTAs -> get_arg(args::...)
+
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(1);
-    uint32_t num_read_per_barrier = get_arg_val<uint32_t>(2);
-    uint32_t start_id = get_arg_val<uint32_t>(3);
+    uint32_t num_sticks_per_core_read = get_arg(args::num_sticks_per_core_read);
+    uint32_t num_read_per_barrier = get_arg(args::num_read_per_barrier);
+    uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t W_size_bytes = get_arg(args::W_size_bytes);
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    constexpr auto dst_args = TensorAccessorArgs<3>();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(ta::output);
 
     Noc noc;
-    CircularBuffer cb(cb_out0);
+    DataflowBuffer cb(dfb::src0);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
