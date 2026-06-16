@@ -28,7 +28,14 @@ def _generalized_golden(
     bias_scores = scores + bias_tensor
     _, topk_indices = torch.topk(bias_scores.reshape(batch, -1), topk, dim=-1, sorted=True)
     topk_scores = torch.gather(scores.reshape(batch, -1), dim=-1, index=topk_indices)
-    weights = torch.exp(topk_scores) if output_softmax else topk_scores
+    if output_softmax:
+        # Subtract the per-row max before exp: numerically stable and mathematically identical
+        # (softmax is shift-invariant). Mirrors the in-kernel max-subtraction so this reference stays
+        # valid for RAW router logits (score_func="softmax"), not just inputs squashed to [0, 1].
+        topk_scores = topk_scores - topk_scores.max(dim=-1, keepdim=True).values
+        weights = torch.exp(topk_scores)
+    else:
+        weights = topk_scores
     return weights / (torch.sum(weights, dim=-1, keepdim=True) + eps) * scaling_factor, topk_indices
 
 
@@ -55,8 +62,18 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
 
     # Create input PyTorch tensor with random values.
     torch.manual_seed(seed)
-    torch_input = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
-    if not enable_sigmoid:
+    torch_input = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1  # ~[-1, 1]
+    if enable_sigmoid:
+        pass  # the op sigmoids internally -> scores land in [0, 1]; a raw [-1, 1] input is fine
+    elif output_softmax:
+        # RAW-LOGIT SOFTMAX path: score_func="softmax" feeds the op UNBOUNDED router logits, NOT [0, 1].
+        # Scale past the bf16 exp range (exp overflows ~88) so this exercises the in-kernel max-subtraction:
+        # without it exp() saturates to inf -> nan/zero weights; with it the result is the correct softmax.
+        # (Real logits are smaller, but the test deliberately overflows to guard the fix; the squash-to-[0,1]
+        # used by the linear path below would hide this case entirely.)
+        torch_input = torch_input * 100.0  # ~[-100, 100]
+    else:
+        # LINEAR-renorm path: keep scores in [0, 1] so the (Σ + eps) denominator stays well-conditioned.
         torch_input = torch.sigmoid(torch_input)
     torch_bias = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
     eps = 1e-20
@@ -186,14 +203,24 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
 
     dev_key = torch.gather(bias_key, dim=-1, index=dev_idx).sort(dim=-1).values
     gold_key = torch.gather(bias_key, dim=-1, index=gold_idx).sort(dim=-1).values
-    assert torch.allclose(dev_key, gold_key, atol=1e-2), (
+    # bf16 ranks by a coarse key: near ±100 (the raw-logit path) the bf16 cell is ~0.5 wide, so experts
+    # whose float keys differ by up to ~0.5 round to the SAME bf16 key — they are genuinely tied to the
+    # device and it may break the tie either way (the float32 golden breaks it differently). That gap
+    # scales with magnitude, so loosen the cutoff tolerance for the ×100 raw-logit path; the squashed
+    # [0,1] paths keep the tight 1e-2. A real mis-selection is off by ≫1 and still fails.
+    key_atol = 1.0 if (output_softmax and not enable_sigmoid) else 1e-2
+    assert torch.allclose(dev_key, gold_key, atol=key_atol), (
         f"Device selection is not a valid top-8 by bias key.\n dev_idx={dev_idx}\n gold_idx={gold_idx}"
         f"\n dev_key={dev_key}\n gold_key={gold_key}"
     )
 
     dev_sel = torch.gather(raw_scores, dim=-1, index=dev_idx)
     # Consistency check vs the device's OWN selection: softmax-over-selected when output_softmax, else linear.
-    weights = torch.exp(dev_sel) if output_softmax else dev_sel
+    if output_softmax:
+        # Max-subtract before exp (matches the kernel; stable for raw logits, identical for [0, 1]).
+        weights = torch.exp(dev_sel - dev_sel.max(dim=-1, keepdim=True).values)
+    else:
+        weights = dev_sel
     expected_norm = weights / (weights.sum(dim=-1, keepdim=True) + eps) * scaling_factor
     assert torch.allclose(
         sorted_output_torch.float(), expected_norm, atol=1e-2, rtol=1e-4
@@ -217,13 +244,23 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
     tile = ttnn.Tile((32, 32))
 
     torch.manual_seed(seed)
-    torch_input = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1
-    if not enable_sigmoid:
+    torch_input = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1  # ~[-1, 1]
+    if enable_sigmoid:
+        pass  # the op sigmoids internally -> scores land in [0, 1]; a raw [-1, 1] input is fine
+    elif output_softmax:
+        # RAW-LOGIT SOFTMAX path: score_func="softmax" feeds the op UNBOUNDED router logits, NOT [0, 1].
+        # Scale past the bf16 exp range (exp overflows ~88) to exercise the in-kernel max-subtraction
+        # across the 512-expert combine path (without it exp() saturates to inf -> nan/zero weights).
+        torch_input = torch_input * 100.0  # ~[-100, 100]
+    else:
+        # LINEAR-renorm path: keep scores in [0, 1] so the (Σ + eps) denominator stays well-conditioned.
         torch_input = torch.sigmoid(torch_input)
     torch_bias = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1
 
-    # Golden: flatten (batch, 512) -> true global top-`topk` (indices 0-511), normalized scores.
-    gold_scores, gold_idx = _generalized_golden(
+    # Golden: flatten (batch, 512) -> true global top-`topk` (indices 0-511). Only the golden INDICES are
+    # used (selection check below); scores are validated against the device's OWN selection, not the
+    # golden's, because a bf16 tie at the cutoff can pick different-but-valid experts (see the score check).
+    _, gold_idx = _generalized_golden(
         torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk, output_softmax
     )
     scores_all = (torch.sigmoid(torch_input) if enable_sigmoid else torch_input).float()
@@ -296,12 +333,27 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
     # Indices: dev must be a valid GLOBAL top-`topk` (tie-robust: compare the gathered bias-keys, sorted).
     dev_key = torch.gather(bias_key, -1, dev_idx).sort(-1).values
     gold_key = torch.gather(bias_key, -1, gold_idx.to(torch.int64)).sort(-1).values
-    assert torch.allclose(dev_key, gold_key, atol=1e-2), (
+    # bf16 ranks by a coarse key: near ±100 (the raw-logit path) the bf16 cell is ~0.5 wide, so experts
+    # whose float keys differ by up to ~0.5 round to the SAME bf16 key — they are genuinely tied to the
+    # device and it may break the tie either way. Loosen the cutoff tolerance for the ×100 raw-logit path
+    # (the gap scales with magnitude); the squashed [0,1] paths keep the tight 1e-2.
+    key_atol = 1.0 if (output_softmax and not enable_sigmoid) else 1e-2
+    assert torch.allclose(dev_key, gold_key, atol=key_atol), (
         f"512 global not a valid top-{topk}.\n dev_idx={dev_idx}\n gold_idx={gold_idx}\n"
         f" dev_key={dev_key}\n gold_key={gold_key}"
     )
 
-    # Scores: normalized top-8 scores match (sorted, tie-robust).
+    # Scores: validate against the device's OWN selection (selection-agnostic, like the 256 test). At ±100
+    # the device and golden may break a bf16 tie toward DIFFERENT (equally valid) experts, so comparing to
+    # the golden's scores is wrong; recompute the expected softmax/linear weights over the device's selected
+    # raw scores instead. The selection check above already confirmed those experts are a valid top-`topk`.
+    dev_sel = torch.gather(scores_all, -1, dev_idx)
+    if output_softmax:
+        # Max-subtract before exp (matches the kernel; stable for raw logits, identical for [0, 1]).
+        w = torch.exp(dev_sel - dev_sel.max(-1, keepdim=True).values)
+    else:
+        w = dev_sel
+    expected = w / (w.sum(-1, keepdim=True) + eps) * scaling_factor
     assert torch.allclose(
-        dev_scores.sort(-1).values, gold_scores.float().sort(-1).values, atol=2e-2
-    ), f"512 normalized scores mismatch.\n dev={dev_scores}\n gold={gold_scores}"
+        dev_scores.sort(-1).values, expected.sort(-1).values, atol=2e-2
+    ), f"512 normalized scores not consistent with device selection.\n dev={dev_scores}\n expected={expected}"
