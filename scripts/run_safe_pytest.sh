@@ -183,30 +183,7 @@ else
     echo "SAFE_PYTEST: WARNING: python_env not found; using system Python" >&2
 fi
 
-# --- Precompile warm phase (opt-in, hardware only; never aborts the real run) ---
-if [[ "$PRECOMPILE" == true ]]; then
-    if [[ "$SIM_MODE" == true ]]; then
-        echo "PRECOMPILE: skipped under simulator (no warm benefit)" >&2
-    else
-        precompile_warm
-    fi
-fi
-
-# --- Hang detection setup (hardware only) ---
-# On timeout, the dispatch layer runs tt-triage. Fires only on actual hang —
-# zero overhead for passing tests. On sim there is no hang detection because
-# wall-clock timeouts are meaningless at kHz clock speeds.
-rm -f "$TRIAGE_LOG"
-if [[ "$SIM_MODE" == false ]]; then
-    export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
-    # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
-    if ! python3 -c "import ttexalens" 2>/dev/null; then
-        echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
-        echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
-    fi
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
-fi
-
+# --- Dev-mode build flags (must precede the warm phase: they feed the JIT build_key) ---
 if [[ "$DEV_MODE" == true ]]; then
     # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
     # exact instruction. The dispatch timeout then fires and runs triage, which
@@ -232,7 +209,34 @@ if [[ "$DEV_MODE" == true ]]; then
     export TT_METAL_WATCHER_NOINLINE=1
     export TT_METAL_WATCHER_DISABLE_ASSERT=1
     export TT_METAL_WATCHER_DISABLE_DISPATCH=1
+fi
 
+# --- Precompile warm phase (opt-in, hardware only; never aborts the real run) ---
+if [[ "$PRECOMPILE" == true ]]; then
+    if [[ "$SIM_MODE" == true ]]; then
+        echo "PRECOMPILE: skipped under simulator (no warm benefit)" >&2
+    else
+        precompile_warm
+    fi
+fi
+
+# --- Hang detection setup (hardware only) ---
+# On timeout, the dispatch layer runs tt-triage. Fires only on actual hang —
+# zero overhead for passing tests. On sim there is no hang detection because
+# wall-clock timeouts are meaningless at kHz clock speeds.
+rm -f "$TRIAGE_LOG"
+if [[ "$SIM_MODE" == false ]]; then
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
+    # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
+    if ! python3 -c "import ttexalens" 2>/dev/null; then
+        echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
+        echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
+    fi
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
+fi
+
+# Dev-mode banner (flags exported above).
+if [[ "$DEV_MODE" == true ]]; then
     if [[ "$SIM_MODE" == true ]]; then
         echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling (no hang detection on sim)" >&2
     else
