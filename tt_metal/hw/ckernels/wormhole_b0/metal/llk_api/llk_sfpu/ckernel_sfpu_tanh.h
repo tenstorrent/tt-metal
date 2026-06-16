@@ -17,12 +17,6 @@
 
 namespace ckernel::sfpu {
 
-// computes expm1(abs(x))
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_expm1_abs_(sfpi::vFloat x) {
-    return y;
-}
-
 /*
  * Accurate tanh for fp32 using sigmoid: tanh(x) = 2*sigmoid(2x) - 1
  * For small |x| < 0.6, uses minimax polynomial for better accuracy
@@ -35,45 +29,38 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_abs_(sfpi::vFloat x) {
  */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
-    x *= 2.0f;
-
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * log2(e)
-    sfpi::vFloat a = sfpi::setsgn(x, 0);
+    x *= 2.0f;
     // Rounds the absolute value of j, clamped to [0, 255].
     sfpi::vMag m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
     sfpi::vInt i = m;
 
-    sfpi::vFloat r, s, f, w, y, scale, bias, c0;
+    sfpi::vFloat a, r, s, f, w, y, scale, bias, c0;
 
-    if constexpr (!is_fp32_dest_acc_en) {
-        f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
+    a = sfpi::setsgn(x, 0);
+    f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
+    f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
 
-        r = 8.361816406e-03f;
-        r = r * f + 4.177856445e-02f;
-        s = f * f;  // hide SFPMAD latency
-        r = r * f + sfpi::vConstFloatPrgm2;
-        c0 = 0.5f;
-        r = __builtin_rvtt_sfpmad(r.get(), f.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    r = 1.974105835e-04f;
+    r = r * f + 1.393107930e-3f;
+    r = r * f + 8.333439939e-3f;
+    r = r * f + 4.166680202e-2f;
+    s = f * f;  // hide SFPMAD latency
+    r = r * f + sfpi::vConstFloatPrgm2;
+    r = r * f + 4.999999702e-1f;
 
-    } else {
-        f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
-        f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
-
-        r = 1.974105835e-04f;
-        r = r * f + 1.393107930e-3f;
-        r = r * f + 8.333439939e-3f;
-        r = r * f + 4.166680202e-2f;
-        s = f * f;  // hide SFPMAD latency
-        r = r * f + sfpi::vConstFloatPrgm2;
-        r = r * f + 4.999999702e-1f;
-    }
-
-    scale = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(sfpi::vConst1));
+    sfpi::vInt e = i + 127;
+    scale = sfpi::setexp(sfpi::vConst0, e);
     bias = scale - sfpi::vConst1;
     r = r * s + f;
 
-    y = 1.0f;
+    // ideally the default should be 1.0 for finite (large) values, otherwise NaN should be propagated.
+    // one slightly weird idea: take a, subtract bits(inf + 1), then shift right by 31, then convert to float.
+    // alternatively, can we just subtract one (bitwise) and do fma
+    // so y = fma(0.0, bitwise(a - 1), 1.0)
+    a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
+    y = a * 0.0f + 1.0f;
     v_if(i < 61) {
         y = r * scale + bias;
         y = y * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(y + 2.0f);
@@ -166,7 +153,9 @@ inline void tanh_init() {
         _sfpu_load_imm16_(2, imm2);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
-            sinh_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+            sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;  // 2 * log2(e) == 2 / ln(2)
+            sfpi::vConstFloatPrgm1 = -0.693145752f;     // -ln(2)_hi
+            sfpi::vConstFloatPrgm2 = 1.666667163e-1f;   // c1
         } else {
             // Polynomial approximation
             // Store some polynomial coefficients in programmable registers
