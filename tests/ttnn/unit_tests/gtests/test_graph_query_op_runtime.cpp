@@ -52,7 +52,13 @@ protected:
         device_ = device_holder_.get();
     }
 
-    void TearDown() override { ttnn::close_device(*device_); }
+    void TearDown() override {
+        if (device_holder_) {
+            ttnn::close_device(*device_);
+            device_holder_.reset();
+            device_ = nullptr;
+        }
+    }
 
 public:
     static const ttnn::TensorSpec m_interleaved_1_3_1024_1024_tiled;

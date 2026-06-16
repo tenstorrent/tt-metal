@@ -2,6 +2,11 @@
 
 # Script to run distributed multi-process visible devices tests
 
+if [ -n "${TT_METAL_SIMULATOR:-}" ]; then
+    echo "[distributed tests] SKIP: TT_VISIBLE_DEVICES mp tests segfault under ttsim+mpirun"
+    exit 0
+fi
+
 # Array of device configurations to test
 DEVICE_CONFIGS=("0" "1" "2" "3" "0,1" "0,3" "1,2" "2,3")
 
