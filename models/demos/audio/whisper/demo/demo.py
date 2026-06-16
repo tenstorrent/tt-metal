@@ -903,6 +903,8 @@ def test_demo_for_conditional_generation(
             ml_model_name=model_repo.split("/")[-1],
             ml_model_type="audio",
             batch_size=total_batch,
+            # Whisper encoder uses 30-second mel spectrogram chunks → 3000 frames at 80 mel bins,
+            # downsampled 2× by two Conv1d layers to 1500 encoder time steps.
             input_sequence_length=1500,
         )
 
