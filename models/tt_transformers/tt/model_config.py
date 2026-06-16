@@ -3008,12 +3008,14 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+        # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
+        # was folded into AutoModelForImageTextToText (available since 4.46).
+        for model_cls in (AutoModelForImageTextToText,):
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
