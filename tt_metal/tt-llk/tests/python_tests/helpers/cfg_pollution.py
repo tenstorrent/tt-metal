@@ -385,7 +385,15 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
       LLK_POLLUTE_PLAN=<path>      Bisection trial: JSON {seed, snapshot:[[s,a,v]..],
                                    pollute:[[s,a]..]}. Restore the snapshot, then poison only
                                    the `pollute` subset. Lets a driver test arbitrary subsets.
-      LLK_POLLUTE_CFG=<spec>       Whole-space / group / addr32-list sweep across both shadows.
+      LLK_POLLUTE_CAPTURE=<path>   Realizable-palette capture: at each kernel launch read the live
+                                   words (the prior kernel's leftover) and merge their values into
+                                   a per-addr32 palette JSON. Run a suite with this to accumulate
+                                   the set of values kernels actually leave. Does NOT pollute.
+      LLK_POLLUTE_CFG=<spec>       Whole-space / group ("alu"/"thread"/"live") / addr32-list sweep.
+                                   spec="live": bit-granular over the reconfigurable surface.
+                                   spec="realizable": bit-granular AND poison each live word with a
+                                   value from LLK_POLLUTE_PALETTE (a state real ops produce) — a
+                                   failure is a candidate actionable escape, not random garbage.
                                    LLK_POLLUTE_SEED optional (random + logged if unset).
 
     LLK_POLLUTE_PRESERVE="a:m,a:m" (optional, all modes): extra {addr32: mask} bits to leave
@@ -407,6 +415,24 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
         )
         print(msg, file=sys.stderr, flush=True)
         logger.warning(msg)
+        return None
+
+    cap_path = os.environ.get("LLK_POLLUTE_CAPTURE")
+    if cap_path:
+        # Realizable-palette capture: read the live words at THIS kernel's launch — i.e. the
+        # leftover CFG the PRIOR kernel left — and merge their values into a per-addr32 palette
+        # (union over shadow states and over all kernels seen). Run a suite with this set; the
+        # accumulated file is the set of values kernels actually leave (the realizable states).
+        items = [(s, a) for s in (0, 1) for a in _LIVE_MASK.get(arch, {})]
+        snap = snapshot_cfg(location, items, device_id=device_id, context=context)
+        palette = {}
+        if os.path.exists(cap_path):
+            with open(cap_path) as f:
+                palette = {int(a): set(v) for a, v in json.load(f).items()}
+        for (s, a), v in snap.items():
+            palette.setdefault(a, set()).add(v)
+        with open(cap_path, "w") as f:
+            json.dump({str(a): sorted(v) for a, v in palette.items()}, f)
         return None
 
     plan_path = os.environ.get("LLK_POLLUTE_PLAN")
@@ -441,7 +467,25 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
     seed_env = os.environ.get("LLK_POLLUTE_SEED")
     seed = int(seed_env, 0) if seed_env else random.getrandbits(32)
 
-    if spec.strip() == "live":
+    if spec.strip() == "realizable":
+        # Bit-granular AND realizable: poison each live word with a VALUE some kernel actually
+        # leaves (from the LLK_POLLUTE_CAPTURE palette), not random garbage. A failure here is a
+        # candidate ACTIONABLE escape on a state real ops produce. Per word, pick a palette value
+        # by seed (sweep seeds for coverage). Words with no palette entry are skipped.
+        pal_path = os.environ["LLK_POLLUTE_PALETTE"]
+        with open(pal_path) as f:
+            palette = {int(a): v for a, v in json.load(f).items()}
+        rng = random.Random(seed)
+        items = []
+        for s in (0, 1):
+            for a, mask in _LIVE_MASK[arch].items():
+                vals = palette.get(a)
+                if vals:
+                    items.append((s, a, mask, vals[rng.randrange(len(vals))]))
+        log = pollute_items(
+            location, items, seed=seed, extra_preserve=env_preserve, device_id=device_id, context=context
+        )
+    elif spec.strip() == "live":
         # Bit-granular: pollute only the written bits of each live word (see _LIVE_MASK).
         log = pollute_items(
             location,
