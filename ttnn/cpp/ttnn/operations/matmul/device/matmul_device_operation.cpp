@@ -1901,7 +1901,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                 all_cores,
                                 {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                                 ShardOrientation::ROW_MAJOR};
-                            mem_config = mem_config.with_shard_spec(shard_spec);
+                            mem_config = tt::tt_metal::MemoryConfig(
+                                mem_config.memory_layout(), mem_config.buffer_type(), shard_spec);
                         }
                     }
                     // support for multi-tensor output
@@ -1947,7 +1948,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         ShardOrientation::ROW_MAJOR};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -2002,7 +2006,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         shard_orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -2042,7 +2049,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         shard_orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
