@@ -96,25 +96,12 @@ def _body(dev):
     a = _tile(torch.randn(1, 1, 256, 256, dtype=torch.bfloat16), dev)
     _run_twice(dev, lambda: ttnn.relu(a))
 """,
-    # eltwise / binary_ng tensor-tensor
-    "add_tensor": """
-def _body(dev):
-    a = _tile(torch.randn(1, 1, 256, 256, dtype=torch.bfloat16), dev)
-    b = _tile(torch.randn(1, 1, 256, 256, dtype=torch.bfloat16), dev)
-    _run_twice(dev, lambda: ttnn.add(a, b))
-""",
-    # eltwise / binary_ng tensor-scalar (arith)
-    "add_scalar": """
-def _body(dev):
-    a = _tile(torch.randn(1, 1, 256, 256, dtype=torch.bfloat16), dev)
-    _run_twice(dev, lambda: ttnn.add(a, 3.0))
-""",
-    # eltwise / binary_ng tensor-scalar (relational)
-    "gt_scalar": """
-def _body(dev):
-    a = _tile(torch.randint(-100, 100, (1, 1, 256, 256), dtype=torch.int32), dev, dtype=ttnn.int32)
-    _run_twice(dev, lambda: ttnn.gt(a, 5))
-""",
+    # NOTE: eltwise / binary_ng (add tensor-tensor, add tensor-scalar, gt tensor-scalar) is
+    # deliberately NOT guarded here. binary_ng is intentionally left as `main` (see PR #46880
+    # "Notable decisions"): it bakes raw buffer addresses into runtime args with a shape-inclusive
+    # program hash, and an earlier attempt to add get_dynamic_runtime_args was a net regression
+    # (PCC misses + slower dispatch) and was reverted. It therefore takes the descriptor slow-path
+    # rebuild on a cache hit by design, so it cannot satisfy the no-rebuild guard.
     # pool / max_pool2d (NHWC row-major flat input)
     "max_pool2d": """
 def _body(dev):
@@ -177,7 +164,7 @@ def _run_guard_subprocess(op_key):
 
 @pytest.mark.parametrize(
     "op_key",
-    ["relu", "add_tensor", "add_scalar", "gt_scalar", "max_pool2d", "softmax", "transpose", "slice", "rotate"],
+    ["relu", "max_pool2d", "softmax", "transpose", "slice", "rotate"],
 )
 def test_descriptor_no_rebuild_guard(op_key):
     """Run `op_key` in an isolated subprocess with the no-rebuild guard armed. A slow-path
