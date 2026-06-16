@@ -68,13 +68,7 @@ ttnn::Tensor narrow(
         buffer->alignment());
 
     // Update global config for narrowed tensor
-    // Note: ShardedBufferConfig variant is not supported due to lack of examples
-    TT_FATAL(
-        storage.get_mesh_buffer().global_layout() == tt::tt_metal::distributed::MeshBufferLayout::REPLICATED,
-        "NarrowOperation currently only supports REPLICATED global layouts");
-
-    tt::tt_metal::distributed::ReplicatedBufferConfig replicated_config =
-        std::get<tt::tt_metal::distributed::ReplicatedBufferConfig>(storage.get_mesh_buffer().global_config());
+    tt::tt_metal::distributed::ReplicatedBufferConfig replicated_config = storage.get_mesh_buffer().global_config();
     replicated_config.size = replicated_config.size / input_tensor_shape[dim] * length;
     tt::tt_metal::distributed::MeshBufferConfig narrowed_global_config = replicated_config;
 

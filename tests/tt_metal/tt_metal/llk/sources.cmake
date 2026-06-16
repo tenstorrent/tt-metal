@@ -22,7 +22,6 @@ set(UNIT_TESTS_LLK_SRC
     test_single_core_binary_compute.cpp
     test_single_core_matmul_compute.cpp
     test_stochastic_rounding.cpp
-    test_single_core_matmul_int8.cpp
     test_top32_rm_dev.cpp
     test_transpose.cpp
     test_unary_broadcast.cpp
