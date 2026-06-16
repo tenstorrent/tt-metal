@@ -129,6 +129,8 @@ shield:
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
+  smoke:
+    wh_n300_civ2: 10
   unit:
     wh_llmbox: 60
     wh_galaxy: 25

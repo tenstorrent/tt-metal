@@ -390,16 +390,9 @@ jobs:
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
+      test-category: smoke
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
