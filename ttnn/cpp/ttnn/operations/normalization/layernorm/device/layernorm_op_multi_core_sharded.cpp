@@ -338,21 +338,14 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, y}).y);
     }
 
-    // A non-tile-aligned width split across multiple cores is supported on the non-Welford path: each
-    // core masks its own final-tile padding columns with its per-core column mask (CB 19), and the
+    // A non-tile-aligned width split across multiple cores is supported on every path. The non-Welford
+    // path masks each core's final-tile padding columns with its per-core column mask (CB 19); the
     // per-element divide is 1/logical_K (winv*cinv), so the cross-core mean and variance reduce over
-    // exactly the logical width however the width tiles distribute across cores. This holds for both the
-    // non-distributed reduction and the distributed pre/post-all-gather stats. Welford has no such
-    // per-core column mask (it relies on last_block_wt and the reciprocal LUT) and its cross-core
-    // combine does not account for a partial final core, so Welford LayerNorm over a non-tile-aligned
-    // width split across cores is not supported. RMSNorm does not use Welford here.
-    TT_FATAL(
-        !col_mask_needed || grid.num_blocks == 1 || rms_norm || !use_welford,
-        "Welford sharded layer_norm does not support a non-tile-aligned width ({}) split across "
-        "multiple cores ({}); use the non-Welford reduction, a single core for the width, or a "
-        "tile-aligned width.",
-        logical_K,
-        grid.num_blocks);
+    // exactly the logical width however the width tiles distribute across cores. Welford has no column
+    // mask, so each core is instead told its real (logical) column count (welford_reduce_w) and reduces
+    // exactly those columns -- full block_w on the cores before the last, the remaining logical columns
+    // (ending in a partial tile) on the final real core -- and the cross-core combine weights the final
+    // block by its true width (last_block_w).
     // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned final width tile so
     // they do not enter the statistics (E[x] and variance for layernorm, the mean of squares for
     // RMSNorm), except the post-all-gather stage, which reduces gathered stats rather than the input.
@@ -381,6 +374,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .block_wt = block_wt,
         .block_wt_resharded = block_wt_resharded,
         .Kt = Kt,
+        .logical_K = logical_K,
         .last_core_width_index = last_core_width_index,
         .is_post_all_gather = is_post_all_gather,
         .num_distributed_devices = num_distributed_devices,

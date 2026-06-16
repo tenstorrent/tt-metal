@@ -185,16 +185,20 @@ void kernel_main() {
     const uint32_t block_ht = (block_wt == 1) ? block_ht_volatile : block_ht_const;
     const uint32_t subblock_wt = (block_wt <= 2) ? subblock_wt_volatile : subblock_wt_const;
 
-    // This value is the same for all cores, except ones that have padding tiles
-    // in them. In that case, don't reduce over the padding elements.
-    const uint32_t num_reduce_tiles_per_block_h = get_arg_val<uint32_t>(0);
-    const uint32_t partial_reduce_W = (num_reduce_tiles_per_block_h - 1) * tile_width + last_tile_w;
+    // This core's real (logical) column count. Welford has no per-column mask, so each core must reduce
+    // over exactly its logical columns: cores before the last own a full block_w, and the last real
+    // core owns the remaining logical columns -- a whole number of full tiles plus, when the logical
+    // width is not tile-aligned, a final partial tile. The reduce must stop there rather than at the
+    // physical shard end, which carries padding tiles. This is the only per-core quantity that differs
+    // for the partial final shard; it is appended after the all-to-all args (index 4 on all-to-all
+    // workers, index 1 otherwise).
+    const uint32_t welford_reduce_w = get_arg_val<uint32_t>(is_allgather_worker ? 4 : 1);
+    const uint32_t partial_reduce_W = welford_reduce_w;
 
-    // We split the Welford calls into full tiles and a final partial tile (if any)
-    const bool all_full_tiles = partial_reduce_W % tile_width == 0;
-    const uint32_t num_full_welford_tiles =
-        all_full_tiles ? num_reduce_tiles_per_block_h : num_reduce_tiles_per_block_h - 1;
-    const uint32_t partial_welford_tile_w = all_full_tiles ? 0 : last_tile_w;
+    // Split the Welford reduction into full tiles and a final partial tile (present only when the
+    // logical width is not a multiple of the tile width).
+    const uint32_t num_full_welford_tiles = welford_reduce_w / tile_width;
+    const uint32_t partial_welford_tile_w = welford_reduce_w % tile_width;
 
     // This is the number of tile rows to process
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
@@ -332,12 +336,15 @@ void kernel_main() {
             welford_update<per_core_recip_lut_size>(welford_input_dst, sample_idx, *p_reciprocals);
             sample_idx += tile_width;
         }
-        // Do the partial Welford tile, if any
+        // Do the partial Welford tile, if any. It is the tile immediately after this core's full tiles
+        // (index_h_offset + num_full_welford_tiles), i.e. the last real tile of this core's logical
+        // columns -- not the last physical tile of the shard (block_wt - 1), which on the final core is
+        // a pure-padding tile when the width is split across cores.
         if (partial_welford_tile_w > 0) {
             if constexpr (welford_fp32_alias) {
                 transpose_init(cb_x_welford_id);
             }
-            transpose_tile(cb_x_welford_id, block_wt - 1, welford_input_dst);
+            transpose_tile(cb_x_welford_id, index_h_offset + num_full_welford_tiles, welford_input_dst);
             if constexpr (welford_fp32_alias) {
                 welford_init<WelfordInitMode::PreserveStats>();
             }

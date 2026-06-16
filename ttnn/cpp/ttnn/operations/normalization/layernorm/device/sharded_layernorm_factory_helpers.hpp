@@ -435,6 +435,7 @@ struct RuntimeArgsContext {
     uint32_t block_wt = 0;
     uint32_t block_wt_resharded = 0;
     uint32_t Kt = 0;
+    uint32_t logical_K = 0;
     uint32_t last_core_width_index = 0;
 
     // Flags
@@ -457,6 +458,10 @@ struct CoreIndices {
     uint32_t gamma_tile_start_id = 0;
     uint32_t beta_tile_start_id = 0;
     uint32_t num_reduce_tiles_per_block_h = 0;
+    // Real (logical) column count this core reduces over. Equals the per-core block width for full
+    // shards and the remaining logical columns for the final real shard; used by the Welford compute
+    // kernel, which has no per-column mask and must reduce exactly the logical columns.
+    uint32_t welford_reduce_w = 0;
 
     static CoreIndices compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx);
 

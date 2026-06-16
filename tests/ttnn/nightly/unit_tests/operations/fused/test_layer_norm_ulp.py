@@ -739,47 +739,6 @@ def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dty
     assert passed, f"[sharded {norm} residual dtype={dtype} w={w} dist={distribution}] {msg}"
 
 
-def test_layer_norm_ulp_sharded_non_tile_aligned_width_split_across_cores_welford_rejected(device):
-    """WELFORD LayerNorm over a non-tile-aligned width split across multiple cores is rejected, not
-    silently wrong.
-
-    The legacy (non-Welford) path masks each core's padding columns with its own per-core column mask,
-    so it supports this split and is covered by the correctness tests in test_layer_norm_sharded.py.
-    The Welford path has no such per-core mask (it relies on last_block_wt / the reciprocal LUT) and its
-    cross-core combine does not account for a partial final core, so it must throw rather than normalize
-    the full blocks over their padding columns. (RMSNorm masks the per-block squares and supports this
-    split too.)
-    """
-    use_welford = True
-    torch.manual_seed(0)
-    h, w = 32, 200  # 200 -> per-core 128; split across 2 cores, the last core's final tile is partial
-    num_cores_w = 2
-    shard_w = math.ceil(w / num_cores_w / 32) * 32
-
-    torch_input_tensor = _make_ln_input(h, w, torch.bfloat16, "normal")
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))}),
-        [h, shard_w],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    sharded_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=shard_spec,
-    )
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=sharded_mem_config,
-    )
-
-    with pytest.raises(RuntimeError, match="does not support a non-tile-aligned width"):
-        ttnn_layer_norm_sharded(
-            device,
-            tt_input_tensor,
-            use_welford=use_welford,
-            block_ht=h // 32,
-            block_wt=shard_w // 32,
-            subblock_w=1,
-        )
+# Welford LayerNorm over a non-tile-aligned width split across multiple cores is now supported; its
+# correctness (legacy and Welford) is covered by test_layer_norm_sharded_uneven_multicore_logical_width
+# in test_layer_norm_sharded.py.

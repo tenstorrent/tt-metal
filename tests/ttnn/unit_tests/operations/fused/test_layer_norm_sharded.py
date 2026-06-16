@@ -490,12 +490,17 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
 
 # A width split across cores so the final core owns fewer real tiles: a tile-aligned width whose tiles
 # do not divide evenly (96 over 2, 224 over 3), and a non-tile-aligned width split across cores (72
-# over 2, 200 over 3). The op must normalize over the logical width, not the padded per-core width. See
-# the helper for the analytic bf16 tolerance derivation; tolerances are not taken from observed output.
+# over 2, 200 over 3). The op must normalize over the logical width, not the padded per-core width.
+# Both reductions are covered: the legacy path (per-core column mask) and Welford (per-core logical
+# column count). See the helper for the analytic bf16 tolerance derivation; tolerances are not taken
+# from observed output.
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize(
     ("w", "num_cores_w"),
     [(96, 2), (224, 3), (72, 2), (200, 3)],
     ids=["w96_c2", "w224_c3", "w72_c2_nonaligned", "w200_c3_nonaligned"],
 )
-def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w):
-    run_sharded_norm_logical_width_multicore(device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w)
+def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, use_welford):
+    run_sharded_norm_logical_width_multicore(
+        device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, use_welford=use_welford
+    )
