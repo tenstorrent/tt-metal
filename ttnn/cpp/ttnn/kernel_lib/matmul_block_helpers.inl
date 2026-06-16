@@ -145,8 +145,8 @@ ALWI void matmul_block(
     //                          last K-block needs a software reload from a FIFO-advanced interm,
     //                          which the fixed-offset pin scheme does not provide.
     //   • SubblockMajor      — the fixed-offset layout is subblock-contiguous; the TileRowMajor
-    //                          row-strided pin variant has no caller on this branch (conv2d's
-    //                          eligible TRM convs are no-bias + perf-neutral, kept non-pin).
+    //                          row-strided pin variant has no caller on this branch (the
+    //                          eligible TRM cases are no-bias + perf-neutral, kept non-pin).
     //   • not OutWithUntilize — pack_untilize_dest packs from DST offset 0 of the current
     //                          reservation, incompatible with absolute-offset pin packs.
     static_assert(
@@ -197,7 +197,7 @@ ALWI void matmul_block(
     // pin reserves interm ONCE at entry (outside the batch loop) and packs every K-block to
     // fixed offsets within that one reservation. With batch > 1 the second batch's spills would
     // L1_ACC-accumulate onto the first batch's at the same offsets — not what callers want.
-    // conv2d (the only pin caller) always passes batch=1; assert to keep that contract explicit.
+    // The only pin caller always passes batch=1; assert to keep that contract explicit.
     if constexpr (pin_interm_to_captured_base) {
         ASSERT(shape.batch == 1);
     }
@@ -205,8 +205,8 @@ ALWI void matmul_block(
     // Data-format reconfig and init are two independent switches, mirroring the
     // tilize_helpers / reduce_helpers / binary_op_helpers pattern. Each side fires
     // on its own compile-time gate; callers that already issued an external reconfig
-    // (e.g. SDPA wrappers) pass reconfig=NONE; callers that already issued an external
-    // mm_block_init_short (e.g. the same wrappers) pass init_mode=None. The pack reconfig
+    // pass reconfig=NONE; callers that already issued an external
+    // mm_block_init_short pass init_mode=None. The pack reconfig
     // targets interm_cb_id to match the OLD mm_block_init's 3rd-arg behavior — the first
     // non-last K-block spills there; the in-loop reconfig at the last block
     // (gated on l1_acc / fp32 DEST) handles the final swap to out_cb_id. The init
@@ -228,6 +228,17 @@ ALWI void matmul_block(
             // call in the K-loop below).
             reconfig_data_format(in1_cb_id, in0_cb_id);
         }
+        // NOTE (deferred follow-up — intentionally not fixed in this pass): this pack
+        // reconfig targets interm_cb_id unconditionally, including when num_k_blocks == 1
+        // where interm is never used for spill/reload. At num_k_blocks == 1 the only block
+        // is the last block (packs to out_cb_id), but the swap-to-out reconfig later in the
+        // K-loop is gated on l1_acc / fp32 DEST and may not fire — so a caller passing a
+        // placeholder interm whose data format differs from out_buf leaves the packer
+        // configured to the wrong format (silent output corruption; e.g. an 8-bit
+        // placeholder vs a 16-bit output). The interm_buf doc in the .hpp now warns callers
+        // to pass a same-data-format placeholder; a robust fix would reconfig to the actual
+        // final pack target when num_k_blocks == 1. Left for a future session to avoid a
+        // core-behavior change here.
         if constexpr (
             reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
             reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
@@ -286,15 +297,16 @@ ALWI void matmul_block(
             pre_k_block(block, shape.num_k_blocks, last_out);
 
             // Per-K-block inner-dim step count. Default no-op returns shape.in0_block_k so the
-            // loop runs the full K-tile span; ring-aware callers override this to
-            // shrink the FMA loop on K-blocks whose unpadded width is < shape.in0_block_k.
+            // loop runs the full K-tile span; callers with per-block varying widths
+            // override this to shrink the FMA loop on K-blocks whose unpadded width is
+            // < shape.in0_block_k.
             // The LLK call's kt_dim arg below stays shape.in0_block_k — that's the in1 row
             // stride in L1, not the FMA step count.
             const uint32_t inner_steps = k_block_inner_dim(block, shape.in0_block_k);
 
             // Per-K-block in0 source. Default no-op returns the bound in0_cb_id, so
-            // active_in0_buf aliases in0_buf and behavior is unchanged. Ring-aware
-            // callers swap to an alternate CB on chosen K-blocks; that alternate CB
+            // active_in0_buf aliases in0_buf and behavior is unchanged. Callers swap
+            // to an alternate CB on chosen K-blocks; that alternate CB
             // MUST share the same dataformat as in0_cb_id (the kernel-entry
             // mm_block_init and the reload's mm_block_init_short_with_dt below keep
             // using the bound in0_cb_id, so the unpacker config doesn't re-issue
@@ -333,12 +345,12 @@ ALWI void matmul_block(
 
             // Per-K-block in1 starting tile offset. Default no-op returns 0, matching
             // the prior behavior of starting the in1 stride from the front of the
-            // CB's fronted region. Ring-aware callers without rd_ptr rotation return
-            // a non-zero base (e.g. in1_block_num_tiles * curr_ring_idx) to read a
+            // CB's fronted region. Callers without rd_ptr rotation return
+            // a non-zero base (e.g. in1_block_num_tiles * position_idx) to read a
             // different slice of the same fronted in1 buffer per K-block.
             const uint32_t in1_base_offset = in1_base_offset_fn(block);
 
-            // Full-block wait for both modes. Every caller (matmul + SDPA) has the
+            // Full-block wait for both modes. Every caller has the
             // full in0 block resident before invoking the helper, so progressive
             // per-subblock waits are pure polling overhead on TRISCs.
             active_in0_buf.wait_front(in0_block_num_tiles);
@@ -600,7 +612,7 @@ ALWI void matmul_block(
                             // pack DF stays at whatever the previous op (kernel-entry mm_block_init,
                             // or a tilize/transpose pre_k_block) configured — typically the output
                             // CB's format — and intermediate spills land in the wrong format. Mirrors
-                            // conv2d's per-K-block `pack_reconfig_data_format(curr_matmul_out_cb)`.
+                            // the per-K-block pack reconfig onto the spill target.
                             PACK((pack_reconfig_data_format(interm_cb_id)));
                         }
                         if constexpr (packer_l1_acc) {
@@ -683,10 +695,10 @@ ALWI void matmul_block(
                 }
             }
 
-            // in0_policy=WaitAndRetainOnLastBlock: SDPA reuses Q across K chunks, so
+            // in0_policy=WaitAndRetainOnLastBlock: caller reuses in0 across K chunks, so
             // caller keeps in0 front on the last iteration. Intermediate blocks always
             // pop. Pop targets active_in0_buf (the In0SourceFn-selected CB for this
-            // iteration) so ring-aware callers swapping CBs per K-block pop from the
+            // iteration) so callers swapping CBs per K-block pop from the
             // right one.
             if constexpr (in0_policy == InputPolicy::WaitAndPopPerKBlock) {
                 active_in0_buf.pop_front(in0_block_num_tiles);
@@ -695,7 +707,7 @@ ALWI void matmul_block(
                     active_in0_buf.pop_front(in0_block_num_tiles);
                 }
             }
-            // in1_policy=WaitAndRetainOnLastBlock: conv3d reuses weights across multiple
+            // in1_policy=WaitAndRetainOnLastBlock: caller reuses in1 weights across multiple
             // matmul invocations (each invocation has shape.num_k_blocks=1, last_out is always
             // true on its only K-block, so the helper never pops). Intermediate K-blocks
             // within a multi-K-block invocation still pop.
@@ -711,7 +723,7 @@ ALWI void matmul_block(
 
             // PostKBlockFn: symmetric counterpart to PreKBlockFn. Fires after the
             // L1_ACC partial drain and after both input pop_front calls, so callers
-            // can advance ring CB rd_ptrs (or other per-K-block bookkeeping) only
+            // can advance CB rd_ptrs (or other per-K-block bookkeeping) only
             // once the consumer has finished reading.
             post_k_block(block, shape.num_k_blocks, last_out);
         }

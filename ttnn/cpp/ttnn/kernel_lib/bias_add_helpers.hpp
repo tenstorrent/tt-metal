@@ -111,7 +111,7 @@ struct NoPostBias {
  *   2. Packer-thread fused activation. This helper fuses SFPU activation on the PACKER
  *      thread (apply_activation_from_pack) at the pack stage — the FUSE_BIAS+activation
  *      overlap path. binary_op's post-op callback runs on the MATH thread only.
- *   3. bias_offset walk-base. conv2d pushes the whole per-core bias slice once and walks
+ *   3. bias_offset walk-base. Some callers push the whole per-core bias slice once and walk
  *      it via bias_offset; binary_op has no equivalent addressing hook.
  * Migration target: once binary_op and this helper share a branch, route the inner add
  * through binary_op<ADD, ROW|NONE> — TileRowMajor directly, SubblockMajor once binary_op
@@ -176,9 +176,9 @@ struct NoPostBias {
  *   post_bias     PostBiasFn instance (default: {}).
  *   bias_offset   Tile offset added to all bias reads (default: 0). Used when the writer pushes
  *                 the entire per-core bias slice once and the compute kernel walks through it
- *                 across multiple outer iterations (e.g. conv2d's bias_block_offset advancing
+ *                 across multiple outer iterations (e.g. a bias_block_offset advancing
  *                 by in1_block_w per output column block). Caller manages the offset; helper
- *                 just adds it to the bias tile index. Default 0 is the bmm pattern (writer
+ *                 just adds it to the bias tile index. Default 0 is the standard pattern (writer
  *                 pushes per outer iter; helper reads from front).
  *
  * @example
@@ -238,7 +238,7 @@ struct NoPostBias {
  *                      BiasAddShape::of(...), SFPUPostBias{});
  *
  * @example
- *   // conv2d pattern: writer pushes the entire per-core bias slice once at startup;
+ *   // Walk-base pattern: writer pushes the entire per-core bias slice once at startup;
  *   // compute walks through it via bias_block_offset advancing by in1_block_w per outer
  *   // w-block iteration. Caller waits bias once and never pops; helper reads at offset
  *   // bias_block_offset + per-subblock index.
