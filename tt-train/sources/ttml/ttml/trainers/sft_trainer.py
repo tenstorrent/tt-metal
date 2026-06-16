@@ -55,19 +55,6 @@ class SFTConfig:
         gradient_checkpointing: Enable activation recomputation to reduce
             memory usage at the cost of ~30 % extra compute.  Sets the
             model's ``runner_type`` to ``MemoryEfficient``.
-        enable_fsdp: Wrap the model with :func:`ttml.fsdp.fully_shard`
-            (per-block + root) so parameters, gradients, and optimizer
-            state are sharded across the ``"fsdp"`` mesh axis.  See
-            ``tt-train/docs/FSDP.md``.  Requires an open mesh with an
-            ``"fsdp"`` axis of size > 1.  Mutually exclusive with
-            ``max_grad_norm > 0`` (per-rank shard L2 norm is not the
-            global norm) and ``save_interval > 0`` (the pickle checkpoint
-            format would store per-rank shards, not full tensors).
-        fsdp_reshard_after_forward: When ``True`` (default), forward
-            re-shards weights between forward and backward to keep peak
-            memory low; the backward-pre callback re-gathers just in
-            time. ``False`` keeps weights gathered between forward and
-            backward — cheaper in CCL but uses more memory.
     """
 
     # ---- loop ----
@@ -88,9 +75,6 @@ class SFTConfig:
     gradient_checkpointing: bool = False
     # If True, tqdm progress bar (and its loss/lr postfix) is suppressed.
     disable_progress_bar: bool = False
-    # ---- FSDP ----
-    enable_fsdp: bool = False
-    fsdp_reshard_after_forward: bool = True
 
 
 class SFTTrainer:
@@ -101,27 +85,14 @@ class SFTTrainer:
     defined by :class:`~ttml.modules.module_base.AbstractModuleBase` and
     :class:`~ttml.datasets.TTMLDataloader`.
 
-    Multi-device training (e.g. DDP) is supported by combining two
-    extension points:
-
-    * A **collate function** that shards batch tensors across the mesh
-      (via ``shard_tensor_to_mesh_mapper``).
-    * The :meth:`~TrainerCallback.on_before_optimizer_step` callback to
-      synchronise gradients before the optimiser step.
+    Multi-device training (DDP / FSDP / HSDP): supply a **collate function**
+    that shards batch tensors across the mesh (via
+    ``shard_tensor_to_mesh_mapper``); gradients are all-reduced automatically
+    each step across the present ``dp`` / ``fsdp`` axes.
 
     Loss aggregation across devices is handled automatically via a default
     ``concat_mesh_to_tensor_composer(device, 0)``.  Pass a custom
     ``loss_composer`` to override.
-
-    **FSDP**: setting ``config.enable_fsdp=True`` wraps the model with
-    :func:`ttml.fsdp.fully_shard` (per-block + root, FSDP2-style) before
-    the optimizer is built so optimizer state is sized against the
-    sharded shapes.  Gradients are then auto-synchronised across the
-    ``("dp", "fsdp")`` axes inside the training loop (``ttml.sync_gradients``
-    skips the FSDP axis per-param because the FSDP backward hook has
-    already reduce-scattered it). With pure FSDP no DDP callback is
-    needed; with HSDP the same call covers both axes. See
-    ``tt-train/docs/FSDP.md`` for the full picture.
 
     Example::
 
@@ -209,38 +180,14 @@ class SFTTrainer:
         if config.gradient_checkpointing:
             self._enable_gradient_checkpointing(model)
 
-        if config.enable_fsdp:
-            # The pickle checkpoint format dumps per-rank tensors via
-            # to_numpy(); under FSDP that captures only a per-rank shard,
-            # not the full weight. clip_grad_norm is similarly broken
-            # because the per-rank shard L2 norm is not the global norm
-            # (sharding-aware variants are tracked in tt-train/docs/FSDP.md).
-            if config.max_grad_norm > 0:
-                raise ValueError(
-                    "SFTConfig.max_grad_norm > 0 is not supported with enable_fsdp=True; "
-                    "the per-rank shard L2 norm is not the global norm. "
-                    "See tt-train/docs/FSDP.md."
-                )
-            if config.save_interval > 0:
-                raise ValueError(
-                    "SFTConfig.save_interval > 0 is not supported with enable_fsdp=True; "
-                    "the pickle checkpoint format would store per-rank shards. "
-                    "Set save_interval=0 or disable FSDP."
-                )
-            self._apply_fsdp(model, config.fsdp_reshard_after_forward)
-
         self.model = model
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
-
-        # Mesh axes to sync gradients across before each optimizer step
-        # when FSDP is enabled. Empty tuple disables the auto-sync (DDP
-        # users keep the existing callback-based path).
-        self._sync_axes: tuple[str, ...] = ()
-        if config.enable_fsdp:
-            self._sync_axes = self._resolve_sync_axes()
+        # Axes to all-reduce gradients across each step; empty (single-device / TP-only) = no-op.
+        self._grad_sync_axes = self._resolve_grad_sync_axes()
+        self._validate_clip_grad_norm()
 
         self._optimizer = self._build_optimizer(optimizer)
         self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
@@ -313,16 +260,13 @@ class SFTTrainer:
                     cb.on_after_backward(self, batch)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
-            if self._sync_axes:
-                ttml.sync_gradients(self.model.parameters(), axis_names=self._sync_axes)
+            if self._grad_sync_axes:
+                ttml.sync_gradients(self.model.parameters(), axis_names=self._grad_sync_axes)
 
             for cb in list(self._callbacks):
                 cb.on_before_optimizer_step(self)
 
             if cfg.max_grad_norm > 0:
-                mesh = ttml.maybe_mesh()
-                if mesh is not None and mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
-                    raise ValueError("clip_grad_norm is not supported with tensor parallelism")
                 ttml.core.clip_grad_norm(self.model.parameters(), cfg.max_grad_norm, 2.0, False)
 
             profiler_marker(None, "gradient_sync_done")
@@ -589,32 +533,26 @@ class SFTTrainer:
             return
         target.config = replace(cfg, runner_type=ttml.models.RunnerType.MemoryEfficient)
 
-    @staticmethod
-    def _apply_fsdp(model: Any, reshard_after_forward: bool) -> None:
-        """Wrap ``model`` with FSDP2-style ``fully_shard`` (per-block + root).
-
-        For LoraModel-wrapped models we descend into the inner ``model.model``
-        to find ``.blocks`` (LoraModel itself doesn't expose them). The root
-        wrapper then claims any params not already managed by a block wrapper.
-        """
-        target = model.model if hasattr(model, "model") and hasattr(model.model, "blocks") else model
-        blocks = getattr(target, "blocks", None)
-        if blocks is None:
-            raise RuntimeError(
-                "SFTConfig.enable_fsdp=True requires a model with a `.blocks` "
-                f"attribute (got {type(target).__name__}). Wrap your model so it "
-                "exposes a list of transformer blocks (matching Llama / NanoGPT)."
+    def _validate_clip_grad_norm(self) -> None:
+        """clip_grad_norm computes a per-device norm with no cross-mesh reduction, so it is only correct
+        when every parameter is replicated. Reject sharded (FSDP/TP) params up front rather than silently
+        clipping by a wrong per-shard norm."""
+        if self.config.max_grad_norm <= 0:
+            return
+        if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for _, p in self.model.parameters().items()):
+            raise ValueError(
+                "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
+                "only a shard, so the per-shard norm is wrong"
             )
-        for block in blocks:
-            ttml.fsdp.fully_shard(block, reshard_after_forward=reshard_after_forward)
-        ttml.fsdp.fully_shard(target, reshard_after_forward=reshard_after_forward)
 
     @staticmethod
-    def _resolve_sync_axes() -> tuple[str, ...]:
-        """Pick the mesh axes to all-reduce gradients across.
+    def _resolve_grad_sync_axes() -> tuple[str, ...]:
+        """Mesh axes to all-reduce gradients across each step.
 
-        Returns the subset of ``("dp", "fsdp")`` whose axis is present on
-        the active mesh AND has size > 1.  Empty tuple = no sync needed
+        The subset of ``("dp", "fsdp")`` present on the active mesh with size > 1; empty otherwise
+        (single device / TP-only). FSDP-sharded params are skipped per-axis by ``ttml.sync_gradients``
+        (``fully_shard``'s backward hooks already reduce-scattered them), so this covers DDP, the dp axis
+        of HSDP, and non-sharded params on the fsdp axis.
         """
         mesh = ttml.maybe_mesh()
         if mesh is None:

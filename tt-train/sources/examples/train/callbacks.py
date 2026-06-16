@@ -18,13 +18,6 @@ import moe_activation_logger
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 
-class DDPCallback(TrainerCallback):
-    """All-reduce gradients across the `dp` mesh axis before each optimizer step."""
-
-    def on_before_optimizer_step(self, trainer: SFTTrainer) -> None:
-        ttml.sync_gradients(trainer.model.parameters())
-
-
 class ThroughputCallback(TrainerCallback):
     """Print wall-clock TPS / TFLOPS / MFU every `log_interval` steps."""
 

@@ -52,7 +52,6 @@ from formatting import HEADER_WIDTH, print_footer, print_header, shorten_home
 from model_builders import FLOPS_REGISTRY, Model, ModelConfig, instantiate_model_from_config, parse_model_config
 from callbacks import (
     AverageLossCallback,
-    DDPCallback,
     MemoryTrackerCallback,
     MoECallback,
     ThroughputCallback,
@@ -537,9 +536,6 @@ def run_training(
 
     callbacks: list[TrainerCallback] = []
 
-    # DDPCallback all-reduces the dp axis (a no-op on fsdp, which FSDP reduce-scatters in backward).
-    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
-        callbacks.append(DDPCallback())
     if model_cfg.model_type == "deepseek":
         callbacks.append(MoECallback(args.log_expert_activations))
 
@@ -836,15 +832,6 @@ def main() -> None:
         os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     device_cfg = DeviceConfig(yaml_config)
-
-    # TP/FSDP-sharded parameter tensors don't round-trip through our pickle format (it would store
-    # per-rank shards, not full tensors), so reject checkpoint flags upfront under either.
-    if device_cfg.enable_tp or device_cfg.enable_fsdp:
-        sharding = "tensor parallelism" if device_cfg.enable_tp else "FSDP"
-        if args.checkpoint_dir:
-            raise ValueError(f"--checkpoint-dir is not supported with {sharding}")
-        if args.resume:
-            raise ValueError(f"--resume is not supported with {sharding}")
 
     mesh = build_mesh(device_cfg)
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)

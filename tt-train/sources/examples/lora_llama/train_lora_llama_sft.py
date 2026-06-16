@@ -5,10 +5,8 @@
 """Llama LoRA fine-tuning on Shakespeare using SFTTrainer, with optional DDP and TP.
 
 This is a reimplementation of train_lora_llama.py that delegates the training
-loop to :class:`SFTTrainer`.  DDP support is wired externally via:
-
-* A collate function that shards batch tensors across the mesh.
-* An ``on_before_optimizer_step`` callback that synchronises gradients.
+loop to :class:`SFTTrainer`.  DDP is wired via a collate function that shards
+batch tensors across the mesh; the trainer synchronises gradients automatically.
 """
 
 import argparse
@@ -43,16 +41,6 @@ LORA_RANK = 8
 LORA_ALPHA = 16
 LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
 LORA_DROPOUT = 0.05
-
-
-# ── DDP callback ──────────────────────────────────────────────────────────────
-
-
-class DDPCallback(TrainerCallback):
-    """Synchronise gradients across all DDP devices before the optimiser step."""
-
-    def on_before_optimizer_step(self, trainer):
-        ttml.sync_gradients(trainer.model.parameters())
 
 
 class LossLogger(TrainerCallback):
@@ -333,8 +321,6 @@ def main():
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     callbacks: list[TrainerCallback] = []
-    if use_ddp:
-        callbacks.append(DDPCallback())
     if args.loss_log:
         callbacks.append(LossLogger(args.loss_log))
 
