@@ -134,9 +134,9 @@ inline void _llk_unpack_tilize_init_(
         const std::uint32_t Tile_z_dim = 1;
         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(Tile_x_dim | (Tile_x_dim << 16));
         // Set x-dim to cover entire tile (face_r_dim * num_faces * FACE_C_DIM)
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0xffff0000>(0 | (Tile_x_dim << 16));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (Tile_x_dim << 16));
         // Set z-dim to 1 as X dim is set to cover the entire tile, so no need to iterate over faces.
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (Tile_z_dim << 16));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (Tile_z_dim << 16));
 
         // Set x-end for Unpackers to (face_r_dim * num_faces * FACE_C_DIM - 1)
         TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0);
@@ -308,8 +308,8 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     // per-context override in Tile_x_dim_cntx0 (set below) is what the unpacker actually
     // consumes for srcA. The non-8-bit init path mutates X-dim (to face_r_dim*num_faces*FACE_C_DIM)
     // so it must be reverted here too to keep the operand operation-restorable.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(CANONICAL_UNPA_TILE_X_DIM);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 16, TILE_DESC_UPPER_HALFWORD_MASK>(CANONICAL_UNPA_TILE_X_DIM);
 
     // The unpack-config[0] write below also clears tileize_mode, haloize_mode, and the
     // other word-0 fields back to 0, mirroring what the zero-initialised config struct

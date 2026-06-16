@@ -273,6 +273,9 @@ inline constexpr std::uint32_t canonical_unpA_z_stride(const std::uint32_t unpac
 constexpr std::uint32_t CANONICAL_UNPA_TILE_Y_DIM = 1;
 constexpr std::uint32_t CANONICAL_UNPA_TILE_X_DIM = 0;
 
+// Mask for the upper halfword of a TileDescriptor config word, where the X/Y/Z dim fields live.
+constexpr std::uint32_t TILE_DESC_UPPER_HALFWORD_MASK = 0xffff0000;
+
 // Canonical Tile_x_dim_cntx0 word: face_dim packed into both cntx0 (low 16) and cntx1 (high 16),
 // where face_dim = face_r_dim * FACE_C_DIM. configure_unpack_AB programs this value.
 inline constexpr std::uint32_t canonical_unpA_tile_x_dim_cntx(const std::uint32_t face_r_dim)

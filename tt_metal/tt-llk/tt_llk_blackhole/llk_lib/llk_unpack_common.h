@@ -194,7 +194,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(face_dim | (face_dim << 16));
 
         // Set Z-dim to number of faces
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (unpack_num_faces << 16));
     }
 }
 
@@ -261,10 +261,10 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(unpack_ch1_z_stride);
 
         // Set X-dim to face_r_dim * FACE_C_DIM
-        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xffff0000>((unpack_face_r_dim * FACE_C_DIM) << 16);
+        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, TILE_DESC_UPPER_HALFWORD_MASK>((unpack_face_r_dim * FACE_C_DIM) << 16);
 
         // Set Z-dim to number of faces
-        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
+        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (unpack_num_faces << 16));
     }
 }
 
