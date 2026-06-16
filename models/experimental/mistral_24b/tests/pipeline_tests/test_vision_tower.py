@@ -34,7 +34,7 @@ def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
     ]
 
 
-@pytest.mark.skip(reason="Disabled: see #45992")
+# @pytest.mark.skip(reason="Disabled: see #45992")
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",

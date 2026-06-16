@@ -10,7 +10,6 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-import torch.nn.functional as F
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.common.sampling import SamplingParams
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -377,26 +376,20 @@ def run_generation_exactly_like_test_end2end(
     # Start full-run and prefill wall-clock timers separately to report both TTFT and total runtime.
     run_t0 = time.perf_counter()
     prefill_t0 = time.perf_counter()
-    logits = generator.prefill_forward_text(
+    prefill_out = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
         kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
         vision_model=vision_model,
         processed_inputs=processed_inputs,
+        sampling_params=DECODE_GREEDY_SAMPLING,
     )
     prefill_t1 = time.perf_counter()
-    inference_prefill_time = prefill_t1 - prefill_t0  # Wall time covering vision forward + text prefill.
+    inference_prefill_time = prefill_t1 - prefill_t0
     num_prefill_tokens = int(prefill_lens[0])
 
-    prefilled_token = torch.argmax(logits, dim=-1)
-
-    # logits: [1, 1, vocab_size]
-    last_logits = logits[0, -1]  # shape: [vocab_size]
-    probs = F.softmax(last_logits, dim=-1)
-
-    top_k = 5
-    topk_probs, topk_indices = torch.topk(probs, k=top_k)
+    prefilled_token, _ = prefill_out
 
     all_outputs = [encoded_prompts[0][: prefill_lens[0]]]
     all_outputs[0].append(int(prefilled_token[0].item()))
@@ -513,11 +506,11 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     "paged_attention",
     (
         True,
-        # False,
+        False,
     ),
     ids=(
         "paged_attention",
-        # "default_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
