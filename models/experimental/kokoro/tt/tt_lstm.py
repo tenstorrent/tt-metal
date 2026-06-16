@@ -204,17 +204,21 @@ def _lstm_step(
     f = ttnn.slice(sig, [0, H], [sig.shape[0], 2 * H], [1, 1])
     o = ttnn.slice(sig, [0, 3 * H], [sig.shape[0], 4 * H], [1, 1])
     ttnn.deallocate(sig)
-    g = ttnn.tanh(ttnn.slice(gates, [0, 2 * H], [gates.shape[0], 3 * H], [1, 1]), memory_config=memory_config)
+    g_raw = ttnn.slice(gates, [0, 2 * H], [gates.shape[0], 3 * H], [1, 1], memory_config=memory_config)
 
-    # c_new = f*c + i*g. Kept as separate mul/mul/add: the fused addcmul (MAC) changes
+    # c_new = f*c + i*tanh(g). Kept as separate mul/mul/add: the fused addcmul (MAC) changes
     # the cell-state accumulation, which feeds the F0 curve (amplified ~1885x by the
-    # vocoder) and dropped end-to-end PCC below the 0.84 floor (0.855 -> 0.825).
+    # vocoder) and dropped end-to-end PCC below the 0.84 floor (0.855 -> 0.825). The two
+    # tanh activations are instead folded into their consuming multiply via the operand
+    # activation kwarg (same SFPU tanh, one kernel instead of two) — this leaves the
+    # add's accumulation order untouched, so it is bit-identical, and drops 2 unary
+    # ops/timestep (and their host-dispatch gap).
     c_new = ttnn.add(
         ttnn.multiply(f, c, memory_config=memory_config),
-        ttnn.multiply(i, g, memory_config=memory_config),
+        ttnn.multiply(g_raw, i, input_tensor_a_activations=[ttnn.UnaryOpType.TANH], memory_config=memory_config),
         memory_config=memory_config,
     )
-    h_new = ttnn.multiply(o, ttnn.tanh(c_new, memory_config=memory_config), memory_config=memory_config)
+    h_new = ttnn.multiply(c_new, o, input_tensor_a_activations=[ttnn.UnaryOpType.TANH], memory_config=memory_config)
     return h_new, c_new
 
 
@@ -252,14 +256,17 @@ def _lstm_step_fused(
     f = ttnn.slice(sig, [0, H2], [sig.shape[0], 2 * H2], [1, 1])
     o = ttnn.slice(sig, [0, 3 * H2], [sig.shape[0], 4 * H2], [1, 1])
     ttnn.deallocate(sig)
-    g = ttnn.tanh(ttnn.slice(gates, [0, 2 * H2], [gates.shape[0], 3 * H2], [1, 1]), memory_config=memory_config)
+    g_raw = ttnn.slice(gates, [0, 2 * H2], [gates.shape[0], 3 * H2], [1, 1], memory_config=memory_config)
 
+    # Fold tanh(g) and tanh(c_new) into their consuming multiply (operand activation kwarg):
+    # same SFPU tanh, one kernel instead of two, leaving the add's accumulation order
+    # untouched (bit-identical) — drops 2 unary ops/timestep. See _lstm_step.
     c_new = ttnn.add(
         ttnn.multiply(f, c, memory_config=memory_config),
-        ttnn.multiply(i, g, memory_config=memory_config),
+        ttnn.multiply(g_raw, i, input_tensor_a_activations=[ttnn.UnaryOpType.TANH], memory_config=memory_config),
         memory_config=memory_config,
     )
-    h_new = ttnn.multiply(o, ttnn.tanh(c_new, memory_config=memory_config), memory_config=memory_config)
+    h_new = ttnn.multiply(c_new, o, input_tensor_a_activations=[ttnn.UnaryOpType.TANH], memory_config=memory_config)
     return h_new, c_new
 
 
