@@ -9,6 +9,13 @@ const GITHUB_BASE =
     "https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_metal/tt_metal/data_movement";
 
 const TESTS = [
+    // ── One from One ───────────────────────────────────────────────
+    {
+        name: "One from One Packet Sizes",
+        csv: "One from One Packet Sizes.csv",
+        tags: ["read", "unicast", "L1", "single_core"],
+        directory: "one_from_one",
+    },
     {
         name: "One from One Packet Sizes 2.0",
         csv: "One from One Packet Sizes 2.0.csv",
@@ -16,30 +23,166 @@ const TESTS = [
         directory: "one_from_one",
     },
     {
+        name: "One from One Directed Ideal",
+        csv: "One from One Directed Ideal.csv",
+        tags: ["read", "unicast", "L1", "single_core", "directed_ideal"],
+        directory: "one_from_one",
+    },
+    {
+        name: "One from One Virtual Channels",
+        csv: "One from One Virtual Channels.csv",
+        tags: ["read", "unicast", "L1", "single_core", "virtual_channels"],
+        directory: "one_from_one",
+    },
+
+    // ── One to One ─────────────────────────────────────────────────
+    {
         name: "One to One Packet Sizes",
         csv: "One to One Packet Sizes.csv",
         tags: ["write", "unicast", "L1", "single_core"],
         directory: "one_to_one",
     },
     {
+        name: "One to One Packet Sizes 2.0",
+        csv: "One to One Packet Sizes 2.0.csv",
+        tags: ["write", "unicast", "L1", "single_core", "2.0_api"],
+        directory: "one_to_one",
+    },
+    {
+        name: "One to One Directed Ideal",
+        csv: "One to One Directed Ideal.csv",
+        tags: ["write", "unicast", "L1", "single_core", "directed_ideal"],
+        directory: "one_to_one",
+    },
+    {
+        name: "One to One Virtual Channels",
+        csv: "One to One Virtual Channels.csv",
+        tags: ["write", "unicast", "L1", "single_core", "virtual_channels"],
+        directory: "one_to_one",
+    },
+
+    // ── One from All ───────────────────────────────────────────────
+    {
         name: "One from All Packet Sizes",
         csv: "One from All Packet Sizes.csv",
         tags: ["read", "unicast", "L1", "multi_core"],
         directory: "one_from_all",
+    },
+    {
+        name: "One from All Directed Ideal",
+        csv: "One from All Directed Ideal.csv",
+        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
+        directory: "one_from_all",
+    },
+    {
+        name: "One from All Virtual Channels",
+        csv: "One from All Virtual Channels.csv",
+        tags: ["read", "unicast", "L1", "multi_core", "virtual_channels"],
+        directory: "one_from_all",
+    },
+
+    // ── One to All ─────────────────────────────────────────────────
+    {
+        name: "One to All Multicast Linked Packet Sizes",
+        csv: "One to All Multicast Linked Packet Sizes.csv",
+        tags: ["write", "multicast", "L1", "multi_core"],
+        directory: "one_to_all",
+    },
+    {
+        name: "One to All Multicast Linked Packet Sizes 2.0",
+        csv: "One to All Multicast Linked Packet Sizes 2.0.csv",
+        tags: ["write", "multicast", "L1", "multi_core", "2.0_api"],
+        directory: "one_to_all",
+    },
+    {
+        name: "Multicast Schemes (Loopback Disabled)",
+        csv: "Multicast Schemes (Loopback Disabled).csv",
+        tags: ["write", "multicast", "L1", "multi_core", "2.0_api"],
+        directory: "one_to_all",
+    },
+
+    // ── All to All ─────────────────────────────────────────────────
+    {
+        name: "All to All Packet Sizes 2.0",
+        csv: "All to All Packet Sizes 2.0.csv",
+        tags: ["write", "unicast", "L1", "multi_core", "2.0_api"],
+        directory: "all_to_all",
+    },
+
+    // ── All from All ───────────────────────────────────────────────
+    {
+        name: "All from All Packet Sizes",
+        csv: "All from All Packet Sizes.csv",
+        tags: ["read", "unicast", "L1", "multi_core"],
+        directory: "all_from_all",
+    },
+    {
+        name: "All from All Directed Ideal",
+        csv: "All from All Directed Ideal.csv",
+        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
+        directory: "all_from_all",
+    },
+    {
+        name: "All from All 2x2 From 1x1 Directed Ideal",
+        csv: "All from All 2x2 From 1x1 Directed Ideal.csv",
+        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
+        directory: "all_from_all",
+    },
+    {
+        name: "All from All 4x4 From 1x1 Directed Ideal",
+        csv: "All from All 4x4 From 1x1 Directed Ideal.csv",
+        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
+        directory: "all_from_all",
+    },
+    {
+        name: "All from All 1x1 From 2x2 Directed Ideal",
+        csv: "All from All 1x1 From 2x2 Directed Ideal.csv",
+        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
+        directory: "all_from_all",
+    },
+    {
+        name: "All from All 1x1 From 4x4 Directed Ideal",
+        csv: "All from All 1x1 From 4x4 Directed Ideal.csv",
+        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
+        directory: "all_from_all",
+    },
+    {
+        name: "All from All 2x2 From 2x2 Directed Ideal",
+        csv: "All from All 2x2 From 2x2 Directed Ideal.csv",
+        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
+        directory: "all_from_all",
+    },
+
+    // ── Multi Interleaved ──────────────────────────────────────────
+    {
+        name: "Multi Interleaved Sizes",
+        csv: "Multi Interleaved Sizes.csv",
+        tags: ["read", "unicast", "DRAM", "multi_core"],
+        directory: "multi_interleaved",
+    },
+
+    // ── Atomics ────────────────────────────────────────────────────
+    {
+        name: "Atomic Semaphore Adjacent Bandwidth Sweep",
+        csv: "Atomic Semaphore Adjacent Bandwidth Sweep.csv",
+        tags: ["write", "unicast", "L1", "multi_core", "atomics"],
+        directory: "atomics",
     },
 ];
 
 const INTERNAL_COLUMNS = new Set([
     "Run Host ID",
     "Architecture",
-    "RISC-V Processor",
 ]);
 
 const METRIC_COLUMNS = new Set([
     "Latency (cycles)",
     "Bandwidth (bytes/cycle)",
     "Combined Bandwidth (bytes/cycle)",
+    "Bandwidth (GB/s)",
     "Total Bytes",
+    "Number of Cores",
+    "Clock Frequency (MHz)",
 ]);
 
 const DEFAULT_X_AXIS = "Transaction Size (bytes)";
@@ -67,7 +210,7 @@ let state = {
     activeTags: new Set(),
     searchQuery: "",
     yAxisMode: "bandwidth",
-    visibleSeries: new Set(),
+    visibleValues: new Map(),
     csvData: null,
     analysis: null,
     chartConfig: null,
@@ -84,16 +227,13 @@ function analyzeColumns(rows) {
     const constants = {};
 
     for (const col of allColumns) {
-        const values = [...new Set(rows.map((r) => r[col]))];
-        const isConstant = values.length <= 1;
+        if (INTERNAL_COLUMNS.has(col) || METRIC_COLUMNS.has(col)) {
+            if (METRIC_COLUMNS.has(col)) metrics.push(col);
+            continue;
+        }
 
-        if (METRIC_COLUMNS.has(col)) {
-            metrics.push(col);
-        } else if (INTERNAL_COLUMNS.has(col)) {
-            if (!isConstant) {
-                sweepDimensions.push({ column: col, values });
-            }
-        } else if (isConstant) {
+        const values = [...new Set(rows.map((r) => r[col]))];
+        if (values.length <= 1) {
             constants[col] = values[0];
         } else {
             sweepDimensions.push({ column: col, values });
@@ -115,12 +255,11 @@ function buildChartConfig(analysis) {
     );
     const xAxis = xAxisDim ? DEFAULT_X_AXIS : sweepDimensions[0]?.column;
 
-    const seriesDim = sweepDimensions.find(
-        (d) => d.column === DEFAULT_SERIES && d.column !== xAxis
-    );
-    const seriesGrouper = seriesDim ? DEFAULT_SERIES : null;
+    const groupers = sweepDimensions
+        .filter((d) => d.column !== xAxis)
+        .map((d) => d.column);
 
-    return { xAxis, seriesGrouper, bandwidthCol, latencyCol };
+    return { xAxis, groupers, bandwidthCol, latencyCol };
 }
 
 // ── CSV Loading ────────────────────────────────────────────────────
@@ -143,7 +282,7 @@ async function probeArchitectures(test) {
     const probes = KNOWN_ARCHITECTURES.map(async (arch) => {
         const url = `${DATA_BASE_PATH}/${arch}/${test.csv}`;
         try {
-            const resp = await fetch(url, { method: "HEAD" });
+            const resp = await fetch(url);
             if (resp.ok) available.push(arch);
         } catch {
             // not available
@@ -204,11 +343,19 @@ function getPlotData(rows, config) {
 
     const series = new Map();
     for (const row of rows) {
-        const seriesKey = config.seriesGrouper
-            ? String(row[config.seriesGrouper])
-            : "all";
+        let visible = true;
+        for (const dim of config.groupers) {
+            const allowed = state.visibleValues.get(dim);
+            if (allowed && !allowed.has(String(row[dim]))) {
+                visible = false;
+                break;
+            }
+        }
+        if (!visible) continue;
 
-        if (!state.visibleSeries.has(seriesKey)) continue;
+        const seriesKey = config.groupers.length > 0
+            ? config.groupers.map((d) => String(row[d])).join(" | ")
+            : "all";
 
         if (!series.has(seriesKey)) {
             series.set(seriesKey, { x: [], y: [] });
@@ -232,9 +379,21 @@ function renderChart(rows, config) {
 
     const traces = [];
     let colorIdx = 0;
-    const sortedKeys = [...plotData.keys()].sort(
-        (a, b) => Number(a) - Number(b)
-    );
+    const sortedKeys = [...plotData.keys()].sort((a, b) => {
+        const aParts = a.split(" | ");
+        const bParts = b.split(" | ");
+        for (let i = 0; i < aParts.length; i++) {
+            const na = Number(aParts[i]);
+            const nb = Number(bParts[i]);
+            if (!isNaN(na) && !isNaN(nb)) {
+                if (na !== nb) return na - nb;
+            } else {
+                const cmp = (aParts[i] || "").localeCompare(bParts[i] || "");
+                if (cmp !== 0) return cmp;
+            }
+        }
+        return 0;
+    });
 
     for (const key of sortedKeys) {
         const s = plotData.get(key);
@@ -244,7 +403,7 @@ function renderChart(rows, config) {
             y: s.y,
             type: "scatter",
             mode: "lines+markers",
-            name: config.seriesGrouper ? String(key) : "Data",
+            name: config.groupers.length > 0 ? key : "Data",
             line: { color, width: 2 },
             marker: { color, size: 5 },
             hovertemplate:
@@ -256,8 +415,8 @@ function renderChart(rows, config) {
 
     const isLatency = state.yAxisMode === "latency";
     const yLabel = isLatency
-        ? "Latency (cycles)"
-        : "Bandwidth (bytes/cycle)";
+        ? config.latencyCol || "Latency (cycles)"
+        : config.bandwidthCol || "Bandwidth (bytes/cycle)";
 
     const layout = {
         xaxis: {
@@ -408,43 +567,57 @@ function renderTestInfo(analysis) {
     }
 }
 
-function renderSeriesCheckboxes(config, rows) {
-    const container = document.getElementById("series-checkboxes");
+function renderSweepFilters(config, rows) {
+    const container = document.getElementById("sweep-filters");
     container.innerHTML = "";
 
-    if (!config.seriesGrouper) return;
+    state.visibleValues = new Map();
 
-    const values = [
-        ...new Set(rows.map((r) => r[config.seriesGrouper])),
-    ].sort((a, b) => Number(a) - Number(b));
+    for (const dim of config.groupers) {
+        const values = [...new Set(rows.map((r) => r[dim]))]
+            .sort((a, b) => {
+                const na = Number(a), nb = Number(b);
+                if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                return String(a).localeCompare(String(b));
+            });
 
-    state.visibleSeries = new Set(values.map(String));
+        state.visibleValues.set(dim, new Set(values.map(String)));
 
-    values.forEach((val, idx) => {
-        const label = document.createElement("label");
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = true;
-        checkbox.addEventListener("change", () => {
-            const key = String(val);
-            if (checkbox.checked) {
-                state.visibleSeries.add(key);
-            } else {
-                state.visibleSeries.delete(key);
-            }
-            renderChart(state.csvData, state.chartConfig);
+        const group = document.createElement("div");
+        group.className = "series-controls";
+
+        const label = document.createElement("span");
+        label.className = "label";
+        label.textContent = dim + ":";
+        group.appendChild(label);
+
+        const checkboxContainer = document.createElement("div");
+        checkboxContainer.className = "series-checkboxes";
+
+        values.forEach((val) => {
+            const lbl = document.createElement("label");
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = true;
+            checkbox.addEventListener("change", () => {
+                const key = String(val);
+                const visible = state.visibleValues.get(dim);
+                if (checkbox.checked) {
+                    visible.add(key);
+                } else {
+                    visible.delete(key);
+                }
+                renderChart(state.csvData, state.chartConfig);
+            });
+
+            lbl.appendChild(checkbox);
+            lbl.appendChild(document.createTextNode(" " + val));
+            checkboxContainer.appendChild(lbl);
         });
 
-        const dot = document.createElement("span");
-        dot.className = "series-color-dot";
-        dot.style.backgroundColor =
-            SERIES_COLORS[idx % SERIES_COLORS.length];
-
-        label.appendChild(checkbox);
-        label.appendChild(dot);
-        label.appendChild(document.createTextNode(" " + val));
-        container.appendChild(label);
-    });
+        group.appendChild(checkboxContainer);
+        container.appendChild(group);
+    }
 }
 
 // ── Main Actions ───────────────────────────────────────────────────
@@ -466,7 +639,7 @@ async function selectTest(test) {
         document.getElementById("test-info").innerHTML =
             '<span class="info-item"><span class="info-value">No CSV data found for any architecture.</span></span>';
         document.getElementById("arch-chips").innerHTML = "";
-        document.getElementById("series-checkboxes").innerHTML = "";
+        document.getElementById("sweep-filters").innerHTML = "";
         Plotly.purge("chart");
         return;
     }
@@ -498,7 +671,7 @@ async function loadAndRender() {
 
         renderArchChips();
         renderTestInfo(analysis);
-        renderSeriesCheckboxes(config, rows);
+        renderSweepFilters(config, rows);
         renderChart(rows, config);
 
         setupYAxisListeners();
