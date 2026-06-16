@@ -45,8 +45,10 @@
 void kernel_main() {
     // CT: [0]=has_gate, [1]=consumed_sem_addr (local L1; 0 if no gate),
     //     [2]=inbound data_ready_sem_addr (local L1), [3]=upstream_backing_addr,
-    //     [4]=dest_addr, [5]=page_size, [6]=scratch_cb_index, [7]=fill_delta,
-    //     [8..]=TensorAccessorArgs (upstream backing & dest share the per-shard spec).
+    //     [4]=dest_addr, [5]=page_size, [6]=scratch_cb_index, [7]=fill_delta (fallback),
+    //     [8]=metadata_enabled, [9]=metadata_size_bytes,
+    //     [10]=inbound_metadata_l1_addr (worker L1 the inbound service mcast the blob into),
+    //     [11..]=TensorAccessorArgs (upstream backing & dest share the per-shard spec).
     constexpr uint32_t has_gate = get_compile_time_arg_val(0);
     constexpr uint32_t consumed_sem_addr = get_compile_time_arg_val(1);
     constexpr uint32_t data_ready_sem_addr = get_compile_time_arg_val(2);
@@ -55,16 +57,25 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(5);
     constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(6);
     constexpr uint32_t fill_delta = get_compile_time_arg_val(7);
-    constexpr auto acc_args = TensorAccessorArgs<8>();
+    constexpr uint32_t metadata_enabled = get_compile_time_arg_val(8);
+    constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(9);
+    constexpr uint32_t inbound_metadata_l1_addr = get_compile_time_arg_val(10);
+    constexpr auto acc_args = TensorAccessorArgs<11>();
 
     // RT: [0]=start_page, [1]=end_page, [2]=inbound consumed_counter_addr,
-    //     [3]=inbound service NoC x, [4]=inbound service NoC y, [5]=skip_gate.
+    //     [3]=inbound service NoC x, [4]=inbound service NoC y, [5]=skip_gate,
+    //     [6]=is_metadata_writer (1 on the designated producing core, else 0),
+    //     [7]=outbound D2D sender metadata L1 addr, [8]=outbound service NoC x, [9]=y.
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t end_page = get_arg_val<uint32_t>(1);
     const uint32_t consumed_counter_addr = get_arg_val<uint32_t>(2);
     const uint32_t service_noc_x = get_arg_val<uint32_t>(3);
     const uint32_t service_noc_y = get_arg_val<uint32_t>(4);
     const uint32_t skip_gate = get_arg_val<uint32_t>(5);
+    const uint32_t is_metadata_writer = get_arg_val<uint32_t>(6);
+    const uint32_t outbound_metadata_l1_addr = get_arg_val<uint32_t>(7);
+    const uint32_t outbound_service_noc_x = get_arg_val<uint32_t>(8);
+    const uint32_t outbound_service_noc_y = get_arg_val<uint32_t>(9);
 
     // (a) Fused overwrite-gate: wait the prior forward to drain (sender consumed_sem), then
     //     reset. Compiled away when has_gate == 0 (last stage). Skipped on iter 0.
@@ -92,8 +103,18 @@ void kernel_main() {
         }
     }
 
+    // (b2) The per-stage increment: read it from the inbound metadata the upstream
+    //      service multicast into this core's L1 (present once data_ready fired above),
+    //      instead of the compile-time fill_delta. Exercises the metadata path: a
+    //      dropped/garbled blob shifts the end-stage iota and fails the test.
+    uint32_t delta = fill_delta;
+    if constexpr (metadata_enabled) {
+        invalidate_l1_cache();
+        delta = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inbound_metadata_l1_addr);
+    }
+
     // (c) Relay this worker's page range upstream -> dest, mutating every element by
-    //     fill_delta (+1 per stage) so the end value is a function of every hop.
+    //     delta (+1 per stage) so the end value is a function of every hop.
     auto upstream = TensorAccessor(acc_args, upstream_backing_addr);
     auto downstream = TensorAccessor(acc_args, dest_addr);
     const uint32_t cb_l1 = get_write_ptr(scratch_cb_index);
@@ -103,11 +124,24 @@ void kernel_main() {
         noc_async_read(upstream.get_noc_addr(p), cb_l1, page_size);
         noc_async_read_barrier();
         for (uint32_t e = 0; e < page_elems; ++e) {
-            scratch[e] += fill_delta;
+            scratch[e] += delta;
         }
         noc_async_write<page_size>(cb_l1, downstream.get_noc_addr(p), page_size);
     }
     noc_async_write_barrier();
+
+    // (c2) Propagate the metadata downstream: the designated producing core copies the
+    //      blob it received (this core's L1) into the outbound D2D sender's service-core
+    //      metadata L1, so the sender ships it to the next stage. Mirrors the H2D->D2D
+    //      bridge worker. Only the producing designated core does this (is_metadata_writer).
+    if constexpr (metadata_enabled) {
+        if (is_metadata_writer != 0) {
+            const uint64_t md_noc =
+                get_noc_addr(outbound_service_noc_x, outbound_service_noc_y, outbound_metadata_l1_addr);
+            noc_async_write(inbound_metadata_l1_addr, md_noc, metadata_size_bytes);
+            noc_async_write_barrier();
+        }
+    }
 
     // (d) Ack the inbound: it may refill its backing with the next iter.
     const uint64_t consumed_noc = get_noc_addr(service_noc_x, service_noc_y, consumed_counter_addr);

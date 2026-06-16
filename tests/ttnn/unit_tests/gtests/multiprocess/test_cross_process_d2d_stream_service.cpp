@@ -150,6 +150,14 @@ const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{0, 0}};  // single worke
 const CoreRange kStressWorkerCores{CoreCoord{0, 0}, CoreCoord{1, 1}};  // 2x2 = 4 worker cores
 constexpr uint32_t kStressIncsPerConn = 4u;  // atomic-inc packets sent per fabric connection per iter
 constexpr uint32_t kFillBase = 1u;  // stage-0 source iota base; end stage verifies kFillBase + iter
+// ForwardChainStress carries the per-stage increment (1) THROUGH the metadata path
+// instead of a kernel arg: stage 0 injects it as H2D metadata, each producing stage
+// reads it from its inbound metadata + propagates it to its outbound D2D sender, and
+// the end-stage iota check (kFillBase + iter + world_size) implicitly verifies the
+// blob survived every hop. metadata_size_bytes == 0 disables it (the CT fill_delta
+// fallback applies).
+constexpr uint32_t kFillDelta = 1u;
+constexpr uint32_t kStressMetadataBytes = sizeof(uint32_t);
 
 // --- small helpers (mirrors test_d2d_stream_service.cpp / test_stream_pipeline.cpp) ---
 
@@ -188,7 +196,8 @@ std::vector<uint32_t> make_iota_u32(size_t n, uint32_t base) {
 D2DStreamConfig make_cfg(
     const std::shared_ptr<MeshDevice>& mesh,
     const ttnn::Shape& global_shape,
-    const CoreRange& worker_cores = kWorkerCores) {
+    const CoreRange& worker_cores = kWorkerCores,
+    uint32_t metadata_size_bytes = 0) {
     const TensorSpec global_spec(
         global_shape,
         TensorLayout(
@@ -201,6 +210,7 @@ D2DStreamConfig make_cfg(
         .socket_mem_config = SocketMemoryConfig{BufferType::L1, /*fifo_size=*/4096u},
         .sender_worker_cores = worker_cores,
         .receiver_worker_cores = worker_cores,
+        .metadata_size_bytes = metadata_size_bytes,
         .share_fabric_links = true,  // LEASE mode (host-driven per-transfer grants)
     };
 }
@@ -224,7 +234,8 @@ uint32_t fifo_bytes_for(const TensorSpec& spec) {
 std::unique_ptr<H2DStreamService> make_h2d_service(
     const std::shared_ptr<MeshDevice>& mesh,
     const TensorSpec& global_spec,
-    const CoreRange& worker_cores = kWorkerCores) {
+    const CoreRange& worker_cores = kWorkerCores,
+    uint32_t metadata_size_bytes = 0) {
     const uint32_t fifo_bytes = fifo_bytes_for(global_spec);
     H2DStreamService::Config cfg{
         .global_spec = global_spec,
@@ -233,7 +244,7 @@ std::unique_ptr<H2DStreamService> make_h2d_service(
         .fifo_size_bytes = fifo_bytes,
         .scratch_cb_size_bytes = fifo_bytes,
         .worker_cores = worker_cores,
-        .metadata_size_bytes = 0,
+        .metadata_size_bytes = metadata_size_bytes,
     };
     return std::make_unique<H2DStreamService>(mesh, std::move(cfg));
 }
@@ -242,11 +253,17 @@ std::unique_ptr<H2DStreamService> make_h2d_service(
 // mapper replicates it to every shard; the stage-0 relay then copies it verbatim into
 // the outbound D2D backing. forward_to_tensor returns once the bytes are in the socket
 // FIFOs; the caller's barrier() blocks until the device kernel drained them.
-void h2d_push_token(H2DStreamService& h2d_service, uint32_t num_u32, uint32_t base) {
+void h2d_push_token(
+    H2DStreamService& h2d_service, uint32_t num_u32, uint32_t base, uint32_t metadata_size_bytes, uint32_t increment) {
     const std::vector<uint32_t> token = make_iota_u32(num_u32, base);
     const auto bytes =
         ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(token.data()), token.size() * sizeof(uint32_t));
-    h2d_service.forward_to_tensor(bytes);
+    // Inject the per-stage increment as the metadata blob (1 word) when enabled; it
+    // rides each token to stage 0's workers and is propagated down the chain.
+    const std::vector<uint32_t> meta_words = {increment};
+    const auto meta =
+        ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(meta_words.data()), metadata_size_bytes);
+    h2d_service.forward_to_tensor(bytes, meta);
 }
 
 // Body of stage 0's feeder THREAD: streams num_iters iota tokens into stage 0's own
@@ -256,10 +273,15 @@ void h2d_push_token(H2DStreamService& h2d_service, uint32_t num_u32, uint32_t ba
 // the FIFO fills; the relay drains one token per iter), so stage 0's device loop is
 // uniform with every other stage (no in-loop push).
 //
-void run_h2d_feed_loop(H2DStreamService& h2d_service, const ttnn::Shape& global_shape, uint32_t num_iters) {
+void run_h2d_feed_loop(
+    H2DStreamService& h2d_service,
+    const ttnn::Shape& global_shape,
+    uint32_t num_iters,
+    uint32_t metadata_size_bytes = 0,
+    uint32_t increment = 0) {
     const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
     for (uint32_t i = 0; i < num_iters; ++i) {
-        h2d_push_token(h2d_service, num_u32, kFillBase + i);
+        h2d_push_token(h2d_service, num_u32, kFillBase + i, metadata_size_bytes, increment);
     }
     h2d_service.barrier();  // flush every push to the device
 }
@@ -360,7 +382,8 @@ MeshWorkload make_stress_compute_workload(
     const std::shared_ptr<MeshDevice>& mesh,
     uint32_t dest_addr,
     D2DStreamServiceSender* outbound_for_gate,
-    uint32_t skip_gate) {
+    uint32_t skip_gate,
+    uint32_t metadata_size_bytes = 0) {
     const auto& coords = inbound->get_backing_tensor().tensor_topology().mesh_coords();
     const auto* up_buf = inbound->get_backing_tensor().buffer();
     const uint32_t page_size = up_buf->aligned_page_size();
@@ -371,6 +394,12 @@ MeshWorkload make_stress_compute_workload(
     const uint32_t has_gate = outbound_for_gate != nullptr ? 1u : 0u;
     const uint32_t consumed_sem_addr =
         has_gate ? static_cast<uint32_t>(outbound_for_gate->get_consumed_sem_addr()) : 0u;
+    // Metadata path: read the per-stage increment from the blob the inbound service
+    // mcast into the worker grid (uniform L1 addr), and — when producing — the
+    // designated core propagates it to the outbound D2D sender's metadata buffer.
+    const bool metadata_enabled = metadata_size_bytes > 0;
+    const uint32_t inbound_metadata_l1_addr =
+        metadata_enabled ? static_cast<uint32_t>(inbound->get_metadata_addr()) : 0u;
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
@@ -389,7 +418,10 @@ MeshWorkload make_stress_compute_workload(
             dest_addr,
             page_size,
             static_cast<uint32_t>(kScratchCb),
-            /*fill_delta=*/1u,
+            kFillDelta,  // fallback increment when metadata disabled
+            metadata_enabled ? 1u : 0u,
+            metadata_size_bytes,
+            inbound_metadata_l1_addr,
         };
         ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -405,9 +437,20 @@ MeshWorkload make_stress_compute_workload(
 
         auto* device = mesh->get_device(coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
+        // Outbound D2D sender's metadata buffer (service-core L1) + its physical NoC —
+        // the propagate target, producing stages only.
+        CoreCoord down_svc_phys{0, 0};
+        uint32_t outbound_metadata_addr = 0;
+        if (has_gate && metadata_enabled) {
+            down_svc_phys = device->worker_core_from_logical_core(outbound_for_gate->get_service_core(coord));
+            outbound_metadata_addr = static_cast<uint32_t>(outbound_for_gate->get_metadata_addr(coord));
+        }
         for (const auto& wc : worker_cores) {
             const auto [start_page, end_page] =
                 worker_page_range(worker_index(wc, worker_cores), num_workers, num_pages);
+            // A single designated producing core forwards the metadata blob downstream.
+            const uint32_t is_metadata_writer =
+                (metadata_enabled && has_gate && wc == worker_cores.end_coord) ? 1u : 0u;
             const std::vector<uint32_t> rt_args = {
                 start_page,
                 end_page,
@@ -415,6 +458,10 @@ MeshWorkload make_stress_compute_workload(
                 static_cast<uint32_t>(up_svc_phys.x),
                 static_cast<uint32_t>(up_svc_phys.y),
                 skip_gate,
+                is_metadata_writer,
+                outbound_metadata_addr,
+                static_cast<uint32_t>(down_svc_phys.x),
+                static_cast<uint32_t>(down_svc_phys.y),
             };
             SetRuntimeArgs(program, kernel, wc, rt_args);
         }
@@ -833,16 +880,19 @@ void run_forward_chain_stress(
     if (has_inbound) {
         inbound = D2DStreamService::create_receiver(
             mesh_device_,
-            make_cfg(mesh_device_, global_shape, worker_cores),
+            make_cfg(mesh_device_, global_shape, worker_cores, kStressMetadataBytes),
             D2DEndpointConfig{.sender_rank = Rank{rank - 1}, .receiver_rank = Rank{rank}, .distributed_context = ctx});
     } else {
         h2d_service = make_h2d_service(
-            mesh_device_, make_cfg(mesh_device_, global_shape, worker_cores).global_spec, worker_cores);
+            mesh_device_,
+            make_cfg(mesh_device_, global_shape, worker_cores).global_spec,
+            worker_cores,
+            kStressMetadataBytes);
     }
     if (has_outbound) {
         outbound = D2DStreamService::create_sender(
             mesh_device_,
-            make_cfg(mesh_device_, global_shape, worker_cores),
+            make_cfg(mesh_device_, global_shape, worker_cores, kStressMetadataBytes),
             D2DEndpointConfig{.sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx});
     }
 
@@ -850,7 +900,8 @@ void run_forward_chain_stress(
 
     std::thread h2d_feeder;
     if (is_stage0) {
-        h2d_feeder = std::thread([&] { run_h2d_feed_loop(*h2d_service, global_shape, num_iters); });
+        h2d_feeder = std::thread(
+            [&] { run_h2d_feed_loop(*h2d_service, global_shape, num_iters, kStressMetadataBytes, kFillDelta); });
     }
 
     Tensor output;
@@ -883,8 +934,10 @@ void run_forward_chain_stress(
         //     + mutate (+1) this worker's slice + ack inbound consumed. No data_ready yet.
         const uint32_t skip_gate = iter == 0 ? 1u : 0u;
         MeshWorkload compute =
-            is_stage0 ? make_stress_compute_workload(h2d_service.get(), mesh_device_, dest_addr, gate_sender, skip_gate)
-                      : make_stress_compute_workload(inbound.get(), mesh_device_, dest_addr, gate_sender, skip_gate);
+            is_stage0 ? make_stress_compute_workload(
+                            h2d_service.get(), mesh_device_, dest_addr, gate_sender, skip_gate, kStressMetadataBytes)
+                      : make_stress_compute_workload(
+                            inbound.get(), mesh_device_, dest_addr, gate_sender, skip_gate, kStressMetadataBytes);
         EnqueueMeshWorkload(cq, compute, /*blocking=*/false);
         Finish(cq);
 
