@@ -745,7 +745,7 @@ struct FlashMLADecode {
 
             reconfig_data_format<false, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
-            PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
+            PACK(SFPU_UNARY_INIT_FN(reduce, sfpu::init_sdpa_reduce_row, (DataFormat::Float16_b)));
             PACK(SFPU_UNARY_INIT_FN(
                 exponential,
                 sfpu::exp_init,
