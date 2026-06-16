@@ -172,11 +172,12 @@ TEST_F(MeshDeviceFixture, TestSimpleL1BufferHi) {
     }
 }
 
-// Temporary verification: confirm the firmware-reserved MEM_ZEROS region in
-// L1 reads as all zeros (a) immediately after device init, and (b) after
-// running a real JIT kernel — the silicon invariant emule must preserve so
-// kernels can NOC-read MEM_ZEROS_BASE for cheap zero-fill.  WH base=0x3280,
-// BH base=0x32E0, size=512.
+// Regression guard for the emule MEM_ZEROS invariant: the firmware-reserved
+// MEM_ZEROS region in L1 must read as all zeros (a) immediately after device
+// init, and (b) after running a real JIT kernel. This is the silicon invariant
+// emule has to preserve so kernels can NOC-read MEM_ZEROS_BASE for cheap
+// zero-fill; it guards the reset_l1_bump / DFB-allocation gating against
+// regressing and clobbering the region. WH base=0x3280, BH base=0x32E0, size=512.
 TEST_F(MeshDeviceFixture, EmuleMemZerosStaysZero) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh = this->devices_.at(id);

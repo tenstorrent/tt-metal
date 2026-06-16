@@ -68,7 +68,7 @@ the offending kernel line.
 | Host L1 / DRAM Alignment | host | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host poke address not aligned to the transfer's real requirement |
 | Metadata Overflow | host | `[metal] host_api/tt_metal.cpp` | program's static CB region overruns the reserved L1 window |
 | Out-of-Bounds Write (L1/DRAM) | kernel + runner | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (L1); `[metal] emulated_program_runner.cpp` (`__emule_dram_ptr`) | access lands in no live buffer extent |
-| Tensor Padding Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | write into a buffer's `[logical_end, physical_end)` pad band |
+| Tensor Padding Violation *(test skipped — see §5)* | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | write into a buffer's `[logical_end, physical_end)` pad band |
 | Illegal Semaphore Access | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | scalar access into the reserved semaphore region |
 | CB Boundary Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (counters in `api/cb_api.h`) | access to a CB page outside an **active** reserve/wait window |
 | CB Reservation Overflow | kernel | `[emule] include/jit_hw/api/cb_api.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
@@ -171,6 +171,12 @@ those `(logical_end, physical_end)` pairs into the kernel. After the OOB check, 
 normalized offset is tested against each padding band — inside one → abort.
 *Diagnostic:* `Tensor Padding Violation: Attempted to write to a padded memory region at 0x…`.
 *Exercised by:* `test_padded_write.cpp`.
+**Status — currently skipped:** `test_padded_write.cpp` is `GTEST_SKIP`'d. The
+check as implemented (a flat `[logical_end, physical_end)` band test) is too
+coarse to be correct in general — real padding is laid out per-row / per-tile-face,
+not as one trailing block, so the simple band both misses interior pad bytes and
+risks false-positiving legitimate writes. The check needs to be reworked to model
+the actual (row-major / tiled face-aware) pad layout before the test is re-enabled.
 
 ### 6. Illegal Semaphore Access
 **Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
@@ -350,7 +356,7 @@ the violation.
 | Host L1/DRAM Alignment | `[metal] host_sanitizers.hpp` | `address % get_alignment_requirements(device, size)` (1 ⇒ no-op on emule) |
 | Metadata Overflow | `[metal] host_api/tt_metal.cpp` | static CB region vs lowest L1 alloc, at configure time |
 | Out-of-Bounds Write | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h`; `[metal] emulated_program_runner.cpp` | normalized offset ∉ any live `LiveL1Ranges`/`LiveDramRanges` extent |
-| Tensor Padding | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ `[logical_end, physical_end)` padding band |
+| Tensor Padding *(test skipped — see §5)* | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ `[logical_end, physical_end)` padding band |
 | Illegal Semaphore | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ reserved semaphore L1 range |
 | CB Boundary | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | accessed page outside an **active** reserve/wait window |
 | CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
