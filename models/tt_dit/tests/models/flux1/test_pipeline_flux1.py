@@ -217,11 +217,11 @@ def test_flux1_dev_checkpoint_load(model_location_generator) -> None:
     """Loads Flux1Checkpoint and verifies key metadata/state are available."""
     checkpoint_name = model_location_generator("black-forest-labs/FLUX.1-dev")
     _log_hf_checkpoint_location(checkpoint_name)
-    checkpoint = Flux1Checkpoint(checkpoint_name)
+    Flux1Checkpoint(checkpoint_name)
 
 
 def test_flux1_schnell_checkpoint_load(model_location_generator) -> None:
     """Loads Flux1Checkpoint and verifies key metadata/state are available."""
     checkpoint_name = model_location_generator("black-forest-labs/FLUX.1-schnell")
     _log_hf_checkpoint_location(checkpoint_name)
-    checkpoint = Flux1Checkpoint(checkpoint_name)
+    Flux1Checkpoint(checkpoint_name)

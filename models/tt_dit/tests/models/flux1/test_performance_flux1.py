@@ -417,7 +417,7 @@ def test_flux1_pipeline_performance_accuracy(
     # Warmup runs
     for i in range(2):
         logger.info("Running warmup iteration...")
-        images = pipeline.run_single_prompt(
+        pipeline.run_single_prompt(
             prompt=TEST_PROMPTS[0],
             num_inference_steps=num_inference_steps,
         )
