@@ -188,8 +188,22 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 
     // Run the MOP, performing a column reduce across all 4 faces
     ckernel::ckernel_template::run();
+
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
+    }
+
     // Replay the 13 instructions to transpose the reduced results
     lltt::replay(2, 13);
+
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+    }
 }
 
 /**
