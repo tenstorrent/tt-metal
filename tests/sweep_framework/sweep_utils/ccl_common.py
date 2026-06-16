@@ -73,24 +73,6 @@ def _teardown_cached_device():
             pass
 
 
-def _clear_dispatch_kernel_cache():
-    """Remove the persisted kernel cache so dispatch kernels rebuild fresh.
-
-    Called on a fabric-config transition (e.g. FABRIC_1D -> FABRIC_2D): a
-    cq_prefetch dispatch-kernel ELF built for the previous fabric, loaded for the
-    new one, throws "TT_THROW @ tt_metal/llrt/tt_elffile.cpp:405" (observed on
-    T3K 2x4 all_gather after the 1x8/1x2 1D configs). Clearing the cache here
-    forces a clean rebuild for the new fabric so no stale/mismatched ELF is loaded.
-    """
-    import shutil
-
-    for d in (os.path.expanduser("~/.cache/tt-metal-cache"), "/github/home/.cache/tt-metal-cache"):
-        try:
-            shutil.rmtree(d, ignore_errors=True)
-        except Exception:
-            pass
-
-
 # Close the last cached device gracefully when the (child) process exits.
 atexit.register(_teardown_cached_device)
 
@@ -131,17 +113,19 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
 
     # Key changed (or caching off / first call): tear down any cached device, then
     # open a fresh one.
-    prev_key = _DEVICE_CACHE["key"]
+    #
+    # NOTE: do NOT clear the persisted kernel cache here. Wiping
+    # ~/.cache/tt-metal-cache mid-run also deletes the base *firmware* objects
+    # (which define globals like my_x/my_y/noc_*_num_issued, built once at the
+    # first device open). The control-plane reinit on a fabric change rebuilds the
+    # fabric_erisc_router kernel but NOT that firmware, so the fresh kernel fails
+    # to link ("undefined reference to noc_posted_writes_num_issued ...",
+    # build.cpp:67 "Failed to generate binaries for fabric_erisc_router") -> the op
+    # hangs -> FAIL_CRASH_HANG (observed on T3K 2x4 all_gather, run 27607824383).
+    # Cross-process stale-ELF staleness is handled by the workflow's
+    # "Clear stale kernel cache" step, which runs BEFORE this process starts so the
+    # firmware rebuilds cleanly at device open.
     _teardown_cached_device()
-    # Clear the kernel cache ONLY on a transition that involves FABRIC_2D (the
-    # tt_elffile.cpp:405 trigger: a FABRIC_1D cq_prefetch ELF loaded for a
-    # FABRIC_2D config on T3K 2x4 all_gather). Do NOT clear on the frequent
-    # FABRIC_1D <-> FABRIC_1D_RING (Linear/Ring) switches within the 1D block —
-    # those don't hit the stale-ELF bug, and clearing there forces full kernel
-    # rebuilds every alternation, which itself causes timeouts.
-    if prev_key is not None and prev_key[1] != key[1] and ("FABRIC_2D" in prev_key[1] or "FABRIC_2D" in key[1]):
-        logger.info(f"Fabric change {prev_key[1]} -> {key[1]} (FABRIC_2D): clearing kernel cache for clean rebuild")
-        _clear_dispatch_kernel_cache()
     parent_device = None
     mesh_device = None
     try:
