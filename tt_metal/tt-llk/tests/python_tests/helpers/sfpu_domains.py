@@ -133,7 +133,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     # form) and close to ±1, so sweep nearer the boundary; stay just inside ±1 to
     # avoid the exact ±inf endpoints (covered separately by special-case tests).
     MathOperation.Atanh: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.999, high=0.999)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-0.999, high=0.999
+        )
     ),
     # celu: exercises both the exponential branch (x < 0) and linear (x >= 0)
     MathOperation.Celu: OperandSpecs(
