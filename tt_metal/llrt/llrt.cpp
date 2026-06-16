@@ -351,11 +351,9 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-    // For simulators, always disable timeout (infinite wait). For non-simulators, a 0
-    // timeout means: use the configured timeout for operations.
-    if (is_simulator) {
-        timeout_ms = 0;
-    } else if (timeout_ms == 0) {
+    // timeout_ms == 0 means infinite wait on sim; on silicon it means use configured operation timeout.
+    // Callers that need a bounded wait on sim (e.g. dispatch-core teardown) pass an explicit timeout_ms > 0.
+    if (timeout_ms == 0 && !is_simulator) {
         timeout_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
                 .count();

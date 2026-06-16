@@ -185,6 +185,7 @@ public:
             case tt::tt_metal::DataType::FLOAT32: return extract_logical_data.template operator()<float>(tensor);
             case tt::tt_metal::DataType::BFLOAT16: return extract_logical_data.template operator()<bfloat16>(tensor);
             case tt::tt_metal::DataType::UINT32: return extract_logical_data.template operator()<uint32_t>(tensor);
+            case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 ingestion via TensorToMesh is not supported");
             case tt::tt_metal::DataType::UINT8: return extract_logical_data.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return extract_logical_data.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return extract_logical_data.template operator()<int32_t>(tensor);
@@ -460,12 +461,23 @@ public:
         }
 
         // Convert individual shards to logical data of the correct type `T`, if needed.
-        if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
-            dst_buffer = dst_buffer.transform(
-                [&tensor](const tt::tt_metal::HostBuffer& shard) {
-                    return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
-                },
-                tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+        // FP8 (float8_e4m3) is row-major-only, so logical == physical always holds and the
+        // conversion path (which would require Tensor::to_vector<float8_e4m3>, not instantiated)
+        // is never reached. Guard explicitly so a future regression fails loudly instead of
+        // silently skipping the conversion.
+        if constexpr (std::is_same_v<T, float8_e4m3>) {
+            TT_FATAL(
+                tt::tt_metal::logical_matches_physical(tensor.tensor_spec()),
+                "float8_e4m3 tensors must have logical layout matching physical (row-major-only); "
+                "logical-to-physical conversion is not supported for FP8");
+        } else {
+            if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
+                dst_buffer = dst_buffer.transform(
+                    [&tensor](const tt::tt_metal::HostBuffer& shard) {
+                        return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
+                    },
+                    tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+            }
         }
 
         // Convert shards into a linear buffer of xtensor views.
@@ -513,6 +525,8 @@ public:
             case tt::tt_metal::DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tensor);
             case tt::tt_metal::DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tensor);
             case tt::tt_metal::DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(tensor);
+            case tt::tt_metal::DataType::FP8_E4M3:
+                TT_THROW("FP8_E4M3 aggregation via aggregate_tensor is not supported");
             case tt::tt_metal::DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tensor);
@@ -758,5 +772,6 @@ template std::pair<std::vector<bfloat16>, Shape> MeshToTensor::compose<bfloat16>
 template std::pair<std::vector<int32_t>, Shape> MeshToTensor::compose<int32_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint8_t>, Shape> MeshToTensor::compose<uint8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint16_t>, Shape> MeshToTensor::compose<uint16_t>(const Tensor& tensor) const;
+template std::pair<std::vector<float8_e4m3>, Shape> MeshToTensor::compose<float8_e4m3>(const Tensor& tensor) const;
 
 }  // namespace ttnn::distributed

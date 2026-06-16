@@ -155,17 +155,16 @@ const auto s0 = TensorAccessor(s1_args, src_addr, stick_size);
 uint32_t stick_id = start_id;
 cb_reserve_back(cb_id_in0, shard_height);
 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-DPRINT_DATA0(DPRINT << "Core (0," << current_core << "): ");
+DPRINT_DATA0("Core (0,{}): ", current_core);
 for (uint32_t h = 0; h < shard_height; ++h) {
-    uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+    uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
     noc_async_read(src_noc_addr, l1_write_addr, stick_size);
     uint32_t* read_ptr = (uint32_t*)l1_write_addr;
-    DPRINT_DATA0(DPRINT << (uint16_t)*read_ptr << " ");
-    DPRINT_DATA0(DPRINT << (uint16_t)(*read_ptr >> 16) << " ");
+    DPRINT_DATA0("{} {} ", (uint16_t)*read_ptr, (uint16_t)(*read_ptr >> 16));
     stick_id++;
     l1_write_addr += padded_offset_bytes;
 }
-DPRINT_DATA0(DPRINT << ENDL());
+DPRINT_DATA0("\n");
 noc_async_read_barrier();
 cb_push_back(cb_id_in0, shard_height);
 ```

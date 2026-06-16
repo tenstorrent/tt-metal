@@ -48,7 +48,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Runtime arguments - first get basic parameters
@@ -90,6 +93,7 @@ void kernel_main() {
     // Set up TensorAccessor for input data - use row size as page size
     const auto s0 = TensorAccessor(src_args, src_addr);
 
+    Noc noc;
     // Create CircularBuffer for Device 2.0 API
     CircularBuffer cb_out(cb_id_out);
 
@@ -133,10 +137,11 @@ void kernel_main() {
             cb_out.reserve_back(1);
             uint32_t l1_write_addr = cb_out.get_write_ptr();
 
-            // Read the full input row first
-            uint64_t input_row_noc_addr = s0.get_noc_addr(input_row_idx);
-            noc_async_read(input_row_noc_addr, l1_write_addr, input_bytes_per_row);
-            noc_async_read_barrier();
+            // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
+            // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
+            tt::data_movement::common::noc_async_read_sharded(
+                l1_write_addr, s0, input_row_idx, /*offset=*/0, /*size=*/input_bytes_per_row);
+            noc.async_read_barrier();
 
             // Now slice the row according to width slice parameters (last dimension)
             uint32_t last_dim = tensor_rank - 1;

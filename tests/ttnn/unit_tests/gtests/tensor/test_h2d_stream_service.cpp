@@ -35,7 +35,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
-#include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
+#include <ttnn/distributed/distributed_configs.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -55,8 +55,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
-
-#include "stream_service_test_utils.hpp"
 
 namespace ttnn::distributed::test {
 namespace {
@@ -175,7 +173,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
 
         auto program = tt::tt_metal::CreateProgram();
 
-        // Scratch CB: one page, BFLOAT16 data-format slot is a no-op for raw
+        // Scratch CB: one page, UInt32 data-format slot is a no-op for raw
         // L1 staging; we just need the L1 region for the read-then-write copy.
         auto cb_cfg = tt::tt_metal::CircularBufferConfig(
                           page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})
@@ -516,7 +514,24 @@ void run_h2d_stream_service_case(
     }
 }
 
-using H2DStreamServiceTest = ::tt::tt_metal::GenericMeshDeviceFixture;
+// Service cores (ServiceCoreManager::claim) are only supported on Blackhole or UBB Galaxy
+// clusters; skip the whole suite on any other configuration so unsupported runners skip
+// cleanly instead of hitting the claim TT_FATAL.
+class H2DStreamServiceTest : public ::tt::tt_metal::GenericMeshDeviceFixture {
+protected:
+    void SetUp() override {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        if (!(cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE)) {
+            GTEST_SKIP() << "H2DStreamService service cores require Blackhole or UBB Galaxy";
+        }
+        ::tt::tt_metal::GenericMeshDeviceFixture::SetUp();
+    }
+};
+
+// Fully-replicated placements sized to this mesh's dimensionality.
+ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return ttsl::SmallVector<MeshMapperConfig::Placement>(mesh_device.shape().dims(), MeshMapperConfig::Replicate{});
+}
 
 // A — Replicated sweep. Mirrors the row structure used by the sharded sweep
 // below: each row varies (per_row_size, N, scratch_cb, fifo) so the matrix
@@ -539,6 +554,9 @@ using H2DStreamServiceTest = ::tt::tt_metal::GenericMeshDeviceFixture;
 // shard), so the bytes path stays on the mapper's zero-copy replicate
 // fast-path for every row.
 TEST_F(H2DStreamServiceTest, Replicated_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     // `scratch_cb` and `fifo` are expressed as multiples of one tensor page
     // (per_row_size * sizeof(uint32_t)). Same shape as the sharded sweep's
     // Row struct so the two tests can be compared side-by-side.
@@ -631,6 +649,9 @@ TEST_F(H2DStreamServiceTest, Replicated_Sweep) {
 //   * The kernel's per-page PCIe burst-chunking (noc_read_page_chunked at
 //     NOC_MAX_BURST_SIZE) is hit at multiple page sizes, not just one.
 TEST_F(H2DStreamServiceTest, Sharded_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
         GTEST_SKIP() << "This test requires a 2D mesh; got " << mesh_shape;
@@ -745,6 +766,9 @@ TEST_F(H2DStreamServiceTest, Sharded_Sweep) {
 // extremes (single worker, mid-range, full grid) plus the original 4-worker
 // baseline. `N` (page count) must be divisible by `num_workers` in every row.
 TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     struct Row {
         uint32_t per_row_size;
         uint32_t N;  // tensor pages per device (must satisfy N % num_workers == 0)
@@ -848,6 +872,9 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
 // (the mappers slice the global shape down to this); page count per device == N,
 // and `N % num_workers == 0` must hold per row.
 TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
         GTEST_SKIP() << "This test requires a 2D mesh; got " << mesh_shape;
@@ -964,6 +991,39 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
     }
 }
 
+namespace {
+// Reshuffle helper — direct port of the Python `reshuffle` in section 5
+// step 4 of the ring-SDPA doc. Volume-preserving column rotation of an
+// N_C*W-element uint32 array.
+void ring_sdpa_reshuffle(
+    ttsl::Span<std::byte> bytes, uint32_t c_start, uint32_t intra, uint32_t N_C, uint32_t W) {
+    const size_t volume = N_C * W;
+    TT_FATAL(bytes.size() == volume * sizeof(uint32_t), "reshuffle: size mismatch");
+    const auto* in = reinterpret_cast<const uint32_t*>(bytes.data());
+    std::vector<uint32_t> out(volume);
+
+    // Column c_start gets two pieces: `[0, W - intra)` from the head + `[N_C*W - intra, N_C*W)`
+    // from the tail (the wraparound across two stripe wraps).
+    for (uint32_t i = 0; i < W - intra; ++i) {
+        out[c_start * W + i] = in[i];
+    }
+    for (uint32_t i = 0; i < intra; ++i) {
+        out[c_start * W + (W - intra) + i] = in[volume - intra + i];
+    }
+
+    // Every other column gets one contiguous slice.
+    for (uint32_t k = 1; k < N_C; ++k) {
+        const uint32_t col = (c_start + k) % N_C;
+        const uint32_t s = (W - intra) + (k - 1) * W;
+        for (uint32_t i = 0; i < W; ++i) {
+            out[col * W + i] = in[s + i];
+        }
+    }
+
+    std::memcpy(bytes.data(), out.data(), bytes.size());
+}
+}  // namespace
+
 // F — Preprocessor hook. Validates that `Config::preprocessor` runs on a
 // service-owned scratch BEFORE the mapper distributes shards and that the
 // scratch is correctly reused across calls.
@@ -992,41 +1052,10 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
 //
 // modulo the full-iota wraparound at N_C*W (since the input is just
 // `[0, 1, ..., N_C*W - 1]`).
-
-namespace {
-// Reshuffle helper — direct port of the Python `reshuffle` in section 5
-// step 4 of the ring-SDPA doc. Volume-preserving column rotation of an
-// N_C*W-element uint32 array.
-void ring_sdpa_reshuffle(
-    ttsl::Span<std::byte> bytes, uint32_t c_start, uint32_t intra, uint32_t N_C, uint32_t W) {
-    const size_t volume = N_C * W;
-    TT_FATAL(bytes.size() == volume * sizeof(uint32_t), "reshuffle: size mismatch");
-    auto* in = reinterpret_cast<const uint32_t*>(bytes.data());
-    std::vector<uint32_t> out(volume);
-
-    // Column c_start gets two pieces: `[0, W - intra)` from the head + `[N_C*W - intra, N_C*W)`
-    // from the tail (the wraparound across two stripe wraps).
-    for (uint32_t i = 0; i < W - intra; ++i) {
-        out[c_start * W + i] = in[i];
-    }
-    for (uint32_t i = 0; i < intra; ++i) {
-        out[c_start * W + (W - intra) + i] = in[volume - intra + i];
-    }
-
-    // Every other column gets one contiguous slice.
-    for (uint32_t k = 1; k < N_C; ++k) {
-        const uint32_t col = (c_start + k) % N_C;
-        const uint32_t s = (W - intra) + (k - 1) * W;
-        for (uint32_t i = 0; i < W; ++i) {
-            out[col * W + i] = in[s + i];
-        }
-    }
-
-    std::memcpy(bytes.data(), out.data(), bytes.size());
-}
-}  // namespace
-
 TEST_F(H2DStreamServiceTest, Preprocessor_RingSDPAReshuffle) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
         GTEST_SKIP() << "Preprocessor reshuffle test requires a 2D mesh; got " << mesh_shape;

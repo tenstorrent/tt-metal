@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -18,7 +19,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -35,13 +36,35 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-#include "stream_service_common.hpp"
-
 namespace tt::tt_metal {
 
 namespace {
 
-using namespace stream_service_common;
+// Zero-filled host tensor of size `spec`, used to feed the mapper at construction.
+Tensor make_zero_host_tensor(const TensorSpec& spec) {
+    const size_t bytes = spec.compute_packed_buffer_size_bytes();
+    switch (spec.data_type()) {
+        case DataType::BFLOAT16:
+            return Tensor::from_vector<bfloat16>(std::vector<bfloat16>(bytes / sizeof(bfloat16)), spec);
+        case DataType::FLOAT32: return Tensor::from_vector<float>(std::vector<float>(bytes / sizeof(float)), spec);
+        case DataType::INT32: return Tensor::from_vector<int32_t>(std::vector<int32_t>(bytes / sizeof(int32_t)), spec);
+        case DataType::UINT8: return Tensor::from_vector<uint8_t>(std::vector<uint8_t>(bytes / sizeof(uint8_t)), spec);
+        case DataType::UINT16:
+            return Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B:
+            // Block-float formats pack a shared exponent per group of datums, so the
+            // packed byte count is NOT element_count * sizeof. from_vector requires a
+            // buffer of exactly logical-volume elements and (per its contract) `float`
+            // for block formats; it tilizes + quantizes internally.
+            return Tensor::from_vector<float>(std::vector<float>(spec.logical_shape().volume()), spec);
+        case DataType::UINT32:
+            return Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
+        case DataType::FP8_E4M3: TT_THROW("H2DStreamService: FP8_E4M3 is not supported");
+        case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
+    }
+    TT_THROW("Unreachable");
+}
 
 // Zero-copy wrap of caller-provided raw bytes into a host Tensor whose spec
 // matches `spec` exactly (ROW_MAJOR + default MemoryConfig only — see caller).
@@ -86,10 +109,55 @@ Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const Tensor
                 ttsl::Span<uint32_t>(reinterpret_cast<uint32_t*>(raw), bytes.size() / sizeof(uint32_t)),
                 shape,
                 MemoryPin{});
+        case DataType::FP8_E4M3: TT_THROW("H2DStreamService: FP8_E4M3 is not supported");
         case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
     }
     TT_THROW("Unreachable");
 }
+
+// Chunk plan: largest pages_per_chunk that fits the scratch CB and divides
+// tensor_num_pages evenly.
+struct ChunkPlan {
+    uint32_t socket_page_size;  // bytes per socket page (== pages_per_chunk * tensor_page_size)
+    uint32_t num_socket_pages;  // socket pages per full transfer (== tensor_num_pages / pages_per_chunk)
+    uint32_t pages_per_chunk;   // tensor pages drained per socket page
+};
+
+ChunkPlan derive_chunk_plan(uint32_t tensor_page_size, uint32_t tensor_num_pages, uint32_t scratch_cb_size_bytes) {
+    TT_FATAL(tensor_page_size > 0, "device_tensor page size must be > 0");
+    TT_FATAL(tensor_num_pages > 0, "device_tensor must have at least one page");
+    TT_FATAL(
+        scratch_cb_size_bytes >= tensor_page_size,
+        "scratch_cb_size_bytes ({} B) must be >= tensor page size ({} B); "
+        "consider a layout with smaller pages or a larger CB budget",
+        scratch_cb_size_bytes,
+        tensor_page_size);
+
+    const uint32_t max_pages_per_chunk_by_cb = scratch_cb_size_bytes / tensor_page_size;
+    uint32_t pages_per_chunk = std::min(tensor_num_pages, max_pages_per_chunk_by_cb);
+    while (pages_per_chunk > 1 && (tensor_num_pages % pages_per_chunk) != 0) {
+        --pages_per_chunk;
+    }
+    return ChunkPlan{
+        .socket_page_size = pages_per_chunk * tensor_page_size,
+        .num_socket_pages = tensor_num_pages / pages_per_chunk,
+        .pages_per_chunk = pages_per_chunk,
+    };
+}
+
+// Worker-sync CT-arg block. Populated when Config::worker_cores is set; all
+// fields zero when disabled (the kernel's `if constexpr (worker_sync_enabled)`
+// gate skips the block entirely).
+struct WorkerSyncArgs {
+    bool enabled = false;
+    uint32_t data_ready_sem_addr = 0;    // worker-grid L1 (mesh-wide GlobalSemaphore)
+    uint32_t consumed_counter_addr = 0;  // service-core L1 (per-coord, allocated via ServiceCoreManager)
+    uint32_t mcast_noc_x_start = 0;      // physical NoC bbox of worker_cores on this device
+    uint32_t mcast_noc_y_start = 0;
+    uint32_t mcast_noc_x_end = 0;
+    uint32_t mcast_noc_y_end = 0;
+    uint32_t num_workers = 0;  // mcast destination count + sync arithmetic target
+};
 
 // Metadata multicast CT-arg block. Populated when Config::metadata_size_bytes > 0;
 // all fields zero when disabled (the kernel's `if constexpr (metadata_enabled)`
@@ -158,7 +226,7 @@ Program build_persistent_h2d_program(
         // kernel's `if constexpr (worker_sync_enabled)` guards every use.
         static_cast<uint32_t>(worker_sync.enabled ? 1u : 0u),
         worker_sync.data_ready_sem_addr,
-        worker_sync.counter_addr,
+        worker_sync.consumed_counter_addr,
         worker_sync.mcast_noc_x_start,
         worker_sync.mcast_noc_y_start,
         worker_sync.mcast_noc_x_end,
@@ -195,8 +263,8 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     TT_FATAL(cfg_.scratch_cb_size_bytes > 0, "H2DStreamService: scratch_cb_size_bytes must be > 0");
     // Metadata multicast is only meaningful when there are workers to multicast
     // to. We do NOT check `metadata_size_bytes <= socket_page_size_` here —
-    // socket_page_size_ isn't derived until B6 (after the chunk plan runs).
-    // That bound is asserted in B6 once the plan is known.
+    // socket_page_size_ isn't derived until B5 (after the chunk plan runs).
+    // That bound is asserted once the plan is known.
     TT_FATAL(
         cfg_.metadata_size_bytes == 0 || cfg_.worker_cores.has_value(),
         "H2DStreamService: metadata_size_bytes={} requires Config::worker_cores to be set "
@@ -235,14 +303,22 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
 
     // --- B3.5: claim one service core per participating device ---------------
     // ServiceCoreManager runs the kernel on a free FD-column core that's outside
-    // the worker grid. Each device may have a different free core; we record the
-    // choice per coord and use it as the recv core for that coord's socket,
+    // the worker grid. Each device may resolve a different free core; we record
+    // the choice per coord and use it as the recv core for that coord's socket,
     // semaphore, and persistent program. H2DSocket auto-detects service cores
     // and allocates its config + data buffers from the service-core L1 region.
-    // claim_service_cores skips already-claimed cores, so an H2D +
-    // D2D (or two D2D directions) on the same device each get their own core.
+    // claim() skips already-claimed cores, so an H2D + D2D (or two D2D
+    // directions) on the same device each get their own core.
+    auto& svc = tt::tt_metal::internal::service_core_manager();
     const auto& coords = topology.mesh_coords();
-    service_cores_ = claim_service_cores(mesh_device_, coords, "H2D");
+    for (const auto& coord : coords) {
+        auto* d = mesh_device_->get_device(coord);
+        auto claimable = svc.get_claimable_cores(d);
+        TT_FATAL(!claimable.empty(), "H2DStreamService: no claimable service core on device at coord {}", coord);
+        const CoreCoord chosen = claimable.front();
+        svc.claim(d, {chosen});
+        service_cores_.emplace(coord, chosen);
+    }
 
     // --- B4: create one socket per participating mesh coord -------------------
     // Iterating topology.mesh_coords() (not the full mesh shape) keeps replication-
@@ -288,10 +364,8 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         s->set_page_size(plan.socket_page_size);
     }
 
-    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
-
     // --- B7: allocate + zero-init the per-device termination signals ----------
-    // One uint32 in L1 per device, on that device's service core. We manage it
+    // One uint32 in L1 per device, on that device's service core, written
     // directly via WriteToDeviceL1 — no GlobalSemaphore wrapper, because
     // GlobalSemaphore's reset_semaphore_value requires a MeshBuffer-backed
     // AnyBuffer and crashes on the single-IDevice path we'd otherwise need
@@ -313,10 +387,10 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     //     via ServiceCoreManager, zero-init via WriteToDeviceL1).
     // These are unused by the kernel until the worker-sync CT-arg block lands
     // in `build_persistent_h2d_program`; allocating them now keeps the addresses
-    // stable so future getters can expose them to user worker kernels.
+    // stable so the owner-only getters can expose them to user worker kernels.
     if (cfg_.worker_cores.has_value()) {
         const auto& worker_range = cfg_.worker_cores.value();
-        num_workers_ = core_range_size(worker_range);
+        num_workers_ = worker_range.size();
         TT_FATAL(num_workers_ > 0, "H2DStreamService: cfg.worker_cores must contain at least one core");
 
         // Data-ready semaphore: mesh-wide, worker-grid L1, same address on every
@@ -396,9 +470,6 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     }
 
     // --- B8: build one persistent program per socket, bundle into a workload --
-    // Construct the workload only on the owner; `MeshWorkloadImpl`'s ctor
-    // touches `MetalContext::instance()` (see member-decl comment in the
-    // header). Connector-mode services leave `workload_` null.
     workload_ = std::make_unique<distributed::MeshWorkload>();
     for (auto& s : sockets_) {
         const auto core = s->get_active_cores()[0];
@@ -408,17 +479,22 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
 
         // Per-coord worker-sync args. Populated only when cfg.worker_cores is
         // set; otherwise everything stays zero and the kernel skips the sync
-        // block via `if constexpr (worker_sync_enabled == 0)`.
+        // block via `if constexpr (worker_sync_enabled == 0)`. The multicast
+        // bbox is the physical-NoC bounding box of worker_range on this device.
         WorkerSyncArgs worker_sync;
         if (cfg_.worker_cores.has_value()) {
+            const auto& worker_range = cfg_.worker_cores.value();
             auto* d = mesh_device_->get_device(core.device_coord);
-            worker_sync = make_worker_sync_args(
-                d,
-                cfg_.worker_cores.value(),
-                num_workers_,
-                static_cast<uint32_t>(data_ready_sem_->address()),
-                static_cast<uint32_t>(consumed_addrs_.at(core.device_coord)),
-                /*enabled=*/true);
+            const auto start_phys = d->worker_core_from_logical_core(worker_range.start_coord);
+            const auto end_phys = d->worker_core_from_logical_core(worker_range.end_coord);
+            worker_sync.enabled = true;
+            worker_sync.data_ready_sem_addr = static_cast<uint32_t>(data_ready_sem_->address());
+            worker_sync.consumed_counter_addr = static_cast<uint32_t>(consumed_addrs_.at(core.device_coord));
+            worker_sync.mcast_noc_x_start = static_cast<uint32_t>(start_phys.x);
+            worker_sync.mcast_noc_y_start = static_cast<uint32_t>(start_phys.y);
+            worker_sync.mcast_noc_x_end = static_cast<uint32_t>(end_phys.x);
+            worker_sync.mcast_noc_y_end = static_cast<uint32_t>(end_phys.y);
+            worker_sync.num_workers = num_workers_;
         }
 
         // Per-coord metadata args. Populated only when cfg.metadata_size_bytes
@@ -554,7 +630,7 @@ H2DStreamService::~H2DStreamService() {
         //     transfers (the consumed-counter wait runs only after a transfer,
         //     and Finish above guarantees the last transfer's worker acks
         //     have already landed).
-        auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+        auto& svc = tt::tt_metal::internal::service_core_manager();
         if (mesh_device_) {
             for (const auto& [coord, core] : service_cores_) {
                 auto* d = mesh_device_->get_device(coord);
@@ -644,13 +720,13 @@ std::vector<distributed::H2DSocket*> H2DStreamService::get_sockets() const {
     return out;
 }
 
-// Diagnostic helper: all of these getters return state used to wire up a
-// consumer worker workload (kernel CT/RT args, NoC destinations, L1 base
-// addresses). Building a workload requires a MeshDevice handle, which the
-// connector-mode service does not hold by design — its only device
-// interaction is PCIe writes through each H2DSocket. Calling these on the
-// connector is a programming error; fail with a clear message rather than
-// returning incidentally-empty state.
+// Diagnostic helper: all of the owner-only getters below return state used to
+// wire up a consumer worker workload (kernel CT/RT args, NoC destinations, L1
+// base addresses). Building a workload requires a MeshDevice handle, which the
+// connector-mode service does not hold by design — its only device interaction
+// is PCIe writes through each H2DSocket. Calling these on the connector is a
+// programming error; fail with a clear message rather than returning
+// incidentally-empty state.
 namespace {
 inline void require_owner(bool is_owner, const char* api) {
     TT_FATAL(
@@ -708,7 +784,6 @@ DeviceAddr H2DStreamService::get_metadata_addr() const {
         "(Config::metadata_size_bytes is 0).");
     return metadata_l1_addr_;
 }
-
 
 const TensorSpec& H2DStreamService::get_per_shard_spec() const {
     TT_FATAL(per_shard_spec_.has_value(), "H2DStreamService::get_per_shard_spec: per-shard spec not derived");
@@ -879,8 +954,7 @@ void H2DStreamService::forward_to_tensor(
     forward_to_tensor(distributed, metadata);
 }
 
-void H2DStreamService::forward_to_tensor(
-    const Tensor& host_tensor, ttsl::Span<const std::byte> metadata) {
+void H2DStreamService::forward_to_tensor(const Tensor& host_tensor, ttsl::Span<const std::byte> metadata) {
     // --- W1: input validation -------------------------------------------------
     TT_FATAL(
         host_tensor.storage_type() == StorageType::HOST,

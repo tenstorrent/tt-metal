@@ -312,7 +312,6 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     gate, up = _prepare_swiglu_inputs(src_A, src_B, formats.input_format, distribution)
@@ -443,7 +442,6 @@ def test_sfpu_swiglu_nan_inf_quasar():
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     # Build all-zero gate/up, then inject NaN/Inf cases at the head.

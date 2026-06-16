@@ -19,6 +19,15 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
+/**
+ * @brief Configure the ADDR_MOD slots used by the untilize pack MOP.
+ *
+ * Programs the src Y increment/clear patterns the untilize MOP relies on to walk face rows and reset
+ * between rows/faces for the selected layout.
+ *
+ * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
+ * @tparam narrow_row: True when packing fewer than a full row of datums.
+ */
 template <bool diagonal = false, bool narrow_row = false>
 inline void _llk_pack_untilize_configure_addrmod_()
 {
@@ -53,6 +62,22 @@ inline void _llk_pack_untilize_configure_addrmod_()
         .set(ADDR_MOD_3);
 }
 
+/**
+ * @brief Build and program the packer MOP template for an untilize (tilized -> row-major) pack.
+ *
+ * Programs a MOP that walks face rows and tiles within the block, packing rows out in row-major
+ * order, and (when packing a partial block) records a replay buffer that advances the L1 destination
+ * address by the per-row stride.
+ *
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam full_ct_dim: Total number of input tiles across all blocks.
+ * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
+ * @tparam narrow_row: True when packing fewer than a full row of datums.
+ * @tparam row_num_datums: Number of datums per output row.
+ * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
+ */
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim    = block_ct_dim,
@@ -126,6 +151,24 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     }
 }
 
+/**
+ * @brief Initialize the packer for an untilize pack op.
+ *
+ * Configures ADDR_MODs and the untilize MOP, and (when packing a partial block) stores the per-row L1
+ * destination address offset so the MOP can advance the L1 address per row, then programs the packer
+ * X counter for the row width.
+ *
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam full_ct_dim: Total number of input tiles across all blocks (must be divisible by block_ct_dim).
+ * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
+ * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
+ * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @note On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
+ * @note Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
+ */
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim    = block_ct_dim,
@@ -160,11 +203,37 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
     }
 }
 
-inline void _llk_pack_untilize_uninit_(const std::uint32_t face_r_dim)
+/**
+ * @brief No-op teardown after an untilize pack op.
+ *
+ * The packer x-start/x-end is transient and reprogrammed by each operation's init (see tt-llk#1036),
+ * so there is nothing to restore here.
+ *
+ * @note Call @ref _llk_pack_untilize_init_ before this function.
+ */
+inline void _llk_pack_untilize_uninit_()
 {
-    TT_SETADCXX(p_setadc::PAC, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
+/**
+ * @brief Untilize-pack one block of tiles from the destination register to L1.
+ *
+ * Programs the L1 destination address and the packer counters, then runs the MOP once per face group,
+ * advancing counters between face groups and resetting them afterward.
+ *
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam full_ct_dim: Total number of input tiles across all blocks.
+ * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
+ * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
+ * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
+ * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
+ * @param address: L1 destination base address for the block.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
+ * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
+ */
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim        = block_ct_dim,

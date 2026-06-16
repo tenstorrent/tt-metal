@@ -1,0 +1,108 @@
+name: "[internal] Build Docker tool images"
+
+# Reusable workflow that builds missing tool images (ccache, mold, doxygen, etc.).
+# Tool images are pushed to GHCR.
+#
+# Expects tool-data JSON from preflight containing tool_tags, any_missing, and *_exists flags.
+# Uses manual docker buildx bake (dockerfile/docker-bake.hcl) to build missing tools.
+#
+# Fan-out strategy: each missing tool gets its own runner/job via dynamic matrix.
+# This parallelises the zstd compression step (CPU-bound on 4-core ubuntu-latest runners)
+# and isolates failures so one bad tool doesn't block the others.
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
+  # Tool images are built infrequently; monitor push duration if this becomes a bottleneck.
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+
+on:
+  workflow_dispatch:
+    inputs:
+      tool-data:
+        required: true
+        type: string
+        description: "JSON from preflight containing tool_tags, any_missing, and *_exists flags"
+  workflow_call:
+    inputs:
+      tool-data:
+        required: true
+        type: string
+        description: "JSON from preflight containing tool_tags, any_missing, and *_exists flags"
+    outputs:
+      tool-tags:
+        description: "Compact JSON string containing all tool image tags"
+        value: ${{ jobs.metadata.outputs.tool_tags }}
+
+jobs:
+  metadata:
+    name: "Tool metadata"
+    runs-on: ubuntu-latest
+    outputs:
+      tool_tags: ${{ steps.metadata.outputs.tool_tags }}
+    steps:
+      - name: Extract tool tags JSON
+        id: metadata
+        env:
+          TOOL_DATA: ${{ inputs.tool-data }}
+        run: |
+          set -euo pipefail
+          TOOL_TAGS=$(echo "$TOOL_DATA" | jq -ce '.tool_tags')
+          echo "tool_tags=$TOOL_TAGS" >> "$GITHUB_OUTPUT"
+
+  prepare-matrix:
+    name: "Prepare tool build matrix"
+    if: fromJson(inputs.tool-data).any_missing == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Build missing-tool matrix
+        id: matrix
+        env:
+          TOOL_DATA: ${{ inputs.tool-data }}
+        run: |
+          set -euo pipefail
+          # Produce a JSON array of {tool, tag} entries for each missing tool.
+          # tool-data keys follow the pattern: <tool>_exists and tool_tags.<tool>-tag
+          matrix=$(echo "$TOOL_DATA" | jq -ce '
+            . as $d |
+            [ $d.tool_tags | to_entries[]
+              | select(.key | endswith("-tag"))
+              | {tool: (.key[:-4]), tag: .value}
+              | select($d[(.tool + "_exists")] != "true") ]
+          ')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: "🔧 Build ${{ matrix.tool }}"
+    needs: [prepare-matrix]
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.tool }}
+        uses: ./.github/actions/manual-docker-bake
+        with:
+          targets: ${{ matrix.tool }}
+          set-lines: |
+            ${{ matrix.tool }}.tags=${{ matrix.tag }}
+            ${{ matrix.tool }}.output=${{ env.BAKE_OUTPUT }}

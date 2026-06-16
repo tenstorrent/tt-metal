@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <utility>
@@ -11,10 +12,11 @@
 #include "mesh_device_impl.hpp"
 #include "mesh_trace.hpp"
 #include "mesh_workload_impl.hpp"
-#include <tt-metalium/internal/service/service_core_manager.hpp>
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -25,80 +27,72 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         return;
     }
 
-    // Service programs target FD-idle dispatch-column cores and are dispatched via SD MMIO,
-    // independently of the FD command queue. Common case: no service programs, skip entirely.
-    auto& service_programs = mesh_workload.impl().get_service_programs();
-    if (!service_programs.empty()) {
-        // Per-device claim-existence assert: every core that the program targets must be
-        // claimed via ServiceCoreManager on each device in the program's device_range.
-        // MeshWorkloadImpl::add_program already enforced the "no mix of service + worker
-        // cores in one program" invariant using a cross-device check; here we additionally
-        // verify that the claim is actually present on every device the program will land
-        // on, catching cases where a CoreCoord is claimed on one device but not another.
-        const auto& claims = tt::tt_metal::internal::ServiceCoreManager::get();
-        for (auto& [device_range, program] : service_programs) {
+    // Route service workloads to the SD path. Done here, not in add_program, because the physical
+    // device needed to device-scope the service-core check is only known at enqueue. Common case -
+    // no service claimed so skip entirely.
+    //
+    // No-mixing contract: a workload is entirely a service workload (every program on claimed service
+    // cores) or entirely a normal one.
+    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto& programs = mesh_workload.impl().get_programs();
+    if (svc.impl().has_any_claims()) {
+        bool saw_service = false;
+        bool saw_normal = false;
+        for (auto& [device_range, program] : programs) {
+            size_t service_cores = 0;
+            size_t total_cores = 0;
             for (const auto& coord : device_range) {
                 auto* device = mesh_cq.device()->impl().get_device(coord);
-                const auto& dev_claimed = claims.claimed_cores(device->id());
-                for (const auto& per_type : program.impl().logical_cores()) {
-                    for (const auto& core : per_type) {
-                        TT_FATAL(
-                            dev_claimed.count(core) > 0,
-                            "Service program targets core {} on device coord {} (id {}), but that "
-                            "core is not claimed via ServiceCoreManager on that device. "
-                            "Either claim it before submitting the workload or remove the kernel.",
-                            core,
-                            coord,
-                            device->id());
-                    }
+                if (device == nullptr) {
+                    continue;
                 }
-                tt::tt_metal::detail::LaunchProgram(device, program, false, true);
-            }
-        }
-    }
-
-    if (mesh_workload.impl().get_programs().empty()) {
-        return;
-    }
-
-    // Catch the "forgot to claim" footgun before FD compile/dispatch: any program in
-    // the worker-grid bucket must target only cores inside the compute-with-storage
-    // grid on every device it will run on. A core outside that grid means the caller
-    // either targeted a service core but didn't claim it (so MeshWorkload::add_program
-    // saw `has_any_claims()==false` and routed to programs_ silently), or claimed it
-    // AFTER add_program (routing decision is made at add time). Either way, fail loudly
-    // here instead of letting FD compile try to handle an off-grid kernel.
-    {
-        const auto& claims = tt::tt_metal::internal::ServiceCoreManager::get();
-        const auto& programs = mesh_workload.impl().get_programs();
-        for (const auto& [device_range, program] : programs) {
-            for (const auto& coord : device_range) {
-                auto* device = mesh_cq.device()->impl().get_device(coord);
-                const auto grid = device->compute_with_storage_grid_size();
                 for (const auto& per_type : program.impl().logical_cores()) {
                     for (const auto& core : per_type) {
-                        if (core.x < grid.x && core.y < grid.y) {
-                            continue;
+                        ++total_cores;
+                        if (svc.impl().is_service_core(device->id(), core)) {
+                            ++service_cores;
                         }
-                        const bool claimed_now = claims.claimed_cores(device->id()).count(core) > 0;
-                        TT_FATAL(
-                            false,
-                            "Worker-grid program targets core {} on device {} (coord {}), which is "
-                            "outside the compute-with-storage grid ({}x{}). {} If this core should "
-                            "be a service core, call ServiceCoreManager::claim() on it BEFORE "
-                            "MeshWorkload::add_program — the routing decision is made at add time "
-                            "and won't reconsider later.",
-                            core,
-                            device->id(),
-                            coord,
-                            grid.x,
-                            grid.y,
-                            claimed_now ? "It IS currently claimed via ServiceCoreManager, but the program was "
-                                          "added before the claim, so it ended up in the worker-grid bucket."
-                                        : "It is NOT claimed via ServiceCoreManager.");
                     }
                 }
             }
+            // Level 1: a program targets only claimed service cores or only worker-grid cores, never a
+            // mix. This also catches a core claimed on some devices in the range but not others.
+            TT_FATAL(
+                service_cores == 0 || service_cores == total_cores,
+                "MeshWorkload program spans both service and worker-grid cores ({}/{} placements are claimed "
+                "service cores). A program must target only claimed service cores (on every device in its "
+                "range) or only worker-grid cores.",
+                service_cores,
+                total_cores);
+            const bool program_is_service = service_cores > 0;
+            // Level 2: the workload is all-service or all-normal, not a mix of the two.
+            saw_service |= program_is_service;
+            saw_normal |= !program_is_service;
+            TT_FATAL(
+                !(saw_service && saw_normal),
+                "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
+                "programs on claimed service cores) or entirely normal (all on the worker grid).");
+        }
+
+        if (saw_service) {
+            // Service workload: every core is claimed (checked above), so mark launch-once and
+            // dispatch each program via SD, bypassing FD. Re-enqueue TT_FATALs in mark_launched.
+            for (auto& [device_range, program] : programs) {
+                for (const auto& coord : device_range) {
+                    auto* device = mesh_cq.device()->impl().get_device(coord);
+                    TT_FATAL(
+                        device != nullptr,
+                        "EnqueueMeshWorkload: service program targets mesh coordinate {} with no local device",
+                        coord);
+                    for (const auto& per_type : program.impl().logical_cores()) {
+                        for (const auto& core : per_type) {
+                            svc.impl().mark_launched(device->id(), core);  // launch-once
+                        }
+                    }
+                    tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+                }
+            }
+            return;
         }
     }
 

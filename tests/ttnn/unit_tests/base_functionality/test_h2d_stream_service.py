@@ -22,12 +22,23 @@ shards and assert byte-exact equality. This keeps the verification logic
 placement-agnostic — same code handles replicate, shard, and mixed cases.
 """
 
-import math
-
 import pytest
 import torch
 
 import ttnn
+
+from models.common.utility_functions import skip_for_slow_dispatch
+
+# H2DStreamService claims FD dispatch-column service cores and DMA-pins host memory; it is only
+# supported on Blackhole Galaxy and requires fast dispatch. Skip the whole module on any other
+# configuration so unsupported runners skip cleanly instead of hitting the claim TT_FATAL.
+pytestmark = [
+    skip_for_slow_dispatch(),
+    pytest.mark.skipif(
+        ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        reason="H2DStreamService is only supported on Blackhole Galaxy",
+    ),
+]
 
 
 # Source dtype: torch.int32 viewed as UINT32 by the service. PyTorch doesn't
@@ -76,9 +87,7 @@ def _run_io_loop(
     for i in range(num_iters):
         gen = torch.Generator()
         gen.manual_seed(i)
-        src_torch = torch.randint(
-            low=0, high=_RANDINT_HIGH, size=shape_list, dtype=_DTYPE_TORCH, generator=gen
-        )
+        src_torch = torch.randint(low=0, high=_RANDINT_HIGH, size=shape_list, dtype=_DTYPE_TORCH, generator=gen)
         expected_host = ttnn.from_torch(src_torch, spec=global_spec, mesh_mapper=iter_mapper)
         _push_source(service, expected_host, src_torch, input_path)
         service.barrier()
@@ -130,9 +139,9 @@ def _verify_readback(service: ttnn.H2DStreamService, expected_host: ttnn.Tensor)
     """
     expected_subs = ttnn.get_device_tensors(expected_host)
     actual_subs = ttnn.get_device_tensors(service.get_backing_tensor())
-    assert len(actual_subs) == len(expected_subs), (
-        f"got {len(actual_subs)} actual vs {len(expected_subs)} expected sub-tensors"
-    )
+    assert len(actual_subs) == len(
+        expected_subs
+    ), f"got {len(actual_subs)} actual vs {len(expected_subs)} expected sub-tensors"
     # Cast to int64 before comparing: ttnn.to_torch returns torch.uint32 for
     # UINT32 specs; torch.equal refuses to promote between Int and UInt.
     # int64 holds both losslessly for our value ranges.
@@ -278,9 +287,7 @@ def _global_shape_for_placements(per_device_shape, placements, mesh_device):
         ),
     ],
 )
-def test_h2d_stream_service_sharded_sweep(
-    mesh_device, placements, per_device_shape, cb_pages, fifo_pages, input_path
-):
+def test_h2d_stream_service_sharded_sweep(mesh_device, placements, per_device_shape, cb_pages, fifo_pages, input_path):
     shape_list = _global_shape_for_placements(per_device_shape, placements, mesh_device)
     shape = ttnn.Shape(shape_list)
     global_spec = _make_global_spec(shape)
@@ -361,11 +368,7 @@ def _mesh_coords(mesh_device):
     if n_dims == 1:
         return [ttnn.MeshCoordinate(i) for i in range(shape[0])]
     if n_dims == 2:
-        return [
-            ttnn.MeshCoordinate(row, col)
-            for row in range(shape[0])
-            for col in range(shape[1])
-        ]
+        return [ttnn.MeshCoordinate(row, col) for row in range(shape[0]) for col in range(shape[1])]
     raise NotImplementedError(f"unsupported mesh dim count: {n_dims}")
 
 
@@ -375,9 +378,6 @@ def _dummy_source_bytes(shape_list):
     payload is never expected to land on device."""
     src = torch.zeros(shape_list, dtype=_DTYPE_TORCH)
     return src.contiguous().numpy()
-
-
-# --- Positive shape: getters return live values when worker_cores is set ----
 
 
 def test_worker_sync_getters_addresses_are_nonzero(mesh_device):
@@ -398,13 +398,8 @@ def test_metadata_getter_address_is_nonzero(mesh_device):
     """worker_cores + metadata_size_bytes set. get_metadata_addr returns a
     live L1 address (the L1-sharded MeshBuffer was allocated)."""
     worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-    service = _make_minimal_service(
-        mesh_device, worker_cores=worker_cores, metadata_size_bytes=16
-    )
+    service = _make_minimal_service(mesh_device, worker_cores=worker_cores, metadata_size_bytes=16)
     assert service.get_metadata_addr() != 0
-
-
-# --- Negative shape: getters raise when worker-sync/metadata is disabled ----
 
 
 def test_worker_sync_getters_raise_when_disabled(mesh_device):
@@ -429,35 +424,25 @@ def test_metadata_getter_raises_when_disabled(mesh_device):
         service.get_metadata_addr()
 
 
-# --- Ctor validation: bad configs rejected upfront --------------------------
-
-
 def test_ctor_rejects_metadata_without_worker_cores(mesh_device):
-    """metadata_size_bytes > 0 requires worker_cores; ctor TT_FATALs in B1."""
+    """metadata_size_bytes > 0 requires worker_cores; ctor rejects otherwise."""
     with pytest.raises(RuntimeError):
         _make_minimal_service(mesh_device, metadata_size_bytes=16)
 
 
 def test_ctor_rejects_metadata_larger_than_socket_page(mesh_device):
-    """metadata_size_bytes > socket_page_size is rejected in B6 (post chunk plan).
-    With per_row=640 and num_pages=1, socket_page_size = 2560 B. Pick 1 MB to
-    be obviously beyond that across any reasonable chunk plan."""
+    """metadata_size_bytes larger than the socket page size is rejected at
+    construction. With per_row=640 and num_pages=1, socket_page_size = 2560 B.
+    Pick 1 MB to be obviously beyond that across any reasonable chunk plan."""
     worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
     with pytest.raises(RuntimeError):
-        _make_minimal_service(
-            mesh_device, worker_cores=worker_cores, metadata_size_bytes=1 << 20
-        )
-
-
-# --- Push validation: bad forward_to_tensor calls raise pre-push -----------
+        _make_minimal_service(mesh_device, worker_cores=worker_cores, metadata_size_bytes=1 << 20)
 
 
 def test_forward_bytes_rejects_wrong_metadata_size(mesh_device):
     """Service expects 16 B of metadata, caller passes 8 B."""
     worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-    service = _make_minimal_service(
-        mesh_device, worker_cores=worker_cores, metadata_size_bytes=16
-    )
+    service = _make_minimal_service(mesh_device, worker_cores=worker_cores, metadata_size_bytes=16)
     data = _dummy_source_bytes([1, 1, 1, 640])
     with pytest.raises(RuntimeError):
         service.forward_to_tensor_bytes(data, metadata=b"x" * 8)
@@ -474,9 +459,7 @@ def test_forward_bytes_rejects_metadata_when_disabled(mesh_device):
 def test_forward_bytes_rejects_missing_metadata_when_required(mesh_device):
     """Service expects 16 B of metadata, caller passes none (default b'')."""
     worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-    service = _make_minimal_service(
-        mesh_device, worker_cores=worker_cores, metadata_size_bytes=16
-    )
+    service = _make_minimal_service(mesh_device, worker_cores=worker_cores, metadata_size_bytes=16)
     data = _dummy_source_bytes([1, 1, 1, 640])
     with pytest.raises(RuntimeError):
         service.forward_to_tensor_bytes(data)

@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Reduction ALIAS ttnn_op_experimental_reduction)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_reduction TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_reduction TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reduction)
 
 set_target_properties(
@@ -28,7 +28,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_REDUCTION_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -40,9 +40,10 @@ target_sources(
 target_include_directories(ttnn_op_experimental_reduction PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_experimental_reduction
+    PUBLIC
+        TTNN::Core
     PRIVATE
         TT::Metalium
-        TTNN::Core
         TTNN::Ops::Reduction
 )
 
@@ -55,4 +56,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_reduction LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_reduction FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

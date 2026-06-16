@@ -45,7 +45,7 @@ namespace tt::tt_metal {
 //   * allocates the device tensor with that derived per-shard spec & topology,
 //   * claims one service core per participating device via
 //     `tt::tt_metal::internal::ServiceCoreManager` — each device's persistent
-//     receiver kernel, socket FIFO, and termination semaphore live on that
+//     receiver kernel, socket FIFO, and termination signal live on that
 //     core, off the worker grid,
 //   * creates one H2DSocket per mesh coord pointing at that coord's service
 //     core (the socket auto-detects service cores and allocates its config /
@@ -63,7 +63,7 @@ namespace tt::tt_metal {
 //
 // At destruction the service:
 //   * `barrier()`s every socket so no host writes are still in flight,
-//   * flips the termination semaphore to 1, which kicks the kernels out of their
+//   * flips the termination signal to 1, which kicks the kernels out of their
 //     socket-wait poll loops,
 //   * drains the mesh CQ so the workload actually completes before we tear down
 //     the sockets / device tensor.
@@ -299,10 +299,10 @@ public:
     // connector talks to the device only through the existing PCIeCoreWriter
     // path inside each H2DSocket.
     //
-    // The returned service supports `forward_to_tensor`,
-    // `forward_to_tensor_bytes`, `barrier`, and `get_per_shard_spec`. Owner-
-    // only methods (e.g. `get_backing_tensor`, the worker-sync getters,
-    // `export_descriptor`) TT_FATAL on the returned instance.
+    // The returned service supports `forward_to_tensor`, `barrier`, and
+    // `get_per_shard_spec`. Owner-only methods (e.g. `get_backing_tensor`, the
+    // worker-sync getters, `export_descriptor`) TT_FATAL on the returned
+    // instance.
     //
     // @param service_id Identifier the owner passed to `export_descriptor`.
     // @param timeout_ms Max wait time for the descriptor file (default 10s).
@@ -342,7 +342,7 @@ private:
         uint32_t socket_page_size,
         uint32_t num_socket_pages);
 
-    // Flip the termination semaphore from 0 to 1, kicking every persistent
+    // Flip the termination signal from 0 to 1, kicking every persistent
     // receiver kernel out of its socket-wait poll loop on the next iteration.
     // Idempotent — safe to call multiple times.
     void signal_termination();
@@ -350,7 +350,7 @@ private:
     // True for services constructed by the public `Config`-based ctor (the
     // process that owns the device tensor, the service-core claim, the
     // persistent kernel, and the worker-sync / metadata allocations).
-    // False for services produced by the future `connect()` factory — those
+    // False for services produced by the `connect()` factory — those
     // attach to an exported descriptor via shared memory and do NOT own
     // device-side resources. The dtor branches on this flag to skip owner-only
     // teardown when the service is a connector.
@@ -365,16 +365,16 @@ private:
     // Per-shard tensor spec produced by the mapper. Cached so owner and
     // connector run the same Tensor-overload validation. Populated:
     //   * Owner: from `device_tensor_.tensor_spec()` once the device tensor
-    //     is allocated (B3).
+    //     is allocated.
     //   * Connector: by running the mapper on a zero host tensor sized to
     //     `cfg_.global_spec` — the same trick the owner ctor uses to derive
-    //     the per-shard spec before allocating its device tensor (B2).
+    //     the per-shard spec before allocating its device tensor.
     std::optional<TensorSpec> per_shard_spec_;
 
     std::vector<std::unique_ptr<distributed::H2DSocket>> sockets_;
 
     // Per-coord service core claimed via ServiceCoreManager at construction.
-    // The receiver kernel + socket FIFO + termination semaphore for that coord
+    // The receiver kernel + socket FIFO + termination signal for that coord
     // all live on this core. Different coords may have different cores (each
     // device has its own free dispatch-column cores).
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores_;
@@ -443,14 +443,14 @@ private:
     std::vector<std::byte> preprocess_scratch_;
 
     // Persistent receiver workload — built and enqueued once in the ctor,
-    // drained in the dtor after termination is signalled.
-    // Persistent receiver workload. Held by unique_ptr so the connector path
-    // doesn't pay for default-constructing a `MeshWorkload` at member-init
-    // time — `MeshWorkloadImpl`'s ctor calls `MetalContext::instance()` to
-    // size kernel/kernel-group tables, which lazy-initializes the Cluster and
-    // acquires the exclusive PCIe chip lock. On the connector that collides
-    // with the owner's hold of the lock and deadlocks. Owner-only construction
-    // via `make_unique<MeshWorkload>()` in B8; connector leaves this null.
+    // drained in the dtor after termination is signalled. Held by unique_ptr
+    // so the connector path doesn't pay for default-constructing a
+    // `MeshWorkload` at member-init time — `MeshWorkloadImpl`'s ctor calls
+    // `MetalContext::instance()` to size kernel/kernel-group tables, which
+    // lazy-initializes the Cluster and acquires the exclusive PCIe chip lock.
+    // On the connector that collides with the owner's hold of the lock and
+    // deadlocks. Owner-only construction via `make_unique<MeshWorkload>()`;
+    // connector leaves this null.
     std::unique_ptr<distributed::MeshWorkload> workload_;
 
     // Chunk plan, cached in the ctor and consumed by every `forward_to_tensor`

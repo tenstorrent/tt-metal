@@ -5,30 +5,45 @@
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 
 #include <umd/device/cluster.hpp>
+#include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::distributed {
 
 std::mutex PCIeCoreWriter::cluster_mutex_;
 std::unique_ptr<tt::umd::Cluster> PCIeCoreWriter::shared_cluster_;
+// The descriptor carries the *physical* PCIe device number (/dev/tenstorrent/N), which is
+// stable across processes regardless of TT_VISIBLE_DEVICES. UMD's Cluster, however, addresses
+// chips by *logical* id (the index into this process's device enumeration). Translate the
+// physical device number into this process's local logical chip id.
+static uint32_t physical_to_local_logical_id(uint32_t physical_device_num) {
+    const auto enumerated = tt::umd::PCIDevice::enumerate_devices();
+    for (size_t i = 0; i < enumerated.size(); ++i) {
+        if (enumerated[i] == static_cast<int>(physical_device_num)) {
+            return static_cast<uint32_t>(i);
+        }
+    }
+    TT_THROW(
+        "H2D socket connector cannot find physical PCIe device /dev/tenstorrent/{} in this process. "
+        "Ensure the device is visible to the connector (check TT_VISIBLE_DEVICES).",
+        physical_device_num);
+}
 
 tt::umd::Cluster* PCIeCoreWriter::get_or_create_cluster() {
     std::lock_guard lock(cluster_mutex_);
     if (!shared_cluster_) {
-        // Single cluster for the whole process — see header comment.
-        // No `target_devices` set: that field is documented as a no-op for
-        // SILICON, so leaving it empty avoids implying constraints UMD does
-        // not honour. The Cluster ctor discovers all visible PCIe chips.
+        // No target_devices: it's a no-op for SILICON, so the ctor discovers all visible PCIe chips.
         shared_cluster_ = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{});
     }
     return shared_cluster_.get();
 }
 
 PCIeCoreWriter::PCIeCoreWriter(uint32_t device_id, uint32_t virtual_core_x, uint32_t virtual_core_y) :
-    device_id_(device_id), virtual_core_x_(virtual_core_x), virtual_core_y_(virtual_core_y) {
-    // Force-init on first construction so the topology-discovery cost (and
-    // its fd usage) is paid up front in a known place rather than lazily
-    // inside `get_pcie_writer()` during the first send.
+    device_id_(physical_to_local_logical_id(device_id)),
+    virtual_core_x_(virtual_core_x),
+    virtual_core_y_(virtual_core_y) {
+    // Init eagerly so topology-discovery cost is paid here rather than lazily during the first send.
     get_or_create_cluster();
 }
 

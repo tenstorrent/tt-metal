@@ -15,6 +15,11 @@ namespace tt::umd {
 class TlbWindow;
 }
 
+namespace tt::tt_metal::experimental::detail {
+struct H2DSocketTryWriteAccess;
+struct H2DSocketDramRecvAccess;
+}  // namespace tt::tt_metal::experimental::detail
+
 namespace tt::tt_metal::distributed {
 
 class NamedShm;
@@ -121,8 +126,7 @@ public:
      * coord — so the resulting connector socket's `get_active_cores()` will
      * report the right coord without the caller having to plumb it through.
      *
-     * @param desc A populated socket descriptor, typically produced by an
-     *             owner-side `populate_from_owner` followed by direct embedding.
+     * @param desc A populated socket descriptor.
      * @return A connected H2DSocket ready for data transfer.
      */
     static std::unique_ptr<H2DSocket> connect_from_descriptor(const HDSocketDescriptor& desc);
@@ -191,6 +195,26 @@ public:
 private:
     H2DSocket() = default;
 
+    // Programmable-core type of the receiver core. Recorded explicitly at
+    // construction rather than inferred at use sites: logical coordinates
+    // overlap across core types (DRAM logical (x,y) is a different physical
+    // core than Tensix logical (x,y)), and keying off the DRAM-L1 NOC offset
+    // conflates "needs an L1 offset" with "is a DRAM core". The DRAM-recv ctor
+    // sets Dram; every other path (owner worker ctor, connect()) is Tensix.
+    enum class RecvCoreType { Tensix, Dram };
+
+    // DRAM-receiver ctor (invoked only by H2DSocketDramRecvAccess). Bypasses the
+    // MeshBuffer paths (which have no DRAM-core L1 allocator) and consumes
+    // pre-allocated DRISC-L1 offsets for the config and data buffers, plus the
+    // DRAM-L1 NOC offset that host writes need to add on top.
+    H2DSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& recv_core,
+        uint32_t fifo_size,
+        uint32_t config_l1_local_addr,
+        uint32_t data_l1_local_addr,
+        uint64_t dram_l1_noc_offset);
+
     struct PinnedBufferInfo {
         uint32_t pcie_xy_enc = 0;
         uint32_t addr_lo = 0;
@@ -221,6 +245,13 @@ private:
     void reserve_bytes(uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);
     void notify_receiver();
+
+    // Non-blocking write. Returns false immediately if the FIFO can't fit `num_pages`
+    // without spinning. Accessible only via tt::tt_metal::experimental::detail::try_write.
+    bool try_write_impl(void* data, uint32_t num_pages);
+
+    friend struct tt::tt_metal::experimental::detail::H2DSocketTryWriteAccess;
+    friend struct tt::tt_metal::experimental::detail::H2DSocketDramRecvAccess;
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
@@ -255,6 +286,15 @@ private:
     HDSocketConnectorState* connector_state_ = nullptr;
     uint32_t connector_state_offset_ = 0;
     bool prior_clean_shutdown_ = true;
+    // Non-zero when the recv_core is a DRAM programmable core: every NOC write
+    // from host to its L1 must add this offset on top of the local L1 address.
+    // Zero for worker recv cores (worker L1 has local==NOC space). Captured
+    // into the pcie_writer lambda in init_receiver_tlb so write() can keep
+    // passing local addresses.
+    uint64_t dram_l1_noc_offset_ = 0;
+    // Receiver core type, set at construction. The authoritative signal for
+    // CoreType resolution and the DRAM-recv write path in init_receiver_tlb.
+    RecvCoreType recv_core_type_ = RecvCoreType::Tensix;
 };
 
 }  // namespace tt::tt_metal::distributed

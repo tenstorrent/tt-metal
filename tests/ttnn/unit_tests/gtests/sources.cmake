@@ -24,6 +24,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_levelized_graph.cpp
     test_graph_capture_arguments_morehdot.cpp
     test_graph_capture_arguments_transpose.cpp
+    test_graph_capture_arguments_untilize_with_unpadding.cpp
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
@@ -82,6 +83,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_tensor_layout.cpp
     tensor/test_tensor_nd_sharding.cpp
     tensor/test_tensor_serialization.cpp
+    tensor/test_tensor_utils.cpp
     tensor/test_unit_mesh_utils.cpp
     tensor/test_vector_conversion.cpp
     tensor/test_xtensor_adapter.cpp
@@ -92,3 +94,5 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
 set(TEST_CCL_MULTI_CQ_MULTI_DEVICE_SOURCES multi_thread/test_ccl_multi_cq_multi_device.cpp)
 
 set(UNIT_TESTS_TTNN_EMITC_SOURCES emitc/test_sanity.cpp)
+
+set(UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES test_query_op_constraints_mock_device.cpp)

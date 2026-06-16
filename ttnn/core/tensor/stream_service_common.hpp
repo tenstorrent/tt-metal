@@ -15,7 +15,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -57,6 +57,9 @@ inline Tensor make_zero_host_tensor(const TensorSpec& spec) {
             return Tensor::from_vector<float>(std::vector<float>(spec.logical_shape().volume()), spec);
         case DataType::UINT32:
             return Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
+        // FP8_E4M3 ingestion is not supported on the streaming path (mirrors the
+        // TensorToMesh / aggregate_tensor restriction); reject it explicitly.
+        case DataType::FP8_E4M3: TT_THROW("StreamService: FP8_E4M3 global_spec data type is not supported");
         case DataType::INVALID: TT_THROW("StreamService: invalid global_spec data type");
     }
     TT_THROW("Unreachable");
@@ -152,7 +155,7 @@ inline std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::vector<distributed::MeshCoordinate>& coords,
     const char* side) {
-    auto& svc = internal::ServiceCoreManager::get();
+    auto& svc = internal::service_core_manager();
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
     for (const auto& coord : coords) {
         auto* d = mesh->get_device(coord);

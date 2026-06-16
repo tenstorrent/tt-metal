@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 
@@ -39,42 +39,27 @@ FORCE_INLINE auto local_noc_addr(uint32_t addr, uint8_t noc_id = noc_index) {
 }
 
 /**
- * @brief Zero out the exact tile size for a CB using NOC reads from the hardware zeros region
+ * @brief Zero out the exact tile size for a DFB's current write entry using the device zero API.
  *
- * @tparam cb_id Circular buffer ID whose tile byte size should be used
- * @param write_addr L1 address where the zeroed tile should be written
+ * @param dfb DataflowBuffer whose current write entry should be zeroed
  */
-template <uint32_t cb_id>
-FORCE_INLINE void zero_tile(uint32_t write_addr) {
-    constexpr uint32_t bytes_to_zero = get_tile_size(cb_id);
-    static_assert(bytes_to_zero % MEM_ZEROS_SIZE == 0, "CB tile size must be a multiple of MEM_ZEROS_SIZE");
-    constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
-
+FORCE_INLINE void zero_tile(::DataflowBuffer dfb) {
     Noc noc;
-    UnicastEndpoint ep;
-    const auto zeros_src = local_noc_addr(MEM_ZEROS_BASE, noc.get_noc_id());
-
-    noc.set_async_read_state<Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(ep, MEM_ZEROS_SIZE, zeros_src);
-
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(
-            ep, ::CoreLocalMem<uint32_t>(write_addr), 0, zeros_src, {});
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc.async_read_barrier();
+    noc.async_write_zeros(dfb, dfb.get_tile_size());
+    noc.write_zeros_l1_barrier();
 }
 
 /**
- * @brief Reserve, zero-fill, and push one tile into a circular buffer
+ * @brief Reserve, zero-fill, and push one tile into a DataflowBuffer
  *
- * @tparam cb_id Circular buffer ID whose tile byte size should be used
+ * @tparam dfb_id DataflowBuffer ID whose tile byte size should be used
  */
-template <uint32_t cb_id>
+template <uint32_t dfb_id>
 FORCE_INLINE void prepare_zero_tile() {
-    ::CircularBuffer cb(cb_id);
-    cb.reserve_back(1);
-    zero_tile<cb_id>(cb.get_write_ptr());
-    cb.push_back(1);
+    ::DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(1);
+    zero_tile(dfb);
+    dfb.push_back(1);
 }
 
 }  // namespace dataflow_kernel_lib

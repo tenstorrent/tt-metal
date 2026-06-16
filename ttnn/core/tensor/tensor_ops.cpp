@@ -4,6 +4,9 @@
 
 #include <tt_stl/reflection.hpp>
 #include "tensor/tensor_ops.hpp"
+// Full definition of distributed::H2DSocket (tensor_ops.hpp only forward-declares it to avoid
+// leaking the experimental::detail namespace through that widely-included public header).
+#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/storage.hpp"

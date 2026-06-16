@@ -88,4 +88,8 @@ if(USE_MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
 endif()
 
+if(TT_UMD_BUILD_SIMULATION)
+    target_compile_definitions(distributed PRIVATE TT_UMD_BUILD_SIMULATION)
+endif()
+
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)

@@ -9,10 +9,15 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include <tt_stl/optional_reference.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
-#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
-
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+// Forward-declared (used only as a pointer in copy_tensor_over_socket below) rather than
+// including <tt-metalium/experimental/sockets/h2d_socket.hpp>. That header pulls in the
+// `tt::tt_metal::experimental::detail` namespace, and including it from this widely-included
+// public header would make an unqualified `detail::` ambiguous (vs `tt::tt_metal::detail`) in
+// every TU that does `using namespace tt::tt_metal{,::experimental};`. The full definition is
+// included in tensor_ops.cpp instead.
+class H2DSocket;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal {

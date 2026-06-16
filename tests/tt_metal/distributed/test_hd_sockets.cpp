@@ -175,6 +175,19 @@ void test_hd_socket_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
+    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
+    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
+    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
+    auto scratch_shard_params =
+        ShardSpecBuffer(CoreRangeSet(socket_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig scratch_device_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
+
     auto send_program = CreateProgram();
     CreateKernel(
         send_program,
@@ -190,6 +203,7 @@ void test_hd_socket_loopback(
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(num_iterations),
                 h2d_mode == H2DMode::DEVICE_PULL,
+                static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
     uint32_t num_txns = data_size / page_size;
@@ -243,6 +257,20 @@ void test_hd_socket_multithreaded_loopback(
         output_sockets.push_back(std::make_unique<D2HSocket>(mesh_device, socket_core, socket_fifo_size));
     }
 
+    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
+    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
+    // A single replicated buffer (same L1 address on every device) serves every per-coord program.
+    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
+    auto scratch_shard_params =
+        ShardSpecBuffer(CoreRangeSet(socket_core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig scratch_device_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
+
     // Build a single MeshWorkload that spans the entire device grid: one loopback program per
     // socketed device, each compiled with that device's H2D/D2H socket config addresses.
     auto mesh_workload = MeshWorkload();
@@ -262,6 +290,7 @@ void test_hd_socket_multithreaded_loopback(
                     static_cast<uint32_t>(data_size),
                     static_cast<uint32_t>(num_iterations),
                     h2d_mode == H2DMode::DEVICE_PULL,
+                    static_cast<uint32_t>(scratch_buffer->address()),
                 }});
         mesh_workload.add_program(MeshCoordinateRange(socket_device_coords[i]), std::move(send_program));
     }

@@ -25,7 +25,7 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -57,7 +57,7 @@ using namespace stream_service_common;
 std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores) {
-    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    auto& svc = tt::tt_metal::internal::service_core_manager();
     std::vector<uint32_t> zero_word{0};
     std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
     for (const auto& [coord, core] : service_cores) {
@@ -293,7 +293,7 @@ struct ServiceCoreReleaseGuard {
         if (committed) {
             return;
         }
-        auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+        auto& svc = tt::tt_metal::internal::service_core_manager();
         for (const auto& [coord, core] : cores) {
             svc.release(mesh->get_device(coord), {core});
         }
@@ -418,7 +418,7 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
         if (impl_ == nullptr) {
             return;
         }
-        auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+        auto& svc = tt::tt_metal::internal::service_core_manager();
         auto* mesh = impl_->mesh_device.get();
 
         // 1. Signal termination + drain the persistent sender kernel.
@@ -566,7 +566,7 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
         if (impl_ == nullptr) {
             return;
         }
-        auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+        auto& svc = tt::tt_metal::internal::service_core_manager();
         auto* mesh = impl_->mesh_device.get();
 
         // 1. Signal termination + drain the persistent receiver kernel.
@@ -932,7 +932,7 @@ SenderSideResources build_sender_side(
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
     const D2DStreamConfig& cfg) {
-    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    auto& svc = tt::tt_metal::internal::service_core_manager();
     const uint32_t num_workers = core_range_size(cfg.sender_worker_cores);
 
     // Reserve the socket config buffer's L1 footprint in each service core's
@@ -1064,7 +1064,7 @@ ReceiverSideResources build_receiver_side(
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
     const D2DStreamConfig& cfg) {
-    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    auto& svc = tt::tt_metal::internal::service_core_manager();
     const uint32_t num_workers = core_range_size(cfg.receiver_worker_cores);
 
     // Reserve the socket config buffer + data FIFO L1 footprint. They sit at the

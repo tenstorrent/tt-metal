@@ -227,7 +227,7 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
-    int vector_mode = (int)VectorMode::C>
+    VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -249,7 +249,7 @@ ALWI void sdpa_tail_streaming(
     // TODO: Unit test perf seemed better if we operated on all chunks
     // Retest in streaming context since unit test doesn't need to wait for input
     if constexpr (untilize) {
-        custom_pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
+        pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense, false>(cb_l_out);
         cb_wait_front(cb_l1, total_size);
         cb_wait_front(cb_l2, total_size);
         cb_reserve_back(cb_l_out, total_size);
@@ -324,7 +324,7 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
-    int vector_mode = (int)VectorMode::C>
+    VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming_conditional(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -815,7 +815,7 @@ struct SdpaReduceWorker {
         // TRISC (Compute) - streaming SDPA tail reduction
         // ==================================================================
         void compute_impl([[maybe_unused]] const ComputeArgs& args) {
-            constexpr int vector_mode = VectorMode::RC_custom;
+            constexpr VectorMode vector_mode = VectorMode::RC_custom;
 
             reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);

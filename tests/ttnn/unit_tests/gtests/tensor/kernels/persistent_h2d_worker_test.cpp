@@ -28,9 +28,9 @@ constexpr uint32_t input_tensor_addr = get_compile_time_arg_val(1);
 constexpr uint32_t output_tensor_addr = get_compile_time_arg_val(2);
 constexpr uint32_t page_size = get_compile_time_arg_val(3);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(4);
-// Metadata copy block (indices 5..7). When metadata_enabled is 0, the worker
+// Metadata copy block (indices 5..8). When metadata_enabled is 0, the worker
 // skips the L1 copy and metadata_{input,output}_addr / metadata_size_bytes
-// are ignored. Indices stay reserved so the host build always emits 8 CT args
+// are ignored. Indices stay reserved so the host build always emits 9 CT args
 // before TensorAccessorArgs — the kernel constexpr resolves to 0 when the host
 // passes 0, which `if constexpr` then drops at compile time.
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(5);

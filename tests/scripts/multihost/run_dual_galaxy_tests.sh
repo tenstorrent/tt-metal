@@ -1,6 +1,9 @@
 #!/bin/bash
 set -eo pipefail
 
+# Source shared utility functions.
+source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
+
 # Exit immediately if ARCH_NAME is not set or empty
 if [ -z "${ARCH_NAME}" ]; then
   echo "Error: ARCH_NAME is not set. Exiting." >&2
@@ -15,13 +18,12 @@ run_dual_galaxy_unit_tests() {
   echo "LOG_METAL: Running run_dual_galaxy_unit_tests"
 
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
-  local tcp_interface="cnx1"
-  # heuristic to extract only 2 first hosts from the hostfile
-  local hosts="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
+  local tcp_interface="$(default_mpi_tcp_interface)"
+  local hosts="$(extract_hosts_from_hostfile 2)"
 
   local mpi_args="--host $hosts $mpi_args_base"
 
-  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="--host $hosts $mpirun_args_base"
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
 

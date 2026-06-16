@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_embedding_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Embedding::Backward ALIAS ttnn_op_embedding_backward)
 
-tt_reuse_precompile_headers(ttnn_op_embedding_backward TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_embedding_backward TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_embedding_backward)
 
 set_target_properties(

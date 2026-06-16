@@ -5,7 +5,7 @@ include(sources.cmake)
 add_library(ttnn_op_point_to_point ${LIB_TYPE})
 add_library(TTNN::Ops::PointToPoint ALIAS ttnn_op_point_to_point)
 
-tt_reuse_precompile_headers(ttnn_op_point_to_point TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_point_to_point TTNN::PCHFull)
 
 set_target_properties(
     ttnn_op_point_to_point
@@ -21,7 +21,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_POINT_TO_POINT_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -30,13 +30,7 @@ target_sources(
         ${TTNN_OP_POINT_TO_POINT_SRCS}
 )
 
-target_include_directories(ttnn_op_point_to_point PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_point_to_point
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_point_to_point PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -46,4 +40,4 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/${OP_NAME}
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_op_point_to_point LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_point_to_point FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
