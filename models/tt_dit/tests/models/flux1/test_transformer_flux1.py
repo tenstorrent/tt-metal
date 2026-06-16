@@ -19,21 +19,23 @@ from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
+TEST_MESH_PARAMS = [
+    # BH Onnly
+    pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
+    pytest.param((2, 2), (2, 2), 0, 1, 2, "2x2sp0tp1", id="2x2sp0tp1"),
+    # WH Only
+    pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+    pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+    # BH and WH
+    pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
+    pytest.param((4, 8), (4, 8), 0, 1, 4, "4x8sp0tp1", id="4x8sp0tp1"),
+    pytest.param((4, 8), (4, 8), 1, 0, 4, "4x8sp1tp0", id="4x8sp1tp0"),
+]
+
 
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
-    [
-        # BH Onnly
-        pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
-        pytest.param((2, 2), (2, 2), 0, 1, 2, "2x2sp0tp1", id="2x2sp0tp1"),
-        # WH Only
-        pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
-        # BH and WH
-        pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
-        pytest.param((4, 8), (4, 8), 0, 1, 4, "4x8sp0tp1", id="4x8sp0tp1"),
-        pytest.param((4, 8), (4, 8), 1, 0, 4, "4x8sp1tp0", id="4x8sp1tp0"),
-    ],
+    TEST_MESH_PARAMS,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -47,8 +49,17 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
     ["schnell", "dev"],
     ids=["flux_schnell", "flux_dev"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_single_transformer_block(
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
+    indirect=True,
+)
+def test_transformer_single_block(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
     sp_axis: int,
@@ -184,15 +195,7 @@ def test_single_transformer_block(
 
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
-    [
-        pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
-        pytest.param((2, 2), (2, 2), 0, 1, 2, "2x2sp0tp1", id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
-        pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
-        pytest.param((4, 8), (4, 8), 1, 0, 4, "4x8sp1tp0", id="4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 0, 1, 4, "4x8sp0tp1", id="4x8sp0tp1"),
-    ],
+    TEST_MESH_PARAMS,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -208,7 +211,13 @@ def test_single_transformer_block(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31000000}],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 31000000,
+            "require_exact_physical_num_devices": True,
+        },
+    ],
     indirect=True,
 )
 def test_transformer(
@@ -257,16 +266,16 @@ def test_transformer(
     tt_model = checkpoint.build(ccl_manager=ccl_manager, parallel_config=parallel_config)
 
     torch.manual_seed(0)
-    spatial = torch.randn([batch_size, spatial_seq_len, in_channels])
-    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim])
-    pooled = torch.randn([batch_size, pooled_projection_dim])
-    timestep = torch.full([batch_size], fill_value=500)
-    guidance = torch.full([batch_size], fill_value=3) if with_guidance_embeds else None
+    spatial = torch.randn([batch_size, spatial_seq_len, in_channels]).to(torch.bfloat16)
+    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim]).to(torch.bfloat16)
+    pooled = torch.randn([batch_size, pooled_projection_dim]).to(torch.bfloat16)
+    timestep = torch.full([batch_size], fill_value=500).to(torch.bfloat16)
+    guidance = torch.full([batch_size], fill_value=3).to(torch.bfloat16) if with_guidance_embeds else None
 
     # prepare for ROPE
-    text_ids = torch.zeros([prompt_seq_len, 3])
-    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3])
-    ids = torch.cat((text_ids, image_ids), dim=0)
+    text_ids = torch.zeros([prompt_seq_len, 3]).to(torch.bfloat16)
+    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3]).to(torch.bfloat16)
+    ids = torch.cat((text_ids, image_ids), dim=0).to(torch.bfloat16)
     rope_cos, rope_sin = torch_model.pos_embed.forward(ids)
 
     tt_spatial = bf16_tensor(spatial, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
