@@ -364,6 +364,30 @@ def _min_speech_tokens(text: str) -> int:
     return max(4096, len(text.split()) * 8)
 
 
+def _resolve_max_speech_tokens(text: str, max_tokens: int, *, log_prefix: str = "tt_generate") -> int:
+    """Apply the same max-token floor as the measured run (``--max-speech-tokens`` + auto-raise)."""
+    min_needed = _min_speech_tokens(text)
+    if max_tokens < min_needed:
+        logger.warning(
+            f"[{log_prefix}] max_tokens={max_tokens} is below the estimated minimum "
+            f"({min_needed}) for {len(text.split())} words. Auto-raising to {min_needed}."
+        )
+        return min_needed
+    return max_tokens
+
+
+def _text_generation_passes(text: str, max_tokens: int, text_max_seq_len: int) -> list[tuple[str, int]]:
+    """Return ``(chunk_text, max_tokens)`` pairs using the same rules as ``run_text_mode``."""
+    chunk_threshold = _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _CHUNK_THRESHOLD_WORDS_SHORT
+    if len(text.split()) > chunk_threshold:
+        passes: list[tuple[str, int]] = []
+        for chunk in _split_into_chunks(text):
+            n_words = len(chunk.split())
+            passes.append((chunk, max(600, n_words * 12)))
+        return passes
+    return [(text, _resolve_max_speech_tokens(text, max_tokens, log_prefix="tt_generate"))]
+
+
 # Threshold above which text is split into chunks to prevent AR degeneration.
 # The model's free-run PCC (~0.79) causes accumulated errors that collapse the
 # semantic code distribution to a single repeated value after ~200 tokens (~20 words).
@@ -546,20 +570,13 @@ def run_text_mode(
       - text_max_seq_len > 4096  (long context / paged KV): chunk at > 35 words
       - text_max_seq_len <= 4096 (short context):           chunk at > 200 words
     """
-    chunk_threshold = _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _CHUNK_THRESHOLD_WORDS_SHORT
-    if len(text.split()) > chunk_threshold:
+    passes = _text_generation_passes(text, max_tokens, text_max_seq_len)
+    if len(passes) > 1:
         _run_chunked_text_mode(pipe, text, voice, seed, sample_rate, out_path)
         return
 
-    # Short text path — single forward pass.
-    # Auto-raise max_tokens if the word count suggests more tokens are needed.
-    min_needed = _min_speech_tokens(text)
-    if max_tokens < min_needed:
-        logger.warning(
-            f"[tt_generate] max_tokens={max_tokens} is below the estimated minimum "
-            f"({min_needed}) for {len(text.split())} words. Auto-raising to {min_needed}."
-        )
-        max_tokens = min_needed
+    chunk_text, max_tokens = passes[0]
+    assert chunk_text == text
 
     t0 = perf_counter()
     out = pipe.forward_device_resident(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
@@ -702,8 +719,19 @@ def run_demo(args: DemoArgs) -> None:
                     out_path = out_dir / f"{tag}_item{pid}.wav"
 
                     if is_warmup:
-                        # Warmup: compile + trace capture (untimed; matches e2e perf test).
-                        pipe.forward_device_resident(text=text, voice=voice, max_tokens=16, seed=args.data.seed)
+                        # Warmup: same text/chunking/max_tokens as the measured run (untimed, no WAV).
+                        passes = _text_generation_passes(text, args.data.max_speech_tokens, args.tt.text_max_seq_len)
+                        logger.info(
+                            f"[warmup] {len(text.split())} words → {len(passes)} pass(es); "
+                            f"max_tokens={[mt for _, mt in passes]}"
+                        )
+                        for pass_text, pass_max_tokens in passes:
+                            pipe.forward_device_resident(
+                                text=pass_text,
+                                voice=voice,
+                                max_tokens=pass_max_tokens,
+                                seed=args.data.seed,
+                            )
                         ttnn.synchronize_device(runtime.compute_device)
                         continue
 
