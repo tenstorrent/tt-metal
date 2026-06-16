@@ -229,7 +229,7 @@ to the 414 currently-passing cells and no change to the bf16/bf8b paths.
 
 ---
 
-### [ ] Refinement 7 — fp32_dest_acc_en precision axis (fix the bf8b fp16-DEST defect)
+### [x] Refinement 7 — fp32_dest_acc_en precision axis (fix the bf8b fp16-DEST defect)
 
 **Goal**: add `fp32_dest_acc_en` ([True, False]) to `SUPPORTED` as a precision
 axis and make every `(dtype × fp32_dest_acc_en)` cell honest. `feature_spec.py`

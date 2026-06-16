@@ -76,6 +76,13 @@ SUPPORTED = {
     "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
+    # Precision axis #2, independent of dtype: fp32 vs 16-bit DEST-register
+    # accumulation (caller's compute_kernel_config.fp32_dest_acc_en; True when
+    # no config is passed — the Phase-0 default HiFi2 + fp32 DEST acc). bf16 and
+    # bf8b support BOTH modes (the bf8b fp16-DEST QK-matmul interm-format defect
+    # was fixed in Refinement 7); fp32 + 16-bit DEST is legal-but-lossy and is
+    # refused via EXCLUSIONS below (mirrors the softmax precedent).
+    "fp32_dest_acc_en": [True, False],
 }
 
 
@@ -101,6 +108,13 @@ EXCLUSIONS = [
     # refused for now (canonical EXCLUSION flagged in Refinement 1).
     {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
     {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
+    # fp32 input + 16-bit DEST accumulation (Refinement 7). Truncating an fp32
+    # tensor's running softmax stats / score accumulators through a 16-bit DEST
+    # register defeats the entire point of an fp32 input — it cannot reach
+    # fp32's tight golden RMS target (0.02), so it is legal-but-lossy and we
+    # refuse it op-side rather than ship a guaranteed near-miss (mirrors the
+    # softmax precedent). bf16 and bf8b support BOTH DEST modes.
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
 ]
 
 
@@ -109,7 +123,7 @@ EXCLUSIONS = [
 # ---------------------------------------------------------------------------
 
 
-def validate(query, key, value, *, attn_mask=None, is_causal=False, scale=None):
+def validate(query, key, value, *, attn_mask=None, is_causal=False, scale=None, compute_kernel_config=None):
     # --- tensor-shape contract violations (ValueError / RuntimeError) ---
     for name, t in (("query", query), ("key", key), ("value", value)):
         if len(t.shape) != 4:
@@ -165,11 +179,17 @@ def validate(query, key, value, *, attn_mask=None, is_causal=False, scale=None):
         mask_mode = "none"
     scale_mode = "explicit" if scale is not None else "auto"
 
+    # fp32_dest_acc_en axis: True when no compute_kernel_config is passed (the
+    # Phase-0 default — HiFi2 + fp32 DEST accumulation), else the caller's
+    # explicit setting. Mirrors how the program descriptor resolves the config.
+    fp32_dest_acc_en = True if compute_kernel_config is None else bool(compute_kernel_config.fp32_dest_acc_en)
+
     axes = {
         "dtype": query.dtype,
         "layout": query.layout,
         "mask_mode": mask_mode,
         "scale_mode": scale_mode,
+        "fp32_dest_acc_en": fp32_dest_acc_en,
     }
     tagger_inputs = (q_shape, k_shape, v_shape)
     for axis_name, tagger in INPUT_TAGGERS.items():
@@ -210,7 +230,15 @@ def scaled_dot_product_attention(
     `math_approx_mode`, `dst_full_sync_en`. When omitted, defaults reproduce the
     Phase-0 behavior exactly (HiFi2 + fp32 DEST accumulation).
     """
-    validate(query, key, value, attn_mask=attn_mask, is_causal=is_causal, scale=scale)
+    validate(
+        query,
+        key,
+        value,
+        attn_mask=attn_mask,
+        is_causal=is_causal,
+        scale=scale,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     if scale is None:
         scale = 1.0 / math.sqrt(int(query.shape[-1]))

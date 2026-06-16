@@ -392,3 +392,64 @@
   — 5 cases: fp32 S=8192 two-pass clears the target (auto + explicit scale),
   fp32 S=8192 multi-head, and two non-regression guards (fp32 S=4096 stays
   online, fp32 short unaffected), all with PCC + rms + NaN-free assertions.
+
+## Refinement 7 — fp32_dest_acc_en precision axis (fix the bf8b fp16-DEST defect)  [x] complete
+- **Date**: 2026-06-16
+- **What was done**:
+  - **Op-side gate**: `validate()` now accepts `compute_kernel_config` and
+    derives the `fp32_dest_acc_en` axis (True when the config is None — the
+    Phase-0 default; else `config.fp32_dest_acc_en`). `SUPPORTED` +=
+    `"fp32_dest_acc_en": [True, False]`. The public entry point threads the
+    config into `validate()`.
+  - **EXCLUSION**: `EXCLUSIONS` += `{"dtype": ttnn.float32,
+    "fp32_dest_acc_en": False}` — fp32 input + 16-bit DEST is legal-but-lossy
+    (cannot reach fp32's 0.02 RMS target), refused op-side (mirrors the softmax
+    precedent). Golden cells for this combo correctly xfail_expected.
+  - **Real kernel fix (NOT a fp32-DEST force, NOT a config override)**: the
+    online-softmax QK^T `matmul_block` call passed the bf8b in0 buffer
+    (`cb_q_buf`) as the helper's interm placeholder. With the default
+    `reconfig=INPUT_AND_OUTPUT`, `matmul_block` calls
+    `pack_reconfig_data_format(interm)` before the K-loop, pointing the PACKER at
+    the placeholder's data format. It only re-points the packer to the true
+    output (`cb_qk`, bf16) on the last K-block when
+    `(packer_l1_acc || fp32_dest_acc_en)` — with a 16-bit DEST and no L1-acc that
+    re-point is SKIPPED, so the QK result was packed into bf16 `cb_qk` using bf8b
+    block-float encoding, decoded downstream as ~1e-37 garbage (PCC ~0.05). Fix:
+    pass `cb_o_tmp` (bf16 = `accum_fmt`, distinct from in0/in1/out, not live
+    during the QK matmul) as the interm placeholder so the packer DF matches
+    `cb_qk`. bf16 inputs escaped the bug only because `cb_q_in` is then already
+    bf16 and coincidentally matched; the PV matmul already passed bf16 `cb_p`.
+    Diagnosed by the ttnn-expert-debugger via DEVICE_PRINT on `cb_qk`
+    (`-6.6e-38` → `1.3125` after the placeholder swap). The reference SDPA
+    program factory
+    (`/localdev/dnijemcevic/sdpa_main_baseline/tt-metal` @ e61af82,
+    `ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp`,
+    `im_df = Float16_b`) confirmed bf16 intermediates are the correct format.
+- **Accuracy achieved** (bf8b @ fp32_dest_acc_en=False, `fa_rand` inputs):
+  - PCC=0.99967, rmse≈0.004 on B1_H1_S1024_D128 causal (matches the reference's
+    0.9996); PCC≥0.99 on B1_H2_S512_D64, B2_H1_S256_D64, no-mask S512_D128.
+  - bf16 @ fp16-DEST unchanged: PCC=0.99982 (no regression).
+- **Golden test progress**: golden suite expanded to 2233 cells (the new
+  fp32_dest_acc_en axis ~doubled it). fp16-DEST slice verified green/correct:
+  bf16+bf8b @ fp32_dest_acc_en=False pass (48/48 across 6 representative shapes
+  incl. the 1024x128 repro, GQA 1x8x128x64, multi-head, multi-batch), fp32 @
+  False correctly xfail_expected via the new EXCLUSION (24 xfailed), ZERO
+  failures, ZERO XPASS drift. fp32_dest_acc_en=True half unchanged (54/54 sampled
+  pass). Acceptance suite 24/24; causal 35/35; bf8b fp32-acc precision matrix
+  64/64 (all confirmed by the debugger / re-run).
+- **Issues encountered**: A back-to-back two-program probe (fp32-acc then
+  fp16-acc in one process, no program cache) hangs the device — kept each repro
+  to one program invocation. An early argv-gated probe silently ran bf16 instead
+  of bf8b (stdin probes get no `sys.argv`) — hardcoded the dtype. Neither
+  affected the fix.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_fp32_dest_acc.py`
+    — 10 cases: bf8b+bf16 @ fp16-DEST on `fa_rand` (causal 3 shapes + no-mask),
+    the fp32 @ fp16-DEST EXCLUSION (NotImplementedError), and an fp32 @ fp32-DEST
+    supported guard.
+  - `test_scaled_dot_product_attention_debug.py::test_sdpa_fp16_dest_acc_off`
+    (expert-debugger regression artifact, preserved).
+  - Corrected the now-stale `bf8b requires fp32_dest_acc_en=True` skip rationale
+    in `test_scaled_dot_product_attention_precision_matrix.py` (kept the skip —
+    that matrix's PCC thresholds are fidelity-keyed only and would conflate
+    bf8b's base precision with the DEST axis the golden + new test already cover).

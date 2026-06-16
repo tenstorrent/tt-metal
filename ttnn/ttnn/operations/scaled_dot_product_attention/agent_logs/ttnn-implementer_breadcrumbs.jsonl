@@ -35,3 +35,4 @@
 {"event":"test_run","status":"pass","test":"probe two-pass forced (threshold lowered)","shapes":["1x1x128x64","1x1x256x64","1x2x128x64"],"detail":"PCC~0.99999 rms 0.0034-0.0042 fp32 two-pass path correct, no nan/hang","ts":"2026-06-12T17:23:25+00:00"}
 {"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_long_context.py","detail":"5/5 pass incl S=8192 fp32 two-pass clears rms<=0.02 PCC>=0.999; S=4096/512 online unaffected","ts":"2026-06-12T17:24:02+00:00"}
 {"event":"test_run","status":"pass","test":"golden -k 8192/4096/broad","detail":"18 S=8192 (all 6 fp32 pass), 72 S=4096 online unaffected, broad sample 72 pass. golden 1002->1004","ts":"2026-06-12T17:37:44+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"ttnn-expert-debugger","description":"Localize bf8b fp16-DEST defect","ts":"2026-06-16T12:59:37+00:00"}
