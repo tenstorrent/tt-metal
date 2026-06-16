@@ -38,7 +38,7 @@ excludeAgent: "cloud-agent"
 
 ## Import Hygiene
 
-- `import ttnn` is the public entry point — test and model code must not import from `ttnn._ttnn`, `ttnn.cpp`, or other internal modules
+- `import ttnn` is the public entry point — test and model code must not import from `ttnn._ttnn` or other internal modules
 - Avoid `from ttnn import *`; use explicit imports so readers can trace symbol origins
 - Group imports: stdlib → third-party (`torch`, `numpy`, `pytest`) → first-party (`ttnn`, `models.*`, `tests.*`)
 

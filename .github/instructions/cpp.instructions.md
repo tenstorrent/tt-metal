@@ -77,7 +77,7 @@ Do not rely on exceptions from STL containers (e.g., `std::out_of_range` from `m
 auto& entry = my_map.at(key);
 
 // Good: explicit check, readable failure
-TT_FATAL(my_map.count(key), "Key {} not found in map (size={})", key, my_map.size());
+TT_FATAL(my_map.contains(key), "Key {} not found in map (size={})", key, my_map.size());
 auto& entry = my_map.at(key);
 ```
 
@@ -86,7 +86,7 @@ Apply the same principle to array bounds, vector indexing, and any lookup that c
 ## Parameter Passing
 
 - Complex types (vectors, tensors, structs) must be passed by `const&` unless the function needs ownership.
-- Prefer `tt::stl::Span<const T>` over `const std::vector<T>&` for input parameters — it accepts both `std::vector` and `std::array` without copying.
+- Prefer `ttsl::Span<const T>` over `const std::vector<T>&` for input parameters — it accepts both `std::vector` and `std::array` without copying.
 - Prefer `std::string_view` over `const std::string&` or `const char*` for read-only string parameters.
 - Avoid bare `bool` arguments in public APIs — they're unreadable at the call site. Prefer `enum class` with descriptive enumerators.
 
@@ -100,7 +100,7 @@ Apply the same principle to array bounds, vector indexing, and any lookup that c
 
 ## Static Storage & Globals
 
-- **No global objects with non-trivial destructors**: destruction order is undefined across translation units. Use `tt::stl::Indestructible<T>` for function-local statics that require dynamic initialization.
+- **No global objects with non-trivial destructors**: destruction order is undefined across translation units. Use `ttsl::Indestructible<T>` for function-local statics that require dynamic initialization.
 - **No global classes with mutexes or locks** except for specific debug instrumentation.
 - **No `using namespace` in headers** — especially never `using namespace std;`.
 
