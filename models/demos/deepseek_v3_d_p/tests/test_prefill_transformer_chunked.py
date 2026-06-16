@@ -41,12 +41,23 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import build_h2d_service
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = 5 * 1024  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
+
+# H2D stream-service constants (mirror prefill_runner.py). Used by the background-service variant of the
+# no-PCC test: build the H2D service so its persistent receiver kernel spins on its worker core during
+# the whole prefill, reproducing the request-loop's service-presence dispatch tax WITHOUT any producer
+# or socket (tokens still come from the local path). See run_chunked_transformer_no_pcc(with_h2d_service).
+H2D_METADATA_SIZE_BYTES = 12
+H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
+    placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
+)
+H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 
 DEFAULT_TRACE_DIR = "/mnt/models/deepseek-prefill-cache/golden/kimi-26/debug_trace/longbook_qa_eng_prefill_56320_nopad"
 TRACE_DIR = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_TRACE_DIR))
@@ -532,6 +543,7 @@ def run_chunked_transformer_no_pcc(
     num_links,
     topology,
     num_iters,
+    with_h2d_service=False,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive
     the full n_chunks-chunk prefill `num_iters` times. No per-layer intermediate readback, no PCC —
@@ -639,6 +651,24 @@ def run_chunked_transformer_no_pcc(
 
     mesh_device.enable_program_cache()
 
+    # Background H2D-service variant: build the H2D stream service so its persistent receiver kernel
+    # spins on its worker core for the whole prefill — reproducing the request-loop's service-presence
+    # dispatch tax WITHOUT a producer or socket (tokens still come from the local path; the service is
+    # never fed). Mirrors prefill_runner.py request-mode: clear the model's custom sub-device manager
+    # first so the service's init program validates against the whole-chip default.
+    bg_h2d_service = None
+    if with_h2d_service:
+        mesh_device.clear_loaded_sub_device_manager()
+        bg_h2d_service = build_h2d_service(
+            mesh_device,
+            mesh_shape=tuple(mesh_shape),
+            max_seq_len=CHUNK,
+            mapper_config=H2D_MAPPER_CONFIG,
+            worker_cores=H2D_SYNC_WORKER_CORES,
+            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+        )
+        logger.info("[h2d-bg] H2D service built and spinning in the background (unused; no producer/socket)")
+
     profiler.start("tt_forward")
     for it in range(num_iters):
         iter_start = time.time()
@@ -669,9 +699,17 @@ def run_chunked_transformer_no_pcc(
         logger.info(f"iter {it} done ({n_chunks} chunks) in {time.time() - iter_start:.3f}s")
     profiler.end("tt_forward")
 
+    # Release the H2D service while the mesh + command queues + service core are still alive (its dtor
+    # frees a command queue and the service-core L1; running it after mesh close aborts).
+    if bg_h2d_service is not None:
+        del bg_h2d_service
+        gc.collect()
+        logger.info("[h2d-bg] H2D service released")
+
     profiler.end("total_test_time")
     logger.success(
-        f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, num_iters={num_iters})"
+        f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, "
+        f"num_iters={num_iters}, with_h2d_service={with_h2d_service})"
     )
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
@@ -878,6 +916,7 @@ def test_kimi_prefill_transformer_chunked_padded(
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
 # TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is NOT needed.
+@pytest.mark.parametrize("with_h2d_service", [False, True], ids=["nosvc", "h2dsvc"])
 @pytest.mark.parametrize("num_iters", [1, 10, 20], ids=["iters1", "iters10", "iters20"])
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
@@ -910,6 +949,7 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
     num_layers,
     n_chunks,
     num_iters,
+    with_h2d_service,
     num_links,
     topology,
 ):
@@ -924,4 +964,5 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
         num_links,
         topology,
         num_iters,
+        with_h2d_service=with_h2d_service,
     )
