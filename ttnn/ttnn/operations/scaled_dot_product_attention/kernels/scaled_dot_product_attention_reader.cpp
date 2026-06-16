@@ -21,8 +21,9 @@ void kernel_main() {
     constexpr uint32_t group = get_compile_time_arg_val(5);  // H_q / H_kv
     constexpr uint32_t has_mask = get_compile_time_arg_val(6);
     constexpr uint32_t mask_H = get_compile_time_arg_val(7);  // mask num-heads (1 or H_q)
+    constexpr uint32_t mask_B = get_compile_time_arg_val(8);  // mask batch (1 or B)
 
-    constexpr auto q_args = TensorAccessorArgs<8>();
+    constexpr auto q_args = TensorAccessorArgs<9>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -60,14 +61,17 @@ void kernel_main() {
         const uint32_t h = tmp % H_q;
         const uint32_t b = tmp / H_q;
         const uint32_t h_kv = h / group;
+        // Mask broadcasting: dim0 collapses to 0 when mask_B==1 (batch-broadcast);
+        // dim1 collapses to 0 when mask_H==1 (head-broadcast).
         const uint32_t mask_h = (mask_H == 1) ? 0 : h;
+        const uint32_t mask_b = (mask_B == 1) ? 0 : b;
 
         // --- Q-chunk: d_t head tiles of query tile-row qc ---
         const uint32_t q_base = ((b * H_q + h) * Sq_t + qc) * d_t;
         cb_reserve_back(cb_q_in, d_t);
         uint32_t q_wr = get_write_ptr(cb_q_in);
         for (uint32_t dd = 0; dd < d_t; ++dd) {
-            noc_async_read_tile(q_base + dd, q_acc, q_wr);
+            noc_async_read_page(q_base + dd, q_acc, q_wr);
             q_wr += tile_bytes;
         }
         noc_async_read_barrier();
@@ -80,7 +84,7 @@ void kernel_main() {
             cb_reserve_back(cb_k_in, d_t);
             uint32_t k_wr = get_write_ptr(cb_k_in);
             for (uint32_t dd = 0; dd < d_t; ++dd) {
-                noc_async_read_tile(kv_base + dd, k_acc, k_wr);
+                noc_async_read_page(kv_base + dd, k_acc, k_wr);
                 k_wr += tile_bytes;
             }
             noc_async_read_barrier();
@@ -89,17 +93,17 @@ void kernel_main() {
             cb_reserve_back(cb_v_in, d_t);
             uint32_t v_wr = get_write_ptr(cb_v_in);
             for (uint32_t dd = 0; dd < d_t; ++dd) {
-                noc_async_read_tile(kv_base + dd, v_acc, v_wr);
+                noc_async_read_page(kv_base + dd, v_acc, v_wr);
                 v_wr += tile_bytes;
             }
             noc_async_read_barrier();
             cb_push_back(cb_v_in, d_t);
 
             if constexpr (has_mask) {
-                const uint32_t mask_tile = ((b * mask_H + mask_h) * Sq_t + qc) * Skv_t + j;
+                const uint32_t mask_tile = ((mask_b * mask_H + mask_h) * Sq_t + qc) * Skv_t + j;
                 cb_reserve_back(cb_mask_in, 1);
                 uint32_t m_wr = get_write_ptr(cb_mask_in);
-                noc_async_read_tile(mask_tile, mask_acc, m_wr);
+                noc_async_read_page(mask_tile, mask_acc, m_wr);
                 noc_async_read_barrier();
                 cb_push_back(cb_mask_in, 1);
             }

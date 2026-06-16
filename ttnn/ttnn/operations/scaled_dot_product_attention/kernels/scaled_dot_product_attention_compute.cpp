@@ -213,7 +213,13 @@ void kernel_main() {
             OperandKind::Block,
             OperandKind::Col>(EltwiseShape::grid(1, d_t));
 
-        // Z. free the retained Q (raw-API — matmul never pops it; see header).
+        // Z. free per-unit persistent operands (raw-API — no helper pops these):
+        //   - cb_q: QKt matmul uses WaitAndRetainOnLastBlock so it never pops it.
+        //   - cb_m: phase K re-pushes the running max every iteration but nothing
+        //     consumes it after the kv loop (L/M use cb_l and cb_o only); the
+        //     final tile must be drained or the next unit's init deadlocks on
+        //     cb_reserve_back(cb_m).
         cb_pop_front(cb_q, d_t);
+        cb_pop_front(cb_m, 1);
     }
 }

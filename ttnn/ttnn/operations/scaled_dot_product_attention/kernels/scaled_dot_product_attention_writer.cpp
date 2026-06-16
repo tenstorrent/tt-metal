@@ -35,7 +35,7 @@ void kernel_main() {
         cb_wait_front(cb_out, d_t);
         uint32_t rd = get_read_ptr(cb_out);
         for (uint32_t dd = 0; dd < d_t; ++dd) {
-            noc_async_write_tile(out_base + dd, out_acc, rd);
+            noc_async_write_page(out_base + dd, out_acc, rd);
             rd += tile_bytes;
         }
         noc_async_write_barrier();

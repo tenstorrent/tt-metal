@@ -44,6 +44,7 @@ def create_program_descriptor(
     group = H_q // H_kv
 
     has_mask = 1 if attn_mask is not None else 0
+    mask_B = int(attn_mask.shape[0]) if attn_mask is not None else 0
     mask_H = int(attn_mask.shape[1]) if attn_mask is not None else 0
 
     total_units = B * H_q * Sq_t
@@ -113,7 +114,7 @@ def create_program_descriptor(
         cbs.append(cb(CB_MASK_IN, 2, tile_size, attn_mask.dtype))
 
     # --- Reader kernel ---
-    reader_ct = [H_q, H_kv, Sq_t, Skv_t, d_t, group, has_mask, mask_H]
+    reader_ct = [H_q, H_kv, Sq_t, Skv_t, d_t, group, has_mask, mask_H, mask_B]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())

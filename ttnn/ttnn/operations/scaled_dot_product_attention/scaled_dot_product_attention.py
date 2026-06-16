@@ -141,12 +141,16 @@ def validate(query, key, value, *, is_causal=False, attn_mask=None, scale=None, 
     if h_kv == 0 or h_q % h_kv != 0:
         raise ValueError("scaled_dot_product_attention: H_q must be a multiple of H_kv")
     if attn_mask is not None:
-        B, S_q, S_kv = query.shape[0], query.shape[-2], key.shape[-2]
-        ok = list(attn_mask.shape) in ([B, 1, S_q, S_kv], [B, h_q, S_q, S_kv])
+        B, S_q, S_kv = int(query.shape[0]), int(query.shape[-2]), int(key.shape[-2])
+        m = [int(x) for x in attn_mask.shape]
+        # Batch dim may be B or 1 (batch-broadcast); head dim may be H_q or 1
+        # (head-broadcast). Trailing two dims must match (S_q, S_kv).
+        ok = len(m) == 4 and m[0] in (1, B) and m[1] in (1, h_q) and m[2] == S_q and m[3] == S_kv
         if not ok:
             raise ValueError(
                 "scaled_dot_product_attention: attn_mask shape must be "
-                f"(B,1,S_q,S_kv) or (B,H_q,S_q,S_kv); got {list(attn_mask.shape)}"
+                f"({{1 or B}},{{1 or H_q}},S_q,S_kv); got {m} "
+                f"for B={B}, H_q={h_q}, S_q={S_q}, S_kv={S_kv}"
             )
 
     axes = _build_axes(
