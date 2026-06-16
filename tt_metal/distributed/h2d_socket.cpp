@@ -194,9 +194,10 @@ void H2DSocket::write_socket_metadata(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const PinnedBufferInfo& bytes_acked_info,
     const PinnedBufferInfo& data_info) {
-    // init_config_buffer hardcodes num_cores = 1, so the config buffer always has exactly one slot at index 0.
-    std::vector<receiver_socket_md> config_data(
-        config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
+    // The L2CPU path has no MeshBuffer-backed config_buffer_ (the caller pre-reserves a fixed LIM address and
+    // init_config_buffer is never called), so config_buffer_ is null there; it still has exactly one md slot.
+    const size_t num_md_slots = is_l2cpu_ ? 1u : (config_buffer_->size() / sizeof(receiver_socket_md));
+    std::vector<receiver_socket_md> config_data(num_md_slots, receiver_socket_md());
 
     auto& md = config_data[0];
     md.bytes_sent = 0;
