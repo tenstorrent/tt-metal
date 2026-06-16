@@ -64,6 +64,8 @@ metal_infra:
 # Current time budgets are based on sums of existing tests.
 # No official decision has been made yet for division of budgets per team.
 ttnn:
+  smoke:
+    wh_n300_civ2: 40
   sanity:
     wh_n300_civ2: 545
     bh_p100: 545
