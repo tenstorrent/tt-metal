@@ -150,14 +150,18 @@ const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{0, 0}};  // single worke
 const CoreRange kStressWorkerCores{CoreCoord{0, 0}, CoreCoord{1, 1}};  // 2x2 = 4 worker cores
 constexpr uint32_t kStressIncsPerConn = 4u;  // atomic-inc packets sent per fabric connection per iter
 constexpr uint32_t kFillBase = 1u;  // stage-0 source iota base; end stage verifies kFillBase + iter
-// ForwardChainStress carries the per-stage increment (1) THROUGH the metadata path
-// instead of a kernel arg: stage 0 injects it as H2D metadata, each producing stage
-// reads it from its inbound metadata + propagates it to its outbound D2D sender, and
-// the end-stage iota check (kFillBase + iter + world_size) implicitly verifies the
-// blob survived every hop. metadata_size_bytes == 0 disables it (the CT fill_delta
-// fallback applies).
-constexpr uint32_t kFillDelta = 1u;
+// ForwardChainStress carries a per-ITERATION random increment THROUGH the metadata
+// path instead of a kernel arg: stage 0 injects metadata[i] as H2D metadata, each
+// producing stage reads it as its mutation delta + propagates it to its outbound D2D
+// sender, and the end stage (a) verifies the iota shifted by world_size * delta and
+// (b) reads the metadata blob back from its worker L1 and checks the exact value. The
+// increments are generated deterministically from a fixed seed, so every rank (the
+// stage-0 feeder thread and the end-stage verifier on another rank) reproduces the
+// SAME array with no inter-rank exchange. metadata_size_bytes == 0 disables it (the CT
+// fill_delta fallback applies; used by the non-stress ForwardChain test).
+constexpr uint32_t kFillDelta = 1u;  // CT fallback increment when metadata disabled
 constexpr uint32_t kStressMetadataBytes = sizeof(uint32_t);
+constexpr uint32_t kStressMetadataSeed = 0x5eed1234u;
 
 // --- small helpers (mirrors test_d2d_stream_service.cpp / test_stream_pipeline.cpp) ---
 
@@ -186,6 +190,23 @@ std::vector<uint32_t> make_iota_u32(size_t n, uint32_t base) {
     std::vector<uint32_t> v(n);
     for (size_t i = 0; i < n; ++i) {
         v[i] = base + static_cast<uint32_t>(i);
+    }
+    return v;
+}
+
+// One pseudo-random increment per iteration in [1, 64], generated from a fixed seed by
+// a pure-uint32 LCG (Numerical Recipes). Deterministic and platform-independent, so
+// every rank reproduces the identical array: the stage-0 feeder thread pushes
+// seeds[i] as iter i's metadata, and the end-stage verifier (a different rank) uses the
+// same seeds[last] to predict the shifted iota + check the metadata readback — no
+// cross-rank exchange. Range [1, 64] keeps world_size * delta well clear of overflow
+// and avoids 0 (so every stage's mutation is observable).
+std::vector<uint32_t> make_metadata_seeds(uint32_t num_iters, uint32_t seed) {
+    std::vector<uint32_t> v(num_iters);
+    uint32_t s = seed;
+    for (uint32_t i = 0; i < num_iters; ++i) {
+        s = s * 1664525u + 1013904223u;
+        v[i] = 1u + ((s >> 24) % 64u);
     }
     return v;
 }
@@ -278,9 +299,11 @@ void run_h2d_feed_loop(
     const ttnn::Shape& global_shape,
     uint32_t num_iters,
     uint32_t metadata_size_bytes = 0,
-    uint32_t increment = 0) {
+    const std::vector<uint32_t>& increments = {}) {
     const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
     for (uint32_t i = 0; i < num_iters; ++i) {
+        // Per-iter metadata increment (seeds[i]); 0 when metadata is disabled / unset.
+        const uint32_t increment = i < increments.size() ? increments[i] : 0u;
         h2d_push_token(h2d_service, num_u32, kFillBase + i, metadata_size_bytes, increment);
     }
     h2d_service.barrier();  // flush every push to the device
@@ -670,6 +693,29 @@ void expect_output_tensor_iota(const Tensor& output, const std::shared_ptr<MeshD
     }
 }
 
+// End-stage metadata check: the blob the inbound D2D receiver multicast into each
+// worker's L1 (the LAST iter's value — each iter overwrites it) must equal `expected`
+// (the last iter's propagated increment). Reads the uniform worker-grid metadata L1 on
+// every participating (coord, worker core) directly — a separate, explicit check that
+// the blob arrived intact, complementing the iota's value-driven check.
+void expect_worker_metadata(
+    D2DStreamServiceReceiver* inbound,
+    const std::shared_ptr<MeshDevice>& mesh,
+    const CoreRange& worker_cores,
+    uint32_t expected) {
+    const uint32_t md_addr = static_cast<uint32_t>(inbound->get_metadata_addr());
+    std::vector<uint32_t> rb;
+    for (const auto& coord : inbound->get_backing_tensor().tensor_topology().mesh_coords()) {
+        auto* device = mesh->get_device(coord);
+        for (const auto& wc : worker_cores) {
+            rb.clear();
+            tt::tt_metal::detail::ReadFromDeviceL1(device, wc, md_addr, sizeof(uint32_t), rb);
+            ASSERT_FALSE(rb.empty());
+            EXPECT_EQ(rb[0], expected) << "metadata mismatch at " << coord << " worker (" << wc.x << "," << wc.y << ")";
+        }
+    }
+}
+
 // World-size-derived forward pipeline (rank == stage), unbundled op + d2d_sync gate,
 // LEASE mode with one release per iter after the op. Stage 0 (rank 0) owns the H2D feed
 // and pushes it from a SEPARATE THREAD, concurrently with its device loop, so the push
@@ -831,8 +877,10 @@ struct StressCombo {
 
 // The sweep matrix. page = last_dim * 4 B (one row); pages = height; total = pages * page.
 // All pages stay <= the 4 KB socket FIFO. The combos span: a single-worker grid, the
-// multi-core baseline, a wide grid with more pages, and a 4x4 grid whose 2 MB tensor
-// EXCEEDS L1 (1.5 MB) — proving the chain streams a > L1 transfer through the bounded FIFO
+// multi-core baseline, an ODD page count (33 — indivisible by both the 2-lane split and
+// the 4-worker grid, so it exercises the +1 remainder in lane 0's half and the worker
+// page split), a wide grid with more pages, and a 4x4 grid whose 2 MB tensor EXCEEDS L1
+// (1.5 MB) — proving the chain streams a > L1 transfer through the bounded FIFO
 // page-by-page (the backing is DRAM, the relay's scratch CB is one page, so L1 use never
 // scales with tensor size). The big combo runs fewer iters to bound HW time.
 const std::vector<StressCombo> kStressCombos = {
@@ -841,6 +889,10 @@ const std::vector<StressCombo> kStressCombos = {
      10u,
      "1x1 grid / 256B page / 32 pages / 8KB (single worker, multi-page)"},
     {kStressWorkerCores, ttnn::Shape({1, 1, 32, 64}), 10u, "2x2 grid / 256B page / 32 pages / 8KB (baseline)"},
+    {kStressWorkerCores,
+     ttnn::Shape({1, 1, 33, 64}),
+     10u,
+     "2x2 grid / 256B page / 33 pages / 8.25KB (odd: 17/16 lane split, 9/8/8/8 worker split)"},
     {CoreRange{CoreCoord{0, 0}, CoreCoord{3, 1}},
      ttnn::Shape({1, 1, 256, 128}),
      10u,
@@ -898,10 +950,16 @@ void run_forward_chain_stress(
 
     ctx->barrier();  // [B1]
 
+    // Per-iter random increments, generated identically on every rank from the fixed
+    // seed (no cross-rank exchange): the stage-0 feeder injects seeds[i] as iter i's
+    // metadata; the end stage uses seeds[last] to predict the shifted iota + check the
+    // metadata readback.
+    const std::vector<uint32_t> seeds = make_metadata_seeds(num_iters, kStressMetadataSeed);
+
     std::thread h2d_feeder;
     if (is_stage0) {
-        h2d_feeder = std::thread(
-            [&] { run_h2d_feed_loop(*h2d_service, global_shape, num_iters, kStressMetadataBytes, kFillDelta); });
+        h2d_feeder =
+            std::thread([&] { run_h2d_feed_loop(*h2d_service, global_shape, num_iters, kStressMetadataBytes, seeds); });
     }
 
     Tensor output;
@@ -980,10 +1038,16 @@ void run_forward_chain_stress(
         h2d_feeder.join();
     }
 
-    // Every one of the world_size stages added 1 to the final iter's iota, so the end
-    // value is kFillBase + (num_iters-1) + i + world_size on every element and coord.
+    // Each of the world_size stages added the per-iter metadata increment to the final
+    // iter's iota, so the end value is kFillBase + (num_iters-1) + e + world_size*delta
+    // (delta = seeds[last]) on every element/coord. Plus an explicit metadata readback:
+    // the blob the inbound receiver multicast must equal seeds[last]. Together these
+    // catch any drop/garble/stale metadata at any hop.
     if (has_inbound && !has_outbound) {
-        expect_output_tensor_iota(output, mesh_device_, kFillBase + num_iters - 1 + static_cast<uint32_t>(world_size));
+        const uint32_t last_delta = seeds[num_iters - 1];
+        expect_output_tensor_iota(
+            output, mesh_device_, kFillBase + num_iters - 1 + static_cast<uint32_t>(world_size) * last_delta);
+        expect_worker_metadata(inbound.get(), mesh_device_, worker_cores, last_delta);
     }
 
     Synchronize(mesh_device_.get(), std::nullopt);
