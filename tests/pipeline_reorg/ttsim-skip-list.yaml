@@ -63,6 +63,8 @@ blackhole:
   # https://github.com/tenstorrent/tt-metal/issues/41286
   # https://github.com/tenstorrent/tt-metal/issues/40583
   # https://github.com/tenstorrent/tt-metal/issues/43295
+  # https://github.com/tenstorrent/tt-metal/issues/47164
+  - tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py::test_windowed_sdpa_smoke
   - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py

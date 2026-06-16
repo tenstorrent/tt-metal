@@ -69,22 +69,55 @@ void bind_moe_compute(nb::module_& mod) {
         ``intermediate_size``. Callers must match the layout the device op expects or
         use the reference packer from ``ttnn.experimental.moe_compute_utils`` (see below).
 
+        **Input tensors**
+
+        The first four tensors are the per-device outputs of the A2A dispatch op:
+
+        - ``tilize_input_tensor``: The dispatched token activations (sparse buffer) for
+          the experts that live on this device. ``hidden_size`` is inferred from its last
+          dim and ``total_tokens`` from its first two dims.
+        - ``tilize_expert_indices_tensor``: Per-token selected expert ids;
+          ``select_experts_k`` is inferred from its last dim.
+        - ``tilize_expert_scores_tensor``: Per-token routing scores (gates) applied to
+          the expert outputs.
+        - ``tilize_expert_mapping_tensor``: The expert → device mapping that tells the
+          kernel which experts are resident locally.
+
         **Key parameters**
 
         - ``intermediate_size`` (**required**, added in this version): The MoE
           intermediate (expert FFN) dimension. Together with ``hidden_size`` (inferred
           from the input tensor), this determines the per-core tile shard counts via
           ``shard_tiles()`` / ``w2_shard_tiles()`` and the number of data-parallel
-          cores (``num_data_parallel_cores``). Previously, tile distributions were
-          selected by a model-specific enum; this parameter replaces that mechanism.
+          cores (``num_data_parallel_cores``).
 
         - ``output_height_shard_dim``: Number of token-parallel (height) cores used
-          for the combine output. The width (data-parallel) core count is auto-derived
-          from ``hidden_size`` and the matmul ring size (``bh_ring_size`` on BH, 12 on WH):
-          largest divisor d of ``hidden_tiles`` with d <= 4 and ``ring_n % d == 0``.
-          Use ``auto_output_width_shard_dim(hidden_size, matmul_ring_size=...)`` from
-          ``moe_compute_utils`` (with ``effective_matmul_ring_size``) so test tensors
-          match the device op.
+          for the combine output.
+
+        - ``num_shared_experts_per_device`` (optional, default ``None`` ≡ 0): How many
+          of the per-device experts are **shared** experts (run on every token) rather
+          than routed. Shared experts occupy the **tail** slots of the experts dimension
+          Note: this parameter differs from `num_shared_experts` used by all_to_all_dispatch_metadata
+          that op counts all logical shared experts. This one counts *physical* shared experts
+          per device, eg: 2x routed shared experts each residing on half of the devices
+          would be num_shared_experts_per_device=1 and num_shared_experts=2
+
+        - ``layer_id`` (**required**): Selects which layer's weight block to read when
+          multiple layers are packed into a single DRAM-resident weight tensor.
+
+        - ``activation_type`` (optional, default ``None`` ≡ ``SILU``): The expert FFN
+          activation function — one of ``ttnn.experimental.MoEActivationFunction``
+          ``{SILU, SWIGLU, GELU}`` — applied between the W0/W1 and W2 projections.
+
+        - ``compute_only`` (default ``False``): When ``True``, run only the expert
+          matmuls and skip the A2A combine. The op then returns **5** tensors (the
+          matmul output is the final output, slot 4) instead of 6, and all combine-path
+          arguments below must be left unset (notably ``cluster_axis`` must be ``None``).
+
+        - ``bh_ring_size`` (optional, default ``None`` ≡ ``12``): Matmul ring size on
+          Blackhole; must be one of ``{8, 12, 16}``. Ignored on Wormhole, which always
+          uses 12 (one per DRAM bank). Must match the value passed to the ``prepare_*`` /
+          ``get_weight_mem_configs`` helpers that packed the weights.
 
         **Bias support (optional)**
 
@@ -102,22 +135,43 @@ void bind_moe_compute(nb::module_& mod) {
         ``has_bias`` must match the actual layout of the provided tensors; mismatch
         produces silent wrong results or UB.
 
-        **Reference packer (optional)**
+        **Combine path (Full mode only)**
+
+        These arguments configure the cross-device A2A combine that reduces expert
+        outputs. They apply only when ``compute_only=False``; with ``compute_only=True``
+        they must be left at their defaults.
+
+        - ``cluster_axis`` (**required when** ``compute_only=False``): The mesh axis along
+          which the combine reduces. Must be ``None`` when ``compute_only=True``.
+        - ``topology`` (optional, default ``None`` ≡ fabric default): Combine fabric
+          topology; only ``ttnn.Topology.Linear`` and ``ttnn.Topology.Ring`` are
+          supported. If the fabric default is Torus/Mesh, pass ``Linear`` or ``Ring``
+          explicitly (BH Loudbox callers must pass ``Linear``).
+        - ``num_links`` (optional, default ``None``): Number of fabric links for the
+          combine; auto-detected from the mesh and ``cluster_axis`` when ``None``.
+        - ``mux_core_range_set`` (optional, default ``None`` ≡ empty): Cores assigned to
+          the fabric mux on the combine path.
+        - ``output_memory_config`` (optional, default ``None`` ≡ ``DRAM_MEMORY_CONFIG``):
+          Memory config for the combine output tensor.
+        - ``optional_output_tensor`` (optional): Preallocated tensor to receive the
+          combine output instead of allocating a new one. Must be ``None`` when
+          ``compute_only=True`` (no combine output is produced).
+        - ``optional_cross_device_semaphore`` (optional): Global semaphore used to
+          synchronize the cross-device combine.
+
+        **Reference input packer **
 
         ``ttnn.experimental.moe_compute_utils`` provides reference implementations that
         produce the expected layout:
 
-        - No bias: ``prepare_w0_w1_tensor_for_moe_compute``,
-          ``prepare_w2_tensor_for_moe_compute``
-        - With bias: ``prepare_w0_w1_tensor_with_bias``,
-          ``prepare_w2_tensor_with_bias``
-        - Shard maps: ``get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size)``
-        - Memory configs: ``get_weight_mem_configs(...)``
-        - Output shard dim: ``auto_output_width_shard_dim(hidden_size, matmul_ring_size=...)``
+        - add_shared_expert_weights
+        - prepare_w0_w1_tensor_for_moe_compute/prepare_w0_w1_tensor_with_bias
+        - prepare_w2_tensor_for_moe_compute/prepare_w2_tensor_with_bias
+        - quantize_weights_via_host (slower but higer quality) or ttnn.typecast (faster)
 
         These functions are kept in sync with the test suite and can be used as
         "executable documentation" for the layout contract; they are not a required
-        public API.
+        public API but they are recommended.
 
         See also: ``ttnn.experimental.moe_compute_utils`` module docstring for full
         layout details, constants (TILES_PER_TXN, ring tables), and constraints.
@@ -146,7 +200,8 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
-        nb::arg("bh_ring_size") = nb::none());
+        nb::arg("bh_ring_size") = nb::none(),
+        nb::arg("num_shared_experts_per_device") = nb::none());
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {
@@ -240,7 +295,18 @@ void bind_moe_compute_utils(nb::module_& mod) {
         Callers own the device → shared-expert mapping and produce the
         pre-arranged ``shared_w*`` tensors.
 
-        Returns ``(output_w0, output_w1, output_w2)`` in TILE_LAYOUT, each the result of
+        The shared experts are tensor-parallel split on the intermediate dim across
+        ``1 - cluster_axis`` (via ``mesh_partition``). Each ring core's real TpNt
+        slice is front-packed into the front of that core's full-Nt shard (zeros
+        after), using the same per-core shard maps the kernel derives, and the
+        identical mapping is applied to W0/W1 (intermediate dim) and W2 (contraction
+        dim) so real columns stay paired with their real W2 rows. This keeps the
+        downstream prep + DRAM layout uniform (full-Nt per-expert stride) while
+        letting the kernel walk only the per-core prefixes as a balanced TpNt ring.
+        ``bh_ring_size`` selects the ring size for the shard-map generator (must
+        match the value used for ``prepare_*`` / ``get_weight_mem_configs``).
+
+        Returns ``(output_w0, output_w1, output_w2)``, each the result of
         concatenating routed + shared along dim 1.
         )doc",
         &ttnn::experimental::add_shared_expert_weights,
@@ -249,7 +315,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("routed_w2").noconvert(),
         nb::arg("shared_w0").noconvert(),
         nb::arg("shared_w1").noconvert(),
-        nb::arg("shared_w2").noconvert());
+        nb::arg("shared_w2").noconvert(),
+        nb::arg("cluster_axis"),
+        nb::arg("bh_ring_size") = 12);
 
     ttnn::bind_function<"prepare_w0_w1_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,

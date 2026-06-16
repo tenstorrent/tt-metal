@@ -17,6 +17,7 @@ struct KernelData {
     path @2 :Text;
     source @3 :Text;
     programId @4 :UInt64;
+    processorElfPaths @5 :List(Text);
 }
 
 enum BinaryStatus {
