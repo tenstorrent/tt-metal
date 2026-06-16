@@ -23,10 +23,10 @@ def tp4_merger_fc1_pc(device):
     return wh_tp4_merger_fc1_pc(device)
 
 
-def tp4_merger_fc2_pc(device):
+def tp4_merger_fc2_pc(device, *, seq_len: int = 2816, k: int = 6144, n: int = 384):
     from models.experimental.tt_symbiote.modules.vision_tp4_wh import wh_tp4_merger_fc2_pc
 
-    return wh_tp4_merger_fc2_pc(device)
+    return wh_tp4_merger_fc2_pc(device, seq_len=seq_len, k=k, n=n)
 
 
 def tp4_o_proj_pc(device, *, seq_len: int = 11264, ctx_dim: int = 384):

@@ -293,9 +293,33 @@ def wh_tp4_merger_fc1_pc(device):
     )
 
 
-def wh_tp4_merger_fc2_pc(device):
-    """fc2 ``2816×6144×384`` — auto-config wins on WH (see ``bh_tp4_merger_fc2_pc`` note)."""
-    _ = device
+def wh_tp4_merger_fc2_pc(device, *, seq_len: int = 2816, k: int = 6144, n: int = 384):
+    """Patch-merger fc2 (TP4 col-parallel) ``2816×6144×384``, BFP4×BFP8→BFP8 on WH 8×8.
+
+    Silicon sweep 2026-06-16 (matmul_tests/bench_merger_fc2_tp4_sweep.py, device
+    profiler): grid=(6,8) tm=False M=11 N=2 obh=11 ibw=48 sub=(1,2) ~161 µs vs the
+    auto-config's ~563 µs (−71%). K=6144 (192 tiles) is the big reduction, so a large
+    in0_block_w (48 → only 4 K-passes) is the dominant lever; ibw=8 (24 passes) is
+    ~2.5× slower and ibw=96 OOMs. N=384 (12 tiles) caps the layout at 48 cores
+    (per_core_N=2 over 6 columns; padding to 64 cores just wastes them), so the
+    48-core compute floor (~130 µs) is the limit — <100 µs is not reachable for this
+    shape.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if int(grid.x) >= 8 and int(grid.y) >= 8 and seq_len == 2816 and k == 6144 and n == 384:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(6, 8),
+            in0_block_w=48,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=11,
+            out_block_w=2,
+            per_core_M=11,
+            per_core_N=2,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
     return None
 
 

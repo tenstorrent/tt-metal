@@ -2716,7 +2716,13 @@ class TTNNDotsPatchMerger(TTNNModule):
             # fc2: BFP4 interleaved in0 -> col-sharded BFP8 L1 out (matches text embeds).
             fc2_k = int(self.tt_w2.shape[-2])
             fc2_n = int(self.tt_w2.shape[-1])
-            fc2_pc = _vision_matmul_program_config(self.device, new_r, fc2_k, fc2_n)
+            # Tuned TP4 config for the 2816x6144x384 shape (~161 us vs the generic
+            # helper's ~563 us); falls back to the generic 2D-mcast PC otherwise.
+            from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_merger_fc2_pc
+
+            fc2_pc = tp4_merger_fc2_pc(self.device, seq_len=new_r, k=fc2_k, n=fc2_n) or _vision_matmul_program_config(
+                self.device, new_r, fc2_k, fc2_n
+            )
             return ttnn.linear(
                 hidden_states,
                 self.tt_w2,
