@@ -9,7 +9,7 @@ import time
 import argparse
 import multiprocessing as mp
 from contextlib import asynccontextmanager
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -18,7 +18,7 @@ import io
 import base64
 
 from utils.logger import setup_logger
-from utils.image_utils import pil_to_base64
+from utils.image_utils import pil_to_base64, ndarray_to_b64npy, b64npy_to_ndarray
 from utils.cache_utils import validate_cache, log_cache_info
 
 from device_specs import DeviceClass, validate_model_board
@@ -164,6 +164,8 @@ class VideoRequest(BaseModel):
     width: Optional[int] = Field(default=None, ge=64, le=2048)
     guidance_scale: Optional[float] = Field(default=None, ge=1.0, le=20.0)
     guidance_scale_2: Optional[float] = Field(default=None, ge=1.0, le=20.0)
+    flow_shift: Optional[float] = Field(default=None, ge=0.0, le=30.0)
+    boundary_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     seed: Optional[int] = None
 
 
@@ -176,6 +178,47 @@ class VideoResponse(BaseModel):
     num_frames: int
     inference_time: float
     model: str
+
+
+# ---------------------------------------------------------------------------
+# Staged-op request/response models (additive — used by the ComfyUI HTTP nodes)
+#
+# Tensors cross as base64 NumPy .npy payloads: {"b64": str, "shape": [...], "dtype": str}.
+# These endpoints currently target the SDXL runner only.
+# ---------------------------------------------------------------------------
+
+
+class DenoiseRequest(BaseModel):
+    """Staged denoise (KSampler) request — returns latents, not images."""
+
+    prompt: str
+    negative_prompt: Optional[str] = ""
+    prompt_2: Optional[str] = None
+    negative_prompt_2: Optional[str] = None
+    num_inference_steps: Optional[int] = Field(default=None, ge=1, le=200)
+    guidance_scale: Optional[float] = Field(default=None, ge=1.0, le=30.0)
+    guidance_rescale: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    seed: Optional[int] = None
+    # LoRA passthrough (mirrors tt-media-server image request fields)
+    lora_path: Optional[str] = None
+    lora_scale: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+
+
+class TensorResponse(BaseModel):
+    """A single tensor payload plus timing/model metadata."""
+
+    latent: Optional[Dict[str, Any]] = None
+    image: Optional[Dict[str, Any]] = None
+    inference_time: float
+    model: str
+
+
+class VaeDecodeRequest(BaseModel):
+    latent: Dict[str, Any]  # base64 .npy payload, [B, C, H, W]
+
+
+class VaeEncodeRequest(BaseModel):
+    image: Dict[str, Any]  # base64 .npy payload, [B, H, W, C]
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +462,89 @@ async def generate_image(request: ImageRequest):
                 pass
 
     raise HTTPException(status_code=408, detail="Request timeout")
+
+
+def _submit_and_wait(request_dict: dict, timeout_seconds: Optional[float] = None) -> dict:
+    """Enqueue a task and poll result_queue for its matching result.
+
+    Shared by the staged endpoints. Mirrors the polling/error-handling pattern of
+    the image/video handlers. Returns the worker's result dict.
+    """
+    task_id = str(uuid.uuid4())
+    request_dict["op"] = request_dict.get("op", "generate")
+    try:
+        task_queue.put((task_id, request_dict), timeout=5)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Task queue is full")
+
+    deadline = time.time() + (timeout_seconds or config.inference_timeout_seconds)
+    while time.time() < deadline:
+        try:
+            result = result_queue.get(timeout=1)
+            if result.get("task_id") == task_id:
+                return result
+            else:
+                result_queue.put(result)  # belongs to another task
+        except Exception:
+            try:
+                error = error_queue.get_nowait()
+                logger.error(f"Worker error: {error}")
+                raise HTTPException(status_code=500, detail=f"Worker error: {error.get('error', error)}")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+    raise HTTPException(status_code=408, detail="Request timeout")
+
+
+def _require_staged_support():
+    """Staged ops are currently implemented for the SDXL runner only."""
+    if args.model != "sdxl":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Staged ops (denoise/vae) are only supported for --model sdxl, not '{args.model}'. "
+            f"Use /image/generations for the full pipeline.",
+        )
+
+
+@app.post("/latent/denoise", response_model=TensorResponse)
+async def latent_denoise(request: DenoiseRequest):
+    """Staged denoise (KSampler): run encode + UNet loop, return latents."""
+    _require_staged_support()
+    req = request.dict()
+    req["op"] = "denoise"
+    result = _submit_and_wait(req)
+    return TensorResponse(
+        latent=ndarray_to_b64npy(result["tensor"]),
+        inference_time=result.get("inference_time", 0.0),
+        model=model_label,
+    )
+
+
+@app.post("/vae/decode", response_model=TensorResponse)
+async def vae_decode(request: VaeDecodeRequest):
+    """Staged VAE decode: latents [B, C, H, W] -> image [B, H, W, C] in [0, 1]."""
+    _require_staged_support()
+    latents = b64npy_to_ndarray(request.latent)
+    result = _submit_and_wait({"op": "vae_decode", "latent": latents})
+    return TensorResponse(
+        image=ndarray_to_b64npy(result["tensor"]),
+        inference_time=result.get("inference_time", 0.0),
+        model=model_label,
+    )
+
+
+@app.post("/vae/encode", response_model=TensorResponse)
+async def vae_encode(request: VaeEncodeRequest):
+    """Staged VAE encode: image [B, H, W, C] in [0, 1] -> latents [B, C, H, W]."""
+    _require_staged_support()
+    images = b64npy_to_ndarray(request.image)
+    result = _submit_and_wait({"op": "vae_encode", "image": images})
+    return TensorResponse(
+        latent=ndarray_to_b64npy(result["tensor"]),
+        inference_time=result.get("inference_time", 0.0),
+        model=model_label,
+    )
 
 
 @app.get("/health")

@@ -146,15 +146,31 @@ def device_worker_process(
                     break
 
                 task_id, request = task
-                logger.info(f"Worker {worker_id} processing task {task_id}")
+                op = request.get("op", "generate") if isinstance(request, dict) else "generate"
+                logger.info(f"Worker {worker_id} processing task {task_id} (op={op})")
 
                 # Run inference and measure wall-clock time
                 start_time = time.time()
-                images = runner.run_inference([request])
-                inference_time = time.time() - start_time
 
-                # Return result to server
-                result_queue.put({"task_id": task_id, "images": images, "inference_time": inference_time})
+                if op == "generate":
+                    # Existing full-pipeline path (unchanged behavior).
+                    images = runner.run_inference([request])
+                    inference_time = time.time() - start_time
+                    result_queue.put({"task_id": task_id, "op": op, "images": images, "inference_time": inference_time})
+                elif op in ("denoise", "vae_decode", "vae_encode"):
+                    # Additive staged ops (currently SDXL only).
+                    if not hasattr(runner, op):
+                        raise RuntimeError(f"Runner {type(runner).__name__} does not support staged op '{op}'")
+                    if op == "denoise":
+                        tensor = runner.denoise(request)
+                    elif op == "vae_decode":
+                        tensor = runner.vae_decode(request["latent"])
+                    else:  # vae_encode
+                        tensor = runner.vae_encode(request["image"])
+                    inference_time = time.time() - start_time
+                    result_queue.put({"task_id": task_id, "op": op, "tensor": tensor, "inference_time": inference_time})
+                else:
+                    raise RuntimeError(f"Unknown op '{op}'")
 
                 logger.info(f"Task {task_id} completed in {inference_time:.2f}s")
 

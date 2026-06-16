@@ -4,8 +4,30 @@
 
 import base64
 from io import BytesIO
+from typing import Any, Dict
 from PIL import Image
+import numpy as np
 import torch
+
+
+def ndarray_to_b64npy(arr: np.ndarray) -> Dict[str, Any]:
+    """Serialize a NumPy array to a base64 ``.npy`` payload (JSON-friendly).
+
+    Used by the staged HTTP endpoints to ship latents / images to ComfyUI.
+    """
+    buf = BytesIO()
+    np.save(buf, np.ascontiguousarray(arr), allow_pickle=False)
+    return {
+        "b64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "shape": list(arr.shape),
+        "dtype": str(arr.dtype),
+    }
+
+
+def b64npy_to_ndarray(payload: Dict[str, Any]) -> np.ndarray:
+    """Deserialize a base64 ``.npy`` payload (as produced by ``ndarray_to_b64npy``)."""
+    raw = base64.b64decode(payload["b64"])
+    return np.load(BytesIO(raw), allow_pickle=False)
 
 
 def pil_to_base64(image: Image.Image, format: str = "JPEG") -> str:

@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 import os
+import numpy as np
 import torch
 import ttnn
 from diffusers import DiffusionPipeline
@@ -233,6 +234,113 @@ class SDXLRunner:
             pil_img = tensor_to_pil(img_tensor, self.pipeline.image_processor)
             images.append(pil_img)
         return images
+
+    # ------------------------------------------------------------------
+    # Staged operations (additive — used by the ComfyUI HTTP nodes).
+    # The full-pipeline run_inference() path above is left untouched.
+    # ------------------------------------------------------------------
+
+    def _maybe_warn_lora(self, request: dict):
+        """LoRA fields are accepted for forward-compat. On-device application is a
+        follow-up (the pipeline exposes a lora_weights_manager, but request-time
+        adapter swap is not wired here yet)."""
+        if request.get("lora_path"):
+            self.logger.warning(
+                f"lora_path={request.get('lora_path')} (scale={request.get('lora_scale')}) "
+                "received but on-device LoRA application is not yet wired; ignoring for now."
+            )
+
+    def _prompt_lists(self, request: dict):
+        """Build the (prompts, negative, prompt_2, negative_2) lists from one request,
+        mirroring run_inference()'s normalization."""
+        prompts = [request.get("prompt", "")]
+        p2 = request.get("prompt_2")
+        prompts_2 = None if p2 in (None, "") else [p2]
+        neg = request.get("negative_prompt")
+        negative_prompts = None if neg in (None, "") else [neg]
+        neg2 = request.get("negative_prompt_2")
+        negative_prompts_2 = None if neg2 in (None, "") else [neg2]
+        return prompts, negative_prompts, prompts_2, negative_prompts_2
+
+    def _apply_request_settings(self, request: dict):
+        """Apply per-request scheduler/guidance settings (subset of run_inference)."""
+        if request.get("num_inference_steps") is not None:
+            self.tt_sdxl.set_num_inference_steps(request["num_inference_steps"])
+        if request.get("guidance_scale") is not None:
+            self.tt_sdxl.set_guidance_scale(request["guidance_scale"])
+        if request.get("guidance_rescale") is not None:
+            self.tt_sdxl.set_guidance_rescale(request["guidance_rescale"])
+        self.tt_sdxl.tt_scheduler.set_begin_index(0)
+        self.tt_sdxl.compile_text_encoding()
+
+    def _latents_to_numpy(self, latents) -> np.ndarray:
+        """Convert device/host latents to standard diffusers layout [B, C, H, W] float32.
+
+        generate_images(return_latents=True) returns the raw scheduler latents (NOT
+        divided by the VAE scaling factor) in the TT layout [N, 1, H*W, C].
+        """
+        if not torch.is_tensor(latents):
+            latents = ttnn.to_torch(latents, mesh_composer=ttnn.ConcatMeshToTensor(self.ttnn_device, dim=0)).float()
+        else:
+            latents = latents.float()
+
+        c = self.tt_sdxl.num_in_channels_unet
+        h = self.tt_sdxl.height // self.pipeline.vae_scale_factor
+        w = self.tt_sdxl.width // self.pipeline.vae_scale_factor
+        n = latents.shape[0]
+        latents = latents.reshape(n, h, w, c).permute(0, 3, 1, 2).contiguous()
+        latents = latents[: self.tt_sdxl.batch_size]
+        return latents.cpu().numpy()
+
+    def denoise(self, request: dict) -> np.ndarray:
+        """Staged: encode prompts + run the (traced) UNet denoise loop on device.
+
+        Returns raw scheduler latents as numpy [B, C, H, W] (consumed by vae_decode).
+        """
+        self._maybe_warn_lora(request)
+        self._apply_request_settings(request)
+        prompts, negative_prompts, prompts_2, negative_prompts_2 = self._prompt_lists(request)
+        prompt_embeds, text_embeds = self.tt_sdxl.encode_prompts(
+            prompts, negative_prompts, prompt_2=prompts_2, negative_prompt_2=negative_prompts_2
+        )
+        seed = request.get("seed")
+        tt_latents, tt_prompts, tt_texts = self.tt_sdxl.generate_input_tensors(
+            prompt_embeds, text_embeds, start_latent_seed=seed
+        )
+        self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts[0], tt_texts[0]])
+        latents = self.tt_sdxl.generate_images(return_latents=True)
+        return self._latents_to_numpy(latents)
+
+    def vae_decode(self, latents_np: np.ndarray) -> np.ndarray:
+        """Staged: decode raw scheduler latents [B, C, H, W] -> image [B, H, W, C] in [0, 1].
+
+        POC uses the host torch VAE for a stable, additive contract; on-device VAE
+        decode of arbitrary latents is a follow-up optimization.
+        """
+        latents = torch.from_numpy(np.ascontiguousarray(latents_np)).float()
+        vae = self.pipeline.vae
+        latents = latents / vae.config.scaling_factor
+        with torch.no_grad():
+            image = vae.decode(latents.to(vae.dtype)).sample
+        image = (image / 2 + 0.5).clamp(0.0, 1.0)
+        image = image.permute(0, 2, 3, 1).contiguous().float()
+        return image.cpu().numpy()
+
+    def vae_encode(self, image_np: np.ndarray) -> np.ndarray:
+        """Staged: encode image [B, H, W, C] in [0, 1] -> raw scheduler latents [B, C, H, W].
+
+        Output matches the denoise() latent contract (scaled by the VAE scaling factor).
+        """
+        image = torch.from_numpy(np.ascontiguousarray(image_np)).float()
+        if image.ndim != 4:
+            raise ValueError(f"vae_encode expects [B, H, W, C], got shape {tuple(image.shape)}")
+        image = image.permute(0, 3, 1, 2).contiguous()
+        image = 2.0 * image - 1.0
+        vae = self.pipeline.vae
+        with torch.no_grad():
+            latents = vae.encode(image.to(vae.dtype)).latent_dist.sample()
+        latents = latents * vae.config.scaling_factor
+        return latents.float().cpu().numpy()
 
     def close_device(self):
         """Close device and cleanup"""

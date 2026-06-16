@@ -101,6 +101,10 @@ class WanRunner:
         # self._num_frames/_height/_width and does not accept per-request overrides.
         guidance_scale = request.get("guidance_scale") or self.config.guidance_scale
         guidance_scale_2 = request.get("guidance_scale_2") or self.config.guidance_scale_2
+        # flow_shift / boundary_ratio are host-side schedule/expert-selection knobs; pass
+        # through only when supplied so the pipeline keeps its construction-time defaults.
+        flow_shift = request.get("flow_shift")
+        boundary_ratio = request.get("boundary_ratio")
         seed = request.get("seed")
 
         self.logger.info(
@@ -119,6 +123,10 @@ class WanRunner:
         )
         if negative_prompt:
             kwargs["negative_prompts"] = [negative_prompt]
+        if flow_shift is not None:
+            kwargs["flow_shift"] = float(flow_shift)
+        if boundary_ratio is not None:
+            kwargs["boundary_ratio"] = float(boundary_ratio)
 
         output = self.pipeline(**kwargs)
         # WanPipelineOutput.frames: numpy uint8 of shape (B, T, H, W, C). Strip batch.
