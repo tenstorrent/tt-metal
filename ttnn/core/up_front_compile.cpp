@@ -74,7 +74,7 @@ std::unordered_map<std::uint64_t, tt::tt_metal::distributed::MeshWorkload> Progr
     return out;
 }
 
-void begin_collect(bool clear, bool real_alloc) {
+void begin_collect(bool clear) {
     // Nesting under an existing capture would skip our blocking hook (begin_capture only
     // installs one when none is present), leaving the collector active but dispatch unblocked.
     TT_FATAL(
@@ -83,18 +83,15 @@ void begin_collect(bool clear, bool real_alloc) {
     if (clear) {
         ProgramCollector::instance().clear();
     }
-    // NO_DISPATCH: buffer allocations are mocked (addr 0) and nothing dispatches,
-    // so the collect pass uses no real device memory. The funnel's stash + early
-    // return (device_operation.hpp) handles program collection.
+    // Install the NO_DISPATCH hook (skips program cache + enqueue), then downgrade it to block
+    // dispatch ONLY — the allocator hands out real addresses so address-baked kernels build the
+    // same program the real run will. The funnel's stash + early return (device_operation.hpp)
+    // handles program collection.
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    auto* ph = dynamic_cast<ttnn::graph::ProcessorHooks*>(tt::tt_metal::GraphTracker::instance().get_hook().get());
+    TT_ASSERT(ph != nullptr, "up_front_compile: collect requires the NO_DISPATCH ProcessorHooks to be active");
+    ph->set_capture_block(ttnn::graph::CaptureBlock::DispatchOnly);
     ProgramCollector::set_active(true);
-    if (real_alloc) {
-        // Block dispatch only, letting the allocator hand out live addresses: this better
-        // captures ops that rely on live allocator state, ensuring higher JIT hit rates.
-        auto* ph = dynamic_cast<ttnn::graph::ProcessorHooks*>(tt::tt_metal::GraphTracker::instance().get_hook().get());
-        TT_ASSERT(ph != nullptr, "up_front_compile: real_alloc requires the NO_DISPATCH ProcessorHooks to be active");
-        ph->set_capture_block(ttnn::graph::CaptureBlock::DispatchOnly);
-    }
 }
 
 void end_collect() {

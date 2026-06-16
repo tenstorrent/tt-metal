@@ -42,10 +42,11 @@ struct CompileStats {
 // Run on a COLD program cache with the cache ENABLED, so each op is a miss that
 // reaches the collector with a distinct hash.
 //
-// Mechanism: NO_DISPATCH graph capture mocks buffer allocations (addr 0) and blocks
-// dispatch; the device-op funnel moves each built-but-uncompiled MeshWorkload into
-// the collector (keyed by hash, skipping cache + enqueue), then parallel_compile
-// JIT-compiles the distinct set. Compilation is address-independent, so addr-0 is fine.
+// Mechanism: a graph-capture pass blocks dispatch while letting the allocator hand out
+// REAL buffer addresses (nothing executes); the device-op funnel moves each built-but-
+// uncompiled MeshWorkload into the collector (keyed by hash, skipping cache + enqueue),
+// then parallel_compile JIT-compiles the distinct set. Real addresses mean kernels that
+// bake or branch on a buffer address build the same program the real run will, so they warm.
 // ---------------------------------------------------------------------------
 class ProgramCollector {
 public:
@@ -81,8 +82,8 @@ private:
     std::uint64_t synthetic_key_ = 0;  // for hash==0 (cache-disabled) fallback
 };
 
-// Begin a collect pass: enables NO_DISPATCH graph capture (buffers mocked,
-// nothing dispatched) and marks the collector active on this thread.
+// Begin a collect pass: blocks dispatch (nothing executes) while the allocator hands out
+// REAL buffer addresses, and marks the collector active on this thread.
 //
 // clear=true (default) drops any previously collected programs first — the
 // model-forward usage (one begin/end around a single run). clear=false
@@ -91,17 +92,13 @@ private:
 // from every test pile into one deduped set, then a single parallel_compile at
 // session end.
 //
-// real_alloc=false (default): NO_DISPATCH mocks every buffer at address 0 → zero device
-// memory, scales to any model, but kernels that bake a buffer address into compile-time
-// args (e.g. pool reader_indices) or branch on addresses (e.g. move forward/backward)
-// collect the addr-0 variant and MISS on the real run. real_alloc=true: let the allocator
-// assign REAL addresses during collect (dispatch still blocked) so those build the same
-// program the real run will → they warm. The L1 allocator is deterministic across processes,
-// so a fresh-device collect and a fresh-device real run land buffers at identical addresses.
-// COST: real device memory (~the real run's peak) + the alloc/free sequence must match the
-// real run (it does if collect replays the same forward). Use real_alloc for models that fit;
-// addr-0 for the giant ones.
-void begin_collect(bool clear = true, bool real_alloc = false);
+// Real addresses mean address-baked / address-branched kernels (e.g. pool reader_indices,
+// move forward/backward) build the same program the real run will, so they warm too. The
+// allocator is deterministic across processes, so a fresh-device collect and a fresh-device
+// real run land buffers at identical addresses. COST: real device memory (~the real run's
+// peak) and the alloc/free sequence must match the real run (it does if collect replays the
+// same forward). A workload that would OOM the real run OOMs here too; that body is skipped.
+void begin_collect(bool clear = true);
 
 // End the collect pass: stops NO_DISPATCH capture and deactivates the collector.
 // Collected programs remain in ProgramCollector::instance() until parallel_compile

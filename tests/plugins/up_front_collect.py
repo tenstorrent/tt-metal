@@ -3,14 +3,14 @@
 
 """Up-front precompile collector for any ttnn pytest suite.
 
-A call-phase hookwrapper runs every test body under NO_DISPATCH, stashing and deduping
-its ops via the C++ collector (``ttnn.graph.up_front_*``), then JIT-compiles the distinct
-set once, in parallel, at session end — warming the on-disk cache (``TT_METAL_CACHE``).
-A hookwrapper (vs re-invoking tests) reuses each test's own fixtures, so any suite works.
-``begin_collect(clear=False)`` wraps only the call phase (device setup stays real) and
-accumulates across tests.
+A call-phase hookwrapper runs every test body with dispatch blocked but buffers allocated
+at REAL addresses (nothing executes), stashing and deduping its ops via the C++ collector
+(``ttnn.graph.up_front_*``), then JIT-compiles the distinct set once, in parallel, at session
+end — warming the on-disk cache (``TT_METAL_CACHE``). A hookwrapper (vs re-invoking tests)
+reuses each test's own fixtures, so any suite works. ``begin_collect(clear=False)`` wraps only
+the call phase (device setup stays real) and accumulates across tests.
 
-TWO PASSES: under NO_DISPATCH each body runs neutered (addr-0 buffers), so its asserts
+TWO PASSES: with dispatch blocked the body's outputs are never computed, so its asserts
 fail and are swallowed — pass 1 only collects + compiles. Re-run for the real, warm results:
 
     # pass 1 — collect + parallel-compile (warms the cache). Loading the plugin IS the opt-in.
@@ -22,9 +22,9 @@ fail and are swallowed — pass 1 only collects + compiles. Re-run for the real,
 Knobs:  UP_FRONT_COLLECT_WORKERS=N (0 => hardware_concurrency) ·
         UP_FRONT_COLLECT_DEVICE_ID=N (device for the session-end compile, default 0)
 
-Cold-compiled in pass 2 instead (NO_DISPATCH can't capture them faithfully): tests driving
-trace/graph capture (skipped); ops after a mid-body tensor readback; ops whose program is
-chosen from live allocator state (they see empty L1 and may collect a different variant).
+Cold-compiled in pass 2 instead (collect can't capture them faithfully): tests driving
+trace/graph capture (skipped); ops after a mid-body tensor readback. (Real allocation means
+ops that bake/branch on a buffer address now collect the same program the real run builds.)
 
 Every collect-time substitution is one of two reversible primitives (_AttrPatch /
 _RebindPatch), grouped into declarative sets and entered under one ExitStack — see
@@ -45,9 +45,6 @@ import pytest
 # own -p no:up_front_collect.
 _WORKERS = int(os.environ.get("UP_FRONT_COLLECT_WORKERS", "0"))  # 0 => hardware_concurrency
 _DEVICE_ID = int(os.environ.get("UP_FRONT_COLLECT_DEVICE_ID", "0"))
-# Collect with REAL buffer addresses (dispatch still blocked) instead of addr-0 mocking, so
-# address-baked kernels (pool reader, move) warm. Costs ~the real run's peak memory; use when it fits.
-_REAL_ALLOC = os.environ.get("UP_FRONT_REAL_ALLOC") == "1"
 # Fast collect (default): swap host reference work for shape-correct stand-ins (randn/conv/matmul/
 # layer_norm -> zeros, comp_pcc -> no-op) and allocate ttnn.from_torch shape-only. Values are
 # irrelevant under NO_DISPATCH and programs depend only on op shapes/config, so collection is
@@ -391,7 +388,7 @@ def pytest_runtest_call(item):
     n_before = ttnn.graph.up_front_num_collected() if _log else 0
     swallowed = False
     exc_info = ""
-    ttnn.graph.up_front_begin_collect(clear=False, real_alloc=_REAL_ALLOC)  # accumulate; wraps ONLY the body
+    ttnn.graph.up_front_begin_collect(clear=False)  # accumulate; wraps ONLY the body
     try:
         with _collect_window(_STATS):
             return (yield)  # ops stash into the collector as the body runs

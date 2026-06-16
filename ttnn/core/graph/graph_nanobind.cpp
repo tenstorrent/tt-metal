@@ -368,16 +368,15 @@ void py_graph_module(nb::module_& m) {
         "up_front_begin_collect",
         &ttnn::up_front_compile::begin_collect,
         nb::arg("clear") = true,
-        nb::arg("real_alloc") = false,
-        R"doc(up_front_begin_collect(clear=True, real_alloc=False) -> None
+        R"doc(up_front_begin_collect(clear=True) -> None
 
         Begin a precompile "collect" pass: run a model forward and every op stashes its
-        built-but-uncompiled program into the collector. Pair with up_front_end_collect().
+        built-but-uncompiled program into the collector. Dispatch is blocked but buffers get
+        real addresses, so address-baked kernels warm too. Pair with up_front_end_collect().
         Run on a COLD program cache (cache enabled). See ttnn/up_front_compile.hpp.
 
         Args:
             clear: drop previously collected programs first (False accumulates across passes).
-            real_alloc: assign real buffer addresses during collect (default mocks at addr 0).
         )doc");
 
     m.def(
