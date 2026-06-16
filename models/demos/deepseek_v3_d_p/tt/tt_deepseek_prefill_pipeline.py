@@ -167,7 +167,7 @@ class TtDeepSeekPrefillPipeline:
         self.model.forward(
             tt_tokens,
             self.kvpe_cache,
-            number_of_non_padded_tokens=chunk,
+            actual_isl=chunk,
             actual_start=0,
             actual_end=chunk,
             cache_user_id=0,
@@ -219,7 +219,7 @@ class TtDeepSeekPrefillPipeline:
         self.model.forward(
             input_tensor,
             self.kvpe_cache,
-            number_of_non_padded_tokens=actual_end - actual_start,
+            actual_isl=actual_end - actual_start,
             on_layer_complete=self._on_layer_complete,
             actual_start=actual_start,
             actual_end=actual_end,

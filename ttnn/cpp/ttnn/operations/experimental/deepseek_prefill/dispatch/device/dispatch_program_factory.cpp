@@ -587,6 +587,30 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     tt::tt_metal::KernelHandle writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kd));
 
+    // ==================== Padding-config scratch CBs (untilize cores) ====================
+    // The untilize reader and writer run on the SAME untilize core (separate RISCs), so each needs
+    // its own scratch CB index for the [local_real_tokens, pad_side] row. c_16/c_17 are free on
+    // untilize cores (the c_16-c_18 writer set lives only on sender cores).
+    const bool has_padding_config = tensor_args.padding_config.has_value();
+    constexpr auto cb_padding_config_reader = tt::CBIndex::c_16;
+    constexpr auto cb_padding_config_writer = tt::CBIndex::c_17;
+    if (has_padding_config) {
+        detail::create_tensor_cb(
+            desc,
+            untilize_core_grid,
+            tensor_args.padding_config.value(),
+            /*buffering_factor=*/1,
+            cb_padding_config_reader,
+            "padding_config_reader");
+        detail::create_tensor_cb(
+            desc,
+            untilize_core_grid,
+            tensor_args.padding_config.value(),
+            /*buffering_factor=*/1,
+            cb_padding_config_writer,
+            "padding_config_writer");
+    }
+
     // ==================== Untilize core kernels ====================
     // Reader (RISCV_1): routing decisions, DRAM reads for input/indices/weights/offsets/dispatch_table,
     //                   publishes per-batch route plan to writer via c_14.
@@ -644,6 +668,12 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(untilize_reader_compile_args);
+        if (has_padding_config) {
+            // padding_config accessor + scratch CB id appended LAST so the existing index layout is unchanged.
+            tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer())
+                .append_to(untilize_reader_compile_args);
+            untilize_reader_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_reader));
+        }
 
         // ===== Writer compile args =====
         std::vector<uint32_t> untilize_writer_compile_args = {
@@ -664,8 +694,18 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(untilize_writer_compile_args);
         tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(untilize_writer_compile_args);
+        if (has_padding_config) {
+            tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer())
+                .append_to(untilize_writer_compile_args);
+            untilize_writer_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_writer));
+        }
 
         auto untilize_kernel_defines = fabric_defines;  // carries AXIS define if set
+        auto untilize_writer_defines = fabric_defines;
+        if (has_padding_config) {
+            untilize_kernel_defines["HAS_PADDING_CONFIG"] = "1";
+            untilize_writer_defines["HAS_PADDING_CONFIG"] = "1";
+        }
 
         CoreRangeSet single_untilize_core({CoreRange(all_untilize_cores[j])});
         tt::tt_metal::KernelDescriptor untilize_reader_kd;
@@ -690,6 +730,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         untilize_writer_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         untilize_writer_kd.core_ranges = single_untilize_core;
         untilize_writer_kd.compile_time_args = std::move(untilize_writer_compile_args);
+        untilize_writer_kd.defines = {untilize_writer_defines.begin(), untilize_writer_defines.end()};
         untilize_writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
@@ -886,6 +927,10 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             untilize_reader_rt_args.push_back((uint32_t)next_noc.y);
             untilize_reader_rt_args.push_back(turn_semaphore_id);
         }
+        // padding_config base address appended last (as Buffer* so it refreshes on cache hit).
+        if (has_padding_config) {
+            untilize_reader_rt_args.push_back(tensor_args.padding_config.value().buffer());
+        }
         desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
             all_untilize_cores[j], untilize_reader_rt_args);
 
@@ -902,6 +947,10 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         untilize_writer_rt_args.push_back(space_avail_semaphore_id);
         untilize_writer_rt_args.push_back(output_tensor.buffer());
         untilize_writer_rt_args.push_back(metadata_tensor.buffer());
+        // padding_config base address appended last (as Buffer* so it refreshes on cache hit).
+        if (has_padding_config) {
+            untilize_writer_rt_args.push_back(tensor_args.padding_config.value().buffer());
+        }
         desc.kernels[writer_untilize_kernel_ids[j]].emplace_runtime_args(
             all_untilize_cores[j], untilize_writer_rt_args);
     }
@@ -1214,6 +1263,26 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
 
+    // Padding-config support: only the reader reads the config, so it gets a dedicated copy of the
+    // compile args (config TensorAccessorArgs + scratch CB id appended last) and the
+    // HAS_PADDING_CONFIG define. The writer keeps the shared compile args.
+    const bool has_padding_config = tensor_args.padding_config.has_value();
+    constexpr auto cb_padding_config_sender = tt::CBIndex::c_14;
+    auto reader_compile_args = compile_time_args;
+    auto reader_defines = fabric_defines;
+    if (has_padding_config) {
+        detail::create_tensor_cb(
+            desc,
+            sender_core_grid,
+            tensor_args.padding_config.value(),
+            /*buffering_factor=*/1,
+            cb_padding_config_sender,
+            "padding_config");
+        tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer()).append_to(reader_compile_args);
+        reader_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_sender));
+        reader_defines["HAS_PADDING_CONFIG"] = "1";
+    }
+
     // Single reader kernel shared across all senders.  (Legacy code stored one
     // handle per sender for uniform override_runtime_arguments iteration; the
     // descriptor framework uses BufferBindings on cache hit so the duplication
@@ -1224,8 +1293,8 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         "reader_dispatch.cpp";
     reader_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kd.core_ranges = sender_core_grid;
-    reader_kd.compile_time_args = compile_time_args;
-    reader_kd.defines = {fabric_defines.begin(), fabric_defines.end()};
+    reader_kd.compile_time_args = reader_compile_args;
+    reader_kd.defines = {reader_defines.begin(), reader_defines.end()};
     reader_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
@@ -1267,7 +1336,10 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         num_cores,                    // num_dispatch_cores
     };
 
-    auto promote_rt_args_with_buffer_bindings = [&](const std::vector<uint32_t>& raw_args) {
+    // Reader-only: padding_config base address sits at fixed index 13 and is promoted to a Buffer*
+    // so its BufferBinding refreshes on cache hit. The writer's index 13 is its exit_semaphore
+    // (stable GlobalSemaphore address) and must stay a plain uint32_t.
+    auto promote_rt_args_with_buffer_bindings = [&](const std::vector<uint32_t>& raw_args, bool is_reader) {
         tt::tt_metal::KernelDescriptor::RTArgList args;
         args.reserve(raw_args.size());
         args.push_back(input_tensor.buffer());
@@ -1278,7 +1350,11 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         args.push_back(metadata_tensor.buffer());
         args.push_back(dispatch_table_tensor.buffer());
         for (size_t i = 7; i < raw_args.size(); ++i) {
-            args.push_back(raw_args[i]);
+            if (is_reader && has_padding_config && i == 13) {
+                args.push_back(tensor_args.padding_config.value().buffer());
+            } else {
+                args.push_back(raw_args[i]);
+            }
         }
         return args;
     };
@@ -1290,6 +1366,12 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
 
         reader_runtime_args[11] = core_idx;
         writer_runtime_args[11] = core_idx;
+
+        // Reader-only: padding_config address at index 13 (right after the 13 base args). The
+        // promote helper rebinds it to a Buffer* so it refreshes on cache hit.
+        if (has_padding_config) {
+            reader_runtime_args.push_back((uint32_t)tensor_args.padding_config.value().buffer()->address());
+        }
 
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
         // init/exit reuse race; mirrors the combine fix).
@@ -1338,9 +1420,9 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         }
 
         desc.kernels[reader_kernel_id].emplace_runtime_args(
-            sender_core, promote_rt_args_with_buffer_bindings(reader_runtime_args));
+            sender_core, promote_rt_args_with_buffer_bindings(reader_runtime_args, /*is_reader=*/true));
         desc.kernels[writer_kernel_id].emplace_runtime_args(
-            sender_core, promote_rt_args_with_buffer_bindings(writer_runtime_args));
+            sender_core, promote_rt_args_with_buffer_bindings(writer_runtime_args, /*is_reader=*/false));
         core_idx++;
     }
 

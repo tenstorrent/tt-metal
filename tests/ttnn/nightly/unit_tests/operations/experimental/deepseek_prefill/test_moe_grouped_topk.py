@@ -60,6 +60,7 @@ ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e"]
     ids=ROUTING_CONFIG_IDS,
 )
 @pytest.mark.parametrize("num_batches,batch_size,seq_len", TEST_PARAMS, ids=TEST_PARAM_IDS)
+@pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 def test_moe_grouped_topk(
     device,
     num_batches,
@@ -71,11 +72,17 @@ def test_moe_grouped_topk(
     topk_groups,
     n_activated_experts,
     route_scale,
+    padded_percent,
 ):
     """Verify moe_grouped_topk matches the PyTorch golden reference using recall and PCC.
 
     Covers both DeepSeek grouped routing and the single-group (n_groups == 1) path that
     collapses to a plain top-k over a variable expert count (e.g. Kimi's 384 experts).
+
+    ``padded_percent`` right-pads the token sequence via a padding_config: padded rows must be
+    routed to the sentinel expert id (== total_experts) while real rows still match the golden.
+    Degenerate splits (0 or all padded, e.g. 50% of a single token) fall back to the no-padding
+    path so the recall/PCC checks stay meaningful.
     """
     torch.manual_seed(42)
 
@@ -98,6 +105,21 @@ def test_moe_grouped_topk(
         scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
     )
 
+    # Right-padding: real tokens occupy the leading rows, padding the trailing rows.
+    total_tokens = num_batches * batch_size * seq_len
+    num_real = total_tokens - int(total_tokens * padded_percent / 100)
+    apply_padding = 0 < num_real < total_tokens
+    padding_config = (
+        ttnn.from_torch(
+            torch.tensor([[num_real, 0]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        if apply_padding
+        else None
+    )
+
     ttnn_scores_in = ttnn.from_torch(scores, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_bias_in = ttnn.from_torch(bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -110,6 +132,7 @@ def test_moe_grouped_topk(
         n_activated_experts=n_activated_experts,
         route_scale=route_scale,
         epsilon=epsilon,
+        padding_config=padding_config,
     )
 
     tt_weights_torch = ttnn.to_torch(ttnn_weights_out)
@@ -122,6 +145,18 @@ def test_moe_grouped_topk(
     # Flatten to 2D [num_tokens, n_activated_experts] for recall calculation
     tt_indices_2d = tt_indices_torch.reshape(-1, n_activated_experts)
     ref_indices_2d = ref_indices.reshape(-1, n_activated_experts)
+    tt_weights_2d = tt_weights_torch.reshape(-1, n_activated_experts)
+    ref_weights_2d = ref_weights.reshape(-1, n_activated_experts)
+
+    # Padded rows must be routed to the out-of-range sentinel expert; validate only real rows.
+    if apply_padding:
+        pad_rows = tt_indices_2d[num_real:]
+        assert torch.all(pad_rows == total_experts), (
+            f"Padded rows not all sentinel ({total_experts}); got unique values "
+            f"{torch.unique(pad_rows).tolist()}"
+        )
+        tt_indices_2d, ref_indices_2d = tt_indices_2d[:num_real], ref_indices_2d[:num_real]
+        tt_weights_2d, ref_weights_2d = tt_weights_2d[:num_real], ref_weights_2d[:num_real]
 
     recall = calculate_average_recall(tt_indices_2d, ref_indices_2d)
     recall_threshold = 0.9
@@ -129,22 +164,22 @@ def test_moe_grouped_topk(
     status = "PASS" if recall_passed else "FAIL"
     logger.info(
         f"[{status}] Recall = {recall:.4f} (threshold: {recall_threshold}) "
-        f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}"
+        f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}, padded_percent={padded_percent}"
     )
 
     pcc_threshold = 0.97
-    weights_passed, weights_pcc = comp_pcc(tt_weights_torch, ref_weights, pcc_threshold)
+    weights_passed, weights_pcc = comp_pcc(tt_weights_2d, ref_weights_2d, pcc_threshold)
     status = "PASS" if weights_passed else "FAIL"
     logger.info(
         f"[{status}] Weights PCC = {weights_pcc:.4f} (threshold: {pcc_threshold}) "
-        f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}"
+        f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}, padded_percent={padded_percent}"
     )
 
     assert recall_passed, (
         f"Recall is {recall:.4f}, expected >= {recall_threshold} "
-        f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}"
+        f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}, padded_percent={padded_percent}"
     )
     assert weights_passed, (
         f"Weights PCC is {weights_pcc:.4f}, expected >= {pcc_threshold} "
-        f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}"
+        f"for num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}, padded_percent={padded_percent}"
     )
