@@ -21,7 +21,7 @@ enum class UnaryOpType {
     EXP,
     RECIP,
     GELU,
-    GELU_TANH_F32,
+    GELU_TANH,
     RELU,
     SQRT,
     SIGMOID,

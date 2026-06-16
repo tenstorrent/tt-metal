@@ -43,7 +43,7 @@ class Linear(Module):
             # repro the audio-decoder "mesh of 4 voices" artifact that bit a prior
             # hand-rolled ttnn.pow(x, 3.0) decomposition.
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU_TANH_F32, 0.0)
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU_TANH, 0.0)
         self.mesh_device = mesh_device
 
         """
@@ -147,7 +147,7 @@ class ColParallelLinear(Module):
             # repro the audio-decoder "mesh of 4 voices" artifact that bit a prior
             # hand-rolled ttnn.pow(x, 3.0) decomposition.
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU_TANH_F32, 0.0)
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU_TANH, 0.0)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis

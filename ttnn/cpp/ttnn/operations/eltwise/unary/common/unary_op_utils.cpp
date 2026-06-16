@@ -18,7 +18,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
         case UnaryOpType::GELU:
-        case UnaryOpType::GELU_TANH_F32: return "SFPU_OP_GELU_INCLUDE";
+        case UnaryOpType::GELU_TANH: return "SFPU_OP_GELU_INCLUDE";
         case UnaryOpType::RECIP: return "SFPU_OP_RECIP_INCLUDE";
         case UnaryOpType::SQRT: return "SFPU_OP_SQRT_INCLUDE";
         case UnaryOpType::RSQRT: return "SFPU_OP_RSQRT_INCLUDE";
@@ -619,7 +619,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init<false>();", fmt::format("recip_tile<false>({});", idst)};
         case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
-        case UnaryOpType::GELU_TANH_F32:
+        case UnaryOpType::GELU_TANH:
             return {"gelu_tanh_f32_tile_init();", fmt::format("gelu_tanh_f32_tile({});", idst)};
         case UnaryOpType::LOG: return {"log_tile_init();", fmt::format("log_tile({});", idst)};
         case UnaryOpType::LOG1P: return {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)};
@@ -845,7 +845,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
     }
     if (name == "gelu_tanh") {
-        return UnaryWithParam(UnaryOpType::GELU_TANH_F32);
+        return UnaryWithParam(UnaryOpType::GELU_TANH);
     }
     if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
