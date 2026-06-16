@@ -20,10 +20,13 @@ using namespace ckernel;
 
 // local function declarations
 template <PoolType type, MathFidelity math_fidelity>
-inline void reduce_configure_addrmod();
+inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape);
 
 template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop();
+
+template <MathFidelity math_fidelity>
+inline void reduce_row_sum_configure_mop(const ckernel::TensorShape& tensor_shape);
 
 /**
  * @brief Transpose the pooled row result through SrcB so a row-reduction lands as a column in the destination register.
@@ -125,42 +128,58 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
     TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
 }
 
-template <MathFidelity math_fidelity, std::uint32_t dst_base = 0>
-inline void reduce_row_sum_mvmul_face()
+/**
+ * @brief Record the reduce-row SUM/AVG MVMUL sequence into the replay buffer and program the MOP.
+ *
+ * Records one face row (num_faces_c faces) of MVMULs. The MOP outer loop iterates over face rows.
+ * Dest advances between face rows via ADDR_MOD_6's dest.cr mechanism.
+ *
+ * @tparam math_fidelity: Controls the number of fidelity phases per MVMUL half.
+ * @param tensor_shape: Tile shape determining face count and dest row stride.
+ */
+template <MathFidelity math_fidelity>
+inline void reduce_row_sum_configure_mop(const ckernel::TensorShape& tensor_shape)
 {
-    if constexpr (math_fidelity == MathFidelity::HiFi4)
-    {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-    }
-    else if constexpr (math_fidelity == MathFidelity::HiFi3)
-    {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-    }
-    else if constexpr (math_fidelity == MathFidelity::HiFi2)
-    {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-    }
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, dst_base);
+    constexpr std::uint32_t fid_count  = (math_fidelity == MathFidelity::LoFi) ? 1 : to_underlying(math_fidelity);
+    const std::uint32_t replay_buf_len = tensor_shape.num_faces_c_dim * 2 * fid_count;
 
-    if constexpr (math_fidelity == MathFidelity::HiFi4)
-    {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-    }
-    else if constexpr (math_fidelity == MathFidelity::HiFi3)
-    {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-    }
-    else if constexpr (math_fidelity == MathFidelity::HiFi2)
-    {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
-    }
-    TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_5, dst_base);
+    load_replay_buf(
+        ckernel::math::replay_buf_offset,
+        replay_buf_len,
+        [&tensor_shape]
+        {
+            for (std::uint32_t face = 0; face < tensor_shape.num_faces_c_dim; face++)
+            {
+                // Top half (dst=0): fidelity phases then srcb advance
+                for (std::uint32_t p = 0; p < fid_count - 1; p++)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+                }
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+
+                // Bottom half (dst=8): fidelity phases then srcb reset
+                for (std::uint32_t p = 0; p < fid_count - 1; p++)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 8);
+                }
+                // Non-last face: CLR_AB + reset srcb (ADDR_MOD_5)
+                // Last face: no CLR_AB, advance dest to next face row (ADDR_MOD_6)
+                // Split to satisfy TTI_MVMUL "n" (immediate) asm constraint.
+                if (face == static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_6, 8);
+                }
+                else
+                {
+                    TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_5, 8);
+                }
+            }
+        });
+
+    const std::uint32_t replay_op = lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len);
+    ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);
+    tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B));
+    tmp.program();
 }
 
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
@@ -195,31 +214,8 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
         else
         {
-            if (tensor_shape.num_faces_c_dim > 1)
-            {
-                reduce_row_sum_mvmul_face<math_fidelity, 0>();
-            }
-            reduce_row_sum_mvmul_face<math_fidelity, 0>();
-
-            if (tensor_shape.num_faces_r_dim > 1)
-            {
-                if (is_narrow_tile)
-                {
-                    if (tensor_shape.num_faces_c_dim > 1)
-                    {
-                        reduce_row_sum_mvmul_face<math_fidelity, 16>();
-                    }
-                    reduce_row_sum_mvmul_face<math_fidelity, 16>();
-                }
-                else
-                {
-                    if (tensor_shape.num_faces_c_dim > 1)
-                    {
-                        reduce_row_sum_mvmul_face<math_fidelity, 32>();
-                    }
-                    reduce_row_sum_mvmul_face<math_fidelity, 32>();
-                }
-            }
+            ckernel_template::run();
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
@@ -288,7 +284,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 }
 
 template <PoolType type, MathFidelity math_fidelity>
-inline void reduce_configure_addrmod()
+inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 {
     constexpr bool high_fidelity               = is_high_fidelity(math_fidelity);
     constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
@@ -330,17 +326,37 @@ inline void reduce_configure_addrmod()
     {
         addr_mod_t {
             .srcb     = {.incr = 8},
-            .dest     = {.incr = 8},
             .fidelity = {.clr = 1},
         }
             .set(ADDR_MOD_4);
 
         addr_mod_t {
             .srcb     = {.cr = 1},
-            .dest     = {.incr = 0x3FF & -8},
             .fidelity = {.clr = 1},
         }
             .set(ADDR_MOD_5);
+
+        // Advance dest counter to the next face row after processing a complete row.
+        // row_stride = num_faces_c_dim * 16 (32 for full-width, 16 for narrow).
+        // Branch to satisfy TTI_SETC16 "n" (immediate) asm constraint in addr_mod_t::set().
+        if (tensor_shape.num_faces_c_dim == 2)
+        {
+            addr_mod_t {
+                .srcb     = {.cr = 1},
+                .dest     = {.incr = 32},
+                .fidelity = {.clr = 1},
+            }
+                .set(ADDR_MOD_6);
+        }
+        else
+        {
+            addr_mod_t {
+                .srcb     = {.cr = 1},
+                .dest     = {.incr = 16},
+                .fidelity = {.clr = 1},
+            }
+                .set(ADDR_MOD_6);
+        }
     }
 }
 
@@ -381,12 +397,17 @@ inline void reduce_configure_mop()
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
-inline void _llk_math_reduce_init_()
+inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
-    reduce_configure_addrmod<type, math_fidelity>();
-    if constexpr (high_fidelity)
+    reduce_configure_addrmod<type, math_fidelity>(tensor_shape);
+
+    if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
+    {
+        reduce_row_sum_configure_mop<math_fidelity>(tensor_shape);
+    }
+    else if constexpr (high_fidelity)
     {
         reduce_configure_mop<dim, math_fidelity>();
     }
