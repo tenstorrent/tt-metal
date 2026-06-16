@@ -41,6 +41,29 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
+// --- Outlined out-of-order pack (code-size) ---
+// pack_tile<true>() (absolute-address pack) inlines the full
+// llk_pack -> program_packer_destination GPR->FLOP address-programming sequence at every
+// call site. That inlined sequence is the single largest contributor to the PACK-thread
+// (TRISC2) text and overflows the TENSIX kernel-config buffer under watcher on Wormhole.
+// Outlining to one noinline copy trades a jal/ret per pack for a large code-size reduction.
+//
+// The jal/ret is NOT free on the hot inner loop. Empirically (wan2_2 BH perf check), the
+// softmax-exp pack in sub_exp_block_bcast_cols is the only perf-critical site: outlining it
+// alone caused the full regression (~70% -> ~66% math util), and re-inlining only it fully
+// recovers perf. So we keep that one site inlined via pack_tile<true>() directly and outline
+// everything else (output/SV drain, salad correction/sum, mask L1-accumulate) through this
+// wrapper. That keeps almost all of the Wormhole code-size win (only the exp pack's ~few
+// static copies return) with no measurable BH perf cost. On MATH/UNPACK threads pack_tile is
+// a no-op, so the outlined wrapper collapses to an empty inline function (zero overhead).
+#ifdef TRISC_PACK
+__attribute__((noinline, noclone)) static void sdpa_pack_tile_ooo(uint32_t dst, uint32_t cb, uint32_t idx) {
+    llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(dst, cb, idx);
+}
+#else
+ALWI void sdpa_pack_tile_ooo(uint32_t, uint32_t, uint32_t) {}
+#endif
+
 static __attribute__((noinline, noclone)) void sdpa_cb_push_back_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
     cb_push_back(cb_id, num_tiles);
 }
@@ -254,11 +277,11 @@ ALWI void pack_contiguous_rows_nocfg(
     for (uint32_t row = 0; row < row_count; ++row) {
         uint32_t out_tile_index = (row_base + row) * row_stride + col_base;
         if (use_blocked_pack_width) {
-            pack_tile<true>(dst_index, out_cb, out_tile_index);
+            sdpa_pack_tile_ooo(dst_index, out_cb, out_tile_index);
             dst_index += pack_width;
         } else {
             for (uint32_t col = 0; col < pack_width; ++col) {
-                pack_tile<true>(dst_index++, out_cb, out_tile_index + col);
+                sdpa_pack_tile_ooo(dst_index++, out_cb, out_tile_index + col);
             }
         }
     }
@@ -519,7 +542,7 @@ void sub_exp_block_bcast_cols(
                 }
 #pragma GCC unroll 1
                 for (uint32_t j = 0; j < tiles_per_column; ++j) {
-                    pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);
+                    pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);  // HOT: softmax exp, keep inline
                     if (global_col_base == 0 && j == 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
@@ -639,7 +662,7 @@ void salad_correct_fused(
         if (fuse_sum_here) {
             configure_single_tile_pack(sum_out_cb);
             for (uint32_t i = 0; i < tiles_per_row; i++) {
-                pack_tile<true>(dst_index++, sum_out_cb, write_row_base + i);
+                sdpa_pack_tile_ooo(dst_index++, sum_out_cb, write_row_base + i);
             }
         }
         tile_regs_release();
@@ -654,7 +677,7 @@ void salad_correct_fused(
         tile_regs_wait();
         configure_single_tile_pack(sum_out_cb);
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-            pack_tile<true>(i, sum_out_cb, write_row_base + i);
+            sdpa_pack_tile_ooo(i, sum_out_cb, write_row_base + i);
         }
         tile_regs_release();
     }
@@ -790,8 +813,32 @@ static inline void l1_acc_single_tile(uint32_t mask_cb, uint32_t tile_idx, uint3
     copy_tile(mask_cb, tile_idx, 0);
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile<true>(0, out_cb, out_pos);
+    sdpa_pack_tile_ooo(0, out_cb, out_pos);
     tile_regs_release();
+}
+
+/**
+ * L1-accumulate a contiguous run of `count` mask tiles (mask_cb[mask_base + i]) onto the matching
+ * contiguous out positions (out_cb[out_base + i]). Tiles are processed in DEST_AUTO_LIMIT-sized
+ * batches so the tile_regs acquire/release overhead is paid once per batch, not once per tile.
+ * Caller brackets with begin/end_mask_l1_accumulate (sets up the copy + L1-accumulate pack state).
+ */
+static inline void l1_acc_tile_run(
+    uint32_t mask_cb, uint32_t mask_base, uint32_t out_cb, uint32_t out_base, uint32_t count) {
+    constexpr uint32_t kBatch = compute_kernel_lib::DEST_AUTO_LIMIT;
+    for (uint32_t i = 0; i < count; i += kBatch) {
+        const uint32_t batch = (count - i) < kBatch ? (count - i) : kBatch;
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < batch; j++) {
+            copy_tile(mask_cb, mask_base + i + j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < batch; j++) {
+            pack_tile<true>(j, out_cb, out_base + i + j);
+        }
+        tile_regs_release();
+    }
 }
 
 static inline void l1_acc_neginf_cols(
@@ -1047,6 +1094,51 @@ static void apply_lightweight_mask_streaming(
 }
 
 /**
+ * Add the dense user mask to one q_subblock row group of a K chunk: QK[r,c] += mask[r,c] for every
+ * tile (additive-bias semantics, reproducing any attn_mask exactly), vs the lightweight path's
+ * sparse constant-palette stamp.
+ *
+ * cb_qkt_im is indexed by the absolute row group (out_q_subblock, out_stride=KT_stride); the mask CB
+ * is front-relative (the caller pops it per subblock, so this subblock's first row is at the front)
+ * with mask_stride=Sk_chunk_t. Each row's active_Sk tiles are contiguous in both CBs, so
+ * l1_acc_tile_run batches them. sbh/out_stride/mask_stride are compile-time at every call site, so
+ * they are template params and the per-row offset math folds away.
+ *
+ * Caller brackets with begin_mask_l1_accumulate / end_mask_l1_accumulate (same as the lightweight path).
+ */
+template <uint32_t sbh, uint32_t out_stride, uint32_t mask_stride>
+static void apply_provided_mask_streaming(
+    uint32_t mask_cb, uint32_t out_cb, uint32_t out_q_subblock, uint32_t active_Sk) {
+    for (uint32_t row = 0; row < sbh; row++) {
+        const uint32_t out_offset = (out_q_subblock * sbh + row) * out_stride;
+        const uint32_t mask_offset = row * mask_stride;
+        l1_acc_tile_run(mask_cb, mask_offset, out_cb, out_offset, active_Sk);
+    }
+}
+
+/**
+ * Open a single-tile L1-accumulate pack onto cb_qkt_im for a mask stamp/apply. MOP is configured
+ * for actual_sbw tiles (blocked matmul), so reconfigure pack state for 1 tile per pack and enable
+ * L1 accumulation. Close with end_mask_l1_accumulate.
+ *
+ * reconfig_dt: when true, reconfigure the unpacker srcA data format (fp16 from Q@KT) to the mask
+ * format so block-float (bfp8/bfp4) masks are not mis-decoded as fp16; no-op when formats match.
+ * The dense provided-mask path needs this; the lightweight palette is always fp16 and does not.
+ */
+template <bool reconfig_dt>
+static inline void begin_mask_l1_accumulate(uint32_t cb_qkt_im, uint32_t cb_mask_in) {
+    configure_single_tile_pack(cb_qkt_im);
+    if constexpr (reconfig_dt) {
+        copy_tile_to_dst_init_short_with_dt(cb_qkt_im, cb_mask_in);
+    } else {
+        copy_tile_to_dst_init_short(cb_mask_in);
+    }
+    PACK((llk_pack_reconfig_l1_acc(1)));
+}
+
+static inline void end_mask_l1_accumulate() { PACK((llk_pack_reconfig_l1_acc(0))); }
+
+/**
  * Largest factor of n that is <= max_val.  Picks a QKT subblock width that
  * evenly divides the active K-tile count on the last K-chunk, avoiding
  * partial subblocks and enabling the split-drain path.
@@ -1099,7 +1191,8 @@ template <
     bool kt_inplace_v = false,
     uint32_t sliding_window_size = 0,
     bool use_attention_sink = false,
-    uint32_t cb_attention_sink = INVALID_CB>
+    uint32_t cb_attention_sink = INVALID_CB,
+    bool use_provided_mask = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1210,17 +1303,39 @@ static void sdpa_inner_loop_step(
         // Restore float16b for mask/reduce after Q@KT.
         sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
 
-        // Lightweight mask stamp: L1-accumulate causal and/or padding masks onto cb_qkt_im
-        // for this row group. Active for ring, causal non-ring, or non-causal padded with a
-        // partial-tile mask (single-chip streaming partial-K case).
-        if constexpr (ring_mode || is_causal_sdpa || use_padded_mask || sliding_window_size > 0) {
+        // Mask stamp/apply: L1-accumulate the mask onto cb_qkt_im for this row group. A dense
+        // user-provided mask and the structured lightweight palette are mutually exclusive — the
+        // user mask supplies all masking itself (causal/sliding/padding baked in by the caller),
+        // so exactly one of these branches is compiled. The only config that stamps nothing is plain
+        // non-causal attention with no mask at all (uses_lightweight_mask == false).
+        constexpr bool uses_lightweight_mask =
+            ring_mode || is_causal_sdpa || use_padded_mask || sliding_window_size > 0;
+        if constexpr (use_provided_mask) {
+            // Dense user-provided mask: the full per-position mask, applied on every K chunk (no
+            // chunk skipping); the user mask defines the visible region. begin_mask_l1_accumulate
+            // reconfigs srcA to the mask format so block-float (bfp8/bfp4) masks decode correctly.
+            // The reader streams the mask one Q-tile-row at a time; wait for / pop just this
+            // subblock's row group so the wait overlaps the reader, and the mask front then sits at
+            // this subblock's first row (apply indexes it mask-base 0).
+            constexpr uint32_t mask_subblock_tiles = qkt_subblock_h * Sk_chunk_t;
+            cb_wait_front(cb_mask_in, mask_subblock_tiles);
+            begin_mask_l1_accumulate<true>(cb_qkt_im, cb_mask_in);
+            apply_provided_mask_streaming<qkt_subblock_h, KT_stride, Sk_chunk_t>(
+                cb_mask_in,
+                cb_qkt_im,
+                q_subblock,  // cb_qkt_im base: absolute row group
+                active_Sk);
+            end_mask_l1_accumulate();
+            // Restore srcA to fp16 for the following max reduce / next-subblock Q@KT.
+            reconfig_data_format_srca(cb_mask_in, cb_qkt_im);
+            cb_pop_front(cb_mask_in, mask_subblock_tiles);
+        } else if constexpr (uses_lightweight_mask) {
+            // Lightweight stamp: causal and/or padding masks. Active for ring, causal non-ring, or
+            // non-causal padded with a partial-tile mask (single-chip streaming partial-K case).
             const bool should_apply_lightweight_mask = kv_pad_rotation_enabled || (is_causal_sdpa && apply_causal) ||
                                                        apply_sliding_window || (apply_mask && lw_partial_tile_idx > 0);
             if (should_apply_lightweight_mask) {
-                // MOP is configured for actual_sbw tiles (blocked matmul); mask needs 1 tile per pack.
-                configure_single_tile_pack(cb_qkt_im);
-                copy_tile_to_dst_init_short(cb_mask_in);
-                PACK((llk_pack_reconfig_l1_acc(1)));
+                begin_mask_l1_accumulate<false>(cb_qkt_im, cb_mask_in);
                 apply_lightweight_mask_streaming<
                     KT_stride,
                     is_causal_sdpa,
@@ -1249,7 +1364,7 @@ static void sdpa_inner_loop_step(
                     mask_straddle_col,
                     mask_straddle_jump,
                     kv_pad_rotation);
-                PACK((llk_pack_reconfig_l1_acc(0)));
+                end_mask_l1_accumulate();
             }
         }
 
@@ -1711,7 +1826,8 @@ template <
     uint32_t sliding_window_size = 0,
     bool is_causal_sdpa = false,
     bool use_attention_sink = false,
-    uint32_t cb_attention_sink = INVALID_CB>
+    uint32_t cb_attention_sink = INVALID_CB,
+    bool use_provided_mask = false>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -1737,9 +1853,18 @@ void sdpa_standard_v2(
     constexpr uint32_t left_window_tiles = window_geom::left_window_tiles;
     constexpr uint32_t right_window_tiles = window_geom::right_window_tiles;
 
+    // v1 dense-mask scope: a user-provided mask supplies all masking itself (causal/sliding/padding
+    // are baked into the tensor by the caller, and the reader neginf-fills padded positions), so it
+    // is never combined with the structured stamp paths.
+    static_assert(
+        !(use_provided_mask && (is_causal_sdpa || has_sliding_window)),
+        "use_provided_mask is mutually exclusive with causal/sliding stamping in v2");
+
     // Neginf tile is permanently fronted by the writer — wait once before any K-chunk loop.
+    // Skipped for a user-provided mask: the writer generates no palette; the reader streams the
+    // dense mask (with padded positions neginf-filled) per chunk instead.
     constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
-    if constexpr (use_padded_mask && padded_k_tiles_inner > 0) {
+    if constexpr (use_padded_mask && padded_k_tiles_inner > 0 && !use_provided_mask) {
         cb_wait_front(cb_mask_in, 1);
     }
 
@@ -1844,7 +1969,8 @@ void sdpa_standard_v2(
                 false,
                 sliding_window_size,
                 use_attention_sink,
-                cb_attention_sink>(
+                cb_attention_sink,
+                use_provided_mask>(
                 prev,
                 cur,
                 is_last,
@@ -1873,7 +1999,10 @@ void sdpa_standard_v2(
 
             // Padded path is non-causal only (use_padded_mask && is_causal_sdpa rejected by static_assert).
             // With sliding-window loop narrowing, the loop's last chunk may not be the tensor's final K chunk.
-            const bool is_padded = !is_causal_sdpa && (k_chunk == k_num_chunks - 1) && (padded_k_tiles_inner > 0);
+            // A user-provided mask processes the full Sk_chunk_t (padded cols are neginf in the dense
+            // mask), so it never takes the partial-tile narrowing.
+            const bool is_padded =
+                !is_causal_sdpa && !use_provided_mask && (k_chunk == k_num_chunks - 1) && (padded_k_tiles_inner > 0);
             uint32_t chunk_active_Sk = is_padded ? last_chunk_Sk : Sk_chunk_t;
             bool chunk_reduce_trigger = is_padded ? can_reduce_trigger_padded : can_reduce_trigger;
             uint32_t chunk_sbw = is_padded ? padded_sbw : full_sbw;
@@ -1891,8 +2020,12 @@ void sdpa_standard_v2(
             bool apply_sliding_mask = false;
             bool apply_causal_mask = is_causal_sdpa;
             uint32_t target_active_Sk = chunk_active_Sk;
-            if constexpr (use_padded_mask && !is_causal_sdpa) {
-                if (is_padded && lw_mask.global_n_partial_col > 0) {
+            if constexpr (use_padded_mask && !is_causal_sdpa && !use_provided_mask) {
+                // Stamp the partial-tile vertical mask whenever the tensor's last K chunk carries a
+                // partial tile (Sk % TILE != 0), independent of fully padded tiles. When there are no
+                // fully padded tiles, global_n_padded_tiles is 0, so target_active_Sk remains
+                // Sk_chunk_t and only the vertical mask stamp is added.
+                if ((k_chunk == k_num_chunks - 1) && lw_mask.global_n_partial_col > 0) {
                     target_active_Sk = Sk_chunk_t - lw_mask.global_n_padded_tiles;
                     apply_partial_mask = true;
                 }

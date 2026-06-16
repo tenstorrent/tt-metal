@@ -20,8 +20,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
 
     // Convert x to sign-magnitude 16-bit integer (round to nearest with ties
     // away from zero), and convert back to floating point.
-    sm = sfpi::convert<sfpi::vSMag16>(x, sfpi::RoundMode::NearestEven);
-    j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::NearestEven);
+    sm = sfpi::convert<sfpi::vSMag16>(x, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
     // Range reduced value in [-0.5, 0.5].
     f = x - j;
@@ -96,7 +96,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
     sfpi::vMag fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
 
-    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
     // Refine 2^x_f on x_f to [0, 2^23). Same minimax coefficients as the
     // production exp_21f kernel (≤ 3 fp32 ULP, well under 1 bf16 ULP).
@@ -109,7 +109,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     // a faithful nearest-even rounding of the fp32 mathematical value, and so
     // that the saturation tricks above (overflow → +inf, underflow → 0) land
     // on the correct bf16 encoding.
-    return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+    return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>

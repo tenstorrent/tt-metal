@@ -1,16 +1,16 @@
-supported_archs: ["wormhole"]
+dest_acc: true
 
 operands:
   - name: "input_A"
     dims: [256, 256]
-    format: "Float16_b"
+    format: "Float32"
   - name: "input_B"
     dims: [256, 256]
-    format: "Float16_b"
+    format: "Float32"
     const_value: 1.0
   - name: "reduce_block_max_runtime_out"
     dims: [256, 256]
-    format: "Float16_b"
+    format: "Float32"
 
 operations:
   - output: "reduce_block_max_runtime_out"
@@ -22,4 +22,4 @@ operations:
         unpacker: "ReduceBlockMaxRuntimeUnpacker"
         math_fidelity: "HiFi2"
     packer: "Packer"
-    block_size: [64, 128]
+    block_size: [64, 64]

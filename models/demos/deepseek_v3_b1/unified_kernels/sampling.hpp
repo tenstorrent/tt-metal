@@ -39,7 +39,7 @@ static inline float bf16_to_float(uint16_t bf) {
     return bits_to_float(u32);
 }
 
-// Convert float32 to bf16 bit-pattern using round-to-nearest-even
+// Convert float32 to bf16 bit-pattern using round-to-nearest
 static inline uint16_t float_to_bf16_rne(float x) {
     uint32_t u = float_to_bits(x);
 
@@ -147,7 +147,7 @@ void calculate_sampling_recip_scalar() {
         out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
     }
     if constexpr (!(DST_ACCUM_MODE || APPROX)) {
-        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
     }
     sfpi::dst_reg[0] = out;
 }
@@ -405,6 +405,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         pack_tile(0, probs_cb);
         cb_push_back(probs_cb, 1);
         tile_regs_release();
+        reconfig_data_format_srca(exp_cb, probs_cb);
         cb_wait_front(probs_cb, 1);
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
@@ -651,6 +652,11 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     tile_regs_commit();
     tile_regs_wait();
 
+    // The custom TTI_SETADCXX(PAC, 1 - 1, 0x0) below packs 1 element per row across
+    // 16 rows (32 elements total) for the topk output, which requires
+    // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
+    // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
 
     ckernel::pack_reconfig_data_format(out_scores_cb);
@@ -658,6 +664,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
 
     tile_regs_release();
 
@@ -757,6 +764,11 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     tile_regs_wait();
 
     // Step 10: pack final top-32 scores/indices.
+    // The custom TTI_SETADCXX(PAC, 1 - 1, 0x0) below packs 1 element per row across
+    // 16 rows (32 elements total) for the topk output, which requires
+    // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
+    // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
 
     ckernel::pack_reconfig_data_format(out_scores_cb);
@@ -765,6 +777,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
 
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
 
     // Reset unpacker state for downstream operations (softmax)
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));
@@ -792,8 +805,8 @@ struct TopKSampling {
         uint32_t WinnerPageBytes,
         uint32_t NumSenders,
         uint32_t ExpectedRemoteIncs,
-        uint32_t ReceiverSemaphoreId,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t ReceiverSemaphoreAddr,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t MeshMode,
         uint32_t Stage1Sender,
         uint32_t Stage1Receiver,
@@ -839,8 +852,8 @@ struct TopKSampling {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t num_senders = NumSenders;
         static constexpr uint32_t expected_remote_incs = ExpectedRemoteIncs;
-        static constexpr uint32_t receiver_semaphore_id = ReceiverSemaphoreId;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t receiver_semaphore_addr = ReceiverSemaphoreAddr;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage1_sender = Stage1Sender == 1;
         static constexpr bool stage1_receiver = Stage1Receiver == 1;
@@ -891,7 +904,7 @@ struct TopKSampling {
 
     template <
         uint32_t WinnerPageBytes,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
         uint32_t SocketPageSizeBytes = 0,
@@ -920,7 +933,7 @@ struct TopKSampling {
         uint32_t MaskAliasesScaler = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
@@ -1220,8 +1233,7 @@ struct TopKSampling {
             uint32_t final_noc_x,
             uint32_t final_noc_y) {
             const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
-            const uint64_t dst_sem_noc_addr =
-                final_noc_base | static_cast<uint64_t>(get_semaphore(CTArgs::receiver_semaphore_id));
+            const uint64_t dst_sem_noc_addr = final_noc_base | static_cast<uint64_t>(CTArgs::receiver_semaphore_addr);
             noc_async_write_one_packet<true, true>(
                 local_scores_addr, final_noc_base | dst_scores_l1_addr, CTArgs::topk_scores_slot_bytes);
             noc_async_write_one_packet<true, true>(
@@ -1471,8 +1483,7 @@ struct TopKSampling {
             // Output goes to the winner CB in split layout [K scores | K indices].
             // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
-                auto recv_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
+                auto recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::receiver_semaphore_addr);
                 {
                     DeviceZoneScopedN("SP-PHASE2WAIT");
                     wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
