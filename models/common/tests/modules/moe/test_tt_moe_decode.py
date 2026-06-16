@@ -289,6 +289,57 @@ def _add_shared_experts_to_golden(
     return out
 
 
+def _add_shared_experts_to_golden_tp(
+    out: torch.Tensor,
+    tokens: torch.Tensor,
+    batch: int,
+    shared_w0: dict[int, torch.Tensor],
+    shared_w1: dict[int, torch.Tensor],
+    shared_w2: dict[int, torch.Tensor],
+    shared_expert_scale: float,
+    activation_type: MoEActivationFunction,
+    num_tp: int,
+) -> torch.Tensor:
+    """Shared-expert golden that mimics the tensor-parallel device path step-for-step.
+
+    Each shared expert's intermediate dim `N` is partitioned into `num_tp` contiguous
+    chunks — one per device along the TP axis (`1 - cluster_axis`). Each device's chunk is
+    zero-padded back to full `N` (front block `[0:N/num_tp]` real, rest zero — exactly the
+    layout `add_shared_expert_weights` produces: W0/W1 padded on the intermediate dim, W2
+    on its row dim), the full-`N` FFN is run on the padded weights to get that device's
+    partial, and the partials are summed (the reduce-scatter), then scaled by
+    `shared_expert_scale`.
+
+    Because SiLU/SwiGLU/GELU are column-separable and each device's W2 rows are zero outside
+    its chunk, the summed partials equal the full FFN — so this matches
+    `_add_shared_experts_to_golden` exactly (modulo bf16 accumulation order). It's written
+    this way on purpose: it tracks what each device actually computes, so if the device
+    output diverges from this golden the fault is in the kernel's handling of the
+    zero-padded TP layout, not the decomposition. No `num_replicated` factor — the sum of
+    disjoint partials is one full copy, not `num_tp` copies.
+    """
+    for sid in shared_w0:
+        w0, w1, w2 = shared_w0[sid], shared_w1[sid], shared_w2[sid]
+        n = w0.shape[-1]
+        assert n % num_tp == 0, f"shared expert intermediate dim {n} not divisible by num_tp {num_tp}"
+        chunk = n // num_tp
+        for t in range(batch):
+            partial_sum = torch.zeros_like(out[t])
+            for d in range(num_tp):
+                lo, hi = d * chunk, (d + 1) * chunk
+                # Device d: its chunk, front-block zero-padded to full N. W0/W1 partition the
+                # intermediate (last) dim; W2 partitions its row (second-to-last) dim.
+                w0_d = torch.zeros_like(w0)
+                w1_d = torch.zeros_like(w1)
+                w2_d = torch.zeros_like(w2)
+                w0_d[..., :chunk] = w0[..., lo:hi]
+                w1_d[..., :chunk] = w1[..., lo:hi]
+                w2_d[..., :chunk, :] = w2[..., lo:hi, :]
+                partial_sum = partial_sum + _matmul_golden(tokens[t], w0_d, w1_d, w2_d, activation_type)
+            out[t] = out[t] + shared_expert_scale * partial_sum
+    return out
+
+
 CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules" / "moe" / "configs"
 CONFIG_PATHS = sorted(CONFIGS_DIR.glob("*.yaml"))
 
@@ -514,19 +565,17 @@ def test_tt_moe_decode(
             b2_per_expert=b2_per_expert,
         )
         if shared_id_to_torch_w0 is not None:
-            # config.reduce.shared_expert_scale is the kernel-ready value (logical / num_replicated).
-            # The post-RS TT output sums num_replicated replicas, so the effective scale at the
-            # final output is the logical value — multiply back.
-            num_replicated = mesh_shape[1 - cluster_axis]
-            golden = _add_shared_experts_to_golden(
+            num_tp = mesh_shape[1 - cluster_axis]
+            golden = _add_shared_experts_to_golden_tp(
                 golden,
                 tokens,
                 batch,
                 shared_id_to_torch_w0,
                 shared_id_to_torch_w1,
                 shared_id_to_torch_w2,
-                shared_expert_scale=config.reduce.shared_expert_scale * num_replicated,
+                shared_expert_scale=config.reduce.shared_expert_scale,
                 activation_type=config.compute.activation_type,
+                num_tp=num_tp,
             )
         output_goldens.append(golden)
 
@@ -549,9 +598,6 @@ def test_tt_moe_decode(
             else:
                 final_output = output
             tt_outputs.append(final_output)
-
-            # Surface async device errors immediately rather than letting them
-            # silently corrupt state and then deadlock at mesh_device teardown.
             ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         except Exception as e:
             _print_exception_and_fail(f"forward iteration {it} failed: {type(e).__name__}")
