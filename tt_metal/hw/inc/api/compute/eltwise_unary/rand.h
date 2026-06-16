@@ -29,12 +29,12 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
-    MATH(SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(rand, RC, APPROX, idst, from, scale));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rand, (APPROX), idst, VectorMode::RC, from, scale));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rand_tile_init(uint32_t seed = 0) { MATH(SFPU_ONE_PARAM_KERNEL_INIT(unused, sfpu::rand_init, APPROX, seed)); }
+ALWI void rand_tile_init(uint32_t seed = 0) { MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed)); }
 
 }  // namespace ckernel

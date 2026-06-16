@@ -39,7 +39,7 @@ static inline float bf16_to_float(uint16_t bf) {
     return bits_to_float(u32);
 }
 
-// Convert float32 to bf16 bit-pattern using round-to-nearest-even
+// Convert float32 to bf16 bit-pattern using round-to-nearest
 static inline uint16_t float_to_bf16_rne(float x) {
     uint32_t u = float_to_bits(x);
 
@@ -147,7 +147,7 @@ void calculate_sampling_recip_scalar() {
         out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
     }
     if constexpr (!(DST_ACCUM_MODE || APPROX)) {
-        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
     }
     sfpi::dst_reg[0] = out;
 }

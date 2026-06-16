@@ -64,7 +64,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
         sfpi::exexp(z, sfpi::ExponentMode::NoDebias);  // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
 
-    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
@@ -77,8 +77,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
-        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest.
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
     }
 
     return y;
@@ -131,7 +131,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
         exexp(z, sfpi::ExponentMode::NoDebias);   // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vMag fractional_part = sfpi::exman(z);  // Extract mantissa ( = leftover part, in [0; 1])
 
-    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
@@ -144,8 +144,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
-        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest.
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
     }
 
     return y;
@@ -241,7 +241,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // the integer-part-as-float-encoding which feeds SETEXP later.
     TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
 
-    // frac = convert<vFloat>(fractional_part, RoundMode::NearestEven)
+    // frac = convert<vFloat>(fractional_part, RoundMode::Nearest)
     constexpr unsigned SFPCAST_MOD1_SM32_TO_FP32_RNE = 0;
     TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, SFPCAST_MOD1_SM32_TO_FP32_RNE);
 
@@ -272,7 +272,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
 
     if constexpr (!is_fp32_dest_acc_en) {
-        // Round float32 -> bfloat16 using round-to-nearest-even before
+        // Round float32 -> bfloat16 using round-to-nearest before
         // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
         TTI_SFP_STOCH_RND(
             sfpi::SFPSTOCHRND_RND_EVEN,
@@ -299,9 +299,9 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 // Utility function to round a float to a 32-bit integer while also calculating the
 // integer part of the rounded value
 sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vInt& k_int) {
-    // From Hacker's Delight: round-to-nearest-even method
+    // From Hacker's Delight: round-to-nearest method
     // float -> int32 (round to nearest even): n = (x + float(c231)) - int32(c231)
-    // round-to-nearest-even: n = (x + float(c231)) - float(c231)
+    // round-to-nearest: n = (x + float(c231)) - float(c231)
     // where c231 = 0x4B400000 (2^23 + 2^22)
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);  // 2^23 + 2^22
 
@@ -350,8 +350,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     // interleaved with first coefficient of polynomial
     j = 1.442695f * a;
     r = 1.37805939e-3f;
-    sfpi::vSMag i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::NearestEven);
-    j = sfpi::convert<sfpi::vFloat>(i_smag, sfpi::RoundMode::NearestEven);
+    sfpi::vSMag i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(i_smag, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
     f = j * -6.93145752e-1f + a;

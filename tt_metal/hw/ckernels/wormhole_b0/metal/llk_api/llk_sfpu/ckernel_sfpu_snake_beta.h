@@ -48,8 +48,8 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
         // a = (ax/π - round(ax/π)) * π, single-stage reduction; vConstFloatPrgm0/1/2 are
         // reserved for the reciprocal estimate so convert<vSMag16> is used instead.
         sfpi::vFloat ax_over_pi = ax * one_over_pi;
-        sfpi::vSMag16 k = sfpi::convert<sfpi::vSMag16>(ax_over_pi, sfpi::RoundMode::NearestEven);
-        sfpi::vFloat k_f = sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::NearestEven);
+        sfpi::vSMag16 k = sfpi::convert<sfpi::vSMag16>(ax_over_pi, sfpi::RoundMode::Nearest);
+        sfpi::vFloat k_f = sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::Nearest);
         sfpi::vFloat a = (ax_over_pi - k_f) * pi_f;
 
         // sin(a) = a + a·s·poly(s), s = a².  PolynomialEvaluator::eval expands to a Horner chain.
@@ -67,7 +67,7 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
         sfpi::vFloat result = x + sin2_ax * inv_beta;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;

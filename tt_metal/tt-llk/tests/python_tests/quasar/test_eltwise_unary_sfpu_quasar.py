@@ -3,7 +3,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 import pytest
 import torch
@@ -37,7 +37,15 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
+from helpers.tile_constants import MAX_NUM_FACES
 from helpers.utils import passed_test
+
+
+@pytest.fixture(autouse=True)
+def _seed_rng():
+    """Seed the RNG once per test so stimuli are deterministic across runs."""
+    torch.manual_seed(42)
+
 
 # Formats swept by every op (none are MX formats, so the implied-math-format
 # guard below is a no-op for this list — kept for forward-compatibility).
@@ -317,17 +325,13 @@ def prepare_unary_inputs(
 
 
 # ---------------------------------------------------------------------------
-# Per-operation sweep configuration. Dims/dest-sync are uniform across ops
-# (rationalized during consolidation); per-op stimuli seeding/spec is preserved.
+# Per-operation sweep configuration.
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class OpConfig:
     mathop: MathOperation
     input_dims: tuple  # list of [H, W] dimensions
     dest_sync_modes: tuple  # DestSync values to sweep
-    # abs/square seed the RNG (default stimuli spec); rsqrt/nonlinear use a
-    # uniform [0, 1) stimuli spec with no explicit seed — preserved per-op.
-    seed: Optional[int] = None
     uniform_spec: bool = False
 
 
@@ -335,8 +339,8 @@ TENSOR_DIMS = ([32, 32], [64, 64])
 DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
 
 OP_CONFIGS = [
-    OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES, seed=42),
-    OpConfig(MathOperation.Square, TENSOR_DIMS, DEST_SYNC_MODES, seed=42),
+    OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES),
+    OpConfig(MathOperation.Square, TENSOR_DIMS, DEST_SYNC_MODES),
     OpConfig(MathOperation.Rsqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Nonlinear ops: identical [32,32]/[64,64] × Half/Full × uniform-spec sweep.
     OpConfig(MathOperation.Exp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
@@ -411,14 +415,11 @@ def test_eltwise_unary_sfpu_quasar(
     variant (abs, exp, gelu, relu, reciprocal, sqrt, tanh, sigmoid, silu, rsqrt,
     square), validated against the UnarySFPUGolden reference.
     """
-    (mathop, formats, dest_acc, dest_sync, implied_math_format, input_dimensions) = (
+    mathop, formats, dest_acc, dest_sync, implied_math_format, input_dimensions = (
         mathop_formats_dest_acc_sync_implied_math_input_dims[0]
     )
 
     cfg = OP_CONFIG_BY_MATHOP[mathop]
-    if cfg.seed is not None:
-        torch.manual_seed(cfg.seed)
-
     spec = StimuliSpec.uniform(low=0.0, high=1.0) if cfg.uniform_spec else None
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -434,7 +435,7 @@ def test_eltwise_unary_sfpu_quasar(
         mathop, src_A, src_B, formats.input_format, formats.output_format
     )
 
-    num_faces = 4
+    num_faces = MAX_NUM_FACES
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(

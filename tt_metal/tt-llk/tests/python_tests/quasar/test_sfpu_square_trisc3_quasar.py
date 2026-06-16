@@ -37,6 +37,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
+from helpers.tile_constants import MAX_NUM_FACES
 from helpers.utils import passed_test
 
 # Reuse the square input-prep and format list from the consolidated unary-SFPU
@@ -97,7 +98,7 @@ def test_sfpu_square_trisc3_quasar(
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
-    (formats, dest_acc, dest_sync_mode, implied_math_format, input_dimensions) = (
+    formats, dest_acc, dest_sync_mode, implied_math_format, input_dimensions = (
         formats_dest_acc_sync_implied_math_dims[0]
     )
 
@@ -114,7 +115,7 @@ def test_sfpu_square_trisc3_quasar(
         src_A, src_B, formats.input_format, formats.output_format
     )
 
-    num_faces = 4
+    num_faces = MAX_NUM_FACES
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(

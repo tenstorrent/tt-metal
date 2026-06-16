@@ -26,7 +26,7 @@ inline void calculate_rdiv(const uint value) {
                 recip = sfpu_reciprocal_iter<2>(in);
             } else {
                 recip = sfpu_reciprocal_iter<1>(in);
-                recip = sfpi::convert<sfpi::vFloat16b>(recip, sfpi::RoundMode::NearestEven);
+                recip = sfpi::convert<sfpi::vFloat16b>(recip, sfpi::RoundMode::Nearest);
             }
         }
         sfpi::vFloat result = recip * val;

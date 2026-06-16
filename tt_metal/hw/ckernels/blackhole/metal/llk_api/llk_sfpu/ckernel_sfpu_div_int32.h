@@ -23,8 +23,8 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         sfpi::vFloat result = 1.0f;
 
         v_if(in0 == 0 || in0 != in1) {
-            sfpi::vFloat float_in0 = sfpi::convert<sfpi::vFloat>(in0, sfpi::RoundMode::NearestEven);
-            sfpi::vFloat float_in1 = sfpi::convert<sfpi::vFloat>(in1, sfpi::RoundMode::NearestEven);
+            sfpi::vFloat float_in0 = sfpi::convert<sfpi::vFloat>(in0, sfpi::RoundMode::Nearest);
+            sfpi::vFloat float_in1 = sfpi::convert<sfpi::vFloat>(in1, sfpi::RoundMode::Nearest);
             result = float_in0 * sfpu_reciprocal_iter<2>(float_in1);
         }
         v_endif;
