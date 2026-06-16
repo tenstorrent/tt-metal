@@ -933,13 +933,14 @@ inline void calculate_asinh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // Keep only the original input live across the body (matching calculate_acosh,
-        // which compiles within the SFPU reload budget). a = |x| is hoisted once and
-        // reused across the predicated blocks rather than recomputed each time. Build
-        // the per-region log1p argument over a, clamp a < 0.75 lanes to a safe value,
-        // materialise to DST, run the shared log1p, then overwrite the a < 0.75 lanes
-        // with the direct polynomial. Sign is restored at the very end from inp.
+        // which compiles within the SFPU reload budget). a = |x| is recomputed inline
+        // rather than held in its own long-lived register: an earlier revision that
+        // hoisted it into a vFloat pushed the allocator past the reload budget and the
+        // kernel failed to compile, so the recompute is deliberate. Build the per-region
+        // log1p argument over |x|, clamp |x| < 0.75 lanes to a safe value, materialise
+        // to DST, run the shared log1p, then overwrite the |x| < 0.75 lanes with the
+        // direct polynomial. Sign is restored at the very end from inp.
         sfpi::vFloat inp = sfpi::dst_reg[0];
-        sfpi::vFloat a = sfpi::abs(inp);
 
         // Mid/large region (|x| >= 0.75): asinh(|x|) = log1p(arg). The large
         // sub-region drops the x^2 term (LN2 + log1p(|x| - 1)) to dodge fp32
@@ -948,29 +949,25 @@ inline void calculate_asinh() {
         // which avoids the subtract-1 cancellation that otherwise costs ~3-4 ulp
         // near the crossover. Lanes below 0.75 are clamped here and overwritten by
         // the polynomial after log1p.
-        sfpi::vFloat arg;
-        v_if(a >= LOG1P_LARGE) {
-            arg = a - sfpi::vConst1;
+        sfpi::vFloat arg = sfpi::vConst0;
+        v_if(sfpi::abs(inp) >= LOG1P_LARGE) {
+            arg = sfpi::abs(inp) - sfpi::vConst1;
         }
-        v_elseif(a >= 0.75f) {
+        v_elseif(sfpi::abs(inp) >= 0.75f) {
             sfpi::vFloat root = _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(inp * inp + sfpi::vConst1);
-            arg = a + (inp * inp) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(sfpi::vConst1 + root);
-        }
-        v_else {
-            // Lanes below 0.75 are overwritten after log1p; clamp to a finite,
-            // in-domain value so the shared log1p stays well-defined here.
-            arg = sfpi::vConst0;
+            arg = sfpi::abs(inp) +
+                  (inp * inp) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(sfpi::vConst1 + root);
         }
         v_endif;
         sfpi::dst_reg[0] = arg;
 
         sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
-        v_if(a >= LOG1P_LARGE) { res = res + LN2; }
+        v_if(sfpi::abs(inp) >= LOG1P_LARGE) { res = res + LN2; }
         v_endif;
 
         // Small region (|x| < 0.75): asinh(|x|) = |x| * P(x^2), a degree-6 (in x^2)
         // minimax fit (<=1 ulp on [0, 0.75]). No sqrt/reciprocal/log1p here.
-        v_if(a < 0.75f) {
+        v_if(sfpi::abs(inp) < 0.75f) {
             sfpi::vFloat s = inp * inp;
             sfpi::vFloat p = 4.375355784e-03f;
             p = p * s + -1.484858524e-02f;
@@ -979,7 +976,7 @@ inline void calculate_asinh() {
             p = p * s + 7.495806366e-02f;
             p = p * s + -1.666652262e-01f;
             p = p * s + 1.000000000e+00f;
-            res = a * p;
+            res = sfpi::abs(inp) * p;
         }
         v_endif;
 
@@ -1009,15 +1006,9 @@ inline void calculate_atanh() {
         sfpi::vFloat inp = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::abs(inp);
 
-        // Precompute |x| - 1 once and drive every |x|-vs-1 test off it. On WH a
-        // two-register compare is lowered to (lhs - rhs) <=> 0, so comparing this
-        // difference against 0 reuses one SFPMAD instead of recomputing abs(inp)
-        // and the subtraction in each predicated block (saves ~2 cycles/iter).
-        sfpi::vFloat cmp = a - sfpi::vConst1;
-
         // Clamp |x| >= 1 lanes to 0 so the interior formula stays finite there;
         // those lanes are overwritten by the boundary fix-up below.
-        v_if(cmp >= sfpi::vConst0) { a = sfpi::vConst0; }
+        v_if(a >= sfpi::vConst1) { a = sfpi::vConst0; }
         v_endif;
 
         // Build the log1p argument, then materialise it to DST before the log1p
@@ -1031,10 +1022,11 @@ inline void calculate_atanh() {
         sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
         res = sfpi::copysgn(0.5f * res, inp);
 
-        // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN. cmp = |x| - 1, so
-        // |x| > 1 is cmp > 0 and |x| == 1 is cmp == 0.
-        v_if(cmp > sfpi::vConst0) { res = std::numeric_limits<float>::quiet_NaN(); }
-        v_elseif(cmp == sfpi::vConst0) {
+        // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN. abs(inp) is
+        // recomputed inline here rather than cached in a register; a cached
+        // |x| - 1 variant pushed the allocator past the reload budget.
+        v_if(sfpi::abs(inp) > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(sfpi::abs(inp) == sfpi::vConst1) {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
             res = sfpi::copysgn(inf, inp);
         }
