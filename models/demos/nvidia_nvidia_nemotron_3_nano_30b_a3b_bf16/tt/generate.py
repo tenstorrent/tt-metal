@@ -147,11 +147,16 @@ def generate(
         print("Prefilling...")
     t_prefill = time.perf_counter()
     for pos, tok in enumerate(input_ids):
+        if verbose:
+            print(f"  prefill token {pos + 1}/{len(input_ids)}...", flush=True)
         _update_ids(ids_tt, tok)
         _update_pos(state.current_pos, pos)
         logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=True)
         ttnn.synchronize_device(mesh_device)
         state.advance()
+        if verbose:
+            elapsed = time.perf_counter() - t_prefill
+            print(f"  prefill token {pos + 1}/{len(input_ids)} done ({elapsed:.1f}s elapsed)", flush=True)
     elapsed_prefill = time.perf_counter() - t_prefill
     if verbose:
         print(f"Prefill done: {len(input_ids)} tokens in {elapsed_prefill:.1f}s")

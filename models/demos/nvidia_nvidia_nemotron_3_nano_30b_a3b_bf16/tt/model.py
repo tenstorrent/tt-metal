@@ -30,7 +30,6 @@ from .mamba2_layer import mamba2_layer_forward
 from .moe_experts import moe_experts_forward
 from .moe_gate import moe_gate_forward, moe_gate_forward_cpu
 from .shared_expert import shared_expert_forward
-from .tp import _upload
 
 # Per-layer cache for pre-stacked expert weight tensors on device.
 # Column-parallel TP sharding: intermediate dim split 4 ways across devices.
@@ -38,6 +37,17 @@ from .tp import _upload
 # down [1,128,1856,2688] bf16 → [1,128,464,2688]/device at shard_dim=2 (≈1.19 GiB)
 # 23 E-layers × 2 matrices × 1.19 GiB ≈ 54.7 GiB total, 13.7 GiB per device.
 _EXPERT_DEVICE_CACHE: dict = {}  # layer_idx -> (up_tt, down_tt)
+
+# Disk cache for pre-stacked, pre-tilized expert weight tensors.
+# ttnn.as_tensor saves on first run; subsequent runs load directly — skips torch.stack
+# and tile-layout conversion (the ~10-min CPU bottleneck on cold start).
+# Override with env var TT_NEMOTRON_EXPERT_CACHE.
+_EXPERT_DISK_CACHE_DIR = os.path.expanduser(
+    os.environ.get(
+        "TT_NEMOTRON_EXPERT_CACHE",
+        "~/.cache/ttnn/nemotron30b_experts_bf16_tp4",
+    )
+)
 
 SNAP = (
     "/home/ttuser/.cache/huggingface/hub/"
@@ -62,7 +72,11 @@ class WeightCache:
         if filename not in self._shards:
             from safetensors.torch import load_file
 
-            self._shards[filename] = load_file(os.path.join(self._snap, filename))
+            path = os.path.join(self._snap, filename)
+            size_gb = os.path.getsize(os.path.realpath(path)) / 1e9
+            print(f"  [WeightCache] loading shard {filename} ({size_gb:.1f} GB)...", flush=True)
+            self._shards[filename] = load_file(path)
+            print(f"  [WeightCache] shard {filename} loaded.", flush=True)
         return self._shards[filename]
 
     def __getitem__(self, key: str) -> torch.Tensor:
@@ -86,30 +100,69 @@ def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
     expert weights (54.7 GiB total ÷ 4) — same as bfloat4_b replicated but
     at full bfloat16 precision.  moe_experts_forward adds an all_reduce to sum
     the 4 partial intermediate-column outputs.
+
+    Disk cache (ttnn.as_tensor): first run stacks from safetensors and saves
+    pre-tilized shards; subsequent runs load directly — skips torch.stack and
+    tile-layout conversion.  Cache dir: _EXPERT_DISK_CACHE_DIR.
     """
     if layer_idx in _EXPERT_DEVICE_CACHE:
         return _EXPERT_DEVICE_CACHE[layer_idx]
 
+    os.makedirs(_EXPERT_DISK_CACHE_DIR, exist_ok=True)
+    up_cache = os.path.join(_EXPERT_DISK_CACHE_DIR, f"layer_{layer_idx}_up")
+    down_cache = os.path.join(_EXPERT_DISK_CACHE_DIR, f"layer_{layer_idx}_down")
+    from_disk = os.path.exists(up_cache + ".bin")
+
+    # Count how many E-layers exist to show X/23 progress.
+    e_indices = [i for i, t in enumerate(PATTERN) if t == "E"]
+    e_num = e_indices.index(layer_idx) + 1 if layer_idx in e_indices else "?"
+    tag = f"E-layer {e_num}/{len(e_indices)} (layer {layer_idx})"
+    if from_disk:
+        print(f"  [experts] {tag}: loading from disk cache...", flush=True)
+    else:
+        print(f"  [experts] {tag}: stacking from safetensors (first run — will cache)...", flush=True)
+
     p = f"backbone.layers.{layer_idx}"
-    up_cpu = (
-        torch.stack([wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)])
-        .transpose(-1, -2)  # [128, 1856, 2688] → [128, 2688, 1856]
-        .unsqueeze(0)  # [1, 128, 2688, 1856]
-        .bfloat16()
-        .contiguous()
+    if not from_disk:
+        up_cpu = (
+            torch.stack([wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)])
+            .transpose(-1, -2)  # [128, 1856, 2688] → [128, 2688, 1856]
+            .unsqueeze(0)  # [1, 128, 2688, 1856]
+            .bfloat16()
+            .contiguous()
+        )
+        down_cpu = (
+            torch.stack([wc[f"{p}.mixer.experts.{e}.down_proj.weight"] for e in range(128)])
+            .transpose(-1, -2)  # [128, 2688, 1856] → [128, 1856, 2688]
+            .unsqueeze(0)  # [1, 128, 1856, 2688]
+            .bfloat16()
+            .contiguous()
+        )
+    else:
+        up_cpu = None
+        down_cpu = None
+
+    # ttnn.as_tensor: saves tilized+sharded tensor on first run, loads on subsequent.
+    # Column-parallel: shard intermediate dim → [1,128,2688,464] and [1,128,464,2688].
+    up_tt = ttnn.as_tensor(
+        up_cpu,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=up_cache,
     )
-    down_cpu = (
-        torch.stack([wc[f"{p}.mixer.experts.{e}.down_proj.weight"] for e in range(128)])
-        .transpose(-1, -2)  # [128, 2688, 1856] → [128, 1856, 2688]
-        .unsqueeze(0)  # [1, 128, 1856, 2688]
-        .bfloat16()
-        .contiguous()
+    down_tt = ttnn.as_tensor(
+        down_cpu,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=down_cache,
     )
-    # Column-parallel: shard intermediate dim across 4 TP devices.
-    # up  [1,128,2688,1856] shard dim=3 → [1,128,2688,464] per device (13.7 GiB)
-    # down [1,128,1856,2688] shard dim=2 → [1,128,464,2688] per device (13.7 GiB)
-    up_tt = _upload(up_cpu, mesh_device, shard_dim=3, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    down_tt = _upload(down_cpu, mesh_device, shard_dim=2, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    print(f"  [experts] {tag}: done.", flush=True)
     _EXPERT_DEVICE_CACHE[layer_idx] = (up_tt, down_tt)
     return up_tt, down_tt
 
