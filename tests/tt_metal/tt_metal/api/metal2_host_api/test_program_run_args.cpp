@@ -1180,6 +1180,39 @@ TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsSucceeds) {
         << "binding base address should be written even though the kernel was omitted from kernel_run_args";
 }
 
+TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsReSetSucceeds) {
+    // Regression: SetProgramRunArgs must be re-callable on a program whose binding-only kernel is
+    // omitted from kernel_run_args. The first call allocates the kernel's CRTA buffer in the second
+    // pass; a second call must patch it in place — set_common_runtime_args fatals if called twice, so
+    // the second pass has to use the same first-time/patch logic as the main loop.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    const std::string tensor_param = "bound_input";
+    spec.tensor_parameters = {MakeMinimalTensorParameter(tensor_param)};
+    BindTensorParameterToKernel(spec.kernels[0], tensor_param, "in_ta");  // kernels[0] == dm_kernel
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor1 =
+        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs params1;
+    params1.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor1}}};
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params1));
+
+    // Second enqueue with a different tensor: must not re-allocate (no fatal), and the binding
+    // address must update in place.
+    MeshTensor tensor2 =
+        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ASSERT_NE(tensor1.address(), tensor2.address())
+        << "test pre-condition: two live allocations should have distinct addresses";
+    ProgramRunArgs params2;
+    params2.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor2}}};
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params2));
+
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor2.address()))
+        << "second SetProgramRunArgs should patch the binding address in place to the new tensor";
+}
+
 // ============================================================================
 // SECTION 5: Gen1 (WH/BH) Tests
 // ============================================================================

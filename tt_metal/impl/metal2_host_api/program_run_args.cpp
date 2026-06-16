@@ -498,6 +498,30 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         }
     };
 
+    // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals
+    // if called twice, so it can only be used the first time; on subsequent SetProgramRunArgs calls
+    // (e.g. re-enqueue with new args) the already-allocated buffer is patched in place. Shared by the
+    // main kernel_run_args loop and the binding-only second pass so both handle the re-set case.
+    auto install_crtas = [](const std::shared_ptr<Kernel>& kernel,
+                            const std::vector<uint32_t>& combined_crtas,
+                            std::string_view kernel_name) {
+        if (combined_crtas.empty()) {
+            return;
+        }
+        if (kernel->common_runtime_args().empty()) {
+            kernel->set_common_runtime_args(combined_crtas);
+        } else {
+            RuntimeArgsData& crta = kernel->common_runtime_args_data();
+            TT_FATAL(
+                crta.size() == combined_crtas.size(),
+                "Kernel '{}' common runtime args count cannot change from {} to {}",
+                kernel_name,
+                crta.size(),
+                combined_crtas.size());
+            std::memcpy(crta.data(), combined_crtas.data(), combined_crtas.size() * sizeof(uint32_t));
+        }
+    };
+
     // Process kernel runtime arguments.
     // Named RTAs/CRTAs and vararg RTAs/CRTAs share a single dispatch buffer each (RTA + CRTA).
     //
@@ -598,25 +622,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             kernel_common_runtime_varargs(kernel_params).begin(),
             kernel_common_runtime_varargs(kernel_params).end());
 
-        // Set common runtime args
-        // TODO: Why on earth does SetCommonRuntimeArgs() only work the first time??
-        if (!combined_crtas.empty()) {
-            if (kernel->common_runtime_args().empty()) {
-                // First time: use the normal setter which allocates storage
-                kernel->set_common_runtime_args(combined_crtas);
-            } else {
-                // Subsequent calls: update in-place
-                // (set_common_runtime_args fatals if called twice, so use direct access)
-                RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                TT_FATAL(
-                    crta.size() == combined_crtas.size(),
-                    "Kernel '{}' common runtime args count cannot change from {} to {}",
-                    kernel_name,
-                    crta.size(),
-                    combined_crtas.size());
-                std::memcpy(crta.data(), combined_crtas.data(), combined_crtas.size() * sizeof(uint32_t));
-            }
-        }
+        install_crtas(kernel, combined_crtas, kernel_name.get());
     }
 
     // Second pass: kernels that bind tensors but were omitted from kernel_run_args.
@@ -641,14 +647,12 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
         }
         // Binding-only kernel: its CRTA buffer is exactly the binding section (it has no named CRTAs
-        // or varargs, else validation would have required a kernel_run_args entry). It was never
-        // visited above, so its CRTA storage is unallocated — assemble and allocate via
-        // set_common_runtime_args (the first-time path), not an in-place patch.
+        // or varargs, else validation would have required a kernel_run_args entry). install_crtas
+        // allocates the buffer on the first SetProgramRunArgs call and patches it in place on later
+        // ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
         std::vector<uint32_t> combined_crtas;
         append_binding_crtas(binding_handles, combined_crtas);
-        if (!combined_crtas.empty()) {
-            kernel->set_common_runtime_args(combined_crtas);
-        }
+        install_crtas(kernel, combined_crtas, kernel_name);
     }
 
     // Process DFB runtime parameters:
