@@ -82,15 +82,36 @@ def _thread_words(arch: ChipArchitecture) -> list[int]:
     return [a for a in range(0, _CFG_STATE_SIZE[arch] * 4) if a not in excluded]
 
 
+# The "live" config-write surface: addr32 words that some reachable LLK/Metal op actually
+# WRITES (from the static sweep in cfg_state_map.md). Polluting only these targets the
+# *reconfigurable* state — the registers a prior op can leave dirty — so a failure is a
+# candidate actionable reconfig-escape, not a reliance on a never-written reset-default
+# (e.g. DEST_REGW_BASE @6, which is absent here). This is the whole-space "thread" sweep
+# minus latent/never-written words. Bit-level over-reach (DISABLE_RISC_BP in word 2) is still
+# masked by _PRESERVE_BITS, so word 2 stays in the set (its ALU/RELU bits are live).
+# Regenerate (Blackhole): resolve each register written at a CFG-write site to its _ADDR32
+# (see cfg_state_map.md). WH set differs (different addr32 numbering) — TODO.
+_LIVE_ADDR32 = {
+    ChipArchitecture.BLACKHOLE: [
+        0, 1, 2, 5, 7, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 28, 29, 30, 31, 32, 33,
+        34, 35, 37, 38, 39, 40, 41, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 59, 64, 68, 69,
+        70, 71, 72, 73, 76, 77, 84, 86, 92, 93, 97, 112, 117, 119, 120, 124, 125, 140, 141, 145,
+        180, 186, 209, 211, 220,
+    ],
+}
+
 # Named addr32 groups within the per-state thread-config region.
 # "alu" is the 3-word ALU config block (addr32 0,1,2) — a small, targeted probe.
 # "thread" is the whole shadowed config register space (minus boot-owned words): every
 # register defined in cfg_defines.h fits inside one state (see module docstring), so
 # this is the complete kernel-owned config-register sweep.
+# "live" is the reconfigurable surface only (see _LIVE_ADDR32) — the right target for
+# hunting actionable reconfig-escapes across LLKs.
 _GROUPS = {
     ChipArchitecture.BLACKHOLE: {
         "alu": [0, 1, 2],
         "thread": _thread_words(ChipArchitecture.BLACKHOLE),
+        "live": _LIVE_ADDR32[ChipArchitecture.BLACKHOLE],
     },
     ChipArchitecture.WORMHOLE: {
         "alu": [0, 1, 2],
