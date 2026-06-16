@@ -49,9 +49,18 @@ def create_program_descriptor(
     B, H_q, S_q, D = q_shape
     H_kv, S_kv = k_shape[1], k_shape[2]
 
-    Sq_t = S_q // TILE_DIM
-    Skv_t = S_kv // TILE_DIM
-    d_t = D // TILE_DIM
+    # R3 — non-tile-aligned shapes. TILE tensors are physically padded to a
+    # tile boundary in DRAM, so the tile counts that index the padded buffer
+    # must use CEIL division (floor would silently drop the last partial tile
+    # and process only S//32 rows / D//32 head columns). The padding lanes are
+    # zero-filled by ttnn on tilize; D-padding therefore contributes 0 to the
+    # QK^T contraction (0*0) and to PV (P*0) with no extra masking, while the
+    # KV-sequence padding columns of the score tile must be forced to −inf so
+    # the padding keys do not pollute the softmax row-max / row-sum (handled by
+    # an on-device column edge-mask added on the last KV chunk — see below).
+    Sq_t = -(-S_q // TILE_DIM)
+    Skv_t = -(-S_kv // TILE_DIM)
+    d_t = -(-D // TILE_DIM)
     group = H_q // H_kv
 
     has_mask = 1 if attn_mask is not None else 0
@@ -62,7 +71,21 @@ def create_program_descriptor(
     # Causal masking generates a triangular −inf bias tile on-device (no
     # caller tensor). It reuses the cb_mask_in path with a bf16 bias tile.
     causal_neg_bits = _bf16_bits(CAUSAL_NEG)
-    # cb_mask_in exists for custom OR causal masking.
+
+    # R3 — KV-sequence edge masking. When S_kv is not tile-aligned the last KV
+    # chunk has (TILE_DIM - kv_valid_last) padding key columns in the score
+    # tile. Those columns carry score 0 (Q · zero-padded-K^T) which would
+    # corrupt the softmax row-max (max picks up the spurious 0) and row-sum
+    # (exp(0 - max) adds a spurious term). We add an on-device "edge mask"
+    # (0 for valid columns, −inf for padding columns) to the score tile on the
+    # last KV chunk for the {none, custom} mask modes. Causal does NOT need it:
+    # causal requires S_q == S_kv (self-attention), the padding KV chunk is only
+    # ever the diagonal block, and the triangular −inf bias already masks
+    # col > row ⊇ the padding columns for every valid query row.
+    kv_valid_last = S_kv % TILE_DIM  # 0 ⇒ tile-aligned
+    kv_edge = 1 if (kv_valid_last != 0 and not causal) else 0
+
+    # cb_mask_in exists for custom OR causal masking; cb_edge_mask for R3 edge.
     need_mask_cb = has_mask or causal
 
     total_units = B * H_q * Sq_t
@@ -103,6 +126,7 @@ def create_program_descriptor(
 
     # --- Circular buffers ---
     CB_Q_IN, CB_K_IN, CB_V_IN, CB_MASK_IN = 0, 1, 2, 3
+    CB_EDGE_MASK = 4  # R3 — on-device KV-sequence column edge mask (bf16 bias)
     CB_SCALER_MAX, CB_SCALER_SUM = 8, 9
     CB_P, CB_O, CB_PV, CB_O_RESC, CB_RECIP_L = 10, 11, 12, 13, 14
     CB_OUT = 16
@@ -150,9 +174,27 @@ def create_program_descriptor(
         # On-device generated triangular bias — always bf16 (it is a generated
         # bias, not tensor data; added into the fp32/bf16 cb_scores).
         cbs.append(cb(CB_MASK_IN, 2, data_format=ttnn.bfloat16))
+    if kv_edge:
+        # R3 — generated column edge-mask bias (bf16). Added to cb_scores on the
+        # last KV chunk for {none, custom} modes; independent of cb_mask_in.
+        cbs.append(cb(CB_EDGE_MASK, 2, data_format=ttnn.bfloat16))
 
     # --- Reader kernel ---
-    reader_ct = [H_q, H_kv, Sq_t, Skv_t, d_t, group, has_mask, mask_H, mask_B, causal, causal_neg_bits]
+    reader_ct = [
+        H_q,
+        H_kv,
+        Sq_t,
+        Skv_t,
+        d_t,
+        group,
+        has_mask,
+        mask_H,
+        mask_B,
+        causal,
+        causal_neg_bits,
+        kv_edge,
+        kv_valid_last,
+    ]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
@@ -197,7 +239,7 @@ def create_program_descriptor(
     )
 
     # --- Compute kernel ---
-    compute_ct = [Skv_t, d_t, has_mask, scale_bits, causal, Sq_t]
+    compute_ct = [Skv_t, d_t, has_mask, scale_bits, causal, Sq_t, kv_edge]
 
     compute_config = ttnn.ComputeConfigDescriptor()
     compute_config.math_fidelity = math_fidelity

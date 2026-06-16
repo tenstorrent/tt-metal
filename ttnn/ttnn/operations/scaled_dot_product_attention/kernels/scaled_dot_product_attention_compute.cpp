@@ -36,6 +36,7 @@ void kernel_main() {
     constexpr uint32_t scale_bits = get_compile_time_arg_val(3);  // fp32 scale, bit-cast
     constexpr uint32_t causal = get_compile_time_arg_val(4);      // native causal masking
     constexpr uint32_t Sq_t = get_compile_time_arg_val(5);        // Q seq tiles (for qc decode)
+    constexpr uint32_t kv_edge = get_compile_time_arg_val(6);     // R3 — KV-seq edge masking active
 
     const uint32_t num_units = get_arg_val<uint32_t>(0);
     const uint32_t start_unit = get_arg_val<uint32_t>(1);
@@ -45,6 +46,7 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = 1;
     constexpr uint32_t cb_v_in = 2;
     constexpr uint32_t cb_mask_in = 3;
+    constexpr uint32_t cb_edge_mask = 4;  // R3 — KV-seq column edge mask
     constexpr uint32_t cb_scaler_max = 8;
     constexpr uint32_t cb_scaler_sum = 9;
     constexpr uint32_t cb_p = 10;
@@ -115,6 +117,17 @@ void kernel_main() {
             } else if constexpr (causal) {
                 if (j == qc) {
                     add<cb_scores, cb_mask_in, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(1));
+                }
+            }
+
+            // B'. R3 — KV-sequence edge mask: on the last KV chunk add the
+            //   on-device column bias (0 for valid key cols, −inf for padding)
+            //   so the padding keys drop out of the row-max / row-sum. Applies
+            //   to {none, custom}; kv_edge is 0 under causal. Independent of
+            //   cb_mask_in (separate CB), so this can stack on the custom add.
+            if constexpr (kv_edge) {
+                if (j == Skv_t - 1) {
+                    add<cb_scores, cb_edge_mask, cb_scores, BroadcastDim::None>(EltwiseShape::tiles(1));
                 }
             }
 

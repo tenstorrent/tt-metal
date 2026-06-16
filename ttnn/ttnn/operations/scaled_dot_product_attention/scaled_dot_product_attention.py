@@ -70,7 +70,7 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "custom", "causal"],
@@ -92,6 +92,14 @@ EXCLUSIONS = [
     # (cross-attention) causal mask is mathematically well-defined but
     # corresponds to no real decoder workload; reject it (R2 causal contract).
     {"mask_mode": "causal", "attention_kind": "cross"},
+    # R3 — non-tile-aligned shapes. The head-dim (w_non_aligned) path relies on
+    # ttnn zero-filling the tile padding so the padded D columns contribute 0 to
+    # the QK^T contraction. bfloat8_b is a block float (per-face shared
+    # exponent); its tile padding is not a clean structural zero, so the
+    # contraction picks up the padded lanes and the QK^T scores are corrupted.
+    # Refused per the /numeric-formats-metal bf8b + non-aligned rule.
+    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
 ]
 
 

@@ -34,6 +34,26 @@ inline void gen_causal_mask_tile(uint32_t cb_id, uint16_t neg_bits) {
     cb_push_back(cb_id, 1);
 }
 
+// R3 — generate the KV-sequence column edge-mask tile (bf16) into L1.
+// Additive form: element (row, col) -> 0 where col < valid_cols (a real key
+// position), neg_bits (a large negative) where col >= valid_cols (a padding
+// key column that must not pollute the softmax). Broadcast across all rows.
+inline void gen_edge_mask_tile(uint32_t cb_id, uint32_t valid_cols, uint16_t neg_bits) {
+    constexpr uint32_t FACE = 16;
+    cb_reserve_back(cb_id, 1);
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
+    for (uint32_t face = 0; face < 4; ++face) {
+        const uint32_t col_off = (face & 1U) ? FACE : 0;
+        for (uint32_t h = 0; h < FACE; ++h) {
+            for (uint32_t w = 0; w < FACE; ++w) {
+                const uint32_t col = col_off + w;
+                *ptr++ = (col < valid_cols) ? uint16_t(0) : neg_bits;
+            }
+        }
+    }
+    cb_push_back(cb_id, 1);
+}
+
 void kernel_main() {
     constexpr uint32_t H_q = get_compile_time_arg_val(0);
     constexpr uint32_t H_kv = get_compile_time_arg_val(1);
@@ -46,8 +66,10 @@ void kernel_main() {
     constexpr uint32_t mask_B = get_compile_time_arg_val(8);  // mask batch (1 or B)
     constexpr uint32_t causal = get_compile_time_arg_val(9);  // native causal masking
     constexpr uint16_t causal_neg_bits = get_compile_time_arg_val(10);  // bf16 −inf bias bits
+    constexpr uint32_t kv_edge = get_compile_time_arg_val(11);          // R3 — KV-seq edge masking active
+    constexpr uint32_t kv_valid_last = get_compile_time_arg_val(12);    // valid key cols in last KV tile
 
-    constexpr auto q_args = TensorAccessorArgs<11>();
+    constexpr auto q_args = TensorAccessorArgs<13>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -63,6 +85,7 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = 1;
     constexpr uint32_t cb_v_in = 2;
     constexpr uint32_t cb_mask_in = 3;
+    constexpr uint32_t cb_edge_mask = 4;  // R3 — KV-seq column edge mask
     constexpr uint32_t cb_scaler_max = 8;
     constexpr uint32_t cb_scaler_sum = 9;
 
@@ -140,6 +163,16 @@ void kernel_main() {
                 // triangular bias; j < qc is fully past (unmasked).
                 if (j == qc) {
                     gen_causal_mask_tile(cb_mask_in, causal_neg_bits);
+                }
+            }
+
+            // R3 — KV-sequence edge mask. Independent of cb_mask_in: pushed on
+            // the last KV chunk only (j == Skv_t-1), for the {none, custom}
+            // modes (kv_edge is 0 under causal). Forces the padding key columns
+            // of the score tile to −inf so they drop out of the softmax.
+            if constexpr (kv_edge) {
+                if (j == Skv_t - 1) {
+                    gen_edge_mask_tile(cb_edge_mask, kv_valid_last, causal_neg_bits);
                 }
             }
         }

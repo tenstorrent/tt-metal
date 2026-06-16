@@ -12,3 +12,6 @@
 {"event":"test_run","status":"pass","tests":"causal self-attention (15 passed --dev)","detail":"on-device triangular bias; causal==additive-triangular PCC>=0.999; shapes single/multi-tile/multi-head/multi-batch x auto/explicit scale","ts":"2026-06-16T19:27:24+00:00"}
 {"event":"test_run","status":"pass","tests":"golden test_gqa_mqa_forward (4 passed)","detail":"the 4 cases R2 explicitly unblocks now pass","ts":"2026-06-16T19:29:14+00:00"}
 {"event":"test_run","status":"pass","tests":"golden causal+gqa/mqa spread","detail":"causal+cross 36 xfailed (EXCLUSION, 0 xpass); gqa/mqa+causal-self 60 passed, 12 xfailed (fp32+acc=False EXCLUSION); no xpass_drift, no failures","ts":"2026-06-16T19:35:09+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-06-16T20:05:14+00:00"}
+{"event":"hypothesis","note":"Non-aligned needs ceil tile counts + zero-pad reliance for D; edge -inf mask on last KV chunk (cols>=S_kv%32) for none/custom; causal handled by triangular; S_q padding rows produce discarded garbage rows (no NaN since l>0).","ts":"2026-06-16T20:09:52+00:00"}
+{"event":"test_run","status":"pass","test":"test_non_aligned bf16 mask_none scale_auto (10 shapes)","detail":"all 10 non-aligned shapes pass PCC>=0.995","ts":"2026-06-16T20:13:19+00:00"}
