@@ -6,8 +6,11 @@
 import argparse
 import csv
 import os
+import random
 from datetime import datetime, timezone
 
+import numpy as np
+import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, TransformerConfig, get_model_config, load_config
@@ -113,8 +116,23 @@ def boolq_reward(completions, answer, **kwargs):
     return rewards
 
 
-if __name__ == "__main__":
+def parse_args():
     parser = argparse.ArgumentParser(description="GRPO BoolQ training example")
+    parser.add_argument(
+        "--config",
+        default="tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
+        help=(
+            "Training config path, relative to TT_METAL_RUNTIME_ROOT or absolute. "
+            "Its device_config section (enable_ddp, mesh_shape) selects single-device vs DDP."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="RNG seed for reproducible runs. If omitted, seed defaults to 42.",
+    )
+
     parser.add_argument(
         "--wandb",
         action="store_true",
@@ -160,23 +178,23 @@ if __name__ == "__main__":
         help="HuggingFace model ID or local path. Overrides the per-model default " "(qwen3 default: Qwen/Qwen3-0.6B).",
     )
     parser.add_argument(
-        "--config",
-        type=str,
-        default=None,
-        help="Path to the training YAML. Overrides the per-model default config.",
-    )
-    parser.add_argument(
         "--max_seq_len",
         type=int,
         default=2048,
         help="Max sequence length for the qwen3 path (bounds the generation horizon).",
     )
-    args = parser.parse_args()
+    # Accept (and ignore) extra flags passed by launch scripts (e.g. --model,
+    # --wandb*) so they don't crash argument parsing.
+    args, _ = parser.parse_known_args()
+    return args
 
-    SEED = 42
-    random.seed(SEED)
-    np.random.seed(SEED)
-    torch.manual_seed(SEED)
+
+if __name__ == "__main__":
+    args = parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     is_qwen3 = args.model == "qwen3"
 
@@ -206,13 +224,18 @@ if __name__ == "__main__":
             "answer": "yes" if example["answer"] else "no",
         }
 
-    dataset = load_dataset("google/boolq", split="train").shuffle(seed=42).map(format_boolq)
+    dataset = load_dataset("google/boolq", split="train").shuffle(seed=args.seed).map(format_boolq)
 
     tt_metal_root = get_tt_metal_runtime_root()
-    config_path = args.config or os.path.join(tt_metal_root, default_config)
+    config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
     raw = load_config(config_path)
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
+    print(
+        f"Loaded config {config_path} | "
+        f"enable_ddp={device_config.enable_ddp} mesh_shape={device_config.mesh_shape} "
+        f"(total_devices={device_config.total_devices()})"
+    )
     if is_qwen3:
         # Qwen3 architecture is read from the HF config inside the completer;
         # only max_sequence_length is consulted here (to bound generation).
