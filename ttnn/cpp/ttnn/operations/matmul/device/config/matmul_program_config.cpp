@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
+#include <cstdlib>
 #include <ranges>
 
 namespace ttnn::operations::matmul {
@@ -989,6 +990,11 @@ MatmulProgramConfig get_program_config(
     const bool transpose_b,
     const uint32_t bias_single_tile_size,
     const ttnn::prim::MatmulParams& attributes) {
+    // MEASUREMENT-ONLY (env-gated): force the MatmulMultiCore fallback factory so the
+    // descriptor-vs-spec host-cost comparison runs on the same factory + shape. Not for prod.
+    if (std::getenv("FORCE_MM_MULTICORE") != nullptr) {
+        return MatmulMultiCoreProgramConfig{};
+    }
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }

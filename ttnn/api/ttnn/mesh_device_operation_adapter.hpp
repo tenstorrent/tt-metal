@@ -14,6 +14,9 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -36,6 +39,124 @@ namespace ttnn::device_operation {
 
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
+
+// ----------------------------------------------------------------------------
+// PROTOTYPE (measurement-only, env-gated): spec-as-cache-key experiment.
+// Computes a hash of the immutable ProgramSpec — the candidate cache key that
+// would replace per-op custom compute_program_hash. Two variants:
+//   strict  — hashes each TensorParameter's full TensorSpec (shape-sensitive)
+//   relaxed — for TensorParameters the program treats as shape-agnostic, hashes
+//             only (dtype, layout, mem_config, PADDED VOLUME) instead of shape,
+//             modelling TensorParameterAdvancedOptions::dynamic_tensor_shape.
+// Groups are folded order-insensitively (sum) since Group order is semantically
+// meaningless. Used only to MEASURE cache reusability vs the current key; does
+// not change live caching.
+// ----------------------------------------------------------------------------
+namespace metal2_speckey_proto {
+template <typename... Ts>
+inline uint64_t oh(const Ts&... xs) {
+    return static_cast<uint64_t>(ttsl::hash::hash_objects_with_default_seed(xs...));
+}
+inline uint64_t mix(uint64_t h, uint64_t v) { return h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2)); }
+
+inline uint64_t program_spec_cache_key(const tt::tt_metal::experimental::ProgramSpec& spec, bool relax_shape) {
+    namespace m2 = tt::tt_metal::experimental;
+    uint64_t h = oh(spec.name);
+
+    uint64_t dfb = 0;
+    for (const auto& d : spec.dataflow_buffers) {
+        uint64_t e = oh(d.unique_id.get(), d.entry_size, d.num_entries);
+        if (d.data_format_metadata) {
+            e = mix(e, oh(static_cast<uint32_t>(*d.data_format_metadata)));
+        }
+        dfb += e;
+    }
+    h = mix(h, dfb);
+
+    uint64_t kk = 0;
+    for (const auto& k : spec.kernels) {
+        uint64_t e = oh(k.unique_id.get(), k.num_threads);
+        if (std::holds_alternative<std::filesystem::path>(k.source)) {
+            e = mix(e, oh(std::get<std::filesystem::path>(k.source).string()));
+        } else {
+            e = mix(e, oh(std::get<m2::KernelSpec::SourceCode>(k.source).code));
+        }
+        uint64_t df = 0;
+        for (const auto& [dk, dv] : k.compiler_options.defines) {
+            df += oh(dk, dv);
+        }
+        uint64_t ct = 0;
+        for (const auto& [ck, cv] : k.compile_time_args) {
+            ct += oh(ck, cv);
+        }
+        uint64_t rn = 0;
+        for (const auto& n : k.runtime_arg_schema.runtime_arg_names) {
+            rn += oh(n);
+        }
+        for (const auto& n : k.runtime_arg_schema.common_runtime_arg_names) {
+            rn += oh(n) + 1;
+        }
+        uint64_t bb = 0;
+        for (const auto& b : k.dfb_bindings) {
+            bb +=
+                oh(b.dfb_spec_name.get(),
+                   b.accessor_name,
+                   static_cast<int>(b.endpoint_type),
+                   static_cast<int>(b.access_pattern));
+        }
+        uint64_t tb = 0;
+        for (const auto& b : k.tensor_bindings) {
+            tb += oh(b.tensor_parameter_name.get(), b.accessor_name);
+        }
+        e = mix(e, df);
+        e = mix(e, ct);
+        e = mix(e, rn);
+        e = mix(e, bb);
+        e = mix(e, tb);
+        e = mix(e, oh(static_cast<int>(k.hw_config.index())));
+        kk += e;
+    }
+    h = mix(h, kk);
+
+    uint64_t tp = 0;
+    for (const auto& p : spec.tensor_parameters) {
+        const auto& s = p.spec;
+        uint64_t e = oh(p.unique_id.get(), static_cast<uint32_t>(s.data_type()), static_cast<int>(s.layout()));
+        e = mix(e, oh(s.memory_config()));
+        if (relax_shape) {
+            e = mix(e, oh(static_cast<uint64_t>(s.padded_shape().volume())));  // volume only
+        } else {
+            e = mix(e, oh(s.logical_shape(), s.padded_shape()));
+        }
+        tp += e;
+    }
+    h = mix(h, tp);
+
+    uint64_t wu = 0;
+    for (const auto& w : spec.work_units) {
+        uint64_t e = 0;
+        for (const auto& kn : w.kernels) {
+            e += oh(kn.get());
+        }
+        e = mix(e, oh(static_cast<int>(w.target_nodes.index())));
+        std::visit([&](const auto& nodes) { e = mix(e, oh(nodes)); }, w.target_nodes);
+        wu += e;
+    }
+    h = mix(h, wu);
+    return h;
+}
+
+inline void log_keys(const tt::tt_metal::experimental::ProgramSpec& spec) {
+    if (std::getenv("SPECKEY_LOG") == nullptr) {
+        return;
+    }
+    std::fprintf(
+        stderr,
+        "[SPECKEY] strict=%llu relaxed=%llu\n",
+        static_cast<unsigned long long>(program_spec_cache_key(spec, /*relax_shape=*/false)),
+        static_cast<unsigned long long>(program_spec_cache_key(spec, /*relax_shape=*/true)));
+}
+}  // namespace metal2_speckey_proto
 
 // Extracts every Tensor reachable from an aggregate `T` and pushes its buffer()
 // onto `out`.  Generated per-T at compile time so the compiler emits a
@@ -730,6 +851,7 @@ public:
             // factory tensor_args and are identical for every stamped program; copy
             // per range into the cached shared state.
             auto artifacts = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
+            metal2_speckey_proto::log_keys(artifacts.spec);  // PROTOTYPE: spec-as-key measurement (cache miss)
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
 
@@ -761,9 +883,15 @@ public:
             // the op deliberately excludes from the program hash), which a tensor-only
             // UpdateTensorArgs refresh cannot do. The ProgramSpec the factory also returns is
             // discarded here — no Program is rebuilt and no kernel is re-JITed.
+            //
+            // skip_validation: this is a cache hit, so the program is the same cache entry whose
+            // run-args structure was already validated on the miss (the cache key fixes the spec
+            // shape). Only argument *values* and the output tensor's address differ between hits —
+            // not the structure validation guards — so re-validating every dispatch is redundant.
             auto artifacts = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
+            metal2_speckey_proto::log_keys(artifacts.spec);  // PROTOTYPE: spec-as-key measurement (cache hit)
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params, /*skip_validation=*/true);
             }
         }
     };
