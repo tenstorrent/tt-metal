@@ -191,3 +191,107 @@ NOT built / not run (per instructions). Self-audited against the kernel-side whi
 local-DFB rule. Watch at build time: `common.hpp`'s `advance_tensor_index` now takes plain
 `uint32_t*`; the local stack arrays bind directly (no address-space conversion). A grep for
 `CBDescriptor` / `CircularBuffer` / `TensorAccessorArgs` over the ported files returns zero hits.
+
+---
+
+# Metal 2.0 Port Report — `pad` (remaining RM + sharded factories)
+
+This pass ports the five remaining `pad` factories (the two tile factories were already done).
+After this pass ALL seven factories of `PadDeviceOperation` are on `create_program_spec`. The
+device-op `program_factory_t` variant and `select_program_factory` are UNCHANGED — the framework
+dispatches each factory via the `MetalV2FactoryConcept` adapter now that each exposes
+`create_program_spec`. No custom `compute_program_hash` exists on `PadDeviceOperation` (nothing to
+keep/delete); no pybind `create_descriptor`/`create_workload_descriptor` hooks exist in
+`pad_nanobind.cpp` (verified).
+
+## Per-factory status
+
+### 1. PadRmReaderWriterProgramFactory (single-core RM) — PORTED
+- `create_workload_descriptor` (WorkloadDescriptor variant) → `create_program_spec`.
+- DFB: `in0` (c_0, 16 pages, local) — reader PRODUCER, writer CONSUMER.
+- TensorParameters: `src`, `dst`, and `pad` (the pad-value const tensor). The legacy const tensor
+  was a `WorkloadDescriptor::buffers`-parked Tensor; it is now an **op-owned tensor** in
+  `ProgramArtifacts::op_owned_tensors` (allocated once on a miss, parked at a stable address by the
+  adapter, bound via a TensorParameter + TensorBinding, read kernel-side through `ta::pad`).
+- Kernels FORKED to `*_m2.cpp` (shared with factory #2): `reader_pad_dims_rm_interleaved_m2.cpp`,
+  `writer_pad_dims_rm_interleaved_m2.cpp`. The legacy reader/writer read a single shared 27-slot
+  RTA vector by positional index with gaps; only the slots each kernel actually consumed survive as
+  named RTAs. src/dst/pad addresses (slots 0/1/13) → TensorBindings. Logic unchanged.
+
+### 2. PadRmReaderWriterMultiCoreProgramFactory — PORTED
+- `create_workload_descriptor` → `create_program_spec`; multi-core work loop preserved verbatim
+  (`split_across_cores`, the resnet-shape switch).
+- Same DFB (`in0`), same three TensorParameters incl. the op-owned `pad` const tensor, same forked
+  `*_m2` kernels as #1. Per-core scalar RTAs are now named; the three buffer-address slots are
+  carried by the src/dst/pad TensorBindings.
+- Dropped the `#if 1` debug-log block and the `log_rt_args` helper (their only inputs — the legacy
+  CTA list / buffer `->address()` calls — no longer exist).
+
+### 3. PadRmReaderWriterMultiCoreDefaultProgramFactory (RM `_v2`, default RM path) — PORTED
+- `create_descriptor` (ProgramDescriptor variant) → `create_program_spec`.
+- DFBs: `in0` (c_0, local; reader PRODUCER → writer CONSUMER), `pad` (c_1 pad-fill scratch — fake CB,
+  reader self-loop), `pad_align` (c_2 — fake CB, reader self-loop, **conditionally** bound only when
+  `stick_size_padded_front != 0 || unaligned`, exactly mirroring the legacy conditional c_2 alloc).
+- Kernels PORTED IN PLACE (1:1, used only by this factory):
+  `reader_pad_dims_rm_interleaved_v2.cpp`, `writer_pad_dims_rm_interleaved_v2.cpp`.
+- Conditional-DFB pattern applied: a `FRONT_PAD_OR_UNALIGNED` define gates the kernel's
+  `dfb::pad_align` alias and every reference to it (the `if constexpr(front_padding)` /
+  `else if constexpr(unaligned)` chain plus the file-scope `get_read_ptr()`); the plain-read `else`
+  runs when the define is absent. Promoting the in-kernel `get_read_ptr` of an unallocated CB into
+  the `#ifdef` is a behavior preserve (legacy only *used* it under the same constexpr guards).
+- `start_dim_offset[4]` per-core array → runtime varargs (fixed at 4, matching the kernel's [1]/[2]/[3]
+  indexing and the post-first-iteration 4-element host vector).
+
+### 4. PadRmShardedHeightOnlyProgramFactory — PORTED
+- `create_descriptor` → `create_program_spec`.
+- **Borrowed-memory DFBs**: `in0` `borrowed_from = src` (input shard L1), `out0` `borrowed_from = dst`
+  (output shard L1); plus `pad` (scratch, writer self-loop). `out0` is reader PRODUCER (reserve/push)
+  → writer CONSUMER (base-pointer fill); `in0` is reader base-pointer-only → reader self-loop.
+- Kernels PORTED IN PLACE: `reader_pad_dims_rm_sharded.cpp`, `writer_pad_dims_rm_sharded.cpp`.
+  In-kernel CB ids (c_0/c_16/c_1) → `dfb::in0`/`dfb::out0`/`dfb::pad`.
+- The reader's packed **variable-length** per-core RTA tail (per-core NoC x/y + stick-chunk lists,
+  read via `get_arg_addr` pointer arithmetic in legacy) → runtime varargs. `num_cores_read` is a
+  named RTA; `num_runtime_varargs` is fixed at the **max tail length** across cores and shorter cores
+  are zero-padded (the kernel only indexes within its own `num_cores_read` range, so trailing pad is
+  never read — this avoids the deprecated `num_runtime_varargs_per_node`). Writer `start_dim_offset[4]`
+  → varargs.
+
+### 5. PadRmShardedWidthOnlyProgramFactory (stickwise) — PORTED
+- `create_descriptor` → `create_program_spec`.
+- **Borrowed-memory DFBs**: `in0` `borrowed_from = src`, `out0` `borrowed_from = dst`; plus `pad`
+  (scratch, writer self-loop). `out0` is writer PRODUCER (reserve/push) → reader CONSUMER (in-place
+  fill after wait_front); `in0` is reader base-pointer-only → reader self-loop.
+- Kernels PORTED IN PLACE: `reader_pad_dims_rm_sharded_stickwise.cpp`,
+  `writer_pad_dims_rm_sharded_stickwise.cpp`. In-kernel CB-id CTAs → `dfb::` handles. No RTAs (CTA-only
+  kernels); the borrowed DFBs pull their L1 base from the src/dst tensor args at runtime.
+
+## Blockers
+
+None. No factory hit the slice-RM "runtime base-offset / per-shard page-size that `ta::` can't
+express" gap: the interleaved RM readers/writers use plain page-id/offset `TensorAccessor` access
+(Case-1), and the sharded factories never use `ta::` at all — they use **borrowed-memory DFBs** for
+the input/output shards and base-pointer reads, which the API supports directly.
+
+## Open items for downstream
+
+- **Fake-CB self-loops (interim).** `_v2` reader: `pad` (c_1) and `pad_align` (c_2); height-only
+  writer: `pad` (c_1); width-only writer: `pad`. All are address-source scratch CBs bound as
+  self-loops purely to satisfy the DFB producer+consumer invariant — not real FIFOs. Replace with the
+  forthcoming Metal 2.0 kernel-scratchpad / local-TensorAccessor resource.
+- **Borrowed input shards as self-loops.** `in0` in both sharded factories is read by base pointer
+  only (no FIFO); bound as a reader self-loop on top of the borrowed (`borrowed_from`) input shard.
+- **Retained varargs.** `_v2` (start_dim_offset[4]); height-only (reader packed tail max-padded +
+  writer start_dim_offset[4]). The height-only reader's tail is genuinely variable-length per core —
+  flagged because the max-pad-then-zero workaround is the alternative to the deprecated
+  `num_runtime_varargs_per_node`. Revisit when typed `std::array` kernel args land.
+- **Forked shared kernels** `reader/writer_pad_dims_rm_interleaved_m2.cpp` shadow the legacy
+  `*_interleaved.cpp` (still used by no other op — pad-internal share between factories #1 and #2).
+  Sunset the legacy copies once nothing else references them.
+
+## Verification
+
+NOT built / not run (per instructions — no build dir). Self-audited against the kernel-side whitelist
+and the local-DFB rule. A grep for `CBDescriptor` / `CircularBuffer` / `TensorAccessorArgs` /
+`ProgramDescriptor` / `WorkloadDescriptor` over the five ported factories returns zero hits in code;
+over the eight ported/forked kernels, the only `CircularBuffer`/`get_arg_addr` hits are in comments
+documenting the legacy layout.

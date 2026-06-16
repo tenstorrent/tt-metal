@@ -5,15 +5,15 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 #include "pad_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
 struct PadRmReaderWriterMultiCoreDefaultProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_spec(
         const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output);
 };
 }  // namespace ttnn::prim

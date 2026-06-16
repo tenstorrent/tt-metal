@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port (in place — used only by the PadRmShardedWidthOnly factory).
+// Logic UNCHANGED; only the access mechanism moves to named bindings:
+//   - output shard CB   -> dfb::out0 (borrowed output shard; writer produces padded sticks)
+//   - pad-value CB       -> dfb::pad  (fake CB: address-source scratch only -> self-loop)
+//   - positional CTAs    -> get_arg(args::...)
+
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
@@ -11,6 +17,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 #define u16_l1_ptr volatile tt_l1_ptr uint16_t*
 #define u32_l1_ptr volatile tt_l1_ptr uint32_t*
@@ -20,7 +27,7 @@ inline __attribute__((always_inline)) void fill_cb_with_padding_value(
     const uint32_t cb_id, const uint32_t padding_value_as_u32) {
     constexpr uint32_t num_elts =
         num_bytes / padding_value_num_bytes;  // constexpr so that this division happens once on host
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     uint32_t cb_write_addr = cb.get_write_ptr();
 
     if constexpr (padding_value_num_bytes == 4) {
@@ -41,15 +48,15 @@ inline __attribute__((always_inline)) void fill_cb_with_padding_value(
 }
 
 void kernel_main() {
-    constexpr uint32_t padded_stick_bytes         = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_shard_height        = get_compile_time_arg_val(1);
-    constexpr uint32_t padding_value_as_u32         = get_compile_time_arg_val(2);
-    constexpr uint32_t padding_value_num_bytes      = get_compile_time_arg_val(3);
+    constexpr uint32_t padded_stick_bytes = get_arg(args::padded_stick_bytes);
+    constexpr uint32_t padded_shard_height = get_arg(args::padded_shard_height);
+    constexpr uint32_t padding_value_as_u32 = get_arg(args::padding_value_as_u32);
+    constexpr uint32_t padding_value_num_bytes = get_arg(args::padding_value_num_bytes);
 
-    constexpr auto output_shard_cb = get_compile_time_arg_val(4);
-    constexpr auto padding_value_cb = get_compile_time_arg_val(5);
-    CircularBuffer cb_output_shard(output_shard_cb);
-    CircularBuffer cb_padding_value(padding_value_cb);
+    constexpr uint32_t output_shard_cb = dfb::out0;
+    constexpr uint32_t padding_value_cb = dfb::pad;
+    DataflowBuffer cb_output_shard(output_shard_cb);
+    DataflowBuffer cb_padding_value(padding_value_cb);
 
     Noc noc;
 

@@ -7,14 +7,17 @@
 #include <algorithm>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
+#include "ttnn/metal2_artifacts.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 
 namespace ttnn::prim {
@@ -29,7 +32,7 @@ uint32_t get_num_stick_per_barrier(uint32_t stick_size_padded_aligned) {
 
 }  // namespace
 
-ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgramFactory::create_program_spec(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
@@ -50,7 +53,7 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
     auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
     uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal::get_l1_alignment());
     uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal::get_dram_alignment());
-    uint32_t row_major_min_bytes = 16;
+    [[maybe_unused]] uint32_t row_major_min_bytes = 16;
 
     // Input page-based addressing
     uint32_t num_input_pages_in_row = 1;
@@ -94,14 +97,10 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
 
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
@@ -112,103 +111,164 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
-    ProgramDescriptor desc;
-
-    // c_1 reused for pad-value scratch on every dispatch.
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = stick_size_padded_DRAM_aligned,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src1_cb_index),
-            .data_format = cb_data_format,
-            .page_size = stick_size_padded_DRAM_aligned,
-        }}},
-    });
-
     bool unaligned = stick_size_padded_aligned % hal::get_dram_alignment() != 0;
-    if (stick_size_padded_front != 0 || unaligned) {
-        uint32_t src2_cb_index = tt::CBIndex::c_2;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = stick_size_padded_DRAM_aligned,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(src2_cb_index),
-                .data_format = cb_data_format,
-                .page_size = stick_size_padded_DRAM_aligned,
-            }}},
-        });
-    }
+    // c_2 (pad_align) is allocated (and bound) only when there is front padding or an unaligned
+    // stick; the kernel references dfb::pad_align only under FRONT_PAD_OR_UNALIGNED to match.
+    bool front_pad_or_unaligned = (stick_size_padded_front != 0 || unaligned);
 
-    std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)N + front_pad[-4],
-        (std::uint32_t)H + front_pad[-2],
-        (std::uint32_t)C + front_pad[-3],
-        (std::uint32_t)stick_size,
-        (std::uint32_t)N_padded,
-        (std::uint32_t)H_padded,
-        (std::uint32_t)C_padded,
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)stick_size_padded_front,
-        (std::uint32_t)stick_size_padded_end,
-        (std::uint32_t)tt::div_up(stick_size_padded, 512),  // max zero size is 512B
-        (std::uint32_t)(stick_size_padded % 512 == 0 ? 512 : stick_size_padded % 512),
-        (std::uint32_t)not_pad_by_zero,
-        (std::uint32_t)packed_pad_value,
-        (std::uint32_t)row_major_min_bytes,
-        (std::uint32_t)(stick_size_padded_front / row_major_min_bytes),
-        (std::uint32_t)(stick_size_padded_end / row_major_min_bytes),
-        (std::uint32_t)(stick_size_padded / row_major_min_bytes),
-        (std::uint32_t)stick_size_padded_aligned,
-        (std::uint32_t)unaligned,
-        (std::uint32_t)num_input_pages_in_row,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)size_of_valid_data_in_last_input_page_in_row};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
-
-    std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)stick_size_padded_aligned,
-        (std::uint32_t)num_output_pages_in_row,
-        (std::uint32_t)output_page_size,
-        (std::uint32_t)size_of_valid_data_in_last_output_page_in_row};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved_v2.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved_v2.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // Build per-core runtime args inline (legacy path called get_runtime_args_rm()
-    // which produced the same data).  Slot 0 of both reader and writer is a raw
-    // buffer base address (no offset) — use Buffer* for BufferBinding so the
-    // framework patches addresses on cache hits.  Idle cores (num_sticks_per_core
-    // == 0) pass 0u to skip the binding since the kernel does nothing.
-    // The legacy helper used input_tensor.padded_shape() for the H/C/N bounds —
-    // mirror that here.  H_padded/C_padded already use the output padded shape.
-    auto input_padded_shape = a.padded_shape();
-    uint32_t H_in = input_padded_shape[2], C_in = input_padded_shape[1], N_in = input_padded_shape[0];
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_padded_shape.rank());
-    std::vector<uint32_t> start_dim_offset(num_dims, 0);
+    // ---- ProgramSpec (immutable) ----
+    m2::ProgramSpec spec;
+    spec.name = "pad_rm_reader_writer_multi_core_default";
 
     uint32_t num_sticks_per_barrier = get_num_stick_per_barrier(stick_size_padded_aligned);
+    const uint32_t buffer_reader_writer_async_factor = 16;
+
+    // c_0 (in0): reader fills, writer drains.
+    // c_1 (pad): pad-value fill scratch — fake CB the reader reads only as an address source.
+    // c_2 (pad_align): pad-align scratch — fake CB, allocated only when front_pad_or_unaligned.
+    spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+        .unique_id = m2::DFBSpecName{"in0"},
+        .entry_size = stick_size_padded_aligned,
+        .num_entries = buffer_reader_writer_async_factor * num_sticks_per_barrier,
+        .data_format_metadata = cb_data_format});
+    spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+        .unique_id = m2::DFBSpecName{"pad"},
+        .entry_size = stick_size_padded_DRAM_aligned,
+        .num_entries = 1,
+        .data_format_metadata = cb_data_format});
+    if (front_pad_or_unaligned) {
+        spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"pad_align"},
+            .entry_size = stick_size_padded_DRAM_aligned,
+            .num_entries = 1,
+            .data_format_metadata = cb_data_format});
+    }
+
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"src"}, .spec = a.tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"dst"}, .spec = output.tensor_spec()},
+    };
+
+    // Reader DFB bindings: in0 PRODUCER, pad self-loop, and pad_align self-loop (when allocated).
+    m2::Group<m2::DFBBinding> reader_dfb_bindings = {
+        m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"in0"},
+            .accessor_name = "in0",
+            .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"pad"},
+            .accessor_name = "pad",
+            .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"pad"},
+            .accessor_name = "pad",
+            .endpoint_type = m2::DFBEndpointType::CONSUMER},
+    };
+    if (front_pad_or_unaligned) {
+        reader_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"pad_align"},
+            .accessor_name = "pad_align",
+            .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"pad_align"},
+            .accessor_name = "pad_align",
+            .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/"
+                                        "reader_pad_dims_rm_interleaved_v2.cpp"},
+        .compiler_options =
+            {.defines = front_pad_or_unaligned ? m2::Table<std::string, std::string>{{"FRONT_PAD_OR_UNALIGNED", "1"}}
+                                               : m2::Table<std::string, std::string>{}},
+        .dfb_bindings = reader_dfb_bindings,
+        .tensor_bindings = {m2::TensorBinding{
+            .tensor_parameter_name = m2::TensorParamName{"src"}, .accessor_name = "src"}},
+        .compile_time_args =
+            {{"N", (std::uint32_t)N + front_pad[-4]},
+             {"H", (std::uint32_t)H + front_pad[-2]},
+             {"C", (std::uint32_t)C + front_pad[-3]},
+             {"stick_size_bytes", (std::uint32_t)stick_size},
+             {"N_padded", (std::uint32_t)N_padded},
+             {"H_padded", (std::uint32_t)H_padded},
+             {"C_padded", (std::uint32_t)C_padded},
+             {"stick_size_padded", (std::uint32_t)stick_size_padded},
+             {"stick_size_padded_front", (std::uint32_t)stick_size_padded_front},
+             {"stick_size_padded_end", (std::uint32_t)stick_size_padded_end},
+             {"num_zero_pad_sticks_read", (std::uint32_t)tt::div_up(stick_size_padded, 512)},  // max zero size is 512B
+             {"last_zero_stick_size", (std::uint32_t)(stick_size_padded % 512 == 0 ? 512 : stick_size_padded % 512)},
+             {"not_pad_by_zero", (std::uint32_t)not_pad_by_zero},
+             {"packed_pad_value", (std::uint32_t)packed_pad_value},
+             {"stick_size_padded_aligned", (std::uint32_t)stick_size_padded_aligned},
+             {"unaligned", (std::uint32_t)unaligned},
+             {"num_input_pages_in_row", (std::uint32_t)num_input_pages_in_row},
+             {"input_page_size", (std::uint32_t)input_page_size},
+             {"size_of_valid_data_in_last_input_page_in_row",
+              (std::uint32_t)size_of_valid_data_in_last_input_page_in_row}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_sticks_per_core",
+                  "num_sticks_per_barrier",
+                  "start_page_id",
+                  "front_pad_n",
+                  "front_pad_c",
+                  "front_pad_h"}},
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+    };
+    // start_dim_offset[4]: per-core starting dim indices {0, curr_h, curr_c, curr_n}, passed as
+    // runtime varargs (the kernel indexes [1],[2],[3], matching the legacy get_arg_addr layout).
+    constexpr std::uint32_t kNumDimOffsets = 4;
+    reader.advanced_options.num_runtime_varargs = kNumDimOffsets;
+
+    m2::KernelSpec writer{
+        .unique_id = m2::KernelSpecName{"writer"},
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/"
+                                        "writer_pad_dims_rm_interleaved_v2.cpp"},
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"in0"},
+            .accessor_name = "in0",
+            .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{
+            .tensor_parameter_name = m2::TensorParamName{"dst"}, .accessor_name = "dst"}},
+        .compile_time_args =
+            {{"stick_size_bytes", (std::uint32_t)stick_size_padded},
+             {"stick_size_padded_aligned", (std::uint32_t)stick_size_padded_aligned},
+             {"num_output_pages_in_row", (std::uint32_t)num_output_pages_in_row},
+             {"output_page_size", (std::uint32_t)output_page_size},
+             {"size_of_valid_data_in_last_output_page_in_row",
+              (std::uint32_t)size_of_valid_data_in_last_output_page_in_row}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_sticks_per_core", "num_sticks_per_barrier", "start_page_id"}},
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+    };
+
+    spec.kernels = {reader, writer};
+
+    // Local/self-loop DFBs require producer and consumer to share a WorkUnitSpec.  Both kernels run
+    // on all_cores, so one WorkUnitSpec hosts both.
+    spec.work_units = std::vector<m2::WorkUnitSpec>{
+        m2::WorkUnitSpec{
+            .name = "multi_core",
+            .kernels = {m2::KernelSpecName{"reader"}, m2::KernelSpecName{"writer"}},
+            .target_nodes = all_cores},
+    };
+
+    // ---- ProgramRunArgs (mutable) ----
+    m2::ProgramRunArgs run;
+    m2::KernelRunArgs reader_run{.kernel = m2::KernelSpecName{"reader"}};
+    m2::KernelRunArgs writer_run{.kernel = m2::KernelSpecName{"writer"}};
+
+    // The legacy helper used input_tensor.padded_shape() for the H/C/N bounds — mirror that here.
+    // H_padded/C_padded already use the output padded shape.
+    auto input_padded_shape = a.padded_shape();
+    uint32_t H_in = input_padded_shape[2], C_in = input_padded_shape[1], N_in = input_padded_shape[0];
+    std::vector<uint32_t> start_dim_offset(kNumDimOffsets, 0);
 
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     uint32_t curr_sticks_read = 0;
     uint32_t curr_sticks_write = 0;
     for (const auto& core : cores_in_order) {
+        const m2::NodeCoord node{core};
         uint32_t num_sticks_per_core;
         if (core_group_1.contains(core)) {
             num_sticks_per_core = num_sticks_padded_per_core_group_1;
@@ -219,31 +279,29 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
             num_sticks_per_core = 0;
         }
 
-        KernelDescriptor::RTArgList reader_rt_args;
-        KernelDescriptor::RTArgList writer_rt_args;
-        if (num_sticks_per_core != 0) {
-            reader_rt_args.push_back(src0_buffer);
-            writer_rt_args.push_back(dst_buffer);
-        } else {
-            reader_rt_args.push_back(0u);
-            writer_rt_args.push_back(0u);
-        }
-        reader_rt_args.push_back(num_sticks_per_core);
-        reader_rt_args.push_back(num_sticks_per_barrier);
-        reader_rt_args.push_back(curr_sticks_read * num_input_pages_in_row);
-        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-4]));
-        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-3]));
-        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-2]));
+        // The legacy buffer-address RTA slot (0=src/dst; 0u on idle cores) is now carried by the
+        // src/dst TensorBindings; idle cores short-circuit on num_sticks_per_core == 0.
+        reader_run.runtime_arg_values.push_back(
+            {node,
+             {{"num_sticks_per_core", num_sticks_per_core},
+              {"num_sticks_per_barrier", num_sticks_per_barrier},
+              {"start_page_id", curr_sticks_read * num_input_pages_in_row},
+              {"front_pad_n", static_cast<uint32_t>(front_pad[-4])},
+              {"front_pad_c", static_cast<uint32_t>(front_pad[-3])},
+              {"front_pad_h", static_cast<uint32_t>(front_pad[-2])}}});
+
+        m2::AdvancedKernelRunArgs::Varargs reader_varargs;
+        reader_varargs.reserve(kNumDimOffsets);
         for (uint32_t v : start_dim_offset) {
-            reader_rt_args.push_back(v);
+            reader_varargs.push_back(v);
         }
+        reader_run.advanced_options.runtime_varargs[node] = std::move(reader_varargs);
 
-        writer_rt_args.push_back(num_sticks_per_core);
-        writer_rt_args.push_back(num_sticks_per_barrier);
-        writer_rt_args.push_back(curr_sticks_write * num_output_pages_in_row);
-
-        reader_desc.emplace_runtime_args(core, reader_rt_args);
-        writer_desc.emplace_runtime_args(core, writer_rt_args);
+        writer_run.runtime_arg_values.push_back(
+            {node,
+             {{"num_sticks_per_core", num_sticks_per_core},
+              {"num_sticks_per_barrier", num_sticks_per_barrier},
+              {"start_page_id", curr_sticks_write * num_output_pages_in_row}}});
 
         curr_sticks_write += num_sticks_per_core;
 
@@ -268,22 +326,13 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         start_dim_offset = {0, curr_h, curr_c, curr_n};
     }
 
-    uint32_t cb_npages = get_num_stick_per_barrier(stick_size_padded_aligned);
-    const uint32_t buffer_reader_writer_async_factor = 16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_reader_writer_async_factor * cb_npages * stick_size_padded_aligned,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
-            .page_size = stick_size_padded_aligned,
-        }}},
-    });
+    run.kernel_run_args = {reader_run, writer_run};
+    run.tensor_args = {
+        {m2::TensorParamName{"src"}, a.mesh_tensor()},
+        {m2::TensorParamName{"dst"}, output.mesh_tensor()},
+    };
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run)};
 }
 
 }  // namespace ttnn::prim

@@ -2,28 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port (in place — used only by the PadRmReaderWriterMultiCoreDefault factory).
+// Logic UNCHANGED; only the access mechanism moves to named bindings:
+//   - output dst tensor address -> ta::dst
+//   - output CB c_0             -> dfb::in0   (consumer of the reader-produced rows)
+//   - positional CTAs/RTAs      -> get_arg(args::...)
+// The legacy cb_out0 CTA (slot 0) is replaced by the dfb::in0 binding.
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
-    uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
-    uint32_t start_page_id = get_arg_val<uint32_t>(3);
+    uint32_t num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    uint32_t num_sticks_per_barrier = get_arg(args::num_sticks_per_barrier);
+    uint32_t start_page_id = get_arg(args::start_page_id);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
-    constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(3);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t size_of_valid_data_in_last_output_page_in_row = get_compile_time_arg_val(5);
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr uint32_t cb_out0 = dfb::in0;
+    constexpr uint32_t stick_size_bytes = get_arg(args::stick_size_bytes);
+    constexpr uint32_t stick_size_padded_aligned = get_arg(args::stick_size_padded_aligned);
+    constexpr uint32_t num_output_pages_in_row = get_arg(args::num_output_pages_in_row);
+    constexpr uint32_t output_page_size = get_arg(args::output_page_size);
+    constexpr uint32_t size_of_valid_data_in_last_output_page_in_row =
+        get_arg(args::size_of_valid_data_in_last_output_page_in_row);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(ta::dst);
     Noc noc;
-    CircularBuffer cb_out0_exp(cb_out0);
+    DataflowBuffer cb_out0_exp(cb_out0);
 
     uint32_t i_page = start_page_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {

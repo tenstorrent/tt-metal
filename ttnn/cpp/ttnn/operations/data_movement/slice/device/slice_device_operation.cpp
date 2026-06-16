@@ -268,7 +268,10 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     const auto& input = tensor_args.input;
 
     if (args.use_tensor_args) {
-        return SliceTileTensorArgsProgramFactory{};
+        // slice's own dispatch uses the Metal 2.0 (ProgramSpec) factory; ccl/mesh_partition still
+        // reuses the legacy SliceTileTensorArgsProgramFactory::create_descriptor directly (see
+        // mesh_partition_program_factory.cpp), so both factory structs are retained.
+        return SliceTileTensorArgsSpecProgramFactory{};
     }
 
     // Check if we have step != 1

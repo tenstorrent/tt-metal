@@ -486,17 +486,24 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Route ONLY the simplest path to the Metal 2.0 ProgramSpecFactory:
-    //   SubtileBroadcastType::NONE x tile layout x FPU (not SFPU, not where) x tensor-b-present x
-    //   interleaved (not sharded) x no activations x no typecast x plain ADD/SUB/MUL.
-    // Everything else stays on the legacy ProgramFactory::create_descriptor. The gate is
-    // deliberately conservative: any condition the narrow factory does not model falls through.
+    // Route to the Metal 2.0 ProgramSpecFactory the no-broadcast x tile x interleaved x
+    // no-activation x no-typecast x plain ADD/SUB/MUL cases across these operand/compute axes:
+    //   1. tensor-b present x FPU
+    //   2. tensor-b present x SFPU
+    //   3. scalar-b (no tensor b) x FPU
+    // Everything else (row-major, all broadcast types, where-op, quant-op, scalar-b-on-SFPU,
+    // sharded, activations, typecast, non-plain ops) stays on the legacy
+    // ProgramFactory::create_descriptor. The gate is deliberately conservative: any condition the
+    // factory does not model falls through. See binary_ng_program_factory_m2.cpp / the report.
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
     const bool b_present = b.has_value();
     const bool is_none_bcast = attributes.subtile_broadcast_type == SubtileBroadcastType::NONE;
-    const bool is_fpu = !attributes.is_sfpu && !attributes.is_where_op && !attributes.is_quant_op;
+    // where/quant ops are never modeled by the Metal 2.0 factory; SFPU is modeled only with a
+    // tensor b (the scalar-b path is FPU-only in the factory).
+    const bool compute_modeled =
+        !attributes.is_where_op && !attributes.is_quant_op && (!attributes.is_sfpu || b_present);
     const bool tile_layout = attributes.input_layout_a == Layout::TILE && attributes.input_layout_b == Layout::TILE &&
                              attributes.output_layout == Layout::TILE;
     const bool no_activations =
@@ -507,10 +514,13 @@ BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_progr
 
     bool sharded = a.memory_config().is_sharded() || (b_present && b->memory_config().is_sharded()) ||
                    attributes.memory_config.is_sharded();
-    // No typecast (a and output share dtype) so the FPU compute kernel binds no POST activation.
-    const bool no_typecast = b_present && a.dtype() == attributes.get_dtype();
+    // No typecast (a and output share dtype) so the compute kernel binds no POST activation. The
+    // scalar-b path also requires a scalar value present.
+    const bool no_typecast = a.dtype() == attributes.get_dtype();
+    const bool operand_ok = b_present || attributes.scalar.has_value();
 
-    if (b_present && is_none_bcast && is_fpu && tile_layout && no_activations && plain_op && !sharded && no_typecast) {
+    if (is_none_bcast && compute_modeled && tile_layout && no_activations && plain_op && !sharded && no_typecast &&
+        operand_ok) {
         return ProgramSpecFactory{};
     }
     return ProgramFactory{};

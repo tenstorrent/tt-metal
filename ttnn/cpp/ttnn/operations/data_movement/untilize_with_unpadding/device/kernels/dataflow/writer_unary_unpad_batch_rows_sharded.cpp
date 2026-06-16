@@ -2,29 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Ported in place to Metal 2.0 named bindings for untilize_with_unpadding's multi-core sharded
+// factory (this writer is op-local — only untilize_with_unpadding uses it).
+//   cb_id_untilize_out (c_16) -> dfb::out          (untilize compute output, consumed here)
+//   cb_id_out          (c_17) -> dfb::sharded_out  (borrowed L1 sharded output, written here)
+//   aligned_page_size CTA     -> named CTA
+//   runtime args              -> named RTAs
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_unpadded_output_rows = get_arg_val<uint32_t>(0);
-    uint32_t num_padded_tiles_per_batch = get_arg_val<uint32_t>(1);
-    uint32_t num_unpadded_rows_per_batch = get_arg_val<uint32_t>(2);
-    uint32_t padded_block_row_size_bytes = get_arg_val<uint32_t>(3);
-    uint32_t unpadded_block_row_size_bytes = get_arg_val<uint32_t>(4);
-    uint32_t batch = get_arg_val<uint32_t>(5);
+    uint32_t num_unpadded_output_rows = get_arg(args::num_unpadded_output_rows);
+    uint32_t num_padded_tiles_per_batch = get_arg(args::num_padded_tiles_per_batch);
+    uint32_t num_unpadded_rows_per_batch = get_arg(args::num_unpadded_rows_per_batch);
+    uint32_t padded_block_row_size_bytes = get_arg(args::padded_block_row_size_bytes);
+    uint32_t unpadded_block_row_size_bytes = get_arg(args::unpadded_block_row_size_bytes);
+    uint32_t batch = get_arg(args::batch);
 
-    constexpr uint32_t cb_id_untilize_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t aligned_page_size = get_arg(args::aligned_page_size);
 
     Noc noc;
-    CircularBuffer cb_untilize_out(cb_id_untilize_out);
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_untilize_out(dfb::out);
+    DataflowBuffer cb_out(dfb::sharded_out);
 
     cb_out.reserve_back(num_unpadded_output_rows);
     uint32_t l1_write_addr = cb_out.get_write_ptr();

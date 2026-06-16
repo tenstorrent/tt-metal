@@ -2,29 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port (in place — used only by the PadRmShardedWidthOnly factory).
+// Logic UNCHANGED; only the access mechanism moves to named bindings:
+//   - input shard CB  -> dfb::in0  (borrowed input shard; read by base pointer only -> self-loop)
+//   - output shard CB -> dfb::out0 (borrowed output shard; reader consumes the padded sticks the
+//                                   writer produced, filling them in-place with input data)
+//   - positional CTAs -> get_arg(args::...)
+
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint_pages.h"
 #include "api/dataflow/circular_buffer.h"
+#include "experimental/kernel_args.h"
 #define u8_l1_ptr volatile tt_l1_ptr uint8_t*
 #define u8_vol_ptr volatile uint8_t*
 #define u8_ptr uint8_t*
 
 void kernel_main() {
-    constexpr uint32_t unpadded_stick_bytes         = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_stick_bytes         = get_compile_time_arg_val(1);
-    constexpr uint32_t unpadded_shard_height        = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_shard_height        = get_compile_time_arg_val(3);
-    constexpr uint32_t W_front_pad_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t unpadded_stick_bytes = get_arg(args::unpadded_stick_bytes);
+    constexpr uint32_t padded_stick_bytes = get_arg(args::padded_stick_bytes);
+    constexpr uint32_t unpadded_shard_height = get_arg(args::unpadded_shard_height);
+    constexpr uint32_t padded_shard_height = get_arg(args::padded_shard_height);
+    constexpr uint32_t W_front_pad_bytes = get_arg(args::W_front_pad_bytes);
 
-    constexpr uint32_t input_shard_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t output_shard_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t unpadded_stick_step = get_compile_time_arg_val(7);
-    constexpr uint32_t padded_stick_step = get_compile_time_arg_val(8);
+    constexpr uint32_t input_shard_cb = dfb::in0;
+    constexpr uint32_t output_shard_cb = dfb::out0;
+    constexpr uint32_t unpadded_stick_step = get_arg(args::unpadded_stick_step);
+    constexpr uint32_t padded_stick_step = get_arg(args::padded_stick_step);
 
-    CircularBuffer cb_input_shard(input_shard_cb);
-    CircularBuffer cb_output_shard(output_shard_cb);
+    DataflowBuffer cb_input_shard(input_shard_cb);
+    DataflowBuffer cb_output_shard(output_shard_cb);
 
     uint32_t input_shard_base_addr = cb_input_shard.get_write_ptr();
     uint32_t output_shard_base_addr = cb_output_shard.get_write_ptr();

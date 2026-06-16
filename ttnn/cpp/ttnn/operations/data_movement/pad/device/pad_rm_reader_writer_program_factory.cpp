@@ -4,13 +4,15 @@
 
 #include "pad_rm_reader_writer_program_factory.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
+
+#include "ttnn/metal2_artifacts.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
+namespace m2 = tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 using ttnn::operations::data_movement::float_to_uint16;
@@ -18,10 +20,10 @@ using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
 
-// Allocate the on-device pad-value const tensor.  Pulled out so
-// create_workload_descriptor() can build it once on cache miss and park it on
-// WorkloadDescriptor::buffers, deferring ~Tensor (which force-deallocates the
-// device memory) until the cached workload is evicted (see #44565).
+// Allocate the on-device pad-value const tensor.  Returned as an op-owned tensor in
+// ProgramArtifacts::op_owned_tensors: the framework parks it at a stable address for the cached
+// Program's life (allocated once on a cache miss, reused on a hit).  The kernel reads it through a
+// TensorAccessor (ta::pad) exactly like the io tensors.
 Tensor build_pad_value_const_tensor_sc(const PadInputs& tensor_args, float pad_value) {
     MeshDevice* device = tensor_args.input.device();
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
@@ -35,54 +37,30 @@ Tensor build_pad_value_const_tensor_sc(const PadInputs& tensor_args, float pad_v
         .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
 }
 
-ProgramDescriptor build_pad_rm_sc_program_descriptor(
-    const PadParams& operation_attributes,
-    const PadInputs& tensor_args,
-    Tensor& output,
-    Buffer* pad_value_const_buffer) {
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create_program_spec(
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input;
+    Tensor& output = tensor_return_value;
     const auto& pad_value = operation_attributes.pad_value;
 
     auto output_shape = operation_attributes.output_padded_shape;
 
-    uint32_t unpadded_row_size_nbytes = tensor_args.input.padded_shape()[3] * tensor_args.input.element_size();
-    uint32_t padded_row_size_nbytes =
-        output_shape[3] * tensor_args.input.element_size();  // Assuming output is same datatype as input
+    uint32_t unpadded_row_size_nbytes = a.padded_shape()[3] * a.element_size();
+    uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();  // Assuming output is same datatype as input
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
-    // construct const buffer with the pad_value
-    uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
-    uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * tensor_args.input.element_size();
-
     Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    CoreRange cores({0, 0}, {0, 0});
+    const CoreRangeSet core_ranges{CoreRange{{0, 0}, {0, 0}}};
 
-    ProgramDescriptor desc;
-
-    uint32_t cb_id = tt::CBIndex::c_0;
     uint32_t cb_npages = 16;  // multibuffering
     uint32_t cb_pagesize =
         tt::round_up(padded_row_size_nbytes, std::max(src0_buffer->alignment(), tt::constants::TILE_WIDTH));
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_npages * cb_pagesize,
-        .core_ranges = cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_id),
-            .data_format = in_df,
-            .page_size = cb_pagesize,
-        }}},
-    });
-
-    std::vector<uint32_t> reader_ct_args = {unpadded_row_size_nbytes, padded_row_size_nbytes};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
-    TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
-    TensorAccessorArgs(*pad_value_const_buffer).append_to(reader_ct_args);
-    std::vector<uint32_t> writer_ct_args = reader_ct_args;
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
@@ -93,123 +71,154 @@ ProgramDescriptor build_pad_rm_sc_program_descriptor(
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
     }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
-
-#if 0
-    {
-        log_debug(tt::LogOp, "src0_buffer_addr: {}", src0_buffer->address());
-        log_debug(tt::LogOp, "dst_buffer_addr: {}", dst_buffer->address());
-        log_debug(tt::LogOp, "a.shape[0]: {}", a.padded_shape()[0]);
-        log_debug(tt::LogOp, "out.shape[0]: {}", output_shape[0]);
-        log_debug(tt::LogOp, "a.shape[1]: {}", a.padded_shape()[1]);
-        log_debug(tt::LogOp, "out.shape[1]: {}", output_shape[1]);
-        log_debug(tt::LogOp, "a.shape[2]: {}", a.padded_shape()[2]);
-        log_debug(tt::LogOp, "out.shape[2]: {}", output_shape[2]);
-        log_debug(tt::LogOp, "s.shape[3]: {}", a.padded_shape()[3]);
-        log_debug(tt::LogOp, "out.shape[3]: {}", output_shape[3]);
-        log_debug(tt::LogOp, "unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
-        log_debug(tt::LogOp, "padded_row_size_nbytes: {}", padded_row_size_nbytes);
-        log_debug(tt::LogOp, "padded_row_diff_size_nbytes: {}", padded_row_diff_size_nbytes);
-        log_debug(tt::LogOp, "pad_value_const_buffer_addr: {}", pad_value_const_buffer->address());
-        log_debug(tt::LogOp, "pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
-        log_debug(tt::LogOp, "packed_pad_value: {}", packed_pad_value);
-    }
-#endif
-
     uint32_t start_src_stick_id = 0;
     uint32_t start_dst_stick_id = 0;
-    // Slots 0 (src), 1 (dst) and 13 (pad-value const) are raw buffer base addresses;
-    // bind them as Buffer* so the framework patches the addresses on cache hits
-    // without rebuilding the descriptor.  The const tensor is owned by
-    // WorkloadDescriptor::buffers in create_workload_descriptor() so its address
-    // remains valid across cache hits.
-    KernelDescriptor::RTArgList reader_rt_args;
-    reader_rt_args.reserve(27);
-    reader_rt_args.push_back(src0_buffer);
-    reader_rt_args.push_back(dst_buffer);
-    reader_rt_args.push_back(static_cast<uint32_t>(a.padded_shape()[0]));
-    reader_rt_args.push_back(static_cast<uint32_t>(output_shape[0]));
-    reader_rt_args.push_back(static_cast<uint32_t>(a.padded_shape()[1]));
-    reader_rt_args.push_back(static_cast<uint32_t>(output_shape[1]));
-    reader_rt_args.push_back(static_cast<uint32_t>(a.padded_shape()[2]));
-    reader_rt_args.push_back(static_cast<uint32_t>(output_shape[2]));
-    reader_rt_args.push_back(static_cast<uint32_t>(a.padded_shape()[3]));
-    reader_rt_args.push_back(static_cast<uint32_t>(output_shape[3]));
-    reader_rt_args.push_back(unpadded_row_size_nbytes);
-    reader_rt_args.push_back(padded_row_size_nbytes);
-    reader_rt_args.push_back(padded_row_diff_size_nbytes);
-    reader_rt_args.push_back(pad_value_const_buffer);
-    reader_rt_args.push_back(pad_value_const_buffer_nbytes);
-    reader_rt_args.push_back(packed_pad_value);
-    reader_rt_args.push_back(start_src_stick_id);
-    reader_rt_args.push_back(start_dst_stick_id);
-    reader_rt_args.push_back(std::uint32_t{0});
-    reader_rt_args.push_back(std::uint32_t{0});
-    reader_rt_args.push_back(std::uint32_t{0});
-    reader_rt_args.push_back(static_cast<uint32_t>(output_shape[2]));
-    reader_rt_args.push_back(static_cast<uint32_t>(a.padded_shape()[2]));
-    reader_rt_args.push_back(unpadded_row_size_nbytes);
-    reader_rt_args.push_back(padded_row_size_nbytes);
-    reader_rt_args.push_back(std::uint32_t{0});
-    reader_rt_args.push_back(static_cast<uint32_t>(output.padded_shape()[0]));
 
-    // Writer reads the same arg layout (slot 1 = dst addr, slot 13 = pad-value const).
-    KernelDescriptor::RTArgList writer_rt_args = reader_rt_args;
+    // ---- Op-owned pad-value const tensor (allocate first; bind against the vector element) ----
+    std::vector<Tensor> op_owned;
+    op_owned.reserve(1);
+    op_owned.push_back(build_pad_value_const_tensor_sc(tensor_args, pad_value));
+    const Tensor& pad_const = op_owned[0];
 
-    reader_desc.emplace_runtime_args(CoreCoord{0, 0}, reader_rt_args);
-    writer_desc.emplace_runtime_args(CoreCoord{0, 0}, writer_rt_args);
+    // ---- ProgramSpec (immutable) ----
+    m2::ProgramSpec spec;
+    spec.name = "pad_rm_reader_writer";
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    // c_0 (in0): row buffer the reader fills (data + pad) and the writer drains to the output.
+    spec.dataflow_buffers = {
+        m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"in0"},
+            .entry_size = cb_pagesize,
+            .num_entries = cb_npages,
+            .data_format_metadata = in_df},
+    };
 
-    return desc;
-}
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"src"}, .spec = a.tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"dst"}, .spec = output.tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"pad"}, .spec = pad_const.tensor_spec()},
+    };
 
-}  // namespace
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/"
+                                        "reader_pad_dims_rm_interleaved_m2.cpp"},
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"in0"},
+            .accessor_name = "in0",
+            .endpoint_type = m2::DFBEndpointType::PRODUCER}},
+        .tensor_bindings =
+            {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"src"}, .accessor_name = "src"},
+             m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"pad"}, .accessor_name = "pad"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_unpadded_W",
+                  "num_total_W",
+                  "num_unpadded_Z",
+                  "num_total_Z",
+                  "num_unpadded_Y",
+                  "num_total_Y",
+                  "unpadded_X_nbytes",
+                  "padded_X_nbytes",
+                  "padded_X_diff_nbytes",
+                  "pad_value_packed",
+                  "start_src_stick_id",
+                  "start_src_stick_wi",
+                  "start_src_stick_offset",
+                  "num_local_Y",
+                  "num_local_unpadded_Y",
+                  "full_unpadded_X_nbytes",
+                  "num_local_W"}},
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+    };
 
-WorkloadDescriptor PadRmReaderWriterProgramFactory::create_workload_descriptor(
-    const PadParams& operation_attributes,
-    const PadInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    WorkloadDescriptor wd;
+    m2::KernelSpec writer{
+        .unique_id = m2::KernelSpecName{"writer"},
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/"
+                                        "writer_pad_dims_rm_interleaved_m2.cpp"},
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = m2::DFBSpecName{"in0"},
+            .accessor_name = "in0",
+            .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{
+            .tensor_parameter_name = m2::TensorParamName{"dst"}, .accessor_name = "dst"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_total_W",
+                  "num_total_Z",
+                  "num_total_Y",
+                  "num_total_X",
+                  "padded_X_nbytes",
+                  "start_dst_stick_id",
+                  "start_dst_stick_wi",
+                  "num_local_Y",
+                  "num_local_unpadded_Y",
+                  "full_padded_X_nbytes",
+                  "dst_stick_offset",
+                  "num_local_W"}},
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+    };
 
-    // Build the pad-value const tensor once on cache miss and park it on the
-    // WorkloadDescriptor.  Holding the SOURCE Tensor (not just a
-    // shared_ptr<MeshBuffer>) is required because ~Tensor force-deallocates the
-    // device memory through DeviceStorage::deallocate regardless of external
-    // shared_ptr<MeshBuffer> owners (see #44565).
-    Tensor pad_value_const_tensor = build_pad_value_const_tensor_sc(tensor_args, operation_attributes.pad_value);
-    auto pad_value_owner = std::make_shared<Tensor>(std::move(pad_value_const_tensor));
-    Buffer* pad_value_const_buffer = pad_value_owner->buffer();
-    wd.buffers.push_back({pad_value_owner, pad_value_const_buffer});
+    spec.kernels = {reader, writer};
 
-    auto desc = build_pad_rm_sc_program_descriptor(
-        operation_attributes, tensor_args, tensor_return_value, pad_value_const_buffer);
+    // Local DFB (in0) requires its producer (reader) and consumer (writer) to share the same
+    // WorkUnitSpec.  Both run on the single core {0,0}.
+    spec.work_units = std::vector<m2::WorkUnitSpec>{
+        m2::WorkUnitSpec{
+            .name = "single_core",
+            .kernels = {m2::KernelSpecName{"reader"}, m2::KernelSpecName{"writer"}},
+            .target_nodes = core_ranges},
+    };
 
-    auto ranges = tensor_coords.ranges();
-    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
-        wd.programs.push_back({ranges[i], desc});
-    }
-    if (!ranges.empty()) {
-        wd.programs.push_back({ranges.back(), std::move(desc)});
-    }
-    return wd;
+    // ---- ProgramRunArgs (mutable) ----
+    m2::ProgramRunArgs run;
+    m2::KernelRunArgs reader_run{.kernel = m2::KernelSpecName{"reader"}};
+    reader_run.runtime_arg_values.push_back(
+        {m2::NodeCoord{CoreCoord{0, 0}},
+         {{"num_unpadded_W", static_cast<uint32_t>(a.padded_shape()[0])},
+          {"num_total_W", static_cast<uint32_t>(output_shape[0])},
+          {"num_unpadded_Z", static_cast<uint32_t>(a.padded_shape()[1])},
+          {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
+          {"num_unpadded_Y", static_cast<uint32_t>(a.padded_shape()[2])},
+          {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
+          {"unpadded_X_nbytes", unpadded_row_size_nbytes},
+          {"padded_X_nbytes", padded_row_size_nbytes},
+          {"padded_X_diff_nbytes", padded_row_diff_size_nbytes},
+          {"pad_value_packed", packed_pad_value},
+          {"start_src_stick_id", start_src_stick_id},
+          {"start_src_stick_wi", 0u},
+          {"start_src_stick_offset", 0u},
+          {"num_local_Y", static_cast<uint32_t>(output_shape[2])},
+          {"num_local_unpadded_Y", static_cast<uint32_t>(a.padded_shape()[2])},
+          {"full_unpadded_X_nbytes", unpadded_row_size_nbytes},
+          {"num_local_W", static_cast<uint32_t>(output.padded_shape()[0])}}});
+
+    m2::KernelRunArgs writer_run{.kernel = m2::KernelSpecName{"writer"}};
+    writer_run.runtime_arg_values.push_back(
+        {m2::NodeCoord{CoreCoord{0, 0}},
+         {{"num_total_W", static_cast<uint32_t>(output_shape[0])},
+          {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
+          {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
+          {"num_total_X", static_cast<uint32_t>(output_shape[3])},
+          {"padded_X_nbytes", padded_row_size_nbytes},
+          {"start_dst_stick_id", start_dst_stick_id},
+          {"start_dst_stick_wi", 0u},
+          {"num_local_Y", static_cast<uint32_t>(output_shape[2])},
+          {"num_local_unpadded_Y", static_cast<uint32_t>(a.padded_shape()[2])},
+          {"full_padded_X_nbytes", padded_row_size_nbytes},
+          {"dst_stick_offset", 0u},
+          {"num_local_W", static_cast<uint32_t>(output.padded_shape()[0])}}});
+
+    run.kernel_run_args = {reader_run, writer_run};
+    run.tensor_args = {
+        {m2::TensorParamName{"src"}, a.mesh_tensor()},
+        {m2::TensorParamName{"dst"}, output.mesh_tensor()},
+        {m2::TensorParamName{"pad"}, pad_const.mesh_tensor()},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec), .run_params = std::move(run), .op_owned_tensors = std::move(op_owned)};
 }
 
 }  // namespace ttnn::prim

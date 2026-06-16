@@ -2,6 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port (in place — used only by the PadRmReaderWriterMultiCoreDefault factory).
+// Logic UNCHANGED; only the access mechanism moves to named bindings:
+//   - input src tensor address       -> ta::src
+//   - input CB c_0                    -> dfb::in0   (producer; reader fills, writer drains)
+//   - pad-fill scratch CB c_1         -> dfb::pad   (self-loop: address-source scratch only)
+//   - pad-align scratch CB c_2        -> dfb::pad_align (conditional self-loop; bound + referenced
+//                                        only when FRONT_PAD_OR_UNALIGNED, mirroring the host's
+//                                        conditional c_2 allocation)
+//   - positional CTAs/RTAs            -> get_arg(args::...); start_dim_offset array -> varargs
+// c_1 and c_2 are "fake" CBs: the kernel never produces/consumes them as a FIFO, it only grabs a
+// base pointer (get_read_ptr / get_write_ptr) and reads/writes the L1 region directly. They are
+// bound as self-loops (producer + consumer on this reader) to satisfy the DFB producer/consumer
+// invariant — interim, until a Metal 2.0 kernel-scratchpad / local-TensorAccessor resource lands.
+
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
@@ -10,10 +24,11 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes / 2; ++i) {
@@ -50,55 +65,62 @@ inline __attribute__((always_inline)) void read_input_pages_into_l1(
 }
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
-    uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
-    uint32_t start_page_id = get_arg_val<uint32_t>(3);
-    uint32_t front_pad_n = get_arg_val<uint32_t>(4);
-    uint32_t front_pad_c = get_arg_val<uint32_t>(5);
-    uint32_t front_pad_h = get_arg_val<uint32_t>(6);
-    tt_l1_ptr uint32_t* start_dim_offset = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
+    uint32_t num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    uint32_t num_sticks_per_barrier = get_arg(args::num_sticks_per_barrier);
+    uint32_t start_page_id = get_arg(args::start_page_id);
+    uint32_t front_pad_n = get_arg(args::front_pad_n);
+    uint32_t front_pad_c = get_arg(args::front_pad_c);
+    uint32_t front_pad_h = get_arg(args::front_pad_h);
+    // start_dim_offset[]: per-core starting dim indices (num_dims long), passed as varargs.
+    uint32_t start_dim_offset[4];
+    for (uint32_t d = 0; d < 4; ++d) {
+        start_dim_offset[d] = get_vararg(d);
+    }
 
-    constexpr uint32_t N = get_compile_time_arg_val(0);
-    constexpr uint32_t H = get_compile_time_arg_val(1);
-    constexpr uint32_t C = get_compile_time_arg_val(2);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t N_padded = get_compile_time_arg_val(4);
-    constexpr uint32_t H_padded = get_compile_time_arg_val(5);
-    constexpr uint32_t C_padded = get_compile_time_arg_val(6);
-    constexpr uint32_t stick_size_padded = get_compile_time_arg_val(7);
-    constexpr uint32_t stick_size_padded_front = get_compile_time_arg_val(8);
-    constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(9);
-    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(10);
-    constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(11);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(18);
+    constexpr uint32_t N = get_arg(args::N);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t C = get_arg(args::C);
+    constexpr uint32_t stick_size_bytes = get_arg(args::stick_size_bytes);
+    constexpr uint32_t N_padded = get_arg(args::N_padded);
+    constexpr uint32_t H_padded = get_arg(args::H_padded);
+    constexpr uint32_t C_padded = get_arg(args::C_padded);
+    constexpr uint32_t stick_size_padded = get_arg(args::stick_size_padded);
+    constexpr uint32_t stick_size_padded_front = get_arg(args::stick_size_padded_front);
+    constexpr uint32_t stick_size_padded_end = get_arg(args::stick_size_padded_end);
+    constexpr uint32_t num_zero_pad_sticks_read = get_arg(args::num_zero_pad_sticks_read);
+    constexpr uint32_t last_zero_stick_size = get_arg(args::last_zero_stick_size);
+    constexpr uint32_t stick_size_padded_aligned = get_arg(args::stick_size_padded_aligned);
 
-    constexpr bool not_pad_by_zero = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t front_padding = get_compile_time_arg_val(8);
-    constexpr bool unaligned = get_compile_time_arg_val(19) == 1;
+    constexpr bool not_pad_by_zero = get_arg(args::not_pad_by_zero) == 1;
+    constexpr uint32_t front_padding = get_arg(args::stick_size_padded_front);
+    constexpr bool unaligned = get_arg(args::unaligned) == 1;
 
-    constexpr uint32_t num_input_pages_in_row = get_compile_time_arg_val(20);
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(21);
-    constexpr uint32_t size_of_valid_data_in_last_input_page_in_row = get_compile_time_arg_val(22);
-    constexpr auto src_args = TensorAccessorArgs<23>();
+    constexpr uint32_t num_input_pages_in_row = get_arg(args::num_input_pages_in_row);
+    constexpr uint32_t input_page_size = get_arg(args::input_page_size);
+    constexpr uint32_t size_of_valid_data_in_last_input_page_in_row =
+        get_arg(args::size_of_valid_data_in_last_input_page_in_row);
 
     uint32_t packed_pad_value = 0;
     if constexpr (not_pad_by_zero) {
-        packed_pad_value = kernel_compile_time_args[13];
+        packed_pad_value = get_arg(args::packed_pad_value);
     }
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_pad = tt::CBIndex::c_1;
-    constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
-    CircularBuffer cb_in0_exp(cb_in0);
-    CircularBuffer cb_pad_exp(cb_pad);
-    CircularBuffer cb_pad_align_exp(cb_pad_align);
+    constexpr uint32_t cb_in0 = dfb::in0;
+    constexpr uint32_t cb_pad = dfb::pad;
+    DataflowBuffer cb_in0_exp(cb_in0);
+    DataflowBuffer cb_pad_exp(cb_pad);
+#if defined(FRONT_PAD_OR_UNALIGNED)
+    constexpr uint32_t cb_pad_align = dfb::pad_align;
+    DataflowBuffer cb_pad_align_exp(cb_pad_align);
+#endif
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(ta::src);
     Noc noc;
 
     const uint32_t pad_val_addr = cb_pad_exp.get_read_ptr();
+#if defined(FRONT_PAD_OR_UNALIGNED)
     const uint32_t pad_align_addr = cb_pad_align_exp.get_read_ptr();
+#endif
 
     fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
 
@@ -124,6 +146,7 @@ void kernel_main() {
                 noc.async_read_barrier();
             }
             if (read_stick) {
+#if defined(FRONT_PAD_OR_UNALIGNED)
                 if constexpr (front_padding) {  // Read noc into cb_pad_align l1
                     uint32_t temp_addr = cb_pad_align_exp.get_write_ptr();
                     read_input_pages_into_l1(
@@ -159,7 +182,9 @@ void kernel_main() {
                          .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                          .addr = pad_align_addr},
                         {.offset_bytes = 0});
-                } else {
+                } else
+#endif
+                {
                     read_input_pages_into_l1(
                         noc,
                         s,
