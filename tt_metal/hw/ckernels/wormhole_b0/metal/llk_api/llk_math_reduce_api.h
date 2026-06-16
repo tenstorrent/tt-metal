@@ -46,7 +46,7 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
     bool enforce_fp32_accumulation = false>
-inline void llk_math_reduce_init() {
+inline void llk_math_reduce_init(const std::uint32_t operandA = 0, const std::uint32_t operandB = 0) {
     _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, math_fidelity, enforce_fp32_accumulation>();
 }
 
