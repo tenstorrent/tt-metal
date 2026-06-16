@@ -8,7 +8,18 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
+
+// Largest pack_untilize block width (<= DEST tile capacity) dividing full_ct_dim.
+constexpr uint32_t untilize_pack_block_ct(uint32_t full_ct_dim) {
+    const uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
+    for (uint32_t bct = max_bct; bct >= 1; --bct) {
+        if (full_ct_dim % bct == 0) {
+            return bct;
+        }
+    }
+    return 1;
+}
 
 ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t in1_idx) {
     // Multiply input by cos
@@ -41,14 +52,19 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 #endif
 }
 
-ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
-    untilize_init(in0_cb);
+template <uint32_t num_tiles>
+ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb) {
+    constexpr uint32_t block_ct = untilize_pack_block_ct(num_tiles);
+    constexpr uint32_t num_blocks = num_tiles / block_ct;
+    pack_untilize_init<block_ct, num_tiles>(in0_cb, out_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
-    untilize_block(in0_cb, num_tiles, out_cb);
+    for (uint32_t b = 0; b < num_blocks; ++b) {
+        pack_untilize_block<block_ct, num_tiles>(in0_cb, 1, out_cb, b);
+        cb_pop_front(in0_cb, block_ct);
+    }
     cb_push_back(out_cb, num_tiles);
-    cb_pop_front(in0_cb, num_tiles);
-    untilize_uninit(in0_cb);
+    pack_untilize_uninit(out_cb);
 }
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -94,8 +110,8 @@ void kernel_main() {
     constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(15);
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
-    UNTILIZE_TILES(sin_cb, untilized_sin_cb, Wt);
-    UNTILIZE_TILES(cos_cb, untilized_cos_cb, Wt);
+    UNTILIZE_TILES<Wt>(sin_cb, untilized_sin_cb);
+    UNTILIZE_TILES<Wt>(cos_cb, untilized_cos_cb);
     TILIZE_ROWS(untilized_sin_cb, untilized_sin_sync_cb, retilized_sin_cb, Wt);
     TILIZE_ROWS(untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb, Wt);
     updated_cos_cb = retilized_cos_cb;

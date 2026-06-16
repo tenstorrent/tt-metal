@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -64,7 +65,9 @@ public:
     // `lock_api_function` grabs the owning MeshDevice's api_mutex_ (bound from
     // MeshDeviceImpl::lock_api). start()/queue()/stop() take it for the duration
     // of the call so prefetcher operations serialize against the rest of the
-    // device API, mirroring MeshCommandQueueBase.
+    // device API, mirroring MeshCommandQueueBase. enqueue_cq_signal_and_wait() also
+    // takes it, but only around its manager-state snapshot — it must release the lock
+    // before the dispatcher write, which re-locks the same (non-recursive) api_mutex_.
     DramCorePrefetcherManager(MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function);
     ~DramCorePrefetcherManager();
 
@@ -79,6 +82,15 @@ public:
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
         const std::vector<experimental::DramCorePrefetcherInput>& tensors);
+
+    // Make the prefetcher wait until all work currently enqueued on command queue
+    // `cq_id` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
+    // has the dispatcher write the new value into every DRAM core's signal slot
+    // (ordered after prior CQ work), and queues a WAIT_CQ request so each kernel
+    // blocks until that value is observed. Must be called synchronously on the
+    // host thread that enqueues the data writes (after them, before the dependent
+    // prefetch request).
+    void enqueue_cq_signal_and_wait(uint8_t cq_id, const std::optional<MeshCoordinateRangeSet>& device_subset);
 
     void stop();
 
@@ -119,19 +131,30 @@ private:
     uint32_t stage_ring_base_ = 0;
     uint32_t stage_ring_size_ = 0;
     uint32_t ring_half_ = 0;
+    uint32_t stage_third_ = 0;
     // Per-DRAM-core L1 layout (uniform across all sender cores on all devices).
     // socket_config / socket_data are local L1 addresses; host writes add the
     // DRAM_L1_NOC_OFFSET (passed into H2DSocket's DRAM-recv ctor) before going
     // over NOC.
     uint32_t socket_config_l1_addr_ = 0;
     uint32_t socket_data_l1_addr_ = 0;
+    // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
+    // across all sender cores. Carved at the front of the kernel working region.
+    uint32_t cq_signal_l1_addr_ = 0;
+    // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
+    // pre-increments cq_signal_counter_[cq_id] and uses it for both the dispatcher
+    // write and the WAIT_CQ request value.
+    std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
-    // sender_logical_cores_[s] = logical DRAM core for bank s. Picked at start
-    // via pick_unused_dram_logical_core(s); GCBs queued must use the same
-    // picks (deterministic on bank_id), which they do because the GCB factory
-    // calls the same picker.
+    // sender_logical_cores_[s] = logical DRAM core for sender s. Picked at start
+    // via pick_unused_dram_logical_core / dram_sender_logical_cores; GCBs queued
+    // must use the same picks (deterministic on bank_id), which they do because the
+    // GCB factory calls the same pickers with the same dual_senders_per_bank flag.
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
+    uint32_t num_banks_ = 0;
+    // When true, each DRAM bank is driven by two sender cores (see DramCorePrefetcherConfig).
+    bool dual_senders_per_bank_ = false;
 
     // One program per IDevice in the mesh; programs_[d].
     std::vector<std::unique_ptr<Program>> programs_;

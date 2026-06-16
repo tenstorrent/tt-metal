@@ -570,6 +570,11 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+
+    // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
+    // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
+    // the value is a mode-independent constant (single row, FACE_C_DIM - 1), so it is safe to set here.
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
@@ -593,6 +598,10 @@ inline void configure_pack(
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
     set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. It is
+    // owned by _llk_pack_init_, which runs after hw-configure and sets its own value per the
+    // "inits own SETADCXX" contract.
 
     t6_mutex_acquire(mutex::REG_RMW);
 
@@ -640,9 +649,6 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
-
-    // In Blackhole, x_start/x_end must be within 1 row size (i.e. from 0 to 15)
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
 inline std::uint8_t get_packer_dest_offset_index()

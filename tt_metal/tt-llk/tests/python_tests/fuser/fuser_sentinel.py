@@ -188,7 +188,7 @@ class FuserSentinel:
             tile_size_b = tile_size_a
 
         return (
-            f"_llk_unpack_hw_configure_<{dest_acc}, false>(\n"
+            f"_llk_unpack_hw_configure_<{dest_acc}>(\n"
             f"    {self._fmt(fmt.unpack_A_src)}, {self._fmt(fmt.unpack_B_src)},\n"
             f"    {self._fmt(fmt.unpack_A_dst)}, {self._fmt(fmt.unpack_B_dst)},\n"
             f"    {face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b},\n"

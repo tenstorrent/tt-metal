@@ -11,7 +11,6 @@ Equivalent to the reference Transformer class (models/demos/deepseek_v3/referenc
 but targeting the TT prefill path with SP+TP parallelism.
 """
 
-import os
 from pathlib import Path
 from typing import Callable, Optional, Union
 
@@ -116,25 +115,20 @@ class TtPrefillTransformer(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
         lm_head_is_column_parallel: bool = False,
+        is_chunked: bool = False,
+        slot_num: int = 1,
+        max_seq_len: Optional[int] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
+        self.is_chunked = is_chunked
 
-        # Log environment variables that define reference output cache and TTNN weights cache.
-        # This is to prevent accidental cache creation at unusual places and fill disk space.
-        TT_DS_PREFILL_TTNN_CACHE = os.getenv("TT_DS_PREFILL_TTNN_CACHE", None)
-        TT_DS_PREFILL_HOST_REF_CACHE = os.getenv("TT_DS_PREFILL_HOST_REF_CACHE", None)
-        logger.debug(f"{TT_DS_PREFILL_TTNN_CACHE=}")
-        logger.debug(f"{TT_DS_PREFILL_HOST_REF_CACHE=}")
-        if TT_DS_PREFILL_TTNN_CACHE is None:
-            raise RuntimeError(
-                "TT_DS_PREFILL_TTNN_CACHE environment variable is not set; export TT_DS_PREFILL_TTNN_CACHE=<path>"
-            )
-        if TT_DS_PREFILL_HOST_REF_CACHE is None:
-            raise RuntimeError(
-                "TT_DS_PREFILL_HOST_REF_CACHE environment variable is not set; export TT_DS_PREFILL_HOST_REF_CACHE=<path>"
+        if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
+            raise ValueError(
+                "TtPrefillTransformer requires weights: pass a non-empty state_dict "
+                f"or a weight_cache_path to an existing cache (got {weight_cache_path=})."
             )
 
         logger.info(f"Building TtPrefillTransformer with {num_layers} layers, seq_len={seq_len}")
@@ -175,6 +169,10 @@ class TtPrefillTransformer(LightweightModule):
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
+                is_chunked=is_chunked,
+                slot_num=slot_num,
+                layer_num=num_layers,
+                max_seq_len=max_seq_len,
             )
             self.layers.append(layer)
 
@@ -193,6 +191,18 @@ class TtPrefillTransformer(LightweightModule):
 
         # --- RoPE (computed once, reused across all layers) ---
         self.rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
+
+        # Chunked prefill uses the KV-pad-aware indexed rotated path: whole-cache cos/sin/trans built
+        # once here and reused for every chunk (only the runtime kv_actual offset varies). seq_len is
+        # the per-chunk size and max_seq_len the full per-user cache length.
+        self.indexed_rope = (
+            self.rope_setup.get_rope_tensors_indexed(
+                cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
+                chunk_size_global=seq_len,
+            )
+            if is_chunked
+            else None
+        )
 
         # --- LM Head ---
         self.lm_head = TtLMHead(
@@ -230,7 +240,10 @@ class TtPrefillTransformer(LightweightModule):
         return_intermediates: bool = False,
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
-        on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
+        on_layer_complete: Optional[Callable[[int], None]] = None,
+        actual_start: Optional[int] = None,
+        actual_end: Optional[int] = None,
+        cache_user_id: int = 0,
     ):
         """
         Forward pass: embed -> [block x N] -> norm -> lm_head.
@@ -244,7 +257,7 @@ class TtPrefillTransformer(LightweightModule):
             temperature: Temperature for sampling. Can be a single float or list of floats.
                         If list, returns first temperature result but stores all in intermediates.
             on_layer_complete: optional callback invoked by MLA after fill_cache_for_user_().
-                Called as on_layer_complete(layer_idx, kvpe_cache). Used for KV cache
+                Called as on_layer_complete(layer_idx). Used for KV cache
                 migration in disaggregated prefill/decode. When set, MLA also zeros
                 the padding region of the cache before fill so migration sees valid KV
                 + zero padding. When None, no migration or zeroing.
@@ -257,7 +270,15 @@ class TtPrefillTransformer(LightweightModule):
                             where "first_token" is a list of results for each temperature
                             (None if return_intermediates=False)
         """
-        rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
+        # Chunked prefill ([actual_start, actual_end) set) uses the prebuilt whole-cache indexed rope
+        # and writes this chunk at the actual_start offset of user cache_user_id's slot; the single-shot
+        # path builds per-call rope for this seq_len. The norm/lm_head/sample tail still runs and a token
+        # is returned, but the chunked caller ignores it (the populated cache is the output).
+        if actual_start is not None:
+            assert self.is_chunked, "actual_start requires the transformer to be built with is_chunked=True"
+            rope_tensors = self.indexed_rope
+        else:
+            rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
         intermediates = {} if return_intermediates else None
 
         h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
@@ -276,7 +297,9 @@ class TtPrefillTransformer(LightweightModule):
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
                 on_layer_complete=on_layer_complete,
-                actual_isl=number_of_non_padded_tokens,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                cache_user_id=cache_user_id,
             )
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:

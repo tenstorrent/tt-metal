@@ -338,21 +338,22 @@ namespace llk_pack_internal_bh
  * @brief Shared packer-init body behind the @ref _llk_pack_init_ overloads.
  *
  * Runs the common init sequence with each stage individually skippable: program the ADDR_MOD slots,
- * build the MOP template, set the packer strides, and program the final ADC X counter. The
+ * build the MOP template, set the packer strides, and program the packer X (datum) counter. The
  * skip_* template flags let a caller reuse state already established by a prior init or hw-configure.
  *
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  * @tparam zero_output: When true, the packer emits zeros instead of dest data.
  * @tparam skip_addrmod_config: When true, leave the ADDR_MOD slots untouched.
  * @tparam skip_packer_strides: When true, do not re-program the packer strides.
- * @tparam skip_final_adcxx: When true, skip the closing SETADCXX of the packer X counter.
  * @param pack_src_format: Source (dest register) data format; only used when programming strides.
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param num_tiles: Number of tiles processed per MOP run.
+ * @note Init owns the packer X (datum) counter (SETADCXX): every init programs its own value, mirroring
+ *       the Wormhole contract. On Blackhole the value is always a single row (FACE_C_DIM - 1).
  */
-template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool skip_final_adcxx>
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides>
 inline void pack_init_apply(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -370,10 +371,9 @@ inline void pack_init_apply(
         set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
     }
 
-    if constexpr (!skip_final_adcxx)
-    {
-        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    }
+    // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
+    // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 } // namespace llk_pack_internal_bh
 
@@ -451,44 +451,19 @@ inline void _llk_pack_hw_configure_(
 }
 
 /**
- * @brief Initialize the packer (addrmod + MOP) for a pack op, without touching packer strides.
- *
- * Lightweight init overload that skips stride setup and the final ADC X configuration; used when the
- * packer strides were already established by a prior hw-configure.
- *
- * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
- * @tparam zero_output: When true, packer emits zeros instead of dest data.
- * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
- * @param face_r_dim: Number of rows per face.
- * @param tile_c_dim: Tile column dimension (datums).
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param num_tiles: Number of tiles processed per MOP run.
- * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
- */
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false>
-inline void _llk_pack_init_(
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const std::uint32_t num_tiles  = 1)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, true /* skip_packer_strides */, true /* skip_final_adcxx */>(
-        0 /* pack_src_format unused */, face_r_dim, tile_c_dim, num_faces, num_tiles);
-}
-
-/**
  * @brief Initialize the packer (addrmod + MOP + strides) for a pack op given a source format.
  *
- * Full init overload: programs ADDR_MODs, the MOP template, packer strides, and the final ADC X
- * configuration. When packing tilized 8-bit datums the Blackhole row-unswizzle workaround can be
- * skipped (the issue does not affect 8-bit datums).
+ * The single Blackhole pack-init entry point: programs ADDR_MODs, the MOP template, (unless skipped)
+ * the packer strides, and the packer X (datum) counter. Per the "inits own SETADCXX" contract, every
+ * init sets its own X-counter value (FACE_C_DIM - 1 on Blackhole). When packing tilized 8-bit datums
+ * the Blackhole row-unswizzle workaround can be skipped (the issue does not affect 8-bit datums).
  *
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  * @tparam zero_output: When true, packer emits zeros instead of dest data.
  * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
- * @tparam skip_packer_strides: When true, do not re-program the packer strides.
- * @param pack_src_format: Source (dest register) data format.
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides (e.g. when a prior
+ *         hw-configure / reconfig already established them, or the caller programs them itself).
+ * @param pack_src_format: Source (dest register) data format. Only consulted when programming strides.
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
@@ -503,7 +478,7 @@ inline void _llk_pack_init_(
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
     const std::uint32_t num_tiles,
-    const bool skip_bh_tilize_workaround = false)
+    const bool skip_bh_tilize_workaround)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
@@ -520,12 +495,12 @@ inline void _llk_pack_init_(
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
     {
-        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
+        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
     else
     {
-        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
+        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
 }
@@ -533,14 +508,14 @@ inline void _llk_pack_init_(
 /**
  * @brief Tear down the packer after a pack op (no-op on Blackhole).
  *
- * On Blackhole @ref _llk_pack_init_ leaves the PAC X counter at its default value, so there is no
- * state to restore.
+ * On Blackhole @ref _llk_pack_init_ always sets the PAC X counter to FACE_C_DIM - 1 (a single row),
+ * which is also its default value, so there is no per-pack state for this teardown to restore.
  *
  * @note Pairs with @ref _llk_pack_init_.
  */
 inline void _llk_pack_uninit_()
 {
-    // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default
+    // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default.
 }
 
 /**

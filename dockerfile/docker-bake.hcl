@@ -12,6 +12,7 @@
 #
 # USAGE (local development):
 #   docker buildx bake dev              # Build dev image (tools+venvs built automatically)
+#   docker buildx bake dev-light        # Build dev image without venv layers
 #   docker buildx bake ci-test          # Build CI test image
 #   docker buildx bake ci-build         # Build CI build image
 #   docker buildx bake basic-dev        # Build basic dev image
@@ -20,6 +21,7 @@
 #   docker buildx bake venvs            # Build just the venv images
 #   docker buildx bake all              # Build everything
 #   docker buildx bake --print dev      # Dry run: show what would be built
+#   docker buildx bake --print dev-light
 #
 #   # Ubuntu 24.04 variant (PYTHON_VERSION must match — 22.04→3.10, 24.04→3.12):
 #   UBUNTU_VERSION=24.04 PYTHON_VERSION=3.12 docker buildx bake dev
@@ -31,7 +33,7 @@
 #   Workflows override tool/venv contexts to point to pre-built GHCR images and
 #   invoke bake via .github/actions/manual-docker-bake (manual CLI instead of
 #   docker/bake-action, which had registry metadata timeout issues).
-#     docker buildx bake ci-build ci-test dev \
+#     docker buildx bake ci-build ci-test dev-light dev \
 #       --set 'ci-build.contexts.ccache-layer=docker-image://ghcr.io/.../ccache:tag' \
 #       --set 'ci-build.contexts.mold-layer=docker-image://ghcr.io/.../mold:tag' \
 #       ...
@@ -42,7 +44,7 @@
 #                                      ├──> Basic targets (Dockerfile.basic-dev)
 #                                      └──> Manylinux target (Dockerfile.manylinux)
 #
-# The `contexts` feature wires tool/venv outputs into downstream builds:
+# The `contexts` feature wires required tool/venv outputs into downstream builds:
 #   - Locally: "target:ccache" means bake builds the ccache target first
 #   - In CI:   override to "docker-image://ghcr.io/.../ccache:tag"
 # =============================================================================
@@ -58,6 +60,14 @@ variable "UBUNTU_VERSION" {
 variable "PYTHON_VERSION" {
   # Must match UBUNTU_VERSION: 22.04 -> 3.10, 24.04 -> 3.12
   default = "3.10"
+}
+
+variable "TT_SMI_VERSION" {
+  # As of June 2026: this is where you set SMI version of Metal container image.
+  # Bake always passes this to the main targets, so it takes precedence over the
+  # ARG TT_SMI_VERSION default in dockerfile/Dockerfile (used only for standalone
+  # `docker build` without Bake). Keep the two in sync.
+  default = "5.2.0"
 }
 
 variable "UV_IMAGE" {
@@ -194,8 +204,9 @@ group "venvs" {
 # =============================================================================
 # Main image targets (from Dockerfile)
 #
-# Use Bake's `contexts` to wire in tool and venv layers. Bake builds the
-# referenced targets automatically before the main image.
+# Use Bake's `contexts` to wire in tool layers for all main targets and venv
+# layers only for targets that copy them. Bake builds referenced targets
+# automatically before the main image.
 #
 # The context names (ccache-layer, mold-layer, etc.) match the stage names
 # in the Dockerfile. Bake overrides those stages with the tool target outputs.
@@ -208,41 +219,66 @@ target "_main-common" {
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
     UV_IMAGE       = UV_IMAGE
+    TT_SMI_VERSION = TT_SMI_VERSION
   }
   contexts = {
     # Tool layers (resolved from Dockerfile.tools targets locally)
-    ccache-layer         = "target:ccache"
-    mold-layer           = "target:mold"
-    doxygen-layer        = "target:doxygen"
+    ccache-layer             = "target:ccache"
+    mold-layer               = "target:mold"
+    doxygen-layer            = "target:doxygen"
     clangbuildanalyzer-layer = "target:clangbuildanalyzer"
-    gdb-layer            = "target:gdb"
-    cmake-layer          = "target:cmake"
-    yq-layer             = "target:yq"
-    zstd-layer           = "target:zstd"
-    sfpi-layer           = "target:sfpi"
-    openmpi-layer        = "target:openmpi"
-    # Python venv layers (resolved from Dockerfile.python targets locally)
-    ci-build-venv-layer  = "target:ci-build-venv"
-    ci-test-venv-layer   = "target:ci-test-venv"
+    gdb-layer                = "target:gdb"
+    cmake-layer              = "target:cmake"
+    yq-layer                 = "target:yq"
+    zstd-layer               = "target:zstd"
+    sfpi-layer               = "target:sfpi"
+    openmpi-layer            = "target:openmpi"
   }
+}
+
+target "ci-build-light" {
+  inherits = ["_main-common"]
+  target   = "ci-build-light"
+  tags     = ["tt-metalium-ci-build-light:local"]
 }
 
 target "ci-build" {
   inherits = ["_main-common"]
   target   = "ci-build"
   tags     = ["tt-metalium-ci-build:local"]
+  contexts = {
+    ci-build-venv-layer = "target:ci-build-venv"
+  }
+}
+
+target "ci-test-light" {
+  inherits = ["_main-common"]
+  target   = "ci-test-light"
+  tags     = ["tt-metalium-ci-test-light:local"]
 }
 
 target "ci-test" {
   inherits = ["_main-common"]
   target   = "ci-test"
   tags     = ["tt-metalium-ci-test:local"]
+  contexts = {
+    ci-test-venv-layer = "target:ci-test-venv"
+  }
+}
+
+target "dev-light" {
+  inherits = ["_main-common"]
+  target   = "dev-light"
+  tags     = ["tt-metalium-dev-light:local"]
 }
 
 target "dev" {
   inherits = ["_main-common"]
   target   = "dev"
   tags     = ["tt-metalium-dev:local"]
+  contexts = {
+    ci-test-venv-layer = "target:ci-test-venv"
+  }
 }
 
 target "release" {
@@ -258,7 +294,7 @@ target "release-models" {
 }
 
 group "main" {
-  targets = ["ci-build", "ci-test", "dev"]
+  targets = ["ci-build-light", "ci-build", "ci-test-light", "ci-test", "dev-light", "dev"]
 }
 
 # =============================================================================

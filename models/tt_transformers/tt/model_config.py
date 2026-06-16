@@ -3621,19 +3621,24 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+            if os.getenv("CI") == "true":
+                # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                # that don't have clean checkpoint artifacts. Skip straight to from_config.
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            else:
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             model_cls = self.get_hf_model_cls()
@@ -3653,19 +3658,26 @@ class ModelArgs:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = model_cls.from_pretrained(
-                        self.CKPT_DIR,
-                        config=config,
-                        torch_dtype="auto",
-                        trust_remote_code=self.trust_remote_code_hf,
-                        local_files_only=True,
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                if os.getenv("CI") == "true":
+                    # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                    # that don't have clean checkpoint artifacts. Skip straight to from_config.
                     model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                else:
+                    try:
+                        # .from_pretrained + _init_weights works faster than .from_config
+                        model = model_cls.from_pretrained(
+                            self.CKPT_DIR,
+                            config=config,
+                            torch_dtype="auto",
+                            trust_remote_code=self.trust_remote_code_hf,
+                            local_files_only=True,
+                        )
+                        model.apply(model._init_weights)
+                    except Exception as e:
+                        logger.info(
+                            f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}"
+                        )
+                        model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
@@ -3739,19 +3751,24 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+            if os.getenv("CI") == "true":
+                # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                # that don't have clean checkpoint artifacts. Skip straight to from_config.
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            else:
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             if self.cached_hf_model is None:
