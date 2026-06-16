@@ -419,6 +419,13 @@ static Tensor std_var_impl(
 
     auto reduce_math = (reduce_type == reduction_common::ReduceType::Std) ? tt::tt_metal::ReduceOpMath::STD
                                                                           : tt::tt_metal::ReduceOpMath::VAR;
+    // The Welford reduction itself always runs unscaled (precise UnpackToDestFp32 path); the
+    // scalar is applied to the small-magnitude result inside the compute kernel via SFPU
+    // post-multiplication. Pre-scaling the input through mul_tiles_bcast_scalar would read
+    // cb_in via the FPU SrcA operand at TF32 precision (10-bit mantissa), collapsing
+    // large-offset inputs to a constant before the multiply and pinning the variance to ~0
+    // (issue #45222). The kernel derives the post-multiplier from this scalar:
+    //   var(s*x) = s^2 * var(x)      std(s*x) = |s| * std(x)
     ttnn::Tensor output_tensor = ttnn::prim::welford_reduce(
         input_tensor,
         reduce_math,
