@@ -50,6 +50,12 @@ _FACE_EXPERTS = _TOKEN_SHAPE[0] * _TOKEN_SHAPE[1]  # 256: the op's fixed face si
 # the output weights or the softmax exp.
 _PAD_NEG = -1e9
 
+# top-k values the generalized_moe_gate KERNEL op supports. Its finalize rank-mask keeps the right ranks
+# ONLY for these (the op's C++ validation + unit tests cover exactly {4,6,8}): topk 1-3 leave ranks 0-3
+# unmasked (wrong normalize) and 5/7 are untested. Any other k (n_group=1) takes the pure-ttnn fallback,
+# which handles any k. Keep in sync with the op's TT_FATAL (generalized_moe_gate_device_operation.cpp).
+_KERNEL_TOPK = (4, 6, 8)
+
 
 class TTMoEGate:
     """Produce ``(weights, indices)`` for ``TTMoEDecode`` from hidden states."""
@@ -140,7 +146,17 @@ class TTMoEGate:
         #   • ttnn fallback (_forward_fallback): EVERYTHING else — k ∉ {4,6,8} (the kernel's rank-mask only
         #     covers 4/6/8, drop threshold = 16*(k-4)) OR N > 512 (beyond the 2-block combine). It is pure
         #     ttnn.matmul → topk → softmax, so it handles any k and any N (e.g. qwen3.5: 512-experts top-10).
-        use_fallback = (n_group == 1) and (select_experts_k not in (4, 6, 8) or num_experts > 2 * _FACE_EXPERTS)
+        use_fallback = (n_group == 1) and (select_experts_k not in _KERNEL_TOPK or num_experts > 2 * _FACE_EXPERTS)
+        # Defense-in-depth: the kernel op path (n_group=1 AND not fallback) must only ever see a supported
+        # topk. use_fallback already routes every other k to the pure-ttnn path, so this can only fire if
+        # that routing is later changed inconsistently — fail loudly here instead of feeding the kernel a
+        # topk it silently mis-normalizes (e.g. topk 1-3 → first-4-ranks). The deepseek grouped op
+        # (n_group=8) is a separate kernel hardwired to k=8 (guarded above), so it's exempt.
+        if n_group == 1 and not use_fallback and select_experts_k not in _KERNEL_TOPK:
+            raise ValueError(
+                f"generalized_moe_gate kernel op supports topk {_KERNEL_TOPK}; got {select_experts_k} "
+                "(this k should have taken the ttnn fallback)"
+            )
 
         self.mesh_device = mesh_device
         self.num_experts = num_experts

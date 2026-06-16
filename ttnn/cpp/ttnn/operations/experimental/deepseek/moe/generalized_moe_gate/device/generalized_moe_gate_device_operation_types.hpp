@@ -14,7 +14,8 @@ struct operation_attributes_t {
     float eps{};
     float scaling_factor{};
     bool enable_sigmoid{};
-    uint32_t topk{8};  // number of experts to keep (k). <=8 supported (single block); 8 = full top-8.
+    uint32_t topk{8};            // number of experts to keep (k). ONLY 4, 6, 8 supported (enforced in validate; the
+                                 // finalize rank-mask + tests cover exactly these); 8 = full top-8.
     bool output_softmax{false};  // false = linear normalize (score/Σ); true = softmax over the selected top-k.
 };
 

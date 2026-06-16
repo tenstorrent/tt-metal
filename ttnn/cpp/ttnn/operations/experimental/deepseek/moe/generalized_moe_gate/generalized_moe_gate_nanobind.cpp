@@ -39,7 +39,7 @@ void bind_generalized_moe_gate(nb::module_& mod) {
             only sees [num_tokens, num_experts] and emits the top-``topk``.
 
         Shapes  (B = #tokens this call = #cores; E = #experts = 256 or 512; num_blocks = E/256, i.e. 1 or 2;
-                 k = ``topk``, 1..8). In the model the router logits arrive as ``[1, 1, B, E]`` and are
+                 k = ``topk`` ∈ {4, 6, 8}). In the model the router logits arrive as ``[1, 1, B, E]`` and are
                  reshaped into the op's per-token block layout below:
 
             input_tensor / bias_tensor (BF16), input_indices_tensor (UInt16):
@@ -79,7 +79,9 @@ void bind_generalized_moe_gate(nb::module_& mod) {
             scaling_factor: Routed scaling factor applied after normalization (default: 2.5).
             enable_sigmoid: Apply sigmoid to the logits before the bias add when True (sigmoid routing);
                 when False the raw logits are scored directly (default: False).
-            topk: Number of experts selected per token; supported values are 4, 6, 8 (default: 8).
+            topk: Number of experts selected per token. Supported values are 4, 6, or 8 ONLY — any other
+                value is rejected by op validation (the finalize rank-mask handles exactly these; topk 1-3
+                would leave ranks 0-3 unmasked and 5/7 are untested) (default: 8).
             output_softmax: Normalize the selected top-``topk`` scores with softmax when True; when False
                 they are linearly renormalized (divided by their sum) (default: False).
 

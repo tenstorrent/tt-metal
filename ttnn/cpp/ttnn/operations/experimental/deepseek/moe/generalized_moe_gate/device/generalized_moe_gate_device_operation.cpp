@@ -21,7 +21,16 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     using tt::tt_metal::DataType;
 
-    TT_FATAL(attrs.topk >= 1 && attrs.topk <= 8, "topk must be in [1, 8], got {}", attrs.topk);
+    // topk is a COMPILE-TIME arg to the templated finalize kernel, whose rank-mask is correct ONLY for
+    // {4, 6, 8} (the values the op tests cover): topk 1-3 fall into the `topk <= 4` branch but leave ranks
+    // 0-3 unmasked (the kernel itself notes "topk<4 would also need offset-0 lane masking"), so they would
+    // silently normalize/output the first FOUR ranks; topk 5/7 take the masked branch but are untested. Reject
+    // everything else here (matches the Python docstring + the TTMoEGate fallback's `_KERNEL_TOPK`) rather
+    // than let an unsupported value through to a silently-wrong route.
+    TT_FATAL(
+        attrs.topk == 4 || attrs.topk == 6 || attrs.topk == 8,
+        "topk must be one of {{4, 6, 8}} (the kernel rank-mask + op tests cover only these), got {}",
+        attrs.topk);
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& input_indices_tensor = tensor_args.input_indices_tensor;

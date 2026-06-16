@@ -95,6 +95,11 @@ struct GeneralizedMoeGate {
         static constexpr uint32_t cb_tilize_idx = cb_tilize_idx_;
         static constexpr uint32_t topk = topk_;
         static constexpr bool output_softmax = output_softmax_ == 1;
+        // topk is restricted to {4, 6, 8}: the finalize rank-mask is correct only for these (topk 1-3 leave
+        // ranks 0-3 unmasked, 5/7 are untested). The device op rejects other values on the host (TT_FATAL)
+        // before this kernel is ever compiled; this static_assert is the compile-time mirror, so a kernel
+        // built with an unsupported topk fails to compile instead of silently mis-normalizing.
+        static_assert(topk == 4 || topk == 6 || topk == 8, "generalized_moe_gate: topk must be one of {4, 6, 8}");
     };
 
     // ========================================================================
