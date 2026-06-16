@@ -158,57 +158,72 @@ def _reshard_activation_to_device(mesh_device: ttnn.MeshDevice, host_tensor, mes
     )
 
 
-def send_activation(runtime: TtPrefillRuntime, activation: ttnn.Tensor, subctx: int, chunk_idx: int, rank: int) -> None:
-    """Publish this rank's output activation to the downstream rank, then free the device tensor.
-    Atomic-rename so the consumer (single shared FS / NFS) never reads a partial file; the wavefront
-    barrier orders this rename before the consumer's read."""
+def send_activation(
+    runtime: TtPrefillRuntime, activation: ttnn.Tensor, subctx: int, chunk_idx: int, rank: int, meta: dict
+) -> None:
+    """Publish this rank's output activation AND its per-chunk metadata to the downstream rank as one
+    payload, then free the device tensor. The atomic rename makes the file appear whole, so the
+    consumer's polling recv_activation never sees a partial write — that pair is the only cross-rank
+    sync (no barrier). Bundling activation+metadata mirrors what the D2D-socket op will carry in one
+    transfer, so the downstream rank needs no shared schedule."""
     import torch
 
-    t0 = time.perf_counter()
-    host = _gather_activation_to_host(runtime.mesh_device, activation)
+    t_to = time.perf_counter()
+    host = _gather_activation_to_host(runtime.mesh_device, activation)  # to_torch: device -> host
+    ms_to_torch = (time.perf_counter() - t_to) * 1000.0
+    t_w = time.perf_counter()
     final = _act_path(subctx, chunk_idx, rank)
     tmp = f"{final}.tmp.{rank}"  # same dir -> rename is atomic on the target FS
-    torch.save(host, tmp)
+    torch.save({"act": host, "meta": meta}, tmp)
     os.rename(tmp, final)
+    ms_write = (time.perf_counter() - t_w) * 1000.0
     ttnn.deallocate(activation)
     nbytes = host.element_size() * host.nelement()
     logger.info(
         f"[pp rank {rank}] SEND chunk={chunk_idx} -> {final} "
-        f"shape={tuple(host.shape)} dtype={host.dtype} bytes={nbytes} "
-        f"gather+write={(time.perf_counter() - t0) * 1000.0:.1f}ms"
+        f"shape={tuple(host.shape)} dtype={host.dtype} bytes={nbytes} meta={meta} "
+        f"[xfer] to_torch={ms_to_torch:.2f}ms write={ms_write:.2f}ms"
     )
 
 
-def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, producer_rank: int) -> ttnn.Tensor:
-    """Receive the upstream rank's activation for this chunk and reshard it onto this rank's mesh.
-    runtime.prefill() deallocates the returned tensor.
+def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, producer_rank: int) -> tuple:
+    """Receive the upstream rank's activation + metadata for this chunk and reshard the activation
+    onto this rank's mesh. Returns (device_tensor, meta_dict); runtime.prefill() deallocates the tensor.
 
-    The producer's rename is barrier-ordered before this read, but NFS can briefly serve a stale
-    negative dentry, so retry the open a bounded number of times before giving up."""
+    Polls for the file — the producer's atomic rename is the only ordering, no barrier — so block here
+    until it appears: the open fails while the producer is still computing/renaming (and, cross-host
+    over NFS, while a stale negative dentry lingers). Retry up to PREFILL_PP_RECV_RETRIES * 0.1s; size
+    that above the producer's worst-case per-chunk compute time."""
     import torch
 
     path = _act_path(subctx, chunk_idx, producer_rank)
-    attempts = int(os.environ.get("PREFILL_PP_RECV_RETRIES", "50"))
-    t0 = time.perf_counter()
+    attempts = int(os.environ.get("PREFILL_PP_RECV_RETRIES", "3000"))
+    # Wait (poll) for the producer's atomic-renamed file; time it separately from the transfer cost.
+    t_wait = time.perf_counter()
     waits = 0
     for attempt in range(attempts):
-        try:
-            host = torch.load(path)
+        if os.path.exists(path):
             break
-        except FileNotFoundError:
-            if attempt == attempts - 1:
-                raise
-            waits += 1  # file from the other host not visible yet -> cross-host propagation in flight
-            time.sleep(0.1)  # absorb NFS negative-dentry cache; barrier already ordered the write
+        if attempt == attempts - 1:
+            raise FileNotFoundError(path)
+        waits += 1  # producer hasn't published this chunk yet (still computing, or cross-host NFS lag)
+        time.sleep(0.1)
+    ms_wait = (time.perf_counter() - t_wait) * 1000.0
+    t_r = time.perf_counter()
+    payload = torch.load(path)
+    ms_read = (time.perf_counter() - t_r) * 1000.0
     os.unlink(path)
-    out = _reshard_activation_to_device(runtime.mesh_device, host, runtime.config.mesh_shape)
+    host, meta = payload["act"], payload["meta"]
+    t_from = time.perf_counter()
+    out = _reshard_activation_to_device(runtime.mesh_device, host, runtime.config.mesh_shape)  # from_torch
+    ms_from_torch = (time.perf_counter() - t_from) * 1000.0
     nbytes = host.element_size() * host.nelement()
     logger.info(
         f"[pp] RECV chunk={chunk_idx} <- {path} (from rank {producer_rank}) "
-        f"shape={tuple(host.shape)} bytes={nbytes} waits={waits} "
-        f"read+reshard={(time.perf_counter() - t0) * 1000.0:.1f}ms"
+        f"shape={tuple(host.shape)} bytes={nbytes} meta={meta} waits={waits} wait={ms_wait:.1f}ms "
+        f"[xfer] read={ms_read:.2f}ms from_torch={ms_from_torch:.2f}ms"
     )
-    return out
+    return out, meta
 
 
 def _subcontext_id() -> int:
@@ -256,75 +271,83 @@ def _first_rank_chunk_tokens(runtime: TtPrefillRuntime, token_ids: list[int], kv
     )
 
 
-def run_standalone_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int) -> None:
+def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int) -> None:
+    """Decoupled per-rank loop: each rank runs its own loop, coordinated ONLY by the
+    activation+metadata file handoff (atomic rename + polling recv) — no cross-rank barrier, so an
+    upstream rank can race ahead of a downstream one (pipeline overlap). The first rank drives the
+    chunk schedule from the trace; the per-chunk metadata (slot / actual_start / actual_end / is_last)
+    rides with each activation, so downstream ranks need no shared schedule and learn the end from
+    is_last. Every rank checks the KV slice it populated against golden."""
     cfg = runtime.config
     subctx = _subcontext_id()
-    token_ids = _load_token_ids()
-    actual_isl = len(token_ids)
     slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % cfg.num_users
 
-    nchunks_env = os.environ.get("PREFILL_STANDALONE_NCHUNKS")
-    n_chunks = int(nchunks_env) if nchunks_env else ((actual_isl + cfg.chunk_size - 1) // cfg.chunk_size)
-    total_len = n_chunks * cfg.chunk_size
-    if total_len > cfg.max_seq_len:
-        raise ValueError(
-            f"{n_chunks} chunks x {cfg.chunk_size} = {total_len} exceeds per-user cache "
-            f"max_seq_len={cfg.max_seq_len}. Lower PREFILL_STANDALONE_NCHUNKS or bump PREFILL_MAX_SEQ_LEN."
-        )
-    token_ids = (token_ids + [1] * total_len)[:total_len]
+    token_ids = None
+    n_chunks = None
+    if cfg.is_first_rank:
+        # Only the first rank needs the input schedule; later ranks learn it from the metadata.
+        token_ids = _load_token_ids()
+        actual_isl = len(token_ids)
+        nchunks_env = os.environ.get("PREFILL_STANDALONE_NCHUNKS")
+        n_chunks = int(nchunks_env) if nchunks_env else ((actual_isl + cfg.chunk_size - 1) // cfg.chunk_size)
+        total_len = n_chunks * cfg.chunk_size
+        if total_len > cfg.max_seq_len:
+            raise ValueError(
+                f"{n_chunks} chunks x {cfg.chunk_size} = {total_len} exceeds per-user cache "
+                f"max_seq_len={cfg.max_seq_len}. Lower PREFILL_STANDALONE_NCHUNKS or bump PREFILL_MAX_SEQ_LEN."
+            )
+        token_ids = (token_ids + [1] * total_len)[:total_len]
 
-    num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
-    logger.info(f"[pp rank {rank}] actual_isl={actual_isl} slot={slot_id} " f"chunks={n_chunks} iters={num_iterations}")
+    logger.info(
+        f"[pp rank {rank}/{num_ranks}] decoupled loop start (is_first={cfg.is_first_rank} "
+        f"is_last={cfg.is_last_rank} slot={slot_id}" + (f" chunks={n_chunks}" if cfg.is_first_rank else "") + ")"
+    )
 
-    iter_times_ms = []
-    for it in range(num_iterations):
-        if _shutdown:
-            logger.info(f"[pp rank {rank}] shutdown requested, breaking loop")
-            break
-        t0 = time.perf_counter()
-        for c in range(n_chunks):
+    t0 = time.perf_counter()
+    c = 0
+    n_done = 0
+    while not _shutdown:
+        if cfg.is_first_rank:
+            if c >= n_chunks:
+                break
             kv_actual = c * cfg.chunk_size
-            # Barrier-ordered wavefront: a chunk has a strict rank0->rank1->...->rankN-1 data
-            # dependency, so ranks run one at a time. The barrier after each stage guarantees the
-            # producer's activation-file write lands before the next rank reads it. Fully serialized
-            # — a PCC/bring-up path, not a perf path.
-            for stage in range(num_ranks):
-                if rank == stage:
-                    if cfg.is_first_rank:
-                        inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
-                    else:
-                        inp = recv_activation(runtime, subctx, c, rank - 1)
-                    out = runtime.prefill(
-                        inp,
-                        slot_id=slot_id,
-                        actual_start=kv_actual,
-                        actual_end=kv_actual + cfg.chunk_size,  # standalone drives full chunks
-                    )
-                    if not cfg.is_last_rank:
-                        send_activation(runtime, out, subctx, c, rank)
-                ttnn.distributed_context_barrier()
-        ttnn.synchronize_device(runtime.mesh_device)
-        dt_ms = (time.perf_counter() - t0) * 1000.0
-        iter_times_ms.append(dt_ms)
-        logger.info(
-            f"[pp rank {rank}] [prefill timing] iter={it} num_tokens={total_len} "
-            f"chunks={n_chunks} slot={slot_id} wavefront = {dt_ms:.2f} ms"
+            inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
+            meta = {
+                "slot_id": slot_id,
+                "actual_start": kv_actual,
+                "actual_end": kv_actual + cfg.chunk_size,  # trace drives full chunks
+                "is_last": c == n_chunks - 1,
+            }
+        else:
+            inp, meta = recv_activation(runtime, subctx, c, rank - 1)
+            slot_id = meta["slot_id"]
+
+        out = runtime.prefill(
+            inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
         )
-    logger.info(f"[pp rank {rank}] [iter timing summary] per-iter ms = {[round(t, 2) for t in iter_times_ms]}")
+        if not cfg.is_last_rank:
+            send_activation(runtime, out, subctx, c, rank, meta)  # out is None on the last rank
+
+        n_done += 1
+        c += 1
+        if meta["is_last"]:
+            break
+
+    ttnn.synchronize_device(runtime.mesh_device)
+    logger.info(
+        f"[pp rank {rank}] processed {n_done} chunks in "
+        f"{(time.perf_counter() - t0) * 1000.0:.2f} ms (decoupled, no barrier)"
+    )
 
     if os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
-        # Each rank PCC-checks its own KV slice against the global golden trace (offset by
-        # first_layer_idx). All ranks passing == the rank-sliced model + host transport reproduce
-        # single-rank KV. Placeholder transport will fail this for non-first ranks, as intended.
+        # Each rank PCC-checks the KV slice it populated against the golden trace (offset by
+        # first_layer_idx); all ranks passing == the rank-sliced model + file handoff reproduce
+        # single-rank KV.
         from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import kv_cache_pcc_check
 
         trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
         kv_cache_pcc_check(
-            runtime,
-            slot_id=slot_id,
-            n_chunks=n_chunks,
-            trace_dir=trace_dir,
-            first_layer_idx=cfg.first_layer_idx,
+            runtime, slot_id=slot_id, n_chunks=n_done, trace_dir=trace_dir, first_layer_idx=cfg.first_layer_idx
         )
 
 
@@ -383,15 +406,19 @@ def main() -> None:
         config=runtime_config,
     )
     runtime.compile()
-    ttnn.distributed_context_barrier()
 
+    # No distributed_context barrier anywhere: ranks run fully independently, coordinated only by the
+    # activation+metadata file handoff. A barrier would turn one rank's failure into a deadlock for the
+    # others (a dead producer hangs the barrier); without it, a missing producer just times out the
+    # consumer's bounded recv poll. The distributed context is used only for rank identity.
     # The activation-handoff dir must exist before the first send (send_activation does not mkdir).
     os.makedirs(_act_dir(), exist_ok=True)
 
-    logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
-    run_standalone_loop(runtime, rank, num_ranks)
+    logger.info(f"[pp rank {rank}] setup complete, entering decoupled pipeline loop")
+    run_pipeline_loop(runtime, rank, num_ranks)
 
-    ttnn.distributed_context_barrier()
+    # No teardown barrier: ranks finish asynchronously (an upstream rank exits once it has produced
+    # its last chunk, before a downstream rank consumes it), so each tears down independently.
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
     logger.info(f"[pp rank {rank}] shutdown complete")

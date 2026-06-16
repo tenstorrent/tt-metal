@@ -35,6 +35,10 @@ PP_DIR="${PP_DIR:-/data/jjovicic/pp_acts}"
 # (models/demos/deepseek_v3_d_p/tt/runners -> 5 levels up).
 TT_METAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
+# Per-host LOCAL JIT cache. A shared (NFS) TT_METAL_CACHE makes both hosts write the same generated
+# kernel files (defines_generated.h, ...) concurrently on a cold cache -> "Stale file handle" compile
+# failures. /tmp is per-host, so each rank compiles into its own dir. ttrun auto-propagates TT_* vars.
+export TT_METAL_CACHE="${PP_TT_METAL_CACHE:-/tmp/tt-metal-cache-pp}"
 cd "$TT_METAL_HOME"
 
 # Fresh handoff dir so a stale activation file can never be read as this run's.
