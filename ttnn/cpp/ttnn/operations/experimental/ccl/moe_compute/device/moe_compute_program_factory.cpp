@@ -909,7 +909,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // tile_width_bytes = TILE_WIDTH * element_size
     // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
-    uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
+    uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * tilize_input_tensor.element_size();
     uint32_t max_tiles_per_local_chunk = max_tilize_subtoken_size / tile_width_bytes;
 
     const uint32_t primary_mcast_gather_group_num_cores = tilize_num_cores / 2;
