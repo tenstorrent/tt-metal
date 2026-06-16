@@ -55,6 +55,8 @@ void kernel_main() {
 
     tx.open();
     tx.set_route_unicast(dst_num_hops);
+    tx.arm_unicast_write(payload_size_bytes);  // invariant payload size for every page write
+    tx.arm_inc(1);                             // invariant inc value for the "done" signal
 
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
         cb_wait_front(sender_cb_id, 1);
@@ -70,7 +72,7 @@ void kernel_main() {
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
                 // op owns the coalescing (page->packet, packet_idx); the helper owns the fabric write.
-                tx.write_page(packet_base_addr, payload_size_bytes, packet_idx, dst_buffer);
+                tx.write_page(packet_base_addr, packet_idx, dst_buffer);
 
                 // reset counters
                 packet_page_idx = 0;
@@ -84,7 +86,7 @@ void kernel_main() {
 
     // signal the receiver "done"
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
-    tx.inc_remote(receive_sem_noc_addr, 1);
+    tx.inc(receive_sem_noc_addr);
 
     tx.close();
 }

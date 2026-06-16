@@ -9,6 +9,11 @@
 
 namespace dataflow_kernel_lib::ccl {
 
+// Namespace shorthands (scoped to this namespace; do not leak to includers).
+namespace linear_fabric = tt::tt_fabric::linear::experimental;
+using tt::tt_fabric::common::experimental::UnicastAtomicIncUpdateMask;
+using tt::tt_fabric::common::experimental::UnicastWriteUpdateMask;
+
 // ----------------------------------------------------------------------------
 // FabricStreamSender — construction / lifecycle
 // ----------------------------------------------------------------------------
@@ -27,7 +32,7 @@ FORCE_INLINE void FabricStreamSender::open() {
 FORCE_INLINE void FabricStreamSender::close() { conn_.close(); }
 
 // ----------------------------------------------------------------------------
-// FabricStreamSender — route + lazy header
+// FabricStreamSender — route
 // ----------------------------------------------------------------------------
 
 FORCE_INLINE void FabricStreamSender::set_route_unicast(uint32_t num_hops) {
@@ -36,45 +41,61 @@ FORCE_INLINE void FabricStreamSender::set_route_unicast(uint32_t num_hops) {
     // the LowLatencyPacketHeader path this resolves to.
     unicast_info_.dst_mesh_id = 0;
     unicast_info_.distance_in_hops = static_cast<uint16_t>(num_hops);
-    route_set_ = true;
-    if (payload_hdr_ != nullptr) {
-        ccl_routing_utils::fabric_set_line_unicast_route(payload_hdr_, unicast_info_);
-    }
 }
 
-FORCE_INLINE void FabricStreamSender::ensure_payload_header() {
+// ----------------------------------------------------------------------------
+// FabricStreamSender — armed unicast-write channel
+// ----------------------------------------------------------------------------
+
+FORCE_INLINE void FabricStreamSender::arm_unicast_write(uint32_t page_size_bytes) {
     if (payload_hdr_ == nullptr) {
         payload_hdr_ = PacketHeaderPool::allocate_header();
-        if (route_set_) {
-            ccl_routing_utils::fabric_set_line_unicast_route(payload_hdr_, unicast_info_);
-        }
     }
+    // set_state programs the invariant on-wire payload size (+ the chip-unicast hop
+    // count); the route util then writes the LowLatency 1-D routing fields (the
+    // proven-correct value, applied last). Helper owns the PayloadSize mask.
+    linear_fabric::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+        payload_hdr_,
+        static_cast<uint8_t>(unicast_info_.distance_in_hops),
+        nullptr,
+        static_cast<uint16_t>(align(page_size_bytes, alignment_)));
+    ccl_routing_utils::fabric_set_line_unicast_route(payload_hdr_, unicast_info_);
 }
 
-// ----------------------------------------------------------------------------
-// FabricStreamSender — writes + atomic-inc
-// ----------------------------------------------------------------------------
+FORCE_INLINE void FabricStreamSender::write(uint64_t dst_noc_addr, uint32_t src_l1_addr) {
+    // with_state issues the armed payload size, updating only the destination address.
+    linear_fabric::fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+        dir_, payload_hdr_, src_l1_addr, tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr});
+}
 
 template <class AddrGen>
-FORCE_INLINE void FabricStreamSender::write_page(
-    uint32_t src_l1_addr, uint32_t size_bytes, uint32_t page_idx, const AddrGen& dst) {
-    ensure_payload_header();
-    // Header carries the alignment-rounded on-wire size; the payload send moves the
-    // actual bytes (mirrors point_to_point's writer_send.cpp).
-    tt::tt_fabric::linear::to_noc_unicast_write(align(size_bytes, alignment_), payload_hdr_, page_idx, dst);
-    perform_payload_send(*dir_, src_l1_addr, size_bytes, payload_hdr_);
+FORCE_INLINE void FabricStreamSender::write_page(uint32_t src_l1_addr, uint32_t page_idx, const AddrGen& dst) {
+    const uint64_t dst_noc_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst, page_idx, 0);
+    write(dst_noc_addr, src_l1_addr);
 }
 
-FORCE_INLINE void FabricStreamSender::inc_remote(uint64_t remote_sem_noc_addr, uint32_t val) {
+// ----------------------------------------------------------------------------
+// FabricStreamSender — armed unicast atomic-inc channel
+// ----------------------------------------------------------------------------
+
+FORCE_INLINE void FabricStreamSender::arm_inc(uint32_t val) {
     if (sem_hdr_ == nullptr) {
         sem_hdr_ = PacketHeaderPool::allocate_header();
     }
-    if (route_set_) {
-        ccl_routing_utils::fabric_set_line_unicast_route(sem_hdr_, unicast_info_);
-    }
-    sem_hdr_->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, val});
-    dir_->wait_for_empty_write_slot();
-    dir_->send_payload_flush_blocking_from_address((uint32_t)sem_hdr_, sizeof(PACKET_HEADER_TYPE));
+    // set_state programs the invariant increment value + flush (the noc_address field is
+    // a placeholder, filled per-issue by inc()). Helper owns the Val|Flush mask.
+    linear_fabric::fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        sem_hdr_,
+        static_cast<uint8_t>(unicast_info_.distance_in_hops),
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, val});
+    ccl_routing_utils::fabric_set_line_unicast_route(sem_hdr_, unicast_info_);
+}
+
+FORCE_INLINE void FabricStreamSender::inc(uint64_t remote_sem_noc_addr) {
+    // with_state issues the armed value, updating only the destination semaphore address.
+    linear_fabric::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        dir_, sem_hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
 }
 
 }  // namespace dataflow_kernel_lib::ccl

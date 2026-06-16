@@ -34,8 +34,9 @@ void kernel_main() {
     // Signal the sender we are "ready" to receive (atomic-inc over fabric), then tear down.
     ack.open();
     ack.set_route_unicast(sender_num_hops);
+    ack.arm_inc(1);
     const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
-    ack.inc_remote(sender_sem_noc_addr, 1);
+    ack.inc(sender_sem_noc_addr);
     ack.close();
 
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on

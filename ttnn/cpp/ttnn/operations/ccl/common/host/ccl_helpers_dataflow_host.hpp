@@ -18,10 +18,10 @@
  * that already pulls these dependencies; splitting into a compiled .cpp + CMake
  * target is trivial later if the inline footprint grows.
  *
- * Design + per-op mapping: see CCL_DATAFLOW_HELPER_DESIGN.md at the repo root. The
- * bodies of ccl_packet_dims and ccl_dm_route are the proven point_to_point
- * detail::compute_aligned_packet_dims / detail::fabric_1d_routing, moved here so a
- * single documented surface owns them (incl. the bf16 bit_floor and the
+ * Design + per-op mapping live in the ccl_helpers_dataflow.hpp banner (vetted-in-header,
+ * no standalone design doc). The bodies of ccl_packet_dims and ccl_dm_route are the
+ * proven point_to_point detail::compute_aligned_packet_dims / detail::fabric_1d_routing,
+ * moved here so a single documented surface owns them (incl. the bf16 bit_floor and the
  * forward/backward sign-reversal footguns).
  */
 
