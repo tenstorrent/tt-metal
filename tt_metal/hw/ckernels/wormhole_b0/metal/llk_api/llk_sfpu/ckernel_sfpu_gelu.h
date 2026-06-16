@@ -16,6 +16,7 @@
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
+#include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh_f32
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -345,6 +346,68 @@ inline void calculate_gelu() {
             sfpi::dst_reg++;
         }
     }
+}
+
+// =============================================================================
+// GELU tanh approximation in FP32 — bit-identical to the Python decomposition:
+//   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+//
+// Reproduces the per-op FP32 rounding of the ttnn op sequence in
+// gelu_tanh_f32(): each multiply/add is materialized to a vFloat before being
+// consumed, so no SFPMAD fusion changes the last-bit result. The tanh call is
+// the same _sfpu_tanh_fp32_accurate_ that ttnn.tanh dispatches to under FP32
+// accumulator, so its output is bit-identical to ttnn.tanh.
+//
+// Matches ttnn.pow(x, 3) for *integer* exponent 3 (POWER_ITERATIVE = x*x*x).
+// If a caller routes float exponent 3.0 through UnaryOpType::POWER (exp-log),
+// that path is NOT bit-equivalent to this kernel — by design, this op fuses
+// the integer-power variant which is what models actually want.
+// =============================================================================
+
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_gelu_tanh_f32() {
+    constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
+    constexpr float GELU_TANH_K = 0.044715f;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+
+        // x^3 via two FP32 multiplies (matches POWER_ITERATIVE, two roundings).
+        sfpi::vFloat x2 = x * x;
+        sfpi::vFloat x3 = x2 * x;
+
+        // 0.044715 * x^3, then x + that. Kept on separate lines so each step
+        // round-trips through a vFloat — prevents SFPMAD fusion.
+        sfpi::vFloat kx3 = x3 * GELU_TANH_K;
+        sfpi::vFloat inner = x + kx3;
+
+        sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
+
+        // Bit-identical to ttnn.tanh under FP32 accumulator.
+        sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(scaled);
+
+        sfpi::vFloat one_plus = 1.0f + t;
+
+        // 0.5 * x first, then multiply by (1 + tanh(...)) — matches Python
+        // left-to-right associativity: `0.5 * x * one_plus_tanh`.
+        sfpi::vFloat half_x = 0.5f * x;
+        sfpi::vFloat result = half_x * one_plus;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void gelu_tanh_f32_init() {
+    // _sfpu_tanh_fp32_accurate_ internally calls _sfpu_sigmoid_, which needs
+    // its programmable-constants init. tanh_init<false, fp32> does exactly
+    // that (see ckernel_sfpu_tanh.h:178-196).
+    tanh_init<false, is_fp32_dest_acc_en>();
 }
 
 // =============================================================================

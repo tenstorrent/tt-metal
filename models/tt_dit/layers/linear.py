@@ -37,11 +37,13 @@ class Linear(Module):
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
         elif self.activation_fn == "gelu_tanh":
-            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
-            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
-            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
+            # FP32 fused tanh-GELU: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))).
+            # Bit-identical to F.gelu(approximate="tanh") computed at FP32. NaN-safe:
+            # the kernel uses x*x*x for the cube (no exp/log path), so it does not
+            # repro the audio-decoder "mesh of 4 voices" artifact that bit a prior
+            # hand-rolled ttnn.pow(x, 3.0) decomposition.
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU_TANH_F32, 0.0)
         self.mesh_device = mesh_device
 
         """
@@ -139,11 +141,13 @@ class ColParallelLinear(Module):
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
         elif self.activation_fn == "gelu_tanh":
-            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
-            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
-            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
+            # FP32 fused tanh-GELU: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))).
+            # Bit-identical to F.gelu(approximate="tanh") computed at FP32. NaN-safe:
+            # the kernel uses x*x*x for the cube (no exp/log path), so it does not
+            # repro the audio-decoder "mesh of 4 voices" artifact that bit a prior
+            # hand-rolled ttnn.pow(x, 3.0) decomposition.
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU_TANH_F32, 0.0)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
