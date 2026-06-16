@@ -605,6 +605,7 @@ def run_test_linear(
         (3072, 5120, 1280, True, True, None, 1, False, 8, 8, 8, 2, 2),
         (3072, 5120, 3456, True, True, "gelu", 1, False, 8, 8, 8, 2, 2),
         (3072, 3456, 5120, True, True, None, 1, False, 8, 9, 8, 2, 2),
+        (4864, 4096, 1024, True, True, None, 1, False, 16, 8, 4, 2, 2),
     ],
     ids=[
         "4k4k4k",
@@ -629,6 +630,7 @@ def run_test_linear(
         "3072x5120x2560",
         "3072x5120x6912",
         "3072x3456x5120",
+        "4864x4096x1024",
     ],
 )
 @pytest.mark.parametrize(
