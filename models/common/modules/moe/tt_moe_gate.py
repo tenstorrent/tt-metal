@@ -70,6 +70,31 @@ class TTMoEGate:
         # Entry point mirrors TTMoEDecode: a config + the torch gate weight/bias(es) in; everything
         # device-side is built here. Unpack the config into the locals the rest of __init__ uses.
         self.config = config
+
+        # The config DECLARES which bias tensors a model has (`score_correction_bias` = the selection-only
+        # correction bias `torch_gate_bias`; `router_bias` = the router-LINEAR bias `torch_gate_proj_bias`).
+        # Nothing downstream re-checks: a missing bias is SILENTLY swapped for zeros (correction, line ~211)
+        # or a bias-free matmul (router, forward), and a stray bias is used regardless of the flag — both
+        # change routing while looking valid. Enforce the contract here so a miswired gate fails at
+        # construction, not as a quietly-wrong route. (Validate BOTH directions: required AND forbidden.)
+        if config.score_correction_bias and torch_gate_bias is None:
+            raise ValueError("config.score_correction_bias=True requires torch_gate_bias, but none was given")
+        if not config.score_correction_bias and torch_gate_bias is not None:
+            raise ValueError("config.score_correction_bias=False forbids torch_gate_bias, but one was given")
+        if config.router_bias and torch_gate_proj_bias is None:
+            raise ValueError("config.router_bias=True requires torch_gate_proj_bias, but none was given")
+        if not config.router_bias and torch_gate_proj_bias is not None:
+            raise ValueError("config.router_bias=False forbids torch_gate_proj_bias, but one was given")
+        # ...and the right SHAPE: both biases are 1-D [num_routed_experts] (the device upload reshapes to
+        # [1, N] / F.pads the last dim assuming exactly that). A [1, N] / [N, 1] / wrong-length tensor would
+        # mis-pad or mis-broadcast into the wrong experts silently, so reject anything but [num_experts].
+        for _name, _tensor in (("torch_gate_bias", torch_gate_bias), ("torch_gate_proj_bias", torch_gate_proj_bias)):
+            if _tensor is not None and tuple(_tensor.shape) != (config.num_routed_experts,):
+                raise ValueError(
+                    f"{_name} must be shape [{config.num_routed_experts}] (num_routed_experts); "
+                    f"got {tuple(_tensor.shape)}"
+                )
+
         num_experts = config.num_routed_experts
         select_experts_k = config.select_experts_k
         hidden_size = config.hidden_size
