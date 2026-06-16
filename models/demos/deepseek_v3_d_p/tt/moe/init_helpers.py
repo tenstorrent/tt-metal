@@ -343,7 +343,9 @@ def get_gate_outputs(
         seq_len_per_chip: Sequence length per chip
         num_experts_per_tok: Number of experts each token routes to
         expert_dispatch_table: Expert to chip mapping table
-            Shape: (num_dispatch_groups, num_routed_experts). If None, computed internally.
+            Shape: (num_dispatch_groups, num_routed_experts) or, with padding awareness,
+            (num_dispatch_groups, num_routed_experts + 1) where the trailing sentinel column
+            (index num_routed_experts, always -1) is ignored here. If None, computed internally.
 
     Returns:
         expert_offsets: Base offset for each expert from each chip (sparse per group)
@@ -366,6 +368,10 @@ def get_gate_outputs(
             dispatch_group_size=dispatch_group_size,
             num_dispatch_groups=num_dispatch_groups,
         )
+
+    # Drop the padding sentinel column (index num_routed_experts, always -1) if present, so the
+    # rest of the body operates at width num_routed_experts and matches expert_counter_dense.
+    expert_dispatch_table = expert_dispatch_table[:, :num_routed_experts]
 
     # Count tokens per expert per chip (dense)
     expert_counter_dense = torch.zeros((dispatch_group_size, num_routed_experts), dtype=torch.int32)
