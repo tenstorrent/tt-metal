@@ -11,6 +11,7 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
@@ -295,13 +296,25 @@ class LTXPipeline:
         self._owned_audio_submesh = None
         self._audio_submesh_shape: tuple[int, int] | None = None
         self._audio_submesh_num_links = ccl_manager.num_links
+        # The submesh decodes audio on a different HW command queue than cq 0 (which the parent
+        # mesh used for the video DiT/VAE). A child submesh shares the parent's HW CQs, so sharing
+        # cq 0 makes the audio CCL deadlock against the parent's live cq-0 work and makes the
+        # cq-0-in-use close guard (mesh_device.cpp) throw on either close order. Issuing audio on
+        # cq 1 keeps the parent on cq 0 exclusively and the child on cq 1 exclusively, so the
+        # per-cq guard passes and there is no cross-cq contention. Requires the mesh to be opened
+        # with num_command_queues=2. Full-mesh audio stays on cq 0 (audio_cq_id None = no override).
+        self._audio_cq_id: int | None = None
         _audio_submesh = os.environ.get("LTX_AUDIO_SUBMESH")
         if _audio_submesh:
             r, c = (int(v) for v in _audio_submesh.lower().split("x"))
             full = tuple(mesh_device.shape)
             if r <= full[0] and c <= full[1] and (r, c) != full:
                 self._audio_submesh_shape = (r, c)
-                logger.info(f"Audio decode will route onto {r}x{c} submesh of {full[0]}x{full[1]} (lazy)")
+                self._audio_cq_id = int(os.environ.get("LTX_AUDIO_CQ", "1"))
+                logger.info(
+                    f"Audio decode will route onto {r}x{c} submesh of {full[0]}x{full[1]} "
+                    f"on cq {self._audio_cq_id} (lazy)"
+                )
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig(
                 height_parallel=parallel_config.tensor_parallel,
@@ -412,6 +425,17 @@ class LTXPipeline:
         full = tuple(self.mesh_device.shape)
         logger.info(f"Audio decode routed onto {r}x{c} submesh of {full[0]}x{full[1]}")
         self._new_audio_decoder()
+
+    def _audio_cq(self):
+        """CQ context for audio ops: cq 1 on the submesh, the default cq otherwise.
+
+        Wrapping the whole decode (and the submesh+CCLManager build) routes every op the audio
+        path issues — including the queue_id-less async CCL ops, which resolve their CQ from the
+        thread-local current-CQ — onto the audio cq, keeping it off the parent's cq 0.
+        """
+        if self._audio_cq_id is None:
+            return contextlib.nullcontext()
+        return ttnn.command_queue(self._audio_cq_id)
 
     def release_audio_submesh(self) -> None:
         """Drop the pipeline's references to the audio decode submesh (LTX_AUDIO_SUBMESH).
@@ -1749,7 +1773,14 @@ class LTXPipeline:
         through ``AudioDecoder`` (mel-VAE) then ``VocoderWithBWE`` (vocoder + BWE).
         Both take and return torch tensors, handling device upload/download internally.
         ``num_frames``/``fps`` trim the output to the clip duration.
+
+        On the audio submesh the whole decode (and the lazy submesh build) runs under the audio
+        CQ so it stays off the parent's cq 0; on the full mesh this is the default CQ (no-op).
         """
+        with self._audio_cq():
+            return self._decode_audio_impl(audio_latent, num_frames, fps=fps)
+
+    def _decode_audio_impl(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio"
 
         # Build the audio submesh + decoder shells now (no-op after the first call, and on the

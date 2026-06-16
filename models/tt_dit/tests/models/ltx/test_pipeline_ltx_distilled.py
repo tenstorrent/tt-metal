@@ -28,6 +28,12 @@ from models.tt_dit.utils.test import line_params, ring_params
 ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
 line_trace_params = {**line_params, "trace_region_size": 300_000_000}
 
+# LTX_AUDIO_SUBMESH routes audio decode onto a child submesh on cq 1 (the parent video keeps
+# cq 0); that requires the mesh to be opened with 2 HW command queues. Opt-in so the default
+# full-mesh runs open with 1 CQ exactly as before.
+if os.environ.get("LTX_AUDIO_SUBMESH"):
+    ring_trace_params = {**ring_trace_params, "num_command_queues": 2}
+
 
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
 # (no checkpoint present). Runs the same prompt as the girl audio fixture (DEFAULT_LTX_PROMPT — the
