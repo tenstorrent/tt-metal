@@ -1,6 +1,7 @@
 # This file defines the test matrix for the triage tests.
 # Triage validates the on-device debug/triage tooling (watcher output parsing,
 # hang detection, triage report generation). Owned by the debug team.
+# Merge-gate core tests live in triage_smoke_merge_gate_tests.yaml (team triage, budget smoke).
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.

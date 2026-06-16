@@ -15,6 +15,11 @@ on:
       enabled-skus:
         required: true
         type: string
+      test-category:
+        required: false
+        type: string
+        default: triage
+        description: "Time-budget workflow key passed to verify_time_budget.py (smoke for merge-gate, triage for L2/standalone)."
       enable-watcher:
         description: "Enable watcher"
         default: false
@@ -38,7 +43,7 @@ jobs:
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/triage_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.test-category == 'smoke' && './tests/pipeline_reorg/triage_smoke_merge_gate_tests.yaml' || './tests/pipeline_reorg/triage_tests.yaml' }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -57,7 +62,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "triage"
+            "${{ inputs.test-category }}"
       - name: Build unified test matrix based on enabled SKUs
         id: prepare
         run: |
@@ -74,7 +79,9 @@ jobs:
           # run-hang-report-test selects which rows run (they are disjoint):
           #   true  -> only the hang-report test (nightly's unique coverage)
           #   false -> only the core triage tests (already gated on merge-gate)
-          if [[ "$RUN_HANG_REPORT" == "true" ]]; then
+          if [[ "${{ inputs.test-category }}" == "smoke" ]]; then
+            selected="$MATRIX"
+          elif [[ "$RUN_HANG_REPORT" == "true" ]]; then
             selected=$(echo "$MATRIX" | jq -c '[.[] | select((.tags // []) | index("hang-report"))]')
           else
             selected=$(echo "$MATRIX" | jq -c '[.[] | select((.tags // []) | index("hang-report") | not)]')
