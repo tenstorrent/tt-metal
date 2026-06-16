@@ -32,7 +32,7 @@
     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
     export MESH_DEVICE=P150x4
-    pytest --timeout 1800 models/experimental/mistral_24b/tests/pipeline_tests/test_end2end.py
+    pytest --timeout 1800 models/experimental/mistral_24b/tests/pipeline_tests
   skus:
     bh_quietbox_2:
       timeout: 45
