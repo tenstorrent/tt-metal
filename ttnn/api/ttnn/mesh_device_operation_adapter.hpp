@@ -675,7 +675,7 @@ public:
             // shared (shared_ptr) across all stamped coordinate-range programs. Empty
             // unless the factory allocated its own tensors; non-empty selects the
             // reuse-parked cache-hit path (no factory re-run, no re-allocation).
-            std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
+            std::shared_ptr<std::vector<tt::tt_metal::Tensor>> op_owned_tensors;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -761,14 +761,13 @@ public:
             // across every stamped coordinate-range program. The std::vector move preserves
             // element addresses, so the run_params TensorArguments the factory built against
             // these elements stay valid (matched by pointer identity below).
-            auto op_owned =
-                std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors));
+            auto op_owned = std::make_shared<std::vector<tt::tt_metal::Tensor>>(std::move(artifacts.op_owned_tensors));
 
             // Candidate list for binding resolution: io tensors first, then op-owned.
             auto candidate_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             const std::size_t io_tensor_count = candidate_tensors.size();
             for (const auto& owned_tensor : *op_owned) {
-                candidate_tensors.push_back(std::cref(owned_tensor));
+                candidate_tensors.push_back(std::cref(owned_tensor.mesh_tensor()));
             }
             auto bindings = resolve_bindings(artifacts.run_params.tensor_args, candidate_tensors);
 
@@ -823,7 +822,7 @@ public:
                         std::reference_wrapper<const tt::tt_metal::MeshTensor> ref =
                             (b.tensor_idx < sv.io_tensor_count)
                                 ? io[b.tensor_idx]
-                                : std::cref((*sv.op_owned_tensors)[b.tensor_idx - sv.io_tensor_count]);
+                                : std::cref((*sv.op_owned_tensors)[b.tensor_idx - sv.io_tensor_count].mesh_tensor());
                         fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{ref});
                     }
                     tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
