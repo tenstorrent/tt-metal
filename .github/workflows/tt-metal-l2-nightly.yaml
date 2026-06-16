@@ -209,7 +209,7 @@ jobs:
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
 
   # =============================================================================
-  # TTNN team 
+  # TTNN team
   # =============================================================================
   ops-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -342,7 +342,6 @@ jobs:
   # =============================================================================
   # LLK team
   # =============================================================================
-
   # LLK Unit Tests — runs the full LLK gtest binary in slow dispatch as a comprehensive
   # nightly regression. The PR gate covers two narrower slices (FD path via
   # llk-fd-unit-tests-* and a Quasar+SD-only slice via llk-sd-unit-tests-*); this job is the
