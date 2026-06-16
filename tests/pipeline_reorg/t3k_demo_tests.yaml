@@ -66,7 +66,6 @@
 - name: t3k_wan2.2_tests
   cmd: |
     export VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
-    sudo apt-get update -qq && sudo apt-get install -y -qq unzip > /dev/null
     uv pip install --no-deps -r models/tt_dit/utils/vbench-requirements.txt
     run_t3000_wan22_tests
   skus:

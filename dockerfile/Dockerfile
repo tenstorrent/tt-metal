@@ -179,6 +179,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     sudo \
     uuid-runtime \
+    unzip \
     wget \
     zstd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
