@@ -10,13 +10,26 @@ import time
 torch.set_printoptions(sci_mode=False)
 
 import ttnn
-
+import tracy
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+valid_tile_heights = [1, 2, 4, 8, 16, 32]
+
+
+def get_tile_height(m):
+    for tile_height in valid_tile_heights:
+        if m <= tile_height:
+            return tile_height
+    return 32
 
 
 @pytest.mark.parametrize(
     "m, k, n",
     [
+        (1, 1024, 4096),
+        (4, 1024, 4096),
+        (8, 1024, 4096),
+        (16, 1024, 4096),
         (32, 1024, 4096),
         # DENOISE
         (64, 1024, 4096),
@@ -31,6 +44,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_matmul_decode(device, m, k, n, num_inputA_cores):
     torch.manual_seed(0)
 
+    tile_height = get_tile_height(m)
+    inputA_tile_size = ttnn.Tile((tile_height, 32))
     num_inputB_cores = n // 32
     print(f"num_inputA_cores: {num_inputA_cores}, num_inputB_cores: {num_inputB_cores}")
     torch_input_tensor_a = torch.randn((m, k), dtype=torch.bfloat16)
@@ -58,12 +73,17 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
         use_height_and_width_as_shard_shape=True,
     )
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_memory_config
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=inputA_tile_size,
+        device=device,
+        memory_config=in0_memory_config,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_memory_config
     )
-    for x in range(10):
+    tracy.signpost(f"MatmulDecode: m: {m} k: {k} n: {n}")
+    for x in range(2):
         output_tensor = ttnn.matmul_decode(input_tensor_a, input_tensor_b)
 
     assert output_tensor.shape == (m, n)
