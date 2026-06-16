@@ -357,7 +357,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // (E[x] scratch) additionally feeds the non-distributed LayerNorm E[x] site so cb_in stays intact
     // for the (x - E[x]) pass.
     const bool do_col_mask = col_mask_needed && !use_welford && !is_post_all_gather;
-    const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm && !is_pre_all_gather && !is_post_all_gather;
+    const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm && !is_pre_all_gather;
 
     RuntimeArgsContext rt_ctx{
         .grid = grid,
