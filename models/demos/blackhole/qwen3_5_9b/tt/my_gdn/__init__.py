@@ -2,15 +2,22 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from enum import Enum
 from .weights import load_gdn_weights
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from .operations import (
     causal_conv1d_silu,
+    causal_conv1d_silu_update,
     l2norm,
     chunk_identity,
     chunk_triangular_masks,
     solve_unit_lower_triangular,
 )
+
+
+class Mode(Enum):
+    PREFILL = "prefill"
+    DECODE = "decode"
 
 
 class Qwen35RMSNormGated(LightweightModule):
@@ -67,7 +74,11 @@ class Qwen35GatedDeltaNet(LightweightModule):
     def reset_conv_state(self):
         self.conv_state = ttnn.zeros(
             [self.batch_size, 1, self.conv_kernel_size, self.conv_dim],
-            dtype=ttnn.float32,
+            # bf16, matching the bf16 mixed_qkv it caches: the state is a verbatim
+            # shift buffer of recent conv inputs (no accumulation), so fp32 only
+            # doubled DRAM/bandwidth for no precision, and fp16 would risk range
+            # clipping on activation outliers. bf16 round-trips losslessly.
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
         )
@@ -300,11 +311,107 @@ class Qwen35GatedDeltaNet(LightweightModule):
         # decode path can pick it up; callers that don't need it simply ignore it.
         return core_attn_out, last_recurrent_state
 
-    def forward_prefill(self, hidden_states):
+    def recurrent_gated_delta_rule(self, query, key, value, g, beta, initial_state=None, use_qk_l2norm_in_kernel=False):
+        """Single-token (decode) recurrent gated-delta scan — torch_recurrent_gated_delta_rule.
+
+        The decode-time sibling of chunk_gated_delta_rule: rather than the chunked
+        parallel form, it walks the sequence one position at a time, carrying the
+        [B, num_v_heads, head_k_dim, head_v_dim] recurrent (KV) state forward and
+        reading the output off it. seq_len is 1 in decode so the loop runs once, but
+        it is written for the general case so a short prefill could reuse it.
+
+        CRITICAL ordering (this is the easy bug): the Qwen3.5 reference DECAYS the
+        state *before* the read — kv_mem is read off the already-decayed state, not
+        the previous step's state. The experimental GDN's decode op
+        (ttnn_delta_rule_ops.recurrent_gated_delta_rule_decode_ttnn) uses the FLA
+        convention (read first, decay during the write), which is a *different*
+        recurrence and would silently diverge here. We follow
+        modeling_qwen3_5.py:340-351 exactly.
+        """
+        initial_dtype = query.dtype
+        # l2norm runs on the head-last layout, in the input dtype, BEFORE the
+        # transpose — identical to chunk_gated_delta_rule and the torch ref.
+        if use_qk_l2norm_in_kernel:
+            query = l2norm(query, dim=-1, eps=1e-6)
+            key = l2norm(key, dim=-1, eps=1e-6)
+
+        # heads-before-seq, then promote to fp32. q/k/v/beta arrive bf16 (g is
+        # already fp32). fp32 is not optional here: the state recurrence compounds
+        # every step and decay = exp(g) sits near 1.0, where bf16's ~0.008
+        # resolution would quantize the per-step forgetting and accumulate error.
+        query, key, value, beta, g = [ttnn.transpose(x, 1, 2) for x in (query, key, value, beta, g)]
+        query, key, value, beta, g = [ttnn.typecast(x, ttnn.float32) for x in (query, key, value, beta, g)]
+
+        batch_size, num_heads, sequence_length, k_head_dim = key.shape
+        v_head_dim = value.shape[-1]
+        query = query * self.scale
+
+        # fp32 + HiFi2 + fp32 accumulation on the tiny per-step matmuls (same
+        # rationale as the chunk path's chunk_math_kernel_config).
+        step_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        # Carried recurrent state [B, H, head_k_dim, head_v_dim]. Decode continues
+        # from the prefill-populated state (passed in); a None initial_state resets
+        # to zero (torch line 334-338). We never mutate initial_state in place — the
+        # first multiply below allocates a fresh tensor.
+        last_recurrent_state = (
+            ttnn.typecast(initial_state, ttnn.float32) if initial_state is not None else self.reset_recurrent_state()
+        )
+
+        # TT-NN has no per-position scatter (core_attn_out[:, :, i] = ...), so each
+        # step's [B, H, 1, v_head_dim] slice is collected and concatenated after.
+        core_attn_out_steps = []
+        for i in range(sequence_length):
+            # [B, H, 1, D] row slices. seq is a tile dim, so a non-aligned slice can
+            # drop tile layout (cheap no-op when seq==1); re-tilize before the matmuls.
+            q_i = ttnn.to_layout(query[:, :, i : i + 1, :], ttnn.TILE_LAYOUT)
+            k_i = ttnn.to_layout(key[:, :, i : i + 1, :], ttnn.TILE_LAYOUT)
+            v_i = ttnn.to_layout(value[:, :, i : i + 1, :], ttnn.TILE_LAYOUT)
+            # g_i / beta_i as [B, H, 1, 1] to broadcast over the [k, v] state plane.
+            g_i = ttnn.reshape(ttnn.exp(g[:, :, i : i + 1]), [batch_size, num_heads, 1, 1])
+            beta_i = ttnn.reshape(beta[:, :, i : i + 1], [batch_size, num_heads, 1, 1])
+
+            # 1) decay the state FIRST (torch line 347).
+            last_recurrent_state = ttnn.multiply(last_recurrent_state, g_i)
+            # 2) read the decayed state: kv_mem = k_i @ state — [B,H,1,Dk] @ [B,H,Dk,Dv]
+            #    = [B,H,1,Dv]. The row-vector matmul IS torch's
+            #    (state * k.unsqueeze(-1)).sum(-2): a weighted sum over the head_k axis.
+            kv_mem = ttnn.matmul(k_i, last_recurrent_state, compute_kernel_config=step_kernel_config)
+            # 3) prediction error, gated by beta (torch line 349).
+            delta = ttnn.multiply(ttnn.subtract(v_i, kv_mem), beta_i)
+            # 4) rank-1 write: state += k_i^T @ delta — [B,H,Dk,1] @ [B,H,1,Dv] is the
+            #    outer product torch writes as k.unsqueeze(-1) * delta.unsqueeze(-2).
+            #    k_i has a singleton seq dim, so reshape (not transpose) yields the column.
+            k_col = ttnn.reshape(k_i, [batch_size, num_heads, k_head_dim, 1])
+            outer = ttnn.matmul(k_col, delta, compute_kernel_config=step_kernel_config)
+            last_recurrent_state = ttnn.add(last_recurrent_state, outer)
+            # 5) read the output with the scaled query: o_i = q_i @ state (torch line 351).
+            o_i = ttnn.matmul(q_i, last_recurrent_state, compute_kernel_config=step_kernel_config)
+            core_attn_out_steps.append(o_i)
+
+        # Stitch the per-step slices back into [B, H, seq, Dv], undo the
+        # heads-before-seq transpose, and restore the caller's dtype (torch 355).
+        core_attn_out = (
+            core_attn_out_steps[0] if len(core_attn_out_steps) == 1 else ttnn.concat(core_attn_out_steps, dim=2)
+        )
+        core_attn_out = ttnn.transpose(core_attn_out, 1, 2)
+        core_attn_out = ttnn.typecast(core_attn_out, initial_dtype)
+
+        # decode_forward unpacks this 2-tuple and copies the state back into the
+        # persistent buffer for the next step (mirrors chunk_gated_delta_rule).
+        return core_attn_out, last_recurrent_state
+
+    def forward_prefill(self, hidden_states, attention_mask=None):
         """
         hidden_states: [B=1, 1, seq_len, hidden_size]
         """
-        # attention masking if there is an attention parameter
+        # TODO attention masking needs to be added
+
         weights = self.weights
         batch_size, seq_len = hidden_states.shape[0], hidden_states.shape[2]
 
@@ -323,25 +430,27 @@ class Qwen35GatedDeltaNet(LightweightModule):
         a = ttnn.linear(hidden_states, weights.wa, dtype=ttnn.float32)
 
         # Prefill path does not use precomputed states
-        breakpoint()
-        if self.conv_state is not None:
-            # in transformers, you might have to pad mixed_qkv if it is smaller than the conv kernel
-            # but, you can also reshape down if the seq_len > conv kernel
-            # in prefill, we will just slice down, but we might need to pad up...
-            conv_state = mixed_qkv[..., :, -self.conv_kernel_size :, :]
-            ttnn.copy(conv_state, self.conv_state)
-        else:
-            # causal_conv1d_silu's contract is a canonical [B, T, D]; drop the singleton
-            # dim 1 that ttnn.linear leaves on. In tile layout this is a metadata-only
-            # reshape (the last two dims, which carry the tiles, are untouched).
+        # we need to initialize the conv state
+        # in transformers, you might have to pad mixed_qkv if it is smaller than the conv kernel
+        # but, you can also reshape down if the seq_len > conv kernel
+        # in prefill, we will just slice down, but we might need to pad up...
+        conv_state = mixed_qkv[..., :, -self.conv_kernel_size :, :]
+        # The seq slice lands off a tile boundary (seq is a tile dim), which can drop
+        # tile layout; re-tilize before the copy so the persistent conv-state buffer
+        # decode reads back verbatim isn't corrupted by stale tile padding.
+        conv_state = ttnn.to_layout(conv_state, ttnn.TILE_LAYOUT)
+        ttnn.copy(conv_state, self.conv_state)
 
-            mixed_qkv = ttnn.reshape(mixed_qkv, (batch_size, 1, seq_len, self.conv_dim))
-            mixed_qkv = causal_conv1d_silu(
-                x=mixed_qkv,
-                weight_taps=weights.w_taps,
-                kernel_size=self.conv_kernel_size,
-                mesh_device=self.mesh_device,
-            )  # [B, 1, seq_len, conv_dim, dim]
+        # causal_conv1d_silu's contract is a canonical [B, T, D]; drop the singleton
+        # dim 1 that ttnn.linear leaves on. In tile layout this is a metadata-only
+        # reshape (the last two dims, which carry the tiles, are untouched).
+        mixed_qkv = ttnn.reshape(mixed_qkv, (batch_size, 1, seq_len, self.conv_dim))
+        mixed_qkv = causal_conv1d_silu(
+            x=mixed_qkv,
+            weight_taps=weights.w_taps,
+            kernel_size=self.conv_kernel_size,
+            mesh_device=self.mesh_device,
+        )  # [B, 1, seq_len, conv_dim, dim]
 
         query, key, value = ttnn.split(mixed_qkv, [self.key_dim, self.key_dim, self.value_dim], dim=-1)
 
@@ -355,16 +464,82 @@ class Qwen35GatedDeltaNet(LightweightModule):
             query = ttnn.repeat_interleave(query, self.num_v_heads // self.num_k_heads, dim=2)
             key = ttnn.repeat_interleave(key, self.num_v_heads // self.num_k_heads, dim=2)
 
-            core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
-                query,
-                key,
-                value,
-                g=g,
-                beta=beta,
-                chunk_size=self.chunk_size,
-                initial_state=None,
-                use_qk_l2norm_in_kernel=True,
-            )
+        core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            chunk_size=self.chunk_size,
+            initial_state=None,
+            use_qk_l2norm_in_kernel=True,
+        )
+        ## update the recurrent state
+        ttnn.copy(last_recurrent_state, self.last_recurrent_state)
+
+        core_attn_out = ttnn.reshape(core_attn_out, (-1, self.head_v_dim))
+        z = ttnn.reshape(z, (-1, self.head_v_dim))
+
+        core_attn_out = self.norm(core_attn_out, gate=z)
+        core_attn_out = ttnn.reshape(core_attn_out, (batch_size, seq_len, -1))
+        out = ttnn.linear(core_attn_out, weights.wo)
+        return out
+
+    def decode_forward(self, hidden_states, attention_mask=None):
+        # hidden_states [1, 1, B, hidden_size]
+        weights = self.weights
+        batch_size, seq_len = hidden_states.shape[2], 1
+
+        # TODO attention masking given mask
+        conv_state = self.conv_state
+        recurrent_state = self.last_recurrent_state
+
+        mixed_qkv = ttnn.linear(hidden_states, weights.wqkv)
+        z = ttnn.linear(hidden_states, weights.wz)
+        z = ttnn.reshape(z, (batch_size, seq_len, self.num_v_heads, self.head_v_dim))
+
+        b = ttnn.linear(hidden_states, weights.wb)
+        a = ttnn.linear(hidden_states, weights.wa, dtype=ttnn.float32)
+
+        mixed_qkv = ttnn.reshape(mixed_qkv, (batch_size, 1, seq_len, self.conv_dim))
+        # causal_conv1d_silu_update returns (out, new_state): the conv output AND the
+        # rolled-forward window. Unlike the torch ref (which mutates conv_state in
+        # place), we must copy the new window back into the persistent buffer so the
+        # NEXT decode step reads the right K-tap context.
+        mixed_qkv, new_conv_state = causal_conv1d_silu_update(
+            x=mixed_qkv,
+            conv_state=conv_state,
+            weight_taps=weights.w_taps,
+            kernel_size=self.conv_kernel_size,
+        )
+        ttnn.copy(new_conv_state, self.conv_state)
+        query, key, value = ttnn.split(mixed_qkv, [self.key_dim, self.key_dim, self.value_dim], dim=-1)
+        query = ttnn.reshape(query, (batch_size, seq_len, self.num_k_heads, self.head_k_dim))
+        key = ttnn.reshape(key, (batch_size, seq_len, self.num_k_heads, self.head_k_dim))
+        value = ttnn.reshape(value, (batch_size, seq_len, self.num_v_heads, self.head_v_dim))
+
+        # Decode lays the batch on dim 2 ([1, 1, B, *]), so b/a come out [1, 1, B, Hv].
+        # A squeeze(1) would leave [1, B, Hv] — batch and seq swapped relative to the
+        # [B, seq=1, Hv] that query/value use and that recurrent_gated_delta_rule's
+        # transpose(1,2) expects. Reshape to [B, 1, Hv] instead so all five tensors
+        # share the same (batch, seq, head) ordering.
+        beta = ttnn.reshape(ttnn.sigmoid(b), (batch_size, seq_len, self.num_v_heads))
+        g = ttnn.reshape(
+            weights.neg_A_log_exp * ttnn.softplus(a + weights.dt_bias), (batch_size, seq_len, self.num_v_heads)
+        )
+        if self.num_v_heads // self.num_k_heads > 1:
+            query = ttnn.repeat_interleave(query, self.num_v_heads // self.num_k_heads, dim=2)
+            key = ttnn.repeat_interleave(key, self.num_v_heads // self.num_k_heads, dim=2)
+
+        core_attn_out, last_recurrent_state = self.recurrent_gated_delta_rule(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            initial_state=recurrent_state,
+            use_qk_l2norm_in_kernel=True,
+        )
         ## update the recurrent state
         ttnn.copy(last_recurrent_state, self.last_recurrent_state)
 

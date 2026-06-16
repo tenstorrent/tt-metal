@@ -140,7 +140,7 @@ class Qwen35ModelArgs(ModelArgs):
         self.gdn_value_dim = self.linear_v_dim  # = nv * dv
         self.gdn_qkv_dim = self.linear_q_dim + self.linear_k_dim + self.linear_v_dim
         self.gdn_z_dim = self.linear_v_dim
-        self.gdn_chunk_size = 128  # gated_delta_attn_seq kernel requires 128
+        self.gdn_chunk_size = 64  # gives the fastest TTFT with the current my_gdn implementation
 
         # Per-device (sharded) dims
         assert self.n_heads % tp == 0, f"n_heads {self.n_heads} not divisible by TP={tp}"

@@ -98,6 +98,83 @@ def causal_conv1d_silu(x, weight_taps, kernel_size, mesh_device, *, memory_confi
     return ttnn.silu(out, memory_config=memory_config)
 
 
+def causal_conv1d_silu_update(x, conv_state, weight_taps, kernel_size, *, memory_config=None):
+    """Depthwise causal conv1d + SiLU for the cache-update (decode) path.
+
+    The decode-time sibling of :func:`causal_conv1d_silu`. It reproduces FLA's
+    ``causal_conv1d_update`` torch fallback::
+
+        h = torch.cat([conv_state, hidden_states], dim=-1)   # prepend cached history
+        conv_state.copy_(h[..., -state_len:])                # roll the window forward
+        out = F.silu(F.conv1d(h, w, padding=0, groups=D)[..., -seq_len:])
+
+    The convolution itself is the prefill FIR unchanged — same per-channel taps,
+    same SiLU. Only two things differ for decode, and they are the whole reason
+    this is a separate function:
+
+    * The left context is the *cached* ``conv_state`` (the last real inputs from
+      prior steps), NOT zeros. Zero-padding here would make the first ``K-1``
+      decode outputs read history as zero and silently corrupt them.
+    * We must hand back the *updated* state so the next step has its window — the
+      last ``state_len`` columns of the concatenated buffer.
+
+    Layout matches the prefill sibling: channels-last ``[B, 1, T, D]`` so the taps
+    broadcast over the last dim and the causal shifts run along the seq dim. No
+    bias term — Qwen3.5's conv1d is ``bias=False``.
+
+    ``state_len`` is read off ``conv_state`` exactly as the torch ref reads
+    ``conv_state.shape[-1]``. This repo allocates it at the full kernel width
+    ``K`` (reset_conv_state), but the offset math below also collapses to the
+    prefill case for a ``K-1`` wide state, so either convention is handled.
+
+    * ``x``           — ttnn ``[B, 1, T, D]`` (TILE_LAYOUT); the new decode token(s).
+    * ``conv_state``  — ttnn ``[B, 1, state_len, D]`` (TILE_LAYOUT); the carried window.
+    * ``weight_taps`` — the ``K`` tensors from :func:`conv1d_weight_taps`.
+    * returns         — ``(out, new_state)``: ``out`` ``[B, 1, T, D]`` post-SiLU and
+                        ``new_state`` ``[B, 1, state_len, D]`` (x's dtype) to copy
+                        back into the persistent conv-state buffer.
+    """
+    T = 1  # decode-time conv runs one step at a time; the prefill FIR handles the full seq in one shot
+    state_len = conv_state.shape[2]
+    # The conv needs K-1 columns of left context; a narrower state can't fill the
+    # window. Assert instead of silently emitting garbage — same constraint the
+    # torch ref hits (its conv output would come out shorter than seq_len).
+    assert state_len >= kernel_size - 1, f"conv_state width {state_len} < kernel_size-1 ({kernel_size - 1})"
+
+    # conv_state lives in its buffer's dtype (this repo: bf16, see reset_conv_state)
+    # while x is the bf16 linear output, and ttnn.concat needs both to agree — so
+    # match x, the same cast the torch ref makes via `.to(weight.dtype)`. The guard
+    # is a no-op while both are bf16, but keeps the op correct for any state dtype.
+    # The state is only a shift buffer of recent inputs (no accumulation), so bf16
+    # loses nothing here.
+    if conv_state.dtype != x.dtype:
+        conv_state = ttnn.typecast(conv_state, x.dtype)
+
+    # The one structural change from prefill: prepend the cached history instead
+    # of zeros. The buffer becomes [B, 1, state_len + T, D].
+    x_padded = ttnn.concat([conv_state, x], dim=2, memory_config=memory_config)
+
+    # Roll the window forward: the next step's left context is the last state_len
+    # columns of what we just convolved (torch's conv_state.copy_(h[..., -state_len:])).
+    # That tail starts at index T; the slice lands off a tile boundary, so re-tilize
+    # before handing it back (causal_conv1d_silu caveat).
+    new_state = x_padded[:, :, T:, :]
+    new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
+
+    # FIR over the last T conv outputs. With a state_len-wide left context the
+    # wanted outputs start at off = state_len - (K-1) (== 0 for prefill's K-1 pad,
+    # == 1 for this repo's K-wide state), so tap k reads x_padded[off+k : off+k+T].
+    off = state_len - (kernel_size - 1)
+    out = None
+    for k in range(kernel_size):
+        x_slice = x_padded[:, :, off + k : off + k + T, :]
+        x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
+        term = ttnn.multiply(x_slice, weight_taps[k], memory_config=memory_config)
+        out = term if out is None else ttnn.add(out, term, memory_config=memory_config)
+
+    return ttnn.silu(out, memory_config=memory_config), new_state
+
+
 def chunk_identity(chunk_size, mesh_device, *, dtype=ttnn.float32, memory_config=None):
     """Build a ``[1, 1, chunk_size, chunk_size]`` identity once on host for the chunk math.
 
