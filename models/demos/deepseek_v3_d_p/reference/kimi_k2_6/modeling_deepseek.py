@@ -50,6 +50,7 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
+
 # transformers >= 5.x removed is_torch_fx_available (it was just `is_torch_available()`).
 try:
     from transformers.utils.import_utils import is_torch_fx_available

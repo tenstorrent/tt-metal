@@ -12,7 +12,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
-from models.demos.ttnn_falcon7b.tt.common import build_past_key_values_cache, create_custom_preprocessor, create_kv_cache
+from models.demos.ttnn_falcon7b.tt.common import (
+    build_past_key_values_cache,
+    create_custom_preprocessor,
+    create_kv_cache,
+)
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from models.perf.perf_utils import prep_perf_report

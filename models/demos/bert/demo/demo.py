@@ -74,9 +74,7 @@ def run_bert_question_and_answering_inference(
     profiler.start(f"preprocessing_parameter")
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
-        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name
-        ).eval(),
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(model_name).eval(),
         custom_preprocessor=bert.custom_preprocessor,
         device=device,
     )
@@ -205,9 +203,7 @@ def run_bert_question_and_answering_inference_squad_v2(
 
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
-        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name
-        ).eval(),
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(model_name).eval(),
         custom_preprocessor=bert.custom_preprocessor,
         device=device,
     )

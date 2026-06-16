@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 from transformers.cache_utils import DynamicCache
 
 MODEL_VERSION = "tiiuae/falcon-7b-instruct"

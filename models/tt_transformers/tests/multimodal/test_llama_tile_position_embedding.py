@@ -120,7 +120,9 @@ def test_tile_position_emb_inference(
             self.is_gated = is_gated
 
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(AutoModelForImageTextToText, os.getenv("HF_MODEL"), embedding_layer_prefix)
+    partial_state_dict = load_partial_weights(
+        AutoModelForImageTextToText, os.getenv("HF_MODEL"), embedding_layer_prefix
+    )
     reference_model = MllamaPrecomputedAspectRatioEmbedding(Config())
     reference_model.load_state_dict(partial_state_dict)
     # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector

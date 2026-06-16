@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
+
 # transformers 5.x moved no_init_weights to transformers.initialization; fall back
 # to the old location for transformers < 5.x.
 try:
