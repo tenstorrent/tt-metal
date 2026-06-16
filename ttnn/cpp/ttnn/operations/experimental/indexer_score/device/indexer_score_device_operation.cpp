@@ -32,6 +32,16 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     const tt::ARCH arch = tt::tt_metal::hal::get_arch();
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "indexer_score is only supported on Blackhole, got {}", arch);
 
+    // The compute kernel honors the config's math_fidelity (default: dtype-derived), but its custom
+    // blocked bcast-col LLK + half-sync 8-head subblock are validated only for bf16 DEST in half-sync.
+    // Reject the unvalidated knobs loudly instead of silently building a path that can drop the -inf mask.
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        ttnn::get_compute_kernel_config_args(arch, attrs.compute_kernel_config);
+    TT_FATAL(
+        !fp32_dest_acc_en,
+        "indexer_score requires fp32_dest_acc_en=false (bf16 DEST; the custom LLK is not validated for fp32 DEST)");
+    TT_FATAL(!dst_full_sync_en, "indexer_score requires dst_full_sync_en=false (the kernel is built half-sync)");
+
     // On-device, allocated, interleaved, same-device: the factory dereferences each buffer's address
     // in q's device address space and the kernels assume interleaved DRAM/L1 (mcast deal + TensorAccessor).
     for (const auto& [t, name] : {std::pair{&q, "q"}, std::pair{&k, "k"}, std::pair{&w, "weights"}}) {
@@ -128,9 +138,13 @@ IndexerScoreDeviceOperation::invoke(
     const Tensor& k,
     const Tensor& weights,
     uint32_t chunk_start_idx,
-    const IndexerScoreProgramConfig& program_config) {
+    const IndexerScoreProgramConfig& program_config,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     return {
-        operation_attributes_t{.chunk_start_idx = chunk_start_idx, .program_config = program_config},
+        operation_attributes_t{
+            .chunk_start_idx = chunk_start_idx,
+            .program_config = program_config,
+            .compute_kernel_config = compute_kernel_config},
         tensor_args_t{.q = q, .k = k, .weights = weights}};
 }
 
@@ -143,10 +157,24 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     uint32_t chunk_start_idx,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config) {
+    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
+    // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi for the 2x peak, else
+    // HiFi2 to keep the bf16 mantissa); a caller-supplied config overrides per field. fp32-dest acc and
+    // full-sync default off -- the only modes this op's custom LLK is validated for (see validate).
+    const bool both_bfp8 = q.dtype() == DataType::BFLOAT8_B && k.dtype() == DataType::BFLOAT8_B;
+    const auto resolved = ttnn::init_device_compute_kernel_config(
+        q.device()->arch(),
+        compute_kernel_config,
+        /*default_fidelity=*/both_bfp8 ? tt::tt_metal::MathFidelity::LoFi : tt::tt_metal::MathFidelity::HiFi2,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/false,
+        /*default_dst_full_sync_en=*/false);
     // Reuse invoke() so attribute/tensor packing lives in one place.
-    auto [operation_attributes, tensor_args] = OperationType::invoke(q, k, weights, chunk_start_idx, program_config);
+    auto [operation_attributes, tensor_args] =
+        OperationType::invoke(q, k, weights, chunk_start_idx, program_config, resolved);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

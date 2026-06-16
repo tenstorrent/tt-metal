@@ -29,14 +29,18 @@ void bind_indexer_score(nb::module_& mod) {
         score[b, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
 
         Args:
-            q: [B, Hi, Sq, D] bf16 tiled (post non-interleaved RoPE)
-            k: [B, 1, T, D] bf16 tiled, single shared head
+            q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
+            k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
             weights: [B, Hi, Sq, 1] bf16 tiled, scales pre-folded
             chunk_start_idx: global position of query row 0 (causality: key t
                 visible to query s iff t <= chunk_start_idx + s)
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Defaults always fit
                 L1; raise head_group_size (0 = all resident) for performance.
+            compute_kernel_config: optional DeviceComputeKernelConfig. Only
+                math_fidelity is honored (default: HiFi2, or LoFi when q and k
+                are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
+                stay false (the custom LLK is validated for bf16 DEST half-sync).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -46,7 +50,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("weights"),
         nb::kw_only(),
         nb::arg("chunk_start_idx") = 0,
-        nb::arg("program_config") = IndexerScoreProgramConfig{});
+        nb::arg("program_config") = IndexerScoreProgramConfig{},
+        nb::arg("compute_kernel_config") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

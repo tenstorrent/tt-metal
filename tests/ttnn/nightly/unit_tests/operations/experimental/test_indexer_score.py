@@ -73,12 +73,24 @@ def to_device(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(t, device=device, layout=layout, dtype=dtype)
 
 
-def run_indexer(q, k, w, chunk_start, device, program_config=None, q_dtype=ttnn.bfloat16, k_dtype=ttnn.bfloat16):
+def run_indexer(
+    q,
+    k,
+    w,
+    chunk_start,
+    device,
+    program_config=None,
+    q_dtype=ttnn.bfloat16,
+    k_dtype=ttnn.bfloat16,
+    compute_kernel_config=None,
+):
     """Run the device op and return the row-major bf16 score as a torch tensor.
 
     q (srcB) and k (srcA) may be bfp8_b; weights stay bf16.
     """
     kwargs = {} if program_config is None else {"program_config": program_config}
+    if compute_kernel_config is not None:
+        kwargs["compute_kernel_config"] = compute_kernel_config
     out = ttnn.experimental.indexer_score(
         to_device(q, device, dtype=q_dtype),
         to_device(k, device, dtype=k_dtype),
@@ -207,6 +219,32 @@ def test_indexer_score_shapes(device, heads, dim, sq, t, chunk_start, q_chunk, k
     dividing Tt (partial last unit clipped by the writer), and a multicore QC=2 split that exercises the
     writer's group -inf tail fill across cores."""
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
+
+
+# ---------------------------------------------------------------------------
+# compute_kernel_config: math_fidelity is the one honored knob (default dtype-derived); the bf16-DEST
+# half-sync modes are required, so fp32_dest_acc_en / dst_full_sync_en are rejected by validate.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.LoFi])
+def test_indexer_score_compute_kernel_config(device, math_fidelity):
+    """An explicit compute_kernel_config overrides math_fidelity; accuracy holds across fidelities."""
+    heads, dim, sq, t, chunk_start = MINI["heads"], MINI["dim"], MINI["sq"], MINI["t"], 128
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    ckc = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=math_fidelity)
+    q, k, w = make_inputs(heads, dim, sq, t)
+    out = run_indexer(q, k, w, chunk_start, device, program_config=cfg, compute_kernel_config=ckc)
+    ref = indexer_score_ref(q, k, w, chunk_start)
+    assert_indexer_match(out, ref, sq, t, check_neg=True)
+
+
+def test_indexer_score_rejects_fp32_dest_acc(device):
+    """fp32_dest_acc_en=True is not supported by the custom LLK -> validate must reject it."""
+    heads, dim, sq, t = MINI["heads"], MINI["dim"], MINI["sq"], MINI["t"]
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    ckc = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=True)
+    q, k, w = make_inputs(heads, dim, sq, t)
+    with pytest.raises(RuntimeError, match="fp32_dest_acc_en=false"):
+        run_indexer(q, k, w, 128, device, program_config=cfg, compute_kernel_config=ckc)
 
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally")

@@ -4,8 +4,8 @@
 
 // Writer for indexer_score. Pops untilized bf16 strips and scatters each strip's
 // 32 rows into the row-major output (page = row, one contiguous run per row).
-// The owner of a group's last unit fills row tails [group_valid_k_tiles*32, T)
-// with -inf; compute already covers [0, group_valid_k_tiles) for every row.
+// The owner of a group's last unit fills row tails [valid_k_tiles*32, T)
+// with -inf; compute already covers [0, valid_k_tiles) for every row.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

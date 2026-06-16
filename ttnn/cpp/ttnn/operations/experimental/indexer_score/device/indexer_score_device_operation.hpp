@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -33,7 +34,8 @@ struct IndexerScoreDeviceOperation {
         const Tensor& k,
         const Tensor& weights,
         uint32_t chunk_start_idx,
-        const IndexerScoreProgramConfig& program_config);
+        const IndexerScoreProgramConfig& program_config,
+        const DeviceComputeKernelConfig& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -49,6 +51,7 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     uint32_t chunk_start_idx = 0,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {});
+    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::experimental

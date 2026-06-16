@@ -7,6 +7,7 @@
 #include <cstddef>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/base_types.hpp>
 
 namespace ttnn::operations::experimental::indexer_score {
@@ -28,6 +29,9 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
 struct operation_attributes_t {
     uint32_t chunk_start_idx{0};
     IndexerScoreProgramConfig program_config{};
+    // Resolved (not optional) so it is part of the reflected program-cache key; the public callable
+    // fills it from the user's optional config, defaulting math_fidelity to the dtype-derived choice.
+    DeviceComputeKernelConfig compute_kernel_config{};
 };
 
 struct tensor_args_t {
