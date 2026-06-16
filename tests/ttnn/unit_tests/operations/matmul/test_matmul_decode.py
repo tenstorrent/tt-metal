@@ -95,6 +95,10 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
 @pytest.mark.parametrize(
     "m, k, n, k_blocks, n_blocks",
     [
+        (1, 4096, 1024, 4, 32),
+        (4, 4096, 1024, 4, 32),
+        (8, 4096, 1024, 4, 32),
+        (16, 4096, 1024, 4, 32),
         (32, 4096, 1024, 4, 32),
         (64, 4096, 1024, 4, 32),
         # (32, 64, 256, 2, 8),
@@ -108,6 +112,8 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
 )
 def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks, num_inputA_cores):
     torch.manual_seed(time.time())
+    tile_height = get_tile_height(m)
+    inputA_tile_size = ttnn.Tile((tile_height, 32))
     kc = k // k_blocks
     nc = n // n_blocks
     num_inputB_cores = k_blocks * n_blocks
@@ -157,6 +163,7 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         layout=ttnn.TILE_LAYOUT,
+        tile=inputA_tile_size,
         device=device,
         memory_config=in0_memory_config,
         dtype=ttnn.bfloat16,
@@ -170,7 +177,8 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
     )
     print("input_tensor_a.shape:", input_tensor_a.shape)
     print("input_tensor_b.shape:", input_tensor_b.shape)
-    for x in range(10):
+    tracy.signpost(f"MatmulDecode: m: {m} k: {k} n: {n}", f" m: {m} k: {k} n: {n}")
+    for x in range(2):
         output_tensor = ttnn.matmul_decode(input_tensor_a, input_tensor_b, partial_width_sharded=True)
 
     assert output_tensor.shape == (m, n)
