@@ -196,6 +196,8 @@ TEST_F(ControlPlaneFixture, TestGalaxyCornerPinnings) {
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto& topology_mapper = control_plane.get_topology_mapper();
 

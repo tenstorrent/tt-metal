@@ -65,6 +65,9 @@ struct GroupingInfo {
     std::vector<GroupingItemInfo> items;
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
 
+    // Row-major ASIC grid shape for flattened mesh variants (e.g. [32, 4]). Empty for non-mesh groupings.
+    std::vector<int32_t> asic_grid_dims;
+
     // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
     // Empty graph if no connection type is specified.
     AdjacencyGraph<uint32_t> adjacency_graph;

@@ -856,34 +856,14 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         };
         const size_t required_edges = count_undirected_edges(mgd_grouping_info.adjacency_graph);
 
-        // When node and edge counts both match, the embedding would be a bijection (an isomorphism), so a
-        // second cheap count must also agree: the summed size of every node's 2-hop neighborhood. This
-        // separates same-size, same-edge-count tori of different shapes -- e.g. an [8,16] torus (8 nodes at
-        // distance 2 per node) from a [4,32] torus (the size-4 axis wraps, so fewer) -- which node and edge
-        // counts alone cannot, and which otherwise cost the SAT solver ~30s each to disprove. It is just
-        // neighbors-of-neighbors over the adjacency graph (O(V*deg^2)), negligible next to the solve.
-        auto two_hop_reach_sum = [](const AdjacencyGraph<uint32_t>& g) -> size_t {
-            size_t total = 0;
-            std::unordered_set<uint32_t> ball;
-            for (uint32_t u : g.get_nodes()) {
-                ball.clear();
-                ball.insert(u);
-                for (uint32_t v : g.get_neighbors(u)) {
-                    ball.insert(v);
-                    for (uint32_t w : g.get_neighbors(v)) {
-                        ball.insert(w);
-                    }
-                }
-                total += ball.size();
-            }
-            return total;
-        };
-        const size_t required_two_hop = two_hop_reach_sum(mgd_grouping_info.adjacency_graph);
-
-        // MGD device topology. Matching uses LINE-only MGD graphs and the PGD supplies the topology via its
-        // MESH/TORUSX/TORUSY/TORUSXY variants (committed directly). device_topo is only used for the fallback
-        // grouping below when no PGD variant places on the PSD.
         const auto device_topo = get_mgd_instance_device_topology(mesh_graph_descriptor, instance_name);
+
+        auto normalized_dims = [](std::vector<int32_t> dims) {
+            std::sort(dims.begin(), dims.end());
+            return dims;
+        };
+        const std::vector<int32_t> required_grid_dims =
+            device_topo.has_value() ? normalized_dims(device_topo->dims) : std::vector<int32_t>{};
 
         // Group valid candidates by node difference (map is ordered by key ascending)
         // Store (name, index) pairs to handle multiple groupings with same name
@@ -925,17 +905,15 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     continue;
                 }
 
-                // Node and edge counts equal => any embedding is a bijection, so the 2-hop neighborhood sum
-                // must match too. If it differs the topologies are not isomorphic (e.g. [4,32] vs the [8,16]
-                // MGD): skip the ~30s SAT that would only disprove it.
-                if (node_diff == 0 && variant_edges == required_edges &&
-                    two_hop_reach_sum(grouping_info.adjacency_graph) != required_two_hop) {
+                if (node_diff == 0 && !required_grid_dims.empty() && grouping_info.asic_grid_dims.size() >= 2 &&
+                    normalized_dims(grouping_info.asic_grid_dims) != required_grid_dims) {
                     log_debug(
                         tt::LogFabric,
-                        "Skipping {} for {}: same node/edge count but 2-hop neighborhood differs "
-                        "(non-isomorphic topology)",
+                        "Skipping {} for {}: ASIC grid dims [{},{}] do not match MGD device topology",
                         name,
-                        mgd_grouping_info.name);
+                        mgd_grouping_info.name,
+                        grouping_info.asic_grid_dims[0],
+                        grouping_info.asic_grid_dims[1]);
                     continue;
                 }
 

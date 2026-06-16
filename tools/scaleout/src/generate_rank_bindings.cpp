@@ -183,57 +183,6 @@ PhysicalGroupingDescriptor find_and_load_pgd(
 }
 
 /**
- * @brief Print intermesh-level degree histogram in one line.
- */
-template <typename NodeId>
-void print_intermesh_level_adjacency_map(const AdjacencyGraph<NodeId>& intermesh_graph, const std::string& label) {
-    const auto& nodes = intermesh_graph.get_nodes();
-
-    std::map<size_t, size_t> degree_hist;
-    for (const auto& node : nodes) {
-        const auto& neighbors = intermesh_graph.get_neighbors(node);
-        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
-        degree_hist[unique_neighbors.size()]++;
-    }
-
-    std::string degree_hist_str = "{";
-    bool first = true;
-    for (const auto& [degree, count] : degree_hist) {
-        if (!first) {
-            degree_hist_str += ", ";
-        }
-        first = false;
-        degree_hist_str += std::to_string(degree) + ":" + std::to_string(count);
-    }
-    degree_hist_str += "}";
-
-    log_info(
-        tt::LogFabric,
-        "{} intermesh-level adjacency map: {} mesh(es), degree histogram {}",
-        label,
-        nodes.size(),
-        degree_hist_str);
-
-    // Per-mesh neighbor list at debug (enable with TT_LOGGER_LEVEL=debug).
-    intermesh_graph.print_adjacency_map(label + " intermesh-level adjacency map", /*quiet_mode=*/true);
-}
-
-/**
- * @brief Print logical multi-mesh adjacency map
- */
-void print_logical_adjacency_map(const LogicalMultiMeshGraph& multi_mesh_graph) {
-    print_intermesh_level_adjacency_map(multi_mesh_graph.mesh_level_graph_, "Logical");
-}
-
-/**
- * @brief Print physical multi-mesh adjacency map
- */
-void print_physical_adjacency_map(
-    const PhysicalMultiMeshGraph& multi_mesh_graph, const PhysicalSystemDescriptor& /*physical_system_descriptor*/) {
-    print_intermesh_level_adjacency_map(multi_mesh_graph.mesh_level_graph_, "Physical");
-}
-
-/**
  * @brief Run topology mapper to map logical meshes to physical ASICs
  *
  * This function:
@@ -261,8 +210,8 @@ TopologyMappingResult run_topology_mapping(
     LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
 
     // Print adjacency maps
-    print_logical_adjacency_map(logical_graph);
-    print_physical_adjacency_map(physical_graph, psd);
+    log_logical_multi_mesh_adjacency_histograms(logical_graph);
+    log_physical_multi_mesh_adjacency_histograms(physical_graph);
 
     // Configure topology mapping
     TopologyMappingConfig config;

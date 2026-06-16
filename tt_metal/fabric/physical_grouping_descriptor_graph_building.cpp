@@ -1105,6 +1105,7 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
             continue;
         }
 
+        info.asic_grid_dims = asic_grid_dims;
         result.push_back(std::move(info));
     }
     return result;

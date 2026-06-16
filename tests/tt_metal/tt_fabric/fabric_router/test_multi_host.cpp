@@ -1515,7 +1515,9 @@ TEST(MultiHost, TestSplitHost4x4TrayMapping) {
 // Full-galaxy 4x8/8x4 torus must span all four trays {1,2,3,4}.
 // - Single mesh: subtorus/subtorus_4x8_ring_ring_2x2 (32 ASICs on 2x2 hosts)
 // - Pipeline: 32 ASICs/stage; stage count = total chips / 32
-// - Split-host 8x4 pipeline (4 ranks/stage): 4 stages per 4-rank galaxy group
+// - Split-host 8x4 pipeline (4 ranks/stage):
+//     * quad-galaxy pod (mpi_size=4): 4-stage ring on the single 4-rank group
+//     * superpod (mpi_size>4): one pipeline stage per 4-rank group (e.g. 64 ranks, 16 stages)
 TEST(MultiHost, Test8x4TrayMapping) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !cluster.is_ubb_galaxy()) {
@@ -1548,10 +1550,18 @@ TEST(MultiHost, Test8x4TrayMapping) {
                 static_cast<size_t>(*tt::tt_metal::MetalContext::instance().full_world_distributed_context().size());
             ASSERT_GE(mpi_size, 4u);
             ASSERT_EQ(mpi_size % 4, 0u) << "8x4 split-host pipeline expects MPI size divisible by 4";
-            const size_t num_galaxies = mpi_size / 4;
-            EXPECT_EQ(expected_stages / num_galaxies, 4u)
-                << "8x4 split-host pipeline should have 4 stages per 4-rank galaxy (mpi_size=" << mpi_size
-                << ", stages=" << expected_stages << ")";
+            const size_t num_rank_groups = mpi_size / 4;
+            const size_t stages_per_rank_group = expected_stages / num_rank_groups;
+            if (mpi_size == 4u) {
+                EXPECT_EQ(stages_per_rank_group, 4u)
+                    << "8x4 split-host quad-galaxy pipeline should have 4 stages on the single 4-rank group "
+                       "(mpi_size="
+                    << mpi_size << ", stages=" << expected_stages << ")";
+            } else {
+                EXPECT_EQ(stages_per_rank_group, 1u)
+                    << "8x4 split-host superpod pipeline should have one stage per 4-rank group (mpi_size=" << mpi_size
+                    << ", stages=" << expected_stages << ")";
+            }
         }
     }
 

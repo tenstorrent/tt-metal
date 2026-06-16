@@ -474,6 +474,10 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
+/** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
+void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph);
+void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph);
+
 }  // namespace tt::tt_metal::experimental::tt_fabric
 
 // Formatter for LogicalExitNode to enable fmt::format debugging

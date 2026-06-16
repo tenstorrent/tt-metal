@@ -24,6 +24,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -1933,8 +1934,10 @@ void add_rank_binding_constraints(
     }
 }
 
-// Helper function to build pinning constraints
-void add_pinning_constraints(
+// Helper function to build pinning constraints.
+// Returns nullopt on success, or a descriptive error message if pinning constraints cannot be satisfied
+// (e.g., pinned ASIC position not in physical topology or incompatible with rank bindings).
+std::optional<std::string> add_pinning_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
     const TopologyMappingConfig& config,
@@ -1951,6 +1954,7 @@ void add_pinning_constraints(
     }
 
     bool success = true;
+    std::vector<std::string> missing_position_failures;
 
     // Apply pinning constraints
     for (const auto& [fabric_node, positions] : fabric_node_to_positions) {
@@ -1960,7 +1964,7 @@ void add_pinning_constraints(
         for (const auto& position : positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
-                log_critical(
+                log_trace(
                     tt::LogFabric,
                     "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
                     "{}) from MGD not found in physical topology",
@@ -1968,6 +1972,13 @@ void add_pinning_constraints(
                     position.second.get(),
                     fabric_node.mesh_id.get(),
                     fabric_node.chip_id);
+                missing_position_failures.push_back(fmt::format(
+                    "fabric node (mesh={}, chip={}) requires pinned ASIC position (tray_id={}, asic_location={}) "
+                    "which is absent from the mapped physical mesh",
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id,
+                    position.first.get(),
+                    position.second.get()));
                 success = false;
                 continue;
             }
@@ -1976,18 +1987,22 @@ void add_pinning_constraints(
 
         if (!asic_ids.empty()) {
             if (!intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids)) {
-                // Pinnings (MGD, galaxy fixed corner pins, etc.) must never be silently dropped.
-                TT_FATAL(
-                    false,
-                    "Pinning for fabric node (mesh={}, chip={}) is unsatisfiable: no pinned ASIC position lies in "
-                    "the node's host-rank partition or mapping domain. Either relax rank bindings, fix the MGD "
-                    "pinnings, or adjust the physical topology.",
+                return fmt::format(
+                    "fabric node (mesh={}, chip={}) has pinned ASIC positions present in the physical mesh but none "
+                    "lie in the node's host-rank partition (conflicts with rank bindings)",
                     fabric_node.mesh_id.get(),
                     fabric_node.chip_id);
             }
         }
     }
-    TT_FATAL(success, "Failed to add pinning constraints");
+
+    if (!success) {
+        return fmt::format(
+            "MGD/galaxy corner pinning unsatisfied for logical mesh {} on this physical mesh: {}",
+            logical_mesh_id.get(),
+            fmt::join(missing_position_failures, "; "));
+    }
+    return std::nullopt;
 }
 
 // Parallel physical inter-mesh edges from one exit ASIC to a destination mesh (each edge is one link / channel).
@@ -2321,6 +2336,66 @@ bool handle_forbidden_constraint(
 
 }  // anonymous namespace
 
+namespace {
+
+template <typename NodeId>
+std::string format_adjacency_degree_histogram(const AdjacencyGraph<NodeId>& graph) {
+    std::map<std::size_t, std::size_t> degree_hist;
+    for (const auto& node : graph.get_nodes()) {
+        const auto& neighbors = graph.get_neighbors(node);
+        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
+        degree_hist[unique_neighbors.size()]++;
+    }
+
+    std::string hist_str = "{";
+    bool first = true;
+    for (const auto& [degree, count] : degree_hist) {
+        if (!first) {
+            hist_str += ", ";
+        }
+        first = false;
+        hist_str += fmt::format("{}:{}", degree, count);
+    }
+    hist_str += "}";
+    return hist_str;
+}
+
+template <typename NodeId>
+std::string format_intra_mesh_degree_histograms(const std::map<MeshId, AdjacencyGraph<NodeId>>& mesh_graphs) {
+    if (mesh_graphs.empty()) {
+        return "(none)";
+    }
+
+    std::string hist_str;
+    bool first = true;
+    for (const auto& [mesh_id, graph] : mesh_graphs) {
+        if (!first) {
+            hist_str += ", ";
+        }
+        first = false;
+        hist_str += fmt::format("mesh{} {}", mesh_id.get(), format_adjacency_degree_histogram(graph));
+    }
+    return hist_str;
+}
+
+}  // namespace
+
+void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph) {
+    log_info(
+        tt::LogFabric,
+        "Logical multi-mesh adjacency: intermesh degree histogram {}; intra-mesh degree histograms {}",
+        format_adjacency_degree_histogram(multi_mesh_graph.mesh_level_graph_),
+        format_intra_mesh_degree_histograms(multi_mesh_graph.mesh_adjacency_graphs_));
+}
+
+void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph) {
+    log_info(
+        tt::LogFabric,
+        "Physical multi-mesh adjacency: intermesh degree histogram {}; intra-mesh degree histograms {}",
+        format_adjacency_degree_histogram(multi_mesh_graph.mesh_level_graph_),
+        format_intra_mesh_degree_histograms(multi_mesh_graph.mesh_adjacency_graphs_));
+}
+
 TopologyMappingResult map_multi_mesh_to_physical(
     const LogicalMultiMeshGraph& adjacency_map_logical,
     const PhysicalMultiMeshGraph& adjacency_map_physical,
@@ -2439,6 +2514,33 @@ TopologyMappingResult map_multi_mesh_to_physical(
         unsigned int mapped_mesh_pairs = 0;
         std::vector<std::pair<MeshId, MeshId>> current_attempt_failed_pairs;
 
+        auto reject_mesh_pair_mapping =
+            [&](MeshId logical_mesh_id, MeshId physical_mesh_id, const std::string& failure_reason) -> bool {
+            log_trace(
+                tt::LogFabric,
+                "Attempt {}: Rejecting logical mesh {} -> physical mesh {} mapping: {}",
+                retry_attempt,
+                logical_mesh_id.get(),
+                physical_mesh_id.get(),
+                failure_reason);
+            return handle_forbidden_constraint(
+                inter_mesh_constraints,
+                logical_mesh_id,
+                physical_mesh_id,
+                failed_mesh_pairs,
+                current_attempt_failed_pairs,
+                retry_attempt,
+                logical_meshes,
+                physical_meshes,
+                inter_mesh_validation_mode,
+                result,
+                fmt::format(
+                    "Intra-mesh mapping failure for logical mesh {} -> physical mesh {}: {}",
+                    logical_mesh_id.get(),
+                    physical_mesh_id.get(),
+                    failure_reason));
+        };
+
         // Step 2: For each mesh mapping, do the sub mapping for fabric node id to asic id
         std::unordered_map<MeshId, MeshId> mesh_mappings(
             solver_result.target_to_global.begin(), solver_result.target_to_global.end());
@@ -2500,37 +2602,30 @@ TopologyMappingResult map_multi_mesh_to_physical(
                     physical_exit_node_graph,
                     inter_mesh_validation_mode);
 
-                // If exit node constraints cannot be satisfied (no valid physical exit nodes or over-constrained),
-                // treat this as a mapping failure and try next combination
                 if (!exit_node_constraints_success) {
-                    log_trace(
-                        tt::LogFabric,
-                        "Attempt {}: Exit node constraints cannot be satisfied for mesh {} -> {}",
-                        retry_attempt,
-                        logical_mesh_id.get(),
-                        physical_mesh_id.get());
-                    if (!handle_forbidden_constraint(
-                            inter_mesh_constraints,
+                    if (!reject_mesh_pair_mapping(
                             logical_mesh_id,
                             physical_mesh_id,
-                            failed_mesh_pairs,
-                            current_attempt_failed_pairs,
-                            retry_attempt,
-                            logical_meshes,
-                            physical_meshes,
-                            inter_mesh_validation_mode,
-                            result,
-                            "Exit node constraint error")) {
-                        return result;  // Mapping should return early
+                            "exit node constraints cannot be satisfied (no valid physical exit nodes or "
+                            "over-constrained)")) {
+                        return result;
                     }
-                    continue;  // Skip to next physical mesh
+                    continue;
                 }
             }
 
             // Build ASIC positions map and add pinning constraints
             auto asic_positions_to_asic_ids = build_asic_positions_map(physical_graph, config);
 
-            add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
+            auto pinning_constraint_failure =
+                add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
+
+            if (pinning_constraint_failure.has_value()) {
+                if (!reject_mesh_pair_mapping(logical_mesh_id, physical_mesh_id, pinning_constraint_failure.value())) {
+                    return result;
+                }
+                continue;
+            }
 
             // Determine validation mode
             auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
@@ -2539,27 +2634,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
             auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
                 logical_graph, physical_graph, intra_mesh_constraints, validation_mode, quiet_mode);
 
-            // If the intra-mesh mapping fails, add a forbidden constraint so it doesn't try to map this pair again
             if (!sub_mapping.success) {
-                log_trace(
-                    tt::LogFabric,
-                    "Attempt {}: Intra-mesh mapping failed for mesh {} -> {}",
-                    retry_attempt,
-                    logical_mesh_id.get(),
-                    physical_mesh_id.get());
-                if (!handle_forbidden_constraint(
-                        inter_mesh_constraints,
-                        logical_mesh_id,
-                        physical_mesh_id,
-                        failed_mesh_pairs,
-                        current_attempt_failed_pairs,
-                        retry_attempt,
-                        logical_meshes,
-                        physical_meshes,
-                        inter_mesh_validation_mode,
-                        result,
-                        "Constraint error")) {
-                    return result;  // Mapping should return early
+                const std::string failure_reason =
+                    sub_mapping.error_message.empty() ? "intra-mesh topology solver failed" : sub_mapping.error_message;
+                if (!reject_mesh_pair_mapping(logical_mesh_id, physical_mesh_id, failure_reason)) {
+                    return result;
                 }
             } else {
                 mapped_mesh_pairs++;
