@@ -5,6 +5,7 @@ from models.common.lightweightmodule import LightweightModule
 from enum import Enum
 from .weights import load_gdn_weights
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
+from models.tt_transformers.tt.ccl import tt_all_reduce
 from .operations import (
     causal_conv1d_silu,
     causal_conv1d_silu_update,
@@ -44,10 +45,22 @@ class Qwen35GatedDeltaNet(LightweightModule):
         args: Qwen35ModelArgs,
         state_dict,
         mesh_device,
+        tt_ccl=None,
+        tensor_cache_path=None,
     ):
+        # Tensor-parallel context. The delta-rule recurrence is per-value-head, so TP
+        # shards by head: every per-head dim below is the LOCAL (per-device) count =
+        # global // num_devices. At TP=1 these equal the originals, so the validated
+        # single-device shapes are unchanged. tt_ccl drives the one collective this layer
+        # needs — the reduce-scatter over the row-parallel out_proj output (TP>1 only).
+        self.args = args
+        self.num_devices = args.num_devices
+        self.tt_ccl = tt_ccl
+        tp = self.num_devices
+
         self.hidden_size = args.dim
-        self.num_v_heads = args.linear_num_value_heads
-        self.num_k_heads = args.linear_num_key_heads
+        self.num_v_heads = args.linear_num_value_heads // tp
+        self.num_k_heads = args.linear_num_key_heads // tp
         self.head_k_dim = args.linear_key_head_dim
         self.head_v_dim = args.linear_value_head_dim
         self.key_dim = self.head_k_dim * self.num_k_heads
@@ -55,8 +68,10 @@ class Qwen35GatedDeltaNet(LightweightModule):
         self.conv_kernel_size = args.linear_conv_kernel_dim
         self.layer_norm_epsilon = args.norm_eps
         self.conv_dim = self.key_dim * 2 + self.value_dim
-        self.scale = 1 / (self.head_k_dim**0.5)
-        self.weights = load_gdn_weights(mesh_device=mesh_device, state_dict=state_dict, args=args)
+        self.scale = 1 / (self.head_k_dim**0.5)  # head dim is NOT sharded, so scale is unchanged
+        self.weights = load_gdn_weights(
+            mesh_device=mesh_device, state_dict=state_dict, args=args, tensor_cache_path=tensor_cache_path
+        )
         self.mesh_device = mesh_device
         self.recurrent_state = None
         self.cache_params = None
@@ -483,7 +498,16 @@ class Qwen35GatedDeltaNet(LightweightModule):
         core_attn_out = self.norm(core_attn_out, gate=z)
         core_attn_out = ttnn.reshape(core_attn_out, (batch_size, seq_len, -1))
         out = ttnn.linear(core_attn_out, weights.wo)
-        return out
+        out = ttnn.reshape(out, (batch_size, 1, out.shape[-2], out.shape[-1]))
+        return tt_all_reduce(
+            out,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def decode_forward(self, hidden_states, attention_mask=None):
         # hidden_states [1, 1, B, hidden_size]
@@ -549,4 +573,13 @@ class Qwen35GatedDeltaNet(LightweightModule):
         core_attn_out = self.norm(core_attn_out, gate=z)
         core_attn_out = ttnn.reshape(core_attn_out, (batch_size, seq_len, -1))
         out = ttnn.linear(core_attn_out, weights.wo)
-        return out
+        out = ttnn.reshape(out, (1, 1, out.shape[-2], out.shape[-1]))
+        return tt_all_reduce(
+            out,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )

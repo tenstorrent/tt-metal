@@ -191,6 +191,7 @@ def chunk_identity(chunk_size, mesh_device, *, dtype=ttnn.float32, memory_config
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=memory_config,
     )
 
@@ -222,6 +223,7 @@ def chunk_triangular_masks(chunk_size, mesh_device, *, dtype=ttnn.float32, memor
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             memory_config=memory_config,
         )
 
