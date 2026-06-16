@@ -10,7 +10,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import skip_with_watcher
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
+from models.demos.ttnn_falcon7b.tt.common import build_past_key_values_cache, create_custom_preprocessor, create_kv_cache
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -118,7 +118,7 @@ def test_falcon_causal_lm(
                 mesh_device,
                 mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
-            past_key_values += ((current_layer_past.key_cache[0], current_layer_past.value_cache[0]),)
+            past_key_values += (current_layer_past,)
             tt_layer_past += (tt_current_layer_past,)
 
     else:
@@ -127,7 +127,7 @@ def test_falcon_causal_lm(
     pytorch_out, pytorch_layer_present = model(
         input_ids=model_input,
         attention_mask=None,  # when attention_mask is None, a causal mask is created under the hood
-        past_key_values=past_key_values,
+        past_key_values=build_past_key_values_cache(past_key_values),
         use_cache=True,
         return_dict=False,
     )
@@ -334,7 +334,7 @@ def test_t3k_falcon_causal_lm_with_trace(
     pytorch_out, pytorch_layer_present = model(
         input_ids=model_input,
         attention_mask=None,  # when attention_mask is None, a causal mask is created under the hood
-        past_key_values=past_key_values,
+        past_key_values=build_past_key_values_cache(past_key_values),
         use_cache=True,
         return_dict=False,
     )
