@@ -20,24 +20,6 @@
 
 namespace ckernel {
 
-#ifndef ARCH_QUASAR
-ALWI void transpose_wh_a2d_datacopy_init(uint32_t icb) {
-    const std::uint32_t src_format = get_operand_src_format(icb);
-    // Low-nibble compare intentionally matches both signed Int8 (14) and unsigned UInt8 (30 -> 0x1e):
-    // both 8-bit integer formats need the int-FPU (ELWADD) A2D reconstruct path.
-    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
-    if (is_8bit_int) {
-        MATH((llk_math_eltwise_unary_datacopy_init<
-              DataCopyType::A2D,
-              DST_ACCUM_MODE,
-              BroadcastType::NONE,
-              true /*is_int_fpu_en*/>(icb)));
-    } else {
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
-    }
-}
-#endif
-
 // clang-format off
 /**
  * Paired Init function for transpose_wh. For general information on init functions refer to any_init.
@@ -72,7 +54,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
-        transpose_wh_a2d_datacopy_init(icb);
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
@@ -111,11 +93,9 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
 ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    const std::uint32_t src_format = get_operand_src_format(icb);
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 
 #ifndef ARCH_QUASAR
-    (void)src_format;
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
@@ -126,10 +106,9 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
-        transpose_wh_a2d_datacopy_init(icb);
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     }
 #else
-    (void)src_format;
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559

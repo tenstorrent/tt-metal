@@ -387,14 +387,6 @@ class TO_FROM_INT8(TemplateParameter):
 
 
 @dataclass
-class NEEDS_INT_FPU(TemplateParameter):
-    needs_int_fpu: bool
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool NEEDS_INT_FPU = {str(self.needs_int_fpu).lower()};"
-
-
-@dataclass
 class IS_MAX_OP(TemplateParameter):
     """Compile-time flag: true for element-wise max, false for min."""
 

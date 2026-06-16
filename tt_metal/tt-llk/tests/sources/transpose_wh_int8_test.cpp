@@ -58,12 +58,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<
-        DataCopyType::A2D,
-        is_fp32_dest_acc_en,
-        BroadcastType::NONE,
-        NEEDS_INT_FPU,
-        PackMode::Default>(params.num_faces, formats.math);
+    // UInt8 uses the same 4-bit register encoding as Int8; signedness is tracked separately.
+    const bool needs_int_fpu = (masked_data_format(formats.math) == to_underlying(DataFormat::Int8));
+    if (needs_int_fpu)
+    {
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            true,
+            PackMode::Default>(params.num_faces, formats.math);
+    }
+    else
+    {
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false,
+            PackMode::Default>(params.num_faces, formats.math);
+    }
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);

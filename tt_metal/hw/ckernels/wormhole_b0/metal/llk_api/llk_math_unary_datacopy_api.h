@@ -57,8 +57,21 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(
-        num_faces, dst_format);
+    if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE && is_fp32_dest_acc_en) {
+        const std::uint32_t src_format = get_operand_src_format(operand_id);
+        // UInt8 uses the same 4-bit register encoding as Int8; signedness is tracked separately.
+        const bool needs_int_fpu = is_int_fpu_en || (masked_data_format(src_format) == to_underlying(DataFormat::Int8));
+        if (needs_int_fpu) {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, true>(
+                num_faces, dst_format);
+        } else {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, false>(
+                num_faces, dst_format);
+        }
+    } else {
+        _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(
+            num_faces, dst_format);
+    }
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
