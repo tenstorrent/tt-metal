@@ -14,9 +14,9 @@ Goal completion requirements:
 - sample_on_device_mode=all keeps sampling on device. The measured path has no host greedy/top-1 argmax, full-logits readback, or eager sampling.
 - Serving reuses the full-model greedy split-sampling contract. Do not accept force-argmax because a generic top-k/top-p-capable sampled path is slower. If force-argmax, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampler op dominates token-out decode, fix the LM-head/sampling contract in the generator instead of patching around it in the adapter.
 - Token, position, RoPE, page-table, cache, and sampler trace inputs are persistent device tensors. Refresh them only when the scheduler state actually changes. The unchanged-page-table case performs no per-token page-table copy. Stale-input tests cover changed token/current-position values plus changed and unchanged page tables.
-- tt-perf-report or equivalent profiler evidence exists for serving decode.
+- Do not collect Tracy, tt-perf-report, live-server TT_METAL_DEVICE_PROFILER, serving-adapter profiler, or ttnn.ReadDeviceProfiler(mesh) evidence in this vLLM serving stage. Use run_vllm_server benchmark JSON, sampling tests, qualitative outputs, stale-input checks, async-split evidence, on-device sampler evidence, and no-host-fallback evidence instead.
 - Runtime fallback and cleanup are clean: no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, blocking readback, standalone-cache assumption, or leftover vLLM/EngineCore process in the measured path.
-- models/autoports/<model>/doc/optimized_vllm/README.md and work_log.md record commands, before/after serving metrics, optimized-full-model comparison, trace/async decisions, profiler conclusions, rejected options, limitations, and exact artifacts.
+- models/autoports/<model>/doc/optimized_vllm/README.md and work_log.md record commands, before/after serving metrics, optimized-full-model comparison, trace/async decisions, profiler-disabled rationale for vLLM serving, rejected options, limitations, and exact artifacts.
 - Relevant $optimize checklist items are completed with evidence for the vLLM serving path.
 - Use $tt-enable-tracing for trace capture, nonblocking replay, async readback, stale inputs, or serving trace correctness.
 - Prefill TTFT and decode t/s/u for batch-1 inference are reported at the top of README.md.
