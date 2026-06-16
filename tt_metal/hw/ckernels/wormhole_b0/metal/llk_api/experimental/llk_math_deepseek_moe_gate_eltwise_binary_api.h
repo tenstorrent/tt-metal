@@ -4,7 +4,7 @@
 
 #pragma once
 #include "llk_math_common_api.h"
-#include "../../../../../../tt_llk/tt_llk_blackhole/llk_lib/llk_math_deepseek_moe_gate_eltwise_binary.h"
+#include "experimental/llk_math_deepseek_moe_gate_eltwise_binary.h"
 
 /*************************************************************************
  * LLK ELTWISE BINARY

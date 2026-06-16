@@ -7,17 +7,10 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/transpose_wh.h"
-#include "api/compute/unpack.h"
 #ifdef TRISC_MATH
-#ifdef ARCH_BLACKHOLE
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_moe_gate_topk_single_face.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_deepseek_moe_gate_eltwise_binary_api.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_deepseek_moe_gate_transpose_dest_single_face_api.h"
-#else
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_deepseek_moe_gate_topk_single_face.h"
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_deepseek_moe_gate_eltwise_binary_api.h"
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_deepseek_moe_gate_transpose_dest_single_face_api.h"
-#endif
+#include "llk_math_deepseek_moe_gate_topk_single_face.h"
+#include "experimental/llk_math_deepseek_moe_gate_eltwise_binary_api.h"
+#include "experimental/llk_math_deepseek_moe_gate_transpose_dest_single_face_api.h"
 #endif
 
 namespace ckernel {
@@ -31,7 +24,7 @@ ALWI void deepseek_moe_gate_init(uint32_t icb0, uint32_t icb1) {
         transpose_wh_init_short(icb0);
     } else {
         // Init copy add (FPU)
-        unpack_AB_init_short(icb0, icb1, Transpose::Both);
+        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::Both)));
         MATH((llk_math_deepseek_moe_gate_eltwise_binary_init_with_operands<
               EltwiseBinaryType::ELWADD,
               DeepseekMoeGateEltwiseBinaryMode::COPY,
