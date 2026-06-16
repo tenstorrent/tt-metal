@@ -85,9 +85,13 @@ def run_model(
     thresholds: PrefillBlockThresholds,
     determinism_check: bool = False,
     num_iterations: int = 1,
+    use_fp8_compression: bool = False,
 ):
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False and not determinism_check:
         pytest.skip("Skip non-PCC test in CI to save time")
+    # FP8 compression is validated locally; skip the fp8 variant in CI to save time.
+    if (is_ci_env or is_ci_v2_env) and use_fp8_compression:
+        pytest.skip("Skip use_fp8_compression test in CI — runnable locally for fp8 validation")
     # Kimi's parametrize has no `balanced` entry today (only non_balanced).
     # Applying this skip would zero out Kimi's CI coverage for this test.
     # Remove this exception once there's need to test both balanced and non_balanced for Kimi.
@@ -253,6 +257,7 @@ def run_model(
         tp_axis=tp_axis,
         weight_cache_path=cache_dir,
         is_balanced=is_balanced,
+        use_fp8_compression=use_fp8_compression,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -481,6 +486,7 @@ def run_model(
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize("use_fp8_compression", [False], ids=["bf16"])
 @pytest.mark.timeout(600)
 def test_ds_prefill_block(
     variant,
@@ -501,6 +507,7 @@ def test_ds_prefill_block(
     is_ci_v2_env,
     determinism_check,
     num_iterations,
+    use_fp8_compression,
 ):
     run_model(
         variant,
@@ -522,6 +529,7 @@ def test_ds_prefill_block(
         determinism_check=determinism_check,
         num_iterations=num_iterations,
         thresholds=DSV3_THRESHOLDS,
+        use_fp8_compression=use_fp8_compression,
     )
 
 
@@ -563,6 +571,7 @@ def test_ds_prefill_block(
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize("use_fp8_compression", [False], ids=["bf16"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(900)
 def test_kimi_prefill_block(
@@ -584,6 +593,7 @@ def test_kimi_prefill_block(
     is_ci_v2_env,
     determinism_check,
     num_iterations,
+    use_fp8_compression,
 ):
     run_model(
         variant,
@@ -605,4 +615,5 @@ def test_kimi_prefill_block(
         determinism_check=determinism_check,
         num_iterations=num_iterations,
         thresholds=KIMI_THRESHOLDS,
+        use_fp8_compression=use_fp8_compression,
     )

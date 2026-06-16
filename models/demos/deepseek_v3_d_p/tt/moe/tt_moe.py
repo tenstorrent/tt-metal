@@ -522,8 +522,6 @@ class TtMoe(LightweightModule):
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
         if self.use_fp8_compression:
-            # x (bf16) is no longer needed once the shared expert above has consumed it
-            ttnn.deallocate(x)
             dispatched_buffer_fp8, metadata = self.dispatch_module(
                 x_fp8,
                 scores,
@@ -540,10 +538,14 @@ class TtMoe(LightweightModule):
                 tt_expert_offsets,
                 self.tt_expert_dispatch_table,
             )
-            ttnn.deallocate(x)
 
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.clear_loaded_sub_device_manager()
+
+        # Free x only after clearing the sub-device manager. The shared expert reads x on the
+        # `shared` sub-device, which runs concurrently with dispatch on the `dispatch` sub-device
+        # with no ordering between them.
+        ttnn.deallocate(x)
 
         if self.use_fp8_compression:
             # Decompress AFTER clearing the sub-device manager (full grid). The per-token scale is

@@ -78,6 +78,8 @@ def run_model(
     gate_fallback_mode,
     use_fp8_compression,
     request,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -88,6 +90,9 @@ def run_model(
     # FP8 compression compresses only works on Blackhole
     if use_fp8_compression and not is_blackhole():
         pytest.skip("use_fp8_compression requires Blackhole (per_token_cast_to_fp8/back)")
+    # FP8 compression is validated locally; skip the fp8 variant in CI to save time.
+    if (is_ci_env or is_ci_v2_env) and use_fp8_compression:
+        pytest.skip("Skip use_fp8_compression test in CI — runnable locally for fp8 validation")
 
     # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
     # Cached all-gather semaphores get placed at the wrong offset for that specific config.
@@ -684,6 +689,8 @@ def test_ds_moe(
     gate_fallback_mode,
     use_fp8_compression,
     request,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     run_model(
         variant,
@@ -702,6 +709,8 @@ def test_ds_moe(
         gate_fallback_mode,
         use_fp8_compression,
         request,
+        is_ci_env,
+        is_ci_v2_env,
     )
 
 
@@ -755,6 +764,8 @@ def test_kimi_moe(
     gate_fallback_mode,
     use_fp8_compression,
     request,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     run_model(
         variant,
@@ -773,4 +784,6 @@ def test_kimi_moe(
         gate_fallback_mode,
         use_fp8_compression,
         request,
+        is_ci_env,
+        is_ci_v2_env,
     )

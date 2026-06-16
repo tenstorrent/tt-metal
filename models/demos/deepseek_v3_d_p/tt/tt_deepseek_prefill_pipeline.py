@@ -37,6 +37,7 @@ class TtPrefillPipelineConfig:
     routed_expert_weights_dtype: ttnn.DataType = ttnn.bfloat4_b
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
+    use_fp8_compression: bool = False
     weight_cache_path: Optional[Path] = None
     # Static model-dimension constants for the variant being built
     # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
@@ -119,6 +120,7 @@ class TtDeepSeekPrefillPipeline:
             routed_expert_weights_dtype=self.config.routed_expert_weights_dtype,
             shared_expert_activations_dtype=self.config.shared_expert_activations_dtype,
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
+            use_fp8_compression=self.config.use_fp8_compression,
             weight_cache_path=self.config.weight_cache_path,
             lm_head_is_column_parallel=True,
             is_chunked=True,
