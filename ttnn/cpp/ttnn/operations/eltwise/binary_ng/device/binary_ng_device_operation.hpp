@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal2_artifacts.hpp"
 namespace ttnn::operations::binary_ng {
 
 enum class SubtileBroadcastType {
@@ -71,7 +72,21 @@ struct BinaryNgDeviceOperation {
             tensor_return_value_t& c);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    // Metal 2.0 factory. Currently handles ONLY the simplest path:
+    //   no-broadcast (SubtileBroadcastType::NONE) x tile layout x FPU x tensor-b-present x
+    //   interleaved x no activations. select_program_factory() routes only that exact case
+    //   here; every other path stays on the legacy ProgramFactory above. The remaining paths
+    //   (row-major, all broadcast types, SFPU, where-op, scalar-b, sharded) are enumerated in
+    //   METAL2_PORT_REPORT.md for a follow-up pass.
+    struct ProgramSpecFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_spec(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& c);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory, ProgramSpecFactory>;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

@@ -484,6 +484,38 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
+BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // Route ONLY the simplest path to the Metal 2.0 ProgramSpecFactory:
+    //   SubtileBroadcastType::NONE x tile layout x FPU (not SFPU, not where) x tensor-b-present x
+    //   interleaved (not sharded) x no activations x no typecast x plain ADD/SUB/MUL.
+    // Everything else stays on the legacy ProgramFactory::create_descriptor. The gate is
+    // deliberately conservative: any condition the narrow factory does not model falls through.
+    const auto& a = tensor_args.input_tensor_a;
+    const auto& b = tensor_args.input_tensor_b;
+
+    const bool b_present = b.has_value();
+    const bool is_none_bcast = attributes.subtile_broadcast_type == SubtileBroadcastType::NONE;
+    const bool is_fpu = !attributes.is_sfpu && !attributes.is_where_op && !attributes.is_quant_op;
+    const bool tile_layout = attributes.input_layout_a == Layout::TILE && attributes.input_layout_b == Layout::TILE &&
+                             attributes.output_layout == Layout::TILE;
+    const bool no_activations =
+        attributes.lhs_activations.empty() && attributes.rhs_activations.empty() && attributes.post_activations.empty();
+    const bool plain_op = attributes.binary_op_type == BinaryOpType::ADD ||
+                          attributes.binary_op_type == BinaryOpType::SUB ||
+                          attributes.binary_op_type == BinaryOpType::MUL;
+
+    bool sharded = a.memory_config().is_sharded() || (b_present && b->memory_config().is_sharded()) ||
+                   attributes.memory_config.is_sharded();
+    // No typecast (a and output share dtype) so the FPU compute kernel binds no POST activation.
+    const bool no_typecast = b_present && a.dtype() == attributes.get_dtype();
+
+    if (b_present && is_none_bcast && is_fpu && tile_layout && no_activations && plain_op && !sharded && no_typecast) {
+        return ProgramSpecFactory{};
+    }
+    return ProgramFactory{};
+}
+
 ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;

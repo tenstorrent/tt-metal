@@ -127,8 +127,18 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
     Program program = std::visit(
         [&](auto&& factory) -> Program {
             using Factory = std::decay_t<decltype(factory)>;
-            auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-            return Program{descriptor};
+            // mesh_partition builds its own MeshWorkload from ProgramDescriptors. The TILE path's
+            // own dispatch went Metal 2.0 (SliceTileSpecProgramFactory has create_program_spec, not
+            // create_descriptor), but the descriptor variant of the same TILE work is still
+            // available on SliceTileProgramFactory — reuse it here so mesh_partition keeps building.
+            if constexpr (std::is_same_v<Factory, ttnn::prim::SliceTileSpecProgramFactory>) {
+                auto descriptor = ttnn::prim::SliceTileProgramFactory::create_descriptor(
+                    slice_attrs, slice_tensor_args, tensor_return_value);
+                return Program{descriptor};
+            } else {
+                auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+                return Program{descriptor};
+            }
         },
         program_factory);
 
@@ -157,8 +167,16 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         std::visit(
             [&](auto&& program_factory) {
                 using Factory = std::decay_t<decltype(program_factory)>;
-                auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-                tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
+                // See create_at: the TILE path's spec factory has no create_descriptor; reuse the
+                // descriptor variant of the same TILE work for mesh_partition's per-coord rebuild.
+                if constexpr (std::is_same_v<Factory, ttnn::prim::SliceTileSpecProgramFactory>) {
+                    auto descriptor = ttnn::prim::SliceTileProgramFactory::create_descriptor(
+                        slice_attrs, slice_tensor_args, tensor_return_value);
+                    tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
+                } else {
+                    auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+                    tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
+                }
             },
             shared_variables.slice_program_factory);
     }

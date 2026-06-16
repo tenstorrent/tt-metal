@@ -291,7 +291,10 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
         return SliceRmProgramFactory{};
     }
     // Layout::TILE — TensorAccessor at tile granularity handles all sharded buffer types natively.
-    return SliceTileProgramFactory{};
+    // slice's own dispatch uses the Metal 2.0 (ProgramSpec) factory; ccl/mesh_partition still
+    // reuses the legacy SliceTileProgramFactory::create_descriptor directly (see
+    // mesh_partition_program_factory.cpp), so both factory structs are retained.
+    return SliceTileSpecProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>

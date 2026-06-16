@@ -37,7 +37,7 @@ struct SliceDeviceOperation {
         SliceRmProgramFactory,
         SliceRmShardedProgramFactory,
         SliceRmStrideProgramFactory,
-        SliceTileProgramFactory,
+        SliceTileSpecProgramFactory,
         SliceTileTensorArgsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

@@ -2,65 +2,69 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port. Used only by the MatmulMultiCoreReuseOptimized factory, so ported in
+// place. Logic, #ifdefs, and loop bounds are unchanged from the legacy reader/writer;
+// only the access mechanism moves to named bindings: the in1 / out tensor addresses ->
+// ta::b / ta::out, CB ids -> dfb::cb_in1 / dfb::cb_out / dfb::cb_in1_intermediate,
+// positional CT/RT args -> get_arg(args::...). The in1 CB (IN1_SHARDED) and out CB
+// (OUT_SHARDED) become borrowed-memory DFBs backed by tensors `b` / `out`; on those
+// paths the matching ta:: construction lives inside the existing #ifndef block, so the
+// factory binds the tensor to this kernel only on the corresponding NoC path.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // RUNTIME ARGS
     // READER
-    uint32_t rt_args_idx = 0;
-    // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // in1 tensor args (addr now arrives via the ta::b binding)
+    uint32_t in1_tensor_start_tile_id = get_arg(args::in1_tensor_start_tile_id);
     // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t batch = get_arg(args::batch);
 
     // WRITER
-    // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // out tensor args (addr now arrives via the ta::out binding)
+    uint32_t out_tensor_start_tile_id = get_arg(args::out_tensor_start_tile_id);
 
     // COMPILE TIME ARGS
     // READER
     // in1 tensor args
-    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(2);
+    constexpr uint32_t in1_tensor_stride_w = get_arg(args::in1_tensor_stride_w);
+    constexpr uint32_t in1_tensor_stride_h = get_arg(args::in1_tensor_stride_h);
+    constexpr uint32_t in1_tensor_next_block_stride = get_arg(args::in1_tensor_next_block_stride);
     // in1 block args
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(3);
-    constexpr uint32_t in1_block_h = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t in1_block_w = get_arg(args::in1_block_w);
+    constexpr uint32_t in1_block_h = get_arg(args::in1_block_h);
+    constexpr uint32_t in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(6);
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
     // batch args
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(7);
-    constexpr uint32_t KtNt = get_compile_time_arg_val(8);
+    constexpr uint32_t bcast_B = get_arg(args::bcast_B);
+    constexpr uint32_t KtNt = get_arg(args::KtNt);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(12);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
-    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(16);
-    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(17);
+    constexpr uint32_t out_tensor_stride_w = get_arg(args::out_tensor_stride_w);
+    constexpr uint32_t out_tensor_stride_h = get_arg(args::out_tensor_stride_h);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_arg(args::out_tensor_next_subblock_stride_w);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_arg(args::out_tensor_next_subblock_stride_h);
+    constexpr uint32_t out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr uint32_t out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr uint32_t out_subblock_tile_count = get_arg(args::out_subblock_tile_count);
+    constexpr uint32_t out_num_subblocks_w = get_arg(args::out_num_subblocks_w);
+    constexpr uint32_t out_num_subblocks_h = get_arg(args::out_num_subblocks_h);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(18);
+    constexpr uint32_t MtNt = get_arg(args::MtNt);
 
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t cb_id_in1 = dfb::cb_in1;
     constexpr uint32_t one_tile = 1;
     // WRITER
-    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
-
-    constexpr auto in1_args = TensorAccessorArgs<19>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_id_out0 = dfb::cb_out;
 
     Noc noc;
     CircularBuffer cb_in1(cb_id_in1);
@@ -72,12 +76,12 @@ void kernel_main() {
     cb_in1.push_back(in1_num_tiles);
 #else
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+    const auto s1 = TensorAccessor(ta::b);
 #endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const auto s = TensorAccessor(ta::out);
 #endif  // OUT_SHARDED
 
 #if not defined IN1_SHARDED or not defined OUT_SHARDED
@@ -88,7 +92,7 @@ void kernel_main() {
             cb_in1.reserve_back(in1_block_num_tiles);
 
 #ifdef INTERMEDIATE_CB_READ
-            constexpr uint32_t in1_intermediate_cb_index = get_named_compile_time_arg_val("cb_in1_intermediate");
+            constexpr uint32_t in1_intermediate_cb_index = dfb::cb_in1_intermediate;
             CircularBuffer cb_helper(in1_intermediate_cb_index);
             cb_helper.reserve_back(one_tile);
 #endif  // INTERMEDIATE_CB_READ
@@ -155,8 +159,10 @@ void kernel_main() {
                 for (uint32_t h = 0; h < out_subblock_h; ++h) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w; ++w) {
+                        // A bare DFB used as a NoC source is already read-pointer-sourced, so the
+                        // legacy use<CircularBuffer::AddrSelector::READ_PTR>(cb_out) wrapper drops.
                         noc.async_write(
-                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                            cb_out,
                             s,
                             output_single_tile_size_bytes,
                             {.offset_bytes = out_read_offset},

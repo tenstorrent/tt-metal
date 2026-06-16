@@ -2,6 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port. Used only by the MatmulMultiCoreReuseOptimized factory, so ported in
+// place. Logic, #ifdefs, and loop bounds are unchanged from the legacy reader; only the
+// access mechanism moves to named bindings: the in0 tensor address -> ta::a, CB ids ->
+// dfb::cb_in0 / dfb::cb_in0_intermediate, positional CT/RT args -> get_arg(args::...).
+// On the IN0_SHARDED path the in0 CB is a borrowed-memory DFB backed by tensor `a`, so
+// the tensor is not accessed via a TensorAccessor; the ta::a construction lives inside
+// the existing #ifndef IN0_SHARDED block, so the factory binds tensor `a` to this kernel
+// only on the non-sharded (NoC-read) path.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -9,36 +18,33 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // RUNTIME ARGS
-    uint32_t rt_args_idx = 0;
-    // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // in0 tensor args (addr now arrives via the ta::a binding)
+    uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);
     // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t batch = get_arg(args::batch);
 
     // COMPILE TIME ARGS
     // in0 tensor args
-    constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_tensor_stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_tensor_next_block_stride = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_tensor_stride_w = get_arg(args::in0_tensor_stride_w);
+    constexpr uint32_t in0_tensor_stride_h = get_arg(args::in0_tensor_stride_h);
+    constexpr uint32_t in0_tensor_next_block_stride = get_arg(args::in0_tensor_next_block_stride);
     // in0 block args
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(4);
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t last_ktile_w = get_compile_time_arg_val(6);
-    constexpr uint32_t last_ktile_h = get_compile_time_arg_val(7);
+    constexpr uint32_t in0_block_w = get_arg(args::in0_block_w);
+    constexpr uint32_t in0_block_h = get_arg(args::in0_block_h);
+    constexpr uint32_t in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
+    constexpr uint32_t last_ktile_w = get_arg(args::last_ktile_w);
+    constexpr uint32_t last_ktile_h = get_arg(args::last_ktile_h);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
     // batch args
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(9);
-    constexpr uint32_t MtKt = get_compile_time_arg_val(10);
+    constexpr uint32_t bcast_B = get_arg(args::bcast_B);
+    constexpr uint32_t MtKt = get_arg(args::MtKt);
 
-    constexpr auto in0_args = TensorAccessorArgs<11>();
-
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t cb_id_in0 = dfb::cb_in0;
     constexpr uint32_t one_tile = 1;
 
     Noc noc;
@@ -53,10 +59,10 @@ void kernel_main() {
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr const uint32_t in0_tile_hw = get_tile_hw(cb_id_in0);
 
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+    const auto s0 = TensorAccessor(ta::a);
 
 #ifdef INTERMEDIATE_CB_READ
-    constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
+    constexpr uint32_t in0_intermediate_cb_index = dfb::cb_in0_intermediate;
     CircularBuffer cb_helper(in0_intermediate_cb_index);
 #endif
 
