@@ -86,7 +86,7 @@ void kernel_main() {
                     compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::CopyTileReconfig::Input,
                     compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::TileOffset::Set>{},
+                    compute_kernel_lib::TileOffset::Set>{1u},  // mask_w lives at index 1 of cb_mask_h_w
                 compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
@@ -117,7 +117,7 @@ void kernel_main() {
                     compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::CopyTileReconfig::Input,
                     compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::TileOffset::Set>{},
+                    compute_kernel_lib::TileOffset::Set>{1u},  // mask_w lives at index 1 of cb_mask_h_w
                 compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
