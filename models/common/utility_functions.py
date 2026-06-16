@@ -508,25 +508,22 @@ def comp_pcc(golden, calculated, pcc=0.99):
     golden = torch.squeeze(golden).flatten()
     calculated = torch.squeeze(calculated).flatten()
 
-    # For now, drop all infs and nans so that we correlate the rest... TODO
+    # For now, mask all infs and nans (to zero) so that we check the rest... TODO
     # Skip this for integer types which don't have NaN/Inf values.
     if golden.dtype.is_floating_point:
-        # FP8 doesn't support isfinite/indexing and bfloat16 products lose precision,
+        # FP8 doesn't support isfinite/nan_to_num and bfloat16 products lose precision,
         # so correlate these in float32.
         if golden.dtype in (torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16):
             golden = golden.to(torch.float32)
             calculated = calculated.to(torch.float32)
 
-        # Exclude (rather than zero) NaN/Inf. Zeroing them injects matching (0, 0)
-        # points into both tensors; those are perfectly correlated and distort the
-        # result (with a non-zero data mean the PCC can be driven toward +/-1 or its
-        # sign flipped). Dropping the invalid positions correlates only the valid data.
-        # On the common all-finite path mask.all() is True, so no copy is made and the
-        # tensors stay as views.
-        finite = torch.isfinite(golden) & torch.isfinite(calculated)
-        if not bool(finite.all()):
-            golden = golden[finite]
-            calculated = calculated[finite]
+        # Zero out NaN/Inf, preserving the historical PCC values. nan_to_num allocates a
+        # full-size copy of each tensor, so only do it when invalid values are actually
+        # present; on the common all-finite path the tensors stay as views and no copy is
+        # made (this short-circuit is what keeps peak memory near 1x of one input).
+        if not bool((torch.isfinite(golden) & torch.isfinite(calculated)).all()):
+            golden = torch.nan_to_num(golden, nan=0.0, posinf=0.0, neginf=0.0)
+            calculated = torch.nan_to_num(calculated, nan=0.0, posinf=0.0, neginf=0.0)
 
     if torch.equal(golden, calculated):
         return True, 1.0
@@ -548,8 +545,7 @@ def comp_pcc(golden, calculated, pcc=0.99):
     denom = torch.sqrt(g_centered.pow(2).sum(dtype=torch.float64) * c_centered.pow(2).sum(dtype=torch.float64))
     cal_pcc = (cov / denom).item()
 
-    # Zero variance (or everything masked out) -> denom == 0 / n == 0 -> nan: treat as a
-    # perfect match.
+    # Zero variance -> denom == 0 -> cal_pcc is nan: treat as a perfect match.
     if math.isnan(cal_pcc):
         return True, 1.0
 
