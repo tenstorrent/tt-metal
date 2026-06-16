@@ -130,6 +130,22 @@ TEST_F(DeallocateTest, MeshTensorGetterThrowsWhenDeallocated) {
     EXPECT_THROW(storage.get_mesh_tensor(), std::exception);
 }
 
+TEST_F(DeallocateTest, DeallocatedTombStoneThrowsForMeshBuffer) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    DeviceStorage storage = tensor.device_storage();
+
+    storage.deallocate();
+    ASSERT_FALSE(storage.is_allocated());
+
+    EXPECT_THROW(storage.get_mesh_buffer(), std::exception);
+}
+
+TEST_F(DeallocateTest, DefaultConstructedThrowsForMeshBuffer) {
+    DeviceStorage storage;
+
+    EXPECT_THROW(storage.get_mesh_buffer(), std::exception);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 }  // namespace ttnn::distributed::test

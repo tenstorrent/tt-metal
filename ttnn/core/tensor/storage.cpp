@@ -57,7 +57,7 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
 // - Allocated: actively holding a MeshTensor.
 // - Deallocated: the MeshTensor was deallocated by any of the DeviceStorage instances.
 //
-// To ease transition, we keep a tombstone of the MeshTensor's spec, topology, and buffer when the MeshTensor is
+// To ease transition, we keep a tombstone of the MeshTensor's spec and topology when the MeshTensor is
 // deallocated.
 struct DeviceStorage::MeshTensorHolder {
     struct DeallocatedDefaultConstructed {};
@@ -69,9 +69,6 @@ struct DeviceStorage::MeshTensorHolder {
     struct DeallocatedTombStone {
         TensorSpec tensor_spec_;
         TensorTopology tensor_topology_;
-        // Deallocated buffer kept so get_mesh_buffer_leak_ownership() stays valid after deallocation.
-        // Remove once post-deallocation MeshBuffer access is no longer needed.
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
     };
 
     using States = std::variant<DeallocatedDefaultConstructed, Allocated, DeallocatedTombStone>;
@@ -87,18 +84,10 @@ struct DeviceStorage::MeshTensorHolder {
 
     void deallocate() {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
-            // We should favor letting MeshTensor go out of scope instead of explicitly calling the underlying
-            // MeshBuffer. Calling deallocate is currently needed as we keep the MeshBuffer object alive in the
-            // DeallocatedTombStone state.
-            // Calling mesh_buffer_invariant_breaking() as we wish to get a mutable pointer to the MeshBuffer,
-            // and this is breaking the invariant of MeshTensor (Device memory is allocated when the MeshTensor object
-            // is alive).
-            allocated->mesh_tensor_.mesh_buffer_invariant_breaking()->deallocate();
-            // MeshTensor goes out of scope at this assignment:
-            state_ = DeallocatedTombStone{
-                allocated->mesh_tensor_.tensor_spec(),
-                allocated->mesh_tensor_.tensor_topology(),
-                allocated->mesh_tensor_.mesh_buffer_invariant_breaking()};
+            // Capture spec/topology, then replace the Allocated state. The MeshTensor is destroyed by this
+            // assignment, and its destructor releases the underlying device memory.
+            state_ =
+                DeallocatedTombStone{allocated->mesh_tensor_.tensor_spec(), allocated->mesh_tensor_.tensor_topology()};
         }
     }
 };
