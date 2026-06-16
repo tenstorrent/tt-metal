@@ -163,13 +163,7 @@ inline void reduce_row_sum_mvmul_face()
     TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_5, dst_base);
 }
 
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    MathFidelity math_fidelity,
-    bool is_int_fpu_en             = false,
-    bool enforce_fp32_accumulation = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -384,10 +378,9 @@ inline void reduce_configure_mop()
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam enforce_fp32_accumulation: Force FP32 accumulation (requires is_fp32_dest_acc_en).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_reduce_init_()
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
@@ -398,11 +391,6 @@ inline void _llk_math_reduce_init_()
         reduce_configure_mop<dim, math_fidelity>();
     }
 
-    if constexpr (enforce_fp32_accumulation)
-    {
-        static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -411,14 +399,8 @@ inline void _llk_math_reduce_init_()
 /**
  * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
  *
- * @tparam enforce_fp32_accumulation: Must match the value used at init.
- * @note Reverses @ref _llk_math_reduce_init_; re-enables debug feature bit 11 (@ref _llk_math_dbg_feature_enable_) only when FP32 accumulation was enforced.
+ * @note Reverses @ref _llk_math_reduce_init_
  */
-template <bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_uninit_()
 {
-    if constexpr (enforce_fp32_accumulation)
-    {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
-    }
 }
