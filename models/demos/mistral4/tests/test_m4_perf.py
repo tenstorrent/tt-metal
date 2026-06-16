@@ -56,13 +56,15 @@ def test_m4_perf(mesh_device, reset_seeds):
         mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
         sdid = ttnn.SubDeviceId(0)
 
-    def _time_decode(td, B):
+    def _time_decode(td, B, base=0):
+        # base = the cur_pos the steps decode at; SDPA-decode attends the expanded-kv cache up to
+        # cur_pos, so a larger base measures the realistic decode-step latency at that context length.
         x1, c1, s1 = torch.randn(B, 1, hidden) * 0.1, torch.randn(B, 1, 1, rope), torch.randn(B, 1, 1, rope)
-        td.step(x1, c1, s1, [0] * B)  # warmup replay
+        td.step(x1, c1, s1, [base] * B)  # warmup replay at this position
         ttnn.synchronize_device(mesh_device)
         t0 = time.time()
         for i in range(DECODE_STEPS):
-            td.step(x1, c1, s1, [i] * B)
+            td.step(x1, c1, s1, [base + i] * B)
         ttnn.synchronize_device(mesh_device)
         return (time.time() - t0) / DECODE_STEPS
 
@@ -87,6 +89,19 @@ def test_m4_perf(mesh_device, reset_seeds):
             )
     dev_dec = decode_rows[0][1]
 
+    # ---- decode tok/s/user vs CONTEXT (batch-1): proves decode stays ~flat as cur_pos grows.
+    # M4_PERF_DECODE_CTX=128,4096,8192,16384,32768 — one trace, timed at each starting position.
+    ctx_rows = []
+    decode_ctx = os.environ.get("M4_PERF_DECODE_CTX")
+    if decode_ctx:
+        ctxs = [int(c) for c in decode_ctx.split(",")]
+        kvc = tt.init_kv_caches(1, max_seq=max(ctxs) + DECODE_STEPS + 64)
+        tdc = TracedDecode(tt, mesh_device, 1, hidden, rope, kvc)
+        for C in ctxs:
+            step = _time_decode(tdc, 1, base=C)
+            ctx_rows.append((C, step, 1 / step))
+            logger.info(f"DECODE-CTX ctx={C}: {step*1e3:.2f}ms/step, {1/step:.1f} tok/s/user ({N_LAYERS}L)")
+
     # ---- prefill TTFT sweep (steady-state; warm up each shape once) ----
     for S in ISLS:
         x = _repl(torch.randn(1, S, hidden) * 0.1, mesh_device)
@@ -105,6 +120,8 @@ def test_m4_perf(mesh_device, reset_seeds):
     logger.info(f"=== Mistral-Small-4 perf ({N_LAYERS}L, sharded bfp8) ===")
     for B, step, tsu, agg in decode_rows:
         logger.info(f"  decode B={B:>3}: {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user  {agg:6.0f} tok/s aggregate")
+    for C, step, tsu in ctx_rows:
+        logger.info(f"  decode ctx {C:>6}: {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user (B=1)")
     for S, ttft, tps in table:
         logger.info(f"  ISL {S:>5}: TTFT {ttft*1e3:8.1f}ms  prefill {tps:7.0f} tok/s")
     assert table and dev_dec > 0

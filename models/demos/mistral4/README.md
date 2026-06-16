@@ -64,13 +64,25 @@ PCCs are ~0.999. Passes the >0.98 full-depth gate.
 Largest full-depth ISL = **8192** (chunked prefill). 16384 runs at reduced layer counts but **OOMs at 36L**
 (the per-layer paged KV caches + 119B weights exceed DRAM) — a paged-cache memory-management follow-up.
 
-**Decode** (captured trace; tok/s/user ~flat across context since the step reads the cache at `cur_pos`):
+**Decode — throughput vs batch** (captured trace, B=1 measured device + E2E):
 
 | batch | tok/s/user | tok/s aggregate | ms/step |
 |---|---|---|---|
 | 1 | **9.3** (device; 8.6 E2E) | 9 | 108 |
 | 32 — dense MoE | 1.34 | 43 | 741 |
 | 32 — **sparse MoE** | 1.88 | **60** (**+39.2%** vs dense) | 532 |
+
+**Decode — throughput vs context** (batch-1, decoding at `cur_pos = ctx`; SDPA-decode attends the
+expanded-kv cache up to `cur_pos`, so latency rises only gently as context grows):
+
+| ctx | 128 | 2048 | 4096 | 8192 |
+|---|---|---|---|---|
+| ms/step | 108.7 | 111.2 | 114.0 | 120.4 |
+| tok/s/user | 9.2 | 9.0 | 8.8 | 8.3 |
+
+Decode stays ~flat — only **~10% slower from 128 → 8192** (64× context), i.e. it is dominated by MoE
+weight streaming, not attention. The sweep stops at **8192**: at 36L the 119B fp8 weights leave ≈240 MB
+DRAM free, so the expanded-kv cache OOMs beyond ~8K — the same full-depth ceiling as chunked prefill.
 
 At high batch the dense MoE is compute-bound (all 16 local experts × B tokens), so per-user throughput
 drops while aggregate rises; **sparse dispatch** (top-4 routed experts) recovers it (+39.2% @B=32). The
