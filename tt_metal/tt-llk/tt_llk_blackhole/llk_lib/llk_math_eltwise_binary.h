@@ -116,7 +116,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
     static_assert(
         math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise multiply");
-    LLK_DPRINT_TENSOR_SHAPE("eltwise_binary_configure_mop_standard", tensor_shape);
+    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::eltwise_binary_configure_mop_standard, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t num_faces       = tensor_shape.total_num_faces();
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
@@ -203,7 +203,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
-    LLK_DPRINT_TENSOR_SHAPE("_llk_math_eltwise_binary_standard_init_", tensor_shape);
+    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::_llk_math_eltwise_binary_standard_init_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
@@ -241,7 +241,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
-    LLK_DPRINT_TENSOR_SHAPE("_llk_math_eltwise_binary_standard_", tensor_shape);
+    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::_llk_math_eltwise_binary_standard_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     constexpr bool high_fidelity        = is_high_fidelity(math_fidelity);
@@ -370,7 +370,7 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
     static_assert(
         math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise multiply");
-    LLK_DPRINT_TENSOR_SHAPE("eltwise_binary_configure_mop_with_dest_reuse", tensor_shape);
+    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::eltwise_binary_configure_mop_with_dest_reuse, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     constexpr bool high_fidelity    = is_high_fidelity(math_fidelity);
     constexpr std::uint8_t addr_mod = ADDR_MOD_0;
@@ -459,7 +459,7 @@ template <
 inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_init_ for no dest reuse");
-    LLK_DPRINT_TENSOR_SHAPE("_llk_math_eltwise_binary_with_dest_reuse_init_", tensor_shape);
+    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::_llk_math_eltwise_binary_with_dest_reuse_init_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
@@ -536,7 +536,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
-    LLK_DPRINT_TENSOR_SHAPE("_llk_math_eltwise_binary_with_dest_reuse_", tensor_shape);
+    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::_llk_math_eltwise_binary_with_dest_reuse_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size

@@ -33,7 +33,7 @@ template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor_shape)
 {
     // Validate tensor shape for tile-dependent operations
-    LLK_DPRINT_TENSOR_SHAPE("_llk_unpack_AB_reduce_mop_config_", tensor_shape);
+    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_AB_reduce_mop_config_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     // Data valid for clear instructions is set to 0 since the MATH kernel should not process this data.
@@ -107,7 +107,7 @@ template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulati
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape)
 {
     // Validate tensor shape for tile-dependent operations
-    LLK_DPRINT_TENSOR_SHAPE("_llk_unpack_AB_reduce_init_", tensor_shape);
+    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_AB_reduce_init_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     if constexpr (enforce_fp32_accumulation)
