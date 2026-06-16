@@ -378,12 +378,10 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
  * a full face worth of datums.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
- * @param tensor_shape: Tensor shape describing tile dimensions; only face_r_dim/face_c_dim are read.
+ * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_A_uninit_(const ckernel::TensorShape tensor_shape)
+inline void _llk_unpack_A_uninit_()
 {
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_AB;
-    TT_SETADCXX(UNP_SEL, tensor_shape.face_r_dim * tensor_shape.face_c_dim - 1, 0x0);
 }

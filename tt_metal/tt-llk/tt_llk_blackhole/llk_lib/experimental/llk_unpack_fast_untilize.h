@@ -152,7 +152,7 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
 
 inline void _llk_unpack_fast_untilize_uninit_()
 {
-    _llk_unpack_A_uninit_<BroadcastType::NONE>(ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_unpack_A_uninit_<BroadcastType::NONE>();
 }
 
 } // namespace ckernel

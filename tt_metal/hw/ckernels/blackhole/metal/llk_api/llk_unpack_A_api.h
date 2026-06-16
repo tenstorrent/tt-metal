@@ -96,9 +96,6 @@ inline void llk_unpack_A_block(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_A_uninit(const std::uint32_t operand) {
-    const std::uint32_t operand_id = get_operand_id(operand);
-    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-
-    _llk_unpack_A_uninit_<BType>(tensor_shape);
+inline void llk_unpack_A_uninit() {
+    _llk_unpack_A_uninit_<BType>();
 }

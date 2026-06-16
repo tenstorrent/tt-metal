@@ -33,7 +33,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_A_<BROADCAST_TYPE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
-    _llk_unpack_A_uninit_<BROADCAST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_unpack_A_uninit_<BROADCAST_TYPE>();
 }
 
 #endif

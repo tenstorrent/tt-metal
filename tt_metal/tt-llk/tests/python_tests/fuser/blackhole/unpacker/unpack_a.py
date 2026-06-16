@@ -177,9 +177,5 @@ class UnpackerA(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        from helpers.tile_shape import cpp_tensor_shape
-
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
-        tensor_shape = cpp_tensor_shape(compute_unit.src_a.tile_shape)
-
-        return f"_llk_unpack_A_uninit_<{broadcast_type}>({tensor_shape});\n"
+        return f"_llk_unpack_A_uninit_<{broadcast_type}>();\n"
