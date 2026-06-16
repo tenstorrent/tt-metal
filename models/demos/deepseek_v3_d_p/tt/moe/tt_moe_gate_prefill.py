@@ -259,15 +259,19 @@ class TtMoEGatePrefill(LightweightModule):
         fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        is_balanced: bool = False,
     ):
         """
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
+            is_balanced: If True, uses zigzag (balanced) sequence placement across SP devices.
+                Affects per-device real token count computation for padding awareness.
         """
         self.config = config
         self.mesh_device = mesh_device
         self.fallback_mode = fallback_mode
+        self.is_balanced = is_balanced
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
@@ -454,8 +458,93 @@ class TtMoEGatePrefill(LightweightModule):
             epsilon=1e-20,
         )
 
-    def _device_grouped_gate_fp32(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run moe_grouped_topk on device with fp32 typecast."""
+    def build_padding_config(self, actual_isl: int, padding_side: str = "right") -> ttnn.Tensor:
+        """Create the per-SP-shard [local_num_real_tokens, pad_side] config for moe_grouped_topk.
+
+        Public so callers (TtMoe) can build the config once and share the same tensor between
+        the gate topk and the dispatch op.
+
+        When is_balanced=True, the sequence uses zigzag placement: the original sequence
+        is split into 2*sp_factor chunks and device d holds chunks d and (2*sp_factor-1-d),
+        early chunk first. Padding remains contiguous on the expected side within each
+        device's local buffer because early chunks always precede late chunks locally.
+        Only the per-device real token count changes relative to the sequential case.
+        """
+        if padding_side not in ("right", "left"):
+            raise ValueError(f"padding_side must be 'right' or 'left', got {padding_side!r}")
+
+        sp_factor = self.mesh_device.shape[0]
+        seq_len_per_chip = self.config.sp_dim
+        total_tokens = sp_factor * seq_len_per_chip
+        pad_side = 0 if padding_side == "right" else 1
+
+        padding_config = []
+
+        if self.is_balanced:
+            num_chunks = 2 * sp_factor
+            chunk_size = total_tokens // num_chunks
+
+            for sp_idx in range(sp_factor):
+                chunk_a = sp_idx
+                chunk_b = num_chunks - 1 - sp_idx
+
+                if padding_side == "right":
+                    real_a = min(chunk_size, max(0, actual_isl - chunk_a * chunk_size))
+                    real_b = min(chunk_size, max(0, actual_isl - chunk_b * chunk_size))
+                else:
+                    total_padded = max(0, total_tokens - actual_isl)
+                    pad_a = min(chunk_size, max(0, total_padded - chunk_a * chunk_size))
+                    pad_b = min(chunk_size, max(0, total_padded - chunk_b * chunk_size))
+                    real_a = chunk_size - pad_a
+                    real_b = chunk_size - pad_b
+
+                padding_config.append([real_a + real_b, pad_side])
+        else:
+            for sp_idx in range(sp_factor):
+                if padding_side == "right":
+                    local_real_tokens = min(seq_len_per_chip, max(0, actual_isl - sp_idx * seq_len_per_chip))
+                else:
+                    total_padded_tokens = max(0, total_tokens - actual_isl)
+                    local_padded_tokens = min(seq_len_per_chip, max(0, total_padded_tokens - sp_idx * seq_len_per_chip))
+                    local_real_tokens = seq_len_per_chip - local_padded_tokens
+
+                padding_config.append([local_real_tokens, pad_side])
+
+        return ttnn.from_torch(
+            torch.tensor(padding_config, dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(0, None),
+                mesh_shape=self.mesh_device.shape,
+            ),
+        )
+
+    def _device_grouped_gate_fp32(
+        self,
+        logits: ttnn.Tensor,
+        actual_isl: int = None,
+        padding_side: str = "right",
+        padding_config: ttnn.Tensor = None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run moe_grouped_topk on device with fp32 typecast.
+
+        When actual_isl is set, padded token rows get sentinel expert
+        indices (= n_routed_experts) so downstream masked_bincount/dispatch/
+        combine skip them.  For SP > 1, the padding config tensor carries
+        per-device local real-token counts.
+
+        If a caller-owned ``padding_config`` is provided it is used as-is (and the
+        caller is responsible for deallocating it, since it may be shared with the
+        dispatch op). Otherwise one is built locally and freed here.
+        """
+        owns_padding_config = padding_config is None
+        if owns_padding_config:
+            padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
+
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
         bias_f32 = ttnn.typecast(self.bias, ttnn.float32)
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
@@ -468,9 +557,12 @@ class TtMoEGatePrefill(LightweightModule):
             route_scale=self.config.route_scale,
             stable_sort=True,
             epsilon=1e-20,
+            padding_config=padding_config,
         )
         ttnn.deallocate(logits_f32)
         ttnn.deallocate(bias_f32)
+        if owns_padding_config and padding_config is not None:
+            ttnn.deallocate(padding_config)
         return ttnn_scores, ttnn_top_k_experts_indices
 
     def _host_grouped_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -490,7 +582,13 @@ class TtMoEGatePrefill(LightweightModule):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        actual_isl: int = None,
+        padding_side: str = "right",
+        padding_config: ttnn.Tensor = None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
         logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
@@ -515,7 +613,12 @@ class TtMoEGatePrefill(LightweightModule):
             )
 
         elif mode == GateComputeMode.DEVICE_FP32:
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(logits)
+            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(
+                logits,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+                padding_config=padding_config,
+            )
 
         elif mode == GateComputeMode.HOST_GROUPED_GATE:
             host_logits = self._compose_logits_to_host(logits)

@@ -22,10 +22,12 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
             Args:
                 * :attr:`input_tensor`: 2D UINT16 height-sharded ROW_MAJOR tensor of shape [sp_dim, topk_dim]
                   containing expert indices selected for each token.
-                * :attr:`expert_mask`: INT32 ROW_MAJOR tensor of shape [n_routed_experts] or [1, n_routed_experts]
-                  mapping experts to chip IDs. Negative (-1) means the expert is absent (belong to different dispatch
-                  groups); non-negative values (chip IDs) mean the expert is present in this dispatch groupand will
-                  be counted.
+                * :attr:`expert_mask`: INT32 ROW_MAJOR tensor of shape [N] or [1, N] where N >= n_routed_experts,
+                  mapping experts to chip IDs. Negative (-1) means the expert is absent (belongs to different dispatch
+                  groups); non-negative values (chip IDs) mean the expert is present in this dispatch group and will
+                  be counted. A sentinel column at index == n_routed_experts is allowed and ignored: the kernel only
+                  reads mask entries at index < n_routed_experts, so padded tokens (sentinel index == n_routed_experts)
+                  are skipped and never counted.
                 * :attr:`n_routed_experts`: Number of routed experts (output dimension size).
                 * :attr:`num_experts_per_token`: Number of expert columns per row to count (must be <= topk_dim).
                   Columns beyond this index are ignored, allowing padded shard widths.

@@ -366,6 +366,21 @@ FORCE_INLINE void gather(uint32_t tokens_per_tile) {
     cb_push_back(cb_gathered_sigmoid, n_activated_expert_tiles);
 }
 
+// Overwrite all n_activated_experts index entries for a single (tile-local) row with SENTINEL.
+// Mirrors the face/column addressing used by gather() so it patches the exact output indices.
+FORCE_INLINE void overwrite_index_row_with_sentinel(
+    volatile tt_l1_ptr uint16_t* idx_ptr, uint32_t row, uint32_t n_activated_experts, uint16_t sentinel) {
+    uint32_t face_row = row % rows_per_face;
+    uint32_t face_base = (row < rows_per_face) ? 0 : 2;
+
+    for (uint32_t expert = 0; expert < n_activated_experts; expert++) {
+        uint32_t face_col = expert % columns_per_face;
+        uint32_t face = face_base + (expert < columns_per_face ? 0 : 1);
+        uint32_t offset = face * elements_per_face + face_row * columns_per_face + face_col;
+        idx_ptr[offset] = sentinel;
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t cb_out_weights = get_named_compile_time_arg_val("cb_out_weights");
     constexpr uint32_t cb_out_indices = get_named_compile_time_arg_val("cb_out_indices");
@@ -404,17 +419,38 @@ void kernel_main() {
     constexpr uint32_t seq_len_tiles = get_named_compile_time_arg_val("seq_len_tiles");
     constexpr uint32_t remainder_tokens_per_tile = get_named_compile_time_arg_val("remainder_tokens_per_tile");
     constexpr uint32_t cb_gathered_sigmoid = get_named_compile_time_arg_val("cb_gathered_sigmoid");
+    constexpr uint32_t cb_padding_config = get_named_compile_time_arg_val("cb_padding_config");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_height_tile = get_arg_val<uint32_t>(2);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(3);
+    const uint32_t padding_config_addr = get_arg_val<uint32_t>(4);
 
     constexpr auto weights_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
+    constexpr auto padding_config_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
 
     const auto weights_accessor = TensorAccessor(weights_args, weights_addr, weights_page_size);
     const auto indices_accessor = TensorAccessor(indices_args, indices_addr, indices_page_size);
+    const auto padding_config_accessor = TensorAccessor(padding_config_args, padding_config_addr);
+
+    // Optional padding awareness: when a per-device [num_real_tokens, pad_side] row is supplied
+    // (addr != 0), padded token rows have their output expert indices overwritten with the
+    // sentinel (= experts), so downstream masked_bincount / dispatch / combine skip them.
+    uint32_t num_real_tokens = 0xFFFFFFFF;  // default: no padding -> every row is real
+    uint32_t pad_side = 0;
+    if (padding_config_addr != 0) {
+        cb_reserve_back(cb_padding_config, 1);
+        const uint32_t padding_config_l1_addr = get_write_ptr(cb_padding_config);
+        noc_async_read_page(0, padding_config_accessor, padding_config_l1_addr);
+        noc_async_read_barrier();
+
+        volatile tt_l1_ptr uint32_t* padding_config_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(padding_config_l1_addr);
+        num_real_tokens = padding_config_ptr[0];
+        pad_side = padding_config_ptr[1];
+    }
 
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     // I see no performance difference generating these internally inside the writer kernel
@@ -463,6 +499,24 @@ void kernel_main() {
             width_tiles,
             n_activated_experts,
             n_activated_expert_tiles>(tokens_per_tile);
+
+        // Overwrite indices for padded token rows with SENTINEL = experts (num_routed_experts).
+        // Topk compute ran normally for all rows; we only patch the output indices here.
+        if (num_real_tokens < tokens) {
+            constexpr uint16_t sentinel = static_cast<uint16_t>(experts);
+            uint32_t tile_start_row = height_tile * tile_height;
+            volatile tt_l1_ptr uint16_t* idx_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_out_indices));
+
+            for (uint32_t row = 0; row < tokens_per_tile; row++) {
+                uint32_t global_row = tile_start_row + row;
+                bool is_padded = (pad_side == 0) ? (global_row >= num_real_tokens)            // right-pad
+                                                 : (global_row < tokens - num_real_tokens);   // left-pad
+                if (is_padded) {
+                    overwrite_index_row_with_sentinel(idx_ptr, row, n_activated_experts, sentinel);
+                }
+            }
+        }
 
         noc_async_write_page(height_tile, indices_accessor, get_read_ptr(cb_out_indices));
         cb_wait_front(cb_out_weights, 1);

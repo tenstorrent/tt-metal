@@ -202,6 +202,7 @@ class TtDispatchModule(LightweightModule):
         indices: ttnn.Tensor,
         tt_expert_offsets: ttnn.Tensor,
         tt_expert_dispatch_table: ttnn.Tensor,
+        padding_config: ttnn.Tensor = None,
     ):
         """
         Route input tokens to destination device dispatch buffers based on top-k expert indices.
@@ -227,6 +228,10 @@ class TtDispatchModule(LightweightModule):
                 Shape per device: (1, num_routed_experts)
                 Values >= 0 are destination chip IDs; -1 means the expert is not present in
                 this dispatch group.
+            padding_config: Optional per-device [local_real_tokens, pad_side] tensor (uint32,
+                ROW_MAJOR). When provided, the dispatch kernels bound their token loop to the
+                real (unpadded) tokens. Must match the tensor the gate used to sentinel-mark
+                padded tokens. None means process the full token range.
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer on each destination device.
@@ -262,6 +267,7 @@ class TtDispatchModule(LightweightModule):
             indices_tensor=indices,
             expert_offsets_tensor=tt_expert_offsets,
             expert_dispatch_table_tensor=tt_expert_dispatch_table,
+            padding_config=padding_config,
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_routed_experts=self.num_routed_experts,

@@ -211,8 +211,12 @@ class ExpertMapping:
             num_dispatch_groups: Number of parallel dispatch groups
 
         Returns:
-            expert_dispatch_table: Shape (num_dispatch_groups, num_routed_experts)
-                Values are logical chip IDs (0 to dispatch_group_size-1) or -1 if not present
+            expert_dispatch_table: Shape (num_dispatch_groups, num_routed_experts + 1)
+                Values are logical chip IDs (0 to dispatch_group_size-1) or -1 if not present.
+                The trailing sentinel column (index num_routed_experts) is always -1: padding-aware
+                routing sentinel-marks padded tokens with expert id == num_routed_experts, so the
+                dispatch reader's unguarded table[idx] lookup maps them to -1 (skip). masked_bincount
+                only reads indices < num_routed_experts, so the extra column is harmless there.
 
         Example:
             # num_chips=8, dispatch_group_size=4, num_dispatch_groups=2, num_routed_experts=16
@@ -228,7 +232,10 @@ class ExpertMapping:
         experts_per_group = num_routed_experts // num_dispatch_groups
         experts_per_chip = experts_per_group // dispatch_group_size  # Experts per chip within each group
 
-        table = torch.full((num_dispatch_groups, num_routed_experts), -1, dtype=torch.int32)
+        # Width is num_routed_experts + 1: the extra trailing column is the padding sentinel
+        # (always -1). Padded tokens carry expert id == num_routed_experts and the dispatch reader
+        # looks them up unguarded, so they map to -1 and are skipped.
+        table = torch.full((num_dispatch_groups, num_routed_experts + 1), -1, dtype=torch.int32)
         for group in range(num_dispatch_groups):
             group_start = group * experts_per_group
             group_end = group_start + experts_per_group

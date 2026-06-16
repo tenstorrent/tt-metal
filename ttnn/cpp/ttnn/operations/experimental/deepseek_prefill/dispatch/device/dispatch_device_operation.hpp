@@ -56,6 +56,7 @@ prefill_dispatch(
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
+    const std::optional<ttnn::Tensor>& padding_config,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,

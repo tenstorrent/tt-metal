@@ -216,7 +216,7 @@ class TtPrefillTransformer(LightweightModule):
         self,
         token_ids: ttnn.Tensor,
         kvpe_cache: ttnn.Tensor,
-        number_of_non_padded_tokens: int,
+        actual_isl: int,
         return_intermediates: bool = False,
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
@@ -266,7 +266,8 @@ class TtPrefillTransformer(LightweightModule):
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
                 on_layer_complete=on_layer_complete,
-                actual_isl=number_of_non_padded_tokens,
+                actual_isl=actual_isl,
+                padding_side=self.padding_side,
             )
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:
@@ -282,7 +283,7 @@ class TtPrefillTransformer(LightweightModule):
             intermediates["norm"] = self._to_host(h)
 
         # LM Head: extract logits for last real token
-        logits_host, first_token_logits = self._lm_head_and_extract(h, number_of_non_padded_tokens)
+        logits_host, first_token_logits = self._lm_head_and_extract(h, actual_isl)
 
         if return_intermediates:
             intermediates["lm_head"] = logits_host
@@ -303,7 +304,7 @@ class TtPrefillTransformer(LightweightModule):
 
         # Sample token(s) from logits
         first_token_id, first_token_prob, sweep_results = self._sample(
-            first_token_logits, number_of_non_padded_tokens, temperature
+            first_token_logits, actual_isl, temperature
         )
 
         if return_intermediates:
@@ -314,19 +315,19 @@ class TtPrefillTransformer(LightweightModule):
     def _lm_head_and_extract(
         self,
         h: ttnn.Tensor,
-        number_of_non_padded_tokens: int,
+        actual_isl: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run LM head and extract last-token logits. Topology-aware.
 
         Args:
             h: Hidden states after final norm
-            number_of_non_padded_tokens: Count of real tokens in the sequence
+            actual_isl: Count of real tokens in the sequence
 
         Returns:
             Tuple of (logits_host, first_token_logits)
         """
         if self.padding_side == "right":
-            global_token_id = number_of_non_padded_tokens - 1
+            global_token_id = actual_isl - 1
         else:  # "left"
             global_token_id = self.seq_len - 1
 
@@ -347,14 +348,14 @@ class TtPrefillTransformer(LightweightModule):
     def _sample(
         self,
         first_token_logits: torch.Tensor,
-        number_of_non_padded_tokens: int,
+        actual_isl: int,
         temperature: Union[float, list[float]],
     ) -> tuple[int, float, list[dict]]:
         """Sample token(s) from extracted logits with temperature sweep.
 
         Args:
             first_token_logits: Logits for the last real token position
-            number_of_non_padded_tokens: Count of real tokens (stored in results)
+            actual_isl: Count of real tokens (stored in results)
             temperature: Temperature for sampling (single float or list for sweep)
 
         Returns:
@@ -367,7 +368,7 @@ class TtPrefillTransformer(LightweightModule):
             token_id, token_prob, top5 = self._sample_token(first_token_logits.clone(), temp)
             sweep_results.append(
                 {
-                    "number_of_non_padded_tokens": number_of_non_padded_tokens,
+                    "actual_isl": actual_isl,
                     "token_id": token_id,
                     "probability": token_prob,
                     "temperature": temp,

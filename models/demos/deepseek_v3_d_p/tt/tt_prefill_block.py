@@ -254,6 +254,7 @@ class TtPrefillBlock(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 layer_idx=layer_idx,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+                is_balanced=is_balanced,
             )
         else:
             self.ffn = TtFfn(
@@ -283,6 +284,7 @@ class TtPrefillBlock(LightweightModule):
         dispatch_buffer_capacity_factor,
         weight_cache_path=None,
         layer_idx=0,
+        is_balanced=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -331,6 +333,7 @@ class TtPrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
             overlap_shared_expert_with_dispatch=True,
+            is_balanced=is_balanced,
         )
 
     def forward(
@@ -343,6 +346,7 @@ class TtPrefillBlock(LightweightModule):
         return_intermediates: bool = False,
         on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_isl: Optional[int] = None,
+        padding_side: str = "right",
     ):
         """
         Args:
@@ -355,7 +359,8 @@ class TtPrefillBlock(LightweightModule):
             on_layer_complete: optional callback passed to MLA; fires after
                 fill_cache_for_user_(). MLA also zeros padding before fill when set.
             actual_isl: actual (unpadded) input sequence length; required when
-                on_layer_complete is set.
+                on_layer_complete is set. Also threaded to the MoE FFN for padding-aware routing.
+            padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None
@@ -378,7 +383,12 @@ class TtPrefillBlock(LightweightModule):
         ffn_norm_out = self.ffn_norm(x)
 
         if self.is_moe:
-            ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)
+            ffn_out = self._moe_path(
+                ffn_norm_out,
+                return_intermediates=return_intermediates,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+            )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
@@ -389,11 +399,22 @@ class TtPrefillBlock(LightweightModule):
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
         return x, kv_cache
 
-    def _moe_path(self, ffn_norm_out: ttnn.Tensor, return_intermediates: bool = False) -> ttnn.Tensor:
+    def _moe_path(
+        self,
+        ffn_norm_out: ttnn.Tensor,
+        return_intermediates: bool = False,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
+    ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
 
-        moe_out, _ = self.ffn(moe_input, return_intermediates=return_intermediates)
+        moe_out, _ = self.ffn(
+            moe_input,
+            return_intermediates=return_intermediates,
+            actual_isl=actual_isl,
+            padding_side=padding_side,
+        )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
         return moe_out

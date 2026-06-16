@@ -77,12 +77,21 @@ def run_model(
     topology,
     gate_fallback_mode,
     request,
+    is_balanced=False,
+    padded_percent=0,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
     The gate's grouping (n_group, topk_group) and route_scale are read from
     the variant's HF config. DSv3 values are a no-op; Kimi values switch the
     gate routing rule.
+
+    ``is_balanced`` selects zigzag placement so padding-aware dispatch shrinks every
+    SP device's token loop. ``padded_percent`` requests right-padding: it is only
+    engaged on the perf (non-PCC) path — a full-tensor PCC check would (correctly)
+    mismatch on the skipped padded rows, and padded-row correctness is covered by the
+    dedicated grouped_topk / routing_setup tests. HOST_ALL gates ignore padding entirely
+    (TtMoe falls back to padding_config=None for non-DEVICE_FP32 gates).
     """
 
     # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
@@ -242,6 +251,12 @@ def run_model(
             dtype=ttnn.bfloat16,
         )
 
+    # Engage right-padding only on the perf (non-PCC) path; see the run_model docstring.
+    if padded_percent > 0 and not run_pcc_check:
+        actual_isl = int(dispatch_group_size * seq_len_per_chip * (1 - padded_percent / 100))
+    else:
+        actual_isl = None
+
     # ========================================
     # Step 3: Run TorchMoe reference with intermediates
     # ========================================
@@ -306,6 +321,7 @@ def run_model(
         n_expert_groups=config.n_group,
         n_limited_groups=config.topk_group,
         route_scale=config.routed_scaling_factor,
+        is_balanced=is_balanced,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -315,7 +331,9 @@ def run_model(
 
     tt_x = upload_tt_x()
     signpost(header="tt_forward_START")
-    tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=run_pcc_check)
+    tt_output, tt_intermediates = tt_moe(
+        tt_x, return_intermediates=run_pcc_check, actual_isl=actual_isl, padding_side="right"
+    )
     ttnn.synchronize_device(mesh_device)
     signpost(header="tt_forward_END")
 
@@ -551,24 +569,29 @@ def run_model(
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
     ),
     [
         # fmt: off
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
+        # is_balanced=True (zigzag placement) spreads real tokens evenly across SP devices so
+        # padding-aware dispatch shrinks every device's token loop. Only enabled for the
+        # perf-device-256 (DEVICE_FP32, non-PCC) row — the only one that builds a padding_config;
+        # the rest keep sequential placement (their reference / PCC path isn't zigzag).
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
         # PCC gate on the production 256-expert / 32-per-chip path. The unified
         # routed-expert MoE op switches into the unfused extract -> FFN -> insert
         # chain whenever num_routed_experts > 64; without this variant that
         # branch ships PCC-untested on Blackhole. Lighter dispatch capacity (5
         # vs 8) keeps the soak time bounded.
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE_FP32,   True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  marks=pytest.mark.timeout(900)),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE_FP32,   True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  False, marks=pytest.mark.timeout(900)),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
         # fmt: on
     ],
 )
+@pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -640,10 +663,12 @@ def test_ds_moe(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     run_pcc_check,
+    is_balanced,
     num_links,
     topology,
     gate_fallback_mode,
     request,
+    padded_percent,
 ):
     run_model(
         variant,
@@ -661,6 +686,8 @@ def test_ds_moe(
         topology,
         gate_fallback_mode,
         request,
+        is_balanced=is_balanced,
+        padded_percent=padded_percent,
     )
 
 

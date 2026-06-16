@@ -25,10 +25,12 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe"
 
-_CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and linear-8'"
+# `and pad0` pins the padding parametrize (test_ttnn_moe.py adds pad0/pad50 ids) so each
+# command still selects exactly one case; pad0 keeps the no-padding baselines below valid.
+_CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and linear-8 and pad0'"
 # `not fabric2d-` excludes the new FABRIC_2D parametrize ids in test_ttnn_moe.py (substring `mesh-2x4`/`mesh-8x4` would otherwise match).
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-2x4 and not linear-8 and not mesh-4x2 and not mesh-8x4 and not fabric2d-'"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-8x4 and not linear-8 and not mesh-4x2 and not mesh-2x4 and not fabric2d-'"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-2x4 and not linear-8 and not mesh-4x2 and not mesh-8x4 and not fabric2d- and pad0'"
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-8x4 and not linear-8 and not mesh-4x2 and not mesh-2x4 and not fabric2d- and pad0'"
 
 
 @pytest.mark.timeout(0)
