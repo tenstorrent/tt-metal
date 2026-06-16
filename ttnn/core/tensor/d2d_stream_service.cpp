@@ -48,7 +48,14 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // shared verbatim with the H2D service (socket_services.cpp); they live in
 // stream_service_common.hpp so the two services can't drift on the socket
 // wire-format or accepted dtypes.
-using namespace stream_service_common;
+
+using stream_service_common::ChunkPlan;
+using stream_service_common::claim_service_cores;
+using stream_service_common::core_range_size;
+using stream_service_common::derive_chunk_plan;
+using stream_service_common::make_worker_sync_args;
+using stream_service_common::make_zero_host_tensor;
+using stream_service_common::WorkerSyncArgs;
 
 // Allocate one zero-initialised uint32 L1 word on a service core, recording the
 // address per coord. Used for the per-coord counters and termination words that
