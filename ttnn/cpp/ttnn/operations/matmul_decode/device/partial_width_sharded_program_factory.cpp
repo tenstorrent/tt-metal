@@ -48,35 +48,86 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const tt::DataFormat in0_data_format = datatype_to_dataformat_converter(input_tensor_a.dtype());
     const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(input_tensor_b.dtype());
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-    const uint32_t in0_tile_size = tt::tile_size(in0_data_format);
-    const uint32_t in1_tile_size = tt::tile_size(in1_data_format);
-    const uint32_t out_tile_size = tt::tile_size(out_data_format);
+
+    const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
+    const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
+    const auto& output_tile = output_tensor.tensor_spec().tile();
+    const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
+    const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
+    const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
+
+    // With tiny tiles (e.g. tile height 16) the in0/in1/out tiles no longer share a
+    // common geometry, so each circular buffer must carry its own tile descriptor in
+    // addition to its own page (tile) size. full_in0 (gathered A) reuses the in0 tile;
+    // the partial and reduce CBs hold [M, Nc] products and reuse the out tile.
+    const TileDescriptor in0_tile_desc{inputA_tile};
+    const TileDescriptor in1_tile_desc{inputB_tile};
+    const TileDescriptor out_tile_desc{output_tile};
+
+    log_info(
+        tt::LogOp,
+        "MatmulDecode(partial): in0_tile_size: {}, in1_tile_size: {}, out_tile_size: {}",
+        in0_tile_size,
+        in1_tile_size,
+        out_tile_size);
+
+    const uint32_t inputA_tile_height = inputA_tile.get_height();
+    const uint32_t inputA_tile_width = inputA_tile.get_width();
+    const uint32_t inputB_tile_height = inputB_tile.get_height();
+    const uint32_t inputB_tile_width = inputB_tile.get_width();
+    const uint32_t output_tile_height = output_tile.get_height();
+    const uint32_t output_tile_width = output_tile.get_width();
+
+    TT_FATAL(
+        inputA_tile_height == output_tile_height,
+        "Input tensor A {} and output tile height {} must be equal",
+        inputA_tile_height,
+        output_tile_height);
+    TT_FATAL(
+        inputB_tile_height == tt::constants::TILE_HEIGHT,
+        "Input tensor B {} tile height must be 32",
+        inputB_tile_height);
+    TT_FATAL(
+        inputA_tile_width == tt::constants::TILE_WIDTH,
+        "Input tensor A tile width {} must be equal to the tile width 32",
+        inputA_tile_width);
+    TT_FATAL(
+        inputB_tile_width == tt::constants::TILE_WIDTH,
+        "Input tensor B tile width {} must be equal to the tile width 32",
+        inputB_tile_width);
+    TT_FATAL(
+        output_tile_width == tt::constants::TILE_WIDTH,
+        "Output tensor tile width {} must be equal to the tile width 32",
+        output_tile_width);
+
+    log_info(tt::LogOp, "MatmulDecode(partial): inputA_tile: {}", inputA_tile);
 
     IDevice* device = input_tensor_a.device();
 
     // ---- Recover the 2D (K x N) block-sharding geometry ----
     // Operation attributes M,N,K are the real matmul dimensions. Weights tensor has been reshaped, so its logical shape
     // is no longer [K, N].
-    // The compute kernel processes the entire M dimension in a single DST block
-    // (out_block_h = M_tiles), so M_tiles must fit in DST (<= 8 tiles in half-sync
-    // mode). Enforce M < 256 (=> M_tiles <= 8).
-    TT_FATAL(
-        operation_attributes.M < 256,
-        "partial_width_sharded matmul_decode requires M < 256 so that out_block_h (= M_tiles) stays < 8 and fits in "
-        "DST, but got M={}",
-        operation_attributes.M);
-
-    const uint32_t M_tiles = div_up(operation_attributes.M, tt::constants::TILE_HEIGHT);
+    const uint32_t M_tiles = div_up(operation_attributes.M, inputA_tile_height);
     const uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
     const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
 
+    // The compute kernel processes the entire M dimension in a single DST block
+    // (out_block_h = M_tiles), so M_tiles must fit in DST (<= 8 tiles in half-sync mode).
+    TT_FATAL(
+        M_tiles <= 8,
+        "partial_width_sharded matmul_decode requires out_block_h (= M_tiles) <= 8 so it fits in DST, but got "
+        "M_tiles={} (M={}, inputA_tile_height={})",
+        M_tiles,
+        operation_attributes.M,
+        inputA_tile_height);
+
     const std::array<uint32_t, 2> inputA_shard_shape = input_tensor_a.memory_config().shard_spec().value().shape;
     TT_FATAL(
-        inputA_shard_shape[0] == (M_tiles * tt::constants::TILE_HEIGHT),
+        inputA_shard_shape[0] == (M_tiles * inputA_tile_height),
         "Input tensor A shard height {} must equal M_tiles {} * tile height {}",
         inputA_shard_shape[0],
         M_tiles,
-        tt::constants::TILE_HEIGHT);
+        inputA_tile_height);
     TT_FATAL(
         inputA_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
         "Input tensor A shard width must be divisible by the tile width");
@@ -162,6 +213,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .buffer_index = in0_cb_index,
             .data_format = in0_data_format,
             .page_size = in0_tile_size,
+            .tile = in0_tile_desc,
         }}},
         .buffer = input_tensor_a.buffer(),
     });
@@ -173,6 +225,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .buffer_index = in1_cb_index,
             .data_format = in1_data_format,
             .page_size = in1_tile_size,
+            .tile = in1_tile_desc,
         }}},
         .buffer = input_tensor_b.buffer(),
     });
@@ -184,6 +237,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .buffer_index = out_cb_index,
             .data_format = out_data_format,
             .page_size = out_tile_size,
+            .tile = out_tile_desc,
         }}},
         .buffer = output_tensor.buffer(),
     });
@@ -195,6 +249,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .buffer_index = full_in0_cb_index,
             .data_format = in0_data_format,
             .page_size = in0_tile_size,
+            .tile = in0_tile_desc,
         }}},
     });
     // partial: this core's matmul partial product (compute -> writer).
@@ -205,6 +260,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .buffer_index = partial_cb_index,
             .data_format = out_data_format,
             .page_size = out_tile_size,
+            .tile = out_tile_desc,
         }}},
     });
     // reduce: gathered K_blocks partials on the base core (writer -> compute). Allocated
@@ -217,6 +273,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .buffer_index = reduce_cb_index,
             .data_format = out_data_format,
             .page_size = out_tile_size,
+            .tile = out_tile_desc,
         }}},
     });
 
