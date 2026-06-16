@@ -9,6 +9,7 @@
 #include <cstring>
 #include <tt-metalium/constants.hpp>
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
@@ -162,19 +163,13 @@ inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, u
 }
 
 /**
- * Zero-fill an L1 region asynchronously by issuing NoC reads from the hardware zero region
- * (`MEM_ZEROS_BASE`).
+ * Zero-fill an L1 region asynchronously via Noc::async_write_zeros.
  *
- * Caller must call `noc_async_read_barrier()` before consuming `write_addr`.
+ * Caller must call `noc.write_zeros_l1_barrier()` before consuming the CB's contents.
  */
-inline void fill_zeros_async(uint32_t write_addr, uint32_t bytes) {
-    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0U) {
-        const uint32_t read_size = bytes > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes -= read_size;
-    }
+inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
+    CircularBuffer cb(cb_id);
+    noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
 
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.

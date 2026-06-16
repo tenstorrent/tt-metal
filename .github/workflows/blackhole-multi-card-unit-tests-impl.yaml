@@ -18,7 +18,7 @@ on:
       runner-label:
         required: false
         type: string
-        default: "BH-LLMBox"
+        default: "BH-LoudBox"
       fast-only:
         required: false
         type: boolean
@@ -69,11 +69,15 @@ jobs:
               # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
             timeout: 15
             test-type: fast
+          - name: sdpa nightly tests (QB2 only)
+            cmd: pytest tests/nightly/blackhole/sdpa/ -svv
+            timeout: 20
+            test-type: fast-qb2
           # NOTE: All slow / loudbox / qb multi-card BH tests have been migrated
           # into tests/pipeline_reorg/blackhole_e2e_tests.yaml and are now run by
           # the blackhole-e2e-tests workflow. This file only carries the
-          # fast / fast-viommu legs that blackhole-post-commit invokes with
-          # fast-only: true.
+          # fast / fast-viommu / fast-qb2 legs that blackhole-post-commit invokes
+          # with fast-only: true.
           YAML_EOF
           )
           all_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
@@ -85,15 +89,15 @@ jobs:
           if [[ "$runner_label" == *viommu* ]]; then viommu_json="true"; fi
           loudbox_json="false"
           if [[ "$runner_label" == *LoudBox* ]]; then loudbox_json="true"; fi
-          quietbox_json="false"
-          if [[ "$runner_label" == *LLMBox* ]]; then quietbox_json="true"; fi
+          qb2_json="false"
+          if [[ "$runner_label" == *Quietbox-2* ]]; then qb2_json="true"; fi
 
           if [ "$fast_only" == "true" ]; then
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
-              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "qb") or $quietbox))]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson qb2 "$qb2_json" \
+              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu) or (.["test-type"] == "fast-qb2" and $qb2)) and ((.["test-type"] != "loudbox") or $loudbox))]')
           else
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
-              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "qb") or $quietbox))]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson qb2 "$qb2_json" \
+              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "fast-qb2") or $qb2) and ((.["test-type"] != "loudbox") or $loudbox))]')
           fi
 
           # Filter by model if specified
@@ -152,6 +156,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -170,8 +175,6 @@ jobs:
           hang-detection-timeout: ${{ contains(matrix.test-group.name, 'PERF') && '20.0' || '5.0' }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
-        with:
-          runner-label: ${{ inputs.runner-label }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
@@ -249,6 +252,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - id: extract-matrix
         env:
           MATRIX_WRAPPER: ${{ needs.generate-matrix.outputs.matrix }}

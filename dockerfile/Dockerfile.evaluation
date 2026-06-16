@@ -39,7 +39,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 # Copy ccache from pre-built tool image
-COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
+COPY --from=ccache-layer /install/ /usr/local/
 
 # Install system dependencies
 # Note: These are installed early as they change infrequently

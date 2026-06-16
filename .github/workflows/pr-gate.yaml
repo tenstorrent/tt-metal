@@ -165,6 +165,7 @@ jobs:
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
           sparse-checkout: .github
@@ -191,6 +192,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       upload-coverage: false
+      enable-kernel-ccache: true
   ttnn-smoke-tests:
     needs: [asan-build, find-changed-files]
     if: ${{
@@ -212,6 +214,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       upload-coverage: false
+      enable-kernel-ccache: true
 
   build-docs:
     if: >-
@@ -245,6 +248,8 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       build-type: 'ASan'
+      enable-kernel-ccache: true
+    secrets: inherit
 
   ttnn-examples:
     needs: [ asan-build, find-changed-files ]
@@ -265,6 +270,8 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       build-type: 'ASan'
+      enable-kernel-ccache: true
+    secrets: inherit
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
@@ -275,8 +282,9 @@ jobs:
     steps:
     - name: Checkout repo
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      timeout-minutes: 20
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: '3.10'
     - name: Run model charts sync Python script
@@ -284,141 +292,6 @@ jobs:
         # Run script that compares the models chart in README.md
         # with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
-
-  # Incremental clang-tidy scan on PR diffs — same checks enforced at merge gate.
-  # Blocking: violations here are exactly what would cause a merge queue eviction.
-  # Posts inline PR comments so developers can fix issues before the merge queue.
-  clang-tidy-light:
-    needs: [resolve-docker-pull-refs]
-    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
-    timeout-minutes: 60
-    runs-on: tt-ubuntu-2204-large-stable
-    container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
-    permissions:
-      pull-requests: write
-      contents: write # to allow auto-closing conversations
-    steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
-        fetch-depth: 1
-        submodules: "recursive"
-    - name: Set safe directory for Git
-      run: git config --global --add safe.directory $GITHUB_WORKSPACE
-    - name: Fetch PR base commit
-      timeout-minutes: 5
-      run: |
-        # Fetch only the single base commit the PR was opened against.
-        # github.event.pull_request.base.sha is the merge-base equivalent —
-        # no need to fetch the full branch history.
-        BASE_REPO="${{ github.event.pull_request.base.repo.full_name }}"
-        BASE_SHA="${{ github.event.pull_request.base.sha }}"
-        git remote add upstream "https://github.com/${BASE_REPO}"
-        git fetch --no-tags --depth=1 upstream "${BASE_SHA}"
-        git tag _pr_base FETCH_HEAD
-    - name: Set up clang-tidy symlinks
-      run: |
-        # The ci-build image ships clang-tidy-20 and clang-tidy-diff-20.py.
-        # Create unversioned symlinks if they don't already exist so the
-        # rest of the job can reference them without version suffixes.
-        command -v clang-tidy        || sudo ln -sf "$(command -v clang-tidy-20)" /usr/local/bin/clang-tidy
-        command -v clang-tidy-diff-20.py || sudo ln -sf "$(find /usr -name 'clang-tidy-diff-20.py' 2>/dev/null | head -1)" /usr/local/bin/clang-tidy-diff-20.py
-        uv pip install pyyaml  # Needed by clang-tidy-diff-20.py
-    - name: Restore CPM source cache
-      id: cpm-cache
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: .cpmcache.tar.zst
-        key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
-        restore-keys: cpm-z22-
-    - name: Unpack CPM cache
-      run: |
-        [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
-    - name: Prepare compile_commands.json
-      timeout-minutes: 10
-      run: |
-        cmake -B build \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-          -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
-          -DBUILD_TT_TRAIN=ON \
-          -DTT_METAL_BUILD_TESTS=ON \
-          -DTTNN_BUILD_TESTS=ON \
-          -DTT_UNITY_BUILDS=OFF \
-          -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
-    - name: Pack CPM cache
-      if: steps.cpm-cache.outputs.cache-hit != 'true'
-      run: |
-        [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
-    - name: Save CPM source cache
-      if: steps.cpm-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: .cpmcache.tar.zst
-        key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
-    - name: Build generated files
-      timeout-minutes: 10
-      run: cmake --build build --target all_generated_files
-    - name: Create results directory
-      run: mkdir clang-tidy-result
-    - name: Analyze
-      # Big PRs will have a LOT to scan, but this should be enough for everyone
-      timeout-minutes: 90
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        # Find all touched files present in compile_commands.json
-        # This is not as simple as filtering non-code files, as some code
-        # (eg: Kernels) are C++ code that is not built at this level, and
-        # thus clang-tidy will be unable to process them.
-        PREFIX=$(pwd)
-        jq --arg prefix "$PREFIX/" -r \
-          '.[].file | sub("^" + $prefix; "")' \
-          build/compile_commands.json > relative_files_in_build.txt
-        git diff --name-only "_pr_base" HEAD > changed_files.txt
-        grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
-
-        # Exit if there are no modified files known to CMake
-        [[ -s common_files.txt ]] || {
-          echo "No files to analyze"
-          exit 0
-        }
-
-        # Analyze the relevant diffs of the relevant files
-        git diff "_pr_base" \
-          -- $(cat common_files.txt) > filtered_changes.diff
-        clang-tidy-diff-20.py -p1 -path build \
-          -export-fixes clang-tidy-result/fixes.yml \
-          -j$(nproc) < filtered_changes.diff
-
-        # Fail if clang-tidy found fixable violations in the diff.
-        # These are the same checks enforced at merge gate — catching them here
-        # avoids a merge queue eviction later.
-        if [[ -s clang-tidy-result/fixes.yml ]]; then
-          echo "::error::clang-tidy found violations. See inline PR comments for details."
-          exit 1
-        fi
-    - name: Run clang-tidy-pr-comments action
-      if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
-      # v1.8.0
-      uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        clang_tidy_fixes: clang-tidy-result/fixes.yml
-        # Explicitly pass PR number — auto-detection fails inside Docker containers
-        # because the action can't reliably read GITHUB_EVENT_PATH from within the container.
-        pull_request_id: ${{ github.event.pull_request.number }}
-        request_changes: false
-        suggestions_per_comment: 10  # arbitrary limit to avoid GH API timeouts
-        # Pip fails if the action attempts to install its own Python; Sidestep that
-        python_path: python3
-        # NOTE: only resolves when ALL are fixed
-        auto_resolve_conversations: true
-        # TT internal runners mount the workspace at /__w/ not /home/runner/work/.
-        # Without this, fixes.yml paths don't match the PR diff and comments are silently dropped.
-        repo_path_prefix: /__w
 
   # Full clang-tidy scan (same checks enforced at merge gate).
   # force-scan=true → single full-scan job (avoids 4-way per-target split with high setup overhead).
@@ -437,6 +310,7 @@ jobs:
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
       dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
       force-scan: true
+      post-pr-suggestions: ${{ github.event_name == 'pull_request' }}
 
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
@@ -561,13 +435,16 @@ jobs:
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-build-quasar.yaml
-    secrets: inherit
-    with:
-      docker_image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      runs_on: tt-ubuntu-2204-xlarge-stable
-      test_splits: 1
-      pytest_markers: "quasar"
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 80
+    container:
+      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - uses: ./.github/actions/llk-compile-quasar
+        with:
+          pytest-markers: "quasar"
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -587,7 +464,6 @@ jobs:
       - metalium-smoke-tests
       - ttnn-smoke-tests
       - metalium-examples
-      - clang-tidy-light
       - code-analysis
       - model-charts-sync
       - build-docs
@@ -602,7 +478,6 @@ jobs:
           required-jobs: "asan-build"
           optional-jobs: >-
             code-analysis,
-            clang-tidy-light,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
             llk-test-wormhole, llk-test-blackhole, llk-build-quasar

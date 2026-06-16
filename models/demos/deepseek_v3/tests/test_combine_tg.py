@@ -166,7 +166,6 @@ def run_combine_test(
             batch,
             seq,
             select_experts_k,
-            experts,
             cluster_axis,
             topology=ttnn.Topology.Ring,
             num_links=num_links,

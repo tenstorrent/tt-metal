@@ -38,7 +38,7 @@ static void WriteRealtimeRecordToCsv(const tt::tt_metal::experimental::ProgramRe
 
     fmt::print(
         "realtime record: id={} chip_id={} start={} end={} duration_cycles={} duration_ns={:.2f}\n",
-        record.program_id,
+        record.runtime_id,
         record.chip_id,
         record.start_timestamp,
         record.end_timestamp,
@@ -71,11 +71,11 @@ static void WriteRealtimeRecordToCsv(const tt::tt_metal::experimental::ProgramRe
     }
 
     if (!g_csv_header_written) {
-        g_csv_file << "program_id,chip_id,start_timestamp,end_timestamp,duration_cycles,duration_ns,frequency_ghz,"
+        g_csv_file << "runtime_id,chip_id,start_timestamp,end_timestamp,duration_cycles,duration_ns,frequency_ghz,"
                    << "kernel_sources\n";
         g_csv_header_written = true;
     }
-    g_csv_file << record.program_id << "," << record.chip_id << "," << record.start_timestamp << ","
+    g_csv_file << record.runtime_id << "," << record.chip_id << "," << record.start_timestamp << ","
                << record.end_timestamp << "," << duration_cycles << "," << duration_ns << "," << record.frequency << ","
                << escaped << "\n";
     g_csv_file.flush();

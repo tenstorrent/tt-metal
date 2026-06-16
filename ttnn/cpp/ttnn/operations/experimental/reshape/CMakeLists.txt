@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_reshape ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Reshape ALIAS ttnn_op_experimental_reshape)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_reshape TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_reshape TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reshape)
 
 set_target_properties(

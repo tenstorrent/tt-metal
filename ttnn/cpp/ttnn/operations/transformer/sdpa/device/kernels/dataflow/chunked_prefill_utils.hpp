@@ -41,12 +41,27 @@ constexpr uint32_t chunks_until_next_multiple(uint32_t processed_chunks, uint32_
     return remainder == 0 ? 0 : alignment - remainder;
 }
 
-template <bool v_shares_k_buffer>
+// Single source of truth for the in-place latent-V predicate, derived identically by the
+// program factory, the reader, and the compute kernel. In-place latent-V reads V straight
+// from K^T (skipping V materialization) when the latent K/V buffer is shared AND the Q chunk
+// is a single tile, where the softmax@V matmul is data-movement bound.
+constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t) {
+    return v_shares_k_buffer && (Sq_chunk_t == 1);
+}
+
+template <bool v_shares_k_buffer, bool kt_inplace_v = false>
 constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks) {
     // Reader pushes one K entry and one V entry per real chunk; compute pops the
     // same entries. The dummy count pads the iteration so the next iteration
     // starts on the same CB phase on every chained reader core.
-    if constexpr (v_shares_k_buffer) {
+    if constexpr (kt_inplace_v) {
+        // In-place latent-V (Sq_chunk_t==1): V is never materialized; the second
+        // matmul reads K^T directly. Each real chunk consumes a single K^T entry in
+        // the triple-buffered K^T CB, so a depth-3 write-pointer cycle realigns —
+        // pad to the next multiple of three (matches the materialized-V phase).
+        constexpr uint32_t inplace_kt_cb_entries = 3;
+        return chunks_until_next_multiple(processed_chunks, inplace_kt_cb_entries);
+    } else if constexpr (v_shares_k_buffer) {
         // Latent-V aliases cb_v_in to cb_k_in. Each real chunk consumes two
         // entries in a three-entry CB cycle: K^T, then materialized V. Pad to
         // the next multiple of three so the next K^T lands in the K phase.

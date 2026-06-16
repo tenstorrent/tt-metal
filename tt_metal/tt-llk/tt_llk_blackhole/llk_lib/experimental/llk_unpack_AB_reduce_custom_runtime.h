@@ -160,15 +160,11 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t add
  * This function should NOT be used as a substitute for native reduce unpacking cleanup.
  * Standard _llk_unpack_AB_reduce_init_ operations typically don't require explicit cleanup.
  */
-inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(
-    const std::uint32_t unpA_face_r_dim, const std::uint32_t unpB_face_r_dim, bool respect_trigger = false)
+inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(bool respect_trigger = false)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim * FACE_C_DIM - 1, 0x0);
 
     if (respect_trigger)
     {

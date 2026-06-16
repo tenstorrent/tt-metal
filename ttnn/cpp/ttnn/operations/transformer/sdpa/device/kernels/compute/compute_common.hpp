@@ -152,7 +152,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         /**
          * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
          */
-        reduce_block_max_row_init<cols>();
+        reduce_block_max_row_init<cols>(out_cb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t reduce_dst_idx = i;
             reduce_block_max_row<cols>(in0_cb, scale_cb, (row_start_idx + i) * cols, reduce_dst_idx);
@@ -1122,9 +1122,15 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
-        // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
-        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(
-            0 /*dst_index*/, 0x3F800000 /*scalar*/, VectorMode::C)));
+        // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binop_with_scalar,
+            (APPROX, ADD_UNARY, 8 /* ITERATIONS */),
+            0 /*dst_index*/,
+            VectorMode::C,
+            0x3F800000 /*scalar*/));
         // recip_tile<false>(0, (int)VectorMode::C);
         MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
         tile_regs_commit();
@@ -1510,7 +1516,7 @@ void apply_causal_mask_lightweight(
 }
 
 /**
- * Context for lightweight mask application in ring joint SDPA.
+ * Context for lightweight mask application.
  * All mask tiles reside in a single CB. This struct stores the pre-resolved mask metadata used when
  * lightweight masking is enabled; enablement itself is controlled by the `lightweight_mask_enabled`
  * template parameter(s), not by default-constructing this context.
@@ -1519,6 +1525,10 @@ struct LightweightMaskContext {
     bool is_causal = false;                  // Causal masking active for this context instance
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
+    uint32_t primary_diag_tile_idx = 0;      // Causal diagonal, or sliding-window trailing-primary tile
+    uint32_t sliding_leading_prev_tile_idx = 0;   // Index of previous sliding-window leading tile
+    uint32_t sliding_leading_tile_idx = 0;        // Index of current sliding-window leading tile in the mask CB
+    uint32_t sliding_trailing_next_tile_idx = 0;  // Index of next sliding-window trailing tile
     uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
     uint32_t local_n_padded_tiles = 0;       // Fully padded K tile columns for local_n chunk
     uint32_t joint_n_padded_tiles = 0;       // Fully padded K tile columns for joint_l chunk

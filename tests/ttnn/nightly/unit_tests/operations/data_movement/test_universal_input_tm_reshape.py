@@ -128,6 +128,10 @@ SCENARIOS = [
     ("dram_height", _mc_interleaved(ttnn.DRAM_MEMORY_CONFIG), _mc_sharded(HEIGHT)),
     ("dram_width", _mc_interleaved(ttnn.DRAM_MEMORY_CONFIG), _mc_sharded(WIDTH)),
     ("dram_block", _mc_interleaved(ttnn.DRAM_MEMORY_CONFIG), _mc_sharded(BLOCK)),
+    # L1 input, sharded output (#46161: close L1→sharded test gap)
+    ("l1_height", _mc_interleaved(ttnn.L1_MEMORY_CONFIG), _mc_sharded(HEIGHT)),
+    ("l1_width", _mc_interleaved(ttnn.L1_MEMORY_CONFIG), _mc_sharded(WIDTH)),
+    ("l1_block", _mc_interleaved(ttnn.L1_MEMORY_CONFIG), _mc_sharded(BLOCK)),
     # sharded-to-sharded, same strategy
     ("height_height", _mc_sharded(HEIGHT), _mc_sharded(HEIGHT)),
     ("width_width", _mc_sharded(WIDTH), _mc_sharded(WIDTH)),
@@ -163,6 +167,11 @@ SHAPE_CASES = [
     ([1, 3, 96, 96], [1, 9, 32, 96], "irreg_aligned"),
     # grid reduction: forces recompute_shard_spec_for_output to shrink the grid
     ([1, 8, 32, 256], [1, 1, 256, 256], "grid_reduction"),
+    # odd batch sizes (#46161: inner dims are tile-aligned and L1-aligned)
+    ([3, 1, 64, 64], [1, 3, 64, 64], "odd_batch_3"),
+    ([7, 32, 32], [1, 7, 32, 32], "odd_batch_7"),
+    ([2, 3, 64, 64], [6, 1, 64, 64], "odd_batch_2x3"),
+    ([3, 64, 128], [3, 128, 64], "odd_batch_swap_hw"),
 ]
 SHAPE_IDS = [s[2] for s in SHAPE_CASES]
 
@@ -187,14 +196,23 @@ DTYPE_IDS = [d[1] for d in DTYPES]
 
 # Per-shape scenario allowlist — matches the semantic coverage of the
 # pre-consolidation test file (i.e. the union of what the 16 separate
-# test_reshape_* functions exercised, minus redundant duplicates).
+# test_reshape_* functions exercised, minus redundant duplicates),
+# plus #46161 expansions for L1→sharded, irregular+sharded output,
+# and odd batch sizes.
 _ALL_SCENARIOS = set(SCENARIO_IDS)
 _SHARDED_IN_DEFAULT_OUT = {"height_default", "width_default", "block_default"}
 _SAME_STRATEGY_S2S = {"height_height", "width_width", "block_block"}
+_INTERLEAVED_TO_SHARDED = {
+    "dram_height",
+    "dram_width",
+    "dram_block",
+    "l1_height",
+    "l1_width",
+    "l1_block",
+}
 
 _SHAPE_SCENARIO_ALLOWLIST = {
-    # Tile-aligned 4D: full scenario set (as in the original dram/l1/
-    # height/width/block_sharded_input + sharded_output + sharded_to_sharded tests).
+    # Tile-aligned 4D: full scenario set (includes L1→sharded from #46161).
     "merge_ch": _ALL_SCENARIOS,
     "swap_hw": _ALL_SCENARIOS,
     "halve_w_double_h": _ALL_SCENARIOS,
@@ -203,14 +221,13 @@ _SHAPE_SCENARIO_ALLOWLIST = {
     "2d_swap": _SHARDED_IN_DEFAULT_OUT,
     "2d_to_3d_view": _SHARDED_IN_DEFAULT_OUT,
     "2d_to_3d_dim_change": _SHARDED_IN_DEFAULT_OUT,
-    # Irregular: dram interleaved + sharded_in × default_out
-    # (as in test_reshape_irregular_interleaved{,_tile} + irregular_sharded_input_tile).
-    "irreg_2d_to_3d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
-    "irreg_2d_swap": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
-    "irreg_3d_to_2d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
-    # The last two irregular shapes were TILE-only originally (no RM case).
-    "irreg_4d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
-    "irreg_4d_swap": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
+    # Irregular: expanded to include TILE sharded-output scenarios (#46161).
+    # RM remains blocked for irregular shapes by the _is_valid filter (non-L1-aligned widths).
+    "irreg_2d_to_3d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
+    "irreg_2d_swap": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
+    "irreg_3d_to_2d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
+    "irreg_4d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
+    "irreg_4d_swap": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
     # irreg_aligned in the old file was only exercised via cross_strategy
     # (separate test) and via test_reshape_bfloat8_b. Restrict main-test
     # coverage to the sharded-in-default scenarios for the bfp8 dtype only
@@ -218,6 +235,12 @@ _SHAPE_SCENARIO_ALLOWLIST = {
     "irreg_aligned": _SHARDED_IN_DEFAULT_OUT,
     # grid_reduction: same-strategy sharded-to-sharded only.
     "grid_reduction": _SAME_STRATEGY_S2S,
+    # Odd batch sizes (#46161): inner dims are tile-aligned and L1-aligned,
+    # so all scenarios work for both TILE and RM.
+    "odd_batch_3": _ALL_SCENARIOS,
+    "odd_batch_swap_hw": _ALL_SCENARIOS,
+    "odd_batch_7": _SHARDED_IN_DEFAULT_OUT | {"dram_default", "l1_default"},
+    "odd_batch_2x3": _SHARDED_IN_DEFAULT_OUT | {"dram_default", "l1_default"},
 }
 
 # dtype axis restrictions matching the pre-consolidation test_reshape_bfloat8_b
@@ -229,9 +252,8 @@ _BFP8_CASE_IDS = {"merge_ch", "swap_hw", "irreg_aligned"}
 def _is_valid(scenario_label, case_id, layout, dtype):
     """Return True if (scenario, shape, layout, dtype) is in-scope.
 
-    Strict allowlist that reproduces the pre-consolidation coverage —
-    we do not expand the cross product beyond what the original 16
-    test_reshape_* functions already exercised.
+    Allowlist based on the pre-consolidation coverage plus #46161
+    expansions (L1→sharded, irregular+sharded output, odd batch).
     """
     # Per-shape scenario allowlist
     if scenario_label not in _SHAPE_SCENARIO_ALLOWLIST.get(case_id, set()):

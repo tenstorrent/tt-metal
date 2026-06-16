@@ -505,6 +505,52 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     }
 }
 
+void FDMeshCommandQueue::enqueue_write_dram_core_counter(
+    tt::stl::Span<const DeviceMemoryAddress> targets,
+    uint32_t value,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
+
+    // No lock_api_function_() here: the caller (DramCorePrefetcherManager) already holds
+    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
+
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
+        return;
+    }
+
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+
+    for (const auto& target : targets) {
+        if (!mesh_device_->impl().is_local(target.device_coord)) {
+            continue;
+        }
+        IDevice* device = mesh_device_->impl().get_device(target.device_coord);
+        // target.address is the full device destination (the caller pre-applies the
+        // DRAM L1 NOC offset). Use the unchecked write: the DRAM-banked bounds check
+        // in write_to_core rejects programmable DRAM-core (DRISC) L1. `value` is copied
+        // inline into the command region by write_to_core_unchecked before it returns.
+        device_dispatch::write_to_core_unchecked(
+            device,
+            target.virtual_core_coord,
+            &value,
+            target.address,
+            sizeof(value),
+            id_,
+            expected_num_workers_completed_,
+            sub_device_ids);
+    }
+
+    if (blocking) {
+        this->finish_nolock(sub_device_ids);
+    }
+}
+
 void FDMeshCommandQueue::enqueue_read_shard_from_core(
     DeviceMemoryAddress address,
     void* dst,

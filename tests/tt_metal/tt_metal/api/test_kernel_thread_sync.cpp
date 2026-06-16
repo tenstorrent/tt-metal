@@ -51,9 +51,9 @@ ScratchLayout make_layout(uint32_t base_addr, uint32_t rounds) {
 }
 
 ProgramRunArgs::KernelRunArgs make_run_params(
-    const KernelSpecName& kernel_name, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
+    KernelSpecName kernel, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
     return ProgramRunArgs::KernelRunArgs{
-        .kernel_spec_name = kernel_name,
+        .kernel = std::move(kernel),
         .advanced_options =
             AdvancedKernelRunArgs{
                 .runtime_varargs =
@@ -126,7 +126,8 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
 
     ProgramRunArgs params;
     for (const auto& cfg : kernel_configs) {
-        params.kernel_run_args.push_back(make_run_params(cfg.name, node, cfg.layout, kRounds, kSkewIters));
+        params.kernel_run_args.push_back(
+            make_run_params(KernelSpecName{cfg.name}, node, cfg.layout, kRounds, kSkewIters));
     }
     SetProgramRunArgs(program, params);
     detail::LaunchProgram(device, program);

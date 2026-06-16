@@ -42,6 +42,7 @@ public:
     std::vector<CoreCoord> get_claimable_cores(IDevice* device) const;
     void claim(IDevice* device, const std::vector<CoreCoord>& cores);
     void release(IDevice* device, const std::vector<CoreCoord>& cores);
+    void wait_done(IDevice* device, CoreCoord core) const;
     std::unordered_set<CoreCoord> claimed_cores(ChipId device_id) const;
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
