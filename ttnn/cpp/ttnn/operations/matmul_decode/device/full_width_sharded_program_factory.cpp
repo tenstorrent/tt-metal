@@ -270,10 +270,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     // ---- Compute kernel ----
     //
     // Matmul over gathered full A and this core's B slice.
-    // Blocking: in0_block_w (K) = 1, out_block_h (M) = 8, out_block_w (N) = 1.
-    constexpr uint32_t out_block_h = 8;
-    const uint32_t num_blocks_h = tt::div_up(M_tiles, out_block_h);
-    const uint32_t last_out_block_h = (M_tiles % out_block_h == 0) ? out_block_h : (M_tiles % out_block_h);
+    // Blocking: in0_block_w (K) = inA_K_tiles_per_core, out_block_h (M) = M_tiles,
+    // out_block_w (N) = 1. The compute kernel processes the entire M dimension in
+    // a single DST block (out_block_h = M_tiles), so M_tiles must fit in DST
+    // (<= 8 tiles in half-sync mode). Enforce M < 256 (=> M_tiles <= 8).
+    TT_FATAL(
+        operation_attributes.M < 256,
+        "full_width_sharded matmul_decode requires M < 256 so that out_block_h (= M_tiles) stays < 8 and fits in DST, "
+        "but got M={}",
+        operation_attributes.M);
 
     log_debug(
         tt::LogOp,
@@ -282,7 +287,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         K_tiles,
         inB_N_tiles_per_core,
         inA_K_tiles_per_core);
-    log_debug(tt::LogOp, "MatmulDecode: num_blocks_h: {}, last_out_block_h: {}", num_blocks_h, last_out_block_h);
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/compute/compute_full_width_sharded.cpp";
@@ -293,8 +297,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         K_tiles,
         inB_N_tiles_per_core,
         inA_K_tiles_per_core,
-        last_out_block_h,
-        num_blocks_h,
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,

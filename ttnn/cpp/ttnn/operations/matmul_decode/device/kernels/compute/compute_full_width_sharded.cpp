@@ -17,37 +17,48 @@ using std::uint32_t;
 // Output:
 //   out_cb (c_2):      this core's output shard (buffer-backed)
 //
-// Blocking: in0_block_w (K) = 1, out_block_h (M) = 1, out_block_w (N) = 1.
+// Blocking: in0_block_w (K) = inA_K_tiles_per_core, out_block_h (M) = M_tiles,
+// out_block_w (N) = 1.
 //
-// M_tiles>1 fix: the original kernel hardcoded a single M-tile (out_block_h=1,
-// in0 index without an M offset, pack always to out slot 0), so it only ever
-// computed M-tile 0 and left M-rows 1..M_tiles-1 unwritten/garbage. We now loop
-// over every M-tile (bh) x N-tile (bw), accumulating over K, and pack each
-// (bh,bw) tile to its sequential output slot.
+// out_block_h = M_tiles: we process the entire M dimension of the output shard
+// in a single DST block, so matmul_block produces all M-tiles for a given N-tile
+// at once (DST holds out_block_h * out_block_w == M_tiles tiles). The program
+// factory asserts M < 256, which keeps M_tiles <= 8 so the block fits in DST.
 //
 // full_in0 layout (built by reader_full_width_sharded): A is width(K)-sharded
 // across `num_senders` sender cores, each holding a contiguous [M_tiles*32,
 // inA_K_tiles_per_core*32] slice in TILE row-major order, and the reader copies
 // each sender's whole slice into full_in0 at offset sender*shard_num_tiles. So
-// full_in0 is SENDER-MAJOR: the tile for global (m, k_global) lives at
-//   sender * (M_tiles * inA_K_tiles_per_core)  // sender base
-//   + m * inA_K_tiles_per_core                 // M-row within the sender slice
-//   + kc_local                                 // K-col within the sender slice
-// where sender = k_global / inA_K_tiles_per_core, kc_local = k_global % ...
-// (For M_tiles==1 this collapses to k_global, matching the old behaviour.)
+// within one sender's slice the tiles are laid out as M_tiles rows x
+// inA_K_tiles_per_core cols (row-major), so the sender slice is an in0 block of
+// rt_dim=M_tiles, kt_dim=inA_K_tiles_per_core.
+//
+// matmul_block accumulation: matmul_block does NOT internally reduce over kt_dim
+// K-tiles. kt_dim (= in0_block_w) is only the in0 *row stride* (K-tiles per
+// M-row in the in0 block layout). Each matmul_block call multiplies one K-column
+// slice (rt_dim in0 tiles x ct_dim in1 tiles) into DST; the reduction over K is
+// done by the explicit K loop, advancing in0_index by 1 (next K-col of the row)
+// and in1_index by the in1 row stride (N_tiles_per_core). We therefore loop over
+// every global K-tile (across all senders and all kc within a sender),
+// accumulating into the same DST tiles.
+//
+// in1 (B) is [K_tiles x N_tiles_per_core] row-major. With out_block_w (ct_dim) = 1
+// each call consumes exactly one in1 tile at in1_index = k_global * N_tiles_per_core
+// + bw, so this is correct for any N_tiles_per_core.
 
 using namespace ckernel;
 void kernel_main() {
-    constexpr uint32_t in0_block_w = 1;
-    constexpr uint32_t out_block_h = 1;
     constexpr uint32_t out_block_w = 1;
 
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t K_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t N_tiles_per_core = get_compile_time_arg_val(2);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t last_out_block_h = get_compile_time_arg_val(4);
-    constexpr uint32_t num_blocks_h = get_compile_time_arg_val(5);
+
+    // The whole M dimension of the output shard is computed in one DST block.
+    constexpr uint32_t out_block_h = M_tiles;
+    // Each sender's K-slice is consumed as the inner (kt) dimension of one block.
+    constexpr uint32_t in0_block_w = inA_K_tiles_per_core;
 
     constexpr uint32_t in0_cb_id = tt::CBIndex::c_3;
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
@@ -55,7 +66,8 @@ void kernel_main() {
 
     constexpr uint32_t in0_num_tiles = M_tiles * K_tiles;
 
-    constexpr uint32_t num_K_blocks = K_tiles / in0_block_w;
+    // Number of sender slices in full_in0 (== number of A-holding cores).
+    constexpr uint32_t num_senders = K_tiles / inA_K_tiles_per_core;
     // tiles per sender slice in full_in0 (== reader's shard_num_tiles)
     constexpr uint32_t sender_slice_tiles = M_tiles * inA_K_tiles_per_core;
 
@@ -63,36 +75,31 @@ void kernel_main() {
     cb_wait_front(in0_cb_id, in0_num_tiles);
     // in1/out are buffer-backed: data is already in L1 (see vecadd_sharding).
 
-    // mm_init(in0_cb_id, in1_cb_id, out_cb_id);
     mm_block_init(in0_cb_id, in1_cb_id, out_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
     // Reserve the whole output shard ([M_tiles x N_tiles_per_core] tiles, row-major).
     cb_reserve_back(out_cb_id, M_tiles * N_tiles_per_core);
-    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-        for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
-            tile_regs_acquire();
-            for (uint32_t k = 0; k < num_K_blocks; ++k) {
-                // Translate global K-tile index k into its sender-major slot in full_in0.
-                const uint32_t sender = k / inA_K_tiles_per_core;
-                const uint32_t kc_local = k - sender * inA_K_tiles_per_core;
-                const uint32_t in0_tile = sender * sender_slice_tiles + mt * inA_K_tiles_per_core + kc_local;
-                matmul_block(
-                    in0_cb_id,
-                    in1_cb_id,
-                    in0_tile,
-                    k * N_tiles_per_core + bw,  // B is [K_tiles x N_tiles_per_core] row-major
-                    0,
-                    false,
-                    out_block_w,
-                    out_block_h,
-                    in0_block_w);
+    for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
+        tile_regs_acquire();
+        for (uint32_t sender = 0; sender < num_senders; ++sender) {
+            // Base of this sender's [M_tiles x inA_K_tiles_per_core] block in full_in0.
+            const uint32_t in0_base = sender * sender_slice_tiles;
+            for (uint32_t kc = 0; kc < inA_K_tiles_per_core; ++kc) {
+                // in0: K-column kc within the sender's block (row stride == in0_block_w).
+                const uint32_t in0_tile = in0_base + kc;
+                // in1: the single B tile for this global K-row at N-tile column bw.
+                const uint32_t k_global = sender * inA_K_tiles_per_core + kc;
+                const uint32_t in1_tile = k_global * N_tiles_per_core + bw;
+                matmul_block(in0_cb_id, in1_cb_id, in0_tile, in1_tile, 0, false, out_block_w, out_block_h, in0_block_w);
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            // Pack to the row-major output slot for (mt, bw).
-            pack_tile<true>(0, out_cb_id, mt * N_tiles_per_core + bw);
-            tile_regs_release();
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        // Pack each of the M_tiles output rows to its row-major output slot.
+        for (uint32_t mt = 0; mt < out_block_h; ++mt) {
+            pack_tile<true>(mt, out_cb_id, mt * N_tiles_per_core + bw);
+        }
+        tile_regs_release();
     }
     cb_push_back(out_cb_id, M_tiles * N_tiles_per_core);
 
