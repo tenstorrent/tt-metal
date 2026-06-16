@@ -74,8 +74,8 @@ struct VariableMatmulInputs {
     // Optional caller-provided output tensor (write-at-offset mode). When set, the
     // EP path derives the row offset from offsets_tensor and matmul-N must match.
     std::optional<ttnn::Tensor> output_tensor;
-    // Optional 1-D UINT32 ROW_MAJOR device tensor. Used with offsets_role.
-    std::optional<ttnn::Tensor> offsets_tensor;
+    // 1-D UINT32 ROW_MAJOR device tensor of offsets; read on every call per offsets_role.
+    ttnn::Tensor offsets_tensor;
 };
 
 }  // namespace ttml::metal::ops::variable_matmul::device

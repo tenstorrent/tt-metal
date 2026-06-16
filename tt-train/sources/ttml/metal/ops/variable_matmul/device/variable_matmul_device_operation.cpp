@@ -158,10 +158,6 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             out_M_tiles);
     }
 
-    // offsets_tensor + role are required on every call — the op always reads offsets on-device.
-    TT_FATAL(
-        tensor_args.offsets_tensor.has_value(),
-        "variable_matmul: offsets_tensor is required (use InputAndOutputRow or InputAndWeightK).");
     const auto role = operation_attributes.offsets_role;
     TT_FATAL(
         role == OffsetsRole::InputAndOutputRow || role == OffsetsRole::InputAndWeightK,
@@ -171,7 +167,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             tensor_args.output_tensor.has_value(),
             "variable_matmul: OffsetsRole::InputAndOutputRow requires a caller-provided output_tensor.");
     }
-    const auto& off = tensor_args.offsets_tensor.value();
+    const auto& off = tensor_args.offsets_tensor;
     check_on_device(off, "offsets_tensor");
     TT_FATAL(off.dtype() == ttnn::DataType::UINT32, "variable_matmul: offsets_tensor must be UINT32.");
     TT_FATAL(off.layout() == ttnn::Layout::ROW_MAJOR, "variable_matmul: offsets_tensor must be ROW_MAJOR.");
@@ -259,8 +255,7 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     // InputAndWeightK overrides both in0 and in1 K-offsets at runtime; force both use_offset
     // flags true so hash matches the program factory's CTA computation (otherwise the cached
     // program's compile-time flags would diverge from what compute_program_hash predicted).
-    const bool input_and_weight_k_active =
-        operation_attributes.offsets_role == OffsetsRole::InputAndWeightK && tensor_args.offsets_tensor.has_value();
+    const bool input_and_weight_k_active = operation_attributes.offsets_role == OffsetsRole::InputAndWeightK;
     const bool use_offset = operation_attributes.expected_M_tiles > 0 || in0_parent_k_mode || input_and_weight_k_active;
     const bool use_offset_in1 = in1_parent_k_mode || input_and_weight_k_active;
     // Mirror the program factory's transpose_core_grid decision exactly: use the caller's

@@ -236,9 +236,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // 4×uint32 page so both layouts (M values at [0..2], K at [3]) share one CB.
     constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
     constexpr uint32_t cb_ctrl_bytes = 16U;
-    const bool cb_ctrl_active = tensor_args.offsets_tensor.has_value() &&
-                                (operation_attributes.offsets_role == OffsetsRole::InputAndOutputRow ||
-                                 operation_attributes.offsets_role == OffsetsRole::InputAndWeightK);
+    const bool cb_ctrl_active = operation_attributes.offsets_role == OffsetsRole::InputAndOutputRow ||
+                                operation_attributes.offsets_role == OffsetsRole::InputAndWeightK;
     if (cb_ctrl_active) {
         tt::tt_metal::CircularBufferConfig cb_ctrl_cfg =
             tt::tt_metal::CircularBufferConfig(cb_ctrl_bytes, {{cb_ctrl_id, tt::DataFormat::UInt32}})
@@ -316,8 +315,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
     if (in0_needs_offsets) {
-        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.value().buffer())
-            .append_to(in0_sender_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.buffer()).append_to(in0_sender_compile_time_args);
     }
 
     const auto in0_sender_kernels_id = CreateKernel(
@@ -351,7 +349,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
     if (in0_needs_offsets) {
-        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.value().buffer())
+        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.buffer())
             .append_to(in0_receiver_compile_time_args);
     }
 
@@ -386,8 +384,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor);
     if (in1_needs_offsets) {
-        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.value().buffer())
-            .append_to(in1_sender_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.buffer()).append_to(in1_sender_compile_time_args);
     }
 
     const auto in1_sender_kernels_id = CreateKernel(
@@ -421,7 +418,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor);
     if (in1_needs_offsets) {
-        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.value().buffer())
+        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.buffer())
             .append_to(in1_receiver_compile_time_args);
     }
 
@@ -570,7 +567,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //                      M range and derives per-core M from in0_idx.
         //   InputAndWeightK:   (offsets_addr, offsets_start_index)          — K-range only.
         if (in0_needs_offsets) {
-            in0_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
+            in0_args.push_back(tensor_args.offsets_tensor.buffer()->address());
             in0_args.push_back(operation_attributes.offsets_start_index);
             if (offset_row_mode) {
                 in0_args.push_back(in0_idx);
@@ -625,7 +622,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //   InputAndWeightK:   (offsets_addr, offsets_start_index) — K-range only.
         //   InputAndOutputRow: also append in0_idx (kernel derives per-core M).
         if (in1_needs_offsets) {
-            in1_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
+            in1_args.push_back(tensor_args.offsets_tensor.buffer()->address());
             in1_args.push_back(operation_attributes.offsets_start_index);
             if (offset_row_mode) {
                 in1_args.push_back(in0_idx);
@@ -756,7 +753,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     // offsets_tensor is always set.
     constexpr bool in0_needs_offsets = true;
     constexpr bool in1_needs_offsets = true;
-    const uint32_t offsets_addr = tensor_args.offsets_tensor.value().buffer()->address();
+    const uint32_t offsets_addr = tensor_args.offsets_tensor.buffer()->address();
     constexpr uint32_t IN0_OFFSETS_ADDR_IDX = 18;  // appended after K_tiles (idx 17).
     constexpr uint32_t IN0_OFFSETS_START_IDX_IDX = 19;
     constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 17;
