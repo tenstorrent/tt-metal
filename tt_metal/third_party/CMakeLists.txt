@@ -23,22 +23,13 @@ set(TRACY_TIMER_FALLBACK ON)
 
 add_subdirectory(tracy)
 
-if(NOT ENABLE_TRACY)
-    return()
-endif()
-
-# These setup ensures that when someone links against TracyClient:
-# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
-target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
-# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
-target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
-# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
-target_link_options(TracyClient PUBLIC -rdynamic)
-
-# Keep TracyClient in the standard lib output/install paths so wheel/CPack dependency discovery works.
-
-# (TODO:MO) as part of https://github.com/tenstorrent/tt-metal/issues/46870
-# remove the set_target and install calls as they might be redundant
+# TracyClient is linked unconditionally by libtt_metal and several installed tools. With
+# TRACY_ENABLE=OFF it is still built (as a no-op stub) and still baked into those binaries as a
+# DT_NEEDED (libtracy.so.<ver>). It must therefore be renamed and installed in BOTH
+# configurations -- otherwise CPack/dpkg-shlibdeps cannot resolve that runtime dependency when
+# packaging a profiler-disabled (ENABLE_TRACY=OFF) build, and `cmake --build --target package`
+# fails with "cannot find library libtracy.so.<ver>". Keep OUTPUT_NAME + install ABOVE the
+# ENABLE_TRACY early-return so the dependency is satisfied regardless of ENABLE_TRACY.
 set_target_properties(
     TracyClient
     PROPERTIES
@@ -61,6 +52,18 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
         COMPONENT metalium-runtime
 )
+
+if(NOT ENABLE_TRACY)
+    return()
+endif()
+
+# Tracy-enabled-only tuning (only meaningful when profiling is actually compiled in):
+# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
+target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
+# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
+target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
+target_link_options(TracyClient PUBLIC -rdynamic)
 
 # TracyClient is a PUBLIC dependency of TT::Metalium, so its interface exports
 # $<INSTALL_INTERFACE:include/tracy>. Tracy's own header install rules are
