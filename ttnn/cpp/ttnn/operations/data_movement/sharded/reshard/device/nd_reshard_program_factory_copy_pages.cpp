@@ -4,98 +4,106 @@
 
 #include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_pages.hpp"
 
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "tt-metalium/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-namespace {
-
-// Anonymous-namespace helper unique to nd_reshard_copy_pages to avoid unity-build collisions.
-void push_reshard_copy_pages_cb(
-    ProgramDescriptor& desc,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t total_size,
-    uint32_t page_size,
-    const CoreRangeSet& core_ranges) {
-    CBDescriptor cb;
-    cb.total_size = total_size;
-    cb.core_ranges = core_ranges;
-    cb.format_descriptors.push_back(CBFormatDescriptor{
-        .buffer_index = static_cast<uint8_t>(cb_index),
-        .data_format = data_format,
-        .page_size = page_size,
-    });
-    cb.buffer = nullptr;
-    desc.cbs.push_back(std::move(cb));
-}
-
-}  // namespace
-
-ProgramDescriptor NdReshardCopyPagesFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_program_spec(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
 
     auto* input_buffer = input.buffer();
-    auto* output_buffer = output.buffer();
 
     auto input_nd_shard_spec = input.memory_config().nd_shard_spec().value();
 
-    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
-    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
-
-    auto aligned_page_size = input_buffer->aligned_page_size();
+    uint32_t aligned_page_size = static_cast<uint32_t>(input_buffer->aligned_page_size());
 
     // Create grid + cores
     auto grid_size = input.device()->compute_with_storage_grid_size();
     auto grid = CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
     auto cores = corerange_to_cores(grid, std::nullopt, input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    // Create Circular Buffer
+    // Create Dataflow Buffer (was Circular Buffer)
     const auto data_format = datatype_to_dataformat_converter(input.dtype());
     constexpr uint32_t num_tiles_in_cb = 1;  // TODO: Try double buffering
-    constexpr uint32_t cb_in0_idx = tt::CBIndex::c_0;
 
-    ProgramDescriptor desc;
-    push_reshard_copy_pages_cb(
-        desc, cb_in0_idx, data_format, aligned_page_size * num_tiles_in_cb, aligned_page_size, grid);
+    const TensorParamName kInput{"input"};
+    const TensorParamName kOutput{"output"};
+    const DFBSpecName kCbIn0{"cb_in0"};
+    const KernelSpecName kReader{"reader"};
+    const KernelSpecName kWriter{"writer"};
 
-    // Prepare compile time arguments
-    auto compile_time_args_reader = input_accessor_args.get_compile_time_args();
-    compile_time_args_reader.push_back(cb_in0_idx);  // Circular buffer index
-    compile_time_args_reader.push_back(aligned_page_size);
+    ProgramSpec spec;
+    spec.name = "nd_reshard_copy_pages";
 
-    auto compile_time_args_writer = output_accessor_args.get_compile_time_args();
-    compile_time_args_writer.push_back(cb_in0_idx);
-    compile_time_args_writer.push_back(aligned_page_size);
+    // Tensor parameters: input (read by reader) and output (written by writer).
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = kInput, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = kOutput, .spec = output.tensor_spec()});
 
-    // Create kernels
-    KernelDescriptor reader_desc;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_reader.cpp";
-    reader_desc.core_ranges = grid;
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.compile_time_args = std::move(compile_time_args_reader);
+    // Dataflow buffer: reader produces a page, writer consumes it.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = kCbIn0,
+        .entry_size = aligned_page_size,
+        .num_entries = num_tiles_in_cb,
+        .data_format_metadata = data_format,
+    });
 
-    KernelDescriptor writer_desc;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_writer.cpp";
-    writer_desc.core_ranges = grid;
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.compile_time_args = std::move(compile_time_args_writer);
+    // Reader kernel: reads pages from the input tensor, pushes them into the DFB.
+    KernelSpec reader;
+    reader.unique_id = kReader;
+    reader.source = std::filesystem::path(
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/"
+        "nd_reshard_copy_pages_reader.cpp");
+    reader.compile_time_args = {{"page_size", aligned_page_size}};
+    reader.runtime_arg_schema.runtime_arg_names = {"start_page", "end_page"};
+    reader.dfb_bindings = {DFBBinding{
+        .dfb_spec_name = kCbIn0,
+        .accessor_name = "cb_in0",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    }};
+    reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = kInput, .accessor_name = "input"}};
+    reader.hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER};
 
-    // Common runtime args: arg 0 is the buffer base address (binding via Buffer*).
-    // emplace_common_runtime_args registers a CommonBufferBinding for the framework
-    // fast cache-hit path.
-    reader_desc.emplace_common_runtime_args({input_buffer});
-    writer_desc.emplace_common_runtime_args({output_buffer});
+    // Writer kernel: waits on pages from the DFB, writes them to the output tensor.
+    KernelSpec writer;
+    writer.unique_id = kWriter;
+    writer.source = std::filesystem::path(
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/"
+        "nd_reshard_copy_pages_writer.cpp");
+    writer.compile_time_args = {{"page_size", aligned_page_size}};
+    writer.runtime_arg_schema.runtime_arg_names = {"start_page", "end_page"};
+    writer.dfb_bindings = {DFBBinding{
+        .dfb_spec_name = kCbIn0,
+        .accessor_name = "cb_in0",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    }};
+    writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = kOutput, .accessor_name = "output"}};
+    writer.hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER};
+
+    spec.kernels.push_back(std::move(reader));
+    spec.kernels.push_back(std::move(writer));
+
+    // Single WorkUnitSpec hosting both kernels on the full grid: the DFB's producer (reader)
+    // and consumer (writer) share the same nodes (local-DFB invariant).
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "wu",
+        .kernels = {kReader, kWriter},
+        .target_nodes = grid,
+    });
+
+    // Run args.
+    ProgramRunArgs run_args;
+
+    KernelRunArgs reader_run;
+    reader_run.kernel = kReader;
+    KernelRunArgs writer_run;
+    writer_run.kernel = kWriter;
 
     // Per-core unique runtime args: [start_page, end_page]
     uint32_t start_page = 0;
@@ -110,15 +118,25 @@ ProgramDescriptor NdReshardCopyPagesFactory::create_descriptor(
             num_pages_for_core++;
             remainder--;
         }
-        reader_desc.emplace_runtime_args(core, {start_page, start_page + num_pages_for_core});
-        writer_desc.emplace_runtime_args(core, {start_page, start_page + num_pages_for_core});
+        uint32_t end_page = start_page + num_pages_for_core;
+        reader_run.runtime_arg_values.push_back(
+            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"start_page", start_page}, {"end_page", end_page}}});
+        writer_run.runtime_arg_values.push_back(
+            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"start_page", start_page}, {"end_page", end_page}}});
         start_page += num_pages_for_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    run_args.kernel_run_args.push_back(std::move(reader_run));
+    run_args.kernel_run_args.push_back(std::move(writer_run));
 
-    return desc;
+    // Tensor arguments: reference the MeshTensors reachable from the factory io tensors
+    // (matched back by pointer identity by the framework adapter).
+    run_args.tensor_args = {
+        {kInput, input.mesh_tensor()},
+        {kOutput, output.mesh_tensor()},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

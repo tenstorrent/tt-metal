@@ -2,35 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port. Used only by the PadTileCore factory, so ported in place.
+// Logic unchanged from the legacy writer; only the access mechanism moves to named bindings:
+//   - the reader->writer input DFB id  -> dfb::in0   (consumer endpoint)
+//   - the pad-scratch DFB id           -> dfb::pad   (self-loop: producer + consumer)
+//   - the output tensor address        -> ta::out
+//   - positional runtime args          -> get_arg(args::...)
+// The pad DFB has no FIFO peer (the writer is its only user): the writer reserves one entry of L1
+// scratch in it, fills it with the pad value, and reuses it as the NoC source for every padded
+// tile. It is bound as a self-loop (producer + consumer on this writer) to satisfy the
+// producer/consumer invariant.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_unpadded_W = get_arg_val<uint32_t>(1);
-    const uint32_t num_padded_Wt = get_arg_val<uint32_t>(2);
-    const uint32_t num_unpadded_Z = get_arg_val<uint32_t>(3);
-    const uint32_t num_padded_Zt = get_arg_val<uint32_t>(4);
-    const uint32_t num_unpadded_Yt = get_arg_val<uint32_t>(5);
-    const uint32_t num_padded_Yt = get_arg_val<uint32_t>(6);
-    const uint32_t num_unpadded_Xt = get_arg_val<uint32_t>(7);
-    const uint32_t num_padded_Xt = get_arg_val<uint32_t>(8);
-    const uint32_t pad_value = get_arg_val<uint32_t>(9);
+    const uint32_t num_unpadded_W = get_arg(args::num_unpadded_W);
+    const uint32_t num_padded_Wt = get_arg(args::num_padded_Wt);
+    const uint32_t num_unpadded_Z = get_arg(args::num_unpadded_Z);
+    const uint32_t num_padded_Zt = get_arg(args::num_padded_Zt);
+    const uint32_t num_unpadded_Yt = get_arg(args::num_unpadded_Yt);
+    const uint32_t num_padded_Yt = get_arg(args::num_padded_Yt);
+    const uint32_t num_unpadded_Xt = get_arg(args::num_unpadded_Xt);
+    const uint32_t num_padded_Xt = get_arg(args::num_padded_Xt);
+    const uint32_t pad_value = get_arg(args::pad_value);
 
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out1 = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr uint32_t cb_id_out0 = dfb::in0;
+    constexpr uint32_t cb_id_out1 = dfb::pad;
 
     const uint32_t tile_size = get_tile_size(cb_id_out0);
 
-    const auto s1 = TensorAccessor(dst_args, dst_addr);
+    const auto s1 = TensorAccessor(ta::out);
     Noc noc;
-    CircularBuffer cb_out0(cb_id_out0);
-    CircularBuffer cb_out1(cb_id_out1);
+    DataflowBuffer cb_out0(dfb::in0);
+    DataflowBuffer cb_out1(dfb::pad);
 
     cb_out1.reserve_back(1);  // in this kernel we are not pushing anything into CBs, just using the space
 

@@ -1,28 +1,30 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port. Used only by the TransposeCNProgramFactory, so ported in place.
+// Logic unchanged from the legacy writer; only the access mechanism moves to named
+// bindings: dest address -> ta::output, CB id -> dfb::src0, positional args -> get_arg(args::...).
+
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_pages = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    uint32_t num_pages = get_arg(args::num_pages);
+    uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t write_size = get_compile_time_arg_val(2);
-    constexpr auto dst_args = TensorAccessorArgs<3>();
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t write_size = get_arg(args::write_size);
 
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(ta::output);
 
     Noc noc;
-    CircularBuffer cb(cb_id_out);
+    DataflowBuffer cb(dfb::src0);
 
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
