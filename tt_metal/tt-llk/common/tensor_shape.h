@@ -146,7 +146,7 @@ constexpr TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_di
  *
  * Keep this conservative until larger TensorShape variants have coverage.
  **/
-__attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const TensorShape &tensor_shape)
+__attribute__((noinline)) inline bool validate_tensor_shape_tile_dependent_ops_(const TensorShape &tensor_shape)
 {
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
