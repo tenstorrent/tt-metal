@@ -154,8 +154,9 @@ The core of this example is the custom SFPI function ``my_add_tile``. It's imple
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_add/kernels/compute/tiles_add.cpp
+    // tt_metal/hw/ckernels/{blackhole,wormhole_b0}/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_custom_add.h
     #ifdef TRISC_MATH
+    namespace ckernel::sfpu {
 
     // Low-level function operating on a tile face
     void my_add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
@@ -171,11 +172,13 @@ The core of this example is the custom SFPI function ``my_add_tile``. It's imple
         // Process one face of the tile (8 SIMD operations covering 256 elements).
         // Each iteration processes 32 elements, so 8 iterations = 256 elements = one 16x16 face.
         for (size_t i = 0; i < 8; i++) {
-            vFloat a = dst_reg[in0_base_idx + i];
-            vFloat b = dst_reg[in1_base_idx + i];
-            dst_reg[out_base_idx + i] = a + b;
+            sfpi::vFloat a = sfpi::dst_reg[in0_base_idx + i];
+            sfpi::vFloat b = sfpi::dst_reg[in1_base_idx + i];
+            sfpi::dst_reg[out_base_idx + i] = a + b;
         }
     }
+
+    }  // namespace ckernel::sfpu
     #endif // TRISC_MATH
 
     // High-level API function
@@ -185,7 +188,7 @@ The core of this example is the custom SFPI function ``my_add_tile``. It's imple
     }
 
 
-Here's a breakdown of the layers. The ``my_add_tile_face`` callable lives in an architecture-local ``llk_api/llk_sfpu`` header and is included only for the math thread, since it uses math-thread-specific code that will not compile for other RISC-V cores.
+Here's a breakdown of the layers. The ``my_add_tile_face`` callable lives in an architecture-local ``llk_api/experimental`` header and is included only for the math thread, since it uses math-thread-specific code that will not compile for other RISC-V cores.
 
 1.  **`my_add_tile`**: This is the main function called by the compute kernel. It wraps ``SFPU_BINARY_CALL_NO_TEMPLATE_ARGS`` with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core. The macro sets up the SFPU, iterates over all faces of a tile, calls ``my_add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
 

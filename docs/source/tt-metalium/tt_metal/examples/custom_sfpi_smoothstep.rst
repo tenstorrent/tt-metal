@@ -173,23 +173,26 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp
+    // tt_metal/hw/ckernels/{blackhole,wormhole_b0}/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_smoothstep.h
 
     #ifdef TRISC_MATH
+    namespace ckernel::sfpu {
 
     // Low-level function operating on a tile face
     void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
         constexpr size_t vectors_per_face = 8;
         for (size_t i = 0; i < vectors_per_face; i++) {
-            vFloat x = dst_reg[i];
-            vFloat t = (x - edge0) * inv_delta;
+            sfpi::vFloat x = sfpi::dst_reg[i];
+            sfpi::vFloat t = (x - edge0) * inv_delta;
             v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
             v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
             v_endif;
-            vFloat result = t * t * (3.0f - 2.0f * t);
-            dst_reg[i] = result;
+            sfpi::vFloat result = t * t * (3.0f - 2.0f * t);
+            sfpi::dst_reg[i] = result;
         }
     }
+
+    }  // namespace ckernel::sfpu
     #endif // TRISC_MATH
 
     // High-level API function

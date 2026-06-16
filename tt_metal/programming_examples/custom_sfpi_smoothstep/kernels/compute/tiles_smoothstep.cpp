@@ -10,7 +10,7 @@
 #include "api/compute/compute_kernel_api.h"
 
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_smoothstep.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_smoothstep.h"
 #endif
 
 /**
