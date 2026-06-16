@@ -241,6 +241,15 @@ def main() -> int:
     wr_spread = completion_spread_us(barriers["brisc_done"], freq, args.min_prog_id)
     o2o_med = float(dg["dg_median_ns"].median()) / 1000.0 if not dg.empty else float("nan")
     o2o_last = float(dg["dg_last_ns"].median()) / 1000.0 if not dg.empty else float("nan")
+    # Per-core op duration (reader start NCRISC_GO -> writer done BRISC_DONE) to normalize
+    # the spread: absolute spread (us) scales with per-core work, so report it as a % of
+    # the typical core's op time for comparability across work sizes / NOP counts.
+    op_durs = per_core_diff_us(barriers["brisc_done"], barriers["ncrisc_go"], freq, args.min_prog_id)
+    op_dur_med = median(op_durs)
+    wr_spread_med = median(wr_spread)
+    wr_spread_pct = (
+        (wr_spread_med / op_dur_med * 100.0) if (op_dur_med == op_dur_med and op_dur_med > 0) else float("nan")
+    )
 
     row = {
         "agg_total_gbps": round(agg_total, 3),
@@ -261,6 +270,10 @@ def main() -> int:
         # op execution skew (NoC starvation), distinct from inter-op latency above:
         "reader_done_spread_us": round(median(rd_spread), 4),
         "writer_done_spread_us": round(median(wr_spread), 4),
+        "op_duration_us": round(op_dur_med, 3),
+        # normalized spread: writer done-spread as a % of the per-core op duration (work-size
+        # independent, so comparable across core counts and NOP counts).
+        "writer_spread_pct": round(wr_spread_pct, 2),
     }
 
     label = {}
