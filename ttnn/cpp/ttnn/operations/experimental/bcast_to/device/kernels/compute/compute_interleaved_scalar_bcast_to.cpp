@@ -30,18 +30,27 @@ void kernel_main() {
     // each call (the boot unary_bcast_init's MOP was redundant with it).
     compute_kernel_hw_startup(cb_id_src, cb_id_dst);
 
+    // Hoist the chain init out of the per-(n,c) loop: build the chain object once, emit its init
+    // once via chain.hoist_init(), then call chain.body(1) per (n,c) instead of the
+    // self-initializing unary_bcast(1). Same loop; the UnaryBcast MOP + reconfig is no longer
+    // re-emitted every iteration. (compute_kernel_hw_startup is the BIG hw init, kept separate.)
+    auto chain = compute_kernel_lib::make_chain(
+        compute_kernel_lib::UnaryBcast<
+            compute_kernel_lib::BroadcastDim::Scalar,
+            cb_id_src,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::UnaryBcastReconfig::Input>{},
+        compute_kernel_lib::PackTile<
+            cb_id_dst,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>{});
+    chain.hoist_init();
+
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
-            compute_kernel_lib::unary_bcast<
-                compute_kernel_lib::BroadcastDim::Scalar,
-                cb_id_src,
-                cb_id_dst,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::UnaryBcastReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(1u);
+            chain.body(1u);
             num_tiles_read += HtWt - start_t;
         }
     }
