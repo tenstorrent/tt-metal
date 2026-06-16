@@ -125,7 +125,7 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
     TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
 }
 
-template <MathFidelity math_fidelity, std::uint32_t clear_mode, std::uint32_t dst_base = 0>
+template <MathFidelity math_fidelity, std::uint32_t dst_base = 0>
 inline void reduce_row_sum_mvmul_face()
 {
     if constexpr (math_fidelity == MathFidelity::HiFi4)
@@ -147,20 +147,20 @@ inline void reduce_row_sum_mvmul_face()
 
     if constexpr (math_fidelity == MathFidelity::HiFi4)
     {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
     }
     else if constexpr (math_fidelity == MathFidelity::HiFi3)
     {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
     }
     else if constexpr (math_fidelity == MathFidelity::HiFi2)
     {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
     }
-    TTI_MVMUL(clear_mode, 0, ADDR_MOD_0, dst_base + 8);
+    TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_5, dst_base);
 }
 
 template <
@@ -197,42 +197,36 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
                 reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
                 reduce_row_perform_transpose<is_int_fpu_en>();
             }
+            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
         else
         {
-            for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
+            if (tensor_shape.num_faces_c_dim > 1)
             {
-                reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB, 0>();
-                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+                reduce_row_sum_mvmul_face<math_fidelity, 0>();
             }
-            reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE, 0>();
+            reduce_row_sum_mvmul_face<math_fidelity, 0>();
 
             if (tensor_shape.num_faces_r_dim > 1)
             {
-                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B);
-
                 if (is_narrow_tile)
                 {
-                    for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
+                    if (tensor_shape.num_faces_c_dim > 1)
                     {
-                        reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB, 16>();
-                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+                        reduce_row_sum_mvmul_face<math_fidelity, 16>();
                     }
-                    reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE, 16>();
+                    reduce_row_sum_mvmul_face<math_fidelity, 16>();
                 }
                 else
                 {
-                    for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
+                    if (tensor_shape.num_faces_c_dim > 1)
                     {
-                        reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB, 32>();
-                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+                        reduce_row_sum_mvmul_face<math_fidelity, 32>();
                     }
-                    reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE, 32>();
+                    reduce_row_sum_mvmul_face<math_fidelity, 32>();
                 }
             }
         }
-
-        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
@@ -341,12 +335,18 @@ inline void reduce_configure_addrmod()
     if constexpr (type != PoolType::MAX)
     {
         addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 8},
-            .dest = {.incr = 0},
-            .fidelity = {.incr = 0, .clr = 1},
+            .srcb     = {.incr = 8},
+            .dest     = {.incr = 8},
+            .fidelity = {.clr = 1},
         }
             .set(ADDR_MOD_4);
+
+        addr_mod_t {
+            .srcb     = {.cr = 1},
+            .dest     = {.incr = 0x3FF & -8},
+            .fidelity = {.clr = 1},
+        }
+            .set(ADDR_MOD_5);
     }
 }
 
