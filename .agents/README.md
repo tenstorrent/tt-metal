@@ -8,7 +8,7 @@ It has three parts:
 
 ```text
 .agents/
-  prompts/model_bringup_multigoal/   # the nine stage goals, one prompt file each
+  prompts/model_bringup_multigoal/   # the ten stage goals, one prompt file each
   skills/                            # the knowledge the agent works from
   scripts/multigoal                  # the runner that chains the stages together
 ```
@@ -23,10 +23,10 @@ and authenticated, and the agent dependencies installed
 python .agents/scripts/multigoal \
   --replace HF_MODEL=org/Your-Model-Here \
   --replace MODEL_DIR=models/autoports/org_your_model_here \
-  .agents/prompts/model_bringup_multigoal/0*.txt
+  .agents/prompts/model_bringup_multigoal/*.txt
 ```
 
-That runs all nine stages back to back. Expect a full bringup to take several
+That runs all ten stages back to back. Expect a full bringup to take several
 hours of unattended work. Results land in `models/autoports/<model>/`, where
 `<model>` is the HF model id lowercased with non-alphanumerics replaced by
 underscores.
@@ -49,6 +49,7 @@ stages build on each other:
 | 07 datatype-sweep | The fastest weight/activation/KV datatype config that still meets accuracy |
 | 08 vllm | The model serving real requests through the Tenstorrent vLLM plugin |
 | 09 optimized-vllm | The serving path optimized: async decode, trace reuse, on-device sampling |
+| 10 tti-release | The tt-inference-server release workflow run and customer-facing readiness report |
 
 The `$skill` references inside each prompt attach the matching skill from
 `.agents/skills/` — that is where the engineering knowledge lives (how to
