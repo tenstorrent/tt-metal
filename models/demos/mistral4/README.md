@@ -52,26 +52,35 @@ Full-depth 0.9816 reflects bf16 + bfp8-expert + bf16-routing error accumulating 
 (`ttnn.topk` is bf16/bfp8-only, so a borderline expert can flip vs the fp32 reference); all per-block
 PCCs are ~0.999. Passes the >0.98 full-depth gate.
 
-## Performance (measured, P150x8, full 36 layers, sharded bfp8, steady-state)
-| Metric | Value |
-|---|---|
-| Decode tok/s/user (device) | **9.0** (110.5 ms/tok) |
-| Decode tok/s/user (E2E, incl. host argmax read-back) | 8.6 |
-| Prefill TTFT @ ISL 128 / 1024 / 4096 | 226 ms / 655 ms / 2657 ms |
-| Prefill throughput @ ISL 1024 / 4096 | 1564 / 1541 tok/s |
-| Largest ISL — single-shot prefill | 4096 (no L1 clash) |
-| Largest ISL — **chunked prefill, full-depth 36L** | **8192** (TTFT 7.8 s, 217 ms/layer); 16384 OOMs at 36L (paged KV + 119B weights), runs at ≤2 layers |
-| Decode MoE **sparse** vs dense — **full-depth 36L, B=32** (traced) | sparse **60** vs dense **43** tok/s agg → **+39.2%** |
-| Decode MoE sparse vs dense — 2-layer (traced) | +13.9% @B=8 (404 vs 355), +16.9% @B=32 (541 vs 462 tok/s agg) |
+## Performance (measured, P150x8, full 36 layers, sharded bfp8, steady-state, traced)
 
-Decode cost is **flat across ISL** (the decode step is a captured trace independent of context).
+**Prefill** (batch-1; single-shot ≤4K, chunked beyond):
 
-**MoE sparse dispatch** (`forward_decode(use_sparse=True)`): routes each token to only its top-4 experts
-(`mesh_partition` → all-to-all dispatch → local experts → combine → `all_gather`) vs computing all 16
-local experts dense. Matches dense logits (PCC 0.9958) and is **trace-compatible** (capture/replay PCC
-1.0). Traced, it is faster than dense at every batch tested, and the win **grows with depth** as the
-per-layer MoE compute dominates: **+16.9% at 2 layers → +39.2% at the full 36 layers (B=32)**. Dense
-remains the default; sparse is opt-in for batched serving.
+| ISL | 128 | 1024 | 4096 | 8192 (chunked) |
+|---|---|---|---|---|
+| TTFT | 226 ms | 655 ms | 2657 ms | 7.8 s |
+| prefill tok/s | 566 | 1564 | 1541 | ~1050 (217 ms/layer) |
+
+Largest full-depth ISL = **8192** (chunked prefill). 16384 runs at reduced layer counts but **OOMs at 36L**
+(the per-layer paged KV caches + 119B weights exceed DRAM) — a paged-cache memory-management follow-up.
+
+**Decode** (captured trace; tok/s/user ~flat across context since the step reads the cache at `cur_pos`):
+
+| batch | tok/s/user | tok/s aggregate | ms/step |
+|---|---|---|---|
+| 1 | **9.3** (device; 8.6 E2E) | 9 | 108 |
+| 32 — dense MoE | 1.34 | 43 | 741 |
+| 32 — **sparse MoE** | 1.88 | **60** (**+39.2%** vs dense) | 532 |
+
+At high batch the dense MoE is compute-bound (all 16 local experts × B tokens), so per-user throughput
+drops while aggregate rises; **sparse dispatch** (top-4 routed experts) recovers it (+39.2% @B=32). The
+sparse win grows with depth (2-layer traced: +13.9% @B=8, +16.9% @B=32 → +39.2% at 36L). Sparse
+matches dense logits (PCC 0.9958) and is trace-compatible (capture/replay PCC 1.0); dense is the default,
+sparse is opt-in for batched serving.
+
+**MoE sparse dispatch** mechanism (`forward_decode(use_sparse=True)`): `mesh_partition` shards the batch
+1/device → `all_to_all_dispatch` routes each token to its top-4 experts' devices → local experts →
+`all_to_all_combine` → `all_gather` back. (Perf + PCC in the decode table above.)
 
 **Chunked prefill** (`forward_prefill_chunked`, paged k/v + `chunked_scaled_dot_product_attention`)
 processes the prompt in chunk-token windows so L1 holds only one chunk's attention — lifting the
