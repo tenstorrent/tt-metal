@@ -179,11 +179,9 @@ debug:
 
 llk:
   unit:
-    wh_n150_civ2: 180
+    wh_n150_civ2: 40
     wh_n300_civ2: 40
     bh_p150: 40
-    bh_p150b_civ2_viommu: 70
-    bh_p150b_civ2_viommu_prio: 70
     bh_p100a_civ2_viommu: 40
   e2e:
     wh_n150_civ2: 1800
@@ -192,8 +190,10 @@ llk:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
   smoke:
-    wh_n150_civ2: 160
+    wh_n150_civ2: 300
     bh_p150b_civ2: 160
+    bh_p150b_civ2_viommu: 70
+    bh_p150b_civ2_viommu_prio: 70
 
 models:
   sanity:

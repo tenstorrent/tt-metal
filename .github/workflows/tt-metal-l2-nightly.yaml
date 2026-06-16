@@ -340,9 +340,9 @@ jobs:
       nightly-run: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # LLK SD Unit Tests — runs the full LLK gtest binary in slow dispatch as a
-  # comprehensive nightly regression on every supported SKU. SKU set and per-
-  # entry filters live in tests/pipeline_reorg/llk_unit_tests.yaml (entries
-  # tagged l2_only: true). Merge-gate covers the FD path separately.
+  # comprehensive nightly regression on every supported SKU. Matrix lives in
+  # tests/pipeline_reorg/llk_unit_tests.yaml. Merge-gate uses
+  # llk_smoke_merge_gate_tests.yaml.
   llk-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -354,7 +354,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      l2-only: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TTNN Tutorials
   test-ttnn-tutorials:
