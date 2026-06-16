@@ -66,11 +66,11 @@ static inline void unpack_operand_configure(
 {
     if constexpr (!reconfig)
     {
-        fsm_advance_impl<FsmState::CONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::Configured>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
     else
     {
-        fsm_advance_impl<FsmState::RECONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::Reconfigured>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
 
     unpack_operand_configure_impl<reconfig>(
@@ -93,11 +93,11 @@ static inline void math_operand_configure(State<std::uint32_t> math_fmt_A, State
 {
     if constexpr (!reconfig)
     {
-        fsm_advance_impl<FsmState::CONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::Configured>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
     else
     {
-        fsm_advance_impl<FsmState::RECONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::Reconfigured>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
 
     math_operand_configure_impl<reconfig>(sanitizer->context.math, sanitizer->operand.math, math_fmt_A, math_fmt_B);
@@ -117,11 +117,11 @@ static inline void pack_operand_configure(
 {
     if constexpr (!reconfig)
     {
-        fsm_advance_impl<FsmState::CONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::Configured>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
     else
     {
-        fsm_advance_impl<FsmState::RECONFIGURED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+        fsm_advance_impl<FsmState::Reconfigured>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     }
 
     pack_operand_configure_impl<reconfig>(
@@ -181,7 +181,7 @@ static inline void pack_operand_check(
 template <Operation op, typename... Ts>
 static inline void operation_init(Ts... args)
 {
-    fsm_advance_impl<FsmState::INITIALIZED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+    fsm_advance_impl<FsmState::Initialized>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
 
     operation_init_impl<op, Ts...>(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC], args...);
 }
@@ -191,7 +191,7 @@ static inline void operation_init(Ts... args)
 template <Operation op, typename... Ts>
 static inline void operation_check(Ts... args)
 {
-    fsm_advance_impl<FsmState::EXECUTED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+    fsm_advance_impl<FsmState::Executed>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     operation_check_impl<op, Ts...>(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC], args...);
 }
 
@@ -200,7 +200,7 @@ static inline void operation_check(Ts... args)
 template <Operation op>
 void operation_uninit()
 {
-    fsm_advance_impl<FsmState::UNINITIALIZED>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
+    fsm_advance_impl<FsmState::Uninitialized>(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], sanitizer->operation[COMPILE_FOR_TRISC]);
     operation_uninit_impl<op>(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC]);
 }
 
