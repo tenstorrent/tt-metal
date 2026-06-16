@@ -21,7 +21,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_sdpa_fw.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
 #endif
 
 constexpr uint32_t onetile = 1U;

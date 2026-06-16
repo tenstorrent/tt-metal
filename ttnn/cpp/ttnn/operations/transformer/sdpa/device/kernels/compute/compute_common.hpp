@@ -27,7 +27,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#include "ckernel_sfpu_sdpa.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
