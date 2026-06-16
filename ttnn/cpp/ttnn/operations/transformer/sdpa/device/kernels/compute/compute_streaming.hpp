@@ -41,6 +41,29 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
+// --- Outlined out-of-order pack (code-size) ---
+// pack_tile<true>() (absolute-address pack) inlines the full
+// llk_pack -> program_packer_destination GPR->FLOP address-programming sequence at every
+// call site. That inlined sequence is the single largest contributor to the PACK-thread
+// (TRISC2) text and overflows the TENSIX kernel-config buffer under watcher on Wormhole.
+// Outlining to one noinline copy trades a jal/ret per pack for a large code-size reduction.
+//
+// The jal/ret is NOT free on the hot inner loop. Empirically (wan2_2 BH perf check), the
+// softmax-exp pack in sub_exp_block_bcast_cols is the only perf-critical site: outlining it
+// alone caused the full regression (~70% -> ~66% math util), and re-inlining only it fully
+// recovers perf. So we keep that one site inlined via pack_tile<true>() directly and outline
+// everything else (output/SV drain, salad correction/sum, mask L1-accumulate) through this
+// wrapper. That keeps almost all of the Wormhole code-size win (only the exp pack's ~few
+// static copies return) with no measurable BH perf cost. On MATH/UNPACK threads pack_tile is
+// a no-op, so the outlined wrapper collapses to an empty inline function (zero overhead).
+#ifdef TRISC_PACK
+__attribute__((noinline, noclone)) static void sdpa_pack_tile_ooo(uint32_t dst, uint32_t cb, uint32_t idx) {
+    llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(dst, cb, idx);
+}
+#else
+ALWI void sdpa_pack_tile_ooo(uint32_t, uint32_t, uint32_t) {}
+#endif
+
 static __attribute__((noinline, noclone)) void sdpa_cb_push_back_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
     cb_push_back(cb_id, num_tiles);
 }
@@ -254,11 +277,11 @@ ALWI void pack_contiguous_rows_nocfg(
     for (uint32_t row = 0; row < row_count; ++row) {
         uint32_t out_tile_index = (row_base + row) * row_stride + col_base;
         if (use_blocked_pack_width) {
-            pack_tile<true>(dst_index, out_cb, out_tile_index);
+            sdpa_pack_tile_ooo(dst_index, out_cb, out_tile_index);
             dst_index += pack_width;
         } else {
             for (uint32_t col = 0; col < pack_width; ++col) {
-                pack_tile<true>(dst_index++, out_cb, out_tile_index + col);
+                sdpa_pack_tile_ooo(dst_index++, out_cb, out_tile_index + col);
             }
         }
     }
@@ -519,7 +542,7 @@ void sub_exp_block_bcast_cols(
                 }
 #pragma GCC unroll 1
                 for (uint32_t j = 0; j < tiles_per_column; ++j) {
-                    pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);
+                    pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);  // HOT: softmax exp, keep inline
                     if (global_col_base == 0 && j == 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
@@ -639,7 +662,7 @@ void salad_correct_fused(
         if (fuse_sum_here) {
             configure_single_tile_pack(sum_out_cb);
             for (uint32_t i = 0; i < tiles_per_row; i++) {
-                pack_tile<true>(dst_index++, sum_out_cb, write_row_base + i);
+                sdpa_pack_tile_ooo(dst_index++, sum_out_cb, write_row_base + i);
             }
         }
         tile_regs_release();
@@ -654,7 +677,7 @@ void salad_correct_fused(
         tile_regs_wait();
         configure_single_tile_pack(sum_out_cb);
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-            pack_tile<true>(i, sum_out_cb, write_row_base + i);
+            sdpa_pack_tile_ooo(i, sum_out_cb, write_row_base + i);
         }
         tile_regs_release();
     }
@@ -790,7 +813,7 @@ static inline void l1_acc_single_tile(uint32_t mask_cb, uint32_t tile_idx, uint3
     copy_tile(mask_cb, tile_idx, 0);
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile<true>(0, out_cb, out_pos);
+    sdpa_pack_tile_ooo(0, out_cb, out_pos);
     tile_regs_release();
 }
 
