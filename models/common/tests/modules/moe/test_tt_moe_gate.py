@@ -29,7 +29,6 @@ from loguru import logger
 import ttnn
 from models.common.modules.moe.tt_moe_gate import TTMoEGate
 from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
-from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules/moe/configs"
@@ -41,14 +40,13 @@ def _config_id(path: Path) -> str:
     return path.stem
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize(
     # 4×8 = 32-chip mesh (TG/Galaxy). TTMoEGate is a PER-DEVICE gate (no cross-chip comms): its weight +
     # op buffers replicate to every chip, so each chip runs the same one-token-per-core routing independently.
     # The mesh_device fixture auto-skips when fewer chips are available. (More shapes can be added here in the
     # pytest.param form used by test_tt_moe_decode.py.)
     "mesh_device",
-    [pytest.param((4, 8), id="4x8")],
+    [pytest.param((1, 4), id="1x4")],
     indirect=True,
 )
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)

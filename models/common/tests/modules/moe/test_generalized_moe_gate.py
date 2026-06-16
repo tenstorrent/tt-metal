@@ -14,7 +14,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 
 
 def _generalized_golden(
@@ -39,7 +38,6 @@ def _generalized_golden(
     return weights / (torch.sum(weights, dim=-1, keepdim=True) + eps) * scaling_factor, topk_indices
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
@@ -227,7 +225,6 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     ), "Normalized scores are not consistent with the device's own top-8 selection"
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
