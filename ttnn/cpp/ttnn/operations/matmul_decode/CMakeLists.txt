@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_matmul_decode ${LIB_TYPE})
 add_library(TTNN::Ops::MatmulDecode ALIAS ttnn_op_matmul_decode)
 
-tt_reuse_precompile_headers(ttnn_op_matmul_decode TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_matmul_decode TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul_decode)
 
 set_target_properties(

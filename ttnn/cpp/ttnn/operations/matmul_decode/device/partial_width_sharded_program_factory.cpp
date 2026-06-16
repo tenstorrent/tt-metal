@@ -57,6 +57,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     // ---- Recover the 2D (K x N) block-sharding geometry ----
     // Operation attributes M,N,K are the real matmul dimensions. Weights tensor has been reshaped, so its logical shape
     // is no longer [K, N].
+    // The compute kernel processes the entire M dimension in a single DST block
+    // (out_block_h = M_tiles), so M_tiles must fit in DST (<= 8 tiles in half-sync
+    // mode). Enforce M < 256 (=> M_tiles <= 8).
+    TT_FATAL(
+        operation_attributes.M < 256,
+        "partial_width_sharded matmul_decode requires M < 256 so that out_block_h (= M_tiles) stays < 8 and fits in "
+        "DST, but got M={}",
+        operation_attributes.M);
+
     const uint32_t M_tiles = div_up(operation_attributes.M, tt::constants::TILE_HEIGHT);
     const uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
     const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
