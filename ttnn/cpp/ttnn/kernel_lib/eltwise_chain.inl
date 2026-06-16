@@ -1710,10 +1710,13 @@ ALWI void elem_push_per_block(const E& e, uint32_t inner_count) {
     else (void)e, (void)inner_count;
 }
 
-// init() dispatch — CRTP bases (DestOnly) have static init()s that take no args.
-// CB-bound elements have static init() that may emit reconfig. Both are static.
-template <class E>
-ALWI void elem_init() { E::init(); }
+// init() dispatch convention — the compute-cohort init is emitted on the element
+// *instance* (`elem.init()`), exactly like `exec`, so an init can read the struct's
+// runtime members when it needs to (e.g. Dropout seeding the SFPU with its runtime
+// `seed`). Most inits don't and are declared `static`; a static member is callable
+// through an instance, so the call site is uniform either way. PackTile is the one
+// exception — its init is dispatched by type in `pack_init_for_each` (no instance in
+// scope there), which is fine because pack init never needs runtime state.
 
 // =============================================================================
 // emit_pre_element_transitions<E, I, Es...>()
@@ -1887,7 +1890,7 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
             (is_dest_only_op_v<ElemT> && HoistSfpu);
         if constexpr (emit) {
             emit_pre_element_transitions<ElemT, II, Es...>();
-            ElemT::init();
+            elem.init();  // instance dispatch (see convention note above): a runtime-stateful init reads its members here
         }
         (void)elem;
     };
@@ -1946,7 +1949,7 @@ ALWI void elem_apply_compute(
         elem.wait_upfront(Ht, Wt);
         if constexpr (EmitMathInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
-            ElemT::init();
+            elem.init();  // instance dispatch (see convention note above)
         }
         constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
         for (uint32_t j = 0; j < inner_count; ++j) {
@@ -1968,7 +1971,7 @@ ALWI void elem_apply_compute(
     } else if constexpr (is_dest_only_op_v<ElemT>) {
         if constexpr (EmitSfpuInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
-            ElemT::init();
+            elem.init();  // instance dispatch (see convention note above)
         }
         for (uint32_t j = 0; j < inner_count; ++j) {
             elem.exec(i_flat + j, j * chain_lane_width);

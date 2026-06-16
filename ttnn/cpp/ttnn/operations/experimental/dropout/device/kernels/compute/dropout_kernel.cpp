@@ -5,8 +5,7 @@
 #include <cstdint>
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"  // Dropout
-#include "api/compute/eltwise_unary/dropout.h"          // dropout_kernel_init
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"  // Dropout (owns dropout_kernel_init via init_runtime)
 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
@@ -20,11 +19,12 @@ void kernel_main() {
     constexpr auto cb_output = tt::CBIndex::c_2;
 
     init_sfpu(cb_input, cb_output);
-    dropout_kernel_init(seed);
 
     // Original: per-tile copy_tile + dropout_tile + pack_tile. Chain compresses
     // the two nested loops into a single n=block_cnt*block_dim sweep, since
-    // there's no inter-block state.
+    // there's no inter-block state. The chain owns dropout_kernel_init(seed) now:
+    // the Dropout element carries the runtime seed and the chain fires its
+    // init_runtime() once at boot (see Dropout in eltwise_scalar.inl).
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     compute_kernel_lib::eltwise_chain(
         total_tiles,
@@ -33,7 +33,7 @@ void kernel_main() {
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::Dropout<compute_kernel_lib::Dst::D0>{int_probability, int_scale_factor},
+        compute_kernel_lib::Dropout<compute_kernel_lib::Dst::D0>{int_probability, int_scale_factor, seed},
         compute_kernel_lib::PackTile<
             cb_output,
             compute_kernel_lib::OutputLifecycle::Streaming,
