@@ -194,7 +194,7 @@ def test_prefill_tp4_pcc():
         with torch.no_grad():
             ref_out, _ = ref.forward_vlm(prefix_embs, attention_mask=None, position_ids=None, use_cache=False)
 
-    with open_prefill_tp4_mesh(l1_small_size=24576) as mesh:
+    with open_prefill_tp4_mesh(tp=int(os.environ.get("PI0_TP", "4")), l1_small_size=24576) as mesh:
         stage = StagePrefillTP4(cfg, weights, mesh)
         prefix_ttnn = ttnn.from_torch(
             prefix_embs,

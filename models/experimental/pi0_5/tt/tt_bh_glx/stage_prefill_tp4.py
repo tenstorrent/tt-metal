@@ -150,6 +150,8 @@ class GemmaMLPTP4:
         self.mesh_device = mesh_device
         self.hidden_size = config.width
         self.intermediate_size = config.mlp_dim
+        # Tensor-parallel degree = mesh device count (4 for 1x4, 8 for 1x8, ...).
+        self.tp = mesh_device.get_num_devices()
 
         # Weights already sharded/replicated during _load_block_weights_tp4
         self.gate_proj = weights["mlp.gate_proj.weight"]  # [hidden, mlp_dim/_TP] per chip
@@ -190,7 +192,7 @@ class GemmaMLPTP4:
 
         seq = x.shape[2]
         hid = x.shape[3]
-        local_mlp = self.intermediate_size // _TP  # mlp_dim per chip (4096 for Gemma-2B/TP=4)
+        local_mlp = self.intermediate_size // self.tp  # mlp_dim per chip (4096 @TP=4, 2048 @TP=8)
 
         num_chunks = (seq + self.chunk_size - 1) // self.chunk_size
         out_chunks: List[ttnn.Tensor] = []
