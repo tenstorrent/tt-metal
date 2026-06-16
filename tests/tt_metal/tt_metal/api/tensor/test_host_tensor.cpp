@@ -9,6 +9,7 @@
 // - Construction with DistributedHostBuffer, TensorSpec, and TensorTopology
 // - Copy and move semantics
 // - Getter methods for tensor properties
+// - pad() and pad_to_tile() with typed pad_value
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -16,6 +17,7 @@
 #include <type_traits>
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
@@ -292,6 +294,97 @@ TEST(HostTensorTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment) {
 
     EXPECT_TRUE(source.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
     EXPECT_FALSE(target.is_valueless_after_move());
+}
+
+// ==================================================================================
+// pad() and pad_to_tile() — typed pad_value
+// ==================================================================================
+
+// Helper: build a 1-shard HostTensor with actual data from a vector<T>.
+template <typename T>
+HostTensor make_tensor(const std::vector<T>& data, const Shape& shape, DataType dtype) {
+    return HostTensor::from_vector(data, create_simple_spec(shape, dtype));
+}
+
+TEST(HostTensorPadTest, PadFloat32FillsCorrectValue) {
+    // 1×2 tensor padded to 1×4 with pad_value = 9.0f
+    auto t = make_tensor<float>({1.0f, 2.0f}, Shape{1, 2}, DataType::FLOAT32);
+    auto padded = pad<float>(t, Shape{1, 4}, Shape{0, 0}, 9.0f);
+    auto data = padded.to_vector<float>();
+    EXPECT_EQ(data.size(), 4u);
+    EXPECT_FLOAT_EQ(data[0], 1.0f);
+    EXPECT_FLOAT_EQ(data[1], 2.0f);
+    EXPECT_FLOAT_EQ(data[2], 9.0f);
+    EXPECT_FLOAT_EQ(data[3], 9.0f);
+}
+
+TEST(HostTensorPadTest, PadBfloat16FillsCorrectValue) {
+    auto t = make_tensor<bfloat16>({bfloat16(3.0f), bfloat16(4.0f)}, Shape{1, 2}, DataType::BFLOAT16);
+    auto padded = pad<bfloat16>(t, Shape{1, 4}, Shape{0, 0}, bfloat16(0.0f));
+    auto data = padded.to_vector<bfloat16>();
+    ASSERT_EQ(data.size(), 4u);
+    EXPECT_FLOAT_EQ(data[0].to_float(), 3.0f);
+    EXPECT_FLOAT_EQ(data[1].to_float(), 4.0f);
+    EXPECT_FLOAT_EQ(data[2].to_float(), 0.0f);
+    EXPECT_FLOAT_EQ(data[3].to_float(), 0.0f);
+}
+
+TEST(HostTensorPadTest, PadUint32FillsCorrectValue) {
+    auto t = make_tensor<uint32_t>({7u, 8u}, Shape{1, 2}, DataType::UINT32);
+    auto padded = pad<uint32_t>(t, Shape{1, 4}, Shape{0, 0}, 42u);
+    auto data = padded.to_vector<uint32_t>();
+    ASSERT_EQ(data.size(), 4u);
+    EXPECT_EQ(data[2], 42u);
+    EXPECT_EQ(data[3], 42u);
+}
+
+TEST(HostTensorPadTest, PadDefaultValueIsZero) {
+    auto t = make_tensor<float>({5.0f}, Shape{1, 1}, DataType::FLOAT32);
+    auto padded = pad<float>(t, Shape{1, 4}, Shape{0, 0});
+    auto data = padded.to_vector<float>();
+    ASSERT_EQ(data.size(), 4u);
+    EXPECT_FLOAT_EQ(data[1], 0.0f);
+    EXPECT_FLOAT_EQ(data[2], 0.0f);
+    EXPECT_FLOAT_EQ(data[3], 0.0f);
+}
+
+TEST(HostTensorPadTest, PadDtypeMismatchFatals) {
+    // Passing bfloat16 pad_value to a FLOAT32 tensor must fatal.
+    auto t = make_tensor<float>({1.0f, 2.0f}, Shape{1, 2}, DataType::FLOAT32);
+    EXPECT_ANY_THROW((pad<bfloat16>(t, Shape{1, 4}, Shape{0, 0}, bfloat16(0.0f))));
+}
+
+TEST(HostTensorPadToTileTest, PadToTileFloat32ShapeAndFill) {
+    // 1×20 tensor → should pad to 1×32 (next multiple of TILE_WIDTH)
+    std::vector<float> data(20, 1.0f);
+    auto t = make_tensor<float>(data, Shape{1, 20}, DataType::FLOAT32);
+    auto padded = pad_to_tile<float>(t, 0.0f);
+    EXPECT_EQ(padded.padded_shape()[-1], 32u);
+    auto out = padded.to_vector<float>();
+    ASSERT_EQ(out.size(), 32u);
+    for (int i = 20; i < 32; ++i) {
+        EXPECT_FLOAT_EQ(out[i], 0.0f);
+    }
+}
+
+TEST(HostTensorPadToTileTest, PadToTileDefaultValueIsZero) {
+    std::vector<float> data(4, 7.0f);
+    auto t = make_tensor<float>(data, Shape{1, 4}, DataType::FLOAT32);
+    auto padded = pad_to_tile<float>(t);
+    auto out = padded.to_vector<float>();
+    ASSERT_EQ(out.size(), 32u);
+    EXPECT_FLOAT_EQ(out[4], 0.0f);
+}
+
+TEST(HostTensorPadToTileTest, PadToTileAlreadyAlignedIsNoop) {
+    std::vector<float> data(32, 5.0f);
+    auto t = make_tensor<float>(data, Shape{1, 32}, DataType::FLOAT32);
+    auto padded = pad_to_tile<float>(t, -1.0f);
+    auto out = padded.to_vector<float>();
+    ASSERT_EQ(out.size(), 32u);
+    for (auto v : out) {
+        EXPECT_FLOAT_EQ(v, 5.0f);
+    }
 }
 
 }  // namespace

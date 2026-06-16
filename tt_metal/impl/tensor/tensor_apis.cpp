@@ -985,6 +985,14 @@ HostTensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     PadT pad_value) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
+    // Block-float dtypes (BFLOAT8_B, BFLOAT4_B) require a float pad_value; all other dtypes
+    // must use the matching C++ type to avoid silent precision loss.
+    TT_FATAL(
+        convert_to_data_type<PadT>() == tensor.dtype() ||
+            (is_block_float(tensor.dtype()) && convert_to_data_type<PadT>() == DataType::FLOAT32),
+        "pad_value type {} does not match tensor dtype {}; use float for block-float dtypes",
+        convert_to_data_type<PadT>(),
+        tensor.dtype());
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(
             tensor, output_padded_shape, input_tensor_start, static_cast<float>(pad_value));
