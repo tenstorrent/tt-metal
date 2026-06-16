@@ -105,7 +105,6 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @tparam enforce_fp32_accumulation: Configure the ALU for FP32 accumulation (MOVB2D hi16/lo16 path).
  * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
  *
  * @note For SUM/AVG REDUCE_ROW, operands are swapped: scaler→SrcA, data→SrcB (no haloize transpose).
@@ -115,7 +114,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
  * @ref _llk_unpack_AB_reduce_ is the matching execute call.
  * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler-operand unpack pairing).
  */
-template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
+template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape)
 {
     // Validate tensor shape for tile-dependent operations
