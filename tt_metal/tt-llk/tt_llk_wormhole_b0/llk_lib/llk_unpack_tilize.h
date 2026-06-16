@@ -546,11 +546,14 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     // Stalling SETDMAREG done by THCON until UNPACK finishes
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
-    // Restore Z dim to the default operand state set by _llk_unpack_init_:
+    // Restore Z and Y dim to the default operand state set by _llk_unpack_init_:
     // THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1 - word 1 of the same-named register
     // z-dim sits in upper 16 bits and is set to unpA_num_faces by _llk_unpack_init_
-    // (y-dim sits in the lower 16 bits and is left untouched by tilize, so we don't restore it)
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
+    // y-dim sits in the lower 16 bits and must be restored to its default of 1. #45179
+    // dropped this restore (assuming tilize leaves y-dim untouched); that leaves the tile
+    // descriptor corrupted for subsequent unpack ops -> Qwen3-32B Galaxy Top-1 0%. Restore it.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0x0000ffff>(1);
 
     unpack_config_u config   = {0};
     config.f.out_data_format = unpack_dst_format;
