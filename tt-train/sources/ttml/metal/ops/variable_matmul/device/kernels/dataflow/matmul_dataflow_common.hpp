@@ -45,6 +45,7 @@ void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr,
+    uint32_t dst_cb_id,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -56,6 +57,11 @@ void read_in0_block_sync(
     uint32_t parent_K_tiles_stride) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
+
+    // Padded/out-of-range tiles are zero-filled into dst_cb_id; offset within the CB is the
+    // current write pointer minus the CB base (write_ptr at entry).
+    Noc noc;
+    const uint32_t cb_base = write_ptr;
 
     // i sweeps M (matmul-outer), j sweeps K (matmul-inner).
     const uint32_t m_bound = TransposeA ? shape.logical_d1 : shape.logical_d0;
@@ -86,7 +92,7 @@ void read_in0_block_sync(
                 }
                 noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, dst_cb_id, tile_size_bytes, write_ptr - cb_base);
             }
             write_ptr += tile_size_bytes;
         }
@@ -119,6 +125,7 @@ void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr_base,
+    uint32_t dst_cb_id,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -128,6 +135,9 @@ void read_in1_block_sync(
     uint32_t parent_K_tiles_stride) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
+    // Padded/out-of-range tiles are zero-filled into dst_cb_id; offset within the CB is the
+    // target write pointer minus the CB base (write_ptr_base).
+    Noc noc;
     // i sweeps K (matmul-inner), j sweeps N (matmul-outer).
     // shape carries storage-layout sizes: when TransposeB, logical_d0=N, logical_d1=K.
     const uint32_t k_bound = TransposeB ? shape.logical_d1 : shape.logical_d0;
@@ -140,7 +150,7 @@ void read_in1_block_sync(
                 // Out-of-N tiles: zero-fill the whole K-column in this N slot.
                 for (uint32_t i = d0_start; i < d0_end; i++) {
                     uint32_t wp = write_ptr_base + ((i - d0_start) * N_block_tiles + n_col) * tile_size_bytes;
-                    fill_zeros_async(wp, tile_size_bytes);
+                    fill_zeros_async(noc, dst_cb_id, tile_size_bytes, wp - write_ptr_base);
                 }
                 continue;
             }
@@ -155,7 +165,7 @@ void read_in1_block_sync(
                     }
                     noc_async_read_tile(tile_id, tensor_accessor, wp);
                 } else {
-                    fill_zeros_async(wp, tile_size_bytes);
+                    fill_zeros_async(noc, dst_cb_id, tile_size_bytes, wp - write_ptr_base);
                 }
             }
         }
@@ -177,7 +187,7 @@ void read_in1_block_sync(
                     }
                     noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
                 } else {
-                    fill_zeros_async(write_ptr, tile_size_bytes);
+                    fill_zeros_async(noc, dst_cb_id, tile_size_bytes, write_ptr - write_ptr_base);
                 }
                 write_ptr += tile_size_bytes;
             }

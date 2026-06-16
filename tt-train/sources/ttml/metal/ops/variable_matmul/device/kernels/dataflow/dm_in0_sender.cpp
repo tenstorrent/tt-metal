@@ -232,6 +232,7 @@ void kernel_main() {
                         in0_reader,
                         in0_shape,
                         in0_start_address,
+                        cb_id_in0,
                         in0_tile_size,
                         m_tile,
                         m_tile_end,
