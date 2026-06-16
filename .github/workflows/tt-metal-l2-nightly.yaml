@@ -338,7 +338,6 @@ jobs:
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       run-hang-report-test: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  
   # =============================================================================
   # LLK team
   # =============================================================================
