@@ -8,6 +8,7 @@
 #include <tt-metalium/float8.hpp>
 
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
+#include "tensor_impl_private.hpp"
 
 #include <vector>
 

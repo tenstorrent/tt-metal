@@ -32,6 +32,10 @@
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/ttnn_dtype_traits.hpp"
+
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -202,23 +206,30 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 
     const auto& tensor_spec = tt_tensor.tensor_spec();
 
-    // Performs logical data conversion on the concrete data type.
+    // Performs logical data conversion on the concrete data type, routing through the public Runtime
+    // Tensor APIs. The buffer holds elements of type T (block-float inputs are pre-unpacked to float
+    // by the caller), so it is described with a matching-dtype spec.
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
+        const tt::tt_metal::TensorSpec elem_spec(
+            tensor_spec.logical_shape(),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::convert_to_data_type<T>(), tensor_spec.page_config(), tensor_spec.memory_config()));
+
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
-                auto row_major_data = tensor_impl::to_row_major_layout(
-                    tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
-                return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
+                const tt::tt_metal::HostTensor host_tensor(
+                    std::move(host_buffer), elem_spec, tt::tt_metal::TensorTopology{});
+                const tt::tt_metal::HostTensor row_major = tt::tt_metal::to_layout(host_tensor, Layout::ROW_MAJOR);
+                const auto row_major_view = tt::tt_metal::host_buffer::get_as<const T>(row_major);
+                return RowMajorHostBuffer::create_padded(
+                    HostBuffer(std::vector<T>(row_major_view.begin(), row_major_view.end())), tensor_spec);
             }
             return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);
         }
 
-        // Previous impl only copied if data needed transformation. Instead *always* copy
-        // because the HostBuffer will be returned directly to the other python frameworks
-        // wrapped in an ndarray
-
-        auto logical_data = tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
-        return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
+        // Always copy: the HostBuffer is handed directly to other python frameworks wrapped in an ndarray.
+        const tt::tt_metal::HostTensor host_tensor(std::move(host_buffer), elem_spec, tt::tt_metal::TensorTopology{});
+        return RowMajorHostBuffer::create_logical(HostBuffer(host_tensor.to_vector<T>()), tensor_spec);
     };
 
     auto convert_to_logical = [&tensor_spec, &dispatch_to_concrete](const HostBuffer& buffer) {

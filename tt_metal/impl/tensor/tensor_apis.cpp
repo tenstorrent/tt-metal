@@ -12,6 +12,7 @@
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
+#include "tensor_impl_private.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
