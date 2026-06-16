@@ -672,11 +672,36 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
 
     // SOFTMAX OUTPUT (over the selected top-k): exp the sorted scores in place, BEFORE the top-n mask and
-    // the normalize. linear-normalize(exp(s)) = exp(s_i)/Σexp(s) = softmax, so the existing sum+recip+mul
-    // tail then yields softmax(selected) * scale. Must precede the mask so the dropped ranks contribute 0
-    // to Σexp. dst_reg[k] = TTI addr 2k (scores+0 -> dst_reg[0], scores+4 -> dst_reg[2]); reset Dst RWC.
+    // the normalize. linear-normalize(exp(s-M)) = exp(s_i)/Σexp(s) = softmax (the exp(M) factor cancels), so
+    // the existing sum+recip+mul tail then yields softmax(selected) * scale. Must precede the mask so the
+    // dropped ranks (zeroed by the mask afterwards) contribute 0 to Σexp, not exp(0)=1.
+    //
+    // MAX-SUBTRACTION (required, not optional): score_func="softmax" feeds the op RAW router logits
+    // (enable_sigmoid=False, see tt_moe_gate.py), which are unbounded -- NOT in [0,1]. exp() of large logits
+    // would overflow / saturate in bf16 (the sum can hit inf -> recip 0 -> NaN weights). Softmax is
+    // shift-invariant, so subtract the selected max M before exp to pin every input <= 0 -> exp in (0,1] ->
+    // no overflow, and Σexp in [1,k]. The selected max is rank 0: the top-8 are sorted DESCENDING, so the
+    // global max sits at scores+0, SFPU lane 0. Broadcast it across the live ranks' lanes {0,8,16,24} with
+    // the SFPCONFIG->LREG14 "replicate down the column" idiom (LREG14[lane] = LREG0[lane&7], so lane 0's M
+    // lands on every lane with lane&7==0 -- exactly the 4 live ranks per row), then subtract via SFPMAD
+    // (score + (-1)*M; LCONST_neg1 is the SFPU's -1.0 const, same use as ckernel_sfpu_rounding_ops.h). The
+    // non-rank ("column != 0") lanes get junk-M and exp to garbage, but they are never summed (the tail's
+    // reduction reads column 0 only) nor stored, so they are harmless. dst_reg[k] = TTI addr 2k (scores+0 ->
+    // dst_reg[0], scores+4 -> dst_reg[2]); reset Dst RWC so the base lines up with the normalize's TTI loads.
     if constexpr (output_softmax)
     {
+        // ---- subtract the global max (rank 0 @ scores+0 lane 0) from both score rows ----
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, scores_offset + 0);                     // ranks 0-3; lane 0 = max M
+        TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, scores_offset + 4);                     // ranks 4-7
+        TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);                                              // LREG14[lane] = LREG0[lane&7] -> M @ lanes 0/8/16/24
+        TTI_SFPMAD(p_sfpu::LREG14, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG0, 0); // LREG0 = scores - M
+        TTI_SFPMAD(p_sfpu::LREG14, p_sfpu::LCONST_neg1, p_sfpu::LREG1, p_sfpu::LREG1, 0); // LREG1 = scores - M
+        TTI_SFPNOP;
+        TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, scores_offset + 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, scores_offset + 4);
+
+        // ---- exp the max-shifted scores in place (inputs <= 0 -> exp in (0,1], no overflow) ----
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         sfpi::vFloat e0                        = sfpi::dst_reg[(scores_offset + 0) / 2];
         sfpi::dst_reg[(scores_offset + 0) / 2] = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(e0);
