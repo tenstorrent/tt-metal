@@ -554,15 +554,10 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 //      translation through the per-thread __emule_bridge_l1 base pointer.)
 // Reads from `src_path`, writes the patched source to `out_path`, and throws
 // on any I/O failure.
-static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
-    std::ifstream in(src_path);
-    if (!in) {
-        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
-    }
-    std::stringstream ss;
-    ss << in.rdbuf();
-    std::string src = ss.str();
-
+// Apply the x86 portability rewrites to one source string in place. These are
+// the constructs that compile on the RISC-V baremetal target but not on the
+// 64-bit host: RISC-V inline asm and L1-pointer/address reinterpret_casts.
+static void apply_x86_rewrites(std::string& src) {
     static const std::regex mhartid_re(
         R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
     src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
@@ -582,11 +577,78 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
         src, l1_named_arg_ptr_re,
         "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>(get_arg($2))))");
 
+    // reinterpret_cast<uint32_t>(ptr): an L1 pointer collapsed to its 32-bit
+    // device address (no-op on silicon, "cast loses information" on the host).
+    // emule L1 addresses are the low 32 bits of host pointers, so truncate via
+    // uintptr_t. Arg allows one nested-paren level; requiring '>' after uint32_t
+    // skips the pointer-typed reinterpret_cast<T*> forms handled above.
+    static const std::regex ptr_to_l1_addr_re(
+        R"(reinterpret_cast<\s*(?:std::)?uint32_t\s*>\s*\(\s*((?:[^()]|\([^()]*\))*?)\s*\))");
+    src = std::regex_replace(
+        src, ptr_to_l1_addr_re, "static_cast<uint32_t>(reinterpret_cast<uintptr_t>($1))");
+}
+
+// Patch `src_path` into `out_path`, then recurse into the quoted project headers
+// it #includes (a shared `*_common.hpp` can hold the offending casts too). Each
+// patched header is written into `out_dir` under its include name; since the
+// top-level patched_kernel.cpp also lives there, the compiler finds the patched
+// copy before the original on the `-I kernel_dir` path. Includes resolved
+// elsewhere (emule api/, system) or escaping `out_dir` are left alone; `done`
+// guards cycles.
+static void preprocess_tu_recursive(
+    const std::string& src_path,
+    const std::string& out_path,
+    const std::string& out_dir,
+    std::set<std::string>& done) {
+    std::ifstream in(src_path);
+    if (!in) {
+        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string src = ss.str();
+
+    apply_x86_rewrites(src);
+
+    const std::filesystem::path src_dir = std::filesystem::path(src_path).parent_path();
+    const std::filesystem::path out_dir_canon = std::filesystem::weakly_canonical(out_dir);
+
+    static const std::regex include_re(R"RE(#[ \t]*include[ \t]*"([^"]+)")RE");
+    for (std::sregex_iterator it(src.begin(), src.end(), include_re), end; it != end; ++it) {
+        const std::string inc_name = (*it)[1].str();
+        std::error_code ec;
+        const std::filesystem::path candidate = src_dir / inc_name;
+        if (!std::filesystem::exists(candidate, ec)) {
+            // Resolved via a -I path (emule api/, system headers) — not ours to patch.
+            continue;
+        }
+        const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
+        if (canon.empty() || !done.insert(canon).second) {
+            continue;  // cycle / already patched
+        }
+        const std::filesystem::path out_inc = std::filesystem::weakly_canonical(
+            std::filesystem::path(out_dir) / inc_name);
+        // Refuse to write outside the temp dir (e.g. inc_name with leading "..").
+        const std::string out_inc_str = out_inc.string();
+        if (out_inc_str.compare(0, out_dir_canon.string().size(), out_dir_canon.string()) != 0) {
+            done.erase(canon);
+            continue;
+        }
+        std::filesystem::create_directories(out_inc.parent_path(), ec);
+        preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
+    }
+
     std::ofstream out(out_path);
     if (!out) {
         throw std::runtime_error("preprocess_kernel_source_for_x86: cannot write " + out_path);
     }
     out << src;
+}
+
+static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
+    const std::string out_dir = std::filesystem::path(out_path).parent_path().string();
+    std::set<std::string> done;
+    preprocess_tu_recursive(src_path, out_path, out_dir, done);
 }
 
 static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
