@@ -17,6 +17,7 @@ replicated activations).
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -40,10 +41,17 @@ _TP = 4  # tensor-parallel degree
 # ─────────────────────────── Weight loading ───────────────────────────────────
 
 
+def _attn_headpar_enabled() -> bool:
+    """PI0_TP4_ATTN_HEADPAR=1: shard attention Q-heads across chips (K/V replicated,
+    row-parallel o_proj + all_reduce) instead of replicating attention on every chip."""
+    return os.environ.get("PI0_TP4_ATTN_HEADPAR", "").lower() in ("1", "true", "yes", "on")
+
+
 def _load_block_weights_tp4(
     weights: Dict[str, torch.Tensor],
     layer_idx: int,
     mesh_device,
+    config: Optional[GemmaConfig] = None,
 ) -> Dict[str, ttnn.Tensor]:
     """Load one VLM block's weights onto a TP=4 mesh.
 
@@ -61,18 +69,40 @@ def _load_block_weights_tp4(
     k_key = f"{prefix}self_attn.k_proj.weight"
     v_key = f"{prefix}self_attn.v_proj.weight"
     if q_key in weights:
-        # Fuse Q/K/V on the host (torch.cat) and upload once, instead of 3 uploads
-        # + an on-device ttnn.concat. q/k/v output dims (2048/256/256) are all
-        # tile-aligned, so bf8 per-tile quantization is identical pre/post concat.
-        wqkv_torch = torch.cat([weights[q_key].T, weights[k_key].T, weights[v_key].T], dim=-1).contiguous()
-        block_w["self_attn.wqkv"] = ttnn.from_torch(
-            wqkv_torch,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=replicate,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        qT, kT, vT = weights[q_key].T, weights[k_key].T, weights[v_key].T  # each [hidden, *]
+        if _attn_headpar_enabled() and config is not None:
+            # Head-parallel: shard Q-heads across chips, replicate K/V. Per-chip slab =
+            # [this chip's hpc Q-heads | K | V]; concat slabs then ShardTensorToMesh(dim=-1)
+            # so chip i gets its slab. K/V duplicated per slab (tiny). Matches the fused
+            # [Q|K|V] layout nlp_create_qkv_heads expects, with num_q=hpc, num_kv=1.
+            tp = mesh_device.get_num_devices()
+            nq, hd = config.num_heads, config.head_dim
+            assert (
+                tp in (4, 8) and nq % tp == 0
+            ), f"head-parallel attn needs tp in (4,8) & num_q%tp==0 (nq={nq}, tp={tp})"
+            hpc = nq // tp
+            slabs = [torch.cat([qT[:, i * hpc * hd : (i + 1) * hpc * hd], kT, vT], dim=-1) for i in range(tp)]
+            wqkv_torch = torch.cat(slabs, dim=-1).contiguous()
+            block_w["self_attn.wqkv"] = ttnn.from_torch(
+                wqkv_torch,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            # Replicated: fuse Q/K/V on host and upload once. q/k/v dims (2048/256/256)
+            # tile-aligned → bf8 per-tile quantization identical pre/post concat.
+            wqkv_torch = torch.cat([qT, kT, vT], dim=-1).contiguous()
+            block_w["self_attn.wqkv"] = ttnn.from_torch(
+                wqkv_torch,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=replicate,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     for key, val in weights.items():
         if not key.startswith(prefix):
@@ -120,8 +150,19 @@ def _load_block_weights_tp4(
                 mesh_mapper=replicate,
                 memory_config=ln_mc,
             )
+        elif new_key == "self_attn.o_proj.weight" and _attn_headpar_enabled() and config is not None:
+            # Row-parallel: o_proj [hidden, heads*hd] → .T [heads*hd, hidden]; shard the in-dim
+            # (dim=0) by head-group so chip i holds the rows for its hpc Q-heads. Matches the
+            # wqkv Q-head split → matmul(concat_i, o_proj_i) = per-chip partial, summed by all_reduce.
+            block_w[new_key] = ttnn.from_torch(
+                val.T.contiguous(),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            )
         else:
-            # o_proj and any remaining weights — replicated
+            # o_proj (replicated path) and any remaining weights — replicated
             v = val.T.contiguous() if "weight" in new_key else val
             block_w[new_key] = ttnn.from_torch(
                 v,
@@ -219,7 +260,12 @@ class GemmaMLPTP4:
             up_pcfg = build_matmul_pcfg(m, k_in, n_local, *self._pcfg_grid)
             down_pcfg = build_matmul_pcfg(m, k_local, n_out, *self._pcfg_grid)
 
-            common = dict(dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # bf8 gate/up/down matmul outputs (default). Halves the GeGLU intermediate L1
+            # AND the down-proj partial that feeds all_reduce — the bf8 partial moves half
+            # the bytes through the bandwidth-bound CCL (AllGather −600 µs). ~1.2 ms/chip
+            # @TP=4, ~1.0 ms @TP=8, PCC ≥ 0.993. (minimal_matmul regresses the 1/TP-width
+            # gate/up, so it's intentionally not used here.)
+            common = dict(dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             if gate_pcfg is not None:
                 gate = ttnn.linear(xc, self.gate_proj, program_config=gate_pcfg, **common)
@@ -270,11 +316,27 @@ class GemmaMLPTP4:
 # ──────────────────── TP=4 Gemma block ────────────────────────────────────────
 
 
+class _GemmaAttentionTP4(GemmaAttentionTTNN):
+    """Head-parallel attention: each chip owns num_q_heads//tp Q-heads (K/V replicated).
+
+    Thin reuse of GemmaAttentionTTNN: build it with num_heads = num_q_heads//tp so the
+    inherited forward (fused-QKV → create_heads → RoPE → SDPA → concat_heads → o_proj)
+    runs per-chip on this chip's heads. Expects head-sharded wqkv + row-parallel o_proj in
+    `weights`. forward() therefore returns a per-chip PARTIAL [.,seq,hidden]; the caller
+    (_GemmaBlockTP4) all_reduces it. head_dim/scale are unchanged (per-head).
+    """
+
+    def __init__(self, config, weights, layer_idx, mesh_device, cos_meta=None, sin_meta=None):
+        tp = mesh_device.get_num_devices()
+        hpc = config.num_heads // tp
+        super().__init__(replace(config, num_heads=hpc), weights, layer_idx, mesh_device, cos_meta, sin_meta)
+
+
 class _GemmaBlockTP4:
     """Gemma-2B transformer block with TP=4 MLP on a 4-chip mesh.
 
-    Attention and norms: identical to TP=1 (replicated on all chips).
     MLP: GemmaMLPTP4 (column/row parallel + AllReduce).
+    Attention: replicated by default; head-parallel + AllReduce when PI0_TP4_ATTN_HEADPAR=1.
     """
 
     def __init__(
@@ -293,7 +355,9 @@ class _GemmaBlockTP4:
         self.input_layernorm_weight = weights["input_layernorm.weight"]
         self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
 
-        self.attention = GemmaAttentionTTNN(config, weights, layer_idx, mesh_device, cos_meta, sin_meta)
+        self._attn_headpar = _attn_headpar_enabled()
+        attn_cls = _GemmaAttentionTP4 if self._attn_headpar else GemmaAttentionTTNN
+        self.attention = attn_cls(config, weights, layer_idx, mesh_device, cos_meta, sin_meta)
         self.mlp = GemmaMLPTP4(config, weights, mesh_device)
 
         self._rms_norm_sharded_pcfg = None
@@ -337,6 +401,10 @@ class _GemmaBlockTP4:
             normed, cos_override, sin_override, attention_mask, position_ids, None, use_cache=True
         )
         ttnn.deallocate(normed)
+        if self._attn_headpar:
+            # Head-parallel: attn_out is a per-chip partial (this chip's Q-heads' contribution
+            # to o_proj). Sum across chips → replicated, same as the MLP all_reduce.
+            attn_out = ttnn.all_reduce(attn_out, num_links=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
@@ -394,7 +462,7 @@ class StagePrefillTP4:
 
         self.blocks: List[_GemmaBlockTP4] = []
         for i in range(stages.VLM_TOTAL_LAYERS):
-            bw = _load_block_weights_tp4(vw, i, mesh_device)
+            bw = _load_block_weights_tp4(vw, i, mesh_device, config.vlm_config)
             self.blocks.append(_GemmaBlockTP4(config.vlm_config, bw, i, mesh_device, cos_meta, sin_meta))
 
         # Final VLM RMS norm — replicated
