@@ -578,6 +578,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(fabric_trimming_profile_path);
     RT(fabric_trimming_override_path);
     RT(enable_fabric_vc2);
+    RT(enable_fabric_mesh_pass_through);
     RT(fabric_router_sync_timeout_ms);
     RT(fabric_kernel_opt_level);
     RT(reliability_mode);
