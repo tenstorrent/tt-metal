@@ -371,24 +371,13 @@ void py_graph_module(nb::module_& m) {
         nb::arg("real_alloc") = false,
         R"doc(up_front_begin_collect(clear=True, real_alloc=False) -> None
 
-        Begin a precompile "collect" pass. Enables NO_DISPATCH graph capture (buffer
-        allocations mocked at address 0, nothing dispatched) and marks the collector
-        active on this thread. Run a model forward after this; every op stashes its
+        Begin a precompile "collect" pass: run a model forward and every op stashes its
         built-but-uncompiled program into the collector. Pair with up_front_end_collect().
+        Run on a COLD program cache (cache enabled). See ttnn/up_front_compile.hpp.
 
-        clear=True (default) drops previously collected programs first (single-run
-        usage). clear=False ACCUMULATES — a pytest plugin wraps each test body in
-        up_front_begin_collect(clear=False)/up_front_end_collect() so programs from
-        every test pile into one deduped set for a single up_front_compile() at the
-        end. Clear once up front with up_front_clear() when accumulating.
-
-        real_alloc=False (default): NO_DISPATCH mocks buffers at address 0 (zero device
-        memory). real_alloc=True: assign REAL addresses during collect (dispatch still
-        blocked) so address-baked / address-branched kernels build the same program the real
-        run will and thus warm — at the cost of real device memory (~the real run's peak).
-
-        Run on a COLD device program cache with the cache ENABLED so each op is a miss
-        (reaches the collector) and carries a distinct program hash.
+        Args:
+            clear: drop previously collected programs first (False accumulates across passes).
+            real_alloc: assign real buffer addresses during collect (default mocks at addr 0).
         )doc");
 
     m.def(
@@ -396,8 +385,7 @@ void py_graph_module(nb::module_& m) {
         &ttnn::up_front_compile::end_collect,
         R"doc(up_front_end_collect() -> None
 
-        End the collect pass (stops NO_DISPATCH capture, deactivates the collector).
-        Collected programs remain until up_front_compile() (or up_front_clear()).
+        End the collect pass. Collected programs remain until up_front_compile() or up_front_clear().
         )doc");
 
     m.def(
@@ -436,8 +424,7 @@ void py_graph_module(nb::module_& m) {
         R"doc(up_front_compile(device, max_workers=0) -> (num_programs, num_errors, max_workers, wall_seconds)
 
         JIT-compile every distinct collected program in parallel, warming the on-disk
-        kernel cache (TT_METAL_CACHE). The subsequent real run runs warm. max_workers<=0
-        uses hardware concurrency. The GIL is released for the duration.
+        kernel cache so the subsequent real run runs warm. max_workers<=0 uses hardware concurrency.
         )doc");
 }
 
