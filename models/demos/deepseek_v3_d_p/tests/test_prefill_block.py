@@ -94,6 +94,13 @@ def run_model(
     if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
+    # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
+    # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
+    # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and
+    # growing the down-matmul output circular buffer to ~2.9 MB — beyond the 1.5 MB L1 (OOM).
+    if isl_total == 25 * 1024 and tuple(mesh_device.shape) != (8, 4):
+        pytest.skip("25k ISL only fits L1 on the full 8x4 mesh; skipping on smaller meshes")
+
     profiler.clear()
     profiler.start("total_test_time")
     config.max_seq_len = isl_total
@@ -532,8 +539,8 @@ def test_ds_prefill_block(
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.HOST_ALL)],
-    ids=["dense", "moe-gate_host"],
+    [("dense", None), ("moe", GateComputeMode.DEVICE_FP32)],
+    ids=["dense", "moe_gate_device"],
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(

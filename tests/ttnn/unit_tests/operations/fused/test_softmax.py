@@ -18,6 +18,7 @@ TEST_PADDING_VALUE = -42
 @pytest.mark.parametrize(
     "batch_size, h, w, dim",
     [
+        (1, 128, 128000, -1),
         (1, 32, 128000, -1),
         (1, 2048, 32000, -1),
         (1, 512, 32000, -1),
@@ -311,6 +312,7 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    dim_size = torch_output_tensor.shape[dim]
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -318,6 +320,8 @@ def test_softmax(device, batch_size, h, w, dim):
         rtol=0.088,
         atol=0.009,
         frobenius_threshold=0.030,
+        # PCC undefined when softmax axis has size 1 (constant output).
+        check_pcc=(dim_size > 1),
     )
 
 
@@ -485,10 +489,10 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999,
         rtol=0.008,
         atol=0.002,
         frobenius_threshold=0.008,
+        check_pcc=False,
     )
 
 

@@ -162,7 +162,7 @@ inline ProgramRunArgs MakeRunArgsForMinimalSpec(
 }
 
 // ============================================================================
-// SECTION 1: Validation Tests (expect failure)
+// SECTION: Validation Tests (expect failure)
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestQuasar, UnknownKernelNameFails) {
@@ -340,7 +340,7 @@ TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideFails) {
 }
 
 // ============================================================================
-// SECTION 1b: Uniqueness Tests (duplicate detection)
+// SECTION: Uniqueness Tests (duplicate detection)
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestQuasar, DuplicateKernelParamsFails) {
@@ -398,7 +398,7 @@ TEST_F(ProgramRunArgsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
 }
 
 // ============================================================================
-// SECTION 2: Success Tests (basic functionality)
+// SECTION: Success Tests (basic functionality)
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestQuasar, SetRunArgsSucceeds_ZeroRTAs) {
@@ -478,7 +478,7 @@ TEST_F(ProgramRunArgsTestQuasar, SetRunArgsSucceeds_DFBRunOverridesWithNoOverrid
 }
 
 // ============================================================================
-// SECTION 3: Repeated Call Tests
+// SECTION: Repeated Call Tests
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestQuasar, SetRunArgsTwice_SameValuesSucceeds) {
@@ -544,7 +544,7 @@ TEST_F(ProgramRunArgsTestQuasar, SetRunArgsMultipleTimes_Succeeds) {
 }
 
 // ============================================================================
-// SECTION 4: Multi-Node Tests
+// SECTION: Multi-Node Tests
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestQuasar, SetRunArgsSucceeds_MultiNodeKernel) {
@@ -653,7 +653,7 @@ TEST_F(ProgramRunArgsTestQuasar, MultiNode_MissingOneNodeFails) {
 }
 
 // ============================================================================
-// SECTION 5: Gen1 (WH/BH) Tests
+// SECTION: Gen1 (WH/BH) Tests
 // ============================================================================
 // The RTA validation logic in SetProgramRunArgs is arch-agnostic; these
 // tests verify the full roundtrip works on gen1 programs and that validation
@@ -661,7 +661,7 @@ TEST_F(ProgramRunArgsTestQuasar, MultiNode_MissingOneNodeFails) {
 
 // Test fixture for ProgramRunArgs on Wormhole - uses WORMHOLE_B0 mock device
 // ============================================================================
-// SECTION 4: Named RTA / CRTA Tests (Quasar)
+// SECTION: Named RTA / CRTA Tests (Quasar)
 // ============================================================================
 
 // Make a ProgramSpec where the DM kernel has a named-RTA / named-CRTA schema.
@@ -768,12 +768,8 @@ TEST_F(ProgramRunArgsTestQuasar, NamedCRTACountMismatchFails) {
 // Vararg-only regression tests
 // ============================================================================
 //
-// These document the "legacy kernel migrated to Metal 2.0" pattern: all args as positional
-// varargs, no named RTAs/CRTAs/CTAs. This is expected to be the dominant migration shape —
-// users who port existing kernels will default to leaving everything as positional args
-// because that's how the old kernel source reads them. These tests are deliberately the
-// strongest regression canaries in this file; breaking them will break migration.
-
+// These document the "legacy kernel migrated lazily to Metal 2.0" pattern: all args as
+// positional varargs, no named RTAs/CRTAs/CTAs.
 TEST_F(ProgramRunArgsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     // A kernel on two nodes with DIFFERENT vararg counts per node. Exercises the advanced
     // num_runtime_varargs_per_node override path. The RTA dispatch buffer must be sized
@@ -1553,7 +1549,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_InterleavedAcceptsDifferentSha
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // shape {1, 32}
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1576,7 +1572,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_DTypeMismatchStillFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // BFLOAT16
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1605,7 +1601,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_RankMismatchFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // rank-2 shape {1, 32}
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1671,7 +1667,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedSetWritesShapeIntoCRTAs
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding =
         MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1697,7 +1693,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding =
         MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1750,7 +1746,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_AcceptsDifferentLogicalShape
     TensorParameter binding{
         .unique_id = TensorParamName{"input_tensor"},
         .spec = declared_spec,
-        .relaxations = TensorParameterRelaxations{.match_padded_shape_only = true},
+        .advanced_options = TensorParameterAdvancedOptions{.match_padded_shape_only = true},
     };
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -1782,7 +1778,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_PaddedShapeMismatchFails) {
     TensorParameter binding{
         .unique_id = TensorParamName{"input_tensor"},
         .spec = declared_spec,
-        .relaxations = TensorParameterRelaxations{.match_padded_shape_only = true},
+        .advanced_options = TensorParameterAdvancedOptions{.match_padded_shape_only = true},
     };
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -1811,7 +1807,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // BFLOAT16
-    binding.relaxations = TensorParameterRelaxations{.match_padded_shape_only = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.match_padded_shape_only = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1874,8 +1870,8 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // shape {1, 32}
-    binding.relaxations =
-        TensorParameterRelaxations{.match_padded_shape_only = true, .dynamic_tensor_shape = true};
+    binding.advanced_options =
+        TensorParameterAdvancedOptions{.match_padded_shape_only = true, .dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1891,6 +1887,248 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+}
+
+// ============================================================================
+// SECTION: Enqueue-loop invariance + UpdateProgramRunArgs + MergeProgramRunArgs
+// ============================================================================
+
+// --- Spec-time legality: an invariant name must reference a declared named arg ---
+
+TEST_F(ProgramRunArgsTestQuasar, InvariantRuntimeArgNameMustBeDeclaredFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, /*named_rtas=*/{"real_rta"}, /*named_crtas=*/{});
+    spec.kernels[0].advanced_options.enqueue_invariant_runtime_args = {"not_declared"};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a declared named")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, InvariantCommonRuntimeArgNameMustBeDeclaredFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, /*named_rtas=*/{}, /*named_crtas=*/{"real_crta"});
+    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"not_declared"};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a declared named")));
+}
+
+// --- The core contract: invariant args are retained, regular args are updated ---
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantCRTA) {
+    NodeCoord node{0, 0};
+    // Declaration order: keep @ slot 0 (invariant), change @ slot 1 (regular).
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
+    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"keep"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"keep", 10}, {"change", 20}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, params);
+
+    // Supply only the regular "change"; omit invariant "keep" and the all-empty compute_kernel.
+    ProgramRunArgs upd;
+    upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"change", 99}},
+    });
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+
+    const auto* crta = program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data().data();
+    EXPECT_EQ(crta[0], 10u) << "invariant 'keep' must retain its value across a partial update";
+    EXPECT_EQ(crta[1], 99u) << "regular 'change' must be updated";
+}
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantPerNodeRTA) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, {"keep", "change"}, {});
+    spec.kernels[0].advanced_options.enqueue_invariant_runtime_args = {"keep"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"keep", 1}, {"change", 2}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, params);
+
+    ProgramRunArgs upd;
+    upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"change", 99}}}},
+    });
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+
+    const auto& rta = program.impl().get_kernel_by_spec_name("dm_kernel")->runtime_args(node);
+    ASSERT_GE(rta.size(), 2u);
+    EXPECT_EQ(rta[0], 1u) << "invariant 'keep' must retain its value";
+    EXPECT_EQ(rta[1], 99u) << "regular 'change' must be updated";
+}
+
+// --- Completeness: a regular (non-invariant) arg may not be omitted ---
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_MissingRegularCRTAFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
+    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"keep"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs full;
+    full.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"keep", 10}, {"change", 20}},
+    });
+    full.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, full);
+
+    // Supply only the invariant "keep"; omit the regular "change" → error.
+    ProgramRunArgs upd;
+    upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"keep", 11}},
+    });
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, upd); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is missing named CRTA 'change'")));
+}
+
+// --- Precondition: a partial update before any full set fails ---
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BeforeSetFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
+    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"keep"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs upd;
+    upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"change", 99}},
+    });
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, upd); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CRTA buffer not allocated")));
+}
+
+// --- Kernel-omission rule ---
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingKernelWithRegularArgsFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"change"});  // regular CRTA, nothing invariant
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs full;
+    full.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"change", 20}},
+    });
+    full.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, full);
+
+    // Omit dm_kernel entirely though it has a regular CRTA → error.
+    ProgramRunArgs upd;
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, upd); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("was omitted from UpdateProgramRunArgs")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingAllInvariantKernelSucceeds) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep"});  // single CRTA, invariant
+    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"keep"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs full;
+    full.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"keep", 7}},
+    });
+    full.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, full);
+
+    // Both kernels may be omitted: dm_kernel's only arg is invariant, compute_kernel is empty.
+    ProgramRunArgs upd;
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_EQ(program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data().data()[0], 7u)
+        << "invariant CRTA retained even when its kernel is omitted entirely";
+}
+
+// --- MergeProgramRunArgs (pure data helper; no device needed) ---
+
+const ProgramRunArgs::KernelRunArgs* FindKernel(const ProgramRunArgs& p, const std::string& name) {
+    for (const auto& kra : p.kernel_run_args) {
+        if (kra.kernel == KernelSpecName{name}) {
+            return &kra;
+        }
+    }
+    return nullptr;
+}
+
+TEST(MergeProgramRunArgs, UnionsDisjointCRTAsForSameKernel) {
+    // The motivating pattern: an invariant-args piece + a volatile-args piece for the SAME kernel
+    // with disjoint named CRTAs merge into one kernel entry holding both.
+    ProgramRunArgs invariant_piece;
+    invariant_piece.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"keep", 10}},
+    });
+    ProgramRunArgs volatile_piece;
+    volatile_piece.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"change", 20}},
+    });
+
+    std::vector<ProgramRunArgs> rest{volatile_piece};
+    ProgramRunArgs merged = MergeProgramRunArgs(std::move(invariant_piece), rest);
+
+    const auto* dm = FindKernel(merged, "dm_kernel");
+    ASSERT_NE(dm, nullptr);
+    auto keep = dm->common_runtime_arg_values.get("keep");
+    auto change = dm->common_runtime_arg_values.get("change");
+    ASSERT_TRUE(keep.has_value());
+    ASSERT_TRUE(change.has_value());
+    EXPECT_EQ(*keep, 10u);
+    EXPECT_EQ(*change, 20u);
+}
+
+TEST(MergeProgramRunArgs, ConflictingArgFails) {
+    ProgramRunArgs a;
+    a.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"x", 1}},
+    });
+    ProgramRunArgs b;
+    b.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"x", 2}},  // same arg in both inputs → conflict
+    });
+    std::vector<ProgramRunArgs> rest{b};
+    EXPECT_THAT(
+        [&] { MergeProgramRunArgs(std::move(a), rest); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("specified in more than one ProgramRunArgs")));
+}
+
+TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
+    ProgramRunArgs a;
+    a.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"x", 1}},
+    });
+    ProgramRunArgs b;
+    b.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute_kernel"},
+        .common_runtime_arg_values = {{"y", 2}},
+    });
+    std::vector<ProgramRunArgs> rest{b};
+    ProgramRunArgs merged = MergeProgramRunArgs(std::move(a), rest);
+    EXPECT_NE(FindKernel(merged, "dm_kernel"), nullptr);
+    EXPECT_NE(FindKernel(merged, "compute_kernel"), nullptr);
 }
 
 }  // namespace

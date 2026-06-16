@@ -71,7 +71,7 @@ struct PhysicalPortEndpoint {
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
     TrayId tray_id{0};
-    PortType port_type = PortType::TRACE;
+    PortType port_type = PortType::UNKNOWN;
     PortId port_id{0};
 
     auto operator<=>(const PhysicalPortEndpoint& other) const = default;
@@ -83,6 +83,7 @@ std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn);
 
 using LogicalChannelConnection = std::pair<LogicalChannelEndpoint, LogicalChannelEndpoint>;
 using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>;
+using PhysicalPortConnection = std::pair<PhysicalPortEndpoint, PhysicalPortEndpoint>;
 
 // Port connection types (graph-level connections between nodes)
 using PortEndpoint = std::tuple<HostId, TrayId, PortId>;  // host_id, tray_id, port_id
@@ -187,6 +188,18 @@ public:
 
     // Method to emit deployment descriptor (one host per node in host_id order; use for merged output)
     void emit_deployment_descriptor(const std::string& output_path) const;
+
+    // Given a set of dead physical channel endpoints (e.g. unretrainable channels reported by
+    // run_cluster_validation), return the set of cables (port-level connections) whose channel
+    // expansion contains at least one of those channels. Used to identify which cables to remove
+    // from a degraded cluster's cabling descriptor before regenerating its FSD.
+    std::set<PhysicalPortConnection> find_cables_containing_channels(
+        const std::set<PhysicalChannelEndpoint>& dead_channels) const;
+
+    // Mutating counterpart to find_cables_containing_channels: walks the resolved graph and
+    // removes every cable whose expansion intersects the dead set, applying the
+    // dead-channel == dead-cable policy.
+    std::set<PhysicalPortConnection> prune_dead_channels(const std::set<PhysicalChannelEndpoint>& dead_channels);
 
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)

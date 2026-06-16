@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "selective_reduce_combine_device_operation.hpp"
+#include "selective_reduce_combine_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/hal.hpp>
@@ -17,12 +18,28 @@ namespace ttnn::experimental::prim {
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.dense_input_tensor;
     const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
 
     TT_FATAL(
         tensor_args.dense_token_maps_tensor.logical_shape().rank() == 2,
         "dense_token_maps_tensor must be rank 2 ([experts, per-token-stride]); got rank {}",
         tensor_args.dense_token_maps_tensor.logical_shape().rank());
+
+    const auto num_links = operation_attributes.num_links;
+    TT_FATAL(num_links > 0, "num_links must be > 0, got {}", num_links);
+
+    const auto worker_layout = detail::compute_worker_layout(
+        input_tensor,
+        operation_attributes.hidden_size,
+        operation_attributes.num_token_parallel_cores,
+        operation_attributes.num_data_parallel_cores);
+    const auto num_worker_cores = worker_layout.num_worker_cores;
+    TT_FATAL(
+        num_worker_cores % num_links == 0,
+        "num_worker_cores ({}) must be divisible by num_links ({})",
+        num_worker_cores,
+        num_links);
 
     const auto batch_size = operation_attributes.batch_size;
     const auto seq_size = operation_attributes.seq_size;

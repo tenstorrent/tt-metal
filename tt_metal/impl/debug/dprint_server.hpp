@@ -19,6 +19,18 @@ class MetalContext;
 class MetalEnv;
 class DispatchCoreConfig;
 
+struct DPrintBufferInfo {
+    uint64_t structure_address;
+    uint16_t structure_size;
+    uint16_t read_write_pointer_offset;
+    uint16_t buffer_offset;
+    uint16_t buffer_size;
+    uint16_t processor_count;
+    uint16_t processor_offset;
+
+    uint64_t get_read_write_pointer_address() const { return structure_address + read_write_pointer_offset; }
+};
+
 class DPrintServer {
 public:
     // Constructor/destructor, reads dprint options from RTOptions.
@@ -46,6 +58,9 @@ public:
 
     // Returns the list of cores the print server polls for the given device.
     std::vector<umd::CoreDescriptor> get_print_cores(ChipId device_id) const;
+
+    // Returns the print buffer info (rw pointer address, buffer offset, and buffer size) for the given core.
+    std::vector<DPrintBufferInfo> get_core_buffers(ChipId device_id, const umd::CoreDescriptor& print_core) const;
 
     // Check whether a print hand has been detected by the server.
     // The print server tries to determine if a core is stalled due to the combination of (1) a WAIT

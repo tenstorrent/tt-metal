@@ -18,12 +18,9 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
-#include "api/compute/untilize.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 #include "api/compute/pack_untilize.h"
-#include "api/compute/untilize.h"
-
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
