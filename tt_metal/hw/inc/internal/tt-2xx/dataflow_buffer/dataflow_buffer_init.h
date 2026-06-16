@@ -168,19 +168,6 @@ inline uint32_t rdcycle() {
 
 // (load_dfb_risc_mask removed — device no longer walks the risc_mask in wait_all)
 
-FORCE_INLINE void copy_txn_descriptor_32(
-    volatile TxnDFBDescriptor* dst, const volatile dfb_dm0_txn_descriptor_image_t* src) {
-    const volatile uint32_t* s = reinterpret_cast<const volatile uint32_t*>(src);
-    volatile uint32_t* d = reinterpret_cast<volatile uint32_t*>(dst);
-    d[0] = s[0];
-    d[1] = s[1];
-    d[2] = s[2];
-    d[3] = s[3];
-    d[4] = s[4];
-    d[5] = s[5];
-    d[6] = s[6];
-    d[7] = s[7];
-}
 
 // Poll until all producers for DFB `dfb_id` have published their signal byte and
 // (for DMs with implicit sync) DM0 has armed the ISR.
@@ -295,9 +282,10 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         uint32_t pending_desc = all_mask;
         while (pending_desc) {
             const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending_desc));
-            copy_txn_descriptor_32(
-                &g_txn_dfb_descriptor[txn_id],
-                reinterpret_cast<const volatile dfb_dm0_txn_descriptor_image_t*>(pool_base + txn_id * 32u));
+            const volatile uint32_t* s = reinterpret_cast<const volatile uint32_t*>(pool_base + txn_id * 32u);
+            volatile uint32_t* d = reinterpret_cast<volatile uint32_t*>(&g_txn_dfb_descriptor[txn_id]);
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+            d[4] = s[4]; d[5] = s[5]; d[6] = s[6]; d[7] = s[7];
             pending_desc &= (pending_desc - 1u);
         }
     }
