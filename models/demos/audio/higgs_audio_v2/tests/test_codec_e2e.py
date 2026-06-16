@@ -6,11 +6,12 @@ vs HF HiggsAudioV2TokenizerModel.decode, on real audio code indices.
 Gate: PCC > 0.97 on the decoded waveform.
 """
 import os
+
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.demos.audio.higgs_audio_v2.tt.codec import tt_decode
 
 

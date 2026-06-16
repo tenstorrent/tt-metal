@@ -25,26 +25,20 @@ import json
 import os
 import pathlib
 
-import numpy as np
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
-from models.demos.audio.higgs_audio_v2.tt.reference import (
-    HiggsAudioV2Config,
-    load_higgs_v2_state_dict,
-)
-from models.demos.audio.higgs_audio_v2.tt.model_args import HiggsModelArgs
-from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
+import ttnn
 from models.demos.audio.higgs_audio_v2.tt.audio_decode import (
-    initialize_delay_pattern_state,
     apply_delay_pattern_to_greedy_audio_tokens,
-    apply_delay_pattern_to_selected_audio_tokens,
+    initialize_delay_pattern_state,
 )
+from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
+from models.demos.audio.higgs_audio_v2.tt.model_args import HiggsModelArgs
+from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config, load_higgs_v2_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
-
 
 HIGGS_MODEL_DIR = "/data/hf_cache/higgs"
 FIXTURE = pathlib.Path(__file__).resolve().parent / "fixtures" / "baseline_tts_short.json"
@@ -71,7 +65,9 @@ def _rot_inputs(rope_setup, mesh_device, args, pos: int):
     rope_idxs = rope_setup.get_rot_idxs(cp, on_host=True)
     rope_idxs = ttnn.to_device(rope_idxs, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cp_tt = ttnn.from_torch(
-        cp, device=mesh_device, dtype=ttnn.int32,
+        cp,
+        device=mesh_device,
+        dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=args.cluster_shape),
     )
     return cp_tt, rope_setup.get_rot_mats(rope_idxs)
@@ -115,8 +111,8 @@ def test_accuracy_native(mesh_device):
     if precision == "accuracy":
         args = HiggsModelArgs(mesh_device=mesh_device, higgs_config=higgs_cfg, max_batch_size=1, max_seq_len=1024)
     else:
-        from models.demos.audio.higgs_audio_v2.tt.precision_presets import build_precision
         from models.demos.audio.higgs_audio_v2.tt.model_args import BASE_TEXT_MODEL
+        from models.demos.audio.higgs_audio_v2.tt.precision_presets import build_precision
 
         opt = build_precision(precision, higgs_cfg.num_hidden_layers, BASE_TEXT_MODEL)
         args = HiggsModelArgs(
@@ -127,13 +123,22 @@ def test_accuracy_native(mesh_device):
     tt_ccl = TT_CCL(mesh_device)
     RopeCls = HfRotarySetup if args.use_hf_rope else RotarySetup
     rope_setup = RopeCls(
-        device=mesh_device, batch_size=args.max_batch_size, head_dim=args.head_dim,
-        max_seq_len=args.max_seq_len, rope_theta=args.rope_theta, rope_scaling=args.rope_scaling,
-        use_qk_fused=args.use_qk_fused, prefetcher=None,
+        device=mesh_device,
+        batch_size=args.max_batch_size,
+        head_dim=args.head_dim,
+        max_seq_len=args.max_seq_len,
+        rope_theta=args.rope_theta,
+        rope_scaling=args.rope_scaling,
+        use_qk_fused=args.use_qk_fused,
+        prefetcher=None,
     )
     model = HiggsAudioTTModel(
-        args=args, mesh_device=mesh_device, tt_ccl=tt_ccl,
-        state_dict=state_dict, transformation_mats=rope_setup.get_both_trans_mats(), dtype=ttnn.bfloat8_b,
+        args=args,
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        state_dict=state_dict,
+        transformation_mats=rope_setup.get_both_trans_mats(),
+        dtype=ttnn.bfloat8_b,
     )
     cfg = _DelayCfg(args)
     _ = model.prefill_text(prompt_ids, rope_setup)
@@ -154,25 +159,26 @@ def test_accuracy_native(mesh_device):
         tt_next, _tt_active, num_delay_t, num_rem_t, _fin_t = apply_delay_pattern_to_greedy_audio_tokens(
             tt_logits, cfg, num_delay_t, num_rem_t
         )
-        match = (tt_next == ref_next)
+        match = tt_next == ref_next
         token_matches += int((match & active_mask).sum().item())
         token_total += int(active_mask.sum().item())
         raw_matches += int(match.sum().item())
         raw_total += int(match.numel())
         if k in (1, 5, 9, 15):
-            logger.info(f"  step {k:>2d}: active={active_mask.int().tolist()} "
-                        f"tt={tt_next.tolist()} ref={ref_next.tolist()}")
+            logger.info(
+                f"  step {k:>2d}: active={active_mask.int().tolist()} " f"tt={tt_next.tolist()} ref={ref_next.tolist()}"
+            )
         if fin_r:
             break
 
     active_acc = token_matches / max(1, token_total)
     raw_acc = raw_matches / max(1, raw_total)
-    logger.info(f"[native-B teacher-forced] active-mask token accuracy: {active_acc:.4f} "
-                f"({token_matches}/{token_total})")
-    logger.info(f"[native-B teacher-forced] raw token accuracy:         {raw_acc:.4f} "
-                f"({raw_matches}/{raw_total})")
+    logger.info(
+        f"[native-B teacher-forced] active-mask token accuracy: {active_acc:.4f} " f"({token_matches}/{token_total})"
+    )
+    logger.info(f"[native-B teacher-forced] raw token accuracy:         {raw_acc:.4f} " f"({raw_matches}/{raw_total})")
     print(f"NATIVE_TF_ACTIVE_ACC={active_acc:.4f} ACTIVE={token_matches}/{token_total} RAW={raw_acc:.4f}")
 
-    assert active_acc >= ACCURACY_MIN_TOKEN_ACCURACY, (
-        f"active-mask token accuracy {active_acc:.4f} < gate {ACCURACY_MIN_TOKEN_ACCURACY}"
-    )
+    assert (
+        active_acc >= ACCURACY_MIN_TOKEN_ACCURACY
+    ), f"active-mask token accuracy {active_acc:.4f} < gate {ACCURACY_MIN_TOKEN_ACCURACY}"

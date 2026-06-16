@@ -14,7 +14,6 @@ Tensors flow channel-last [1, L, C] (the conv ops' NHWC-style layout).
 """
 from __future__ import annotations
 
-import torch
 import ttnn
 
 
@@ -30,11 +29,24 @@ def tt_conv1d(device, x, weight, bias, in_ch, out_ch, L, k, stride=1, padding=0,
     # convs fit in L1 alongside a co-resident LLM (demo runs both on one chip).
     cfg = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16, act_block_h_override=32)
     out, [w, b] = ttnn.conv1d(
-        input_tensor=x, weight_tensor=weight, bias_tensor=bias, device=device,
-        in_channels=in_ch, out_channels=out_ch, batch_size=1, input_length=L,
-        kernel_size=k, stride=stride, padding=padding, dilation=dilation, groups=1,
-        dtype=ttnn.bfloat16, conv_config=cfg, compute_config=_compute_cfg(device),
-        return_weights_and_bias=True, return_output_dim=False,
+        input_tensor=x,
+        weight_tensor=weight,
+        bias_tensor=bias,
+        device=device,
+        in_channels=in_ch,
+        out_channels=out_ch,
+        batch_size=1,
+        input_length=L,
+        kernel_size=k,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=1,
+        dtype=ttnn.bfloat16,
+        conv_config=cfg,
+        compute_config=_compute_cfg(device),
+        return_weights_and_bias=True,
+        return_output_dim=False,
     )
     return out, w, b
 
@@ -46,13 +58,26 @@ def tt_conv_transpose1d(device, x, weight, bias, in_ch, out_ch, L, k, stride, pa
     """
     cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)  # auto shard layout
     out, [w, b] = ttnn.conv_transpose2d(
-        input_tensor=x, weight_tensor=weight, bias_tensor=bias, device=device,
-        in_channels=in_ch, out_channels=out_ch, kernel_size=(1, k), stride=(1, stride),
-        padding=(0, padding), output_padding=(0, output_padding), dilation=(1, 1), groups=1,
-        batch_size=1, input_height=1, input_width=L,
-        conv_config=cfg, compute_config=_compute_cfg(device),
+        input_tensor=x,
+        weight_tensor=weight,
+        bias_tensor=bias,
+        device=device,
+        in_channels=in_ch,
+        out_channels=out_ch,
+        kernel_size=(1, k),
+        stride=(1, stride),
+        padding=(0, padding),
+        output_padding=(0, output_padding),
+        dilation=(1, 1),
+        groups=1,
+        batch_size=1,
+        input_height=1,
+        input_width=L,
+        conv_config=cfg,
+        compute_config=_compute_cfg(device),
         mirror_kernel=True,  # PyTorch ConvTranspose flips the kernel; match it
-        return_weights_and_bias=True, return_output_dim=False,
+        return_weights_and_bias=True,
+        return_output_dim=False,
     )
     return out, w, b
 
@@ -83,11 +108,14 @@ def tt_snake(device, x_rm, alpha_torch, L, C):
     x = ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
     x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
     alpha = ttnn.from_torch(
-        alpha_torch.reshape(1, 1, C).float(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        alpha_torch.reshape(1, 1, C).float(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     inv = ttnn.reciprocal(ttnn.add(alpha, 1e-9))
-    ax = ttnn.mul(x, alpha)              # broadcast [1,1,C] over L
+    ax = ttnn.mul(x, alpha)  # broadcast [1,1,C] over L
     s = ttnn.sin(ax)
     s2 = ttnn.mul(s, s)
     out = ttnn.add(x, ttnn.mul(s2, inv))
@@ -167,7 +195,9 @@ class TtDacDecoder:
         assert B == 1
         x = ttnn.from_torch(
             quantized_acoustic.transpose(1, 2).contiguous().float(),  # [1, T, C0]
-            dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
         )
         L = T
         x, L = self._conv1d(self.dec.conv1, x, L)
@@ -194,4 +224,3 @@ def tt_decode(device, hf_model, audio_codes, ttdec=None):
         quantized_acoustic = hf_model.fc2(quantized.transpose(1, 2)).transpose(1, 2)  # [1, 256, T]
     ttdec = ttdec or TtDacDecoder(device, hf_model.acoustic_decoder)
     return ttdec.forward(quantized_acoustic.float())
-

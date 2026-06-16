@@ -11,20 +11,18 @@ Reports aggregate end-to-end RTF = (2 streams * N/25 s of audio) / wall.
 """
 import json
 import os
+import pathlib
 import time
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.demos.audio.higgs_audio_v2.tests.test_perf_dp_n300 import _build_stream
 from models.demos.audio.higgs_audio_v2.tt.codec import TtDacDecoder
 from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config
 from models.tt_transformers.tt.generator import create_submeshes
-
-import numpy as np
-import pathlib
 
 HIGGS_MODEL_DIR = "/data/hf_cache/higgs"
 FIXTURE = pathlib.Path(__file__).resolve().parent / "fixtures" / "baseline_tts_short.json"
@@ -98,8 +96,10 @@ def test_e2e_rtf_n300(mesh_device):
     logger.info(f"==== N300 END-TO-END (traced decode + codec, 2 streams) ====")
     logger.info(f"  decode {decode_wall*1e3:.0f}ms  codec {codec_wall*1e3:.0f}ms  total {wall*1e3:.0f}ms")
     logger.info(f"  audio={audio_s:.2f}s  END-TO-END aggregate RTF = {rtf:.4f}")
-    print(f"PERF_E2E_N300 rtf={rtf:.4f} decode_ms={decode_wall*1e3:.0f} codec_ms={codec_wall*1e3:.0f} "
-          f"per_step_ms={1e3*decode_wall/STEPS:.2f}")
+    print(
+        f"PERF_E2E_N300 rtf={rtf:.4f} decode_ms={decode_wall*1e3:.0f} codec_ms={codec_wall*1e3:.0f} "
+        f"per_step_ms={1e3*decode_wall/STEPS:.2f}"
+    )
 
     for st in streams:
         ttnn.release_trace(st["submesh"], st["trace_id"])

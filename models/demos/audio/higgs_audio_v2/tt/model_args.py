@@ -20,12 +20,10 @@ LOCAL_HF_PARAMS[self.model_name] when dummy_weights is True.
 from __future__ import annotations
 
 import os
-import pathlib
-from dataclasses import dataclass
-from typing import Any
 
 from loguru import logger
 
+from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config
 from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
@@ -36,7 +34,6 @@ from models.tt_transformers.tt.model_config import (
     PrecisionSetting,
     TensorGroup,
 )
-from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config
 
 
 def _higgs_accuracy_optimizations_settings() -> ModelOptimizations:
@@ -155,7 +152,8 @@ class HiggsModelArgs(ModelArgs):
         self.original_max_context_len = scaling_params.get("original_max_position_embeddings")
         self.rope_scaling = (
             rope_scaling_model_factory(scaling_params, original_max_context_len=self.original_max_context_len)
-            if scaling_params else None
+            if scaling_params
+            else None
         )
 
         # Higgs-specific fields, layered on top of the Llama-3.2-3B base.
@@ -172,18 +170,18 @@ class HiggsModelArgs(ModelArgs):
         # Sanity: the base Llama-3.2-3B config we just loaded had better
         # match the Higgs backbone shape, otherwise the state-dict load
         # below will silently miswire.
-        assert self.dim == higgs_config.hidden_size, (
-            f"hidden_size mismatch: base Llama-3.2-3B={self.dim}, Higgs={higgs_config.hidden_size}"
-        )
-        assert self.n_layers == higgs_config.num_hidden_layers, (
-            f"num_hidden_layers mismatch: base={self.n_layers}, Higgs={higgs_config.num_hidden_layers}"
-        )
-        assert self.n_heads == higgs_config.num_attention_heads, (
-            f"num_attention_heads mismatch: base={self.n_heads}, Higgs={higgs_config.num_attention_heads}"
-        )
-        assert self.n_kv_heads == higgs_config.num_key_value_heads, (
-            f"num_kv_heads mismatch: base={self.n_kv_heads}, Higgs={higgs_config.num_key_value_heads}"
-        )
+        assert (
+            self.dim == higgs_config.hidden_size
+        ), f"hidden_size mismatch: base Llama-3.2-3B={self.dim}, Higgs={higgs_config.hidden_size}"
+        assert (
+            self.n_layers == higgs_config.num_hidden_layers
+        ), f"num_hidden_layers mismatch: base={self.n_layers}, Higgs={higgs_config.num_hidden_layers}"
+        assert (
+            self.n_heads == higgs_config.num_attention_heads
+        ), f"num_attention_heads mismatch: base={self.n_heads}, Higgs={higgs_config.num_attention_heads}"
+        assert (
+            self.n_kv_heads == higgs_config.num_key_value_heads
+        ), f"num_kv_heads mismatch: base={self.n_kv_heads}, Higgs={higgs_config.num_key_value_heads}"
 
         logger.info(
             f"HiggsModelArgs ready: dim={self.dim} layers={self.n_layers} "

@@ -13,11 +13,10 @@ import argparse
 import os
 import pathlib
 
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.demos.audio.higgs_audio_v2.demo.generator import HiggsAudioTTSGenerator
-
 
 SYSTEM = "Generate speech in the style of a calm neutral male voice."
 
@@ -62,8 +61,20 @@ def _voiceclone_conversation(ref_audio, text):
     ]
 
 
-def run(mode, out_dir, ref_audio=None, ref_audio_b=None, text=None, precision="performance", max_new_tokens=750,
-        temperature=1.0, top_k=50, top_p=0.95, seed=1234, silence_patience=32):
+def run(
+    mode,
+    out_dir,
+    ref_audio=None,
+    ref_audio_b=None,
+    text=None,
+    precision="performance",
+    max_new_tokens=750,
+    temperature=1.0,
+    top_k=50,
+    top_p=0.95,
+    seed=1234,
+    silence_patience=32,
+):
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -87,9 +98,15 @@ def run(mode, out_dir, ref_audio=None, ref_audio_b=None, text=None, precision="p
             raise ValueError(mode)
 
         logger.info(f"=== MODE: {mode} ===")
-        audio_seq = gen.generate(conv, max_new_tokens=max_new_tokens,
-                                 temperature=temperature, top_k=top_k, top_p=top_p, seed=seed,
-                                 silence_patience=silence_patience)
+        audio_seq = gen.generate(
+            conv,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            seed=seed,
+            silence_patience=silence_patience,
+        )
         out_path = out_dir / f"higgs_{mode}.wav"
         out_path, dur = gen.save(audio_seq, out_path)
         print(f"DEMO_OK mode={mode} out={out_path} duration_s={dur:.2f} rows={audio_seq.shape[1]}")
@@ -110,15 +127,29 @@ def main():
     ap.add_argument("--top-k", type=int, default=50)
     ap.add_argument("--top-p", type=float, default=0.95)
     ap.add_argument("--seed", type=int, default=1234)
-    ap.add_argument("--silence-patience", type=int, default=32,
-                    help="stop after this many identical repeated rows (silent-tail guard)")
+    ap.add_argument(
+        "--silence-patience",
+        type=int,
+        default=32,
+        help="stop after this many identical repeated rows (silent-tail guard)",
+    )
     args = ap.parse_args()
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-    run(args.mode, args.out_dir, ref_audio=args.ref_audio, ref_audio_b=args.ref_audio_b, text=args.text,
-        precision=args.precision, max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature, top_k=args.top_k, top_p=args.top_p, seed=args.seed,
-        silence_patience=args.silence_patience)
+    run(
+        args.mode,
+        args.out_dir,
+        ref_audio=args.ref_audio,
+        ref_audio_b=args.ref_audio_b,
+        text=args.text,
+        precision=args.precision,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        seed=args.seed,
+        silence_patience=args.silence_patience,
+    )
 
 
 if __name__ == "__main__":

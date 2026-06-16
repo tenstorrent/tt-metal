@@ -38,22 +38,18 @@ import pathlib
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
-from models.demos.audio.higgs_audio_v2.tt.reference import (
-    HiggsAudioV2Config,
-    load_higgs_v2_state_dict,
-)
-from models.demos.audio.higgs_audio_v2.tt.model_args import HiggsModelArgs
-from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
+import ttnn
 from models.demos.audio.higgs_audio_v2.tt.audio_decode import (
-    initialize_delay_pattern_state,
     apply_delay_pattern_to_greedy_audio_tokens,
+    initialize_delay_pattern_state,
 )
+from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
+from models.demos.audio.higgs_audio_v2.tt.model_args import HiggsModelArgs
+from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config, load_higgs_v2_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
-
 
 HIGGS_MODEL_DIR = "/data/hf_cache/higgs"
 REF_WAV = os.environ.get("VC_REF_WAV", "/tmp/higgs_pick/tts_male_voice.wav")
@@ -85,7 +81,9 @@ def _rot_inputs(rope_setup, mesh_device, args, pos: int):
     rope_idxs = rope_setup.get_rot_idxs(cp, on_host=True)
     rope_idxs = ttnn.to_device(rope_idxs, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cp_tt = ttnn.from_torch(
-        cp, device=mesh_device, dtype=ttnn.int32,
+        cp,
+        device=mesh_device,
+        dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=args.cluster_shape),
     )
     return cp_tt, rope_setup.get_rot_mats(rope_idxs)
@@ -109,13 +107,19 @@ def _build_voiceclone_inputs():
     proc = AutoProcessor.from_pretrained(HIGGS_MODEL_DIR)
     if mode == "tts":
         conv = [
-            {"role": "system", "content": [{"type": "text", "text": "Generate speech in the style of a calm neutral male voice."}]},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Generate speech in the style of a calm neutral male voice."}],
+            },
             {"role": "user", "content": [{"type": "text", "text": _LONG_TEXT}]},
         ]
     else:
         assert pathlib.Path(REF_WAV).exists(), f"reference wav missing: {REF_WAV}"
         conv = [
-            {"role": "system", "content": [{"type": "text", "text": "Generate speech in the style of a calm neutral male voice."}]},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Generate speech in the style of a calm neutral male voice."}],
+            },
             {"role": "user", "content": [{"type": "text", "text": "Please speak in this voice."}]},
             {"role": "assistant", "content": [{"type": "audio", "url": REF_WAV}]},
             {"role": "user", "content": [{"type": "text", "text": TARGET_TEXT}]},
@@ -137,9 +141,11 @@ def test_accuracy_voiceclone(mesh_device):
     audio_token_id = proc.audio_token_id
     S = input_ids.shape[0]
     n_ph = int((input_ids == audio_token_id).sum())
-    logger.info(f"VC prompt: mode={os.environ.get('VC_MODE','voiceclone')} S={S} placeholders={n_ph} "
-                f"audio_in={None if audio_in is None else tuple(audio_in.shape)} "
-                f"valid={None if audio_mask is None else int(audio_mask.sum())}")
+    logger.info(
+        f"VC prompt: mode={os.environ.get('VC_MODE','voiceclone')} S={S} placeholders={n_ph} "
+        f"audio_in={None if audio_in is None else tuple(audio_in.shape)} "
+        f"valid={None if audio_mask is None else int(audio_mask.sum())}"
+    )
 
     # ---- native-B: generate a conditioned trajectory, then teacher-force it ----
     from transformers import HiggsAudioV2ForConditionalGeneration
@@ -150,16 +156,19 @@ def test_accuracy_voiceclone(mesh_device):
     hf_model.eval()
 
     with torch.no_grad():
-        out = hf_model.generate(**enc, max_new_tokens=T_FRAMES, do_sample=False,
-                                return_dict_in_generate=True, output_scores=False)
+        out = hf_model.generate(
+            **enc, max_new_tokens=T_FRAMES, do_sample=False, return_dict_in_generate=True, output_scores=False
+        )
     # HF's audio_sequences PREPENDS the reference frames (verified: seq[:n_valid]==ref).
     # The genuinely *generated* continuation — the only thing decoded at positions >= S —
     # is the tail after those reference frames. Teacher-force only that.
     n_skip = 0 if audio_in is None else audio_in.shape[1]
     ref = torch.as_tensor(out.audio_sequences[0], dtype=torch.long)[n_skip:]  # [T, K] generated only
     T, K = ref.shape
-    logger.info(f"[HF] trajectory {tuple(out.audio_sequences[0].shape)} -> skipped {n_skip} reference frames, "
-                f"scoring {T} generated frames")
+    logger.info(
+        f"[HF] trajectory {tuple(out.audio_sequences[0].shape)} -> skipped {n_skip} reference frames, "
+        f"scoring {T} generated frames"
+    )
     logger.info(f"[HF] conditioned target trajectory: {tuple(ref.shape)}")
 
     backbone = hf_model.model if hasattr(hf_model, "model") else hf_model
@@ -168,8 +177,13 @@ def test_accuracy_voiceclone(mesh_device):
     with torch.no_grad():
         hf_cache = DynamicCache(config=hf_model.config)
         # PREFILL WITH the reference-audio merge (the conditioning under test)
-        _ = backbone(input_ids=input_ids.unsqueeze(0), audio_input_ids=audio_in,
-                     audio_input_ids_mask=audio_mask, past_key_values=hf_cache, use_cache=True)
+        _ = backbone(
+            input_ids=input_ids.unsqueeze(0),
+            audio_input_ids=audio_in,
+            audio_input_ids_mask=audio_mask,
+            past_key_values=hf_cache,
+            use_cache=True,
+        )
         for k in range(1, T):
             _ = backbone(audio_input_ids=ref[k - 1].view(1, 1, K), past_key_values=hf_cache, use_cache=True)
     h.remove()
@@ -185,38 +199,49 @@ def test_accuracy_voiceclone(mesh_device):
     if precision == "accuracy":
         args = HiggsModelArgs(mesh_device=mesh_device, higgs_config=higgs_cfg, max_batch_size=1, max_seq_len=max_seq)
     else:
-        from models.demos.audio.higgs_audio_v2.tt.precision_presets import build_precision
         from models.demos.audio.higgs_audio_v2.tt.model_args import BASE_TEXT_MODEL
+        from models.demos.audio.higgs_audio_v2.tt.precision_presets import build_precision
 
         opt = build_precision(precision, higgs_cfg.num_hidden_layers, BASE_TEXT_MODEL)
-        args = HiggsModelArgs(mesh_device=mesh_device, higgs_config=higgs_cfg, max_batch_size=1,
-                              max_seq_len=max_seq, optimizations=opt)
+        args = HiggsModelArgs(
+            mesh_device=mesh_device, higgs_config=higgs_cfg, max_batch_size=1, max_seq_len=max_seq, optimizations=opt
+        )
     logger.info(f"HIGGS_PRECISION={precision} max_seq_len={max_seq}")
     _, state_dict = load_higgs_v2_state_dict(HIGGS_MODEL_DIR)
     tt_ccl = TT_CCL(mesh_device)
     RopeCls = HfRotarySetup if args.use_hf_rope else RotarySetup
     rope_setup = RopeCls(
-        device=mesh_device, batch_size=args.max_batch_size, head_dim=args.head_dim,
-        max_seq_len=args.max_seq_len, rope_theta=args.rope_theta, rope_scaling=args.rope_scaling,
-        use_qk_fused=args.use_qk_fused, prefetcher=None,
+        device=mesh_device,
+        batch_size=args.max_batch_size,
+        head_dim=args.head_dim,
+        max_seq_len=args.max_seq_len,
+        rope_theta=args.rope_theta,
+        rope_scaling=args.rope_scaling,
+        use_qk_fused=args.use_qk_fused,
+        prefetcher=None,
     )
     act_dtype = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[os.environ.get("HIGGS_ACT_DTYPE", "bf8")]
     logger.info(f"activation/block dtype = {act_dtype}")
     model = HiggsAudioTTModel(
-        args=args, mesh_device=mesh_device, tt_ccl=tt_ccl,
-        state_dict=state_dict, transformation_mats=rope_setup.get_both_trans_mats(), dtype=act_dtype,
+        args=args,
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        state_dict=state_dict,
+        transformation_mats=rope_setup.get_both_trans_mats(),
+        dtype=act_dtype,
     )
     cfg = _DelayCfg(args)
-    _ = model.prefill_text(input_ids, rope_setup, audio_input_ids=audio_in,
-                           audio_input_ids_mask=audio_mask, audio_token_id=audio_token_id)
+    _ = model.prefill_text(
+        input_ids, rope_setup, audio_input_ids=audio_in, audio_input_ids_mask=audio_mask, audio_token_id=audio_token_id
+    )
 
     # ---- score both sides through the same delay state machine ----------------
     num_delay_r, num_rem_r = initialize_delay_pattern_state(ref[:1].transpose(0, 1), cfg)
     num_delay_t, num_rem_t = initialize_delay_pattern_state(ref[:1].transpose(0, 1), cfg)
     token_matches, token_total, raw_matches, raw_total = 0, 0, 0, 0
-    pccs = []           # per-step,per-codebook logit PCC (TTNN vs HF)
-    miss_margins = []   # for active mismatches: HF's logit margin between its pick and TTNN's pick
-    per_step = []       # (k, n_active, n_match, mean_pcc) to localize prefill-context vs decode-position
+    pccs = []  # per-step,per-codebook logit PCC (TTNN vs HF)
+    miss_margins = []  # for active mismatches: HF's logit margin between its pick and TTNN's pick
+    per_step = []  # (k, n_active, n_match, mean_pcc) to localize prefill-context vs decode-position
     for k in range(1, T):
         pos = S + k - 1
         cp_tt, rot_mats = _rot_inputs(rope_setup, mesh_device, args, pos)
@@ -238,47 +263,62 @@ def test_accuracy_voiceclone(mesh_device):
                 continue
             step_active += 1
             p = float(torch.corrcoef(torch.stack([rl[cb], tl[cb]]))[0, 1])
-            pccs.append(p); step_pccs.append(p)
+            pccs.append(p)
+            step_pccs.append(p)
             r_arg, t_arg = int(rl[cb].argmax()), int(tl[cb].argmax())
             if r_arg == t_arg:
                 step_match += 1
             else:
                 miss_margins.append(float(rl[cb][r_arg] - rl[cb][t_arg]))
         per_step.append((k, step_active, step_match, sum(step_pccs) / max(1, len(step_pccs))))
-        match = (tt_next == ref_next)
+        match = tt_next == ref_next
         token_matches += int((match & active_mask).sum().item())
         token_total += int(active_mask.sum().item())
         raw_matches += int(match.sum().item())
         raw_total += int(match.numel())
         if k in (1, 5, 9, 15, 23):
-            logger.info(f"  step {k:>2d}: active={active_mask.int().tolist()} tt={tt_next.tolist()} ref={ref_next.tolist()}")
+            logger.info(
+                f"  step {k:>2d}: active={active_mask.int().tolist()} tt={tt_next.tolist()} ref={ref_next.tolist()}"
+            )
         if fin_r:
             break
 
     active_acc = token_matches / max(1, token_total)
     raw_acc = raw_matches / max(1, raw_total)
     import numpy as _np
+
     mean_pcc = float(_np.mean(pccs)) if pccs else float("nan")
     mm = _np.array(miss_margins) if miss_margins else _np.array([0.0])
-    near = int((mm < 0.05).sum()); small = int((mm < 0.10).sum())
+    near = int((mm < 0.05).sum())
+    small = int((mm < 0.10).sum())
     logger.info(f"[VC teacher-forced] active-mask token accuracy: {active_acc:.4f} ({token_matches}/{token_total})")
     logger.info(f"[VC teacher-forced] raw token accuracy:         {raw_acc:.4f} ({raw_matches}/{raw_total})")
     logger.info(f"[diag] mean active-codebook logit PCC = {mean_pcc:.5f}")
-    logger.info(f"[diag] active mismatches: {len(miss_margins)}; HF margin over TTNN's pick: "
-                f"min={mm.min():.4f} median={_np.median(mm):.4f} max={mm.max():.4f}; "
-                f"<0.05: {near}/{len(miss_margins)}  <0.10: {small}/{len(miss_margins)}")
+    logger.info(
+        f"[diag] active mismatches: {len(miss_margins)}; HF margin over TTNN's pick: "
+        f"min={mm.min():.4f} median={_np.median(mm):.4f} max={mm.max():.4f}; "
+        f"<0.05: {near}/{len(miss_margins)}  <0.10: {small}/{len(miss_margins)}"
+    )
     # localize: accuracy + PCC across thirds of the trajectory (decode position increases with k)
     nps = len(per_step)
-    for lbl, lo, hi in [("first-third", 0, nps // 3), ("mid-third", nps // 3, 2 * nps // 3),
-                        ("last-third", 2 * nps // 3, nps)]:
+    for lbl, lo, hi in [
+        ("first-third", 0, nps // 3),
+        ("mid-third", nps // 3, 2 * nps // 3),
+        ("last-third", 2 * nps // 3, nps),
+    ]:
         chunk = per_step[lo:hi]
-        a = sum(m for _, _, m, _ in chunk); n = sum(act for _, act, _, _ in chunk)
+        a = sum(m for _, _, m, _ in chunk)
+        n = sum(act for _, act, _, _ in chunk)
         pc = _np.mean([p for _, _, _, p in chunk]) if chunk else float("nan")
         ks = f"k={chunk[0][0]}..{chunk[-1][0]}" if chunk else "-"
-        logger.info(f"[diag] {lbl:11s} ({ks}, pos {S + (chunk[0][0] if chunk else 0)}..): "
-                    f"acc={a}/{n}={a / max(1, n):.3f}  logitPCC={pc:.5f}")
-    print(f"VC_TF_ACTIVE_ACC={active_acc:.4f} ACTIVE={token_matches}/{token_total} RAW={raw_acc:.4f} "
-          f"LOGIT_PCC={mean_pcc:.5f} NEARTIE_MISS={near}/{len(miss_margins)} (TTS baseline 0.967)")
+        logger.info(
+            f"[diag] {lbl:11s} ({ks}, pos {S + (chunk[0][0] if chunk else 0)}..): "
+            f"acc={a}/{n}={a / max(1, n):.3f}  logitPCC={pc:.5f}"
+        )
+    print(
+        f"VC_TF_ACTIVE_ACC={active_acc:.4f} ACTIVE={token_matches}/{token_total} RAW={raw_acc:.4f} "
+        f"LOGIT_PCC={mean_pcc:.5f} NEARTIE_MISS={near}/{len(miss_margins)} (TTS baseline 0.967)"
+    )
 
     assert active_acc >= ACCURACY_MIN_TOKEN_ACCURACY, (
         f"voice-clone active-mask token accuracy {active_acc:.4f} < regression floor "

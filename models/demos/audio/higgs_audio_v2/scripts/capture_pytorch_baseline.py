@@ -18,15 +18,14 @@ Requires:
 Output:
   tests/fixtures/baseline_tts_short.json
 """
-import json
 import argparse
+import json
 import os
 import pathlib
 import time
 
 import numpy as np
 import torch
-
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -53,9 +52,7 @@ def main():
 
     print(f"Loading model from {args.model} (bf16, CPU)", flush=True)
     t0 = time.time()
-    model = HiggsAudioV2ForConditionalGeneration.from_pretrained(
-        args.model, dtype=torch.bfloat16
-    ).to("cpu")
+    model = HiggsAudioV2ForConditionalGeneration.from_pretrained(args.model, dtype=torch.bfloat16).to("cpu")
     model.eval()
     print(f"  loaded in {time.time()-t0:.1f}s", flush=True)
 

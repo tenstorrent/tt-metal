@@ -21,21 +21,19 @@ import os
 import pathlib
 import time
 
-import numpy as np
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
-from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config, load_higgs_v2_state_dict
-from models.demos.audio.higgs_audio_v2.tt.model_args import HiggsModelArgs, BASE_TEXT_MODEL
+import ttnn
 from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
+from models.demos.audio.higgs_audio_v2.tt.model_args import BASE_TEXT_MODEL, HiggsModelArgs
 from models.demos.audio.higgs_audio_v2.tt.precision_presets import build_precision
+from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config, load_higgs_v2_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.generator import create_submeshes
-
+from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 HIGGS_MODEL_DIR = "/data/hf_cache/higgs"
 FIXTURE = pathlib.Path(__file__).resolve().parent / "fixtures" / "baseline_tts_short.json"
@@ -54,20 +52,30 @@ def mesh_device():
 def _build_stream(submesh, higgs_cfg, state_dict, prompt_ids, precision):
     """Build a full replicated model + traced decode step on one 1x1 submesh."""
     opt = build_precision(precision, higgs_cfg.num_hidden_layers, BASE_TEXT_MODEL)
-    args = HiggsModelArgs(mesh_device=submesh, higgs_config=higgs_cfg, max_batch_size=1, max_seq_len=1024,
-                          optimizations=opt)
+    args = HiggsModelArgs(
+        mesh_device=submesh, higgs_config=higgs_cfg, max_batch_size=1, max_seq_len=1024, optimizations=opt
+    )
     assert args.num_devices == 1, f"submesh must be 1 device (got {args.num_devices})"
     K, cb_size, dim = args.audio_num_codebooks, args.audio_codebook_size, args.dim
     tt_ccl = TT_CCL(submesh)
     RopeCls = HfRotarySetup if args.use_hf_rope else RotarySetup
     rope_setup = RopeCls(
-        device=submesh, batch_size=args.max_batch_size, head_dim=args.head_dim,
-        max_seq_len=args.max_seq_len, rope_theta=args.rope_theta, rope_scaling=args.rope_scaling,
-        use_qk_fused=args.use_qk_fused, prefetcher=None,
+        device=submesh,
+        batch_size=args.max_batch_size,
+        head_dim=args.head_dim,
+        max_seq_len=args.max_seq_len,
+        rope_theta=args.rope_theta,
+        rope_scaling=args.rope_scaling,
+        use_qk_fused=args.use_qk_fused,
+        prefetcher=None,
     )
     model = HiggsAudioTTModel(
-        args=args, mesh_device=submesh, tt_ccl=tt_ccl,
-        state_dict=state_dict, transformation_mats=rope_setup.get_both_trans_mats(), dtype=ttnn.bfloat8_b,
+        args=args,
+        mesh_device=submesh,
+        tt_ccl=tt_ccl,
+        state_dict=state_dict,
+        transformation_mats=rope_setup.get_both_trans_mats(),
+        dtype=ttnn.bfloat8_b,
     )
     S = prompt_ids.shape[0]
     _ = model.prefill_text(prompt_ids, rope_setup)
@@ -75,15 +83,23 @@ def _build_stream(submesh, higgs_cfg, state_dict, prompt_ids, precision):
     nc = args.get_norm_config("lm_head", Mode.DECODE, None)
 
     cur_tokens = ttnn.from_torch(
-        torch.zeros(1, K, dtype=torch.int32), device=submesh, dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        torch.zeros(1, K, dtype=torch.int32),
+        device=submesh,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
     offsets_dev = ttnn.from_torch(
-        (torch.arange(K, dtype=torch.int32) * cb_size).view(1, K), device=submesh, dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        (torch.arange(K, dtype=torch.int32) * cb_size).view(1, K),
+        device=submesh,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
     cp_dev = ttnn.from_torch(
-        torch.tensor([S], dtype=torch.int32), device=submesh, dtype=ttnn.int32,
+        torch.tensor([S], dtype=torch.int32),
+        device=submesh,
+        dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, dims=(None, None), mesh_shape=args.cluster_shape),
     )
     rope_idxs = rope_setup.get_rot_idxs(torch.tensor([S], dtype=torch.int32), on_host=False)
@@ -110,9 +126,11 @@ def _build_stream(submesh, higgs_cfg, state_dict, prompt_ids, precision):
         return logits
 
     def advance_pos(pos):
-        cp_host = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), dtype=ttnn.int32,
-                                  mesh_mapper=ttnn.ShardTensor2dMesh(submesh, dims=(None, None),
-                                                                     mesh_shape=args.cluster_shape))
+        cp_host = ttnn.from_torch(
+            torch.tensor([pos], dtype=torch.int32),
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, dims=(None, None), mesh_shape=args.cluster_shape),
+        )
         ttnn.copy_host_to_device_tensor(cp_host, cp_dev)
         ridx_host = rope_setup.get_rot_idxs(torch.tensor([pos], dtype=torch.int32), on_host=True)
         ttnn.copy_host_to_device_tensor(ridx_host, rope_idxs)
@@ -168,10 +186,14 @@ def test_decode_perf_dp_n300(mesh_device):
     amortized_rtf = CODEC_FRAME_RATE_HZ / aggregate_tokps
     logger.info("==== N300 DATA-PARALLEL DECODE (2 streams, one per chip) ====")
     logger.info(f"  per-stream: {per_stream_tokps:.2f} tok/s  RTF={per_stream_rtf:.4f}")
-    logger.info(f"  AGGREGATE : {aggregate_tokps:.2f} tok/s  amortized RTF={amortized_rtf:.4f}  "
-                f"(single-chip baseline 63.5 tok/s / 0.394)")
-    print(f"PERF_DP_N300 per_stream_tokps={per_stream_tokps:.2f} aggregate_tokps={aggregate_tokps:.2f} "
-          f"per_stream_rtf={per_stream_rtf:.4f} amortized_rtf={amortized_rtf:.4f} per_step_ms={1e3*wall/STEPS:.2f}")
+    logger.info(
+        f"  AGGREGATE : {aggregate_tokps:.2f} tok/s  amortized RTF={amortized_rtf:.4f}  "
+        f"(single-chip baseline 63.5 tok/s / 0.394)"
+    )
+    print(
+        f"PERF_DP_N300 per_stream_tokps={per_stream_tokps:.2f} aggregate_tokps={aggregate_tokps:.2f} "
+        f"per_stream_rtf={per_stream_rtf:.4f} amortized_rtf={amortized_rtf:.4f} per_step_ms={1e3*wall/STEPS:.2f}"
+    )
 
     for st in streams:
         ttnn.release_trace(st["submesh"], st["trace_id"])

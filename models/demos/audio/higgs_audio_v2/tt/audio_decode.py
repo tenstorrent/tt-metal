@@ -61,8 +61,8 @@ def apply_delay_pattern_to_selected_audio_tokens(
 
     # Startup delay: codebooks beyond (num_delay) are still emitting BOS.
     if num_delay + 1 < next_audio_tokens.shape[0]:
-        active_mask[(num_delay + 1):] = False
-        next_audio_tokens[(num_delay + 1):] = config.audio_stream_bos_id
+        active_mask[(num_delay + 1) :] = False
+        next_audio_tokens[(num_delay + 1) :] = config.audio_stream_bos_id
         num_delay += 1
 
     # EOS shutdown: once an EOS appears, lower codebooks have finished.
