@@ -17,6 +17,25 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # --- e2e ---
+- id: bh-lb-devstral2-123b-teacher-forced-sanity
+  name: devstral2-123b teacher-forced accuracy sanity
+  model-name: devstral2-123b-instruct
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    if [[ -d /localdev/blackhole_demos/huggingface_data/hub ]]; then
+      export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
+    fi
+    export MESH_DEVICE=T3K
+    export DEVSTRAL2_HF_LOCAL_ONLY=1
+    uv pip install "git+https://github.com/huggingface/transformers"
+    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sanity -v
+  skus:
+    bh_loudbox:
+      timeout: 60
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng)
+  team: models
+
 - id: bh-grid-110-cores-panoptic-deeplab-demo
   name: 110 cores panoptic-deeplab demo
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1800
