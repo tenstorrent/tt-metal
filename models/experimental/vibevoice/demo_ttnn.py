@@ -22,12 +22,14 @@ Usage (from tt-metal root):
     python models/experimental/vibevoice/demo_ttnn.py --demo 2p_goat
     python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --output_dir ~/vv_ttnn_long
     python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 256
+    python models/experimental/vibevoice/demo_ttnn.py --text ... --voice alice.wav carter.wav frank.wav --max_new_tokens 64 --debug
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -47,6 +49,7 @@ from models.experimental.vibevoice.common.model_utils import ensure_model_weight
 from models.experimental.vibevoice.common.resource_utils import (
     DEMO_VOICE_CLONES,
     build_voice_samples,
+    voice_preset_demo_id,
     ensure_demo_resources,
     load_script,
 )
@@ -151,8 +154,24 @@ def main() -> int:
     )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--text", default=None, help="Custom script path (overrides --demo text)")
-    ap.add_argument("--voice", default=None, help="Custom voice WAV for voice cloning")
+    ap.add_argument(
+        "--voice",
+        nargs="+",
+        default=None,
+        metavar="WAV",
+        help="Voice clone WAV(s) for Speaker 1, 2, 3, … in order (repeatable path list)",
+    )
+    ap.add_argument(
+        "--debug",
+        action="store_true",
+        help="Verbose stage logs (VV_DEBUG=1) + device-synced timing breakdown (VV_PROFILE=1)",
+    )
     args = ap.parse_args()
+
+    if args.debug:
+        os.environ["VV_DEBUG"] = "1"
+        os.environ["VV_PROFILE"] = "1"
+        print("[demo_ttnn] debug enabled (VV_DEBUG=1 VV_PROFILE=1)", flush=True)
 
     if args.text:
         text_path = Path(args.text)
@@ -188,16 +207,26 @@ def main() -> int:
     voice_mapping: Optional[list[dict[str, str]]] = None
     voice_samples: Optional[list[str]] = None
     if args.voice:
-        voice_path = Path(args.voice)
-        if not voice_path.is_file():
-            print(f"[demo_ttnn] ERROR: voice file not found: {voice_path}", file=sys.stderr)
-            return 1
+        voice_paths: list[Path] = []
+        for voice_ref in args.voice:
+            voice_path = Path(voice_ref)
+            if not voice_path.is_file():
+                print(f"[demo_ttnn] ERROR: voice file not found: {voice_path}", file=sys.stderr)
+                return 1
+            voice_paths.append(voice_path)
         use_voice_cloning = not args.no_voice_cloning
-        voice_samples = [str(voice_path)]
-        voice_mapping = [{"speaker_id": "1", "name": voice_path.stem, "voice_file": voice_path.name}]
-    elif not args.no_voice_cloning and demo_id in DEMO_VOICE_CLONES:
+        voice_samples = [str(p) for p in voice_paths]
+        voice_mapping = [
+            {
+                "speaker_id": str(speaker_idx),
+                "name": voice_path.stem,
+                "voice_file": voice_path.name,
+            }
+            for speaker_idx, voice_path in enumerate(voice_paths, start=1)
+        ]
+    elif not args.no_voice_cloning and voice_preset_demo_id(demo_id) in DEMO_VOICE_CLONES:
         use_voice_cloning = True
-        voice_samples, voice_mapping = build_voice_samples(script, demo_id)
+        voice_samples, voice_mapping = build_voice_samples(script, voice_preset_demo_id(demo_id))
 
     print(f"[demo_ttnn] demo={demo_id}  text={text_path.name}", flush=True)
     if demo_entry is not None:
@@ -230,6 +259,19 @@ def main() -> int:
     inputs = processor(**processor_kwargs)
     prefill_len = inputs["input_ids"].shape[1]
 
+    if args.debug:
+        speech_slots = int(inputs["speech_input_mask"][0].sum().item()) if "speech_input_mask" in inputs else 0
+        voice_samples_sec = None
+        if voice_samples and inputs.get("speech_tensors") is not None:
+            voice_samples_sec = inputs["speech_tensors"].shape[-1] / SR
+        print(
+            "[demo_ttnn] stage 1/5 processor: "
+            f"input_ids={tuple(inputs['input_ids'].shape)} "
+            f"speech_slots={speech_slots} "
+            f"voice_audio_sec={voice_samples_sec}",
+            flush=True,
+        )
+
     max_ar_steps = args.max_new_tokens
     if max_ar_steps is None:
         max_ar_steps = int(args.max_length_times * prefill_len)
@@ -242,6 +284,8 @@ def main() -> int:
 
     mesh = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
+        if args.debug:
+            print("[demo_ttnn] stage 2/5 open_device: device_id=0 l1_small_size=32768", flush=True)
         print("[demo_ttnn] Loading TTVibeVoiceModel...", flush=True)
         _t_load0 = _time.perf_counter()
         tt_model = TTVibeVoiceModel.from_checkpoint(
@@ -251,9 +295,21 @@ def main() -> int:
             num_diffusion_steps=args.num_steps,
         )
         print(f"[demo_ttnn] model load: {_time.perf_counter() - _t_load0:.1f}s", flush=True)
+        if args.debug:
+            print(
+                "[demo_ttnn] stage 3/5 model loaded: LM + connectors + diffusion_head + "
+                "acoustic/semantic tokenizers + DPM scheduler",
+                flush=True,
+            )
 
         torch.manual_seed(args.seed)
         print("[demo_ttnn] TT generate...", flush=True)
+        if args.debug:
+            print(
+                "[demo_ttnn] stage 4/5 generate: prefill (voice encode + LM) → "
+                f"AR loop up to {max_ar_steps} steps (see [VV_DEBUG] per step)",
+                flush=True,
+            )
         _t_gen0 = _time.perf_counter()
         generate_kwargs = {
             "input_ids": inputs["input_ids"],
@@ -274,6 +330,12 @@ def main() -> int:
         tt_gen = tt_out.sequences[0, prefill_len:]
     finally:
         ttnn.close_device(mesh)
+
+    if args.debug:
+        print(
+            f"[demo_ttnn] stage 5/5 save: wav + meta under {paths['dir']}",
+            flush=True,
+        )
 
     tt_path = paths["tt"]
     golden_out = paths["golden"]

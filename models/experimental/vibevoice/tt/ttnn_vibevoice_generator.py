@@ -19,17 +19,28 @@ from typing import List, Optional, Tuple
 import torch
 import ttnn
 
-# Optional, env-gated wall-clock profiler for the generate() pipeline.
-# Enable with VV_PROFILE=1.  When on, each section synchronizes the device so
-# wall time is attributed to the right phase (this serializes the pipeline, so
-# the absolute total is inflated vs a normal run — use it for *relative* breakdown).
-_VV_PROFILE = os.environ.get("VV_PROFILE", "0") == "1"
+# Optional env-gated diagnostics for generate():
+#   VV_PROFILE=1 — device-synced timing breakdown per phase
+#   VV_DEBUG=1   — per-AR-step token + phase logs (also set by demo_ttnn.py --debug)
+
+
+def _vv_profile_enabled() -> bool:
+    return os.environ.get("VV_PROFILE", "0") == "1"
+
+
+def _vv_debug_enabled() -> bool:
+    return os.environ.get("VV_DEBUG", "0") == "1"
+
+
+def _vv_debug(msg: str) -> None:
+    if _vv_debug_enabled():
+        print(f"[VV_DEBUG] {msg}", flush=True)
 
 
 class _Profiler:
-    def __init__(self, device, enabled: bool = _VV_PROFILE):
+    def __init__(self, device, enabled: Optional[bool] = None):
         self.device = device
-        self.enabled = enabled
+        self.enabled = _vv_profile_enabled() if enabled is None else enabled
         self.totals: dict = {}
         self.counts: dict = {}
 
@@ -212,6 +223,17 @@ class TTVibeVoiceGenerator:
         # Cached device-side logit mask for the valid-token constraint (built once,
         # reused every AR step — avoids a full-vocab host alloc + H2D upload per step).
         self._token_mask_tt: Optional[ttnn.Tensor] = None
+
+    def _token_label(self, token_id: int) -> str:
+        labels = {
+            self.speech_start_id: "speech_start",
+            self.speech_end_id: "speech_end",
+            self.speech_diffusion_id: "speech_diffusion",
+            self.eos_token_id: "eos",
+        }
+        if self.bos_token_id is not None:
+            labels[self.bos_token_id] = "bos"
+        return labels.get(token_id, f"id={token_id}")
 
     def _token_constraint_mask(self, vocab_size: int) -> ttnn.Tensor:
         if self._token_mask_tt is None:
@@ -599,6 +621,13 @@ class TTVibeVoiceGenerator:
 
         prof = _Profiler(device)
 
+        _vv_debug(
+            f"generate() start: input_ids={tuple(input_ids.shape)} "
+            f"voice_cloning={speech_tensors is not None} "
+            f"max_new_tokens={max_new_tokens} cfg_scale={self.cfg_scale} "
+            f"diffusion_steps={self.num_diffusion_steps}"
+        )
+
         with prof.section("prefill_build_embeds (voice-clone encode)"):
             inputs_embeds = self._build_prefill_embeds(
                 input_ids,
@@ -608,6 +637,11 @@ class TTVibeVoiceGenerator:
                 prefill_speech_embeds=prefill_speech_embeds,
             )
         prefill_len = inputs_embeds.shape[2]
+        _vv_debug(
+            f"prefill embeds built: seq_len={prefill_len} "
+            f"speech_slots={int(speech_input_mask[0].sum().item()) if speech_input_mask is not None else 0} "
+            f"scale={self.speech_scaling_factor} bias={self.speech_bias_factor}"
+        )
 
         # Determine the max number of AR steps up front — it sizes the fixed KV cache.
         initial_length = input_ids.shape[-1]
@@ -638,6 +672,7 @@ class TTVibeVoiceGenerator:
 
         with prof.section("lm_prefill"):
             logits_pos, prefill_hidden = self._lm_prefill(inputs_embeds, kv_cache_pos)
+        _vv_debug(f"lm_prefill done: kv_cache_pos size={prefill_len + max_steps + 8}")
 
         neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
         neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
@@ -665,15 +700,19 @@ class TTVibeVoiceGenerator:
         else:
             next_token = _greedy_argmax(logits_pos, use_fp32=use_fp32_argmax)
         step_hidden = prefill_hidden
+        _vv_debug(f"AR loop: max_steps={max_steps} first_token={next_token} ({self._token_label(next_token)})")
 
+        diffusion_frames = 0
         for step in range(max_steps):
             current_token = next_token
             sequences = torch.cat(
                 [sequences, torch.tensor([[current_token]], dtype=torch.long)],
                 dim=-1,
             )
+            _vv_debug(f"step {step + 1}/{max_steps}: emit {self._token_label(current_token)}")
 
             if current_token == self.speech_diffusion_id:
+                diffusion_frames += 1
                 cond_pos = _condition_from_hidden(step_hidden)
                 # Negative CFG: reference processes the PREVIOUS speech_diffusion_id
                 # at each step (the current one is appended to negative_input_ids
@@ -700,8 +739,14 @@ class TTVibeVoiceGenerator:
                         audio_chunks.append(audio_chunk.to(torch.float32).reshape(-1))
                     else:
                         audio_chunks.append(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))
+                chunk_samples = audio_chunks[-1].numel()
+                _vv_debug(
+                    f"  diffusion frame {diffusion_frames}: audio_chunk={chunk_samples} samples "
+                    f"({chunk_samples / 24000:.3f}s)"
+                )
 
             if current_token == self.eos_token_id:
+                _vv_debug(f"EOS at step {step + 1}")
                 break
 
             start_pos = prefill_len + step
@@ -713,6 +758,7 @@ class TTVibeVoiceGenerator:
                     logits, step_hidden = self._lm_decode_token(current_token, start_pos, kv_cache_pos)
 
             if current_token == self.speech_start_id:
+                _vv_debug("  new speech segment: reset neg-CFG cache + acoustic/semantic streaming caches")
                 neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
                 neg_prev_diffusion_token = None
                 self.acoustic_tok.reset_decode_cache()
@@ -741,6 +787,11 @@ class TTVibeVoiceGenerator:
         else:
             speech_waveform = torch.zeros(0)
 
+        ar_tokens = sequences.shape[1] - input_ids.shape[1]
+        _vv_debug(
+            f"generate() done: ar_tokens={ar_tokens} diffusion_frames={diffusion_frames} "
+            f"audio_samples={speech_waveform.numel()} ({speech_waveform.numel() / 24000:.2f}s)"
+        )
         prof.report()
 
         return TTVibeVoiceOutput(
