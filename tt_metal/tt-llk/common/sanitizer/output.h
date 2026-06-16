@@ -91,7 +91,6 @@ NOINLINE NOCLONE void _print_operand_actual(const State<T> actual)
     if (actual.is_known())
     {
         DEVICE_PRINT(
-            "│\r"
             "│  ┌[ Failed operand state check ]─\r"
             "│  ├── Provided state value ── {}\r",
             actual.get_underlying());
@@ -162,7 +161,6 @@ NOINLINE NOCLONE bool operation_assert(const Operation expected, const Operation
     _print_compute_info(update);
 
     DEVICE_PRINT(
-        "│\r"
         "│  ┌[ Violating execute / uninit call ]─\r"
         "│  ├── Operation ── {}\r",
         actual);
@@ -200,9 +198,7 @@ NOINLINE NOCLONE void operation_argument_assert(
         "│  ┌[ llk::san::operation_init called from ]─\r");
     _print_compute_info(update);
 
-    DEVICE_PRINT(
-        "│\r"
-        "│  ┌[ llk::san::operation_check called from ]─\r");
+    DEVICE_PRINT("│  ┌[ llk::san::operation_check called from ]─\r");
     _print_compute_info(current);
 
     DEVICE_PRINT("└─────────────────────────────\n");
@@ -270,9 +266,7 @@ NOINLINE NOCLONE void fsm_assert(
         "│  ┌[ Last successful transition ]─\r");
     _print_compute_info(update);
 
-    DEVICE_PRINT(
-        "│\r"
-        "│  ┌[ Violating transition ]─\r");
+    DEVICE_PRINT("│  ┌[ Violating transition ]─\r");
     _print_compute_info(current);
 
     DEVICE_PRINT("└─────────────────────────────\n");
