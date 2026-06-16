@@ -158,12 +158,10 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         logging.info(
             "Building ttml Qwen3 model (hidden=%d, layers=%d)", qwen_config.hidden_size, qwen_config.num_hidden_layers
         )
-        tt_model = Qwen3(qwen_config)
 
-        # Load HF weights into the (still replicated) model, then shard.
-        hf_state_dict = self._load_hf_state_dict(model_source)
-        load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie)
-        del hf_state_dict
+        # Lazy-init FSDP requires both the opt-in flag and an active FSDP axis;
+        # without FSDP there is nothing to shard and the eager path is simpler.
+        lazy_fsdp = self._fsdp_enabled and bool(device_config.lazy_parameter_init)
 
         if self._fsdp_enabled:
             # reshard_after_forward keeps peak memory low by resharding weights
@@ -180,16 +178,56 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             # transformer blocks (the bulk of params) and leave the embeddings /
             # lm_head / final norm replicated.
             wrap_root = os.environ.get("GRPO_QWEN_FSDP_WRAP_ROOT", "1") == "1"
+
+        if lazy_fsdp:
+            # Lazy-init FSDP path (required for large models like 32B): build the
+            # module tree without allocating any weights, let fully_shard rewrite
+            # each lazy parameter's mapper to add Shard{dim} on the 'fsdp' axis,
+            # materialize the parameters already-sharded, then stream the HF
+            # weights in sharded. The full unsharded model is never present on a
+            # single device. Contract: fully_shard -> materialize_module ->
+            # (load weights) -> create_optimizer (the optimizer is created later
+            # in GRPOTrainer.train()).
             logging.info(
-                "Applying FSDP fully_shard across the 'fsdp' axis " "(size=%d, reshard_after_forward=%s, wrap_root=%s)",
+                "Applying lazy-init FSDP fully_shard across the 'fsdp' axis "
+                "(size=%d, reshard_after_forward=%s, wrap_root=%s)",
                 self._mesh.axis_size("fsdp"),
                 reshard,
                 wrap_root,
             )
+            with ttml.lazy_init():
+                tt_model = Qwen3(qwen_config)
             for block in tt_model.blocks:
                 ttml.fsdp.fully_shard(block, reshard_after_forward=reshard)
             if wrap_root:
                 ttml.fsdp.fully_shard(tt_model, reshard_after_forward=reshard)
+            ttml.materialize_module(tt_model)
+
+            # Weights are uploaded already-sharded to match each materialized
+            # parameter's placements (full tensor stays in host RAM).
+            hf_state_dict = self._load_hf_state_dict(model_source)
+            load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie, sharded=True)
+            del hf_state_dict
+        else:
+            tt_model = Qwen3(qwen_config)
+
+            # Load HF weights into the (still replicated) model, then shard.
+            hf_state_dict = self._load_hf_state_dict(model_source)
+            load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie)
+            del hf_state_dict
+
+            if self._fsdp_enabled:
+                logging.info(
+                    "Applying FSDP fully_shard across the 'fsdp' axis "
+                    "(size=%d, reshard_after_forward=%s, wrap_root=%s)",
+                    self._mesh.axis_size("fsdp"),
+                    reshard,
+                    wrap_root,
+                )
+                for block in tt_model.blocks:
+                    ttml.fsdp.fully_shard(block, reshard_after_forward=reshard)
+                if wrap_root:
+                    ttml.fsdp.fully_shard(tt_model, reshard_after_forward=reshard)
 
         ctx._tokenizer = tokenizer
         if ctx._pad_token is None:

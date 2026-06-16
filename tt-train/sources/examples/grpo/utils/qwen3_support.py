@@ -14,7 +14,7 @@ that example's import layout.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import List
+from typing import Any, List
 
 import torch
 import ttnn
@@ -81,13 +81,43 @@ def build_mesh(device_config: DeviceConfig) -> "ttml.Mesh":
 # ---------------------------------------------------------------------------
 
 
-def torch_to_ttml(t: torch.Tensor) -> "ttml.autograd.Tensor":
-    """Convert a torch tensor to a bfloat16 TILE tensor on the active device."""
+def torch_to_ttml(t: torch.Tensor, mapper: Any = None) -> "ttml.autograd.Tensor":
+    """Convert a torch tensor to a bfloat16 TILE tensor on the active device.
+
+    When ``mapper`` is ``None`` the tensor is uploaded to a single device (or
+    replicated by the default mesh behaviour) — the original eager path. When a
+    ``mapper`` (a ``ttnn`` mesh mapper) is provided the full host tensor is
+    distributed across the mesh according to the mapper's placements, so an
+    FSDP-sharded parameter only ever lands on device as its per-device slice
+    (the full weight stays in host RAM). This mirrors how
+    ``ttml.fsdp._shard_replicated_param`` redistributes via
+    ``Tensor.from_numpy(full_np, TILE, dtype, mapper)``.
+    """
+    if mapper is not None:
+        full_np = t.float().numpy()
+        return ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
     device = ttml.autograd.AutoContext.get_instance().get_device()
     ttnn_host = ttnn.from_torch(t, dtype=ttnn.bfloat16)
     ttnn_dev = ttnn.to_device(ttnn_host, device)
     ttnn_tiled = ttnn.tilize_with_zero_padding(ttnn_dev)
     return ttml.autograd.create_tensor(ttnn_tiled)
+
+
+def _placements_of(param_tensor: "ttml.autograd.Tensor") -> Any:
+    """Best-effort read of a materialized parameter's mesh placements.
+
+    Returns the list of ``ttnn`` placements (``PlacementShard`` /
+    ``PlacementReplicate``) backing the autograd tensor's value, or ``None`` if
+    the topology is unavailable (e.g. unit mesh). Mirrors
+    ``ttml.fsdp._get_placements``; kept local so this module doesn't depend on
+    an underscore-private symbol from ``ttml.fsdp``.
+    """
+    try:
+        value = param_tensor.get_value()
+        topology = value.tensor_topology()
+        return list(topology.placements())
+    except Exception:
+        return None
 
 
 def unpermute_proj_rows(weight: torch.Tensor, num_heads: int) -> torch.Tensor:
@@ -171,18 +201,55 @@ def build_weight_mapping_single(config, root_prefix: str, tie_word_embeddings: b
     return mapping, transforms
 
 
-def load_weights_from_hf(ttml_model, hf_state_dict: dict, config, tie_word_embeddings: bool = False) -> None:
-    """Load a HuggingFace Qwen3 state-dict into a (replicated) ttml Qwen3 model.
+def load_weights_from_hf(
+    ttml_model, hf_state_dict: dict, config, tie_word_embeddings: bool = False, sharded: bool = False
+) -> None:
+    """Load a HuggingFace Qwen3 state-dict into a ttml Qwen3 model.
 
-    Must be called BEFORE ``ttml.fsdp.fully_shard`` so the parameters are still
-    replicated on the FSDP axis; ``fully_shard`` then reshards them in place.
+    Two modes:
+
+    - ``sharded=False`` (default, eager path): the model is still replicated on
+      the FSDP axis. Must be called BEFORE ``ttml.fsdp.fully_shard`` so
+      ``fully_shard`` can reshard the (full, replicated) parameters in place.
+
+    - ``sharded=True`` (lazy + FSDP path): the model has already been
+      ``fully_shard``-ed and materialized, so each parameter is allocated
+      already-sharded. Each HF weight is uploaded distributed to match the
+      destination parameter's existing placements, so the full unsharded weight
+      never lands on a single device (only its per-device slice does; the full
+      tensor stays in host RAM). The materialized parameter's value is swapped
+      in place via ``set_value`` so any FSDP markers attached to the autograd
+      tensor at materialize time are preserved.
     """
     ttml_params = ttml_model.parameters()
     any_key = next(iter(ttml_params))
     root_prefix = any_key.split("/")[0]
 
     mapping, transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
+
+    # For a materialized FSDP-sharded parameter, ``.shape()`` returns the LOCAL
+    # per-device shape, not the global tensor shape. ``_prepare`` pads each HF
+    # weight to ``ttml_shapes[name]`` and (in the sharded path) hands the result
+    # to ``Tensor.from_numpy(full_np, ..., mapper)``, where the mapper expects
+    # the GLOBAL tensor and slices the per-device shards itself. So in the
+    # sharded path we must record the global shape (local shape scaled back up
+    # by the mesh axis size on every sharded dim); otherwise the weight is
+    # truncated to one shard and then sharded a second time (uneven shards ->
+    # "Shard shape mismatch"). The matching per-param mapper is cached for reuse
+    # in the upload loop below.
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
+    sharded_placements: dict = {}
+    if sharded:
+        mesh_shape = list(ttml.mesh().shape)
+        for name in ttml_params:
+            placements = _placements_of(ttml_params[name])
+            sharded_placements[name] = placements
+            if not placements:
+                continue
+            global_shape = ttml_shapes[name]
+            for axis_idx, placement in enumerate(placements):
+                if isinstance(placement, ttnn.PlacementShard) and axis_idx < len(mesh_shape):
+                    global_shape[placement.dim] *= mesh_shape[axis_idx]
 
     def _prepare(hf_name, ttml_name):
         # CPU-only prep (float cast, permutation, padding). The device transfer
@@ -228,6 +295,8 @@ def load_weights_from_hf(ttml_model, hf_state_dict: dict, config, tie_word_embed
     loaded = 0
     skipped: List[str] = []
 
+    device = ttml.autograd.AutoContext.get_instance().get_device() if sharded else None
+
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [(hf_name, ttml_name, pool.submit(_prepare, hf_name, ttml_name)) for hf_name, ttml_name in items]
         for hf_name, ttml_name, future in futures:
@@ -236,7 +305,20 @@ def load_weights_from_hf(ttml_model, hf_state_dict: dict, config, tie_word_embed
                 skipped.append(hf_name)
                 continue
             # Device transfer runs serially in the main thread (see _prepare).
-            ttml_params[ttml_name].assign(torch_to_ttml(weight))
+            param = ttml_params[ttml_name]
+            if sharded:
+                # ``weight`` is already padded to the GLOBAL shape (see above).
+                # Distribute it to match the destination parameter's existing
+                # (FSDP-sharded or replicated) placements, then swap the value in
+                # place to preserve FSDP markers.
+                placements = sharded_placements.get(ttml_name)
+                if placements:
+                    mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements))
+                else:
+                    mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+                param.set_value(torch_to_ttml(weight, mapper=mapper).get_value())
+            else:
+                param.assign(torch_to_ttml(weight))
             loaded += 1
 
     print(f"  Qwen3 weight loading: {loaded} loaded, {len(skipped)} skipped")
