@@ -12,10 +12,10 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <unistd.h>
 #include <array>
-#include <functional>
 #include <map>
 #include <memory>
 #include <ostream>
+#include <random>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -255,10 +255,11 @@ OperandStimulus make_operand_stimulus(tt::DataFormat fmt, uint32_t tile_count, u
         // Generate random floats in face-major tile order (no spatial reshape),
         // pack to Bfp8_b L1 layout, then unpack to get the float values
         // post-quantization for the golden reference.
-        auto rand_float = std::bind(std::uniform_real_distribution<float>(-rng, +rng), std::mt19937(seed));
+        std::mt19937 gen(seed);
+        std::uniform_real_distribution<float> dist(-rng, +rng);
         std::vector<float> raw(num_elements);
         for (float& v : raw) {
-            v = rand_float();
+            v = dist(gen);
         }
         out.packed =
             pack_as_bfp8_tiles<float>(ttsl::make_const_span(raw), /*row_major_input=*/false, /*is_exp_a=*/false);
@@ -270,10 +271,11 @@ OperandStimulus make_operand_stimulus(tt::DataFormat fmt, uint32_t tile_count, u
         // the post-quantization float values used as the golden reference. NOTE: this L1 layout
         // is identical for plain MxFp4 and the register-only MxFp4_2x variants -- the 2x packing
         // happens in the unpacker (L1->SrcReg), not here.
-        auto rand_float = std::bind(std::uniform_real_distribution<float>(-rng, +rng), std::mt19937(seed));
+        std::mt19937 gen(seed);
+        std::uniform_real_distribution<float> dist(-rng, +rng);
         std::vector<float> raw(num_elements);
         for (float& v : raw) {
-            v = rand_float();
+            v = dist(gen);
         }
         out.packed = pack_as_mxfp4_tiles<float>(ttsl::make_const_span(raw), /*row_major_input=*/false);
         out.floats = unpack_mxfp4_tiles_into_float_vec(ttsl::make_const_span(out.packed), /*row_major_output=*/false);
