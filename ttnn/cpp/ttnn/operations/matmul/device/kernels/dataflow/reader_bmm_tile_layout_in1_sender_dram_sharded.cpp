@@ -106,7 +106,8 @@ void kernel_main() {
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
 
-    cb_in1.reserve_back(in1_block_num_tiles);
+    constexpr uint32_t initial_reserved_blocks = (num_blocks > 1) ? 2 : 1;
+    cb_in1.reserve_back(in1_block_num_tiles * initial_reserved_blocks);
     uint32_t l1_write_addr_in1_offset = 0;
     uint32_t l1_write_addr_in1_start = cb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;

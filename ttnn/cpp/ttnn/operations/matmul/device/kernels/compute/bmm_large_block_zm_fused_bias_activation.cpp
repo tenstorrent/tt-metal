@@ -194,7 +194,6 @@ void kernel_main() {
 
     CircularBuffer in0_cb(in0_cb_id);
     CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer out_cb(out_cb_id);
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
     CircularBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
 
@@ -301,10 +300,6 @@ void kernel_main() {
 
                     in0_cb.wait_front(in0_block_num_tiles);
                     in1_cb.wait_front(in1_block_num_tiles);
-
-                    if (block == 0 && !last_out) {
-                        out_cb.reserve_back(out_block_num_tiles);
-                    }
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
