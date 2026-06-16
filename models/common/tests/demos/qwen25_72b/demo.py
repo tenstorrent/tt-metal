@@ -48,6 +48,7 @@ import ttnn
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
 from models.common.models.qwen25_72b.executor import EagerQwen25_72BExecutor, TracedQwen25_72BExecutor
 from models.common.models.qwen25_72b.model import QWEN25_72B_ACCURACY, QWEN25_72B_PERFORMANCE, Qwen25_72B
+from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.tt_transformers.tt.common import encode_prompt_hf
 
@@ -98,11 +99,17 @@ def _ttnn_mesh_device_param_from_env() -> dict:
             f"(64 attn heads / 8 KV heads ⇒ 8 devices).",
             allow_module_level=True,
         )
-    return {
+    param = {
         "mesh_shape": shape,
         "trace_region_size": 50_000_000,
         "num_command_queues": 1,
     }
+    # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without
+    # an explicit 1D fabric; the root conftest does not auto-enable it. FABRIC_1D on any >1-device
+    # mesh (Qwen2.5-72B only runs on T3K = (1, 8), so this is always enabled here).
+    if shape != (1, 1):
+        param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return param
 
 
 pytestmark = [
@@ -455,6 +462,23 @@ def _run_perf_benchmark(
         # Pad/truncate to _PERF_PREFILL_LEN for PERF.md workload alignment.
         input_tokens, prompt_lens = pad_prompts_to_len(prompts, tokenizer, target_len=_PERF_PREFILL_LEN)
 
+        # On-device sampling toggle (Qwen2.5-72B runs on T3K where on-device top-k wins; see the
+        # rebase handoff crossover table):
+        #   host            -> sampling_params=None (host-argmax, the default shipped path)
+        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
+        #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (PERF.md recipe)
+        sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+        _on_device_params = {
+            "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
+            "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
+        }
+        sampling_params = (
+            _on_device_params[sampling_mode]
+            if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
+            else None
+        )
+        logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+
         result = run_perf_benchmark(
             traced_executor,
             tokens=input_tokens,
@@ -463,6 +487,7 @@ def _run_perf_benchmark(
             num_decode_tokens=_PERF_NUM_DECODE_TOKENS,
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
+            sampling_params=sampling_params,
         )
 
         logger.info(
