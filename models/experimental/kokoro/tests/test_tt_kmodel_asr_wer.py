@@ -17,6 +17,7 @@ from __future__ import annotations
 import gc
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ if str(_TT_METAL_ROOT) not in sys.path:
 import ttnn
 
 from models.experimental.kokoro.reference.model import KModel
-from models.experimental.kokoro.tests.kokoro_checkpoint import STFT_PHASE_FALLBACK_KWARGS, find_checkpoint
+from models.experimental.kokoro.tests.kokoro_checkpoint import find_checkpoint
 from models.experimental.kokoro.tt.tt_kmodel import KokoroConfig, TTKModel, preprocess_tt_kmodel
 
 ASR_WER_TARGET = 0.30
@@ -43,6 +44,26 @@ _LANG_CODE = "a"
 # Common-word prompt for the WER gate (avoids coined brand words that Whisper
 # systematically misspells and that would inflate WER without reflecting intelligibility).
 _ASR_TEXT = "Hello world this is a speech synthesis test."
+
+
+@dataclass(frozen=True)
+class _Cfg:
+    """Vocoder fallback / STFT-formulation config (shared matrix with the cFW2VD / mel-PCC /
+    SECS metric tests; defined locally here to avoid a circular import)."""
+
+    label: str
+    disable_complex: bool
+    use_torch_stft_fallback: bool
+    use_torch_phase_fallback: bool
+
+
+_CONFIGS = (
+    _Cfg("phase_fallback", disable_complex=False, use_torch_stft_fallback=False, use_torch_phase_fallback=True),
+    _Cfg("stft_and_phase_fallback", disable_complex=False, use_torch_stft_fallback=True, use_torch_phase_fallback=True),
+    _Cfg("no_fallback", disable_complex=False, use_torch_stft_fallback=False, use_torch_phase_fallback=False),
+    _Cfg("dc_phase_fallback", disable_complex=True, use_torch_stft_fallback=False, use_torch_phase_fallback=True),
+    _Cfg("dc_no_fallback", disable_complex=True, use_torch_stft_fallback=False, use_torch_phase_fallback=False),
+)
 
 
 def _load_pipeline():
@@ -126,19 +147,26 @@ def _word_overlap(transcription: str, reference: str) -> float:
     return len(ref_words & set(_normalize_words(transcription))) / len(ref_words)
 
 
-def _load_kmodel() -> KModel:
+def _load_kmodel(disable_complex: bool = True) -> KModel:
     ckpt_path = find_checkpoint()
     if ckpt_path is None:
         pytest.skip("Kokoro-82M checkpoint not found locally.")
     return KModel(
         repo_id=KokoroConfig.repo_id,
         model=str(ckpt_path),
-        disable_complex=True,
+        disable_complex=disable_complex,
     ).eval()
 
 
-def _tt_audio(device, ref: KModel, params, phonemes: str, ref_s: torch.Tensor) -> torch.Tensor:
-    tt_model = TTKModel(device, ref, params, **STFT_PHASE_FALLBACK_KWARGS)
+def _tt_audio(device, ref: KModel, params, phonemes: str, ref_s: torch.Tensor, cfg: _Cfg) -> torch.Tensor:
+    tt_model = TTKModel(
+        device,
+        ref,
+        params,
+        use_torch_stft_fallback=cfg.use_torch_stft_fallback,
+        use_torch_phase_fallback=cfg.use_torch_phase_fallback,
+        disable_complex=cfg.disable_complex,
+    )
     out = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True)
     return out.audio.detach().float().squeeze()
 
@@ -151,11 +179,13 @@ def _ref_audio(ref: KModel, phonemes: str, ref_s: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 @pytest.mark.timeout(3600)
-def test_ttnn_kokoro_asr_wer(device, reset_seeds):
-    """TT Kokoro E2E correctness via Whisper ASR WER.
+@pytest.mark.parametrize("cfg", _CONFIGS, ids=[c.label for c in _CONFIGS])
+def test_ttnn_kokoro_asr_wer(device, reset_seeds, cfg: _Cfg):
+    """TT Kokoro E2E correctness via Whisper ASR WER, per vocoder-fallback config.
 
-    Generate audio on the Tenstorrent device with config-E vocoder fallbacks, transcribe
-    with Whisper, and assert WER is below ``ASR_WER_TARGET`` (0.30, matching Voxtral Phase-4).
+    Generate audio on the Tenstorrent device with the ``cfg`` vocoder fallbacks / STFT
+    formulation, transcribe with Whisper, and assert WER is below ``ASR_WER_TARGET``
+    (0.30, matching Voxtral Phase-4).
     """
     try:
         import librosa  # noqa: F401
@@ -164,24 +194,29 @@ def test_ttnn_kokoro_asr_wer(device, reset_seeds):
         pytest.skip(f"Whisper ASR deps unavailable: {exc}")
 
     phonemes, ref_s = _phonemize(_ASR_TEXT)
-    ref = _load_kmodel()
+    ref = _load_kmodel(cfg.disable_complex)
     params = preprocess_tt_kmodel(ref, device)
 
+    cfg_str = (
+        f"disable_complex={cfg.disable_complex}, stft_fallback={cfg.use_torch_stft_fallback}, "
+        f"phase_fallback={cfg.use_torch_phase_fallback}"
+    )
     logger.info("=" * 70)
-    logger.info("KOKORO ASR GATE (TT generates audio; Whisper transcribes; WER)")
+    logger.info(f"KOKORO ASR GATE [{cfg.label}] ({cfg_str}) (TT generates audio; Whisper transcribes; WER)")
     logger.info("=" * 70)
 
     torch.manual_seed(0)
-    waveform = _tt_audio(device, ref, params, phonemes, ref_s)
+    waveform = _tt_audio(device, ref, params, phonemes, ref_s, cfg)
     ttnn.synchronize_device(device)
 
-    assert waveform.numel() > 0, "TT Kokoro generation produced no audio samples"
-    assert torch.isfinite(waveform).all(), "TT Kokoro waveform has non-finite samples"
+    assert waveform.numel() > 0, f"TT Kokoro [{cfg.label}] produced no audio samples"
+    assert torch.isfinite(waveform).all(), f"TT Kokoro [{cfg.label}] waveform has non-finite samples"
 
     transcription = _transcribe_waveform(waveform, _OUTPUT_SAMPLE_RATE)
     wer = _word_error_rate(_ASR_TEXT, transcription)
     overlap = _word_overlap(transcription, _ASR_TEXT)
     duration_s = float(waveform.reshape(-1).numel()) / _OUTPUT_SAMPLE_RATE
+    logger.info(f"  config       : {cfg_str}")
     logger.info(f"  target       : {_ASR_TEXT!r}")
     logger.info(f"  transcription: {transcription!r}")
     logger.info(
@@ -191,7 +226,8 @@ def test_ttnn_kokoro_asr_wer(device, reset_seeds):
     )
 
     assert wer < ASR_WER_TARGET, (
-        f"Kokoro ASR WER {wer:.2%} >= {ASR_WER_TARGET:.0%}; " f"transcription={transcription!r} target={_ASR_TEXT!r}"
+        f"Kokoro ASR WER {wer:.2%} >= {ASR_WER_TARGET:.0%} [{cfg.label}]; "
+        f"transcription={transcription!r} target={_ASR_TEXT!r}"
     )
 
     ttnn.synchronize_device(device)
