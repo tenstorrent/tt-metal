@@ -28,14 +28,22 @@ accumulator format**: at S=2048 bf16, HiFi2→HiFi4 drops rel_rms 0.146→0.0145
 (at HiFi4, acc=True 0.0145 < acc=False 0.0203). Hence the R1 default config
 (compute_kernel_config=None) now uses **HiFi4 + fp32_dest_acc_en=True**.
 
-## Known frontier (left failing — see changelog R1)
+## Frontier (resolved — see changelog R4 / R5)
 
-- **fp32 @ D=1024**: L1 OOM (fp32 CBs scale with d_t). Follow-up: memory-budget.
-- **fp32 acc=True @ S≥4096**: rel_rms 0.028–0.053 vs golden 0.02 — TF32 matmul
-  floor (fp32 unpacks to TF32 through srcA/srcB; HiFi4 is already max fidelity).
-- **bf16 / bf8b acc=False @ S≥4096**: rel_rms 0.15–0.77 vs golden 0.12 — 16-bit
-  DEST register floor (golden pins fp32_dest_acc_en=False + HiFi2; probe with
-  fp32-CB-always gave identical rms, proving CB format is irrelevant here).
+- **fp32 @ D=1024**: L1 OOM — **resolved (R4)**: host single-buffers the input/
+  output CBs when the double-buffered layout would exceed the L1 budget.
+- **fp32 acc=True @ S≥4096**: was rel_rms 0.028–0.053 vs golden 0.02 — **resolved
+  (R5)**: NOT a hard TF32 floor. `Bkv_t` KV-chunk blocking (fewer running-output
+  accumulation roundings) drops it to 0.0063 (S=4096) / 0.0093 (S=8192), under
+  the 0.02 gate. The earlier "TF32 matmul floor" reading was wrong — the
+  dominant term was the per-KV-chunk accumulation of the near-zero mask=none
+  output, not per-element TF32 truncation.
+- **bf16 / bf8b acc=False @ S≥4096**: was rel_rms 0.15–0.77 vs golden 0.12 —
+  **resolved (R5)**: the 16-bit-DEST error is *accumulation* error across the
+  per-KV-chunk rescale rounds, not a per-op floor. `Bkv_t` blocking cuts the
+  round count by `Bkv_t` and drops mask=none S=8192 from 0.756 to 0.048. CB
+  format / fidelity remain irrelevant (the R1 probe stands); the lever is
+  algorithmic, exactly as the verifier predicted.
 
 ## Skips
 

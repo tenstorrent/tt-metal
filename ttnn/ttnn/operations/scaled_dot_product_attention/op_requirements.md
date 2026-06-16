@@ -166,7 +166,7 @@ pattern: stream the head dim in `d_chunk` tiles instead of sizing
 double-buffer (`2*d_t → d_t`) for fp32. Per-core CB footprint must stop
 scaling with `d_t`. Independent of R2/R3.
 
-### [ ] Refinement 5 — long-context precision: lift acc=False / fp32 S≥4096 misses
+### [x] Refinement 5 — long-context precision: lift acc=False / fp32 S≥4096 misses
 
 **Goal**: the remaining long-context `supported_fail` cells are precision
 near-misses at S∈{4096,8192}, NOT structural gaps (left red by R1, not

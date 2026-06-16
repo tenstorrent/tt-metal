@@ -214,3 +214,58 @@
 - **Tests added**: `test_scaled_dot_product_attention_l1_budget.py`
   (`test_fp32_large_d_no_oom` 4 cases, `test_fp32_large_d_custom_mask` 2 cases,
   `test_bf16_large_d_still_works`). 7 cases, all pass (--dev + non-dev).
+
+## Refinement 5 — long-context precision: lift acc=False / fp32 S≥4096 misses
+- **Date**: 2026-06-16
+- **What was done**: Added a compile-time **Bkv_t KV-chunk block size** to the
+  FlashAttention recurrence (the `op_design.md` `Bkv_t` tunable, previously
+  pinned at 1). The online-softmax rescale of the running output (`corr*O`) runs
+  once per KV-chunk; folding `Bkv_t` key-tiles per chunk cuts the rescale-round
+  count by `Bkv_t`. This was the **verifier-prescribed and (with the golden
+  pinning `fp32_dest_acc_en`/`math_fidelity`) only** lever — the R1 probe already
+  proved CB format and fidelity inert for these cells.
+  - **Failure-surface finding** (probe): every long-context miss is in
+    `mask=none` (its output is a near-zero average of thousands of V vectors →
+    tiny `ref.std()` → inflated *relative* RMS); `custom`/`causal` missed only
+    at S=8192 (acc=False). Bkv blocking reduces the absolute accumulation error
+    across the board, clearing both.
+  - **compute kernel**: `Bkv_t`-parametric KV loop. QKᵀ emits a `[1, Bkv_t]`
+    score block (`in1_num_subblocks=Bkv_t`); rowmax/exp/rowsum operate over the
+    `[1, Bkv_t]` block; PV reduces over `in0_block_k=Bkv_t`. `Bkv_t==1` recovers
+    the Phase-0 per-tile path **byte-for-byte**.
+  - **reader**: block reads — K laid out K-major `[d_t][Bkv_t]`, V K-major
+    `[Bkv_t][d_t]` (natural DRAM order), custom mask `Bkv_t`-wide. Causal: only
+    the last (diagonal) chunk carries a `Bkv_t`-wide mask via `gen_causal_block`
+    (zeros for past tiles, triangular on the diagonal tile, −inf for future
+    tiles); `kv_count = ceil((qc+1)/Bkv_t)`.
+  - **descriptor**: host `_choose_bkv()` picks `Bkv_t ∈ {8,4,2}` for long
+    (`Skv_t≥128` ⇒ S≥4096), tile-aligned (non-edge) shapes; `1` otherwise —
+    short/medium, non-aligned (edge), and large-D fp32 (R4 budget) stay on the
+    proven per-tile path. Block CBs (`cb_k_in/cb_v_in/cb_scores/cb_p/cb_mask_in`)
+    sized by `Bkv_t`; `_footprint` updated.
+  - **No SUPPORTED / EXCLUSIONS change** — this is a precision lift on
+    already-supported cells, not a new axis value (so no xpass-drift risk).
+- **Accuracy achieved** (HiFi2+acc=False for bf16/bf8b; HiFi4+acc=True for fp32;
+  randn, golden tolerances):
+  - **fp32 acc=True** `mask=none`: S=4096 **0.0289→0.0063**, S=8192
+    **0.0529→0.0093** — now well under the tight `0.02` fp32 gate. (Answers the
+    verifier's open question: the `0.02` bound **is** reachable via blocking.)
+  - **bf16 acc=False** `mask=none`: S=4096 **0.178→0.027**, S=8192 **0.756→0.048**.
+  - **bf8b acc=False** `mask=none`: S=4096 0.188→0.036, S=8192 0.768→0.056.
+  - **acc=False custom** S=8192: bf16 0.154→0.018, bf8b 0.159→0.026.
+  - **acc=False causal** S=8192: bf16 0.152→0.0165, bf8b 0.157→0.024;
+    S=4096 0.048→0.013.
+- **Golden test progress**: long-context slice (`-k "4096"` + `-k "8192"`)
+  **150 passed, 30 xfailed (fp32+acc=False EXCLUSION), 0 failures, 0
+  xpass-drift**. Every S≥4096 supported cell now passes (was: ~38 supported_fail
+  precision near-misses). Regression suites all green: acceptance 24/24,
+  non_aligned 81, l1_budget 7, precision_baseline 4, precision_matrix
+  107(+21 skip), variants. Short/medium shapes unchanged (Bkv_t=1).
+- **Issues encountered**: None. The `Bkv_t==1`-recovers-Phase-0 invariant made
+  the rewrite low-risk; a torch bf16-DEST sim predicted the lever direction
+  before any device run, and the K/V K-major layout (`in1_index += in1_per_core_w`)
+  matched the matmul_block contract on the first device run.
+- **Tests added**: `test_scaled_dot_product_attention_long_context.py` (27
+  cases: mask=none × {bf16/bf8b acc=False, fp32 acc=True} × S{4096,8192} ×
+  scale{auto,explicit}; causal long-context; custom@8192; GQA+D=128; short
+  Bkv_t=1 no-regression control).
