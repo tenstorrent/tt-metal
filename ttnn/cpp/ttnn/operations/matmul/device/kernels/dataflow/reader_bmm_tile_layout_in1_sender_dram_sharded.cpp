@@ -212,6 +212,8 @@ void kernel_main() {
     noc.async_write_barrier();
 #endif
 
+    cb_out.pop_front(out_block_num_tiles);
+
     // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
     // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
     // and this hardware register persists across kernel launches. Kernels that
