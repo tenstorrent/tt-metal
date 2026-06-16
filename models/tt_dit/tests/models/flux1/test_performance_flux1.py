@@ -25,37 +25,47 @@ TEST_PROMPTS = [
     """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
 ]
 
+PERF_TEST_IMAGE_PARAMS = [
+    (1024, 1024, 3.5, 28),
+]
+
+PERF_TEST_MESH_PARAMS = [
+    [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
+    [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
+    [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+    [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 2],
+    [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
+    [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 2],
+]
+
+PERF_TEST_MESH_IDS = [
+    "1x2sp0tp1",
+    "2x2sp0tp1",
+    "wh_2x4sp0tp1",
+    "bh_2x4sp0tp1",
+    "wh_4x8sp0tp1",
+    "bh_4x8sp0tp1",
+]
+
+PERF_TEST_DEVICE_PARAMS = [
+    {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}
+]
+
 
 # TODO: Factor out commonalities with sd35
 @pytest.mark.parametrize(
     "image_w, image_h, guidance_scale, num_inference_steps",
-    [
-        (1024, 1024, 3.5, 28),
-    ],
+    PERF_TEST_IMAGE_PARAMS,
 )
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
-    [
-        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
-        [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
-        [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 2],
-        [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
-        [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 2],
-    ],
-    ids=[
-        "1x2sp0tp1",
-        "2x2sp0tp1",
-        "wh_2x4sp0tp1",
-        "bh_2x4sp0tp1",
-        "wh_4x8sp0tp1",
-        "bh_4x8sp0tp1",
-    ],
+    PERF_TEST_MESH_PARAMS,
+    ids=PERF_TEST_MESH_IDS,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    PERF_TEST_DEVICE_PARAMS,
     indirect=True,
 )
 def test_flux1_pipeline_performance_speed(
@@ -363,23 +373,17 @@ def test_flux1_pipeline_performance_speed(
 
 @pytest.mark.parametrize(
     "image_w, image_h, guidance_scale, num_inference_steps",
-    [
-        (1024, 1024, 3.5, 28),
-    ],
+    PERF_TEST_IMAGE_PARAMS,
 )
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
-    [
-        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
-    ],
-    ids=[
-        "2x2sp0tp1",
-    ],
+    PERF_TEST_MESH_PARAMS,
+    ids=PERF_TEST_MESH_IDS,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    PERF_TEST_DEVICE_PARAMS,
     indirect=True,
 )
 def test_flux1_pipeline_performance_accuracy(
@@ -444,23 +448,17 @@ def test_flux1_pipeline_performance_accuracy(
 
 @pytest.mark.parametrize(
     "image_w, image_h, guidance_scale, num_inference_steps",
-    [
-        (1024, 1024, 3.5, 28),
-    ],
+    PERF_TEST_IMAGE_PARAMS,
 )
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
-    [
-        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
-    ],
-    ids=[
-        "2x2sp0tp1",
-    ],
+    PERF_TEST_MESH_PARAMS,
+    ids=PERF_TEST_MESH_IDS,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    PERF_TEST_DEVICE_PARAMS,
     indirect=True,
 )
 def test_flux1_pipeline_performance_determinism(
