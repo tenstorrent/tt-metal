@@ -695,6 +695,25 @@ def transition_preprocess_to_dit_device(
     return dev
 
 
+def _resolve_demo_reexec_argv(argv: list[str]) -> list[str]:
+    """Return ``[script_path, *args]`` for DiT mesh ``os.execv``.
+
+    ``run_prompt_to_wav.main()`` under pytest often sets ``sys.argv[0]`` to a bare
+    ``run_prompt_to_wav`` token; re-exec must use the real ``.py`` path under ``/work``.
+    """
+    if not argv:
+        raise RuntimeError("ace_step_reexec_for_dit_mesh: empty argv")
+    script, *rest = argv
+    if script and os.path.isfile(script):
+        return [script, *rest]
+    demo_py = Path(__file__).resolve().parent.parent / "demo" / "run_prompt_to_wav.py"
+    if demo_py.is_file():
+        return [str(demo_py), *rest]
+    raise RuntimeError(
+        f"ace_step_reexec_for_dit_mesh: cannot resolve demo script (argv[0]={script!r}, " f"expected {demo_py})"
+    )
+
+
 def ace_step_reexec_for_dit_mesh(
     ttnn_mod: Any,
     *,
@@ -753,7 +772,7 @@ def ace_step_reexec_for_dit_mesh(
 
     new_argv = [sys.executable]
     skip_next = False
-    for tok in argv:
+    for tok in _resolve_demo_reexec_argv(argv):
         if skip_next:
             skip_next = False
             continue

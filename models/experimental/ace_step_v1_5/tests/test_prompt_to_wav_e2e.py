@@ -35,12 +35,13 @@ def test_prompt_to_wav_bh_demo(tmp_path, monkeypatch, duration_label: str, durat
     if not _checkpoints_available():
         pytest.skip("ACE-Step v1.5 checkpoints not found; set ACE_STEP_CHECKPOINT_DIR.")
 
+    demo_script = Path(__file__).resolve().parent.parent / "demo" / "run_prompt_to_wav.py"
     out = tmp_path / f"ace_step_bh_demo_{duration_label}.wav"
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "run_prompt_to_wav",
+            str(demo_script),
             "--mesh-device",
             "BH_QB",
             "--variant",
