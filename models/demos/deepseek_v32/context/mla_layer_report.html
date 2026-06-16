@@ -85,18 +85,25 @@
 <h1>DeepSeek&nbsp;V3.2 MLA &mdash; the DSA layer as an op graph</h1>
 <p class="sub">
 Source: <code>models/demos/deepseek_v32/tt/mla/mla.py</code> (the <code>ttMLA</code> subclass) +
-<code>tt/ops.py</code> (missing-op workarounds), exercised by
+<code>tt/ops.py</code> (thin wrappers over the now-landed C++ ops), exercised by
 <code>tests/test_mla.py::test_v32_mla_vs_cpu_reference</code> and <code>…_chunked_…</code>.
 V3.2 MLA = the v3 dense MLA (<code>deepseek_v3_d_p</code>) <b>plus</b> DeepSeek Sparse Attention (DSA): a lightning
 <b>indexer</b> proposes top-k keys, and ring SDPA is swapped for <code>sparse_mla</code> over just those keys.
 Nodes below are <b>ops</b>; edges are <b>tensors</b> labelled with their shapes; node colour is the <b>distribution</b>
 (see legend). Edges animate in the direction data flows.</p>
+<p class="sub"><b>Updated 2026-06-16</b> to reflect the device-op port (status.md Step 6) <b>and the on-device gather (Step 7)</b>:
+the indexer is <b>fully on device</b> (stems, RoPE, key cache, <code>indexer_score</code>, <code>topk_large_indices</code>),
+<code>sparse_mla</code> is the <code>ttnn.transformer.sparse_sdpa</code> <b>device</b> op run SPMD per chip, and the latent
+prefix it consumes is now <b>gathered entirely on device</b> (no host readback) — with the <code>indices</code> SP-reshard
+done via <code>ttnn.mesh_partition</code>. <b>The DSA path no longer touches the host.</b> This report focuses on the
+<b>chunked-prefill</b> path.</p>
 
 <div class="note">
-<b>The one structural fact.</b> <code>forward()</code> is a router (<code>mla.py:201</code>). When the global end position
+<b>The one structural fact.</b> <code>forward()</code> is a router (<code>mla.py:226</code>). When the global end position
 is <span class="pill phost">≤ index_topk (2048)</span> the selection is a no-op (every causal key fits in top-k), so it falls
-straight through to the unchanged <b>v3 dense</b> <code>super().forward</code> — the indexer K-cache is still written so later
-chunks can score against the early prefix. Only when <span class="pill phost">end_pos &gt; 2048</span> does the real DSA path
+straight through to the unchanged <b>v3 dense</b> <code>super().forward</code> — and on the <b>chunked</b> path
+(<code>kv_actual_isl</code> passed) the indexer K-cache is still written (<code>mla.py:231-232</code>) so later chunks can score
+against the early prefix. Only when <span class="pill phost">end_pos &gt; 2048</span> does the real DSA path
 run: <code>_indexer_topk → _dsa_forward</code>.</div>
 
 <h2>1. Symbols &amp; dimensions</h2>
@@ -126,32 +133,44 @@ run: <code>_indexer_topk → _dsa_forward</code>.</div>
   <span class="pill ptp">🟦 TP-sharded (heads or hidden)</span>
   <span class="pill psp">🟧 SP-sharded (sequence)</span>
   <span class="pill pcomm">🟥 CCL collective (comm)</span>
-  <span class="pill phost">🟪 host / CPU fallback (workaround)</span>
+  <span class="pill phost">🏠 host (CPU / control-flow decision)</span>
   <span class="pill io">⬜ mesh I/O activation</span>
 </div>
+<p class="sub"><b>Layout marker (orthogonal to colour).</b> 🟫 on an edge = that tensor is <b>ROW_MAJOR</b>; unmarked = TILE.
+The DSA device ops are ROW_MAJOR (<code>indexer_score</code> emits RM logits → <code>topk_large_indices</code> RM uint32
+indices → <code>sparse_sdpa</code> RM q/kv/idx/out); inside <code>sparse_mla</code> the absorbed q is converted TILE→RM on
+the way in and the output RM→TILE on the way out for the <code>wkv_b2</code> linear. Everything else (v3 linears, norms,
+RoPE, cache writes) is TILE.</p>
 <p class="sub">Edge labels carry the <b>symbolic</b> shape; the <code>↳</code> line below it is the <b>concrete</b> shape for the
 §7 runtime (<b>50k cached + 5k chunk</b>, <code>sp=8, tp=4</code>, 50k=50·1024, 5k=5·1024:
-<code>S/sp=640, dim/tp=1792, H/tp=32, glob=5120, end_pos=56320, k=2048</code>). Note the SP all-gathers in the indexer are
+<code>S/sp=640, dim/tp=1792, H/tp=32, glob=5120, end_pos=56320, k=2048</code>). <b>Dimension assumptions kept from the
+original report:</b> <code>tp=4 &lt; sp=8</code>, 50k cached prefix, 5k chunk. Note the SP all-gathers in the indexer are
 <b>real</b> at sp=8 — per-device tensors are <code>S/sp=640</code> until the gather, then jump to the global
 <code>glob=5120</code>.</p>
-<div class="warn"><b>Functional bring-up shortcuts</b> (status.md). Three ops in <code>tt/ops.py</code> are still composed/host
-workarounds, not native kernels: <code>indexer_logits</code> (composed ttnn), <code>topk_indices</code> (ttnn.topk, host
-fallback at large k), and <code>sparse_mla</code> (<b>gather+SDPA on host</b>). The latent prefix is also read back to host
-for the fallback. These are the 🟪 nodes; the C++ ops are follow-up work and must keep the same signature/shapes.</div>
+<div class="good"><b>The DSA path is now fully on device</b> (status.md Step 6 + Step 7). The three ops in <code>tt/ops.py</code>
+that were host/composed workarounds are thin wrappers over <b>C++ device ops</b>:
+<code>indexer_logits</code>→<code>ttnn.experimental.deepseek.indexer_score</code>,
+<code>topk_indices</code>→<code>ttnn.experimental.topk_large_indices</code>,
+<code>sparse_mla</code>→<code>ttnn.transformer.sparse_sdpa</code>. <b>Step 7</b> removed the last host hop: the latent prefix
+feeding <code>sparse_mla</code> is gathered on device (<code>to_memory_config</code> ND→interleaved → SP <code>all_gather</code>
+→ <code>typecast</code> bf8→bf16 → <code>to_layout</code> TILE→RM → on-device block-cyclic un-rotate), and the
+<code>indices</code> SP-reshard uses <code>ttnn.mesh_partition</code> (the inverse of all-gather). No tensor leaves the
+device. Remaining C++ follow-up (perf, not correctness): the SP-ring + full device-residency that would avoid materializing
+the full-T replica (backlog 12) — see the dedicated <code>kvpe_sparse_pipeline_report.html</code>.</div>
 
 <h2>3. Top-level <code>forward()</code> — the router</h2>
-<p class="frcap">Decision at <code>mla.py:201</code>. Dense passthrough re-uses all of v3 (see <code>MLA_layer_v3.md</code>);
+<p class="frcap">Decision at <code>mla.py:230</code>. Dense passthrough re-uses all of v3 (see <code>MLA_layer_v3.md</code>);
 DSA is the new path.</p>
 <div class="fr"><pre class="mermaid">
 flowchart TD
   X["hidden_states<br/>[1, 1, S/sp, dim/tp]<br/>↳ [1,1,640,1792]"]:::io
-  DEC{"end_pos = kv_isl + S_local·sp<br/>&gt; index_topk (2048) ?<br/>↳ 56320 &gt; 2048 → yes"}:::host
+  DEC{"🏠 end_pos = kv_isl + S_local·sp<br/>&gt; index_topk (2048) ?<br/>↳ 56320 &gt; 2048 → yes"}:::host
   X -->|"[1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"| DEC
-  DEC -->|"no — dense"| WK0["_indexer_write_k<br/>(keep K-cache warm)"]:::comm
+  DEC -->|"no — dense (chunked: kv_isl set)"| WK0["_indexer_write_k<br/>(device K-cache warm)"]:::comm
   WK0 -->|"K appended"| V3["super().forward<br/>(v3 dense ring SDPA)"]:::tp
   V3 -->|"[1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"| OUT1["out"]:::io
-  DEC -->|"yes — sparse (DSA)"| TOPK["_indexer_topk<br/>→ indices [1,1,glob,k]<br/>↳ [1,1,5120,2048]"]:::host
-  TOPK -->|"indices [1,1,glob,k] uint32<br/>↳ [1,1,5120,2048]"| DSA["_dsa_forward<br/>(sparse_mla over selected latents)"]:::tp
+  DEC -->|"yes — sparse (DSA)"| TOPK["_indexer_topk (device)<br/>→ indices [1,1,glob,k]<br/>↳ [1,1,5120,2048] replicated"]:::rep
+  TOPK -->|"🟫 indices [1,1,glob,k] uint32 RM<br/>↳ [1,1,5120,2048]"| DSA["_dsa_forward<br/>(sparse_mla over selected latents)"]:::tp
   DSA -->|"[1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"| OUT2["out"]:::io
   classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
   classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
@@ -164,8 +183,8 @@ flowchart TD
 <h2>4. The indexer — selecting the top-k keys (<code>_indexer_topk</code>)</h2>
 <p>Three stems run off the same <code>hidden_states</code>: the <b>K stem</b> (cached, runs every chunk), the <b>Q stem</b>
 (reuses v3's q_a latent then the indexer's <code>wq_b</code>), and <b>weights_proj</b> (per-head score weights). Their dot
-product gives index logits; a causal mask + top-k yields the indices. Fully on device except the final top-k tie-break and
-the score formula's composed shape.</p>
+product gives index logits; <code>indexer_score</code> fuses the causal mask, and <code>topk_large_indices</code> yields the
+indices. <b>Fully on device</b> — stems, RoPE, key cache, logits and top-k — no host (status.md backlog 6/19).</p>
 
 <div class="fr"><pre class="mermaid">
 flowchart TD
@@ -177,8 +196,8 @@ flowchart TD
     KRS["_tp_rs_ag<br/>reduce_scatter+all_gather (TP)"]:::comm
     KLN["ttnn.layer_norm · k_norm (w,b)"]:::rep
     KAG["_sp_all_gather (dim2, SP)"]:::comm
-    KROPE["_device_rope_pe<br/>rotary_embedding_hf on first 64"]:::rep
-    KCAT["concat → _index_kbuf<br/>(grow by concat, natural order)"]:::rep
+    KROPE["_device_rope_pe<br/>rotary_embedding_hf on first 64 (device)"]:::rep
+    KCAT["ttnn.concat → _index_kbuf (device)<br/>(grow by concat, natural order)"]:::rep
     WK -->|"partial [1,1,S/sp,128]<br/>↳ [1,1,640,128]"| KRS -->|"[1,1,S/sp,128]<br/>↳ [1,1,640,128]"| KLN
     KLN -->|"[1,1,S/sp,128]<br/>↳ [1,1,640,128]"| KAG -->|"[1,1,glob,128]<br/>↳ [1,1,5120,128]"| KROPE
     KROPE -->|"[1,1,glob,128]<br/>↳ [1,1,5120,128]"| KCAT
@@ -212,17 +231,15 @@ flowchart TD
   H --> QA
   H --> WP
 
-  LOG["ops.indexer_logits<br/>relu(q·kᵀ) then weighted head-reduce"]:::host
-  MASK["+ causal mask<br/>triu(start_pos+1) = -inf"]:::rep
-  TK["ops.topk_indices<br/>ttnn.topk (host fallback @ large k)"]:::host
-  IDX["indices<br/>[1,1,glob,k] uint32<br/>↳ [1,1,5120,2048]"]:::io
+  LOG["ops.indexer_logits (device)<br/>deepseek.indexer_score<br/>relu(q·kᵀ), head-reduce, causal -inf FUSED"]:::rep
+  TK["ops.topk_indices (device)<br/>topk_large_indices<br/>masked slots → 0xFFFFFFFF sentinel"]:::rep
+  IDX["indices 🟫<br/>[1,1,glob,k] uint32 RM replicated<br/>↳ [1,1,5120,2048]"]:::io
 
-  QROPE -->|"q_dev [1,64,glob,128]<br/>↳ [1,64,5120,128]"| LOG
-  KCAT  -->|"_index_kbuf [1,1,end_pos,128]<br/>↳ [1,1,56320,128]"| LOG
-  WMUL  -->|"wts [1,1,glob,64]<br/>↳ [1,1,5120,64]"| LOG
-  LOG -->|"logits [1,1,glob,end_pos]<br/>↳ [1,1,5120,56320]"| MASK
-  MASK -->|"[1,1,glob,end_pos]<br/>↳ [1,1,5120,56320]"| TK
-  TK -->|"k = min(2048,end_pos)<br/>↳ k = 2048"| IDX
+  QROPE -->|"q_dev [1,64,glob,128] TILE<br/>↳ [1,64,5120,128]"| LOG
+  KCAT  -->|"_index_kbuf [1,1,end_pos,128] TILE<br/>↳ [1,1,56320,128]"| LOG
+  WMUL  -->|"wts [1,1,glob,64] → permute [1,64,glob,1]<br/>↳ [1,1,5120,64]"| LOG
+  LOG -->|"🟫 logits [1,1,glob,end_pos] bf16 RM<br/>↳ [1,1,5120,56320]; future cols -inf"| TK
+  TK -->|"🟫 k = min(2048,end_pos), mult. of 16<br/>↳ k = 2048 (uint32 RM)"| IDX
 
   classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
   classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
@@ -243,14 +260,21 @@ flowchart TD
 
 <div class="note"><b>The score math</b> (<code>ops.indexer_logits</code>):
 $$ \text{logits}[s,t] = \sum_{h} w[s,h]\cdot \mathrm{relu}\big(\langle q[s,h],\,k[t]\rangle\big) $$
-The reference fuses this as DeepGEMM <code>fp8_mqa_logits</code>; the port composes it from <code>matmul · transpose · relu ·
-permute · matmul · permute</code> in bf16, causality deferred to the caller's <code>-inf</code> mask add. Keys are shared across
-all <code>H_idx</code> heads (MQA), so a single <code>_index_kbuf</code> serves every head.</div>
+The reference fuses this as DeepGEMM <code>fp8_mqa_logits</code>; the port now calls the merged
+<code>ttnn.experimental.deepseek.indexer_score</code> C++ op (bf16, no fp8/Hadamard yet) — <b>causality is fused inside the
+op</b> from <code>chunk_start_idx</code> (future/pad columns set to <code>-inf</code>), so the caller no longer adds a triu
+mask. Output is <code>[1,1,Sq,Skv]</code> bf16 <b>ROW_MAJOR</b>, chaining straight into <code>topk_large_indices</code>; the
+<code>-inf</code> columns survive there as the <code>0xFFFFFFFF</code> sentinel (contiguous descending tail), which
+<code>sparse_mla</code> masks. Keys are shared across all <code>H_idx</code> heads (MQA), so a single <code>_index_kbuf</code>
+serves every head.</div>
 
 <h2>5. Sparse attention forward (<code>_dsa_forward</code>)</h2>
-<p>Structurally this is v3's <code>forward</code> with the ring SDPA replaced by <code>ops.sparse_mla</code>: Q is built absorbed
-(latent 512 ++ rope 64 = 576), KV is built + cached exactly as v3, then attention runs over <b>only the k selected latents</b>.
-Like v3's chunked path it keeps attention latent and applies <code>wkv_b2</code> <i>after</i>.</p>
+<p>Structurally this is v3's <code>forward</code> with the ring SDPA replaced by <code>ops.sparse_mla</code> (now the
+<code>ttnn.transformer.sparse_sdpa</code> <b>device</b> op): Q is built absorbed (latent 512 ++ rope 64 = 576), KV is built +
+cached exactly as v3, then attention runs over <b>only the k selected latents</b>. Like v3's chunked path it keeps attention
+latent and applies <code>wkv_b2</code> <i>after</i>. The <b>chunked</b> cache write is
+<code>update_padded_kv_cache</code> (block-cyclic across SP); the latent prefix for the op is then gathered and un-rotated to
+natural order <b>on device</b> (<code>_gather_kvpe_prefix</code>), with no host round-trip.</p>
 
 <div class="fr"><pre class="mermaid">
 flowchart TD
@@ -293,8 +317,9 @@ flowchart TD
   H --> KVA
 
   CACHE["KVPE cache write<br/>single-shot: fill_cache_for_user_<br/>chunked: update_padded_kv_cache"]:::sp
-  HOST["latent prefix → host<br/>single-shot: SP all_gather + to_torch<br/>chunked: read block-cyclic, un-rotate"]:::host
-  SMLA["ops.sparse_mla<br/>gather top-k latents + SDPA (host)"]:::host
+  GATHER["on-device latent gather (no host)<br/>chunked: _gather_kvpe_prefix — ND→INTER · SP all_gather ·<br/>typecast bf8→bf16 · TILE→RM · block-cyclic un-rotate<br/>single-shot: SP all_gather + to_layout RM"]:::comm
+  IRS["ttnn.mesh_partition (device, sp&gt;1)<br/>replicated → SP-sharded on dim2<br/>[1,1,glob,k] → [1,1,S/sp,k]"]:::comm
+  SMLA["ttnn.transformer.sparse_sdpa (device, 🟫RM-only)<br/>SPMD per chip: gather k latents + online-softmax<br/>V = kv[..,:512]; sentinel-masked"]:::tp
   WB2["linear wkv_b2 → v_head_dim 128"]:::tp
   CH["nlp_concat_heads"]:::tp
   OP["linear o_proj (in-sharded)"]:::tp
@@ -302,11 +327,12 @@ flowchart TD
   OUT["out [1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"]:::io
 
   KB8 --> CACHE
-  CACHE -->|"kvpe_b8 written<br/>↳ chunk [1,1,640,576]"| HOST
-  HOST -->|"kvpe_host [end_pos,576]<br/>↳ [56320,576]"| SMLA
-  QCC -->|"tt_q [1,H/tp,S/sp,576]<br/>↳ [1,32,640,576]"| SMLA
-  IDX -->|"indices [1,1,glob,k]<br/>↳ [1,1,5120,2048]"| SMLA
-  SMLA -->|"attn_out latent [1,H/tp,S/sp,512]<br/>↳ [1,32,640,512]"| WB2
+  CACHE -->|"kvpe_b8 written<br/>↳ chunk [1,1,640,576]"| GATHER
+  GATHER -->|"🟫 kv [1,1,end_pos,576] RM bf16 replicated<br/>↳ [1,1,56320,576]"| SMLA
+  QCC -->|"tt_q [1,H/tp,S/sp,576] TILE→🟫RM in op<br/>↳ [1,32,640,576]"| SMLA
+  IDX -->|"🟫 indices [1,1,glob,k] RM replicated<br/>↳ [1,1,5120,2048]"| IRS
+  IRS -->|"🟫 idx [1,1,S/sp,k] RM (matches q seq)<br/>↳ [1,1,640,2048]"| SMLA
+  SMLA -->|"attn_out latent [1,H/tp,S/sp,512]<br/>TILE (sparse_mla re-tilized RM→TILE) · ↳ [1,32,640,512]"| WB2
   WB2 -->|"[1,H/tp,S/sp,128]<br/>↳ [1,32,640,128]"| CH
   CH -->|"[1,1,S/sp,(H/tp)·128]<br/>↳ [1,1,640,4096]"| OP
   OP -->|"partial [1,1,S/sp,dim]<br/>↳ [1,1,640,7168]"| ORS
@@ -322,12 +348,19 @@ flowchart TD
 
 <h3>What <code>sparse_mla</code> actually does</h3>
 <div class="note">
-FlashMLA sparse contract: <b>no causal flag</b> — the indices already encode causality. Per query row it gathers its k
-selected latents and runs a tiny absorbed-MQA softmax:
+FlashMLA sparse contract: <b>no causal flag</b> — the indices already encode causality (via the <code>0xFFFFFFFF</code>
+sentinel; <code>start_pos</code> is vestigial/ignored). Per query row it gathers its k selected latents and runs a tiny
+absorbed-MQA online-softmax:
 $$ O_{h,s} = \mathrm{softmax}_j\!\Big(\text{scale}\cdot\langle q_{h,s},\,kv[\mathrm{idx}_{s,j}]\rangle\Big)\cdot kv[\mathrm{idx}_{s,j}][{:}512] $$
-V is the first 512 dims of the same latent (MQA). The host fallback walks the mesh shards explicitly: it reshards output back
-to <b>heads on TP (dim1), sequence on SP (dim2)</b> — matching v3's q/out layout — and re-masks any selected index that is still
-in the future for that query row. The on-device path (<code>ttnn.gather</code> → matmul/softmax/matmul) is backlog item 8.</div>
+V is the first 512 dims of the same latent (MQA). This is now the merged <code>ttnn.transformer.sparse_sdpa</code>
+<b>device</b> op (Blackhole single-chip kernel), invoked <b>SPMD across the SP×TP mesh</b>: each chip runs the kernel over
+its own q shard, so q's distribution is preserved end-to-end — <b>heads on TP (dim1), sequence on SP (dim2)</b>, output the
+same. Preconditions the producer guarantees: per-chip <code>H</code> a multiple of 32 (128/tp=4=32), <code>indices</code>
+uint32 with sentinels as a contiguous tail, every row ≥1 valid key, all valid indices &lt;T. The op is <b>🟫 ROW_MAJOR-only</b>:
+the wrapper converts the absorbed q TILE→RM in and converts the latent output RM→TILE out for <code>wkv_b2</code>. Both the
+<code>kv</code> prefix and the <code>indices</code> SP-reshard are produced <b>on device</b> (the latent gather of §5's
+graph; <code>ttnn.mesh_partition</code> for indices) — no host hop. The remaining C++ follow-up is perf only: an SP-ring +
+full device-residency that avoids materializing the full-T replica (backlog 12).</div>
 
 <h2>6. Op-by-op shape &amp; sharding table (DSA path)</h2>
 <table>
@@ -345,8 +378,9 @@ in the future for that query row. The on-device path (<code>ttnn.gather</code> �
 <tr><td>11</td><td><code>slice + rms_norm kv_a_layernorm</code></td><td><code>nope[512]</code></td><td><span class="pill prep">replicated</span></td></tr>
 <tr><td>12</td><td><code>_apply_rope</code> + <code>concat</code></td><td><code>rope[64] → kvpe [1,1,S/sp,576]</code></td><td><span class="pill prep">rep</span> · <span class="pill psp">SP-seq</span></td></tr>
 <tr><td>13</td><td><code>typecast bf8 + cache write</code></td><td><code>fill_cache_for_user_</code> / <code>update_padded_kv_cache</code></td><td><span class="pill psp">SP-sharded cache</span></td></tr>
-<tr><td>14</td><td>latent prefix → host</td><td><code>→ kvpe_host [end_pos,576]</code></td><td><span class="pill phost">host</span></td></tr>
-<tr><td>15</td><td><code>ops.sparse_mla</code></td><td><code>tt_q + kvpe_host + indices → [1,H/tp,S/sp,512]</code></td><td><span class="pill phost">host</span> → <span class="pill ptp">TP</span>·<span class="pill psp">SP</span></td></tr>
+<tr><td>14</td><td><code>_gather_kvpe_prefix</code> (on device)</td><td>chunked: <code>to_memory_config</code> ND→INTER · SP <code>all_gather</code> · <code>typecast</code> bf8→bf16 · <code>to_layout</code> RM · block-cyclic un-rotate → <code>[1,1,end_pos,576]</code> 🟫RM; single-shot: <code>all_gather</code> + <code>to_layout</code></td><td><span class="pill pcomm">CCL+device</span> → <span class="pill prep">rep</span></td></tr>
+<tr><td>15a</td><td><code>ttnn.mesh_partition</code> indices (sp&gt;1)</td><td>🟫RM <code>[1,1,glob,k]</code> replicated → <code>[1,1,S/sp,k]</code> SP-sharded (dim2), on device</td><td><span class="pill pcomm">CCL</span> → <span class="pill psp">SP</span></td></tr>
+<tr><td>15b</td><td><code>ops.sparse_mla</code> (<code>sparse_sdpa</code>, device, 🟫RM-only)</td><td>q TILE→RM; <code>tt_q + kv + idx → [1,H/tp,S/sp,512]</code> RM→TILE; SPMD per chip</td><td><span class="pill ptp">TP</span>·<span class="pill psp">SP</span></td></tr>
 <tr><td>16</td><td><code>linear wkv_b2</code></td><td><code>[..,512] → [..,128]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
 <tr><td>17</td><td><code>nlp_concat_heads</code></td><td><code>→ [1,1,S/sp,(H/tp)·128]</code></td><td><span class="pill ptp">TP</span></td></tr>
 <tr><td>18</td><td><code>linear o_proj</code></td><td><code>→ [1,1,S/sp,dim]</code> partial</td><td><span class="pill ptp">TP partial</span></td></tr>
@@ -359,8 +393,10 @@ in the future for that query row. The on-device path (<code>ttnn.gather</code> �
 <h2>7. Worked example — 50k cached, processing a fresh 5k chunk</h2>
 <p class="sub">Concrete trace with <code>kv_actual_isl = 51200</code> (50·1024), this chunk = 5120 tokens (5·1024), on an
 <code>8×4</code> mesh (<code>sp=8, tp=4</code>). Because <code>kv_actual_isl</code> is passed, this is the <b>chunked</b> path.
-(The code's DSA path is validated at <code>sp=1</code>; <code>sp=8</code> here exercises the general SP wiring — the indexer
-all-gathers become real, not no-ops.)</p>
+(The code's DSA path is validated at <code>sp=1</code> (1×4, single-shot + chunked) and <code>sp=2</code> (2×2 single-shot);
+<b>2×2 chunked is currently guarded back to 1×4</b> over the open block-cyclic read issue (status.md 5.5). <code>sp=8</code>
+here is illustrative — it exercises the general SP wiring, where the indexer all-gathers and the <code>indices</code> SP-reshard
+become real, not no-ops.)</p>
 
 <table>
 <tr><th>Quantity</th><th>Value</th><th>Set by</th></tr>
@@ -382,13 +418,13 @@ is ~64×).</div>
 <tr><th>Stage</th><th>Tensor</th><th>Shape</th><th>Note</th></tr>
 <tr><td rowspan="3">indexer (§4)</td><td>index K-cache <code>_index_kbuf</code></td><td><code>[1,1,51200,128] → [1,1,56320,128]</code></td><td>this chunk's 5120 keys appended (rope'd at pos 51200…56319); replicated across TP, full-seq after SP gather</td></tr>
 <tr><td><code>q_dev</code> (index queries)</td><td><code>[1,64,5120,128]</code></td><td>64 indexer heads; <code>glob</code> queries (after SP all-gather)</td></tr>
-<tr><td><b><code>logits</code></b></td><td><b><code>[1,1,5120,56320]</code></b></td><td>5120 new queries × full 56320-key prefix — the heavy intermediate</td></tr>
-<tr><td>mask</td><td><code>+ triu(start_pos+1 = 51201)</code></td><td><code>[1,1,5120,56320]</code></td><td>row <i>s</i> (pos 51200+<i>s</i>) keeps keys ≤ 51200+<i>s</i></td></tr>
-<tr><td><b>indices</b></td><td><b><code>indices</code></b></td><td><b><code>[1,1,5120,2048]</code></b> uint32</td><td>per-query top-2048 (the 27.5× crop)</td></tr>
+<tr><td><b><code>logits</code></b> 🟫</td><td><b><code>[1,1,5120,56320]</code></b> bf16 RM</td><td>5120 new queries × full 56320-key prefix — the heavy intermediate</td></tr>
+<tr><td>causality</td><td><b>fused</b> in <code>indexer_score</code> (<code>chunk_start_idx=51200</code>)</td><td>cols set to <code>-inf</code> in-op</td><td>row <i>s</i> (pos 51200+<i>s</i>) keeps keys ≤ 51200+<i>s</i>; no separate triu add</td></tr>
+<tr><td><b>indices</b> 🟫</td><td><b><code>indices</code></b></td><td><b><code>[1,1,5120,2048]</code></b> uint32 RM replicated</td><td>per-query top-2048 (the 27.5× crop); masked slots = <code>0xFFFFFFFF</code> sentinel. <b>Resharded inside <code>sparse_mla</code> to <code>[1,1,640,2048]</code> per chip</b> (SP dim2) to align with q's local seq</td></tr>
 <tr><td rowspan="4">attention (§5)</td><td><code>tt_q</code> (absorbed)</td><td><code>[1,32,640,576]</code></td><td>32 = H/tp heads; 640 = SP-sharded seq; 576 = latent 512 ++ rope 64</td></tr>
 <tr><td>this chunk's <code>kvpe</code></td><td><code>[1,1,640,576]</code> bf8</td><td>SP-sharded; written via <code>update_padded_kv_cache</code> at offset 51200</td></tr>
-<tr><td><code>kvpe_host</code> (prefix readback)</td><td><code>[56320,576]</code></td><td>block-cyclic cache un-rotated to natural order, host (full prefix)</td></tr>
-<tr><td><code>sparse_mla</code> out → <code>out</code></td><td><code>[1,32,640,512] → [1,1,640,1792]</code></td><td>gather 2048/row, SDPA, wkv_b2, concat, o_proj, reduce_scatter</td></tr>
+<tr><td>latent prefix (on-device gather)</td><td>🟫RM <code>[1,1,56320,576]</code> replicated</td><td><code>_gather_kvpe_prefix</code>: block-cyclic cache un-rotated to natural order <b>on device</b> (no host) — backlog 9 done</td></tr>
+<tr><td><code>sparse_mla</code> out → <code>out</code></td><td><code>[1,32,640,512] → [1,1,640,1792]</code></td><td>device <code>sparse_sdpa</code> (gather 2048/row, online-softmax), then wkv_b2, concat, o_proj, reduce_scatter</td></tr>
 </table>
 
 <h3>One query row's view (row 5119, global position 56319)</h3>
@@ -398,7 +434,7 @@ is ~64×).</div>
   <div style="flex:5120;background:var(--spbg);color:var(--sp)">this chunk — 5120 🟧</div>
 </div>
 <div class="strip" style="margin-top:6px">
-  <div style="flex:2048;background:var(--hostbg);color:var(--host)">top-2048 selected (scattered across the 56320) 🟪</div>
+  <div style="flex:2048;background:var(--hostbg);color:var(--host)">top-2048 selected (scattered across the 56320)</div>
   <div style="flex:54272;background:#f2f2f2;color:var(--muted)">54272 keys masked out (not attended)</div>
 </div>
 <p class="sub">Bottom strip is to scale: the purple sliver is what <code>sparse_mla</code> actually computes over.</p>
@@ -413,12 +449,12 @@ is ~64×).</div>
     <span class="bar bq" style="left:2%;animation-delay:.1s"></span><span class="bar bq" style="left:13%;animation-delay:.5s"></span></div></div>
   <div class="lane"><div class="who">weights_proj: wproj → TP reduce → SP gather → scale</div><div class="slot">
     <span class="bar bw" style="left:4%;animation-delay:.2s"></span></div></div>
-  <div class="lane"><div class="who">indexer_logits → +mask → topk_indices (host)</div><div class="slot">
+  <div class="lane"><div class="who">indexer_score (causal fused) → topk_large_indices (device)</div><div class="slot">
     <span class="bar bm" style="left:24%;animation-delay:1.2s"></span></div></div>
   <div class="lane"><div class="who">DSA front-end: Q absorbed + KV cached</div><div class="slot">
     <span class="bar bq" style="left:34%;animation-delay:1.8s"></span><span class="bar bw" style="left:38%;animation-delay:2s"></span></div></div>
-  <div class="lane"><div class="who">prefix → host → sparse_mla (gather+SDPA)</div><div class="slot">
-    <span class="bar bm" style="left:50%;animation-delay:2.8s"></span></div></div>
+  <div class="lane"><div class="who">on-device latent gather → sparse_sdpa (device, SPMD)</div><div class="slot">
+    <span class="bar bk" style="left:50%;animation-delay:2.8s"></span></div></div>
   <div class="lane"><div class="who">wkv_b2 → concat_heads → o_proj → reduce_scatter</div><div class="slot">
     <span class="bar bq" style="left:64%;animation-delay:3.6s"></span><span class="bar bw" style="left:68%;animation-delay:3.8s"></span></div></div>
 </div>
@@ -431,11 +467,12 @@ for functional parity):</p>
 <tr><td><code>test_v32_mla_vs_cpu_reference</code> · seq256 / seq2k</td><td>≤ 2048</td><td>dense passthrough (v3)</td><td>DSA mask is zero over the causal region → v32 must match dense v3 (PCC ≥ 0.98)</td></tr>
 <tr><td>… · seq4k</td><td>4096</td><td><b>DSA active</b></td><td>device indexer + <code>sparse_mla</code> vs the CPU index mask; logs banded PCC for rows&lt;2048 vs ≥2048</td></tr>
 <tr><td><code>test_v32_mla_chunked_vs_cpu_reference</code></td><td>4k, chunk 1k</td><td>DSA + chunked cache</td><td>block-cyclic cache read-back (un-rotated) feeds <code>sparse_mla</code>; per-chunk + KVPE PCC</td></tr>
-<tr><td><code>test_v32_mla_determinism</code></td><td>4096 ×3</td><td>DSA active</td><td>same in → same out across CCL reductions, host fallback, topk ties</td></tr>
+<tr><td><code>test_v32_mla_determinism</code></td><td>4096 ×3</td><td>DSA active</td><td>bit-exact run-to-run (PCC 1.0) across CCL reductions, the <code>sparse_sdpa</code> device op, and topk ties</td></tr>
 </table>
-<p class="sub">Meshes: <code>1×4</code> pure TP (DSA functional path; <code>sp=1</code>) and <code>2×2</code> SP×TP. The DSA path is
-documented <code>sp=1</code>-only for now (the indexer needs the full local sequence); the <code>_sp_all_gather</code> calls are
-no-ops at <code>sp=1</code> and the wiring is in place for 2×2 later.</p>
+<p class="sub">Meshes: <code>1×4</code> pure TP (<code>sp=1</code>; <code>_sp_all_gather</code> no-ops) and <code>2×2</code> SP×TP
+(<code>sp=2</code>; the SP all-gathers and the <code>indices</code> SP-reshard are real). DSA now runs on both meshes:
+<b>single-shot</b> validated at 1×4 and 2×2 (seq4k 0.9974); <b>chunked</b> validated at 1×4 (4k+1k 0.9982) but currently
+<b>guarded back to 1×4</b> for 2×2 over the open block-cyclic cache-read issue (status.md 5.5).</p>
 
 <p class="ctrl"><button onclick="document.body.classList.toggle('still')">⏸ toggle animation</button>
 &nbsp;(also respects your OS “reduce motion” setting)</p>

@@ -111,13 +111,35 @@ Merged `pjosipovic/sparse_mla_prefill_ref` → `ttnn.transformer.sparse_sdpa` (B
 - ⚠️ **Perf debt (re-opens (9)):** the wrapper re-uploads `kvpe_host` to device, so the non-chunked path is again device→host (caller `_dsa_forward`) → host→device (op). Removing it needs a signature change to pass the already-replicated device KVPE tensor — follow-up. Chunked path genuinely needs the host hop (block-cyclic un-rotation).
 - ⚠️ 2x2 chunked still guarded to 1x4 (pre-existing 5.5 block-cyclic issue, unrelated to this op).
 
+### ✅ Step 7 — DSA path fully on device (2026-06-16, `-m dev` green; chunked 1x4+2x2 PCC 0.9969, seq4k 1x4+2x2 green)
+Removed the last host hops so DSA prefill runs end-to-end on device — backlog (9) **done**, indices reshard on device.
+- 🧩 **KVPE prefix gather on device** — `mla.py` `_gather_kvpe_prefix` + `_unrotate_blockcyclic`, replacing the
+  `ConcatMesh2dToTensor`/`to_torch` + host `blockcyclic_positions` un-rotate + `from_torch` re-upload:
+  - single-shot: SP `all_gather` of the live kvpe + `to_layout(ROW_MAJOR)`;
+  - chunked: `to_memory_config` ND_SHARDED→INTERLEAVED + SP `all_gather` (no-op at sp=1) + `typecast` bf8→bf16 +
+    `to_layout` TILE→RM + on-device block-cyclic→natural un-rotate (`reshape`/`permute`, inverse of `blockcyclic_positions`)
+    + trim to `end_pos`. `all_gather` physically concatenates the per-chip cache buffers regardless of the cache's
+    Replicate mesh-metadata; the op input is bit-identical to the old host build, so numerics are unchanged.
+  - `ops.sparse_mla` now takes the already-replicated **device** kvpe tensor (no `from_torch`); intermediates deallocated.
+- 🧩 **Indices SP-reshard on device** via `ttnn.mesh_partition(dim=2, cluster_axis=sp_axis)` (the inverse of `all_gather`),
+  replacing `_to_host` + `from_torch`/`ShardTensor2dMesh`. `_to_host` retained as a test/diagnostic readback helper only;
+  `tt/ops.py` is now torch-free.
+- 🧪 Validated on Blackhole (truth cached): ops shapes/numerics, indexer-chunked, determinism (bit-exact),
+  `test_v32_mla_vs_cpu_reference[seq4k]` 1x4+2x2, `test_v32_mla_chunked_vs_cpu_reference` **1x4+2x2** (chunked out PCC 0.9969)
+  — full `-m dev` green (13/13). The on-device un-rotate **unblocked 2x2 chunked** (the 5.5 host block-cyclic read is gone).
+- ⚠️ Perf debt remains (not correctness): the gather still materializes the full-T replica per chip; the SP-ring +
+  full device-residency that avoids it is the (12) C++ follow-up. Design in `context/kvpe_sparse_pipeline_report.html`.
+- 🧩 Two incremental commits on `mvasilijevic/dsa_w_ops`: on-device KVPE gather; on-device indices reshard.
+
 ### CPU fallbacks (multichip) — running list
-All indexer fallbacks are gone (the indexer is fully on-device — backlog (19)); only the MLA KVPE host hop remains.
+**All host fallbacks are gone — the DSA path is fully on device** (indexer backlog (19); KVPE gather + indices reshard Step 7).
+No tensor leaves the device during DSA prefill.
 | id | fallback | where | status / SP behavior |
 |---|---|---|---|
 | ~~F-rope~~ | ~~non-interleaved RoPE on host (issue #4)~~ | indexer pe slices | **RESOLVED by (19): `_device_rope_pe` → `ttnn.experimental.rotary_embedding_hf` on device (issue #4 resolved); no host RoPE** |
 | ~~F-sparse~~ | ~~sparse_mla gather+SDPA on host (backlog 8)~~ | `ops.sparse_mla` | **RESOLVED 2026-06-15 (Step 6): now `ttnn.transformer.sparse_sdpa` device op, no host SDPA** |
-| F-mla-prefix | MLA KVPE host readback (backlog 9) | `_dsa_forward` | **only remaining host hop.** Non-chunked: SP all-gather→`to_torch`→re-upload to the op (re-upload re-opened by Step 6). Chunked: cache readback + block-cyclic un-rotation (irreducible host step). |
+| ~~F-mla-prefix~~ | ~~MLA KVPE host readback (backlog 9)~~ | `_dsa_forward` | **RESOLVED 2026-06-16 (Step 7): `_gather_kvpe_prefix` gathers + un-rotates the prefix on device; `ops.sparse_mla` takes the device tensor. No `to_torch`/`from_torch`.** |
+| ~~F-idx-reshard~~ | ~~indices replicate→shard via host (sp>1)~~ | `ops.sparse_mla` | **RESOLVED 2026-06-16 (Step 7): `ttnn.mesh_partition` on device (inverse of all_gather); no `_to_host`.** |
 | ~~F-idx-key~~ | ~~indexer key SP-gather (2x2)~~ | `_indexer_topk` | **RESOLVED by (19): index key cache is the device tensor `_index_kbuf` (natural order, grown by `ttnn.concat`); no host AG** |
 
 ### ⏭️ Next
@@ -129,9 +151,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` open · ⏸️ postponed · 📌 re
 
 ### Recommended implementation order (open items, updated 2026-06-15)
 
-Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (Step 6, 2026-06-15) — the host fallback retirement reasoning below is obsolete: `ttnn.transformer.sparse_sdpa` landed and `ops.sparse_mla` wraps it. **(12)** as originally scoped (per-query gather + SDPA + online-softmax, single chip) is now **delivered by that op**; what remains of (12) is the SP-ring + full device-residency (no host KVPE gather/re-upload). Remaining open:
+Done: (4),(5),(6),(7),**(9, Step 7)**,(11),(18),(19). **(8) superseded by the device op** (Step 6). **(9) done** (Step 7, 2026-06-16): the KVPE gather + indices reshard are on device, so **the whole DSA path is on device**. **(12)** core delivered by `sparse_sdpa`; what remains of (12) is **perf only** — an SP-ring that reads the cache natively and avoids the full-T replica (the gather itself is now on device). Remaining open:
 
-`14 → 13 → 16 → 3 → 12(SP-ring/residency) → 15`
+`14 → 13 → 16 → 3 → 12(SP-ring perf) → 15 → 20`
 
 | # | Item | Why here |
 |---|---|---|
@@ -139,10 +161,11 @@ Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (S
 | 13 | upstream injection → v3, delete copies | independent hygiene; kills drift from copied files |
 | 16 | multi-layer / multi-user cache | functional scope expansion toward the full model |
 | 3 ⏸️ | 50k scale gate | hardware-time gated; pre-cache truth on a big box |
-| 12 | **SP-ring/residency tail of sparse attn** | per-query gather+SDPA **DONE** via `sparse_sdpa` (Step 6); only the SP-ring + full device-residency (drop host KVPE gather/re-upload) remain — C++ follow-up |
+| 12 | **SP-ring tail of sparse attn (perf)** | per-query gather+SDPA **DONE** via `sparse_sdpa` (Step 6); KVPE gather now on device (Step 7); only the SP-ring that avoids the full-T replica remains — C++ follow-up |
 | 15 | decode path | beyond current prefill-only scope; largest expansion |
+| 20 | **KV migration for DSA (disaggregated prefill→decode)** | DSA path drops the migration ack/zero-pad and the indexer cache isn't in the address table; couples to (15)/(16), cleanest after (12) device-residency. See cache_report.html §12 |
 
-**The MLA-layer milestone is essentially complete** (1x4+2x2, single-shot+chunked, random+pretrained; sparse attention now a device op). What remains is hygiene (14/13), scope expansion (16/15), and perf (the SP-ring/residency tail of 12) — none blocking functional correctness.
+**The MLA-layer milestone is complete and fully on device** (1x4+2x2, single-shot+chunked, random+pretrained; sparse attention a device op; KVPE gather + indices reshard on device — Step 7). What remains is hygiene (14/13), scope expansion (16/15), and perf (the SP-ring tail of 12) — none blocking functional correctness.
 
 **Step 4 — chunked prefill**
 - [x] **(1)** MLACPU decode branch accepts intra-chunk causal mask (was mask=None → no within-chunk causality)
@@ -160,7 +183,7 @@ Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (S
   - A composed device version is *feasible* (query-tile to bound `sel=[Sq,k,576]`, ~9.6 GB full → ~0.6 GB at tile=256 via `ttnn.embedding` gather, verified), but **not worth it**: (a) no correctness gain (host fallback already PCC 0.997); (b) the real win is **fusion** (never materialize `sel`, stream over `k`) which a composed op *by definition cannot do*; (c) per-tile ROW_MAJOR↔TILE churn + many small batched matmuls over k=2048 may be net-slower than host; (d) perf is out of scope (spec §3, Approach §4).
   - SP only gives ~sp× (2×), already captured by query-sharding in (4). The order-of-magnitude relief is fusion, independent of SP — only the kernel delivers it. So there is **no composed workaround**; → folded into (12).
   - Probe kept as design input for (12): row-gather primitive = `ttnn.embedding` (weight [T,576] RM + flat idx → [Sq·k,576]); `ttnn.gather` needs prohibitive input expansion.
-- [~] **(9)** MLA cache-slot host readback — was DONE (host-resident KVPE, one download no re-upload), **partially re-opened 2026-06-15 by Step 6**: the `sparse_sdpa` op needs KVPE on device, so `ops.sparse_mla` now re-uploads `kvpe_host`→replicated device tensor. Non-chunked path is therefore device→host (caller all-gather→to_torch) → host→device (op) again. Fix = pass the already-replicated device KVPE tensor instead of `kvpe_host` (signature change; couples to the device-residency tail of (12)). Chunked path's host hop is irreducible (block-cyclic un-rotation).
+- [x] **(9)** MLA cache-slot host readback — **DONE 2026-06-16 (Step 7).** `_dsa_forward` builds the sparse op's KVPE input fully on device: single-shot = SP `all_gather` + `to_layout`; chunked = `_gather_kvpe_prefix` (`to_memory_config` ND→INTER + SP `all_gather` + `typecast` + `to_layout` + on-device block-cyclic un-rotate). `ops.sparse_mla` takes the device tensor (no `from_torch`). The "chunked host hop is irreducible" note was wrong — the block-cyclic un-rotate is a tile-aligned `reshape`/`permute` on device. Validated 1x4+2x2 (chunked PCC 0.9969).
 - [x] **(10)** ~~indexer host stems readback (full hidden concat per chunk)~~ — resolved by (6); only the pe-slice RoPE readback remains, folded into (6)'s F1 host-rope note (coupled to issue #4)
 - [x] **(19)** indexer key cache → device + on-device indexer RoPE — **DONE 2026-06-11. The indexer is now fully on-device: stems, RoPE, key cache, logits, topk — zero host.**
   - On-device RoPE: `_device_rope_pe` uses `rotary_embedding_hf` with precomputed device cos/sin (`_build_index_rope_tables`, halves-repeated, sliced per chunk to global positions). Replaces host `_host_rope_pe` — removes the q/k readbacks (the dominant indexer host transfer).
@@ -174,7 +197,7 @@ Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (S
   - `topk_large_indices(logits, k)` (Blackhole-only) chains directly off the row-major bf16 score → ROW_MAJOR uint32 indices. k∈[16,2048], multiple of 16 (active path k=index_topk=2048). -inf columns survive as the **sentinel index 0xFFFFFFFF** (contiguous tail, descending sort). As of Step 6 the consumer is the `sparse_sdpa` device op, which masks those slots itself from the sentinel — `sparse_mla` no longer clamps/drops indices in Python (that host logic was removed). bf16 (no fp8/Hadamard) still the contract.
   - ✅ **topk_large_indices index-drop bug — DIAGNOSED then FIXED 2026-06-12.** Symptom: on inputs containing **+0.0** the op dropped genuine top-k indices and duplicated the window-base index 0. Isolation localized it to the LLK **index carry** (`_topk_xl_add_lsb_indices_`/compare-exchange), NOT the cross-window merge and NOT data movement — proven by: reproduces at minimal **1 row, n=k=512, single window** (merge never runs, output must be a permutation 0..511); 512 strictly-distinct shuffled values → perfect (not ordering); `ttnn.add(t,0)` bit-exact (not movement); all-equal/two-valued → perfect (the trigger is +0.0, which also ties). Repro `context/repro_topk_minimal.py` (BUG + negative control + torch/input self-check); writeup `context/BUG_topk_large_indices_dups.md`.
   - **Fix landed in `pjosipovic/topk_xl` (53144ada029 "Fix topk_large_indices zero tie indices"), merged here (f0067b3e91e).** Mechanism confirmed the diagnosis: the fused word packs the bf16 value in bits[31:16] and the index in bits[15:0]; for +0.0 that word is an FP32 **subnormal** which `SFPSWAP` canonicalizes back to +0.0, **erasing the index** → 0. Fix substitutes a tiny negative-normal surrogate for +0.0 internally (`_topk_xl_promote_positive_zero_for_fused_index_`). Rebuilt + verified: pjosipovic ties test PASSES; minimal repro 512/512 (was 506); **op dev suite 10/10 green incl. `test_topk_indices_match[k2048]`** (the former RED sentinel). The -inf→0xFFFFFFFF causal sentinel is a separate, still-valid feature; `sparse_mla`'s clamp + index≥T handling stays. (Prior to this, the 2026-06-12 force-push cd4ad317678 was a rebase + cosmetic cleanup that added the failing ties regression test but not the fix.)
-- [~] **(12)** **fused sparse attention** — single-chip core **DONE 2026-06-15: `ttnn.transformer.sparse_sdpa`** (merged `pjosipovic/sparse_mla_prefill_ref`). One kernel, per-query gather of k selected latents + flash/online-softmax SDPA (no `sel` materialization) + DSA mask baked into the 0xFFFFFFFF index sentinel; H any multiple of tile height, k_chunk-blocked over the key axis. Blackhole-only, fp32_dest_acc disabled. **Remaining:** SP-ring over the latent cache (today KVPE is gathered full-T / replicated per chip, not ringed) + full device-residency (drop the host KVPE gather+re-upload, see (9)). Siblings: v3 `ring_mla` (ring+latent). C++ follow-up.
+- [~] **(12)** **fused sparse attention** — single-chip core **DONE 2026-06-15: `ttnn.transformer.sparse_sdpa`** (merged `pjosipovic/sparse_mla_prefill_ref`). One kernel, per-query gather of k selected latents + flash/online-softmax SDPA (no `sel` materialization) + DSA mask baked into the 0xFFFFFFFF index sentinel; H any multiple of tile height, k_chunk-blocked over the key axis. Blackhole-only, fp32_dest_acc disabled. **Remaining (perf only):** the gather/un-rotate is now on device (Step 7, (9) done), but it still materializes the full-T replica per chip; an SP-ring over the latent cache (read it natively, ring across SP, gather only the selected k — like v3 `ring_mla`) would avoid that. C++ follow-up; design in `context/kvpe_sparse_pipeline_report.html`.
 
 **Hygiene**
 - [ ] **(13)** upstream mla_class/block_class injection to v3 → delete the two copied files
@@ -183,6 +206,7 @@ Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (S
 - [ ] **(16)** multi-layer / multi-user cache
 - [ ] **(17)** replicated-vs-sharded mask dedup
 - [x] **(18)** determinism tests — `test_v32_mla_determinism` (seq4k, 1x4 + 2x2, 3 runs each, no CPU truth). **Bit-exact: exact=True, PCC=1.0** run-to-run on both meshes — the DSA path (CCL reductions, sparse_sdpa op, topk) is fully deterministic. Asserts torch.equal + PCC≥0.9999.
+- [ ] **(20)** KV migration (disaggregated prefill→decode) for the DSA path. **Background:** migration is *not* a ttnn op — it's out-of-band NoC reads by an external `migration_worker`, driven by a `KvChunkAddressTable` (built host-side from the live cache layout, `utils/kv_cache_utils.py:21 create_kv_chunk_address_table_ds`; one entry per `(layer, 32-tok pos, slot)` → `noc_addr=(bank<<32)|(base+off)`, round-robin over 8 DRAM banks, chunk=`[1,1,32,576]` bf8 = 19584 B) + a per-layer ack (`InterProcessCounterChannel.inject(1)`). The v3 on-device contribution is just `update_padded_kv_cache` → `zero_padded_kv_cache` (zero the pad window to the next 128-boundary) → `synchronize_device` → `on_layer_complete(layer)` — **chunked path only** (`deepseek_v3_d_p/tt/mla/mla.py:536-567`); single-shot has no per-layer stream (wholesale copy). **Gaps in v3.2:** (i) `_dsa_forward` swallows `on_layer_complete`/`actual_isl` in `**_` (`tt/mla/mla.py:253-262`) → never zero-pads or acks; only the dense passthrough (super().forward → v3 chunked) migrates. (ii) the two v3.2-only structures are **absent from the address table**: the indexer key cache (`_index_kbuf`, replicated, grown by concat) and the host KVPE readback. **Work:** (a) thread `on_layer_complete`+`actual_isl` through `_dsa_forward` and call `zero_padded_kv_cache`+ack like v3 `_chunked_attn` (the MLA latent cache is the same `kvpe_cache` as v3, so it is already address-table-mappable — only the ack is missing); (b) extend `create_kv_chunk_address_table_ds` to map the **indexer key cache** `_index_kbuf` (replicated → ship one replica), the genuinely new structure; (c) decode-side layout/policy for the indexer cache. Couples to (15) decode + (16) multi-user cache. See `context/cache_report.html` §12.
 
 ## References
 1. models/demos/deepseek_v32/reference_cpu - deepseek's reference implementation running on CPU w/o fused ops and sparse attention
