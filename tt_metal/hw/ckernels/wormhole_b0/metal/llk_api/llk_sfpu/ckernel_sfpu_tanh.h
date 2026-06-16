@@ -29,7 +29,7 @@ namespace ckernel::sfpu {
  */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
-    sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * log2(e)
+    sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
     x *= 2.0f;
     // Rounds the absolute value of j, clamped to [0, 255].
     sfpi::vMag m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
@@ -39,8 +39,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat a, r, s, f, w, y, scale, bias, c0;
 
     a = sfpi::setsgn(x, 0);
-    f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
-    f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
+    f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
 
     r = 1.974105835e-04f;
     r = r * f + 1.393107930e-3f;
@@ -153,9 +152,9 @@ inline void tanh_init() {
         _sfpu_load_imm16_(2, imm2);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
-            sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;  // 2 * log2(e) == 2 / ln(2)
-            sfpi::vConstFloatPrgm1 = -0.693145752f;     // -ln(2)_hi
-            sfpi::vConstFloatPrgm2 = 1.666667163e-1f;   // c1
+            sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)
+            sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // ln(2)
+            sfpi::vConstFloatPrgm2 = 1.666667163e-1f;       // c1
         } else {
             // Polynomial approximation
             // Store some polynomial coefficients in programmable registers
