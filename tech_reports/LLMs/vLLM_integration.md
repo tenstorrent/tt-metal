@@ -36,13 +36,18 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```python
       warmup_model_prefill(kv_cache : list, enable_trace : bool, sampling_params : list)
       ```
-    - `model_capabilities`: Class dictionary that lets VLLM know about the
-      features supported by this model. We use it in
+    - `model_capabilities`: Class dictionary that lets VLLM know which optional
+      TT backend features the model supports. We use it in
       [platform.py](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py)
-      to decide about enabling or disabling those features in VLLM.
-      Currently there is only one feature (`supports_prefix_caching`)
-      that we describe here, but the list is expected to grow. Example:
-      `model_capabilities={"supports_prefix_caching": True}`
+      to validate requested features and enable or disable them in VLLM. Missing
+      keys default to `False`. The currently recognized keys are
+      `supports_prefix_caching`, `supports_async_decode`, and
+      `supports_sample_on_device`. `supports_prefix_caching` controls automatic
+      prefix caching. `supports_async_decode` allows async scheduling for models
+      that can submit decode with `read_from_device=False` and later read the
+      output asynchronously. `supports_sample_on_device` allows the
+      `sample_on_device_mode` TT config option. Example:
+      `model_capabilities={"supports_prefix_caching": True, "supports_async_decode": True, "supports_sample_on_device": True}`
 3. **(Multi-modal models only)** Currently, we only support image+text input modalities. An example generation class is `Gemma3ForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). For more info on multi-modal models see also [vLLM Docs - Multi-Modal Support](https://docs.vllm.ai/en/latest/contributing/model/multimodal.html)). These models have the same interface requirements as the text-only models, as well as the following:
    - `prefill_forward` (**image+text models**): same as text-only models with an additional kwarg (`pixel_values`) for the image inputs.
 
