@@ -198,9 +198,9 @@ class TtSam3ImagePipeline:
             tt_encoder_forward,
         )
         from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_vitdet import (
+            TracedViTBackbone,
             move_backbone_params_to_device,
             preprocess_vit_backbone_weights,
-            tt_vit_backbone,
         )
 
         self.device = device
@@ -216,7 +216,7 @@ class TtSam3ImagePipeline:
         self.vit_backbone = vit_backbone
         self.backbone_params = preprocess_vit_backbone_weights(vit_backbone)
         self.backbone_params = move_backbone_params_to_device(self.backbone_params, device)
-        self._tt_vit_backbone = tt_vit_backbone
+        self._traced_vit = TracedViTBackbone(self.backbone_params, device)
 
         self._orig_vit_forward = vit_backbone.forward
         vit_backbone.forward = self._patched_vit_forward
@@ -240,6 +240,25 @@ class TtSam3ImagePipeline:
         self._pos_enc_module = pos_enc_module
         self._fast_pos_enc = _fast_pos_enc
         neck.position_encoding.forward = _fast_pos_enc
+
+        self._neck = neck
+        self._bf16_neck = neck.sam2_convs is None
+
+        if self._bf16_neck:
+            _SeqFwd = type(neck.convs[0]).forward
+            self._conv_wrappers = []
+            for cs in neck.convs:
+                cs.to(torch.bfloat16, memory_format=torch.channels_last)
+
+                def _mk(seq):
+                    def _w(x):
+                        return _SeqFwd(seq, x.to(torch.bfloat16, memory_format=torch.channels_last)).float()
+
+                    return _w
+
+                w = _mk(cs)
+                cs.forward = w
+                self._conv_wrappers.append(w)
 
         encoder = sam3_model.transformer.encoder
         self._encoder = encoder
@@ -323,7 +342,7 @@ class TtSam3ImagePipeline:
         pd_ng = [n.num_groups for n in pixel_decoder.norms]
         pd_shared = pixel_decoder.shared_conv
 
-        def _fast_pd_forward(backbone_feats):
+        def _fast_pd_impl(backbone_feats):
             feats_b = [f.to(torch.bfloat16, memory_format=torch.channels_last) for f in backbone_feats]
             prev = feats_b[-1]
             for i, bb in enumerate(feats_b[:-1][::-1]):
@@ -335,8 +354,8 @@ class TtSam3ImagePipeline:
                 prev = torch.nn.functional.relu(torch.nn.functional.group_norm(prev, pd_ng[ci], pd_nw[ci], pd_nb[ci]))
             return prev.float().contiguous()
 
-        self._fast_pd_forward = _fast_pd_forward
-        pixel_decoder.forward = _fast_pd_forward
+        self._fast_pd_forward = _fast_pd_impl
+        pixel_decoder.forward = _fast_pd_impl
 
         mask_pred_module = sam3_model.segmentation_head.mask_predictor
         self._mask_predictor = mask_pred_module
@@ -590,80 +609,86 @@ class TtSam3ImagePipeline:
                 else None
             )
 
-            for li, layer in enumerate(self_d.layers):
-                rpi = reference_boxes[:, :, None] * vr2
-                qse = _cached_sineembed(rpi[:, :, 0, :], self_d.d_model)
-                qp = self_d.ref_point_head(qse)
-                if self_d.boxRPB != "none" and reference_boxes is not None:
-                    memory_mask = self_d._get_rpb_matrix(reference_boxes, fs).flatten(0, 1)
-                    if presence_out is not None:
-                        nq = memory_mask.shape[1]
-                        if _mask_buf[0] is None or _mask_buf[0].shape[1] != nq + 1:
-                            _mask_buf[0] = torch.zeros(
-                                memory_mask.shape[0], nq + 1, memory_mask.shape[2], dtype=memory_mask.dtype
+            with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+                for li, layer in enumerate(self_d.layers):
+                    rpi = reference_boxes[:, :, None] * vr2
+                    qse = _cached_sineembed(rpi[:, :, 0, :], self_d.d_model)
+                    qp = self_d.ref_point_head(qse)
+                    if self_d.boxRPB != "none" and reference_boxes is not None:
+                        memory_mask = self_d._get_rpb_matrix(reference_boxes, fs).flatten(0, 1)
+                        if presence_out is not None:
+                            nq = memory_mask.shape[1]
+                            if _mask_buf[0] is None or _mask_buf[0].shape[1] != nq + 1:
+                                _mask_buf[0] = torch.zeros(
+                                    memory_mask.shape[0], nq + 1, memory_mask.shape[2], dtype=memory_mask.dtype
+                                )
+                            _mask_buf[0][:, 1:, :] = memory_mask
+                            layer._pp_mask = _mask_buf[0]
+                        else:
+                            layer._pp_mask = None
+                    output, presence_out = layer(
+                        tgt=output,
+                        tgt_query_pos=qp,
+                        tgt_query_sine_embed=qse,
+                        tgt_key_padding_mask=tgt_key_padding_mask,
+                        tgt_reference_points=rpi,
+                        memory_text=memory_text,
+                        text_attention_mask=text_attention_mask,
+                        memory=memory,
+                        memory_key_padding_mask=memory_key_padding_mask,
+                        memory_level_start_index=level_start_index,
+                        memory_spatial_shapes=spatial_shapes,
+                        memory_pos=pos,
+                        self_attn_mask=tgt_mask,
+                        cross_attn_mask=memory_mask,
+                        dac=apply_dac,
+                        dac_use_selfatt_ln=self_d.dac_use_selfatt_ln,
+                        presence_token=presence_out,
+                        **(decoder_extra_kwargs or {}),
+                        obj_roi_memory_feat=obj_roi_memory_feat,
+                        obj_roi_memory_mask=obj_roi_memory_mask,
+                    )
+                    layer._pp_mask = None
+                    if self_d.box_refine:
+                        ref_bs = _inv_sig(reference_boxes)
+                        normed = out_norm(output)
+                        if box_head_trk is None:
+                            du = box_head(normed) if self_d.use_normed_output_consistently else box_head(output)
+                        else:
+                            Q_det = decoder_extra_kwargs["Q_det"]
+                            du = torch.cat([self_d.bbox_embed(output[:Q_det]), box_head_trk(output[Q_det:])], dim=0)
+                        new_rp = (du + ref_bs).sigmoid()
+                        reference_boxes = new_rp.detach()
+                        if li != self_d.num_layers - 1:
+                            intermediate_ref_boxes.append(new_rp)
+                    else:
+                        normed = out_norm(output)
+                    intermediate.append(normed)
+                    if self_d.presence_token is not None and not is_instance_prompt:
+                        ipl = self_d.presence_token_head(self_d.presence_token_out_norm(presence_out)).squeeze(-1)
+                        if self_d.clamp_presence_logits:
+                            ipl.clamp_(
+                                min=-self_d.clamp_presence_logit_max_val, max=self_d.clamp_presence_logit_max_val
                             )
-                        _mask_buf[0][:, 1:, :] = memory_mask
-                        layer._pp_mask = _mask_buf[0]
-                    else:
-                        layer._pp_mask = None
-                output, presence_out = layer(
-                    tgt=output,
-                    tgt_query_pos=qp,
-                    tgt_query_sine_embed=qse,
-                    tgt_key_padding_mask=tgt_key_padding_mask,
-                    tgt_reference_points=rpi,
-                    memory_text=memory_text,
-                    text_attention_mask=text_attention_mask,
-                    memory=memory,
-                    memory_key_padding_mask=memory_key_padding_mask,
-                    memory_level_start_index=level_start_index,
-                    memory_spatial_shapes=spatial_shapes,
-                    memory_pos=pos,
-                    self_attn_mask=tgt_mask,
-                    cross_attn_mask=memory_mask,
-                    dac=apply_dac,
-                    dac_use_selfatt_ln=self_d.dac_use_selfatt_ln,
-                    presence_token=presence_out,
-                    **(decoder_extra_kwargs or {}),
-                    obj_roi_memory_feat=obj_roi_memory_feat,
-                    obj_roi_memory_mask=obj_roi_memory_mask,
-                )
-                layer._pp_mask = None
-                if self_d.box_refine:
-                    ref_bs = _inv_sig(reference_boxes)
-                    normed = out_norm(output)
-                    if box_head_trk is None:
-                        du = box_head(normed) if self_d.use_normed_output_consistently else box_head(output)
-                    else:
-                        Q_det = decoder_extra_kwargs["Q_det"]
-                        du = torch.cat([self_d.bbox_embed(output[:Q_det]), box_head_trk(output[Q_det:])], dim=0)
-                    new_rp = (du + ref_bs).sigmoid()
-                    reference_boxes = new_rp.detach()
-                    if li != self_d.num_layers - 1:
-                        intermediate_ref_boxes.append(new_rp)
-                else:
-                    normed = out_norm(output)
-                intermediate.append(normed)
-                if self_d.presence_token is not None and not is_instance_prompt:
-                    ipl = self_d.presence_token_head(self_d.presence_token_out_norm(presence_out)).squeeze(-1)
-                    if self_d.clamp_presence_logits:
-                        ipl.clamp_(min=-self_d.clamp_presence_logit_max_val, max=self_d.clamp_presence_logit_max_val)
-                    intermediate_presence_logits.append(ipl)
-                    presence_feats = presence_out.clone()
+                        intermediate_presence_logits.append(ipl)
+                        presence_feats = presence_out.clone()
             return (
-                torch.stack(intermediate),
-                torch.stack(intermediate_ref_boxes) if intermediate_ref_boxes is not None else None,
+                torch.stack(intermediate).float(),
+                torch.stack(intermediate_ref_boxes).float() if intermediate_ref_boxes is not None else None,
                 (
-                    torch.stack(intermediate_presence_logits)
+                    torch.stack(intermediate_presence_logits).float()
                     if self_d.presence_token is not None and not is_instance_prompt
                     else None
                 ),
-                presence_feats,
+                presence_feats.float() if presence_feats is not None else None,
             )
 
         import types
 
-        decoder.forward = types.MethodType(_opt_dec_fwd, decoder)
+        self._opt_dec_forward = types.MethodType(_opt_dec_fwd, decoder)
+        self._opt_dec_forward = torch.compile(self._opt_dec_forward, mode="reduce-overhead", backend="inductor")
+        decoder.forward = self._opt_dec_forward
+        self._opt_layer_fwds = [layer.forward for layer in decoder.layers]
         decoder.compiled = True
 
     def _patched_vit_forward(self, x):
@@ -673,7 +698,15 @@ class TtSam3ImagePipeline:
             self._pixel_decoder.forward = self._fast_pd_forward
         if self._mask_predictor.forward is not self._fast_mp_forward:
             self._mask_predictor.forward = self._fast_mp_forward
-        return self._tt_vit_backbone(x, self.backbone_params, self.device)
+        if self._decoder.forward is not self._opt_dec_forward:
+            self._decoder.forward = self._opt_dec_forward
+            for i, layer in enumerate(self._decoder.layers):
+                layer.forward = self._opt_layer_fwds[i]
+        if self._bf16_neck and "forward" not in self._neck.convs[0].__dict__:
+            for i, cs in enumerate(self._neck.convs):
+                cs.to(torch.bfloat16)
+                cs.forward = self._conv_wrappers[i]
+        return self._traced_vit(x)
 
     def _cached_forward_text(self, captions, input_boxes=None, additional_text=None, device="cuda"):
         cache_key = (tuple(captions), input_boxes is not None, additional_text is not None)
@@ -687,6 +720,7 @@ class TtSam3ImagePipeline:
 
     def restore(self):
         """Restore original forwards (for cleanup / PCC comparison)."""
+        self._traced_vit.release()
         self.vit_backbone.forward = self._orig_vit_forward
         self.sam3_model.backbone.forward_text = self._orig_forward_text
         self._pos_enc_module.forward = self._orig_pos_enc_forward
@@ -696,6 +730,11 @@ class TtSam3ImagePipeline:
         self._decoder.forward = self._orig_decoder_forward
         for i, layer in enumerate(self._decoder.layers):
             layer.forward = self._orig_layer_forwards[i]
+        if self._bf16_neck:
+            for cs in self._neck.convs:
+                if "forward" in cs.__dict__:
+                    del cs.__dict__["forward"]
+                cs.float()
 
     @torch.inference_mode()
     def forward(self, input_batch):

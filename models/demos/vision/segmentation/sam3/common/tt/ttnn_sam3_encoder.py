@@ -98,7 +98,9 @@ def _pad_to_tile(tensor, dim, tile_size=32):
     return torch.nn.functional.pad(tensor, pad_widths), size
 
 
-def tt_encoder_forward(tgt_cpu, memory_cpu, query_pos_cpu, memory_mask_cpu, encoder_params, device, compute_config):
+def tt_encoder_forward(
+    tgt_cpu, memory_cpu, query_pos_cpu, memory_mask_cpu, encoder_params, device, compute_config, sync=True
+):
     """Run all encoder layers on device.
 
     Args:
@@ -197,4 +199,6 @@ def tt_encoder_forward(tgt_cpu, memory_cpu, query_pos_cpu, memory_mask_cpu, enco
         ff = ttnn.linear(ff, p["ff2_w"], bias=p["ff2_b"], compute_kernel_config=compute_config)
         tgt = ttnn.add(tgt, ff)
 
+    if not sync:
+        return tgt
     return ttnn.to_torch(tgt).float()
