@@ -95,9 +95,11 @@ def is_python_io_recording_enabled() -> bool:
 def _configure_python_stack_traces_for_outer_graph_capture(ttnn_mod) -> None:
     """Outermost ``begin_graph_capture`` only: turn on Python stacks if ``CONFIG`` allows.
 
-    Stack traces are enabled only when ``enable_graph_python_stack_traces`` on
-    ``ttnn_mod.CONFIG`` is true (defaults to false if the field is missing on older
-    ``_ttnn`` builds).  Sets ``_python_stack_traces_auto_for_session`` so the matching
+    Stack traces are enabled when either ``enable_graph_python_stack_traces`` or
+    ``enable_detailed_tensor_report`` on ``ttnn_mod.CONFIG`` is true (each defaults to
+    false if missing on older ``_ttnn`` builds).  The latter is required for
+    ``tensor_lifetime`` source file/line columns in :mod:`ttnn.graph_report`.
+    Sets ``_python_stack_traces_auto_for_session`` so the matching
     ``end_graph_capture`` / ``end_graph_capture_to_file`` can disable traces again
     when this path enabled them.
     """
@@ -105,7 +107,10 @@ def _configure_python_stack_traces_for_outer_graph_capture(ttnn_mod) -> None:
     if _python_stack_traces_enabled:
         _python_stack_traces_auto_for_session = False
         return
-    if getattr(ttnn_mod.CONFIG, "enable_graph_python_stack_traces", False):
+    enable_traces = getattr(ttnn_mod.CONFIG, "enable_graph_python_stack_traces", False) or getattr(
+        ttnn_mod.CONFIG, "enable_detailed_tensor_report", False
+    )
+    if enable_traces:
         enable_python_stack_traces()
         _python_stack_traces_auto_for_session = True
     else:
@@ -187,9 +192,10 @@ def begin_graph_capture(run_mode=None):
 
     On the outermost Python-started capture only, Python stack traces may be
     turned on by ``_configure_python_stack_traces_for_outer_graph_capture`` when
-    ``getattr(ttnn.CONFIG, 'enable_graph_python_stack_traces', False)`` is true.
-    Set the config field to true (for example via ``TTNN_CONFIG_OVERRIDES``) to
-    enable that auto step.
+    ``ttnn.CONFIG.enable_graph_python_stack_traces`` or
+    ``ttnn.CONFIG.enable_detailed_tensor_report`` is true (set via
+    ``TTNN_CONFIG_OVERRIDES``).  Detailed tensor reporting enables traces for
+    ``tensor_lifetime`` source file/line columns in :mod:`ttnn.graph_report`.
 
     If traces were already enabled before that configure step (for example
     after :func:`enable_python_stack_traces` or from :func:`full_graph_capture`),

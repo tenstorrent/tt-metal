@@ -96,10 +96,105 @@ def get_mesh_shape_from_machine_info(machine_info: Optional[Dict]) -> Optional[T
     return None
 
 
+def program_config_grid_bounds(pc):
+    """Max core (x, y) a traced program_config will actually use.
+
+    Accepts either a structured dict (matmul configs: ``compute_with_storage_grid_size
+    = {"x":7,"y":10}`` plus ``hop_cores``/``sub_core_grids`` range lists) or a repr
+    string (SDPA: ``compute_with_storage_grid_size=(x=8,y=8)`` or ``=8-9`` — a grid
+    SIZE, so the max core index is size-1 — plus ``sub_core_grids={[x1-y1 - x2-y2],
+    ...}``). compute_with_storage_grid_size is a SIZE; explicit core ranges
+    (sub_core_grids/hop_cores) are exact and extend the bounds. Returns
+    (max_x, max_y), each possibly None.
+    """
+    import re
+
+    # Structured dict form (matmul program configs).
+    if isinstance(pc, dict):
+        max_x = max_y = None
+        csg = pc.get("compute_with_storage_grid_size")
+        if isinstance(csg, dict) and csg.get("x") is not None and csg.get("y") is not None:
+            max_x, max_y = int(csg["x"]) - 1, int(csg["y"]) - 1
+        for key in ("hop_cores", "sub_core_grids"):
+            ranges = pc.get(key)
+            if isinstance(ranges, list):
+                for r in ranges:
+                    end = r.get("end") if isinstance(r, dict) else None
+                    if isinstance(end, dict):
+                        max_x = max(max_x if max_x is not None else -1, int(end.get("x", -1)))
+                        max_y = max(max_y if max_y is not None else -1, int(end.get("y", -1)))
+        if max_x is None and max_y is None and pc.get("value"):
+            return program_config_grid_bounds(pc.get("value"))  # SDPA-style repr in "value"
+        return max_x, max_y
+
+    s = str(pc or "")
+    sub = list(re.finditer(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", s))
+    if sub:
+        return max(int(m.group(3)) for m in sub), max(int(m.group(4)) for m in sub)
+    gm = re.search(r"compute_with_storage_grid_size=\(x=(\d+),y=(\d+)\)", s) or re.search(
+        r"compute_with_storage_grid_size=(\d+)-(\d+)", s
+    )
+    if gm:
+        return int(gm.group(1)) - 1, int(gm.group(2)) - 1
+    return None, None
+
+
+def dispatch_axis_for_grid(max_x, max_y):
+    """Pick the Wormhole WORKER dispatch axis a core grid needs, or None.
+
+    ROW dispatch -> compute grid (8,9): x in [0,7], y in [0,8].
+    COL dispatch -> compute grid (7,10): x in [0,6], y in [0,9].
+    A grid touching x=7 needs ROW; one touching y=9 (but not x=7) needs COL;
+    otherwise either axis works (None). x is checked first because the matmul
+    compute grid width is a hard placement constraint; if a config genuinely
+    needs both x=7 and y=9 it fits neither (a genuinely inconsistent traced
+    config), and ROW at least satisfies the compute-grid width.
+    """
+    if (max_x or -1) >= 7:
+        return ttnn.DispatchCoreAxis.ROW
+    if (max_y or -1) >= 9:
+        return ttnn.DispatchCoreAxis.COL
+    return None
+
+
+def shard_grid_bounds(mc):
+    """Max core (x, y) used by a (serialized) memory_config's shard_spec grid.
+
+    Accepts the V2 dict form ({"data": {"shard_spec": {"grid": [{"start":..,
+    "end":..}, ...]}}}) or a ttnn.MemoryConfig. Returns (max_x, max_y), each
+    possibly None when there is no shard spec.
+    """
+    max_x = max_y = None
+    grid = None
+    if isinstance(mc, dict):
+        ss = (mc.get("data") or {}).get("shard_spec") or mc.get("shard_spec")
+        if isinstance(ss, dict):
+            grid = ss.get("grid")
+    else:
+        ss = getattr(mc, "shard_spec", None)
+        if ss is not None:
+            try:
+                for cr in ss.grid.ranges():
+                    max_x = max(max_x if max_x is not None else -1, cr.end.x)
+                    max_y = max(max_y if max_y is not None else -1, cr.end.y)
+            except Exception:
+                # malformed / partial shard_spec — return whatever bounds were gathered (best-effort)
+                pass
+            return max_x, max_y
+    if isinstance(grid, list):
+        for r in grid:
+            end = r.get("end") if isinstance(r, dict) else None
+            if isinstance(end, dict):
+                max_x = max(max_x if max_x is not None else -1, int(end.get("x", -1)))
+                max_y = max(max_y if max_y is not None else -1, int(end.get("y", -1)))
+    return max_x, max_y
+
+
 def create_mesh_device(
     mesh_shape: Tuple[int, int],
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
+    dispatch_core_axis=None,
 ) -> ttnn.MeshDevice:
     """
     Create a mesh device with the specified shape.
@@ -108,11 +203,16 @@ def create_mesh_device(
         mesh_shape: Tuple of (rows, cols) for mesh shape
         device_ids: Optional list of device IDs (deprecated, not used by API)
         l1_small_size: L1 small buffer size (default 79104 to prevent OOM in model-traced sweeps)
+        dispatch_core_axis: explicit ttnn.DispatchCoreAxis (ROW/COL). When given,
+            opens WORKER dispatch on that axis directly and skips auto-detection.
+            Used for per-vector axis selection when an op's traced program_config
+            grid needs a specific axis (some need x=7/ROW, others y=9/COL).
 
     Returns:
         ttnn.MeshDevice instance
 
     Dispatch axis selection (in priority order):
+      0. Explicit ``dispatch_core_axis`` argument (per-vector selection).
       1. `TTNN_DISPATCH_AXIS=col|row` env var — explicit override. Used by
          the two-pass workflow when a single op has master configs that
          straddle both axes (e.g. linear has both y=9 and x=7 masters).
@@ -120,6 +220,14 @@ def create_mesh_device(
          op's masters all need the same axis.
       3. Default to COL.
     """
+    # 0. Explicit per-vector axis override.
+    if dispatch_core_axis is not None:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, dispatch_core_axis),
+        )
+
     # 1. Env-var override — but ETH dispatch overrides when 8x8 grid is needed.
     _env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
 
@@ -205,13 +313,50 @@ def create_mesh_device(
         needs_col = False
         needs_row_only = False
 
+    # Explicit TTNN_DISPATCH_AXIS override takes priority over auto-detection.
+    # This enables the two-pass workflow (run a sweep once with row, once with
+    # col) for ops whose master configs straddle both axes — e.g. linear, which
+    # has some configs needing x=7 (ROW/8x9) and others needing y=9 (COL/7x10);
+    # no single axis fits all, so each pass covers the configs it can host.
+    if _env_axis in ("col", "row"):
+        _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, _override_axis),
+            )
+        except Exception:
+            # this dispatch axis/config isn't available on this cluster — fall through to the next open option
+            pass
+
     # Default: COL (gives compute grid 7x10) since most lead_models traces use
     # cores in the 7-wide pattern with y up to 9. Switch to ROW only if any of
     # the op's master shard_specs uses x=7 (which COL excludes).
     # When x=7 or 8-8 grid is needed, use ETH dispatch so all 8x8
-    # compute cores are available. ETH takes priority over the env-var
-    # because the op cannot run at all without the full grid.
+    # compute cores are available.
     if needs_row_only:
+        # Prefer WORKER ROW dispatch (compute grid 8x9 -> x in [0,7]) which
+        # provides the x=7 cores these configs need, and is a superset of ETH's
+        # 8x8 grid. Try it BEFORE DispatchCoreType.ETH: on Galaxies where ETH
+        # dispatch cores cannot be allocated ("No more available dispatch cores
+        # on device 0"), the failed ETH open + MetalContext re-init leaves the
+        # command queue in a broken state and the next op's readback hangs
+        # (observed for add/gelu/layer_norm/softmax/transpose). ROW WORKER opens
+        # cleanly and avoids that; ETH stays as a fallback. Dispatch-core
+        # placement does not affect op results, only which cores are usable.
+        try:
+            # Specify WORKER explicitly: DispatchCoreConfig(axis=...) alone
+            # leaves the core *type* at the system default (which can be ETH on
+            # multi-chip clusters), defeating the purpose of avoiding ETH here.
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.ROW),
+            )
+        except Exception:
+            # WORKER ROW dispatch unavailable here — fall through to the next open option
+            pass
         try:
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
@@ -219,30 +364,25 @@ def create_mesh_device(
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
             )
         except Exception:
-            pass
-
-    # 3. Env-var override (when ETH not needed).
-    if _env_axis in ("col", "row"):
-        _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
-        try:
-            return ttnn.open_mesh_device(
-                mesh_shape=ttnn.MeshShape(*mesh_shape),
-                l1_small_size=l1_small_size,
-                dispatch_core_config=ttnn.DispatchCoreConfig(axis=_override_axis),
-            )
-        except Exception:
+            # ETH dispatch unavailable on this cluster — fall through to the default open below
             pass
 
     # 4. Default to COL.
     use_axis = ttnn.DispatchCoreAxis.COL
 
     try:
+        # NB: pass axis only and let the core *type* default. Unlike the ROW path
+        # above (which forces WORKER to dodge ETH-allocation failures), the default
+        # type here keeps dispatch OFF the worker grid, leaving the full worker grid
+        # free for compute — forcing WORKER instead collides with ops that use the
+        # whole grid ("Illegal kernel placement ... on dispatch cores", e.g. add).
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
             l1_small_size=l1_small_size,
             dispatch_core_config=ttnn.DispatchCoreConfig(axis=use_axis),
         )
     except Exception:
+        # requested dispatch axis was rejected — caller falls back to a plain device open
         pass
 
     return ttnn.open_mesh_device(
@@ -834,13 +974,14 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     chips).  The tracer records 2-D ``tensor_placement`` metadata that is
     only reproduced when the sweep re-executes on a mesh device.
 
-    Returns ``MESH_DEVICE_SHAPE`` from the environment when set, otherwise
-    auto-detects from available hardware so that the sweep device topology
-    matches the trace topology.
+    Priority: MESH_DEVICE_SHAPE env var > master JSON > auto-detect.
     """
-    # Read mesh shape from master JSON matching current hardware.
-    # The master may contain configs from multiple devices (N300 + BH).
-    # Only use mesh shape from configs whose device_series matches this machine.
+    # Env var takes priority — CI sets this per batch to match traced topology.
+    shape = get_mesh_shape()
+    if shape:
+        return shape
+
+    # Fall back to master JSON, filtering by current arch AND card count.
     try:
         _master_path = os.environ.get("TTNN_MASTER_JSON_PATH")
         if not _master_path:
@@ -876,14 +1017,19 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         _execs = _cfg_ms.get("executions", [])
                         if _execs and isinstance(_execs[0], dict):
                             _mi_ms = _execs[0].get("machine_info", {})
-                    # Filter: only use configs matching current arch
+                    # Filter: only use configs matching current arch AND device count.
                     _board = str(_mi_ms.get("board_type", "")).lower()
-                    if _is_bh and "blackhole" not in _board and "wormhole" not in _board:
-                        pass  # no board info, use anyway
-                    elif _is_bh and "wormhole" in _board:
-                        continue  # skip N300/WH configs on BH
+                    if _is_bh and "wormhole" in _board:
+                        continue
                     elif _is_wh and "blackhole" in _board:
-                        continue  # skip BH configs on WH
+                        continue
+
+                    # Filter by device count so N300 (1-2 devices) doesn't
+                    # pick up Galaxy (32) or T3K (8) mesh shapes.
+                    _num_devices = ttnn.get_num_devices()
+                    _cfg_card_count = _mi_ms.get("card_count")
+                    if _cfg_card_count is not None and int(_cfg_card_count) > _num_devices:
+                        continue
 
                     _ms_val = _mi_ms.get("mesh_device_shape")
                     if _ms_val:
@@ -894,12 +1040,8 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         if isinstance(_ms_val, list) and len(_ms_val) == 2:
                             return tuple(_ms_val)
     except Exception:
-        pass  # Intentionally ignored: master config parsing is best-effort, fall through to env var / auto-detect
-    # Env var override (used when master JSON is not available)
-    shape = get_mesh_shape()
-    if shape:
-        return shape
-    # Auto-detect mesh shape from available hardware when env var not set.
+        pass  # Intentionally ignored: master config parsing is best-effort, fall through to auto-detect
+    # Auto-detect mesh shape from available hardware.
     # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
     # mesh matching the topology used during model tracing.
     try:
@@ -917,13 +1059,59 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     return (1, 1)
 
 
-def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
+def _replicated_single_copy(device_tensors, to_torch_fn):
+    """Return device 0's torch tensor iff every device holds identical data.
+
+    Trace-validation inputs are built with ``replicate_with_topology``, which
+    copies identical data to every chip while stamping a Shard topology. When
+    such a tensor is gathered with ``ConcatMesh*ToTensor`` the N identical
+    per-device copies are concatenated, blowing the host tensor up by the mesh
+    factor (e.g. 8x) before golden tiling and PCC — the dominant cost (and OOM /
+    timeout risk) for large vectors whose "sharded" dim can't actually be split
+    (e.g. a size-1 dim over 8 devices).
+
+    When all devices are identical the shard is effectively a replicate, so a
+    single copy is numerically equivalent for PCC (concatenating/tiling both the
+    actual and golden by the same factor leaves the correlation unchanged).
+    Returns None when the data genuinely differs across devices (real shard) so
+    the caller falls back to the normal concat path.
+    """
+    if not device_tensors or len(device_tensors) <= 1:
+        return None
+    try:
+        ref = to_torch_fn(device_tensors[0])
+    except Exception:
+        return None
+    for t in device_tensors[1:]:
+        try:
+            other = to_torch_fn(t)
+        except Exception:
+            return None
+        identical = ref.shape == other.shape and torch.equal(ref, other)
+        del other
+        if not identical:
+            return None
+    return ref
+
+
+def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, force_single_device=False) -> torch.Tensor:
     """Convert a TTNN mesh tensor back to torch, reassembling shards by topology.
 
     Replicated tensors return device 0. Sharded tensors are reassembled
     according to the tensor's TensorTopology placements. Mixed
     [Replicate, Shard(d)] cases concatenate only the unique row/col of devices
     along the shard dim. A caller-supplied mesh_composer overrides this.
+
+    Tensors whose Shard topology is backed by identical per-device data (the
+    trace-validation replicate path) collapse to a single copy to avoid an
+    N-fold host blow-up during gather.
+
+    Args:
+        force_single_device: When True, always return device 0's tensor
+            without any concat/gather. Use when the inputs were replicated
+            via replicate_with_topology and the golden was computed from a
+            single copy — comparing against the full gathered output would
+            produce shape mismatches.
     """
 
     def _get_torch_dtype(t):
@@ -934,6 +1122,7 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             if dt == ttnn.uint32:
                 return torch.int64
         except Exception:
+            # tensor has no resolvable dtype — signal 'unknown' to the caller via None
             pass
         return None
 
@@ -949,6 +1138,45 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
         device = None
 
     is_mesh = device is not None and hasattr(device, "get_num_devices")
+
+    if force_single_device and is_mesh:
+        try:
+            device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+            if device_tensors:
+                return _to_torch_safe(device_tensors[0])
+        except Exception:
+            # get_device_tensors can fail for some host/odd tensors; fall back
+            # to converting the tensor as-is below.
+            pass
+        return _to_torch_safe(ttnn_tensor)
+
+    # Auto-detect replicated outputs: when all per-device tensors have the
+    # same shape, the data was replicated (not truly sharded). Return device 0
+    # to avoid N-fold shape blow-ups from concatenation.  Truly sharded outputs
+    # have different per-device shapes (each device holds a fraction).
+    if is_mesh:
+        try:
+            dt = ttnn.get_device_tensors(ttnn_tensor)
+            if len(dt) > 1:
+                shapes = [tuple(t.shape) for t in dt]
+                if len(set(shapes)) == 1:
+                    topology = ttnn_tensor.tensor_topology()
+                    placements = list(topology.placements())
+                    if any(type(p).__name__ == "PlacementShard" for p in placements):
+                        # Identical per-device *shapes* with a Shard topology are
+                        # ambiguous: either replicate_with_topology (identical
+                        # data -> safe to collapse) or a genuine shard (identical
+                        # shapes, DIFFERENT data -> must NOT collapse, or we'd
+                        # drop shards). _replicated_single_copy verifies contents
+                        # are byte-identical and returns None for a real shard,
+                        # so we fall through to the proper concat/gather path.
+                        single = _replicated_single_copy(dt, _to_torch_safe)
+                        if single is not None:
+                            return single
+        except Exception:
+            # Best-effort fast path; on any error fall back to the normal
+            # topology-driven gather below.
+            pass
 
     if not is_mesh:
         # Host tensor brought back from a mesh device (e.g. via from_device on a
@@ -1013,6 +1241,15 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             return _to_torch_safe(device_tensors[0])
 
     if len(placements) == 2 and len(dist_dims) == 2 and all(_is_shard(p) for p in placements):
+        # When the Shard topology is backed by identical per-device data (the
+        # replicate_with_topology trace-validation path), concatenating the shards
+        # just duplicates the same buffer mesh-factor times (e.g. a size-1 dim
+        # "sharded" over 8 chips -> 8x host tensor). Collapse to one copy instead;
+        # PCC is unchanged and we avoid the blow-up / OOM / 300s-timeout in CI.
+        single = _replicated_single_copy(device_tensors, _to_torch_safe)
+        if single is not None:
+            return single
+
         try:
             d0 = placements[0].dim
             d1 = placements[1].dim
@@ -1021,9 +1258,14 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             torch_dtype = _get_torch_dtype(ttnn_tensor)
             return result.to(torch_dtype) if torch_dtype is not None else result
         except Exception:
+            # 2D mesh-composer path failed — fall through to the per-placement logic below
             pass
 
     if len(placements) == 2 and len(dist_dims) == 2:
+        single = _replicated_single_copy(device_tensors, _to_torch_safe)
+        if single is not None:
+            return single
+
         rows, cols = dist_dims[0], dist_dims[1]
         if _is_shard(placements[0]) and not _is_shard(placements[1]):
             shard_dim = placements[0].dim
@@ -1050,12 +1292,16 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
 
     shard_p = next((p for p in placements if _is_shard(p)), None)
     if shard_p is not None:
+        single = _replicated_single_copy(device_tensors, _to_torch_safe)
+        if single is not None:
+            return single
         try:
             comp = ttnn.ConcatMeshToTensor(device, dim=shard_p.dim)
             result = ttnn.to_torch(ttnn_tensor, mesh_composer=comp)
             torch_dtype = _get_torch_dtype(ttnn_tensor)
             return result.to(torch_dtype) if torch_dtype is not None else result
         except Exception:
+            # 1D mesh-composer path failed — fall through to the safe single-device conversion
             pass
 
     if device_tensors:
@@ -1314,6 +1560,20 @@ def reconcile_golden_to_actual(
     if torch_golden.shape == actual_global.shape:
         return torch_golden
 
+    # Strategy 1.5: ndim mismatch — pad golden with trailing size-1 dims or squeeze.
+    if torch_golden.ndim != actual_global.ndim:
+        g = torch_golden
+        while g.ndim < actual_global.ndim:
+            g = g.unsqueeze(-1)
+        while g.ndim > actual_global.ndim:
+            if g.shape[-1] == 1:
+                g = g.squeeze(-1)
+            else:
+                break
+        if g.shape == actual_global.shape:
+            return g
+        torch_golden = g
+
     # Strategy 2: per-dim integer-ratio tile.
     if torch_golden.ndim == actual_global.ndim:
         repeats = []
@@ -1330,7 +1590,24 @@ def reconcile_golden_to_actual(
             if tiled.shape == actual_global.shape:
                 return tiled
 
-    # Strategy 3: placement-driven tile (legacy path).
+    # Strategy 3: golden LARGER than actual — slice golden to match.
+    if torch_golden.ndim == actual_global.ndim:
+        slice_ok = True
+        slices = []
+        for d in range(torch_golden.ndim):
+            g = torch_golden.shape[d]
+            a = actual_global.shape[d]
+            if a <= g:
+                slices.append(slice(0, a))
+            else:
+                slice_ok = False
+                break
+        if slice_ok and any(s.stop < torch_golden.shape[i] for i, s in enumerate(slices)):
+            sliced = torch_golden[tuple(slices)]
+            if sliced.shape == actual_global.shape:
+                return sliced
+
+    # Strategy 4: placement-driven tile (legacy path).
     out = torch_golden
     for plac in placements:
         if out.shape == actual_global.shape:

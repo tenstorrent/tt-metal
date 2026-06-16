@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 
 namespace ckernel::sfpu {
 
@@ -24,7 +24,7 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     sfpi::vFloat underflow_bound = UNDERFLOW_THRESHOLD;
     sfpi::vec_min_max(underflow_bound, z);
 
-    // Round z to nearest integer using round-to-nearest-even
+    // Round z to nearest integer using round-to-nearest
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
@@ -93,7 +93,7 @@ template <bool is_fp32_dest_acc_en>
 sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloat addend) {
     sfpi::vFloat result = mul_a * mul_b + addend;
     if constexpr (!is_fp32_dest_acc_en) {
-        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
     }
     sfpi::dst_reg[0] = result;
 }

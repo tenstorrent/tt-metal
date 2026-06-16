@@ -3,17 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 
 #include "boot.h"
+#include "counters.h"
 
 // BRISC firmware
 #ifdef LLK_BOOT_MODE_BRISC
 
 // Mailbox addresses
 #ifdef COVERAGE
-mailbox_t mailboxes_arr = (mailbox_t)0x6DFB8U;
+static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x6DFB8U);
 #else
-mailbox_t mailboxes_arr = (mailbox_t)0x1FFB8U;
+static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x1FFB8U);
 #endif
 
 #ifdef ARCH_WORMHOLE
@@ -23,17 +25,17 @@ mailbox_t mailboxes_arr = (mailbox_t)0x1FFB8U;
 #define ARCH_CYCLE_MICRO_SECOND 1350
 #endif
 
-mailbox_t mailbox_unpack = mailboxes_arr;
-mailbox_t mailbox_math   = mailboxes_arr + 1;
-mailbox_t mailbox_pack   = mailboxes_arr + 2;
+static const mailbox_t mailbox_unpack = mailboxes_arr;
+static const mailbox_t mailbox_math   = mailboxes_arr + 1;
+static const mailbox_t mailbox_pack   = mailboxes_arr + 2;
 
-mailbox_t brisc_command_buffer = mailboxes_arr + 3; // 2 entries
-mailbox_t brisc_counter        = mailboxes_arr + 5;
+static const mailbox_t brisc_command_buffer = mailboxes_arr + 3; // 2 entries
+static const mailbox_t brisc_counter        = mailboxes_arr + 5;
 
-mailbox_t brisc_bread0 = mailboxes_arr + 6;
-mailbox_t brisc_bread1 = mailboxes_arr + 7;
+static const mailbox_t brisc_bread0 = mailboxes_arr + 6;
+static const mailbox_t brisc_bread1 = mailboxes_arr + 7;
 
-mailbox_t profiler_barrier = (mailbox_t)0x16AFF4U;
+static const mailbox_t profiler_barrier = reinterpret_cast<mailbox_t>(0x16AFF4U);
 
 enum class BriscCommandState : std::uint32_t
 {
@@ -124,6 +126,10 @@ int main()
                 commit_store(profiler_barrier + 2, 0U);
 
                 device_setup();
+
+                // Configure + arm counters before releasing TRISCs (no-op in NC builds).
+                llk_perf::configure_and_arm_from_brisc();
+
                 clear_trisc_soft_reset();
 
                 reset_state(counter);

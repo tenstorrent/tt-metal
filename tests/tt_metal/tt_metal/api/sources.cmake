@@ -26,7 +26,8 @@ set(UNIT_TESTS_API_SOURCES
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
-    metal2_host_api/test_program_run_params.cpp
+    metal2_host_api/test_program_run_args.cpp
+    metal2_host_api/test_table.cpp
     test_kernel_thread_sync.cpp
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
@@ -42,6 +43,8 @@ set(UNIT_TESTS_API_SOURCES
     test_compiler_include_paths.cpp
     test_direct.cpp
     test_dram_kernels.cpp
+    test_dram_sender_global_cb.cpp
+    test_dram_subchannel_helper.cpp
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
@@ -68,5 +71,6 @@ set(UNIT_TESTS_API_SOURCES
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
+    test_zero_memory_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp
 )

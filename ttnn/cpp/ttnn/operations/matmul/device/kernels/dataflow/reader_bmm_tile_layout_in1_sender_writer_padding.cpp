@@ -13,7 +13,6 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -297,11 +296,11 @@ void kernel_main() {
                             if (i == 0) {
                                 shard_base_addr += dram_tensor_start_offset;
                             }
-                            noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 dram_bank,
                                 in1_single_tile_size_bytes,
                                 {.bank_id = shard_bank_id, .addr = shard_base_addr},
-                                vc);
+                                NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
                             uint32_t l1_write_addr_in1 = cb_in1.get_write_ptr() + l1_write_addr_in1_offset;
@@ -314,14 +313,14 @@ void kernel_main() {
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
                                     noc.async_read_with_state<
-                                        Noc::VcSelection::CUSTOM,
+                                        NocOptions::CUSTOM_VC,
                                         NOC_MAX_BURST_SIZE>(
                                         dram_bank,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
                                         in1_single_tile_size_bytes,
                                         {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
                                         {},
-                                        vc);
+                                        NocOptVals{.vc = vc});
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
                                     l1_write_addr_in1_temp += in1_single_tile_size_bytes;
                                 }
@@ -498,11 +497,11 @@ void kernel_main() {
                                                         bias_single_tile_size_bytes;
                             }
 
-                            noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 bias_dram_bank,
                                 bias_single_tile_size_bytes,
                                 {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
-                                vc);
+                                NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in3 = 0;
                             l1_write_addr_in3 = cb_in3.get_write_ptr() + l1_write_addr_in3_offset;
@@ -513,13 +512,13 @@ void kernel_main() {
                                 in1_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
-                                noc.async_read_with_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                                noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                     bias_dram_bank,
                                     CoreLocalMem<uint32_t>(l1_write_addr_in3),
                                     bias_single_tile_size_bytes,
                                     {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
                                     {},
-                                    vc);
+                                    NocOptVals{.vc = vc});
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
                                 l1_write_addr_in3 += bias_single_tile_size_bytes;
                                 in3_block_size_bytes += bias_single_tile_size_bytes;

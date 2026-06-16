@@ -43,19 +43,24 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-wheel: true
       enable-lto: ${{ inputs.enable-lto || false }}
 
   runtime-integration-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/runtime-integration-tests-impl.yaml
     secrets: inherit
     with:
@@ -65,10 +70,10 @@ jobs:
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'
-            && 'wh_n150_civ2,bh_p150b_civ2,bh_quietbox'
+            && 'wh_n150_civ2,bh_p150b_civ2,bh_loudbox'
             || format('{0}{1}',
               inputs.wormhole && 'wh_n150_civ2' || '',
-              inputs.blackhole && format('{0}bh_p150b_civ2,bh_quietbox',
+              inputs.blackhole && format('{0}bh_p150b_civ2,bh_loudbox',
                 inputs.wormhole && ',' || '') || ''
             )
         }}

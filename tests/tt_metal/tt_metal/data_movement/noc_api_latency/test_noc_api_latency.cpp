@@ -7,7 +7,10 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -51,9 +54,6 @@ bool run_noc_api_latency_test(
 
     /* ================ SETUP ================ */
 
-    // Program
-    Program program = CreateProgram();
-
     // (Logical) Core coordinates and ranges
 
     CoreRangeSet sub_logical_core_set({CoreRange(test_config.mcast_dest_core_start, test_config.mcast_dest_core_end)});
@@ -87,20 +87,6 @@ bool run_noc_api_latency_test(
         packed_dest_core_coordinates = physical_mcast_dest_start.x << 16 | (physical_mcast_dest_start.y & 0xFFFF);
     }
 
-    // Compile-time arguments for kernels
-    vector<uint32_t> compile_args = {
-        (uint32_t)l1_base_address,
-        (uint32_t)test_config.num_transactions,
-        (uint32_t)test_config.transaction_size,
-        (uint32_t)test_config.test_id,
-        (uint32_t)packed_dest_core_coordinates,
-        (uint32_t)packed_dest_core_end_coordinates,
-        (uint32_t)test_config.loopback};
-
-    if (test_config.kernel_type == KernelType::MULTICAST_WRITE) {
-        compile_args.push_back(sub_logical_core_set.num_cores());
-    }
-
     // Select kernel based on type
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/noc_api_latency/kernels/";
     std::string kernel_filename;
@@ -116,29 +102,58 @@ bool run_noc_api_latency_test(
 
     std::string kernel_path = kernels_dir + kernel_filename + ".cpp";
 
-    // Create kernel on source core - branch by architecture
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        // Quasar path: Use experimental API
-        experimental::quasar::CreateKernel(
-            program,
-            kernel_path,
-            test_config.source_core_coord,
-            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = compile_args});
-    } else {
-        // WH/BH path: Use legacy API with processor selection
-        auto riscv = DataMovementProcessor::RISCV_0;
-
-        if (test_config.kernel_type == KernelType::UNICAST_READ ||
-            test_config.kernel_type == KernelType::STATEFUL_READ) {
-            riscv = DataMovementProcessor::RISCV_1;
-        }
-
-        CreateKernel(
-            program,
-            kernel_path,
-            test_config.source_core_coord,
-            DataMovementConfig{.processor = riscv, .noc = test_config.noc_id, .compile_args = compile_args});
+    // Determine processor for WH/BH (gen1)
+    auto riscv = DataMovementProcessor::RISCV_0;
+    if (test_config.kernel_type == KernelType::UNICAST_READ || test_config.kernel_type == KernelType::STATEFUL_READ) {
+        riscv = DataMovementProcessor::RISCV_1;
     }
+
+    // Create program using Metal 2.0 API - works for all architectures
+    using namespace tt::tt_metal::experimental;
+
+    KernelSpec::CompileTimeArgs named_compile_args = {
+        {"l1_addr", l1_base_address},
+        {"num_tx", test_config.num_transactions},
+        {"tx_size", test_config.transaction_size},
+        {"test_id", test_config.test_id},
+        {"dest_coords", packed_dest_core_coordinates}};
+
+    switch (test_config.kernel_type) {
+        case KernelType::MULTICAST_WRITE:
+            named_compile_args.emplace("dest_coords_end", packed_dest_core_end_coordinates);
+            named_compile_args.emplace("loopback", (uint32_t)test_config.loopback);
+            named_compile_args.emplace("num_cores", (uint32_t)sub_logical_core_set.num_cores());
+            break;
+        case KernelType::UNICAST_WRITE:
+        case KernelType::UNICAST_READ:
+        case KernelType::STATEFUL_WRITE:
+        case KernelType::STATEFUL_READ:
+            named_compile_args.emplace("dest_coords_end", packed_dest_core_end_coordinates);
+            break;
+        default: break;
+    }
+
+    ProgramSpec spec{
+        .name = "noc_api_latency_test",
+        .kernels = {KernelSpec{
+            .unique_id = KernelSpecName{"noc_kernel"},
+            .source = kernel_path,
+            .num_threads = 1,
+            .compile_time_args = named_compile_args,
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .gen1_config =
+                        DataMovementHardwareConfig::Gen1Config{
+                            .processor = riscv, .noc = test_config.noc_id, .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
+                    .gen2_config = DataMovementHardwareConfig::Gen2Config{}}}},
+        .work_units = {WorkUnitSpec{
+            .name = "noc_work_unit",
+            .kernels = {KernelSpecName{"noc_kernel"}},
+            .target_nodes = NodeCoord{
+                static_cast<uint32_t>(test_config.source_core_coord.x),
+                static_cast<uint32_t>(test_config.source_core_coord.y)}}}};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

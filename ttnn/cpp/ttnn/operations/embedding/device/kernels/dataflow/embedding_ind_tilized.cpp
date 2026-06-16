@@ -3,10 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
 #include "api/debug/dprint.h"
 
 void kernel_main() {
+    Noc noc;
+
     const std::uint32_t input_buffer_src_addr = get_arg_val<uint32_t>(0);
     const std::uint32_t weight_buffer_src_addr = get_arg_val<uint32_t>(1);
     const std::uint32_t tile_offset = get_arg_val<uint32_t>(2);
@@ -33,47 +39,24 @@ void kernel_main() {
     constexpr uint32_t tile_height = 32;
     constexpr uint32_t face_hw = face_size * face_size;
 
-    prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
+    prepare_local_cache(noc, cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
 
-    cb_reserve_back(cb_id_in1, 1);
-    uint32_t input_l1_addr = get_write_ptr(cb_id_in1);
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
+
+    cb_in1.reserve_back(1);
+    uint32_t input_l1_addr = cb_in1.get_write_ptr();
     volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
 
-    auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t weight_l1_addr = get_write_ptr(cb_id_in0);
-        volatile tt_l1_ptr uint16_t* weight_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(weight_l1_addr);
-        uint64_t src_noc_addr;
-        uint32_t token = input_l1_ptr[token_idx + offset];
+    const uint32_t input_page_size = input.get_aligned_page_size();
 
-#if defined PADDED
-        if (token == pad_token) {
-            src_noc_addr = pad_noc_addr;
-        } else {
-            src_noc_addr = get_noc_addr(token, weights);
-        }
-#elif defined BINARY
-        if (token == 0) {
-            src_noc_addr = zero_noc_addr;
-        } else {
-            src_noc_addr = one_noc_addr;
-        }
-#else
-#if defined BFP16
-        union {
-            float f;
-            uint32_t u;
-        } u;
-        u.u = (uint32_t)input_l1_ptr[token_idx] << 16;
-        uint32_t token_casted = static_cast<uint32_t>(u.f);
-        src_noc_addr = get_noc_addr(token_casted, weights);
-#else
-        src_noc_addr = get_noc_addr(token, weights);
-#endif
-#endif
-        noc_async_read(src_noc_addr, weight_l1_addr, width_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+    auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {
+        cb_in0.reserve_back(1);
+        uint32_t weight_l1_addr = cb_in0.get_write_ptr();
+        input_token_t token = static_cast<input_token_t>(input_l1_ptr[token_idx + offset]);
+        read_token_async(noc, token, weights, weight_l1_addr, width_size);
+        noc.async_read_barrier();
+        cb_in0.push_back(1);
     };
 
     uint32_t curr_tile = tile_offset;
@@ -82,13 +65,11 @@ void kernel_main() {
     bool read_indices = true;
     uint32_t col_offset = curr_col;
     uint32_t tiles_per_row = (row_length + tile_height - 1) / tile_height;
-    const auto s = TensorAccessor(input_args, input_buffer_src_addr);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            uint64_t noc_input_src_addr = get_noc_addr(curr_tile, input) + (offset * sizeof(uint32_t));
-            noc_async_read_tile(curr_tile, s, input_l1_addr);
-            noc_async_read_barrier();
+            noc.async_read(input, CoreLocalMem<uint32_t>(input_l1_addr), input_page_size, {.page_id = curr_tile}, {});
+            noc.async_read_barrier();
             read_indices = false;
         }
         read_block(index, weight_stick_size, offset);

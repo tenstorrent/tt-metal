@@ -334,11 +334,11 @@ metadata_len = 5
 source python_env/bin/activate
 
 # Run specific configuration
-pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -k "linear-2" -vvv
+pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_dispatch.py -k "linear-2" -vvv
 
 # Run all dispatch tests
-pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv
+pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_dispatch.py -vvv
 
 # Run combine tests
-pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
+pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py -vvv
 ```

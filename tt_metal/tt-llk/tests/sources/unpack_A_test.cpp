@@ -54,7 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
-    _llk_unpack_A_uninit_<BROADCAST_TYPE>(params.TEST_FACE_R_DIM);
+    _llk_unpack_A_uninit_<BROADCAST_TYPE>();
 }
 
 #endif

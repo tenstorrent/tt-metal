@@ -104,14 +104,13 @@ SFPU_FILL_FLOAT_FORMATS = [
     for out_fmt in _FILL_FLOAT_OUTPUTS
 ]
 
-# Fill int path: _calculate_fill_int_ with p_sfpu::sfpmem::INT32/UINT16/UINT8.
+# Fill int path: _calculate_fill_int_ with p_sfpu::sfpmem::INT32/UINT16/INT8.
 # Quasar integer formats and their SFPMEM store modes:
-#   Int32  → sfpmem::INT32  (32-bit sign-magnitude)
-#   Int16  → sfpmem::UINT16 (INT16 = Quasar hardware code 9, maps to SFPMEM::UINT16)
-#   Int8   → sfpmem::UINT8  (8-bit)
-#   UInt8  → sfpmem::UINT8  (8-bit unsigned)
-# Note: UInt16 (Quasar code 130) is invalid on Quasar; Int16 (code 9) is the correct
-# 16-bit integer format. FILL_INT_FORMAT bakes the format into each compiled variant.
+#   Int32        → sfpmem::INT32  (32-bit sign-magnitude)
+#   Int16        → sfpmem::UINT16 (16-bit truncate)
+#   Int8 / UInt8 → sfpmem::INT8   (0b0101, sign-magnitude 8-bit; true UINT8 0b1011 is unvalidated
+#                  on the emulator — see ckernel_sfpu_fill.h)
+# FILL_INT_FORMAT bakes the format into each compiled variant.
 SFPU_FILL_INT_FORMATS = input_output_formats(
     [DataFormat.Int32, DataFormat.Int16, DataFormat.Int8, DataFormat.UInt8],
     same=True,

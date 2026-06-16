@@ -13,7 +13,7 @@
  *   - Interleaved Horner: back-to-back SFPMAD on numer/denom hides pipeline latency
  *   - Parity x²-Horner: halves FMA count for odd-num/even-den (atanh, erfinv, erf)
  *   - Deferred reciprocal: ONE sfpu_reciprocal for all segments
- *   - Recursive template unrolling: ALWI prevents spills
+ *   - Recursive template unrolling: sfpi_inline prevents spills
  *   - Range reduction: Cody-Waite for exp/trig, mantissa/exponent for log
  *
  * Usage:
@@ -88,9 +88,8 @@ inline sfpi::vFloat piecewise_log_expand(sfpi::vFloat poly_result, sfpi::vInt e_
 #else
     constexpr float EXPAND_C = 0.6931471805599453f;  // ln(2)
 #endif
-    v_if(e_int < 0) { e_int = sfpi::setsgn(~e_int + 1, 1); }
-    v_endif;
-    return sfpi::int32_to_float(e_int, sfpi::RoundMode::NearestEven) * EXPAND_C + poly_result;
+    auto e_smag = sfpi::convert<sfpi::vSMag>(e_int);
+    return sfpi::convert<sfpi::vFloat>(e_smag, sfpi::RoundMode::Nearest) * EXPAND_C + poly_result;
 }
 #endif
 
@@ -100,7 +99,7 @@ inline sfpi::vFloat piecewise_log_expand(sfpi::vFloat poly_result, sfpi::vInt e_
 // ============================================================================
 
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
-ALWI void piecewise_rational_eval_numer_denom(
+sfpi_inline void piecewise_rational_eval_numer_denom(
     const float* num_coeffs,
     const float* den_coeffs,
     sfpi::vFloat x,
@@ -140,7 +139,7 @@ ALWI void piecewise_rational_eval_numer_denom(
 // ============================================================================
 
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
-ALWI void piecewise_rational_eval_parity_numer_denom(
+sfpi_inline void piecewise_rational_eval_parity_numer_denom(
     const float* num_coeffs,
     const float* den_coeffs,
     sfpi::vFloat x,
@@ -188,7 +187,7 @@ ALWI void piecewise_rational_eval_parity_numer_denom(
 // ============================================================================
 
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, bool USE_PARITY = false>
-ALWI void piecewise_rational_dispatch_numer_denom(
+sfpi_inline void piecewise_rational_dispatch_numer_denom(
     const float* num_coeffs,
     const float* den_coeffs,
     sfpi::vFloat x,
@@ -214,7 +213,7 @@ template <
     uint32_t NUM_SEGMENTS,
     uint32_t LUT_SIZE,
     bool USE_PARITY = false>
-ALWI void piecewise_rational_unroll_segment(
+sfpi_inline void piecewise_rational_unroll_segment(
     const std::array<float, LUT_SIZE>& lut,
     sfpi::vFloat x,
     sfpi::vFloat& numer,
@@ -247,7 +246,7 @@ template <
     uint32_t LUT_SIZE,
     bool USE_PARITY = false,
     bool APPROX_RECIP = false>
-ALWI sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, sfpi::vFloat x) {
     constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
     constexpr uint32_t COEFF_OFFSET = NUM_SEGMENTS + 1;
 

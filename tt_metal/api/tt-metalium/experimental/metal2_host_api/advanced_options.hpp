@@ -9,16 +9,15 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt_stl/strong_type.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
-// Forward-declare *Name typedefs that AdvancedOptions members reference.
-// (Each is also declared in its owning spec header.)
-using DFBSpecName = std::string;
-
-//------------------------------------------------------------
+// ============================================================================
 // Advanced options for Metal 2.0 specs
-//------------------------------------------------------------
+// ============================================================================
 //
 // Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, TensorParameter, ...) may
 // carry a *AdvancedOptions field at the end of its struct.
@@ -34,6 +33,13 @@ using DFBSpecName = std::string;
 //
 // Use the advanced options with caution!
 // The header comments for each field describe special considerations for use.
+//
+// ============================================================================
+
+// Canonical definition of DFBSpecName. It lives in this lower-level header
+// (rather than dataflow_buffer_spec.hpp) because AdvancedOptions members here
+// reference it, and dataflow_buffer_spec.hpp includes this header.
+using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -47,9 +53,22 @@ struct KernelAdvancedOptions {
     //       (It's an open question if we EVER want to support it.)
     //       It is included here just as a placeholder for use case feedback.
     //       Attempting to use it will trigger a runtime error.
-    using NodeSpecificThreadCount = std::pair<Nodes, uint32_t>;  // {node_set, num_threads}
-    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
-    NodeSpecificThreadCounts node_specific_thread_counts;
+    Table<Nodes, /* num_threads */ uint32_t> node_specific_thread_counts;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Enqueue-loop invariant kernel arguments
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Designate certain runtime arguments and common runtime arguments as enqueue-loop
+    // invariant. This permits the same argument value to be reused across multiple Program
+    // enqueues via UpdateProgramRunArgs, which can improve performance in enqueue loops.
+    // By default, every runtime argument and common runtime argument is expected to be
+    // re-specified (via SetProgramRunArgs) on every enqueue.
+    //
+    // CAUTION: This feature is unsafe if used incorrectly! The onus is on the programmer
+    // to ensure that the designated arguments remain valid across enqueues.
+    Group<std::string> enqueue_invariant_runtime_args;
+    Group<std::string> enqueue_invariant_common_runtime_args;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
@@ -77,11 +96,11 @@ struct KernelAdvancedOptions {
     // Runtime varargs
     //--------------------------------
     // Number of runtime varargs for the kernel.
-    // Set the vararg values (per node) via ProgramRunParams.
+    // Set the vararg values (per node) via ProgramRunArgs.
     uint32_t num_runtime_varargs = 0;
 
     // Number of common runtime varargs for the kernel.
-    // Set the vararg values via ProgramRunParams.
+    // Set the vararg values via ProgramRunArgs.
     // (The same argument values are broadcast to every node the kernel runs on.)
     uint32_t num_common_runtime_varargs = 0;
 
@@ -91,9 +110,8 @@ struct KernelAdvancedOptions {
     // not listed default to num_runtime_varargs.
     // TODO: This feature is truly bizarre. It will be removed from the API once
     //       existing uses are refactored to avoid it.
-    using NumVarargsPerNode = std::vector<std::pair<Nodes, uint32_t>>;
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
-    NumVarargsPerNode num_runtime_varargs_per_node;
+    Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Multi-threaded self-loop DFBs on compute kernels
@@ -113,19 +131,14 @@ struct KernelAdvancedOptions {
     // Only the INTRA case is currently supported. INTER will trigger a validation error.
     // There are currently no known use cases for an INTER-thread self-loop. This option
     // is present in the API for completeness, to surface any use cases that may arise.
-    struct DFBComputeSelfLoopScope {
-        DFBSpecName dfb_spec_name;
-        enum class Scope { INTRA, INTER };
-        Scope scope = Scope::INTRA;
-        // If the INTER case were enabled, we would need an additional field to describe
-        // the inter-thread communication pattern here.
-    };
-    // Self-loop DFBs on compute kernels — see DFBComputeSelfLoopScope above.
-    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+    enum class DFBSelfLoopConnectivity { INTRA, INTER };
+
+    // Self-loop DFBs on compute kernels: maps each self-looped DFB to its scope.
+    Table<DFBSpecName, DFBSelfLoopConnectivity> dfb_self_loop_connectivities;
 };
 
-// (Convenience alias for type)
-using DFBComputeSelfLoopScope = KernelAdvancedOptions::DFBComputeSelfLoopScope;
+// (Convenience aliases for nested types)
+using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -145,28 +158,25 @@ struct DFBAdvancedOptions {
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
-    std::vector<DFBSpecName> alias_with;
+    Group<DFBSpecName> alias_with;
 };
 
-struct AdvancedKernelRunParams {
+struct AdvancedKernelRunArgs {
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
+    using Varargs = std::vector<uint32_t>;
+
     // Unnamed runtime argument "varargs"
     // (Companion to the vararg schema declared on KernelAdvancedOptions).
     // Specified per-node; length can vary per-node (as declared in schema).
-    struct NodeVarargs {
-        NodeCoord node;
-        std::vector<uint32_t> args;
-    };
-    std::vector<NodeVarargs> runtime_varargs;
+    Table<NodeCoord, Varargs> runtime_varargs;
 
     // Unnamed common runtime argument "varargs"
     // (Companion to num_common_runtime_varargs in the schema.)
     // Broadcast to every node the kernel runs on.
-    using CommonVarargs = std::vector<uint32_t>;
-    CommonVarargs common_runtime_varargs;
+    Varargs common_runtime_varargs;
 };
 
 struct SemaphoreAdvancedOptions {
@@ -182,6 +192,22 @@ struct SemaphoreAdvancedOptions {
 };
 
 struct TensorParameterAdvancedOptions {
+    ////////////////////////////////////////////////////////////////////////////////
+    // Enqueue-loop invariance
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Designate this TensorParameter as enqueue-loop invariant.
+    // Permits the same MeshTensor argument to be reused across multiple Program
+    // enqueues via UpdateProgramRunArgs. By default, a TensorParameter is expected to
+    // be re-specified on every enqueue.
+    //
+    // CAUTION:
+    // The user is responsible for managing the MeshTensor argument's lifetime and
+    // ensuring that it remains valid across enqueues. Undefined behavior will result
+    // if the MeshTensor goes out of scope (and its device memory is deallocated),
+    // and you try to re-enqueue the Program with the now-stale MeshTensor argument.
+    bool enqueue_invariant = false;
+
     ////////////////////////////////////////////////////////////////////////////////
     // TensorSpec match relaxation options
     ////////////////////////////////////////////////////////////////////////////////
@@ -212,4 +238,4 @@ struct TensorParameterAdvancedOptions {
     bool dynamic_tensor_shape = false;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

@@ -13,7 +13,6 @@ struct UntilizeWithUnpaddingParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool use_multicore = false;
     bool fp32_dest_acc_en = false;
-    bool enough_space_width = false;
     bool enough_space_height = false;
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };

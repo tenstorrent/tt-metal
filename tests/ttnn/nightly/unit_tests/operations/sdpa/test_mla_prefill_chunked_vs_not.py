@@ -182,15 +182,12 @@ def run_flash_mla_prefill_chunked_vs_nonchunked(
     ### Compare chunked vs non-chunked
     ######################
     pcc_threshold = 0.999
-    # TODO: Investigate this relaxation as a potential no-MOP matmul race:
-    # https://github.com/tenstorrent/tt-metal/issues/44693
-    atol_threshold = 0.03
-    out_pass, out_pcc = comp_allclose_and_pcc(nonchunked_torch, chunked_torch, pcc=pcc_threshold, atol=atol_threshold)
+    out_pass, out_pcc = comp_allclose_and_pcc(nonchunked_torch, chunked_torch, pcc=pcc_threshold)
     logger.debug(f"num_chunks={num_chunks} chunked vs non-chunked PCC: {out_pcc}")
 
     assert out_pass, (
         f"chunked_flash_mla_prefill (num_chunks={num_chunks}) output mismatch "
-        f"vs flash_mla_prefill: PCC {out_pcc} < {pcc_threshold}, atol={atol_threshold}"
+        f"vs flash_mla_prefill: PCC {out_pcc} < {pcc_threshold}"
     )
 
 
@@ -227,23 +224,6 @@ def test_chunked_flash_mla_prefill_vs_flash_mla_prefill(
     function_level_defaults,
     reset_seeds,
 ):
-    if (
-        ttnn.device.is_blackhole()
-        and batch == 4
-        and seq_len == 768
-        and nh == 16
-        and nkv == 1
-        and kv_lora_rank == 512
-        and d_rope == 64
-        and q_dtype == ttnn.bfloat16
-        and dtype == ttnn.bfloat8_b
-        and block_size == 64
-        and num_chunks == 3
-    ):
-        pytest.skip(
-            reason="Disabled by issue #44858: blackhole chunked_flash_mla_prefill vs flash_mla_prefill PCC mismatch for 3-chunk 4x768 case"
-        )
-
     run_flash_mla_prefill_chunked_vs_nonchunked(
         device,
         batch,

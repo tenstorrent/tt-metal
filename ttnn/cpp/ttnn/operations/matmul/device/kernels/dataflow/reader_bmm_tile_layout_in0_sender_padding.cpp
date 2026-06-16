@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
@@ -16,7 +17,6 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-
 void kernel_main() {
     uint32_t rt_args_idx = 0;
     // in0 tensor args
@@ -77,6 +77,18 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<28>();
 
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+
+    // Number of valid (non-zero sparsity) batches the receiver and compute kernels are configured to
+    // process. When nnz is supplied (get_batch_from_reader == false), those kernels loop exactly
+    // num_batch_compute times, while this sender only multicasts once per non-zero sparsity entry, i.e.
+    // count_nonzero(sparsity) times. The op silently requires count_nonzero(sparsity) == num_batch_compute;
+    // if they disagree, the receivers wait on multicasts that never come (or the sender waits on receivers
+    // that already finished) and the device deadlocks. count_nonzero(sparsity) is data-dependent and only
+    // known here at runtime, so we validate it on-device by counting the multicasts we actually issue and
+    // asserting the contract holds -- surfacing a loud assert (under watcher) instead of a silent hang.
+    // See https://github.com/tenstorrent/tt-metal/issues/45943.
+    [[maybe_unused]] constexpr uint32_t num_batch_compute =
+        get_compile_time_arg_val(sparsity_args.next_compile_time_args_offset());
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
@@ -154,6 +166,10 @@ void kernel_main() {
         l1_write_addr_sparsity = cb_sparsity.get_write_ptr();
     }
 
+    // Counts the in0 multicasts actually issued (one per non-zero sparsity entry). Used to validate
+    // count_nonzero(sparsity) == num_batch_compute when nnz is supplied (see num_batch_compute above).
+    [[maybe_unused]] uint32_t num_valid_batches = 0;
+
     for (uint32_t b = 0; b < in0_B; ++b) {
         if constexpr (batchB > 0) {
             noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
@@ -194,6 +210,14 @@ void kernel_main() {
                         in0_tensor_start_tile_id += MtKt;
                     }
                     continue;
+                }
+
+                // This is a valid (non-zero) batch that we are about to multicast. When nnz was supplied,
+                // catch count_nonzero(sparsity) > num_batch_compute here, before the sender blocks below
+                // waiting on receivers that have already finished their num_batch_compute iterations.
+                if constexpr (!get_batch_from_reader) {
+                    ++num_valid_batches;
+                    ASSERT(num_valid_batches <= num_batch_compute);
                 }
             }
 
@@ -419,6 +443,15 @@ void kernel_main() {
         }
     }
     noc.async_write_barrier();
+
+    // When nnz was supplied, the receiver and compute kernels loop exactly num_batch_compute times.
+    // If we issued fewer multicasts than that (count_nonzero(sparsity) < num_batch_compute), those
+    // kernels are now waiting on multicasts that will never arrive and the device would deadlock.
+    // Fail loudly instead. See https://github.com/tenstorrent/tt-metal/issues/45943.
+    if constexpr (!get_batch_from_reader && batchB > 0) {
+        ASSERT(num_valid_batches == num_batch_compute);
+    }
+
     // For completeness, we empty the sparsity CB if it was reserved earlier
     if constexpr (batchB > 0) {
         cb_sparsity.push_back(1);

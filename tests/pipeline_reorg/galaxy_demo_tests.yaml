@@ -27,7 +27,7 @@
     pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "4x8cfg1sp0tp1" --timeout 1200
   model: sd35
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 10
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
@@ -38,7 +38,7 @@
     pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
   model: flux1
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 15
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
@@ -84,7 +84,7 @@
     pytest models/demos/deepseek_v3/demo/test_demo.py -k "tg_stress or tg_upr8" --timeout 900
   model: deepseek_v3
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 15
   owner_id: U08H32XUS9W # Yousef Al Rawwash
   team: models

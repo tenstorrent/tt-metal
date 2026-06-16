@@ -51,14 +51,6 @@ skus:
       - topology-6u
       - in-service
 
-  # Temporary SKU separating UF machines
-  wh_galaxy_perf_uf:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-perf-uf
-      - topology-6u
-      - in-service
-
   wh_galaxy_release:
     runs_on:
       - arch-wormhole_b0
@@ -139,6 +131,10 @@ skus:
     runs_on:
       - tt-ubuntu-2204-P150b-viommu-stable
 
+  bh_p150b_civ2_viommu_prio:
+    runs_on:
+      - tt-ubuntu-2204-P150b-viommu-prio-stable
+
   bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
@@ -164,13 +160,6 @@ skus:
       - P150
       - pipeline-perf
 
-  bh_llmbox:
-    runs_on:
-      - in-service
-      - arch-blackhole
-      - BH-LLMBox
-      - pipeline-perf
-
   bh_loudbox:
     runs_on:
       - in-service
@@ -190,31 +179,13 @@ skus:
       - P300-viommu
       - in-service
 
-  bh_quietbox:
-    runs_on:
-      - BH-LLMBox
-      - pipeline-functional
-      - in-service
-
-  bh_quietbox_perf:
-    runs_on:
-      - BH-LLMBox
-      - pipeline-perf
-      - in-service
-
-  bh_deskbox:
-    runs_on:
-      - BH-DeskBox
-      - pipeline-functional
-      - in-service
-
   bh_loudbox_civ2_viommu:
     runs_on:
       - tt-ubuntu-2204-BH-LoudBox-viommu-stable
 
   bh_quietbox_2:
     runs_on:
-      - BH-QB-GE
+      - BH-Quietbox-2
       - pipeline-perf
       - in-service
 
@@ -247,3 +218,15 @@ skus:
       match_labels:
         exabox.tenstorrent.com/purpose: ci-metal
         exabox.tenstorrent.com/superpod: A29
+
+  # Synthetic CPU SKUs for ttsim simulator jobs. Tests using these SKUs run on
+  # ubuntu-latest; the impl is expected to invoke .github/actions/setup-ttsim
+  # gated on `startsWith(sku, 'sim_')` to download the matching libttsim_<arch>.so
+  # and export the simulator env vars. The arch suffix on the SKU name selects
+  # the ttsim binary (sim_wormhole_b0 → libttsim_wh.so, sim_blackhole → libttsim_bh.so).
+  sim_wormhole_b0:
+    runs_on:
+      - ubuntu-latest
+  sim_blackhole:
+    runs_on:
+      - ubuntu-latest
