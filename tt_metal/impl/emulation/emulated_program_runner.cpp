@@ -160,6 +160,12 @@ thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
 thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
 thread_local uint32_t __emule_cb_reserved_pages[32] = {};
 thread_local uint32_t __emule_cb_waited_pages[32] = {};
+// Dirty-CB leak signal, decoupled from the window counters above (see cb_api.h):
+// set by reserve/wait, cleared by push/pop. A flag still set at kernel exit means
+// a reserve/wait that no push/pop ever followed — the faithful "forgot to hand
+// off" signal that does NOT false-positive on lookahead producers.
+thread_local bool __emule_cb_reserve_dangling[32] = {};
+thread_local bool __emule_cb_wait_dangling[32] = {};
 thread_local const char* __emule_cb_reserve_file[32] = {};
 thread_local uint32_t __emule_cb_reserve_line[32] = {};
 thread_local const char* __emule_cb_wait_file[32] = {};
@@ -2238,6 +2244,8 @@ inline void clear_sanitizer_thread_locals() {
     for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
         __emule_cb_reserved_pages[i] = 0;
         __emule_cb_waited_pages[i] = 0;
+        __emule_cb_reserve_dangling[i] = false;
+        __emule_cb_wait_dangling[i] = false;
         __emule_cb_reserve_file[i] = nullptr;
         __emule_cb_reserve_line[i] = 0;
         __emule_cb_wait_file[i] = nullptr;
@@ -2283,8 +2291,10 @@ inline void abort_if_dirty_cb(
     }
     __emule_asan_panic(
         "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! Kernel (processor %u):%s%s "
-        "Every reserve must be matched by a push and every wait by a pop before the kernel exits, "
-        "or the CB's read/write pointers desync on silicon.\n",
+        "A cb_reserve_back with no following cb_push_back (or cb_wait_front with no following cb_pop_front) "
+        "before the kernel exits leaves data the consumer is never signaled for; on silicon its matching "
+        "cb_wait_front then hangs. (Lookahead producers that reserve more than they push but always push "
+        "after their last reserve are not flagged.)\n",
         lx,
         ly,
         cb_id,
@@ -2293,15 +2303,30 @@ inline void abort_if_dirty_cb(
         wait_clause);
 }
 
-// A CB is "flushed" when every cb_reserve_back was committed by a matching
-// cb_push_back and every cb_wait_front was released by a matching cb_pop_front.
-// The per-kernel thread-local counters hold the net unmatched amount at kernel
-// exit: __emule_cb_reserved_pages[cb] is bumped by reserve_back and shrunk by
-// push_back; __emule_cb_waited_pages[cb] is set by wait_front and shrunk by
-// pop_front. Either being > 0 means the kernel reserved/waited without the
-// matching push/pop — an un-flushed CB. This is a per-kernel property (reserve
-// pairs with push within the producer, wait with pop within the consumer), so it
-// is checked at each kernel's exit, before the thread-locals are cleared.
+// A CB is "dirty" when the kernel exits with a cb_reserve_back that no
+// cb_push_back ever followed, or a cb_wait_front that no cb_pop_front ever
+// followed — a producer/consumer that claimed the handshake but never handed off.
+//
+// Detection is a per-CB *trailing-dangling* flag, NOT a net page count:
+// __emule_cb_reserve_dangling[cb] is set by reserve_back and cleared by ANY
+// following push_back; __emule_cb_wait_dangling[cb] is set by wait_front and
+// cleared by ANY following pop_front (see cb_api.h). A flag still set at exit is
+// the leak. This is deliberately decoupled from the window counters
+// (__emule_cb_reserved_pages / __emule_cb_waited_pages, which the CB Boundary
+// check uses): on silicon cb_reserve_back is a non-cumulative free-space wait
+// that creates no obligation to push exactly n, so a net "reserved − pushed"
+// count false-positives on legitimate lookahead/double-buffer producers (e.g. the
+// DRAM-sharded matmul in1 reader reserves 2 blocks of headroom but pushes 1 per
+// iteration, pushing every block it produces). Those always have a push after
+// their last reserve, so the flag is clear and they are correctly NOT flagged;
+// only a genuinely un-followed reserve/wait trips it. The reported page count is
+// the window counter at exit, which for a true dangling reserve is the unpushed
+// amount. Trade-off: a reserve;reserve;push (one intermediate push forgotten)
+// clears the flag and is missed here — that pattern corrupts data and surfaces via
+// the Object-Intent / OOB checks (or a PCC mismatch) instead. This is a per-kernel
+// property (reserve pairs with push within the producer, wait with pop within the
+// consumer), so it is checked at each kernel's exit, before the thread-locals are
+// cleared.
 inline void sweep_per_kernel_dirty_cbs(
     const EmuleOobTensorState& oob, tt_emule::CBSyncState* cb_array, uint32_t processor_id, uint32_t lx, uint32_t ly) {
     if (!oob.asan_enabled || cb_array == nullptr) {
@@ -2317,8 +2342,11 @@ inline void sweep_per_kernel_dirty_cbs(
         if (cb_array[cb_id].num_pages == 0) {
             continue;
         }
-        uint32_t unpushed = __emule_cb_reserved_pages[cb_id];
-        uint32_t unpopped = __emule_cb_waited_pages[cb_id];
+        // Fire only on a trailing dangling reserve/wait (one that no push/pop
+        // followed). The page count reported is the window counter, which for a
+        // genuine dangling reserve is the unpushed amount.
+        uint32_t unpushed = __emule_cb_reserve_dangling[cb_id] ? __emule_cb_reserved_pages[cb_id] : 0;
+        uint32_t unpopped = __emule_cb_wait_dangling[cb_id] ? __emule_cb_waited_pages[cb_id] : 0;
         if (unpushed > 0 || unpopped > 0) {
             abort_if_dirty_cb(
                 cb_id,

@@ -19,11 +19,17 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
 
-// A CB is "flushed" when every cb_reserve_back is committed by a matching
-// cb_push_back and every cb_wait_front is released by a matching cb_pop_front.
-// A kernel that reserves a page but never pushes it leaves the CB un-flushed:
-// the producer claimed write space it never handed off, so the CB's write
-// pointer desyncs from its committed state. The sanitizer must catch this.
+// A CB is "dirty" when the kernel exits with a cb_reserve_back that no
+// cb_push_back ever followed (or a cb_wait_front with no following cb_pop_front):
+// the producer claimed the handshake but never handed the data off, so on silicon
+// the consumer's matching cb_wait_front hangs. Detection is a trailing-dangling
+// flag (set by reserve/wait, cleared by ANY following push/pop), decoupled from
+// the reserve/wait *window* counters the CB Boundary check uses — because on
+// silicon cb_reserve_back is a non-cumulative free-space wait, so a net
+// "reserved − pushed" count false-positives on lookahead producers that reserve
+// more than they push but always push after their last reserve (see
+// Dirty_CB_LookaheadReserve_NoViolation). The sanitizer must catch a truly
+// un-followed reserve/wait while leaving the lookahead idiom alone.
 TEST_F(MeshDeviceFixture, Dirty_CB_ReserveWithoutPush) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     // This test validates the Dirty CB check itself, so force it on regardless
@@ -101,11 +107,16 @@ TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
         ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
 }
 
-// Partial-push edge case: the check tracks the NET unmatched count, not just
-// "any reserve without any push". Reserve 2 but push only 1 -> 1 page still
-// reserved-without-push at exit -> un-flushed -> abort. Pins the arithmetic to
-// `reserved -= pushed` rather than a boolean "did a push happen".
-TEST_F(MeshDeviceFixture, Dirty_CB_PartialPush) {
+// Lookahead / double-buffer producer: reserves more pages than it pushes on
+// every iteration (headroom for in-flight reads that the free-space count can't
+// see), but pushes every block it produces, so a push always follows the last
+// reserve. This is the canonical DRAM-sharded matmul in1 reader pattern. On
+// silicon cb_reserve_back is a non-cumulative free-space wait, so the cumulative
+// "reserved 4, pushed 3 -> net 1" is NOT a leak — nothing is stranded. This must
+// NOT abort. It is the regression guard for the false positive that a net-count
+// Dirty-CB check produced (it flagged ~num_blocks*block_tiles "unpushed" pages on
+// a correct matmul reader); the trailing-dangling-flag detection fixes it.
+TEST_F(MeshDeviceFixture, Dirty_CB_LookaheadReserve_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
@@ -114,17 +125,22 @@ TEST_F(MeshDeviceFixture, Dirty_CB_PartialPush) {
     Program program = CreateProgram();
 
     uint32_t cb_id = 0;
+    // 4 pages deep so the 2-page lookahead reservations fit.
     CircularBufferConfig cb_config =
-        CircularBufferConfig(2 * 1024, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
+        CircularBufferConfig(4 * 1024, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
-    // Reserve 2 pages, push only 1 -> net 1 page un-pushed at exit.
+    // Reserve 2 (headroom), push 1, reserve 2 (headroom), push 1, push 1.
+    // Cumulative reserved (4) > pushed (3), but every reserve is followed by a
+    // push, so nothing dangles. The old net-count check aborted here.
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
             cb_reserve_back(0, 2);
             cb_push_back(0, 1);
-            // MISSING: cb_push_back(0, 1);  -> 1 page still reserved
+            cb_reserve_back(0, 2);
+            cb_push_back(0, 1);
+            cb_push_back(0, 1);
         }
     )";
 
@@ -134,8 +150,11 @@ TEST_F(MeshDeviceFixture, Dirty_CB_PartialPush) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(
-        detail::LaunchProgram(device, program), ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
+    // Must NOT abort — lookahead over-reservation is correct on silicon.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 // Positive control: a kernel whose reserve/push and wait/pop all balance leaves
