@@ -565,3 +565,112 @@ def test_conv2d_method2_dram_sharded_matmul(
     )
     pcc = torch.corrcoef(torch.stack([result.float().flatten(), golden.float().flatten()]))[0, 1].item()
     assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
+
+
+# ---------------------------------------------------------------------------
+# Method 2 Approach 2 + Opportunity 4: HEIGHT_SHARDED Tilize
+#
+# Combines Opportunity 3 + 4: tilizes DIRECTLY to L1 HEIGHT_SHARDED,
+# eliminating the separate InterleavedToShardedDeviceOperation step.
+# The matmul then reads from L1 (not DRAM).
+#
+#   ROW_MAJOR → to_layout(TILE, L1 HEIGHT_SHARDED)  ← one op: tilize + shard
+#   → linear (reads from L1 per-core shard)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "batch, in_channels, out_channels, input_height, input_width",
+    _CONFIGS,
+)
+def test_conv2d_method2_height_sharded_tilize(
+    device,
+    batch,
+    in_channels,
+    out_channels,
+    input_height,
+    input_width,
+):
+    dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
+    K = _spatial_pack_factor(in_channels)
+    assert input_height % K == 0
+
+    packed_ic = in_channels * K
+    packed_oc = out_channels * K
+    packed_h = input_height // K
+    packed_spatial = packed_h * input_width
+
+    torch_input = torch.randn(batch, in_channels, input_height, input_width, dtype=torch.bfloat16)
+    torch_weight = torch.randn(out_channels, in_channels, 1, 1, dtype=torch.bfloat16)
+    torch_bias = torch.randn(1, 1, 1, out_channels, dtype=torch.bfloat16)
+
+    torch_w_packed = _make_packed_weight(torch_weight, in_channels, out_channels, K)
+    torch_b_packed = _make_packed_bias(torch_bias, out_channels, K)
+
+    tt_weight = ttnn.from_torch(
+        torch_w_packed.reshape(1, 1, packed_ic, packed_oc),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=dram_interleaved,
+    )
+    tt_bias = ttnn.from_torch(
+        torch_b_packed.reshape(1, 1, 1, packed_oc),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=dram_interleaved,
+    )
+
+    # Pack (identical to Approach 2)
+    tt_nchw = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=dram_interleaved
+    )
+    tt_packed_nchw = ttnn.reshape(tt_nchw, (batch, packed_ic, packed_h, input_width))
+    tt_nhwc = ttnn.permute(tt_packed_nchw, dims=(0, 2, 3, 1), memory_config=dram_interleaved)
+    ttnn.deallocate(tt_nchw)
+    ttnn.deallocate(tt_packed_nchw)
+    tt_flat = ttnn.reshape(tt_nhwc, (batch, 1, packed_spatial, packed_ic))
+    ttnn.deallocate(tt_nhwc)
+
+    # Opportunity 4: tilize DIRECTLY to L1 HEIGHT_SHARDED
+    # Reads 17.7 MB from DRAM ROW_MAJOR, writes to L1 per-core shards.
+    # No separate InterleavedToShardedDeviceOperation needed.
+    sharded_l1 = ttnn.create_sharded_memory_config(
+        shape=(packed_spatial, packed_ic),
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_tile_l1 = ttnn.to_layout(tt_flat, ttnn.TILE_LAYOUT, memory_config=sharded_l1)
+    ttnn.deallocate(tt_flat)
+
+    # Matmul reads from L1 (each core uses its local shard, no DRAM read)
+    tt_out_packed = ttnn.linear(tt_tile_l1, tt_weight, bias=tt_bias, memory_config=dram_interleaved)
+    ttnn.deallocate(tt_tile_l1)
+    ttnn.deallocate(tt_weight)
+    ttnn.deallocate(tt_bias)
+
+    # Unpack (identical to Approach 2)
+    tt_out_rm = ttnn.to_layout(tt_out_packed, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_interleaved)
+    ttnn.deallocate(tt_out_packed)
+    tt_out_nhwc = ttnn.reshape(tt_out_rm, (batch, packed_h, input_width, packed_oc))
+    tt_out_nchw_packed = ttnn.permute(tt_out_nhwc, dims=(0, 3, 1, 2), memory_config=dram_interleaved)
+    ttnn.deallocate(tt_out_rm)
+    ttnn.deallocate(tt_out_nhwc)
+    tt_output = ttnn.reshape(tt_out_nchw_packed, (batch, out_channels, input_height, input_width))
+    result = ttnn.to_torch(tt_output)
+    ttnn.deallocate(tt_out_nchw_packed)
+    ttnn.deallocate(tt_output)
+
+    assert result.shape == torch.Size((batch, out_channels, input_height, input_width))
+
+    golden = F.conv2d(
+        torch_input.float(),
+        torch_weight.float().reshape(out_channels, in_channels, 1, 1),
+        bias=torch_bias.float().reshape(out_channels),
+        stride=1,
+        padding=0,
+    )
+    pcc = torch.corrcoef(torch.stack([result.float().flatten(), golden.float().flatten()]))[0, 1].item()
+    assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
