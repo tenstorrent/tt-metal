@@ -45,9 +45,15 @@ def _generalized_golden(
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
-def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, output_softmax):
+# logit_scale only matters on the raw-logit softmax path (see input gen): 1.0 = small/realistic regime,
+# 100.0 = past the bf16 exp ceiling (overflow stress). Other paths ignore it and run once (scale 1.0).
+@pytest.mark.parametrize("logit_scale", [1.0, 100.0])
+def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, output_softmax, logit_scale):
     """Test the generalized MoE gate C++ op on a 32x32 tile against the golden reference (top-`topk`,
     linear-normalize or softmax-over-selected)."""
+    raw_logit_softmax = output_softmax and not enable_sigmoid  # the only path logit_scale affects
+    if logit_scale != 1.0 and not raw_logit_softmax:
+        pytest.skip("logit_scale only varies the raw-logit softmax path")
 
     # Tensor dimensions — full 32x32 tile, logical 32x32 per shard.
     input_shape = (batch_size, 8, 32)
@@ -66,12 +72,12 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     if enable_sigmoid:
         pass  # the op sigmoids internally -> scores land in [0, 1]; a raw [-1, 1] input is fine
     elif output_softmax:
-        # RAW-LOGIT SOFTMAX path: score_func="softmax" feeds the op UNBOUNDED router logits, NOT [0, 1].
-        # Scale past the bf16 exp range (exp overflows ~88) so this exercises the in-kernel max-subtraction:
-        # without it exp() saturates to inf -> nan/zero weights; with it the result is the correct softmax.
-        # (Real logits are smaller, but the test deliberately overflows to guard the fix; the squash-to-[0,1]
-        # used by the linear path below would hide this case entirely.)
-        torch_input = torch_input * 100.0  # ~[-100, 100]
+        # SOFTMAX path (score_func="softmax", enable_sigmoid=False). logit_scale sweeps two regimes:
+        #   1.0 -> sigmoid to [0, 1]: the original small-magnitude coverage (benign, well inside the exp
+        #          range; also confirms the max-subtraction does not regress this case).
+        #   100 -> raw ~[-100, 100]: UNBOUNDED router logits past the bf16 exp ceiling (~88), which exercises
+        #          the in-kernel max-subtraction — without it exp() saturates to inf -> nan/zero weights.
+        torch_input = torch.sigmoid(torch_input) if logit_scale == 1.0 else torch_input * logit_scale
     else:
         # LINEAR-renorm path: keep scores in [0, 1] so the (Σ + eps) denominator stays well-conditioned.
         torch_input = torch.sigmoid(torch_input)
@@ -203,12 +209,12 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
 
     dev_key = torch.gather(bias_key, dim=-1, index=dev_idx).sort(dim=-1).values
     gold_key = torch.gather(bias_key, dim=-1, index=gold_idx).sort(dim=-1).values
-    # bf16 ranks by a coarse key: near ±100 (the raw-logit path) the bf16 cell is ~0.5 wide, so experts
-    # whose float keys differ by up to ~0.5 round to the SAME bf16 key — they are genuinely tied to the
-    # device and it may break the tie either way (the float32 golden breaks it differently). That gap
-    # scales with magnitude, so loosen the cutoff tolerance for the ×100 raw-logit path; the squashed
-    # [0,1] paths keep the tight 1e-2. A real mis-selection is off by ≫1 and still fails.
-    key_atol = 1.0 if (output_softmax and not enable_sigmoid) else 1e-2
+    # bf16 ranks by a coarse key whose cell width scales with magnitude (ULP ≈ 2^-8·|key|): at ±100 it is
+    # ~0.5, so experts whose float keys differ by up to ~0.5 round to the SAME bf16 key — genuinely tied to
+    # the device, which may break the tie differently than the float32 golden. So scale the cutoff tolerance
+    # with the logit magnitude: tight 1e-2 at the small/[0,1] scales, ~1.0 at ×100. A real mis-selection is
+    # off by ≫ that and still fails. (Non-raw paths run only at scale 1.0, so they keep the tight 1e-2.)
+    key_atol = 1e-2 * max(1.0, logit_scale)
     assert torch.allclose(dev_key, gold_key, atol=key_atol), (
         f"Device selection is not a valid top-8 by bias key.\n dev_idx={dev_idx}\n gold_idx={gold_idx}"
         f"\n dev_key={dev_key}\n gold_key={gold_key}"
@@ -232,11 +238,16 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
-def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, output_softmax):
+# logit_scale only matters on the raw-logit softmax path: 1.0 = small/realistic, 100.0 = overflow stress.
+@pytest.mark.parametrize("logit_scale", [1.0, 100.0])
+def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, output_softmax, logit_scale):
     """512-expert true GLOBAL top-8 (A2 combine). Each of the 2 blocks produces a re-mergeable top-8
     RUN (idx made global via +b*256), stashed to L1; the combine places run0 at {0,2} and run1 at
     {4,6} and finalizes -> the global top-8 over all 512 experts (indices 0-511). GMG_DIAG_BLOCK must
     be UNSET in the kernel. Input layout = slice (each 256-block -> face0 of its own 32x32 tile)."""
+    raw_logit_softmax = output_softmax and not enable_sigmoid  # the only path logit_scale affects
+    if logit_scale != 1.0 and not raw_logit_softmax:
+        pytest.skip("logit_scale only varies the raw-logit softmax path")
     num_experts = 512
     num_blocks = num_experts // 256
     batch_size = 1
@@ -248,10 +259,10 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
     if enable_sigmoid:
         pass  # the op sigmoids internally -> scores land in [0, 1]; a raw [-1, 1] input is fine
     elif output_softmax:
-        # RAW-LOGIT SOFTMAX path: score_func="softmax" feeds the op UNBOUNDED router logits, NOT [0, 1].
-        # Scale past the bf16 exp range (exp overflows ~88) to exercise the in-kernel max-subtraction
-        # across the 512-expert combine path (without it exp() saturates to inf -> nan/zero weights).
-        torch_input = torch_input * 100.0  # ~[-100, 100]
+        # SOFTMAX path (score_func="softmax", enable_sigmoid=False), across the 512 combine. logit_scale:
+        #   1.0 -> sigmoid to [0, 1]: original small-magnitude coverage (also confirms max-sub doesn't regress).
+        #   100 -> raw ~[-100, 100]: UNBOUNDED logits past the bf16 exp ceiling (~88) -> exercises max-sub.
+        torch_input = torch.sigmoid(torch_input) if logit_scale == 1.0 else torch_input * logit_scale
     else:
         # LINEAR-renorm path: keep scores in [0, 1] so the (Σ + eps) denominator stays well-conditioned.
         torch_input = torch.sigmoid(torch_input)
@@ -333,11 +344,12 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
     # Indices: dev must be a valid GLOBAL top-`topk` (tie-robust: compare the gathered bias-keys, sorted).
     dev_key = torch.gather(bias_key, -1, dev_idx).sort(-1).values
     gold_key = torch.gather(bias_key, -1, gold_idx.to(torch.int64)).sort(-1).values
-    # bf16 ranks by a coarse key: near ±100 (the raw-logit path) the bf16 cell is ~0.5 wide, so experts
-    # whose float keys differ by up to ~0.5 round to the SAME bf16 key — they are genuinely tied to the
-    # device and it may break the tie either way. Loosen the cutoff tolerance for the ×100 raw-logit path
-    # (the gap scales with magnitude); the squashed [0,1] paths keep the tight 1e-2.
-    key_atol = 1.0 if (output_softmax and not enable_sigmoid) else 1e-2
+    # bf16 ranks by a coarse key whose cell width scales with magnitude (ULP ≈ 2^-8·|key|): at ±100 it is
+    # ~0.5, so experts whose float keys differ by up to ~0.5 round to the SAME bf16 key — genuinely tied to
+    # the device, which may break the tie differently than the float32 golden. Scale the cutoff tolerance
+    # with the logit magnitude: tight 1e-2 at the small/[0,1] scales, ~1.0 at ×100. A real mis-selection is
+    # off by ≫ that and still fails. (Non-raw paths run only at scale 1.0, so they keep the tight 1e-2.)
+    key_atol = 1e-2 * max(1.0, logit_scale)
     assert torch.allclose(dev_key, gold_key, atol=key_atol), (
         f"512 global not a valid top-{topk}.\n dev_idx={dev_idx}\n gold_idx={gold_idx}\n"
         f" dev_key={dev_key}\n gold_key={gold_key}"
