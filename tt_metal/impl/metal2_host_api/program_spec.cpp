@@ -1189,14 +1189,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (num_producers == 1 && num_consumers == 1) {
                 continue;
             }
-            const std::string_view guidance =
-                num_producers == 0 ? "This node has a consumer but no producer — ensure a producer kernel covers it "
-                                     "(via its WorkUnitSpec membership)."
-                : num_consumers == 0
-                    ? "This node has a producer but no consumer — ensure a consumer kernel covers it "
-                      "(via its WorkUnitSpec membership)."
-                    : "Multiple same-role kernel instances land on this node — their placements overlap; "
-                      "give each disjoint nodes.";
+            std::string_view guidance;
+            if (num_producers == 0) {
+                guidance =
+                    "This node has a consumer but no producer — ensure a producer kernel covers it "
+                    "(via its WorkUnitSpec membership).";
+            } else if (num_consumers == 0) {
+                guidance =
+                    "This node has a producer but no consumer — ensure a consumer kernel covers it "
+                    "(via its WorkUnitSpec membership).";
+            } else {
+                guidance =
+                    "Multiple same-role kernel instances land on this node — their placements overlap; "
+                    "give each disjoint nodes.";
+            }
             TT_FATAL(
                 false,
                 "Local DFB '{}' is malformed at node {}: {} producer instance(s) ({}) and {} consumer "
