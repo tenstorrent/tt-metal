@@ -305,10 +305,18 @@ def test_ttnn_dispatch(
     # Convert TTNN outputs to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)
     if use_fp8_output:
-        # Device returned uint8 bytes that decode as float8_e4m3fn — widen to fp32 for PCC.
+        # Quantize the torch reference to fp8_e4m3fn so it carries the same precision as the TT
+        # dispatch output (which packs BF16->FP8 at the untilize stage), isolating routing
+        # correctness from fp8 quantization noise. Round-trip to float32 since
+        # validate_dispatch_buffer_pcc expects a real float dtype — matching the TT side below.
+        torch_dispatched = torch_dispatched.to(torch.float8_e4m3fn).to(torch.float32)
+
+        # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors; widen to fp32 for PCC.
         tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer)
-        assert tt_out_dispatched.dtype == torch.uint8, f"expected uint8 fp8 output, got {tt_out_dispatched.dtype}"
-        tt_out_dispatched = tt_out_dispatched.view(torch.float8_e4m3fn).to(torch.float32)
+        assert (
+            tt_out_dispatched.dtype == torch.float8_e4m3fn
+        ), f"expected float8_e4m3fn fp8 output, got {tt_out_dispatched.dtype}"
+        tt_out_dispatched = tt_out_dispatched.to(torch.float32)
     else:
         tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)

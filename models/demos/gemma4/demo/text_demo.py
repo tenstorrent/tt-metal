@@ -11,6 +11,16 @@ Usage:
 
     # With fewer layers for testing:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600 -k "test_demo"
+
+    # Batch-32 batched prefill:
+    pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_prefill -k "prefill_128-1x1" -v
+
+    # Batch-32 prefill + decode; override batch via GEMMA4_BATCH_DEMO_SIZE=8:
+    pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_32 -k "prefill_128 and 1x1" -v
+    GEMMA4_BATCH_DEMO_SIZE=8 pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_32 -k "prefill_2048 and 1x4" -v
+
+    # 128k batched-prefill ceiling documentation:
+    pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_prefill_4096_ceiling -v
 """
 
 import gc
@@ -24,9 +34,11 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, sample_host
+from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 from models.tt_transformers.tt.model_config import determine_device_name
 
 _TT_TRANSFORMERS_PROMPTS_DIR = "models/tt_transformers/demo/sample_prompts"
@@ -128,6 +140,311 @@ def load_demo_prompt(target_bucket, instruct=True):
         context = _load_and_cache_context(entry["context"], max_chars=max_chars)
         prompt = "```" + context + "```\n\n" + prompt if instruct else context
     return prompt
+
+
+# Batch batched-prefill helpers and tests (default batch 32; override with GEMMA4_BATCH_DEMO_SIZE).
+_BATCH32_DRAM_OOM_SIZE = 32
+_DEFAULT_BATCH_DEMO_SIZE = 32
+# Prefill lengths for ``test_demo_batch_32`` (4096 hits the 128k batched-prefill ceiling).
+_DEMO_BATCH_PREFILL_LENGTHS = [128, 512, 1024, 2048, 4096]
+# Prefill-only batch coverage; batch-32 2048/4096 may xfail on DRAM-limited meshes (see below).
+_BATCH_PREFILL_LENGTHS = [128, 1024, 2048]
+
+
+def _batch_demo_size():
+    """Demo concurrent-user count; defaults to 32, overridable for smaller-batch experiments."""
+    size = int(os.getenv("GEMMA4_BATCH_DEMO_SIZE", str(_DEFAULT_BATCH_DEMO_SIZE)))
+    if size not in SUPPORTED_PREFILL_BATCH_SIZES:
+        supported = ", ".join(str(b) for b in SUPPORTED_PREFILL_BATCH_SIZES)
+        raise ValueError(f"GEMMA4_BATCH_DEMO_SIZE={size} must be one of: {supported}")
+    return size
+
+
+def _mesh_shape_str(mesh_device):
+    return "x".join(str(d) for d in mesh_device.shape)
+
+
+def _is_31b_model(model_path):
+    name = os.path.basename(str(model_path).rstrip("/")).lower()
+    return "31b" in name
+
+
+def _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_len):
+    """True for batch-32 long prefill on 31B 1×4 (~64k batched token DRAM budget, e.g. 32×2048)."""
+    if batch_size != _BATCH32_DRAM_OOM_SIZE:
+        return False
+    if prefill_len not in (2048, 4096):
+        return False
+    if _mesh_shape_str(mesh_device) != "1x4":
+        return False
+    return _is_31b_model(model_path)
+
+
+def _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len):
+    if _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_len):
+        pytest.xfail(
+            f"Batch-{batch_size} prefill_len={prefill_len} exceeds ~64k batched token DRAM budget "
+            f"on 31B 1×4 (32×2048=65536); run on 1×8 or a smaller model."
+        )
+
+
+def _batch_prefill_hits_ceiling(batch_size, prompt_len):
+    """True when ``batch_size × padded prefill length`` meets/exceeds the 128k cap."""
+    kernel_len = get_padded_prefill_len(prompt_len)
+    return batch_size * kernel_len >= GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN
+
+
+def _batch_page_params(batch_size, prefill_len, max_new_tokens, page_block_size=64):
+    """Size the paged-attention pool for ``batch_size`` concurrent users."""
+    blocks_per_user = (prefill_len + max_new_tokens + page_block_size - 1) // page_block_size
+    return {
+        "page_block_size": page_block_size,
+        "page_max_num_blocks": batch_size * blocks_per_user,
+    }
+
+
+def _create_tt_page_table(global_batch_size, paged_attention_config: PagedAttentionConfig):
+    """Map virtual paged-attention blocks to physical blocks for a batch."""
+    max_num_blocks = paged_attention_config.max_num_blocks
+    permutation = torch.randperm(max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    return reverse_permutation.reshape(global_batch_size, max_num_blocks // global_batch_size).to(torch.int32)
+
+
+def load_batch_demo_prompts(batch_size, prefill_len, instruct=True):
+    """Replicate one bucket-sized prompt so every user has identical token length."""
+    prompt = load_demo_prompt(prefill_len, instruct=instruct)
+    return [prompt] * batch_size
+
+
+def _encode_demo_prompt(tokenizer, prompt, instruct=True):
+    """Tokenize a demo prompt the same way as ``run_generation``."""
+    if instruct and getattr(tokenizer, "chat_template", None):
+        messages = [{"role": "user", "content": prompt}]
+        chat_result = tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        return chat_result["input_ids"].squeeze(0).tolist()
+    return tokenizer.encode(prompt, add_special_tokens=True)
+
+
+def _prepare_batch_prefill_tokens(prompts, tokenizer, target_prefill_len, instruct=True):
+    """Build ``[batch, target_prefill_len]`` tokens and per-user prompt lengths."""
+    encoded_prompts = [_encode_demo_prompt(tokenizer, prompt, instruct=instruct) for prompt in prompts]
+    rows = []
+    decoding_pos = []
+    for encoded in encoded_prompts:
+        if len(encoded) > target_prefill_len:
+            encoded = encoded[:target_prefill_len]
+        prompt_len = len(encoded)
+        row = torch.zeros(target_prefill_len, dtype=torch.int32)
+        row[:prompt_len] = torch.tensor(encoded, dtype=torch.int32)
+        rows.append(row)
+        decoding_pos.append(prompt_len)
+    return torch.stack(rows), decoding_pos, encoded_prompts
+
+
+def run_batch_generation(
+    mesh_device,
+    model_path,
+    batch_size=None,
+    prefill_len=128,
+    max_new_tokens=32,
+    num_layers=None,
+    max_seq_len=4096,
+    page_params=None,
+    enable_prefill_trace=True,
+    enable_decode_trace=False,
+):
+    """Run batched text generation through ``Gemma4Generator``.
+
+    Exercises batched prefill (including chunking at the 128k token ceiling)
+    via ``generator.prefill_forward_text``. Decode is best-effort for batch>1:
+    batch>1: Gemma4's decode path currently prepares inputs for a single active
+    user, so this demo primarily validates batched prefill coverage from #44952.
+
+    Args:
+        mesh_device: TT mesh device
+        model_path: HuggingFace model path or ID
+        batch_size: Number of concurrent users (default from ``GEMMA4_BATCH_DEMO_SIZE``, else 32)
+        prefill_len: Target prefill bucket length
+        max_new_tokens: Decode tokens per user after prefill
+        max_seq_len: KV cache / context budget
+        page_params: Paged-attention block config
+        enable_prefill_trace: Enable prefill tracing where supported
+        enable_decode_trace: Enable decode tracing (single-user oriented today)
+
+    Returns:
+        dict with ``prefilled_tokens`` [B, 1], ``generated_texts`` [B],
+        ``prefill_seq_len`` (padded kernel length), and ``prompt_lens``.
+    """
+    del num_layers  # Full-model demo; layer override not wired through Generator factory yet.
+
+    if batch_size is None:
+        batch_size = _batch_demo_size()
+
+    is_ci_env = os.environ.get("CI") == "true"
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
+    prompts = load_batch_demo_prompts(batch_size, prefill_len, instruct=True)
+    logger.info(f"Loaded {batch_size} prompts for prefill bucket {prefill_len}")
+
+    if page_params is None:
+        page_params = _batch_page_params(batch_size, prefill_len, max_new_tokens)
+    paged_attention_config = PagedAttentionConfig(
+        block_size=int(page_params["page_block_size"]),
+        max_num_blocks=int(page_params["page_max_num_blocks"]),
+    )
+    page_table = _create_tt_page_table(batch_size, paged_attention_config)
+
+    logger.info(
+        f"Creating Gemma4Generator (batch={batch_size}, max_seq_len={max_seq_len}, " f"prefill_len={prefill_len})..."
+    )
+    t0 = time.time()
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        paged_attention_config=paged_attention_config,
+    )
+    model_args = generator.model_args[0]
+    if not hasattr(tokenizer, "stop_tokens"):
+        tokenizer.stop_tokens = [tokenizer.eos_token_id]
+    logger.info(f"Generator ready in {time.time() - t0:.1f}s")
+
+    input_tokens_prefill_pt, decoding_pos, encoded_prompts = _prepare_batch_prefill_tokens(
+        prompts,
+        tokenizer,
+        target_prefill_len=prefill_len,
+        instruct=True,
+    )
+    prefill_seq_len = get_padded_prefill_len(decoding_pos[0])
+    logger.info(
+        f"Batch prefill: users={batch_size}, prompt_len={decoding_pos[0]}, "
+        f"kernel_seq_len={prefill_seq_len}, tensor_shape={tuple(input_tokens_prefill_pt.shape)}"
+    )
+
+    logger.info("Starting batched prefill warmup...")
+    profiler.start("compile_prefill")
+    generator.prefill_forward_text(
+        input_tokens_prefill_pt,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=True,
+        enable_trace=enable_prefill_trace,
+    )
+    profiler.end("compile_prefill")
+    logger.info(f"Prefill warmup done in {profiler.get_duration('compile_prefill'):.2f}s")
+
+    logger.info("Starting batched prefill (measured)...")
+    profiler.start("inference_prefill")
+    prefill_out = generator.prefill_forward_text(
+        input_tokens_prefill_pt,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
+        enable_trace=enable_prefill_trace,
+    )
+    prefilled_token = torch.argmax(prefill_out, dim=-1)
+    profiler.end("inference_prefill")
+    logger.info(
+        f"Batched prefill finished in {profiler.get_duration('inference_prefill'):.2f}s; "
+        f"first tokens sample: {prefilled_token[:4].reshape(-1).tolist()}"
+    )
+
+    all_outputs = [encoded_prompts[b][: decoding_pos[b]] for b in range(batch_size)]
+    for user in range(batch_size):
+        all_outputs[user].append(int(prefilled_token[user].item()))
+
+    current_pos = torch.tensor(decoding_pos, dtype=torch.int32)
+    out_tok = prefilled_token
+    user_done = [False] * batch_size
+    users_decoding = max_new_tokens > 1
+
+    if users_decoding:
+        logger.info(f"Starting batched decode ({max_new_tokens - 1} steps)...")
+        profiler.start("inference_decode")
+        for iteration in range(max_new_tokens - 1):
+            if iteration == 0:
+                profiler.start("compile_decode")
+            else:
+                profiler.start(f"inference_decode_time_{iteration}")
+
+            decode_out = generator.decode_forward(
+                out_tok,
+                current_pos,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                enable_trace=enable_decode_trace,
+                reset_batch=(iteration == 0),
+            )
+            if isinstance(decode_out, tuple):
+                logits = decode_out[0]
+            else:
+                logits = decode_out
+            _, out_tok = sample_host(logits, temperature=0, top_p=1.0, on_host=True)
+
+            if iteration == 0:
+                profiler.end("compile_decode")
+            else:
+                profiler.end(f"inference_decode_time_{iteration}")
+
+            current_pos += 1
+            for user in range(batch_size):
+                user_tok = int(out_tok[user].item())
+                if user_tok not in tokenizer.stop_tokens and not user_done[user]:
+                    all_outputs[user].append(user_tok)
+                else:
+                    user_done[user] = True
+            if all(user_done):
+                break
+        profiler.end("inference_decode")
+
+    generated_texts = [tokenizer.decode(all_outputs[b]) for b in range(batch_size)]
+    profiler.end("run")
+
+    logger.info("")
+    logger.info("=== Batch performance metrics ===")
+    logger.info(f"Prefill compile time: {profiler.get_duration('compile_prefill'):.2f}s")
+    logger.info(f"Prefill inference time (TTFT): {profiler.get_duration('inference_prefill') * 1000:.2f}ms")
+    if users_decoding and profiler.get_duration("compile_decode") > 0:
+        logger.info(f"Decode compile time: {profiler.get_duration('compile_decode'):.2f}s")
+    logger.info(f"Full batch demo runtime: {profiler.get_duration('run'):.2f}s")
+
+    if is_ci_env:
+        targets = {}
+        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
+        measurements = ["compile_prefill", "inference_prefill"]
+        if users_decoding:
+            measurements.extend(["compile_decode", "inference_decode"])
+        benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo",
+            ml_model_name="gemma4",
+            ml_model_type="llm",
+            device_name=determine_device_name(mesh_device),
+            num_layers=model_args.num_hidden_layers,
+            batch_size=batch_size,
+            config_params={"prefill_len": prefill_len, "batched_prefill": True},
+            input_sequence_length=prefill_len,
+            output_sequence_length=max_new_tokens,
+        )
+
+    return {
+        "prefilled_tokens": prefilled_token,
+        "generated_texts": generated_texts,
+        "prefill_seq_len": prefill_seq_len,
+        "prompt_lens": decoding_pos,
+    }
 
 
 def run_generation(
@@ -412,6 +729,9 @@ def run_generation(
                 on_device_logits=on_device_sampling,
                 pli_combined=device_inputs.get("pli"),
             )
+            # ttnn_decode_forward returns a bare logits tensor on the on-device-sampling
+            # path (on_device_logits=True) and a (logits, None) tuple otherwise. Normalize
+            # to a 2-tuple so the trace-capture call sites below can always unpack two values.
             return out if isinstance(out, tuple) else (out, None)
 
         def _inputs_to_device(inputs):
@@ -759,3 +1079,147 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     )
     assert len(results) == 1
     logger.info(f"Full model output: {_shorten_for_log(results[0])}")
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.gemma4_batched_prefill
+@pytest.mark.parametrize(
+    "prefill_len",
+    _BATCH_PREFILL_LENGTHS,
+    ids=[f"prefill_{b}" for b in _BATCH_PREFILL_LENGTHS],
+)
+def test_demo_batch_prefill(mesh_device, model_path, prefill_len, request):
+    """Batch-32 prefill — validates ``Gemma4Generator.prefill_forward_text``.
+
+    Parametrized over prefill_len ∈ {128, 1024, 2048}. Uses identical prompts
+    for all 32 users so batched prefill is eligible. Prefill-only
+    (``max_new_tokens=1``).
+
+    Filter examples:
+        pytest -k "test_demo_batch_prefill and prefill_128 and 1x1"
+        pytest -k "test_demo_batch_prefill and blackhole and 1x4"
+    """
+    max_prefill = request.config.getoption("--max-prefill")
+    if prefill_len > max_prefill:
+        pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
+
+    if os.environ.get("CI") == "true" and prefill_len != 128:
+        pytest.skip(f"CI: only prefill_128 runs in CI; skipping prefill_{prefill_len}")
+
+    batch_size = _batch_demo_size()
+    _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len)
+
+    max_new_tokens = 1
+    max_seq_len = max(prefill_len + max_new_tokens, 4096)
+    page_params = _batch_page_params(batch_size, prefill_len, max_new_tokens)
+
+    result = run_batch_generation(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        batch_size=batch_size,
+        prefill_len=prefill_len,
+        max_new_tokens=max_new_tokens,
+        max_seq_len=max_seq_len,
+        page_params=page_params,
+        enable_prefill_trace=True,
+    )
+
+    prefilled_tokens = result["prefilled_tokens"]
+    expected_kernel_len = get_padded_prefill_len(result["prompt_lens"][0])
+
+    assert prefilled_tokens.shape[0] == batch_size
+    assert result["prefill_seq_len"] == expected_kernel_len
+    logger.info(
+        f"Batch-{batch_size} prefill_{prefill_len} ok — kernel_seq_len={result['prefill_seq_len']}, "
+        f"sample token: {int(prefilled_tokens[0].item())}"
+    )
+
+
+@pytest.mark.gemma4_batched_prefill
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize(
+    "prefill_len",
+    _DEMO_BATCH_PREFILL_LENGTHS,
+    ids=[f"prefill_{b}" for b in _DEMO_BATCH_PREFILL_LENGTHS],
+)
+def test_demo_batch_32(mesh_device, model_path, prefill_len, request):
+    """Batch-32 demo — validates batched prefill via ``Gemma4Generator``.
+
+    Parametrized over prefill_len ∈ {128, 512, 1024, 2048, 4096}.
+    Uses identical prompts for all 32 users so batched prefill is eligible,
+    and exercises the chunking override at 32×4096 (128k token ceiling).
+
+    Filter examples:
+        pytest -k "test_demo_batch_32 and prefill_4096"
+        pytest -k "test_demo_batch_32 and 1x8"
+    """
+    max_prefill = request.config.getoption("--max-prefill")
+    if prefill_len > max_prefill:
+        pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
+
+    if os.environ.get("CI") == "true" and prefill_len != 128:
+        pytest.skip(f"CI: only prefill_128 runs in CI; skipping prefill_{prefill_len}")
+
+    batch_size = _batch_demo_size()
+    _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len)
+
+    max_new_tokens = 32
+    max_seq_len = max(prefill_len + max_new_tokens, 4096)
+    page_params = _batch_page_params(batch_size, prefill_len, max_new_tokens)
+
+    result = run_batch_generation(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        batch_size=batch_size,
+        prefill_len=prefill_len,
+        max_new_tokens=max_new_tokens,
+        max_seq_len=max_seq_len,
+        page_params=page_params,
+        enable_prefill_trace=True,
+        enable_decode_trace=False,
+    )
+
+    prefilled_tokens = result["prefilled_tokens"]
+    generated_texts = result["generated_texts"]
+    assert prefilled_tokens.shape[0] == batch_size
+    assert len(generated_texts) == batch_size
+    for user, text in enumerate(generated_texts):
+        assert len(text) > 0, f"User {user} produced empty output"
+    logger.info(
+        f"Batch-{batch_size} prefill_{prefill_len} ok — kernel_seq_len={result['prefill_seq_len']}, "
+        f"sample output: {_shorten_for_log(generated_texts[0])}"
+    )
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.gemma4_batched_prefill
+def test_demo_batch_prefill_4096_ceiling(mesh_device, model_path, request):
+    """Document the 128k batched-prefill ceiling at batch 32 × seq 4096.
+
+    32 × 4096 = 131072 tokens, which meets/exceeds ``GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN`` (128k).
+    ``Gemma4Generator`` chunks into smaller user batches (e.g. 32→16+16 at 4096).
+    This test documents the threshold; use ``test_demo_batch_32`` for the device run.
+
+    Filter examples:
+        pytest -k "test_demo_batch_prefill_4096_ceiling and 1x1"
+    """
+    del mesh_device, model_path  # Documentation-only; device run is test_demo_batch_32.
+
+    max_prefill = request.config.getoption("--max-prefill")
+    prefill_len = 4096
+    if prefill_len > max_prefill:
+        pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
+
+    batch_size = _BATCH32_DRAM_OOM_SIZE
+    kernel_len = get_padded_prefill_len(prefill_len)
+    total_tokens = batch_size * kernel_len
+
+    assert _batch_prefill_hits_ceiling(batch_size, prefill_len)
+
+    pytest.skip(
+        f"Batch-32 prefill at seq_len={prefill_len} totals {total_tokens} tokens "
+        f"({batch_size}×{kernel_len}), which exceeds "
+        f"GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN ({GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN}). "
+        f"Gemma4Generator chunks this case automatically. "
+        f"Run test_demo_batch_32[prefill_4096] for batched-path coverage."
+    )

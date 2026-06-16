@@ -65,8 +65,6 @@
       timeout: 60
     bh_p300:
       timeout: 60
-    bh_quietbox_2:
-      timeout: 60
   owner_id: U07RD9YRFT9 # Slavko Krstic
   team: ttnn
 

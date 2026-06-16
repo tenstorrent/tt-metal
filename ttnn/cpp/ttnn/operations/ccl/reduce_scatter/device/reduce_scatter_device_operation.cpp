@@ -61,7 +61,10 @@ ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::
             !operation_attributes.optional_intermediate_mem_config.has_value()) {
             auto intermediate_shard_spec = intermediate_mem_config.shard_spec().value();
             intermediate_shard_spec.shape[0] *= 2;
-            adjusted_intermediate_mem_config = intermediate_mem_config.with_shard_spec(intermediate_shard_spec);
+            adjusted_intermediate_mem_config = MemoryConfig(
+                intermediate_mem_config.memory_layout(),
+                intermediate_mem_config.buffer_type(),
+                intermediate_shard_spec);
         } else {
             adjusted_intermediate_mem_config = intermediate_mem_config;
         }

@@ -379,15 +379,19 @@ void DPrintServer::Impl::print_buffer_data(
             auto kernel_id = static_cast<int>(header->info_id);
             risc_data.last_loaded_kernel_id = kernel_id;
 
-            // Find elf path from inspector using kernel id
-            auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
-            auto [processor_class, processor_type_idx] =
-                hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
-            const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-                device_id, programmable_core_type_idx, static_cast<uint32_t>(processor_class), processor_type_idx);
-            const auto& risc_name = build_state.get_target_name();
-            auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
-            risc_data.kernel_elf_path = elf_path.string();
+            // Find the elf path for this risc from the inspector.
+            auto elf_path = Inspector::get_kernel_elf_path(header->info_id, header->risc_id);
+
+            if (elf_path.empty() || !std::filesystem::exists(elf_path)) {
+                log_warning(
+                    tt::LogMetal,
+                    "DPRINT: could not resolve ELF path for kernel id {} risc {}; print messages for this kernel will "
+                    "not be decoded.",
+                    kernel_id,
+                    header->risc_id);
+                continue;
+            }
+            risc_data.kernel_elf_path = elf_path;
             risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
         } else if (
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&

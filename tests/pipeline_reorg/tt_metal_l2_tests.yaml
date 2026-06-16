@@ -264,14 +264,12 @@
 - name: ttnn nightly data_movement tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150:
-      timeout: 40
-    wh_n300:
-      timeout: 40
-    bh_p100:
-      timeout: 40
+    wh_n150_civ2:
+      timeout: 60
+    wh_n300_civ2:
+      timeout: 60
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 60
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -281,14 +279,12 @@
   # nightly in 3 split groups to cover the long tail that the PR gate skips.
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=300'
   skus:
-    wh_n150:
-      timeout: 35
-    wh_n300:
-      timeout: 35
-    bh_p100:
-      timeout: 35
+    wh_n150_civ2:
+      timeout: 50
+    wh_n300_civ2:
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 50
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -296,14 +292,12 @@
 - name: ttnn nightly data_movement ccl tests group 2
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=300'
   skus:
-    wh_n150:
-      timeout: 35
-    wh_n300:
-      timeout: 35
-    bh_p100:
-      timeout: 35
+    wh_n150_civ2:
+      timeout: 50
+    wh_n300_civ2:
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 50
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -311,14 +305,12 @@
 - name: ttnn nightly data_movement ccl tests group 3
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=300'
   skus:
-    wh_n150:
-      timeout: 35
-    wh_n300:
-      timeout: 35
-    bh_p100:
-      timeout: 35
+    wh_n150_civ2:
+      timeout: 50
+    wh_n300_civ2:
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 50
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -376,26 +368,6 @@
   owner_id: U0837MYG788 # Marko Radosavljevic
   team: models
   category: sdxl
-
-# =============================================================================
-# tt-train (team:train)
-# =============================================================================
-
-- name: tt-train nightly tests
-  # ENABLE_NIGHTLY_TT_TRAIN_TESTS is inlined in cmd.
-  cmd: 'ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*'
-  skus:
-    wh_n150:
-      timeout: 40
-    wh_n300:
-      timeout: 40
-    bh_p100:
-      timeout: 40
-    bh_p150b_civ2:
-      timeout: 40
-  owner_id: U07K00A281X # Kevin Wu
-  team: train
-  category: train
 
 # =============================================================================
 # ttsim simulator — runs on ubuntu-latest via sim_<arch> SKUs.
