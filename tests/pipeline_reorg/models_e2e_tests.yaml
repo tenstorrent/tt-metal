@@ -624,8 +624,10 @@
   team: models
 
 
-- name: TT-DiT Flux.1 e2e tests
+- name: TT-DiT Flux.1 schnell e2e tests
   cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_performance_flux1.py
   model: flux.1-schnell
   skus:
