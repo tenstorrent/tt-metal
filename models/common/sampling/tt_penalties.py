@@ -163,11 +163,19 @@ class TTPenalties(LightweightModule):
         self.per_row_batch_size = per_row_batch
         self._shard_dims_gathered = shard_dims_gathered
 
-        self.prompt_mask = self._alloc_int_buffer(shard_dims=shard_dims)
-        self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
+        # Gather-in-forward: the sampling op operates on the FULL (replicated) vocab,
+        # so the per-token penalty buffers (prompt/output masks + output counts) must
+        # be full-vocab replicated too (instead of vocab-sharded). The per-device
+        # slice that normally derives the sharded mask from the gathered counts is
+        # then skipped (see token_bin_counts_and_mask). Enabled via model_config.
+        self._gather_in_forward = getattr(args, "gather_logits_in_forward", False)
+        mask_shard_dims = shard_dims_gathered if self._gather_in_forward else shard_dims
+
+        self.prompt_mask = self._alloc_int_buffer(shard_dims=mask_shard_dims)
+        self.output_mask = self._alloc_int_buffer(shard_dims=mask_shard_dims)
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
-        self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
-        self._shard_dims_mask = shard_dims
+        self.output_counts = self._alloc_int_buffer(shard_dims=mask_shard_dims)
+        self._shard_dims_mask = mask_shard_dims
         self.decode_src = self._alloc_int_buffer(
             host=torch.ones(self._total_batch, 1), shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -357,15 +365,21 @@ class TTPenalties(LightweightModule):
             counts = ttnn.add(counts, counts_new, output_tensor=counts, **self._op_kwargs)
         else:
             counts = counts_new
-        counts_sliced = ttnn.slice(
-            counts,
-            self.slice_start,
-            self.slice_end,
-            output_tensor=counts_sliced,
-            slice_dim=1,
-            num_devices=self.num_devices,
-            **self._op_kwargs,
-        )
+        if self._gather_in_forward:
+            # Full-vocab path: output_counts spans the whole vocab (matches the
+            # forward-gathered logits), so copy the gathered counts in directly
+            # instead of slicing out a per-device shard.
+            counts_sliced = ttnn.add(counts, 0, output_tensor=counts_sliced, **self._op_kwargs)
+        else:
+            counts_sliced = ttnn.slice(
+                counts,
+                self.slice_start,
+                self.slice_end,
+                output_tensor=counts_sliced,
+                slice_dim=1,
+                num_devices=self.num_devices,
+                **self._op_kwargs,
+            )
 
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **self._op_kwargs)
         return counts, mask

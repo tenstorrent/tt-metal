@@ -778,8 +778,7 @@ class Transformer(LightweightModule):
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
         page_tables_per_layer=None,
     ):
         """
@@ -808,17 +807,39 @@ class Transformer(LightweightModule):
             page_tables_per_layer=page_tables_per_layer,
         )
 
-        if sampling_on_device and self.sampling is not None:
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
-                return tt_logits
-            tt_toks, tt_log_probs = self.sampling.sample(
-                tt_logits,
-                tt_out_tok=x,
-                enable_trace=False,
+        if on_device_logits:
+            assert self.sampling is not None, (
+                "ttnn_decode_forward got on_device_logits=True but no on-device sampling "
+                "module exists (self.sampling is None)."
             )
-
-            return tt_toks, tt_log_probs
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            # Gather-in-forward: all-gather the logits HERE, inside the forward (the
+            # exact CCL call/context host sampling uses correctly), instead of
+            # leaving them sharded for the on-device sampling op to gather later in
+            # the sampling context (which corrupts on-device sampling under
+            # concurrent batch condense/slot_remap). Keep them TILED (do NOT untilize
+            # here — penalties' binary_ng requires tiled layout); force_argmax
+            # untilizes as usual. Enabled via model_config.gather_logits_in_forward
+            # (default on for non-Galaxy multi-device models with a force-argmax config).
+            if getattr(self.args, "gather_logits_in_forward", False) and self.args.num_devices > 1:
+                cluster_axis = 0 if self.args.is_galaxy else None
+                num_links = 2 if self.args.is_galaxy else 1
+                tt_logits = ttnn.experimental.all_gather_async(
+                    tt_logits,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                    num_links=num_links,
+                    memory_config=tt_logits.memory_config() if self.prefetcher is None else ttnn.DRAM_MEMORY_CONFIG,
+                    cluster_axis=cluster_axis,
+                    topology=self.args.ccl_topology(),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                    subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+                )
+            return tt_logits
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:

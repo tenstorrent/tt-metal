@@ -103,20 +103,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
-        # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
-        self.enable_split_sampling = True
         self.mode = None
 
     # Class-level capabilities (VLLM specific, to be overridden by subclasses)
     model_capabilities = {
         "supports_prefix_caching": True,
     }
-
-    def _set_sampling_trace_mode(self, enabled: bool):
-        for model_instance in self.model:
-            sampling_module = getattr(model_instance, "sampling", None)
-            if sampling_module is not None:
-                sampling_module.enable_internal_trace = enabled
 
     def _get_sampling_contract(self, model_id: int):
         sampling_module = getattr(self.model[model_id], "sampling", None)
@@ -148,7 +140,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.already_warmed_up_prefill = True
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
-        warmup_batch_sizes = (1,)
+        # Warm up every batch size that runtime batched prefill can pad to
+        # (SUPPORTED_PREFILL_BATCH_SIZES), so each (seq_len x padded_batch) prefill
+        # program AND trace is compiled/captured during the warmup "safe" window.
+        # Otherwise the first batched prefill of an unseen (seq_len, batch) combo
+        # compiles a full model + captures a new prefill trace mid-serving -- after
+        # the decode trace is already captured and the device is in the trace-active
+        # ("unsafe") allocation state. Those post-capture allocations reuse addresses
+        # the live decode trace holds for transient activations, corrupting decode
+        # replay output under concurrency (root cause confirmed via the trace
+        # allocation tracker). Skip when batched prefill is disabled.
+        batched_prefill_disabled = getattr(self.model_args[0], "disable_batched_prefill", False)
+        warmup_batch_sizes = (1,) if batched_prefill_disabled else SUPPORTED_PREFILL_BATCH_SIZES
 
         skip_sequence_lengths = False
 
@@ -156,7 +159,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         sampling_parameters_sweeped = False
 
         if enable_trace:
-            logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
+            logger.info(f"Traced prefill warmup batch sizes: {warmup_batch_sizes}")
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
@@ -797,6 +800,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         use_batched_prefill=False,
                         user_id=user_id,
                         padded_batch_size=None,
+                        use_full_prompt_len=True,
                     )
             else:
                 page_table_user = None
@@ -878,13 +882,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     sampling_module, sampling_dp, sampling_batch, _ = self._get_sampling_contract(model_id)
                     assert sampling_module is not None
                     assert sampling_batch is not None
-                    combined_params = format_sampling_params(sampling_params, sampling_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
                         plen = int(prompt_lens[local_idx])
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
+                    combined_params = format_sampling_params(sampling_params, sampling_batch)
                     sampling_module.apply_prefill_state(
                         sampling_params=combined_params,
                         prompt_tokens=combined_prompt_tokens,
@@ -932,15 +936,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     ttnn.synchronize_device(self.model[model_id].mesh_device)
 
                     tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)
-                    log_probs_host = (
+                    # tt_log_probs may be a LogProbsResult (top-k logprobs mode) or a plain [B]
+                    # tensor (scalar logprobs); mirror the single-user handling so
+                    # reformat_logprobs receives per-slot LogProbsResult / scalar entries.
+                    plain_log_probs_host = (
                         ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)
-                        if tt_log_probs is not None
+                        if tt_log_probs is not None and not isinstance(tt_log_probs, LogProbsResult)
                         else None
                     )
                     for local_idx, slot in enumerate(empty_slots):
                         output_tokens[slot] = tokens_host[slot]
-                        if log_probs_host is not None:
-                            output_log_probs[slot] = log_probs_host[slot]
+                        if isinstance(tt_log_probs, LogProbsResult):
+                            output_log_probs[slot] = tt_log_probs.extract_user(slot)
+                        elif plain_log_probs_host is not None:
+                            output_log_probs[slot] = plain_log_probs_host[slot]
                 else:
                     if return_hidden_states:
                         # Embedding models: trace returns hidden states; extract last-token hidden per slot
@@ -1217,6 +1226,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
+        defer_device_sampling: bool = False,
         **kwargs,
     ):
         mode_switched = False
@@ -1228,77 +1238,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i in range(len(self.model)):
             self.model[i].switch_mode(Mode.DECODE)
 
-        sampling_on_device = sampling_params is not None
-        split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
-        self._set_sampling_trace_mode(split_sampling_enabled)
-
+        sampling_on_device = (sampling_params is not None) or defer_device_sampling
         B = tokens.shape[0]
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
-        sampling_params_list = None
-        if sampling_params is not None:
-            # sampling_dp may differ from data_parallel for models that internally
-            # shard users across mesh rows (users_row_sharded) — each row samples
-            # 32 users independently, so sampling params must be chunked by the
-            # number of rows even though data_parallel=1 for the forward pass.
-            sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
-            assert (
-                len(set(sampling_dp_values)) == 1
-            ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
-            # NOTE: This assumes data_parallel and sampling_dp are mutually exclusive
-            # (one is always 1). If a future model needs both DP>1 and row-sharded
-            # sampling, this should become data_parallel * sampling_dp_values[0].
-            sampling_dp = max(self.data_parallel, sampling_dp_values[0])
-
-            sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
-
-            prompt_chunks = (
-                torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
-            )
-            output_chunks = (
-                torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
-            )
-
-            for i in range(self.data_parallel):
-                sampling_module = getattr(self.model[i], "sampling", None)
-                assert sampling_module is not None, "Sampling module not found in model for sampling on device."
-                assert (
-                    sampling_dp % self.data_parallel == 0
-                ), f"sampling_dp ({sampling_dp}) must be divisible by data_parallel ({self.data_parallel})"
-                cpm = sampling_dp // self.data_parallel
-                start = i * cpm
-                model_chunks = sampling_params_list[start : start + cpm]
-
-                model_prompt = (
-                    torch.cat([c for c in prompt_chunks[start : start + cpm] if c is not None], 0)
-                    if prompt_tokens is not None
-                    else None
-                )
-                model_output = (
-                    torch.cat([c for c in output_chunks[start : start + cpm] if c is not None], 0)
-                    if output_tokens is not None
-                    else None
-                )
-
-                sampling_module.apply_decode_state(
-                    model_chunks,
-                    reset_batch=reset_batch,
-                    prompt_tokens=model_prompt,
-                    output_tokens=model_output,
-                )
-                active_seed_slots = None
-                if start_pos[i] is not None:
-                    max_seed_slots = sampling_module.seed_manager.max_batch_size
-                    start_values = torch.as_tensor(start_pos[i]).reshape(-1).tolist()
-                    active_seed_slots = [idx for idx, pos in enumerate(start_values[:max_seed_slots]) if int(pos) >= 0]
-                # Apply slot remap from condense before advancing seeds.
-                if slot_remap is not None:
-                    sm_bs = sampling_module.seed_manager.max_batch_size
-                    rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
-                    sampling_module.seed_manager.apply_slot_remap(rank_remap)
-                sampling_module.seed_manager.get_new_values(active_seed_slots)
 
         # vLLM under async scheduling supplies a one-step-stale last token at
         # reset steps (its host state lags device sampling). The device token
@@ -1361,11 +1306,30 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # token/current_pos trace buffers stale, not just a prefill->decode
             # mode switch, so both must force a full traced-input reset.
             tt_decode_output = self._decode_forward_trace_text(
-                **decode_kwargs, reset_batch=reset_batch or mode_switched
+                **decode_kwargs,
+                reset_batch=reset_batch or mode_switched,
             )
         else:
-            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_no_trace_text(
+                **decode_kwargs,
+            )
 
+        # Device deferred
+        if defer_device_sampling and sampling_on_device:
+            return tt_decode_output
+        # Device immediate
+        if sampling_params is not None:
+            tt_decode_output = self.sample_decode_on_device(
+                tt_decode_output,
+                sampling_params=sampling_params,
+                start_pos=start_pos,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                enable_trace=enable_trace,
+            )
+        # Host sampling
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
@@ -1409,14 +1373,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
+            decode_out = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
                 rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
-                sampling_on_device=sampling_on_device,
+                on_device_logits=sampling_on_device,
             )
+            if isinstance(decode_out, tuple):
+                tt_logits_i, tt_log_probs_i = decode_out
+            else:
+                tt_logits_i, tt_log_probs_i = decode_out, None
             tt_output.append((tt_logits_i, tt_log_probs_i))
 
         return tt_output
@@ -1459,11 +1427,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
-            split_enabled = (
-                sampling_on_device
-                and sampling_module is not None
-                and getattr(sampling_module, "enable_internal_trace", False)
-            )
+            sampling_trace_enabled = sampling_on_device and sampling_module is not None
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -1485,20 +1449,36 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 self.model[i].ttnn_decode_forward(
                     *model_inputs,
                     kv_cache=user_kv_cache,
-                    sampling_on_device=sampling_on_device,
-                    capture_sampling_trace=split_enabled,
+                    on_device_logits=sampling_on_device,
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
 
-            if split_enabled:
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
+            if sampling_trace_enabled:
+                # NOTE: sampling trace can be keyed depending on sampling params,
+                # this traces only for the current ones.
+                # tt_out_tok feeds the sampled token back into the decode token
+                # buffer (device_inputs[0]) for the next traced step. Only do this
+                # for models that rely on on-device token feedback. Models that
+                # re-stage decode inputs from host every step (e.g. gemma4, via
+                # _tt_vllm_always_refresh_decode_trace_inputs) don't, and their
+                # token buffer is not shaped as a sampling output (gemma4's is
+                # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
+                # pass None so sampling allocates its own output.
+                tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
+                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok)
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        reset_batch=False,
     ):
         """
         Run decode forward text with tracing
@@ -1513,16 +1493,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.trace_output_decode[sampling_on_device] = tt_out_trace
 
         # reset inputs when mode switches from prefill to decode,
-        # or when sampling_on_device changes (different trace has stale inputs)
-        prev_sampling_on_device = getattr(self, "_prev_sampling_on_device", None)
-        self._prev_sampling_on_device = sampling_on_device
-        sampling_mode_changed = prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device
+        # or when sampling mode changes (different trace has stale inputs)
+        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
+        self._prev_on_device_sampling = sampling_on_device
+        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != sampling_on_device
         reset_inputs = reset_batch or not sampling_on_device or sampling_mode_changed
         page_table_changed = page_table is not None and (
             self.prev_page_table is None
             or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
         )
-
         for i in range(self.data_parallel):
             refresh_trace_inputs = reset_inputs or getattr(
                 self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False
@@ -1554,23 +1533,140 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-        outputs = self.trace_output_decode[sampling_on_device]
-        if sampling_on_device:
-            new_outputs = []
-            for i in range(self.data_parallel):
-                sampling_module = getattr(self.model[i], "sampling", None)
-                if sampling_module is None or not getattr(sampling_module, "enable_internal_trace", False):
-                    new_outputs.append(outputs[i])
-                    continue
+        return self.trace_output_decode[sampling_on_device]
 
-                new_outputs.append(
-                    sampling_module.sample(
-                        logits=outputs[i],
-                        tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
-                    )
+    def sample_decode_on_device(
+        self,
+        tt_logits,
+        sampling_params,
+        start_pos=None,
+        reset_batch=False,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+        slot_remap=None,
+        enable_trace=False,
+    ):
+        # sampling_dp may differ from data_parallel for models that internally
+        # shard users across mesh rows (users_row_sharded) — each row samples
+        # 32 users independently, so sampling params must be chunked by the
+        # number of rows even though data_parallel=1 for the forward pass.
+        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
+        assert (
+            len(set(sampling_dp_values)) == 1
+        ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+        # NOTE: This assumes data_parallel and sampling_dp are mutually exclusive
+        # (one is always 1). If a future model needs both DP>1 and row-sharded
+        # sampling, this should become data_parallel * sampling_dp_values[0].
+        sampling_dp = max(self.data_parallel, sampling_dp_values[0])
+        sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
+        prompt_chunks = (
+            torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
+        )
+        output_chunks = (
+            torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
+        )
+
+        for i in range(self.data_parallel):
+            sampling_module = getattr(self.model[i], "sampling", None)
+            assert sampling_module is not None, "Sampling module not found in model for sampling on device."
+            assert (
+                sampling_dp % self.data_parallel == 0
+            ), f"sampling_dp ({sampling_dp}) must be divisible by data_parallel ({self.data_parallel})"
+            cpm = sampling_dp // self.data_parallel
+            start = i * cpm
+            model_chunks = sampling_params_list[start : start + cpm]
+            model_prompt = (
+                torch.cat([c for c in prompt_chunks[start : start + cpm] if c is not None], 0)
+                if prompt_tokens is not None
+                else None
+            )
+            model_output = (
+                torch.cat([c for c in output_chunks[start : start + cpm] if c is not None], 0)
+                if output_tokens is not None
+                else None
+            )
+
+            sampling_module.apply_decode_state(
+                model_chunks,
+                reset_batch=reset_batch,
+                prompt_tokens=model_prompt,
+                output_tokens=model_output,
+            )
+            active_seed_slots = None
+            if start_pos is not None and start_pos[i] is not None:
+                max_seed_slots = sampling_module.seed_manager.max_batch_size
+                start_values = torch.as_tensor(start_pos[i]).reshape(-1).tolist()
+                active_seed_slots = [idx for idx, pos in enumerate(start_values[:max_seed_slots]) if int(pos) >= 0]
+            # Apply slot remap from condense before advancing seeds.
+            if slot_remap is not None:
+                sm_bs = sampling_module.seed_manager.max_batch_size
+                rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+                sampling_module.seed_manager.apply_slot_remap(rank_remap)
+            # Register each request's explicit seed into the seed manager and
+            # tie its RNG counter to the absolute decode position before
+            # advancing. Without registration the per-request seed never reaches
+            # the device (the seed manager stays unseeded), so sampling falls
+            # back to per-slot boot RNG and two requests sharing a seed diverge.
+            # Position alignment then keeps the stream reproducible even when
+            # vLLM evicts a running request and re-admits it in a different slot
+            # under async scheduling. Mirrors the llama3_70b_galaxy decode path.
+            if active_seed_slots:
+                seed_bs = sampling_module.tt_sampling.max_batch_size
+                if len(model_chunks) == 1:
+                    seed_values = format_sampling_params(model_chunks[0], seed_bs).seed
+                else:
+                    seed_values = []
+                    for chunk in model_chunks:
+                        s = format_sampling_params(chunk, seed_bs).seed
+                        seed_values += s if isinstance(s, list) else [s] * seed_bs
+                sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
+                sampling_module.seed_manager.align_seed_counters_to_positions(
+                    seed_values, active_seed_slots, start_values
                 )
-            return new_outputs
-        return outputs
+            sampling_module.seed_manager.get_new_values(active_seed_slots)
+
+        sampled_outputs = []
+        for i in range(self.data_parallel):
+            sampling_module = getattr(self.model[i], "sampling", None)
+            if sampling_module is None:
+                sampled_outputs.append(tt_logits[i])
+                continue
+            logits_i = tt_logits[i]
+            if isinstance(logits_i, tuple):
+                logits_i = logits_i[0]
+            # Must match the capture-time decision in _capture_decode_trace_text:
+            # only feed the sampled token back into device_inputs[0] for models
+            # that use on-device token feedback (see _decode_token_feedback_buffer).
+            tt_out_tok = (
+                self._decode_token_feedback_buffer(self.model[i], self.trace_inputs_decode[True][i])
+                if enable_trace and self.trace_inputs_decode[True]
+                else None
+            )
+            sampled_outputs.append(
+                sampling_module.sample(
+                    logits=logits_i,
+                    tt_out_tok=tt_out_tok,
+                    enable_trace=enable_trace,
+                )
+            )
+        return sampled_outputs
+
+    @staticmethod
+    def _decode_token_feedback_buffer(model, device_inputs):
+        """Return the device token buffer to feed the sampled token back into for
+        the next traced decode step, or None if the model doesn't use on-device
+        token feedback.
+
+        Models that re-stage all decode trace inputs from host every step (e.g.
+        gemma4, ``_tt_vllm_always_refresh_decode_trace_inputs=True``) don't rely
+        on the device feedback and their token buffer (``device_inputs[0]``) may
+        not be a valid sampling output (gemma4's is rank-2; ``ttnn.sampling``
+        requires a rank-4 preallocated output). Returning None makes sampling
+        allocate its own output instead of writing into ``device_inputs[0]``.
+        """
+        if getattr(model, "_tt_vllm_always_refresh_decode_trace_inputs", False):
+            return None
+        return device_inputs[0]
 
     def _prefill_forward_single_user(
         self,
@@ -2652,6 +2748,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         use_batched_prefill=False,
         user_id=None,
         padded_batch_size=None,
+        use_full_prompt_len=False,
     ):
         block_size = get_block_size(kv_cache)
 
@@ -2673,7 +2770,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # prefill length (for example 32-token prompts become 128-token
             # kernels), so the page table must expose blocks for that padded
             # length even on the non-traced compile path.
-            target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
+            if use_full_prompt_len:
+                target_prefill_len = prefill_len
+            else:
+                target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
             num_blocks = num_blocks_in_seq(target_prefill_len, block_size)
             if page_table.shape[1] < num_blocks:
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1

@@ -129,6 +129,13 @@ class TTSampling(LightweightModule):
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
+        # Gather-in-forward: logits are all-gathered inside the forward, so the
+        # sampling op sees the FULL (replicated) vocab. The top-k path then splits
+        # the full vocab back into per-device shards, top-ks each locally, and
+        # reuses the existing local index tensor + device offsets -- avoiding the
+        # corrupting sampling-context all-gather while producing identical global
+        # candidates. Enabled via model_config.gather_logits_in_forward.
+        self._gather_in_forward = getattr(args, "gather_logits_in_forward", False)
 
         self.sampling_all_gather_axis = getattr(args, "sampling_all_gather_axis", 0)
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
@@ -276,6 +283,10 @@ class TTSampling(LightweightModule):
         )
         # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
         padded_per_device = self.padded_vocab_size // num_devices_in_mesh
+        # Stored for the gather-in-forward path (chunk the full gathered vocab back
+        # into these per-device shards and reuse the local index tensor + offsets).
+        self._num_sampling_devices = num_devices_in_mesh
+        self._padded_per_device = padded_per_device
 
         for device_id in range(num_devices_in_mesh):
             indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
@@ -462,7 +473,10 @@ class TTSampling(LightweightModule):
             logger.info("Forcing argmax sampling")
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
-            if num_devices > 1:
+            # Gather-in-forward: logits were already all-gathered inside the forward
+            # (still tiled), so skip the sampling-context gather and only untilize +
+            # argmax below.
+            if num_devices > 1 and not self._gather_in_forward:
                 cluster_axis = self._get_sampling_cluster_axis()
                 num_links, topology = self._get_force_argmax_all_gather_config(cluster_axis)
                 logger.debug(
@@ -499,7 +513,60 @@ class TTSampling(LightweightModule):
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
 
-        if self.multi_step_reduction:
+        if self._gather_in_forward:
+            # The forward-gathered logits are the concatenation of the per-device
+            # vocab shards (padded_vocab = num_devices * padded_per_device). Split
+            # them back into those shards, pad each to pow2 exactly like the sharded
+            # path pads a shard, top-k each locally with the SAME local index tensor,
+            # and concat in device order. This reproduces the sharded path's
+            # (num_devices * k) LOCAL top-k results WITHOUT the corrupting
+            # sampling-context all-gather, so the existing device-offset add below
+            # converts them to global indices identically.
+            per_device_width = self._padded_per_device
+            x_chunks = ttnn.split(x_bf16, per_device_width, dim=3)
+            topk_values_list = []
+            topk_indices_list = []
+            for ci in range(len(x_chunks)):
+                xc_in = x_chunks[ci]
+                xc = xc_in
+                if self.pad_to_power_of_2 and not is_power_of_2(xc.shape[-1]):
+                    padded_value = upper_power_of_2(xc.shape[-1])
+                    xc = ttnn.pad(
+                        xc_in,
+                        [(0, 0), (0, 0), (0, 0), (0, padded_value - xc_in.shape[-1])],
+                        value=-sys.float_info.max,
+                        sub_core_grids=self.sub_core_grids,
+                    )
+                cv, cidx = ttnn.topk(
+                    xc,
+                    k=self.max_top_k,
+                    dim=-1,
+                    sub_core_grids=self.sub_core_grid_topk,
+                    indices_tensor=self.tt_indices_tensor,
+                )
+                topk_values_list.append(cv)
+                topk_indices_list.append(cidx)
+                ttnn.deallocate(xc)
+                if xc is not xc_in:
+                    ttnn.deallocate(xc_in)
+            topk_values_gathered = ttnn.concat(topk_values_list, dim=3)
+            topk_indices_gathered = ttnn.concat(topk_indices_list, dim=3)
+            for ci in range(len(topk_values_list)):
+                ttnn.deallocate(topk_values_list[ci])
+                ttnn.deallocate(topk_indices_list[ci])
+            if self.sampling_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                topk_values_gathered_bf16 = ttnn.to_memory_config(
+                    topk_values_gathered, memory_config=self.sampling_memory_config, dtype=ttnn.bfloat16
+                )
+                topk_values_gathered_bf16_interleaved = ttnn.to_memory_config(
+                    topk_values_gathered_bf16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                ttnn.deallocate(topk_values_gathered_bf16)
+                ttnn.deallocate(topk_values_gathered)
+            else:
+                topk_values_gathered_bf16_interleaved = topk_values_gathered
+
+        elif self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
             indices_tensor_list = ttnn.split(self.tt_indices_tensor, self.tt_indices_tensor.shape[-1] // 2, dim=3)
             topk_values_list = []
@@ -602,7 +669,9 @@ class TTSampling(LightweightModule):
         else:
             topk_indices_gathered_int32_sharded = topk_indices_gathered_int32
 
-        # Add device offsets to get global vocabulary indices
+        # Add device offsets to get global vocabulary indices. For gather-in-forward
+        # the per-shard chunks were top-k'd with the same local index tensor, so the
+        # same offsets apply (device_id * padded_per_device) -- identical to sharded.
         topk_global_indices = ttnn.add(
             self.tt_indices_device_offsets,
             topk_indices_gathered_int32_sharded,

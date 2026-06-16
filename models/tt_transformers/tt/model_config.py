@@ -1097,6 +1097,28 @@ class ModelArgs:
                 self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
                 self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
 
+            # Gather-in-forward decode sampling: move the decode-logits all-gather
+            # into the forward (the CCL context host sampling uses correctly) instead
+            # of the on-device sampling op, which corrupts on-device sampling under
+            # concurrent batch condense/slot_remap. Enabled BY DEFAULT for the models
+            # that have a force-argmax sampling config, on non-Galaxy multi-device
+            # meshes (where the corruption occurs and the fix is validated). The env
+            # var TT_GATHER_IN_FORWARD, if set, overrides the default (1=on, 0=off)
+            # for A/B testing; CI/serving need not set it.
+            _gif_default = (
+                (not executed_on_galaxy)
+                and (self.base_model_name in model_specific_ccl_configs)
+                and (self.num_devices > 1)
+            )
+            _gif_env = os.environ.get("TT_GATHER_IN_FORWARD")
+            self.gather_logits_in_forward = (_gif_env == "1") if _gif_env is not None else _gif_default
+            if self.gather_logits_in_forward:
+                # Greedy uses the on-device argmax path on the forward-gathered logits.
+                self.model_config["SAMPLING_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name][
+                    "sampling_force_argmax"
+                ]
+            logger.info(f"gather_logits_in_forward = {self.gather_logits_in_forward}")
+
             logger.info(f"Attention grid: {self.attn_input_grid}")
             logger.info(f"MLP grid: {self.mlp_core_grid}")
             logger.info(f"MLP prefill grids @ 32: w1/w3: {self.mlp1_3_grid(32)}, w2: {self.mlp2_grid(32)}")
@@ -3650,19 +3672,24 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+            if os.getenv("CI") == "true":
+                # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                # that don't have clean checkpoint artifacts. Skip straight to from_config.
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            else:
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             model_cls = self.get_hf_model_cls()
@@ -3682,19 +3709,26 @@ class ModelArgs:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = model_cls.from_pretrained(
-                        self.CKPT_DIR,
-                        config=config,
-                        torch_dtype="auto",
-                        trust_remote_code=self.trust_remote_code_hf,
-                        local_files_only=True,
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                if os.getenv("CI") == "true":
+                    # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                    # that don't have clean checkpoint artifacts. Skip straight to from_config.
                     model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                else:
+                    try:
+                        # .from_pretrained + _init_weights works faster than .from_config
+                        model = model_cls.from_pretrained(
+                            self.CKPT_DIR,
+                            config=config,
+                            torch_dtype="auto",
+                            trust_remote_code=self.trust_remote_code_hf,
+                            local_files_only=True,
+                        )
+                        model.apply(model._init_weights)
+                    except Exception as e:
+                        logger.info(
+                            f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}"
+                        )
+                        model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
@@ -3768,19 +3802,24 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+            if os.getenv("CI") == "true":
+                # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                # that don't have clean checkpoint artifacts. Skip straight to from_config.
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            else:
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             if self.cached_hf_model is None:
