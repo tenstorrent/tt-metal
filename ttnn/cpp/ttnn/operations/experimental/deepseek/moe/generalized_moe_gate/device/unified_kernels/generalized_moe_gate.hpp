@@ -8,6 +8,7 @@
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
 #ifndef REDUCE_OP
@@ -26,6 +27,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/experimental/generalized_moe_gate.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 namespace deepseek_v3_ops {
@@ -115,8 +117,13 @@ struct GeneralizedMoeGate {
         // to the L1 stash CBs (page b).
         template <uint32_t b>
         void process_block_to_run() {
-            cb_wait_front(CTArgs::bias_cb, 1);
-            cb_wait_front(CTArgs::input_cb, 1);
+            CircularBuffer bias_cb(CTArgs::bias_cb);
+            CircularBuffer input_cb(CTArgs::input_cb);
+            CircularBuffer run_scores_cb(CTArgs::run_scores_cb);
+            CircularBuffer run_idx_cb(CTArgs::run_idx_cb);
+            CircularBuffer run_bias_cb(CTArgs::run_bias_cb);
+            bias_cb.wait_front(1);
+            input_cb.wait_front(1);
             reconfig_data_format_srca(CTArgs::input_indices_cb);
             copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
             tile_regs_acquire();
@@ -138,9 +145,9 @@ struct GeneralizedMoeGate {
             // normalize runs once after the combine). transpose_wh restores standard->math on the way back.
             generalized_moe_gate_step2_only<false>();
             tile_regs_commit();
-            cb_reserve_back(CTArgs::run_scores_cb, 1);
-            cb_reserve_back(CTArgs::run_idx_cb, 1);
-            cb_reserve_back(CTArgs::run_bias_cb, 1);
+            run_scores_cb.reserve_back(1);
+            run_idx_cb.reserve_back(1);
+            run_bias_cb.reserve_back(1);
             tile_regs_wait();
             // pack_untilize each region (DEST tile 0/1/2) to its run CB as ROW-MAJOR (linearized). Unlike
             // pack_tile, this survives the round-trip in a form tilize+transpose_wh can restore to math.
@@ -152,20 +159,20 @@ struct GeneralizedMoeGate {
             pack_untilize_dest_init<1, 1>(CTArgs::run_scores_cb);
             pack_untilize_dest<1, 1>(CTArgs::run_scores_cb, 1, 0, 0);  // DEST tile 0 (scores)
             pack_untilize_uninit(CTArgs::run_scores_cb);
-            cb_push_back(CTArgs::run_scores_cb, 1);
+            run_scores_cb.push_back(1);
             pack_reconfig_data_format(CTArgs::run_idx_cb);
             pack_untilize_dest_init<1, 1>(CTArgs::run_idx_cb);
             pack_untilize_dest<1, 1>(CTArgs::run_idx_cb, 1, 0, 1);  // DEST tile 1 (idx)
             pack_untilize_uninit(CTArgs::run_idx_cb);
-            cb_push_back(CTArgs::run_idx_cb, 1);
+            run_idx_cb.push_back(1);
             pack_reconfig_data_format(CTArgs::run_bias_cb);
             pack_untilize_dest_init<1, 1>(CTArgs::run_bias_cb);
             pack_untilize_dest<1, 1>(CTArgs::run_bias_cb, 1, 0, 2);  // DEST tile 2 (bias)
             pack_untilize_uninit(CTArgs::run_bias_cb);
-            cb_push_back(CTArgs::run_bias_cb, 1);
+            run_bias_cb.push_back(1);
             tile_regs_release();
-            cb_pop_front(CTArgs::input_cb, 1);
-            cb_pop_front(CTArgs::bias_cb, 1);
+            input_cb.pop_front(1);
+            bias_cb.pop_front(1);
         }
 
 #endif
@@ -180,8 +187,10 @@ struct GeneralizedMoeGate {
             // ================================================================
             // BRISC: Wait for compute to finish
             // ================================================================
-            cb_wait_front(CTArgs::output_indices_cb, 1);
-            cb_wait_front(CTArgs::output_cb, 1);
+            CircularBuffer output_cb(CTArgs::output_cb);
+            CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
+            output_indices_cb.wait_front(1);
+            output_cb.wait_front(1);
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
@@ -196,17 +205,22 @@ struct GeneralizedMoeGate {
             // input_indices: one persistent sharded tile PER block, holding that block's GLOBAL expert
             // ids (block b = arange + b*256). Block b copies tile b, so the pipeline tracks global ids
             // directly (no in-kernel offset add).
-            cb_wait_front(CTArgs::input_indices_cb, CTArgs::num_blocks);
+            CircularBuffer input_indices_cb(CTArgs::input_indices_cb);
+            input_indices_cb.wait_front(CTArgs::num_blocks);
 
             if constexpr (CTArgs::num_blocks == 1) {
+                CircularBuffer bias_cb(CTArgs::bias_cb);
+                CircularBuffer input_cb(CTArgs::input_cb);
+                CircularBuffer output_cb(CTArgs::output_cb);
+                CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
                 // ============ single ≤256-block path: the proven fused single-op gate (128/256 top-8) ============
-                cb_wait_front(CTArgs::bias_cb, 1);
+                bias_cb.wait_front(1);
                 copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
                 tile_regs_acquire();
                 copy_tile(CTArgs::input_indices_cb, 0, 1);  // indices (arange 0-255) -> idx region
                 reconfig_data_format_srca(CTArgs::input_cb);
                 generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-                cb_wait_front(CTArgs::input_cb, 1);
+                input_cb.wait_front(1);
                 generalized_moe_gate<
                     CTArgs::enable_sigmoid,
                     false,
@@ -216,19 +230,26 @@ struct GeneralizedMoeGate {
                     0,
                     CTArgs::topk,
                     CTArgs::output_softmax>(CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
-                cb_pop_front(CTArgs::input_cb, 1);
+                input_cb.pop_front(1);
                 tile_regs_commit();
 
-                cb_reserve_back(CTArgs::output_cb, 1);
-                cb_reserve_back(CTArgs::output_indices_cb, 1);
+                output_cb.reserve_back(1);
+                output_indices_cb.reserve_back(1);
                 tile_regs_wait();
                 pack_tile(0, CTArgs::output_cb);
-                cb_push_back(CTArgs::output_cb, 1);
+                output_cb.push_back(1);
                 pack_reconfig_data_format(CTArgs::output_indices_cb);
                 pack_tile(1, CTArgs::output_indices_cb);
-                cb_push_back(CTArgs::output_indices_cb, 1);
+                output_indices_cb.push_back(1);
                 tile_regs_release();
             } else {
+                CircularBuffer run_scores_cb(CTArgs::run_scores_cb);
+                CircularBuffer run_idx_cb(CTArgs::run_idx_cb);
+                CircularBuffer run_bias_cb(CTArgs::run_bias_cb);
+                CircularBuffer cb_tilize(CTArgs::cb_tilize);
+                CircularBuffer cb_tilize_idx(CTArgs::cb_tilize_idx);
+                CircularBuffer output_cb(CTArgs::output_cb);
+                CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
                 // ============ multi-block path ============
                 // A2 combine (L1 stash, v3 — MERGE-ONLY acquire). Both blocks are stashed to L1 via the
                 // proven round-trip (process_block_to_run). Then ALL fields are tilize'd into scratch, and a
@@ -241,40 +262,40 @@ struct GeneralizedMoeGate {
                 // ---- tilize all fields BEFORE the merge acquire (tilize self-manages DEST). cb_tilize (bf16):
                 //      p0=b0 score, p1=b1 score, p2=b0 bias, p3=b1 bias. cb_tilize_idx (uint16): p0=b0 idx, p1=b1 idx.
                 compute_kernel_hw_startup(CTArgs::run_scores_cb, CTArgs::cb_tilize);
-                cb_wait_front(CTArgs::run_scores_cb, CTArgs::num_blocks);
+                run_scores_cb.wait_front(CTArgs::num_blocks);
                 reconfig_data_format_srca(CTArgs::run_scores_cb);
                 tilize_init(CTArgs::run_scores_cb, 1, CTArgs::cb_tilize);
                 for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
-                    cb_reserve_back(CTArgs::cb_tilize, 1);
+                    cb_tilize.reserve_back(1);
                     tilize_block(CTArgs::run_scores_cb, 1, CTArgs::cb_tilize);
-                    cb_push_back(CTArgs::cb_tilize, 1);
-                    cb_pop_front(CTArgs::run_scores_cb, 1);
+                    cb_tilize.push_back(1);
+                    run_scores_cb.pop_front(1);
                 }
                 tilize_uninit(CTArgs::run_scores_cb, CTArgs::cb_tilize);
-                cb_wait_front(CTArgs::run_bias_cb, CTArgs::num_blocks);
+                run_bias_cb.wait_front(CTArgs::num_blocks);
                 reconfig_data_format_srca(CTArgs::run_bias_cb);
                 tilize_init(CTArgs::run_bias_cb, 1, CTArgs::cb_tilize);
                 for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
-                    cb_reserve_back(CTArgs::cb_tilize, 1);
+                    cb_tilize.reserve_back(1);
                     tilize_block(CTArgs::run_bias_cb, 1, CTArgs::cb_tilize);
-                    cb_push_back(CTArgs::cb_tilize, 1);
-                    cb_pop_front(CTArgs::run_bias_cb, 1);
+                    cb_tilize.push_back(1);
+                    run_bias_cb.pop_front(1);
                 }
                 tilize_uninit(CTArgs::run_bias_cb, CTArgs::cb_tilize);
                 compute_kernel_hw_startup(CTArgs::run_idx_cb, CTArgs::cb_tilize_idx);
-                cb_wait_front(CTArgs::run_idx_cb, CTArgs::num_blocks);
+                run_idx_cb.wait_front(CTArgs::num_blocks);
                 reconfig_data_format_srca(CTArgs::run_idx_cb);
                 tilize_init(CTArgs::run_idx_cb, 1, CTArgs::cb_tilize_idx);
                 for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
-                    cb_reserve_back(CTArgs::cb_tilize_idx, 1);
+                    cb_tilize_idx.reserve_back(1);
                     tilize_block(CTArgs::run_idx_cb, 1, CTArgs::cb_tilize_idx);
-                    cb_push_back(CTArgs::cb_tilize_idx, 1);
-                    cb_pop_front(CTArgs::run_idx_cb, 1);
+                    cb_tilize_idx.push_back(1);
+                    run_idx_cb.pop_front(1);
                 }
                 tilize_uninit(CTArgs::run_idx_cb, CTArgs::cb_tilize_idx);
                 // ---- merge-only acquire: restore block1 -> {0,2}, block0 -> {4,6}, then merge ----
-                cb_wait_front(CTArgs::cb_tilize, 2 * CTArgs::num_blocks);
-                cb_wait_front(CTArgs::cb_tilize_idx, CTArgs::num_blocks);
+                cb_tilize.wait_front(2 * CTArgs::num_blocks);
+                cb_tilize_idx.wait_front(CTArgs::num_blocks);
                 tile_regs_acquire();
                 // block1 -> {0,2}: scores(cb_tilize p1), idx(cb_tilize_idx p1), bias(cb_tilize p3)
                 reconfig_data_format_srca(CTArgs::cb_tilize);
@@ -306,17 +327,17 @@ struct GeneralizedMoeGate {
                 generalized_moe_gate_combine_finalize<false, CTArgs::topk, CTArgs::output_softmax>(
                     CTArgs::eps, CTArgs::scaling_factor);
                 tile_regs_commit();
-                cb_pop_front(CTArgs::cb_tilize, 2 * CTArgs::num_blocks);
-                cb_pop_front(CTArgs::cb_tilize_idx, CTArgs::num_blocks);
-                cb_reserve_back(CTArgs::output_cb, 1);
-                cb_reserve_back(CTArgs::output_indices_cb, 1);
+                cb_tilize.pop_front(2 * CTArgs::num_blocks);
+                cb_tilize_idx.pop_front(CTArgs::num_blocks);
+                output_cb.reserve_back(1);
+                output_indices_cb.reserve_back(1);
                 tile_regs_wait();
                 pack_reconfig_data_format(CTArgs::output_cb);
                 pack_tile(0, CTArgs::output_cb);
-                cb_push_back(CTArgs::output_cb, 1);
+                output_cb.push_back(1);
                 pack_reconfig_data_format(CTArgs::output_indices_cb);
                 pack_tile(1, CTArgs::output_indices_cb);
-                cb_push_back(CTArgs::output_indices_cb, 1);
+                output_indices_cb.push_back(1);
                 tile_regs_release();
             }
 #endif
