@@ -947,5 +947,5 @@ class PipelineBlock:
         assert self.h2d_socket is not None, "Expected H2D socket on the first pipeline stage"
         assert self.d2h_socket is not None, "Expected D2H socket on the first pipeline stage"
 
-        self.h2d_socket.export_descriptor(f"{io_socket_descriptor_prefix}_h2d")
-        self.d2h_socket.export_descriptor(f"{io_socket_descriptor_prefix}_d2h")
+        self.h2d_socket.export_descriptor(f"{io_socket_descriptor_prefix}")
+        self.d2h_socket.export_descriptor(f"{io_socket_descriptor_prefix}")
