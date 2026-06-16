@@ -213,7 +213,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
 // ops, fused producers), so writing to it is legitimate and must NOT abort,
 // even though the kernel never resolved a pointer into it. Guards the exemption
 // from regressing (which would re-introduce false positives on real in-place
-// ttnn ops).
+// TT-NN ops).
 TEST_F(MeshDeviceFixture, Object_Intent_IOArg_Exempt_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 

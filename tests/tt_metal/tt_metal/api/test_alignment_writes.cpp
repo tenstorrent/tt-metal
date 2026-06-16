@@ -186,7 +186,7 @@ TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
 // Positive control (WH): a DRAM->L1 read where BOTH endpoints are 32-byte
 // aligned (lower 5 bits = 0) but differ in higher bits MUST NOT abort. This is
 // the exact pattern that the old, too-strict 0xFF mask (256-byte) wrongly
-// flagged across the ttnn sweeps (e.g. DRAM off 0x40 -> L1 off 0xa0: both
+// flagged across the TT-NN sweeps (e.g. DRAM off 0x40 -> L1 off 0xa0: both
 // 32-aligned, but 0x40 != 0xa0 under 0xFF). The corrected 0x1F mask compares
 // only the lower 5 bits (0 == 0) and lets it through.
 //

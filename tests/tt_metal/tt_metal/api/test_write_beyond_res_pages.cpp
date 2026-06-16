@@ -230,7 +230,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
 // pattern used by globally-allocated/sharded CBs and single-buffered scratch.
 // The boundary check is only meaningful relative to an active window, so this
 // must NOT abort. This is the exact shape (reserved==0, waited==0) that the old
-// check false-positived across the ttnn sweeps (expand/reshape/roll/to_memory_config/…).
+// check false-positived across the TT-NN sweeps (expand/reshape/roll/to_memory_config/…).
 TEST_F(MeshDeviceFixture, CB_Boundary_NoActiveWindow_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
