@@ -133,12 +133,14 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
     # open a fresh one.
     prev_key = _DEVICE_CACHE["key"]
     _teardown_cached_device()
-    # On a fabric-config transition (prev_key[1] is the previous fabric str),
-    # clear the kernel cache so dispatch kernels rebuild for the new fabric and we
-    # never load a stale FABRIC_1D cq_prefetch ELF for a FABRIC_2D config
-    # (-> tt_elffile.cpp:405 on T3K 2x4 all_gather after the 1D configs).
-    if prev_key is not None and prev_key[1] != key[1]:
-        logger.info(f"Fabric change {prev_key[1]} -> {key[1]}: clearing kernel cache for clean dispatch rebuild")
+    # Clear the kernel cache ONLY on a transition that involves FABRIC_2D (the
+    # tt_elffile.cpp:405 trigger: a FABRIC_1D cq_prefetch ELF loaded for a
+    # FABRIC_2D config on T3K 2x4 all_gather). Do NOT clear on the frequent
+    # FABRIC_1D <-> FABRIC_1D_RING (Linear/Ring) switches within the 1D block —
+    # those don't hit the stale-ELF bug, and clearing there forces full kernel
+    # rebuilds every alternation, which itself causes timeouts.
+    if prev_key is not None and prev_key[1] != key[1] and ("FABRIC_2D" in prev_key[1] or "FABRIC_2D" in key[1]):
+        logger.info(f"Fabric change {prev_key[1]} -> {key[1]} (FABRIC_2D): clearing kernel cache for clean rebuild")
         _clear_dispatch_kernel_cache()
     parent_device = None
     mesh_device = None
