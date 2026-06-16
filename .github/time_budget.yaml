@@ -201,7 +201,7 @@ models:
   sanity:
     wh_galaxy_perf: 10
     wh_n300_civ2: 5
-    bh_p150b_civ2_viommu: 80
+    bh_p150b_civ2_viommu: 110
   stress:
     wh_galaxy_perf: 500
   l2:

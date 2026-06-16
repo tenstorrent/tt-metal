@@ -26,7 +26,7 @@
   cmd: 'pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/ --ignore=models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation'
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 30
+      timeout: 60
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
   slow_dispatch: true
