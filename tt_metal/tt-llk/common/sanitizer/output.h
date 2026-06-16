@@ -104,21 +104,15 @@ NOINLINE NOCLONE void _print_operand_actual(const State<T> actual)
 
 NOINLINE NOCLONE void _print_compute_info(const UnwindContext context)
 {
-    const ct_string unknown = CTSTR("<unknown>");
-    const ct_string file    = CTSTR("<file>");
-    const ct_string line    = CTSTR("<line>");
-
-    DEVICE_PRINT(
-        "│  ├── Compute API ─┬ {:#x}\r"
-        "│  │                └ {}:{}\r"
-        "│  └── Callsite ────┬ {:#x}\r"
-        "│                   └ {}:{}\r",
-        context.pc,
-        context.pc != UINTPTR_MAX ? file : unknown,
-        context.pc != UINTPTR_MAX ? line : unknown,
-        context.ra,
-        context.ra != UINTPTR_MAX ? file : unknown,
-        context.ra != UINTPTR_MAX ? line : unknown);
+    // Expected stack layout
+    // [0] write_unwind_context
+    // [1] thread_context_push_impl
+    // [2] thread_context_push
+    // [3] FunctionZone::FunctionZone
+    // [4] Compute API <- first frame the user cares about
+    // [5] ...
+    // Discard 4 sanitizer-internal frames, print from Compute API
+    DEVICE_PRINT("{}\r", dp_top_callstack_t(context.pc, context.ra, 4));
 }
 
 template <Trigger level, typename T>
