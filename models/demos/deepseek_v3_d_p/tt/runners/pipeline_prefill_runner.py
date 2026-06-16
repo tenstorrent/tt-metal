@@ -36,7 +36,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
+    build_h2d_service,
     get_variant,
     load_hf_config,
     load_trace_token_ids,
@@ -46,6 +48,13 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     resolve_weight_cache_path,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+
+# H2D socket service config (first rank, PREFILL_PP_H2D=1). Mirrors prefill_runner.py: one worker
+# core copies the pushed chunk into a fresh tensor; the producer packs a 12-byte PrefillMetadata
+# (slot_id, actual_start, actual_end) alongside each push.
+H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+H2D_METADATA_SIZE_BYTES = 12
+H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
 VARIANT = get_variant(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
 MODEL_CFG = VARIANT.model_config
@@ -271,13 +280,32 @@ def _first_rank_chunk_tokens(runtime: TtPrefillRuntime, token_ids: list[int], kv
     )
 
 
-def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int) -> None:
+def _h2d_request_mode() -> bool:
+    """First rank reads tokens from the H2D socket (driven by prefill_h2d_producer.py) instead of the
+    trace file. Off by default (file input)."""
+    return os.environ.get("PREFILL_PP_H2D") == "1"
+
+
+def _socket_next(h2d_service) -> tuple:
+    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end})
+    decoded from the 12-byte PrefillMetadata. is_last is set by the caller — the socket carries no
+    end-of-stream marker, so the first rank derives it from its chunk count vs PREFILL_STANDALONE_NCHUNKS."""
+    import torch
+
+    tt_tokens, tt_metadata = h2d_socket_sync(
+        h2d_service, H2D_SYNC_WORKER_CORES, metadata_size_bytes=H2D_METADATA_SIZE_BYTES
+    )
+    m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
+    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+
+
+def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, h2d_service=None) -> None:
     """Decoupled per-rank loop: each rank runs its own loop, coordinated ONLY by the
     activation+metadata file handoff (atomic rename + polling recv) — no cross-rank barrier, so an
-    upstream rank can race ahead of a downstream one (pipeline overlap). The first rank drives the
-    chunk schedule from the trace; the per-chunk metadata (slot / actual_start / actual_end / is_last)
-    rides with each activation, so downstream ranks need no shared schedule and learn the end from
-    is_last. Every rank checks the KV slice it populated against golden."""
+    upstream rank can race ahead of a downstream one (pipeline overlap). The first rank's input is
+    either the trace file or the H2D socket (h2d_service set); the per-chunk metadata (slot /
+    actual_start / actual_end / is_last) rides with each activation, so downstream ranks need no
+    shared schedule and learn the end from is_last. Every rank checks the KV slice it populated."""
     cfg = runtime.config
     subctx = _subcontext_id()
     slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % cfg.num_users
@@ -285,22 +313,27 @@ def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int) -> N
     token_ids = None
     n_chunks = None
     if cfg.is_first_rank:
-        # Only the first rank needs the input schedule; later ranks learn it from the metadata.
-        token_ids = _load_token_ids()
-        actual_isl = len(token_ids)
-        nchunks_env = os.environ.get("PREFILL_STANDALONE_NCHUNKS")
-        n_chunks = int(nchunks_env) if nchunks_env else ((actual_isl + cfg.chunk_size - 1) // cfg.chunk_size)
-        total_len = n_chunks * cfg.chunk_size
-        if total_len > cfg.max_seq_len:
+        # Only the first rank needs the schedule length; later ranks learn the end from is_last.
+        if h2d_service is not None:
+            # Socket mode: tokens arrive per push; the producer streams PREFILL_STANDALONE_NCHUNKS of them.
+            n_chunks = int(os.environ["PREFILL_STANDALONE_NCHUNKS"])
+        else:
+            token_ids = _load_token_ids()
+            actual_isl = len(token_ids)
+            nchunks_env = os.environ.get("PREFILL_STANDALONE_NCHUNKS")
+            n_chunks = int(nchunks_env) if nchunks_env else ((actual_isl + cfg.chunk_size - 1) // cfg.chunk_size)
+            token_ids = (token_ids + [1] * (n_chunks * cfg.chunk_size))[: n_chunks * cfg.chunk_size]
+        if n_chunks * cfg.chunk_size > cfg.max_seq_len:
             raise ValueError(
-                f"{n_chunks} chunks x {cfg.chunk_size} = {total_len} exceeds per-user cache "
-                f"max_seq_len={cfg.max_seq_len}. Lower PREFILL_STANDALONE_NCHUNKS or bump PREFILL_MAX_SEQ_LEN."
+                f"{n_chunks} chunks x {cfg.chunk_size} exceeds per-user cache max_seq_len={cfg.max_seq_len}. "
+                f"Lower PREFILL_STANDALONE_NCHUNKS or bump PREFILL_MAX_SEQ_LEN."
             )
-        token_ids = (token_ids + [1] * total_len)[:total_len]
 
     logger.info(
         f"[pp rank {rank}/{num_ranks}] decoupled loop start (is_first={cfg.is_first_rank} "
-        f"is_last={cfg.is_last_rank} slot={slot_id}" + (f" chunks={n_chunks}" if cfg.is_first_rank else "") + ")"
+        f"is_last={cfg.is_last_rank} slot={slot_id} input={'h2d' if h2d_service is not None else 'trace'}"
+        + (f" chunks={n_chunks}" if cfg.is_first_rank else "")
+        + ")"
     )
 
     t0 = time.perf_counter()
@@ -310,14 +343,18 @@ def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int) -> N
         if cfg.is_first_rank:
             if c >= n_chunks:
                 break
-            kv_actual = c * cfg.chunk_size
-            inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
-            meta = {
-                "slot_id": slot_id,
-                "actual_start": kv_actual,
-                "actual_end": kv_actual + cfg.chunk_size,  # trace drives full chunks
-                "is_last": c == n_chunks - 1,
-            }
+            if h2d_service is not None:
+                inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
+                meta["is_last"] = c == n_chunks - 1
+            else:
+                kv_actual = c * cfg.chunk_size
+                inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
+                meta = {
+                    "slot_id": slot_id,
+                    "actual_start": kv_actual,
+                    "actual_end": kv_actual + cfg.chunk_size,  # trace drives full chunks
+                    "is_last": c == n_chunks - 1,
+                }
         else:
             inp, meta = recv_activation(runtime, subctx, c, rank - 1)
             slot_id = meta["slot_id"]
@@ -414,8 +451,38 @@ def main() -> None:
     # The activation-handoff dir must exist before the first send (send_activation does not mkdir).
     os.makedirs(_act_dir(), exist_ok=True)
 
+    # First rank in H2D mode: stand up the socket service so an external producer
+    # (prefill_h2d_producer.py) can push token chunks. Other ranks / file mode: no service.
+    h2d_service = None
+    if is_first_rank and _h2d_request_mode():
+        # compile() leaves a custom sub-device manager loaded; the service's init program validates
+        # its worker cores against the default whole-chip sub-device, so revert first.
+        mesh_device.clear_loaded_sub_device_manager()
+        h2d_service = build_h2d_service(
+            mesh_device,
+            mesh_shape=GLOBAL_MESH_SHAPE,
+            chunk_size=CHUNK_SIZE,
+            mapper_config=H2D_MAPPER_CONFIG,
+            worker_cores=H2D_SYNC_WORKER_CORES,
+            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+        )
+        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+        descriptor_path = h2d_service.export_descriptor(service_id)
+        logger.info(
+            f"[pp rank {rank}] [h2d] service up, descriptor service_id={service_id!r} -> {descriptor_path}; "
+            f"drive it with prefill_h2d_producer.py on this host."
+        )
+
     logger.info(f"[pp rank {rank}] setup complete, entering decoupled pipeline loop")
-    run_pipeline_loop(runtime, rank, num_ranks)
+    run_pipeline_loop(runtime, rank, num_ranks, h2d_service=h2d_service)
+
+    if h2d_service is not None:
+        # Free the service while the mesh + command queues are still alive (its dtor frees a command
+        # queue and the service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
+        import gc
+
+        del h2d_service
+        gc.collect()
 
     # No teardown barrier: ranks finish asynchronously (an upstream rank exits once it has produced
     # its last chunk, before a downstream rank consumes it), so each tears down independently.
