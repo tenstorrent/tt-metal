@@ -285,7 +285,7 @@ static inline void pack_operand_check_impl(
 template <typename... Ts>
 constexpr std::uint8_t _args_count()
 {
-    static_assert((sizeof...(Ts) <= std::numeric_limits<std::uint8_t>::max()), "llk::san | fault    | argument count can't fit in uint8_t");
+    static_assert((sizeof...(Ts) <= std::numeric_limits<std::uint8_t>::max()), "llk::san | fault   | argument count can't fit in uint8_t");
 
     return static_cast<std::uint8_t>(sizeof...(Ts));
 }
@@ -293,7 +293,7 @@ constexpr std::uint8_t _args_count()
 template <typename... Ts>
 constexpr std::array<std::uint8_t, sizeof...(Ts)> _args_sizeof()
 {
-    static_assert(((sizeof(Ts) <= std::numeric_limits<std::uint8_t>::max()) && ...), "llk::san | fault    | sizeof can't fit in uint8_t");
+    static_assert(((sizeof(Ts) <= std::numeric_limits<std::uint8_t>::max()) && ...), "llk::san | fault   | sizeof can't fit in uint8_t");
 
     return {static_cast<std::uint8_t>(sizeof(Ts))...};
 }
@@ -301,7 +301,7 @@ constexpr std::array<std::uint8_t, sizeof...(Ts)> _args_sizeof()
 template <typename... Ts>
 static inline constexpr std::array<std::uint8_t, sizeof...(Ts)> _args_alignof()
 {
-    static_assert(((alignof(Ts) <= std::numeric_limits<std::uint8_t>::max()) && ...), "llk::san | fault    | alignof can't fit in uint8_t");
+    static_assert(((alignof(Ts) <= std::numeric_limits<std::uint8_t>::max()) && ...), "llk::san | fault   | alignof can't fit in uint8_t");
 
     return {static_cast<std::uint8_t>(alignof(Ts))...};
 }
@@ -366,7 +366,7 @@ static inline void operation_init_impl(ThreadOutputContext& context, OperationSt
 
     constexpr size_t entry_size = _operation_entry_size<args_count>(args_sizeof, args_alignof, args_offsetof);
 
-    static_assert(entry_size <= OperationState::BUFFER_SIZE, "llk::san | fault    | operation entry will overflow the buffer");
+    static_assert(entry_size <= OperationState::BUFFER_SIZE, "llk::san | fault   | operation entry will overflow the buffer");
 
     // | ARG_COUNT | SIZEOF(args[0]) ... | ALIGNOF(args[1]) ... | args[0] PADDING ... |
 
@@ -417,7 +417,7 @@ void operation_check_impl(const ThreadOutputContext& context, OperationState& st
 
     constexpr size_t entry_size = _operation_entry_size<args_count>(args_sizeof, args_alignof, args_offsetof);
 
-    static_assert(entry_size <= OperationState::BUFFER_SIZE, "llk::san | fault    | operation entry will overflow the buffer");
+    static_assert(entry_size <= OperationState::BUFFER_SIZE, "llk::san | fault   | operation entry will overflow the buffer");
 
     // | ARG_COUNT | SIZEOF(args[0]) ... | ALIGNOF(args[1]) ... | args[0] PADDING ... |
 

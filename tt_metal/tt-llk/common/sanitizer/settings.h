@@ -22,53 +22,52 @@
 #ifndef LLK_SAN_ENABLE
 
 #if defined(LLK_SAN_SETTING_ASSERT)
-#error "LLK_SAN_SETTING_ASSERT is set but LLK_SAN_ENABLE is not defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_ASSERT is set but LLK_SAN_ENABLE is not defined"
 #endif
 #define LLK_SAN_SETTING_ASSERT 0
 
 #if defined(LLK_SAN_SETTING_PRINT)
-#error "LLK_SAN_SETTING_PRINT is set but LLK_SAN_ENABLE is not defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_PRINT is set but LLK_SAN_ENABLE is not defined"
 #endif
 #define LLK_SAN_SETTING_PRINT 0
 
 #if defined(LLK_SAN_SETTING_PEDANTIC)
-#error "LLK_SAN_SETTING_PEDANTIC is set but LLK_SAN_ENABLE is not defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_PEDANTIC is set but LLK_SAN_ENABLE is not defined"
 #endif
 #define LLK_SAN_SETTING_PEDANTIC 0
 
 #if defined(LLK_SAN_SETTING_WARN)
-#error "LLK_SAN_SETTING_WARN is set but LLK_SAN_ENABLE is not defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_WARN is set but LLK_SAN_ENABLE is not defined"
 #endif
 #define LLK_SAN_SETTING_WARN 0
 
 #if defined(LLK_SAN_SETTING_ERROR)
-#error "LLK_SAN_SETTING_ERROR is set but LLK_SAN_ENABLE is not defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_ERROR is set but LLK_SAN_ENABLE is not defined"
 #endif
 #define LLK_SAN_SETTING_ERROR 0
 
 #if defined(LLK_SAN_SETTING_INFO)
-#error "LLK_SAN_SETTING_INFO is set but LLK_SAN_ENABLE is not defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_INFO is set but LLK_SAN_ENABLE is not defined"
 #endif
 #define LLK_SAN_SETTING_INFO 0
 
 #if defined(LLK_SAN_SETTING_FAULT)
-#error "LLK_SAN_SETTING_FAULT is set but LLK_SAN_ENABLE is not defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_FAULT is set but LLK_SAN_ENABLE is not defined"
 #endif
 #define LLK_SAN_SETTING_FAULT 0
 
 #if defined(LLK_SAN_SETTING_INTERNAL)
-#error "LLK_SAN_SETTING_INTERNAL is set but LLK_SAN_ENABLE is not defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_INTERNAL is set but LLK_SAN_ENABLE is not defined"
 #endif
 #define LLK_SAN_SETTING_INTERNAL 0
 
 #else
 
 #if defined(LLK_SAN_SETTING_ASSERT) && defined(LLK_SAN_SETTING_PRINT)
-#error "LLK_SAN_SETTING_ASSERT and LLK_SAN_SETTING_PRINT cannot both be defined"
+#error "llk::san | fault   | LLK_SAN_SETTING_ASSERT and LLK_SAN_SETTING_PRINT cannot both be defined"
 #endif
 
 #if !defined(LLK_SAN_SETTING_ASSERT) && !defined(LLK_SAN_SETTING_PRINT)
-// If override is not provided, default to assert
 #define LLK_SAN_SETTING_ASSERT 1
 #endif
 

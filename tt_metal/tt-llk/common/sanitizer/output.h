@@ -19,13 +19,13 @@
 #elif defined(LLK_SAN_SETTING_PRINT)
 
 #ifdef ENV_LLK_INFRA
-#error "llk_san: error: LLK_SAN_SETTING_PRINT is not supported in LLK INFRA, only in metal"
+#error "llk::san | fault   | LLK_SAN_SETTING_PRINT is not supported in LLK INFRA, only in metal"
 #endif
 
 #include "api/debug/device_print.h"
 
 #else
-#error "llk_san: fault: terrible failure :D"
+#error "llk::san | fault   | terrible failure :D"
 #endif
 
 namespace llk::san
