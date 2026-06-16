@@ -176,7 +176,7 @@ jobs:
           )
           PY
       - name: Download Mistral-Small-3.1-24B model weights to local cache
-        if: ${{ inputs.regenerate-ttnn-cache && matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && contains(matrix.test-group.name, 'mistral-small-3.1-24b') }}
+        if: ${{ inputs.regenerate-ttnn-cache && (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' || matrix.test-group['weights-cache-mode'] == 'local-disk') && contains(matrix.test-group.name, 'mistral-small-3.1-24b') }}
         timeout-minutes: 120
         run: |
           set -e
