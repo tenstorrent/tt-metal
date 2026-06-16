@@ -28,8 +28,9 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
-    const uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces = get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+    const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
+    const uint32_t unpB_num_faces =
+        partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
@@ -84,8 +85,8 @@ inline void llk_unpack_AB_matmul(
         unpack_dst_format[operandA_id],
         get_operand_face_r_dim(operandB_id),
         get_operand_face_r_dim(operandA_id),
-        get_operand_num_faces(operandB_id),
-        get_operand_num_faces(operandA_id)));
+        partial_face_a ? 1 : get_operand_num_faces(operandB_id),
+        partial_face_b ? 1 : get_operand_num_faces(operandA_id)));
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(
