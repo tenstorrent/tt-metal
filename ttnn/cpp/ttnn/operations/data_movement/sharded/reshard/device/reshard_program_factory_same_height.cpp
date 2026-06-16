@@ -56,7 +56,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     // Both KernelDescriptors use the SAME source (selected by local_is_output); the CT define for the
     // bank type differs by name across the two source files. The reader/writer roles split work along
     // tensor height (each kernel handles half the sticks) and each reads/writes the shared local shard CB
-    // purely by base pointer, so the borrowed DFB is bound as a self-loop on both kernels.
+    // purely by base pointer, so the borrowed DFB is bound as a producer/consumer pair across the kernels.
     const std::filesystem::path kKernelSource =
         local_is_output ? std::filesystem::path(
                               "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/"
@@ -102,31 +102,36 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     const uint32_t total_num_sticks_kernel_0 = total_num_sticks / 2;
     const uint32_t total_num_sticks_kernel_1 = total_num_sticks - total_num_sticks_kernel_0;
 
-    // Self-loop the borrowed DFB on both kernels (base-pointer access only; no real FIFO).
-    auto bind_self_loop = [&](KernelSpec& k) {
+    // Borrowed-memory DFB binding. The borrowed local shard is a pure address source: both kernel
+    // instances run the SAME source (selected by local_is_output) and access shard_cb only by base
+    // pointer (both get_write_ptr() when local is the output; both get_read_ptr() when local is the
+    // input). It is accessed by BOTH kernels, so it cannot be a self-loop on either (the local-DFB
+    // invariant forbids two same-role bindings — or a multi-kernel self-loop — sharing one
+    // WorkUnitSpec). Model it as a single producer/consumer pair across the two kernels in the shared
+    // WorkUnitSpec: reader=PRODUCER, writer=CONSUMER. For a borrowed DFB the role is only a placement
+    // label (no real FIFO sync); read and write pointers resolve to the same borrowed base, so
+    // behaviour is unchanged.
+    auto bind_endpoint = [&](KernelSpec& k, DFBEndpointType endpoint_type) {
         k.dfb_bindings = {
-            DFBBinding{
-                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{
-                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = endpoint_type},
         };
     };
 
-    auto make_kernel = [&](const KernelSpecName& unique_id, DataMovementRoleHint role) {
+    auto make_kernel = [&](const KernelSpecName& unique_id, DataMovementRoleHint role, DFBEndpointType endpoint_type) {
         KernelSpec k;
         k.unique_id = unique_id;
         k.source = kKernelSource;
         k.compile_time_args = {{kDramCtaName, static_cast<uint32_t>(interface_with_dram)}};
         k.runtime_arg_schema.runtime_arg_names = {
             "total_num_sticks", "local_stride_bytes", "remote_stride_bytes", "num_segments"};
-        bind_self_loop(k);
+        bind_endpoint(k, endpoint_type);
         k.tensor_bindings = {TensorBinding{.tensor_parameter_name = kRemote, .accessor_name = "remote"}};
         k.hw_config = DataMovementHardwareConfig{.role = role};
         return k;
     };
 
-    KernelSpec reader = make_kernel(kReader, DataMovementRoleHint::READER);
-    KernelSpec writer = make_kernel(kWriter, DataMovementRoleHint::WRITER);
+    KernelSpec reader = make_kernel(kReader, DataMovementRoleHint::READER, DFBEndpointType::PRODUCER);
+    KernelSpec writer = make_kernel(kWriter, DataMovementRoleHint::WRITER, DFBEndpointType::CONSUMER);
 
     // Determine the max per-core vararg tail length (4 values per segment).
     uint32_t max_tail = 0;
@@ -139,7 +144,8 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     spec.kernels.push_back(reader);
     spec.kernels.push_back(writer);
 
-    // Both kernels run on all_cores and self-loop the borrowed DFB: one WorkUnitSpec (Local-DFB rule).
+    // Both kernels run on all_cores and form the producer/consumer pair of the borrowed DFB: one
+    // WorkUnitSpec hosts both endpoints (Local-DFB rule).
     spec.work_units.push_back(WorkUnitSpec{
         .name = "wu",
         .kernels = {kReader, kWriter},

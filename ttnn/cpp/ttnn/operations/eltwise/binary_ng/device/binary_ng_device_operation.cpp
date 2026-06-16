@@ -486,25 +486,24 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
 
 // Defined in binary_ng_program_factory_m2.cpp. Returns true for exactly the (broadcast x layout x
 // compute x operand) cases the Metal 2.0 ProgramSpecFactory faithfully models. Routing and the
-// factory share this single predicate so the two never drift -- in particular the simple-broadcast
-// cases route to spec ONLY on the LLK-bcast subset (the software-fallback compute kernels are not
-// ported), reproducing the legacy `use_llk_bcast` (arch/dtype/fp32) gating verbatim.
+// factory share this single predicate so the two never drift.
 bool binary_ng_m2_routes_to_spec(
     const BinaryNgDeviceOperation::operation_attributes_t& attributes,
     const BinaryNgDeviceOperation::tensor_args_t& tensor_args);
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Route to the Metal 2.0 ProgramSpecFactory the interleaved x no-activation x no-typecast x
-    // plain ADD/SUB/MUL x non-where x non-quant cases that the factory models:
-    //   TILE:  NONE bcast {tensor-b FPU, tensor-b SFPU, scalar-b FPU, scalar-b SFPU};
-    //          SCALAR/ROW/COL bcast {tensor-b FPU} -- LLK-bcast subset only.
+    // Route to the Metal 2.0 ProgramSpecFactory only the interleaved x no-activation x no-typecast x
+    // plain ADD/SUB/MUL x non-where x non-quant x NONE-broadcast cases that fully populate at least
+    // one tile (no sub-tile / 01-volume tensors):
+    //   TILE:      NONE bcast {tensor-b FPU, tensor-b SFPU, scalar-b FPU, scalar-b SFPU};
     //   ROW_MAJOR: NONE bcast {tensor-b FPU}.
-    // Everything else (sharded, activations, typecast, where-op, quant-op, scalar-b broadcast,
-    // software-fallback broadcast tuples, mixed row+col bcast, RM broadcast/scalar-op, SFPU bcast)
-    // stays on the legacy ProgramFactory::create_descriptor. The gate is deliberately conservative:
-    // any condition the factory does not model falls through. See binary_ng_program_factory_m2.cpp /
-    // the report.
+    // Everything else (sharded, activations, typecast, where-op, quant-op, ALL subtile broadcast
+    // (scalar/row/col/mixed), RM broadcast/scalar-op, and sub-tile / 01-volume tensors) stays on the
+    // legacy ProgramFactory::create_descriptor. The simple-broadcast spec path was reverted: its
+    // forked LLK-bcast kernels deadlock for multi-tile broadcast operands. The gate is deliberately
+    // conservative: any condition the factory does not model falls through. See
+    // binary_ng_program_factory_m2.cpp / the report.
     if (binary_ng_m2_routes_to_spec(attributes, tensor_args)) {
         return ProgramSpecFactory{};
     }

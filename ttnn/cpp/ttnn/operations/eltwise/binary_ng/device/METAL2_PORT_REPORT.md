@@ -1,6 +1,21 @@
 # binary_ng — Metal 2.0 port report
 
-## STATUS: PARTIAL (coverage widened; remaining cases deliberately on legacy)
+## STATUS: PARTIAL (NONE-broadcast only; simple-broadcast widening REVERTED — see fix note below)
+
+> ### Fix note (routing narrowed)
+> The earlier broadcast widening was unsound and has been reverted in `binary_ng_m2_routes_to_spec`:
+> - **bf4b/bf8b broadcast HANG**: the forked LLK-bcast compute/reader kernels deadlock for
+>   multi-tile broadcast operands (e.g. `test_bf4b_bf8b` add over `[5,3,128,64]+[1,3,128,1]`). All
+>   simple-broadcast tile paths (SCALAR/ROW/COL) are now routed to the **legacy** factory.
+> - **01-volume / sub-tile wrong values**: tensors whose logical shape does not fill a full tile
+>   (e.g. `[1]+[2]` -> `[2]` instead of `[3]`; `[1,2]+[3]` -> `[0,0]`) read back wrong data on the
+>   spec path because `dynamic_tensor_shape = true` rebuilds the interleaved TensorAccessor page
+>   geometry from the live sub-tile logical `TensorSpec`, so the per-tile NoC reads in the forked
+>   dataflow kernels no longer match the on-device padded-tile layout. A guard now keeps any tensor
+>   with `logical volume < tile_area` on the **legacy** factory.
+> Only NONE-broadcast (tile + RM), tile-aligned (>= 1 full tile) cases route to spec. The unused
+> simple-broadcast forked kernels + spec-construction code remain in the factory for a future debug
+> pass but are unreachable. (Original "widened" report text retained below for context.)
 
 `BinaryNgDeviceOperation::ProgramSpecFactory::create_program_spec` (in
 `binary_ng_program_factory_m2.cpp`) is the single Metal 2.0 factory for the op. It now models a
@@ -24,20 +39,20 @@ Common gate for any spec routing: interleaved (not sharded), no activations, no 
 (`a.dtype() == output dtype`), plain op ∈ {ADD, SUB, MUL}, not where-op, not quant-op, operand
 present (tensor-b or scalar value).
 
+Additional gate (applied to every routed case): all of `a`, `b` (if present), and `c` have logical
+volume >= one full tile (`tile_height * tile_width`). Sub-tile / 01-volume tensors -> legacy.
+
 | Broadcast | Layout | Compute | Operand | Routed to |
 |-----------|--------|---------|---------|-----------|
 | NONE | TILE | FPU | tensor-b | **SPEC** |
 | NONE | TILE | SFPU | tensor-b | **SPEC** |
 | NONE | TILE | FPU | scalar-b | **SPEC** |
-| NONE | TILE | SFPU | scalar-b | **SPEC** (new) |
-| NONE | ROW_MAJOR | FPU | tensor-b | **SPEC** (new) |
+| NONE | TILE | SFPU | scalar-b | **SPEC** |
+| NONE | ROW_MAJOR | FPU | tensor-b | **SPEC** |
 | NONE | ROW_MAJOR | SFPU | tensor-b | legacy |
 | NONE | ROW_MAJOR | any | scalar-b (RM scalar-op) | legacy |
-| SCALAR_A / SCALAR_B | TILE | FPU | tensor-b | **SPEC iff `use_llk_bcast`** (new); else legacy |
-| ROW_A / ROW_B | TILE | FPU | tensor-b | **SPEC iff `use_llk_bcast`** (new); else legacy |
-| COL_A / COL_B | TILE | FPU | tensor-b | **SPEC iff `use_llk_bcast`** (new); else legacy |
-| SCALAR / ROW / COL | TILE | SFPU | tensor-b | legacy |
-| SCALAR / ROW / COL | TILE | any | scalar-b | legacy |
+| NONE (any layout) | any | any | sub-tile / 01-volume tensor | legacy (new guard) |
+| SCALAR / ROW / COL (any *_A/*_B) | TILE | any | any | legacy (reverted — hang/wrong values) |
 | ROW_A_COL_B / ROW_B_COL_A (mixed) | any | any | any | legacy |
 | any broadcast | ROW_MAJOR | any | any | legacy |
 | any (sharded) | any | any | any | legacy |

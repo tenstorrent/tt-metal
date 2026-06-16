@@ -695,18 +695,21 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_s
         .borrowed_from = kOutput,
     });
 
-    // Self-loop the borrowed DFB on both kernels (base-pointer access only; no real FIFO).
-    auto bind_self_loop = [&](KernelSpec& k) {
+    // Borrowed-memory DFB binding. The borrowed output shard is a pure address source (both kernel
+    // instances only ever call get_write_ptr() on it; neither reads it through the DFB). It is accessed
+    // by BOTH kernels, so it cannot be a self-loop on either (the local-DFB invariant forbids two
+    // PRODUCERs — or a multi-kernel self-loop — sharing one WorkUnitSpec). Model it as a single
+    // producer/consumer pair across the two kernels in the shared WorkUnitSpec: reader=PRODUCER,
+    // writer=CONSUMER. For a borrowed DFB the role is only a placement label (no real FIFO sync); both
+    // get_write_ptr()/get_read_ptr() resolve to the same borrowed base, so behaviour is unchanged.
+    auto bind_endpoint = [&](KernelSpec& k, DFBEndpointType endpoint_type) {
         k.dfb_bindings = {
-            DFBBinding{
-                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{
-                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = endpoint_type},
         };
     };
 
     // CTAs: the legacy slot 0 (dst CB index) is now dfb::shard_cb; the remaining four stay CTAs.
-    auto make_kernel = [&](const KernelSpecName& unique_id, DataMovementRoleHint role) {
+    auto make_kernel = [&](const KernelSpecName& unique_id, DataMovementRoleHint role, DFBEndpointType endpoint_type) {
         KernelSpec k;
         k.unique_id = unique_id;
         k.source = kKernelSource;
@@ -716,14 +719,14 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_s
             {"page_size", page_size},
             {"unit_size", unit_size},
         };
-        bind_self_loop(k);
+        bind_endpoint(k, endpoint_type);
         k.tensor_bindings = {TensorBinding{.tensor_parameter_name = kInput, .accessor_name = "input"}};
         k.hw_config = DataMovementHardwareConfig{.role = role};
         return k;
     };
 
-    KernelSpec reader = make_kernel(kReader, DataMovementRoleHint::READER);
-    KernelSpec writer = make_kernel(kWriter, DataMovementRoleHint::WRITER);
+    KernelSpec reader = make_kernel(kReader, DataMovementRoleHint::READER, DFBEndpointType::PRODUCER);
+    KernelSpec writer = make_kernel(kWriter, DataMovementRoleHint::WRITER, DFBEndpointType::CONSUMER);
 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);

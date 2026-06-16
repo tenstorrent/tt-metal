@@ -5,33 +5,27 @@
 // Metal 2.0 program factory for binary_ng.
 //
 // SCOPE: this factory handles interleaved (not sharded), no-activation, no-typecast, plain
-// ADD/SUB/MUL, non-where, non-quant cases across the following axes (all routed here by
-// select_program_factory()):
+// ADD/SUB/MUL, non-where, non-quant, NONE-broadcast cases that fully populate at least one tile,
+// across the following axes (all routed here by select_program_factory()):
 //   TILE layout:
 //     1. NONE broadcast x tensor-b x FPU   (eltwise_binary_no_bcast_m2 compute)
 //     2. NONE broadcast x tensor-b x SFPU  (eltwise_binary_sfpu_no_bcast_m2 compute)
 //     3. NONE broadcast x scalar-b x FPU   (eltwise_binary_scalar_m2 compute; writer fills scalar)
 //     4. NONE broadcast x scalar-b x SFPU  (eltwise_binary_sfpu_scalar_m2 compute; writer fills scalar)
-//     5. SCALAR_A/SCALAR_B broadcast x tensor-b x FPU  (eltwise_binary_scalar_bcast_m2 compute) -- LLK-bcast subset
-//     only
-//     6. ROW_A/ROW_B broadcast    x tensor-b x FPU  (eltwise_binary_row_bcast_m2 compute)    -- LLK-bcast subset only
-//     7. COL_A/COL_B broadcast    x tensor-b x FPU  (eltwise_binary_col_bcast_m2 compute)    -- LLK-bcast subset only
 //   ROW_MAJOR layout:
-//     8. NONE broadcast x tensor-b x FPU   (RM reader/writer forks + eltwise_binary_no_bcast_m2 compute)
+//     5. NONE broadcast x tensor-b x FPU   (RM reader/writer forks + eltwise_binary_no_bcast_m2 compute)
 //
-// The simple-broadcast cases (5,6,7) are routed to spec ONLY when the legacy `use_llk_bcast`
-// decision would be true for the (arch, broadcast, dtype, fp32_dest_acc_en) tuple -- the
-// software-fallback (BCAST_LLK=0) compute kernels are NOT ported, so any (arch,dtype) tuple that
-// the legacy code would have run on the software path stays on the legacy ProgramFactory. The
-// `use_llk_bcast` gating (BH col bf16->fp32 hang, BH MOVB2D fp32, UInt16 relational, exp ops,
-// where/scalar/col where-op exclusions) is reproduced verbatim from the legacy factory so the
-// routed subset is identical to what the legacy factory would have compiled on the LLK path.
+// The simple-broadcast tile paths (SCALAR/ROW/COL) are NO LONGER routed here: the forked LLK-bcast
+// kernels deadlock for multi-tile broadcast operands (test_bf4b_bf8b add hangs) and the degenerate
+// SCALAR_B case ([1,2]+[3]) produces wrong values. They (and any "01-volume" / sub-tile tensor on
+// the NONE path, which mis-reads under dynamic_tensor_shape) fall back to the legacy
+// ProgramFactory. The simple-broadcast forked kernels + spec wiring (cases 5-7 of the prior pass)
+// are left in this file for a future debug pass but are unreachable via the routing predicate.
 //
-// Every OTHER path (sharded, activations, typecast, where-op, quant-op, scalar-b broadcast types,
-// row/col/scalar broadcast on the software-fallback tuple, mixed row+col bcast, RM broadcast,
-// RM scalar-op, SFPU broadcast) stays on the legacy ProgramFactory::create_descriptor in
-// binary_ng_program_factory.cpp. The full routed-vs-legacy matrix is enumerated in
-// METAL2_PORT_REPORT.md.
+// Every OTHER path (sharded, activations, typecast, where-op, quant-op, ALL subtile broadcast
+// (scalar/row/col/mixed), RM broadcast, RM scalar-op, and sub-tile / 01-volume tensors) stays on
+// the legacy ProgramFactory::create_descriptor in binary_ng_program_factory.cpp. The full
+// routed-vs-legacy matrix is enumerated in METAL2_PORT_REPORT.md.
 //
 // The legacy factory's logic for these paths is preserved exactly (work-split, per-core tile
 // strides, CB sizes, fp32_dest_acc_en, unpack-to-dest, use_llk_bcast); only the host API is
@@ -255,39 +249,44 @@ bool binary_ng_m2_routes_to_spec(
 
     const auto sbt = attributes.subtile_broadcast_type;
 
+    // Only NONE-broadcast is routed to the spec factory. The simple-broadcast tile paths
+    // (SCALAR/ROW/COL) are NOT routed: the forked LLK-bcast kernels deadlock on this path for
+    // multi-tile broadcast operands (e.g. test_bf4b_bf8b add over [5,3,128,64]+[1,3,128,1] hangs),
+    // and the degenerate SCALAR_B case ([1,2]+[3]) produces wrong values. The legacy ProgramFactory
+    // handles all broadcast cases correctly, so they stay there until the broadcast spec path is
+    // debugged. (Reverts the broadcast widening from the prior pass; see METAL2_PORT_REPORT.md.)
+    if (sbt != SubtileBroadcastType::NONE) {
+        return false;
+    }
+
+    // Sub-tile / "01-volume" guard. Degenerate tensors whose logical shape does not fill a full
+    // 32x32 tile (e.g. rank-1 [1], [1,2], [2,3]) read back wrong values on the spec path: with
+    // dynamic_tensor_shape = true the framework rebuilds the interleaved TensorAccessor page
+    // geometry from the LIVE (sub-tile) logical TensorSpec, so the per-tile 2048-byte NoC reads in
+    // the forked dataflow kernels no longer line up with the on-device padded-tile layout (a=[1]
+    // reads back 0, so [1]+[2] yields 2 instead of 3). Tensors that fully populate at least one tile
+    // (logical volume >= tile area) are unaffected; keep the degenerate cases on the legacy factory,
+    // which carries an explicit page-size override.
+    // (The output tensor is not available here on a cache miss; for NONE broadcast a and b share the
+    // broadcasted shape, so guarding on the inputs is sufficient.)
+    const uint64_t tile_area =
+        static_cast<uint64_t>(a.tensor_spec().tile().get_height()) * a.tensor_spec().tile().get_width();
+    const bool sub_tile =
+        a.logical_shape().volume() < tile_area || (b_present && b->logical_shape().volume() < tile_area);
+    if (sub_tile) {
+        return false;
+    }
+
     if (rm) {
         // Row-major: only NONE broadcast x tensor-b x FPU.
-        return sbt == SubtileBroadcastType::NONE && b_present && !attributes.is_sfpu;
+        return b_present && !attributes.is_sfpu;
     }
     if (!tile) {
         return false;
     }
 
-    if (sbt == SubtileBroadcastType::NONE) {
-        // NONE tile: tensor-b FPU, tensor-b SFPU, scalar-b FPU, scalar-b SFPU.
-        return true;
-    }
-
-    // Simple broadcast tile (SCALAR/ROW/COL): FPU + tensor-b only, and only the LLK-bcast subset.
-    const bool simple_bcast = sbt == SubtileBroadcastType::SCALAR_A || sbt == SubtileBroadcastType::SCALAR_B ||
-                              sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
-                              sbt == SubtileBroadcastType::COL_A || sbt == SubtileBroadcastType::COL_B;
-    if (!simple_bcast || !b_present || attributes.is_sfpu) {
-        return false;
-    }
-
-    // Reproduce the legacy fp32_dest_acc_en + use_llk_bcast decision to gate routing.
-    const auto a_dtype = a.dtype();
-    const auto b_dtype = b->dtype();
-    const auto a_df = datatype_to_dataformat_converter(a_dtype);
-    const auto b_df = datatype_to_dataformat_converter(b_dtype);
-    const auto c_df = datatype_to_dataformat_converter(attributes.get_dtype());
-    const bool fp32_dest_acc_en = c_df == tt::DataFormat::UInt32 || c_df == tt::DataFormat::Int32 ||
-                                  c_df == tt::DataFormat::Float32 || a_df == tt::DataFormat::Float32 ||
-                                  b_df == tt::DataFormat::Float32 ||
-                                  (a_df == tt::DataFormat::Int32 && b_df == tt::DataFormat::Int32) ||
-                                  (a_df == tt::DataFormat::UInt32 && b_df == tt::DataFormat::UInt32);
-    return binary_ng_m2_use_llk_bcast(sbt, a_dtype, b_dtype, fp32_dest_acc_en);
+    // NONE tile: tensor-b FPU, tensor-b SFPU, scalar-b FPU, scalar-b SFPU.
+    return true;
 }
 
 // Implements c = a op b for the routed interleaved cases (see SCOPE header).

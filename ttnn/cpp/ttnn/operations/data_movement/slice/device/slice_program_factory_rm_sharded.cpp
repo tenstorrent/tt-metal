@@ -383,8 +383,16 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedSpecProgramFactory::creat
     uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
     uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
 
-    // Data formats are not needed in the spec path: the borrowed DFBs are DM-only (no compute
-    // kernel binds them), so no data_format_metadata is required.
+    // Data formats: the borrowed DFBs are DM-only (no compute kernel binds them), but the framework
+    // still lowers each DFB to a CB and calls get_tile_size(data_format) when computing the CB tile
+    // size. A nullopt data_format_metadata lowers to tt::DataFormat::Invalid, which makes that
+    // conversion throw "Invalid data format" at program build. Mirror the legacy descriptor, which set
+    // each borrowed CB's data_format from the corresponding tensor's dtype (cb_data_format from the
+    // input dtype, dst_cb_data_format from the output dtype). The per-stick entry_size is still the
+    // row-major stick byte size below; data_format only supplies the element width for tile sizing.
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     m2::ProgramSpec spec;
@@ -398,12 +406,14 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedSpecProgramFactory::creat
             .unique_id = m2::DFBSpecName{"cb_in"},
             .entry_size = static_cast<uint32_t>(stick_size_padded),
             .num_entries = shard_height_padded,
+            .data_format_metadata = cb_data_format,
             .borrowed_from = m2::TensorParamName{"src"},
         },
         m2::DataflowBufferSpec{
             .unique_id = m2::DFBSpecName{"cb_out"},
             .entry_size = static_cast<uint32_t>(stick_size_unpadded),
             .num_entries = shard_height_unpadded,
+            .data_format_metadata = dst_cb_data_format,
             .borrowed_from = m2::TensorParamName{"dst"},
         },
     };

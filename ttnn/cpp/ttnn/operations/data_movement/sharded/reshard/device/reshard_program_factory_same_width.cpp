@@ -109,27 +109,28 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         });
     }
 
-    // Self-loop the borrowed shard DFB (and scratch, if present) on both kernels (base-pointer access only).
-    auto bind_self_loops = [&](KernelSpec& k) {
+    // Both DFBs are accessed by BOTH kernels (the two kernel instances run the SAME source selected by
+    // local_is_output), so neither can be a self-loop (the local-DFB invariant forbids two same-role
+    // bindings — or a multi-kernel self-loop — sharing one WorkUnitSpec). Each DFB is modelled as a
+    // single producer/consumer pair across the two kernels: reader=PRODUCER, writer=CONSUMER.
+    //  - shard_cb is borrowed memory and a pure address source (both instances access it only by base
+    //    pointer; for a borrowed DFB the role is just a placement label, no real FIFO sync, and read
+    //    and write pointers resolve to the same borrowed base).
+    //  - scratch_cb (unaligned path only) is a single shared local scratch region used by both
+    //    instances (each writes then reads it by base pointer) — exactly the legacy single shared c_1
+    //    scratch CB. Binding it as one producer/consumer pair keeps that single shared region.
+    // For both, behaviour is unchanged.
+    auto bind_endpoints = [&](KernelSpec& k, DFBEndpointType endpoint_type) {
         k.dfb_bindings = {
-            DFBBinding{
-                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{
-                .dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = kShardCb, .accessor_name = "shard_cb", .endpoint_type = endpoint_type},
         };
         if (use_scratch) {
-            k.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = kScratchCb,
-                .accessor_name = "scratch_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER});
-            k.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = kScratchCb,
-                .accessor_name = "scratch_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+            k.dfb_bindings.push_back(
+                DFBBinding{.dfb_spec_name = kScratchCb, .accessor_name = "scratch_cb", .endpoint_type = endpoint_type});
         }
     };
 
-    auto make_kernel = [&](const KernelSpecName& unique_id, DataMovementRoleHint role) {
+    auto make_kernel = [&](const KernelSpecName& unique_id, DataMovementRoleHint role, DFBEndpointType endpoint_type) {
         KernelSpec k;
         k.unique_id = unique_id;
         k.source = kKernelSource;
@@ -144,14 +145,14 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
             k.compiler_options.defines = {{"UNALIGNED", "1"}};
         }
         k.runtime_arg_schema.runtime_arg_names = {kOffsetName, kNumName};
-        bind_self_loops(k);
+        bind_endpoints(k, endpoint_type);
         k.tensor_bindings = {TensorBinding{.tensor_parameter_name = kRemote, .accessor_name = "remote"}};
         k.hw_config = DataMovementHardwareConfig{.role = role};
         return k;
     };
 
-    KernelSpec reader = make_kernel(kReader, DataMovementRoleHint::READER);
-    KernelSpec writer = make_kernel(kWriter, DataMovementRoleHint::WRITER);
+    KernelSpec reader = make_kernel(kReader, DataMovementRoleHint::READER, DFBEndpointType::PRODUCER);
+    KernelSpec writer = make_kernel(kWriter, DataMovementRoleHint::WRITER, DFBEndpointType::CONSUMER);
 
     // ---- Build per-core, per-kernel runtime args (legacy work split, verbatim). ----
     // Legacy packed RTA layout per kernel: [remote_addr(dropped), start_offset, num_transfers, then
