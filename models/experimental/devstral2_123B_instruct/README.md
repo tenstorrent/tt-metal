@@ -12,7 +12,7 @@ This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Dev
 
 **Full-model PCC:** End-to-end parity for the whole TT stack (`TtMinistral3Model`, all **88** decoder layers) is measured in `tests/test_ministral3_full_model.py` — **0.99 PCC**.
 
-**Maximum context length:** The HF checkpoint advertises very long context (YaRN / RoPE tables up to 256K positions). On Blackhole Loudbox (1×8), the working KV budget (`max_seq_len`) is what you can actually run. **Up to 96K tokens** has been verified end-to-end on this mesh (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len` default **98304** in `text_demo.py` and `tt_demo_agent.py`).
+**Maximum context length:** The HF checkpoint advertises very long context (YaRN / RoPE tables up to 256K positions). On Blackhole Loudbox (1×8), the working KV budget (`max_seq_len`) is what you can actually run. **Up to 96K tokens** has been verified end-to-end on this mesh (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len` default **262144** in `text_demo.py` and `tt_demo_agent.py`).
 
 **Traced prefill/decode** with **2CQ** decode staging is on by default (`DEVSTRAL2_TRACE_PREFILL=1`, `DEVSTRAL2_DECODE_TRACE_2CQ=1`). Set either to `0` to disable.
 
@@ -272,4 +272,4 @@ Re-runs with cached ``.refpt`` files finish much sooner.
 ### Limitations
 
 - **Batch size:** Only **batch size 1** is supported and tested (`Devstral2Args.max_batch_size=1` in `tt/model_args.py`). Demos (`text_demo.py`, `tt_demo_agent.py`), perf tests, PCC tests, and the teacher-forced sweep all run a single sequence at a time. Multi-user / `batch_size > 1` is not validated on this 123B mesh configuration. On-device sampling pads decode logits to a **32-row tile** internally (`demo/on_device_sampling.py`) for `TTSampling` — that is not multi-batch serving; only row 0 is the active user.
-- **Context length:** Long context is limited by per-chip KV and RoPE allocation, not by the HF config alone. On Blackhole Loudbox (1×8), **up to 96K tokens** has been verified for end-to-end generation. Defaults use `max_seq_len=98304` (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len`). Prompts longer than the configured budget need a larger cap and sufficient device memory.
+- **Context length:** Long context is limited by per-chip KV and RoPE allocation, not by the HF config alone. On Blackhole Loudbox (1×8), **up to 96K tokens** has been verified for end-to-end generation. Defaults use `max_seq_len=262144` (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len`). Prompts longer than the configured budget need a larger cap and sufficient device memory.

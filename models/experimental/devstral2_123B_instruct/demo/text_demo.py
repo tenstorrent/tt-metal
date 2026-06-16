@@ -50,7 +50,7 @@ pytest CLI option churn)::
     DEVSTRAL2_ONDEVICE_SAMPLING=0 # unset = on-device greedy sampling (single-CQ); 0 = host argmax
     DEVSTRAL2_SAMPLE_IN_TRACE=0   # 1 = fold sampling into decode trace (needs L1 headroom)
     DEVSTRAL2_VERBOSE_SAMPLING=0 # 1 = log every on-device argmax/top-k step
-    DEVSTRAL2_MIN_MAX_SEQ_LEN=98304  # KV floor (must be >= prompt + max_new; 96K default)
+    DEVSTRAL2_MIN_MAX_SEQ_LEN=262144  # KV floor (must be >= prompt + max_new; 96K default)
     MESH_DEVICE=N150|N300|N150x4|P150x4|T3K|TG    # default 1x4 (Quietbox)
 
 The Devstral-2-123B Hub checkpoint is gated, so the first run must have
@@ -184,7 +184,7 @@ def _round_up_max_seq_len(seq_len: int, kv_block_size: int) -> int:
 
 
 def _min_max_seq_len() -> int:
-    """Minimum KV/RoPE budget (multiple of ``kv_block_size``); default 98304 via env."""
+    """Minimum KV/RoPE budget (multiple of ``kv_block_size``); default 262144 via env."""
     raw = os.environ.get("DEVSTRAL2_MIN_MAX_SEQ_LEN", "262144").strip()
     floor = int(raw)
     block = Devstral2Args.kv_block_size
