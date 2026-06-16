@@ -26,7 +26,7 @@ class TtMixtralMLP(LightweightModule):
             ],
             dim=0,
         )
-        if args.dummy_weights:
+        if args.dummy_weights or args.disable_disk_cache:
             cache_name = lambda _: None
         else:
             cache_name = lambda name: args.weight_cache_path(dtypes[name]) / (

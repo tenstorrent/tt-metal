@@ -1,0 +1,39 @@
+# Two-chip DDP variant of grpo_boolq_llama_1dev.yaml, used by the
+# WeightBridge end-to-end test (tt-train/sources/examples/grpo/
+# tests/weight_transfer/test_bridge_transfer.py): the ttml rank opens
+# both chips of one N300 board so weight parameters are replicated
+# across the [1, 2] mesh and the sanity-completion generate splits its
+# batch across the pair under DDP.
+
+training_config:
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    batch_size: 4
+    micro_batch_size: 4
+    num_iterations: 1
+    gradient_accumulation_steps: 4
+    logging_steps: 1
+    checkpointing: false
+    checkpoint_interval: 0
+    prompts_to_train: 1600
+    temperature: 1.5
+    max_completion_length: 256
+    num_generations: 8
+    warmup_steps: 0
+
+device_config:
+  enable_ddp: true
+  mesh_shape: [1, 2]
+  device_ids: [0, 1]

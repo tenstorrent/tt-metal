@@ -26,7 +26,7 @@ class TtMoeLayer(LightweightModule):
         self.tt_ccl = tt_ccl
 
         gate_name = f"layers.{layer_num}.block_sparse_moe.gate.weight"
-        if args.dummy_weights:
+        if args.dummy_weights or args.disable_disk_cache:
             cache_name = None
         else:
             cache_name = args.weight_cache_path(dtype) / (gate_name + "_multidevice_repadded")

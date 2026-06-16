@@ -46,7 +46,7 @@ class TtLlamaImageAttention(LightweightModule):
 
         self.model_config = configuration.get_model_config()
 
-        if configuration.dummy_weights or (weight_cache_path is None):
+        if configuration.dummy_weights or configuration.disable_disk_cache or (weight_cache_path is None):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / (f"{state_dict_prefix}{name}")

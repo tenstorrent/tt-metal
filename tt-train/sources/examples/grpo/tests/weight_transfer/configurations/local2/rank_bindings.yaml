@@ -1,0 +1,27 @@
+# Maps MPI ranks to mesh ids declared in mgd.textproto, and pins each rank
+# to a disjoint N300 board via TT_VISIBLE_DEVICES (UMD enumerates PCIe
+# boards 0..3; each board has 2 chips both reachable to UMD via the
+# on-board eth link).
+#
+# Rank 0 = TTML rank (WeightBridge sender), owns board 0.
+# Rank 1 = TTT  rank (WeightBridge receiver), owns board 1.
+#
+# Both ranks declare a [1, 2] mesh in mgd.textproto so UMD's eth walk has
+# a fabric-node mapping for every ASIC. The applications open
+# asymmetric sub-meshes: TTML opens the full [1, 2], TTT opens only
+# [1, 1] at offset (0, 0). See test_bridge_transfer.py and
+# utils/weight_bridge.py for the bridge's negotiation logic.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "1"
+
+mesh_graph_desc_path: "configurations/local2/mgd.textproto"
