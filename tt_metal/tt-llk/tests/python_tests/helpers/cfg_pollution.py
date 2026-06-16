@@ -419,20 +419,26 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
 
     cap_path = os.environ.get("LLK_POLLUTE_CAPTURE")
     if cap_path:
-        # Realizable-palette capture: read the live words at THIS kernel's launch — i.e. the
-        # leftover CFG the PRIOR kernel left — and merge their values into a per-addr32 palette
-        # (union over shadow states and over all kernels seen). Run a suite with this set; the
-        # accumulated file is the set of values kernels actually leave (the realizable states).
+        # Realizable-palette capture, NET-LEFTOVER ("set but not wiped"): read the live words at THIS
+        # launch (= the prior kernel's post-state) and DIFF against the previous launch's read. A word
+        # that CHANGED is one the just-finished kernel set and left changed (transients it wiped on
+        # uninit read back unchanged -> excluded). Record the changed word's new value into the palette.
+        # File holds {"palette": {addr32: sorted values}, "prev": {"s,a": value}}. Run a suite to
+        # accumulate. Read-only (no pollution).
         items = [(s, a) for s in (0, 1) for a in _LIVE_MASK.get(arch, {})]
-        snap = snapshot_cfg(location, items, device_id=device_id, context=context)
-        palette = {}
+        now = snapshot_cfg(location, items, device_id=device_id, context=context)
+        state = {"palette": {}, "prev": {}}
         if os.path.exists(cap_path):
             with open(cap_path) as f:
-                palette = {int(a): set(v) for a, v in json.load(f).items()}
-        for (s, a), v in snap.items():
-            palette.setdefault(a, set()).add(v)
+                state = json.load(f)
+        pal, prev = state["palette"], state["prev"]
+        for (s, a), v in now.items():
+            key = f"{s},{a}"
+            if key in prev and prev[key] != v:  # kernel changed this word and left it at v
+                pal[str(a)] = sorted(set(pal.get(str(a), [])) | {v})
+            prev[key] = v
         with open(cap_path, "w") as f:
-            json.dump({str(a): sorted(v) for a, v in palette.items()}, f)
+            json.dump({"palette": pal, "prev": prev}, f)
         return None
 
     plan_path = os.environ.get("LLK_POLLUTE_PLAN")
@@ -474,7 +480,9 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
         # by seed (sweep seeds for coverage). Words with no palette entry are skipped.
         pal_path = os.environ["LLK_POLLUTE_PALETTE"]
         with open(pal_path) as f:
-            palette = {int(a): v for a, v in json.load(f).items()}
+            raw = json.load(f)
+        raw = raw.get("palette", raw)  # accept capture file {"palette":..,"prev":..} or static {addr32:[..]}
+        palette = {int(a): v for a, v in raw.items()}
         rng = random.Random(seed)
         items = []
         for s in (0, 1):
