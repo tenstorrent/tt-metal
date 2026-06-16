@@ -230,9 +230,16 @@ def scaled_dot_product_attention(
 
     fp32_dest_acc_en = _resolve_fp32_dest_acc_en(compute_kernel_config)
     if compute_kernel_config is not None:
-        math_fidelity = getattr(compute_kernel_config, "math_fidelity", ttnn.MathFidelity.HiFi2)
+        math_fidelity = getattr(compute_kernel_config, "math_fidelity", ttnn.MathFidelity.HiFi4)
     else:
-        math_fidelity = ttnn.MathFidelity.HiFi2
+        # R1: default to HiFi4 (+ fp32 DEST acc). SDPA chains two matmuls
+        # (QK^T and PV) whose operands unpack to TF32; under HiFi2 the matmul
+        # truncation dominates and long-context mask=none rows (a near-uniform
+        # softmax over thousands of keys -> tiny-magnitude output) miss the
+        # relative-RMS gate. HiFi4 drops rel_rms ~10x (0.146 -> 0.0145 at
+        # S=2048) and is the lever that clears the Phase-0 long-context
+        # `supported_fail` set; the fp32 accumulator (below) compounds it.
+        math_fidelity = ttnn.MathFidelity.HiFi4
 
     output_shape = list(query.shape)
     output = ttnn.allocate_tensor_on_device(
