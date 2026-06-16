@@ -78,6 +78,7 @@ skus:
       - pipeline-perf
       - topology-6u
       - in-service
+      - g03blx03
 
   bh_galaxy_release:
     runs_on:
