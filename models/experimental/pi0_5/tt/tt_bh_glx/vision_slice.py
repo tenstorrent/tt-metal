@@ -82,6 +82,39 @@ class SigLIPEmbedSlice:
         return ttnn.add(hidden, pos, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
+class SigLIPCameraSlice:
+    """FULL SigLIP on ONE chip: embed + all layers + post_layernorm + mm_projector
+    → (B, 256, 2048). For camera-parallel data parallelism — each chip runs the whole
+    encoder for its own camera(s) at small batch, in parallel, with NO inter-layer
+    socket hops (unlike the layer-sliced path). Composes the existing per-chip blocks,
+    so it needs no mesh mappers (each chip is a 1x1 submesh / single device)."""
+
+    def __init__(
+        self,
+        config: SigLIPConfig,
+        vision_weights: Dict[str, torch.Tensor],
+        projector_weights: Dict[str, torch.Tensor],
+        submesh,
+    ):
+        self.config = config
+        self.submesh = submesh
+        self.embed = SigLIPEmbedSlice(config, vision_weights, submesh)
+        self.layers = SigLIPLayerSlice(config, vision_weights, submesh, layer_range=(0, config.num_hidden_layers))
+        # Empty layer range → SigLIPTailSlice contributes only post_ln + projector.
+        self.tail = SigLIPTailSlice(
+            config,
+            vision_weights,
+            projector_weights,
+            submesh,
+            layer_range=(config.num_hidden_layers, config.num_hidden_layers),
+        )
+
+    def forward(self, pixel_values) -> "ttnn.Tensor":
+        hidden = self.embed.forward(pixel_values)
+        hidden = self.layers.forward(hidden)
+        return self.tail.forward(hidden)
+
+
 class SigLIPLayerSlice:
     """Chips 1/2: a contiguous range of SigLIP transformer blocks."""
 
