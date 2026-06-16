@@ -550,6 +550,14 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     PhysicalAdjacencyMap flat_adj;
 
+    // Diagnostics (debug only): count how many ethernet links are local (intra-host) vs global (cross-host),
+    // and how many distinct cross-host ASIC pairs survive into the flat graph. Cross-host links are the
+    // inter-galaxy fabric seams; if they are under-represented here the physical mesh-level adjacency will be
+    // too sparse for the topology mapper to embed the MGD.
+    std::size_t local_links = 0;
+    std::size_t global_links = 0;
+    std::set<std::pair<tt::tt_metal::AsicID, tt::tt_metal::AsicID>> cross_host_pairs;
+
     // Go through all connections in the physical system descriptor
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
         for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
@@ -563,12 +571,28 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
 
                 const auto& eth_connections = asic_connection.second;
                 // Add each neighbor multiple times based on number of ethernet connections (channels)
-                for ([[maybe_unused]] const auto& eth_conn : eth_connections) {
+                for (const auto& eth_conn : eth_connections) {
                     flat_adj[src_asic_id].push_back(dst_asic_id);
+                    if (eth_conn.is_local) {
+                        ++local_links;
+                    } else {
+                        ++global_links;
+                        cross_host_pairs.emplace(
+                            std::min(src_asic_id, dst_asic_id), std::max(src_asic_id, dst_asic_id));
+                    }
                 }
             }
         }
     }
+
+    log_debug(
+        tt::LogFabric,
+        "build_flat_adjacency_map_from_psd: {} ASIC node(s), {} local eth link(s), {} cross-host eth link(s), {} "
+        "distinct cross-host ASIC pair(s)",
+        flat_adj.size(),
+        local_links,
+        global_links,
+        cross_host_pairs.size());
 
     return flat_adj;
 }
@@ -628,7 +652,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // overlap then becomes a fast word-by-word AND loop instead of a slower
     // hash-set intersection.
     // -------------------------------------------------------------------------
-    log_info(tt::LogFabric, "Building flat adjacency map from PSD");
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
 
     std::unordered_map<tt::tt_metal::AsicID, std::uint32_t> asic_to_dense_index;
@@ -651,10 +674,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // for each mesh shape name (e.g. "prefill"), we get a list of candidate
     // chip groups that have the right topology to host that shape.
     // -------------------------------------------------------------------------
-    log_info(tt::LogFabric, "Getting valid groupings map from MGD and PGD");
     auto valid_groupings_map =
         physical_grouping_descriptor.get_valid_groupings_for_mgd(mesh_graph_descriptor, physical_system_descriptor);
-    log_info(tt::LogFabric, "Got {} valid groupings map from MGD and PGD", valid_groupings_map.size());
 
     TT_FATAL(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
     TT_FATAL(
@@ -685,6 +706,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
         const auto placed_groupings =
             physical_grouping_descriptor.find_all_in_psd(groupings, physical_system_descriptor);
+        log_info(
+            tt::LogFabric,
+            "Physical groupings adjacency: '{}' found {} PSD placement(s) from {} committed grouping(s)",
+            mesh_name,
+            placed_groupings.size(),
+            groupings.size());
 
         mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, placed_groupings);
 
@@ -736,10 +763,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         TT_FATAL(
             sole_it != mesh_physical_graphs.end(),
             "Single mesh shape '{}' missing PSD-derived PhysicalMultiMeshGraph",
-            sole_mesh_name);
-        log_info(
-            tt::LogFabric,
-            "Single mesh descriptor shape '{}': skipping mesh-level solve and disjoint packing",
             sole_mesh_name);
         return sole_it->second;
     }
@@ -1375,10 +1398,18 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     }
 
     // Process each ASIC in the flat adjacency graph
+    // Diagnostics (debug only): an inter-mesh edge is silently dropped when the neighbor ASIC is not part of any
+    // placed grouping. For cross-host fabric seams this means the remote galaxy's ASIC was not placed (or its
+    // unique-id did not match), which would make the physical mesh-level graph too sparse to embed the MGD.
+    std::size_t edges_src_not_in_mesh = 0;
+    std::size_t edges_dst_not_in_mesh = 0;
+    std::size_t intra_mesh_edges = 0;
+    std::size_t inter_mesh_edges = 0;
     for (const auto& src_asic_id : flat_adjacency_graph.get_nodes()) {
         auto src_mesh_id_it = asic_id_to_mesh_id.find(src_asic_id);
         if (src_mesh_id_it == asic_id_to_mesh_id.end()) {
             // ASIC not in any mesh assignment, skip it
+            edges_src_not_in_mesh += flat_adjacency_graph.get_neighbors(src_asic_id).size();
             continue;
         }
         MeshId src_mesh_id = src_mesh_id_it->second;
@@ -1389,6 +1420,7 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
             auto dst_mesh_id_it = asic_id_to_mesh_id.find(dst_asic_id);
             if (dst_mesh_id_it == asic_id_to_mesh_id.end()) {
                 // Neighbor not in any mesh assignment, skip it
+                ++edges_dst_not_in_mesh;
                 continue;
             }
             MeshId dst_mesh_id = dst_mesh_id_it->second;
@@ -1396,6 +1428,7 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
             if (src_mesh_id == dst_mesh_id) {
                 // Intra-mesh connection: add to mesh adjacency map
                 mesh_adjacency_maps[src_mesh_id][src_asic_id].push_back(dst_asic_id);
+                ++intra_mesh_edges;
             } else {
                 // Intermesh connection: add to exit node graph and mesh-level graph
                 // Create PhysicalExitNode objects with mesh_id populated
@@ -1403,8 +1436,44 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
                 PhysicalExitNode dst_exit_node{dst_mesh_id, dst_asic_id};
                 exit_node_adjacency_maps[src_mesh_id][src_exit_node].push_back(dst_exit_node);
                 mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
+                ++inter_mesh_edges;
             }
         }
+    }
+
+    // Collapse diagnostic (debug only): how many ASIC-level edges back each distinct mesh-level pair. A high
+    // multiplicity means many parallel ASIC links concentrate between the same two meshes (so they reduce to a
+    // single mesh-level edge and do NOT raise mesh degree). This is the key signal for why the physical
+    // mesh-level graph can be far sparser than the raw ASIC connectivity suggests.
+    {
+        std::map<std::pair<uint32_t, uint32_t>, std::size_t> pair_multiplicity;
+        for (const auto& [src_mesh_id, dsts] : mesh_level_adjacency_map) {
+            for (const auto& dst_mesh_id : dsts) {
+                auto a = static_cast<uint32_t>(*src_mesh_id);
+                auto b = static_cast<uint32_t>(*dst_mesh_id);
+                pair_multiplicity[{std::min(a, b), std::max(a, b)}]++;
+            }
+        }
+        std::map<std::size_t, std::size_t> mult_hist;  // (#ASIC edges backing a mesh-pair) -> count of mesh-pairs
+        for (const auto& [_, m] : pair_multiplicity) {
+            mult_hist[m / 2]++;  // /2: directed edges counted from both endpoints
+        }
+        std::string mult_str;
+        for (const auto& [m, c] : mult_hist) {
+            mult_str += fmt::format("{}:{} ", m, c);
+        }
+        log_debug(
+            tt::LogFabric,
+            "build_hierarchical_from_flat_graph: {} mesh(es); directed edges: {} intra-mesh, {} inter-mesh; DROPPED {} "
+            "(neighbor ASIC not in any placement) + {} (source ASIC not placed); {} distinct mesh-pairs; "
+            "ASIC-edges-per-mesh-pair histogram {{{}}}",
+            mesh_groupings.size(),
+            intra_mesh_edges,
+            inter_mesh_edges,
+            edges_dst_not_in_mesh,
+            edges_src_not_in_mesh,
+            pair_multiplicity.size(),
+            mult_str);
     }
 
     // Build PhysicalMultiMeshGraph
@@ -2460,6 +2529,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
 
             // Build ASIC positions map and add pinning constraints
             auto asic_positions_to_asic_ids = build_asic_positions_map(physical_graph, config);
+
             add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
 
             // Determine validation mode

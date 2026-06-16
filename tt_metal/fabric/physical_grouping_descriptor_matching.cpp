@@ -736,6 +736,14 @@ void process_higher_layer_and_recurse(
         }
         result[mgd_type][graph_name].push_back(*best);
         known_mappings[mgd_type] = best->type;
+        log_info(
+            tt::LogFabric,
+            "Physical groupings: Mesh graph descriptor {} '{}': {} topology match(es), committed: {} ({})",
+            mgd_type,
+            graph_name,
+            matches.size(),
+            best->name,
+            best->type);
     } else {
         // No matches found - use the MGD grouping info itself
         auto mgd_it = mgd_grouping_infos.find(mgd_type);
@@ -743,6 +751,14 @@ void process_higher_layer_and_recurse(
             auto instance_it = mgd_it->second.find(graph_name);
             if (instance_it != mgd_it->second.end()) {
                 result[mgd_type][graph_name].push_back(instance_it->second);
+                log_info(
+                    tt::LogFabric,
+                    "Physical groupings: Mesh graph descriptor {} '{}': 0 topology match(es), fallback to Mesh graph "
+                    "descriptor: {} ({})",
+                    mgd_type,
+                    graph_name,
+                    instance_it->second.name,
+                    instance_it->second.type);
             }
         }
     }
@@ -790,7 +806,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
-    log_info(tt::LogFabric, "Building MGD to GroupingInfo map");
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos =
         PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
@@ -798,7 +813,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     // Map from grouping name to vector of flattened GroupingInfo (supports multiple definitions with same name)
     std::unordered_map<std::string, std::vector<GroupingInfo>> mesh_flat_groupings;
     // Find MESH type groupings across all names
-    log_info(tt::LogFabric, "Finding MESH type groupings across all names");
     bool found_mesh = false;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto mesh_it = type_map.find("MESH");
@@ -818,7 +832,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // ===== PHASE 2: Match MESH mgd groupings to MESH groupings =====
     // For each MGD mesh instance, find all valid PGD mesh groupings that can contain it
-    log_info(tt::LogFabric, "Matching MESH mgd groupings to MESH groupings");
     for (const auto& [mgd_instance_key, mgd_mesh_grouping] : mgd_grouping_infos["MESH"]) {
         const std::string& instance_name = mgd_instance_key;  // Use unique instance key (includes mesh_id)
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
@@ -874,7 +887,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
         // Group valid candidates by node difference (map is ordered by key ascending)
         // Store (name, index) pairs to handle multiple groupings with same name
-        log_info(tt::LogFabric, "Grouping valid candidates by node difference");
         std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff;
         for (const auto& [name, grouping_infos] : mesh_flat_groupings) {
             for (size_t idx = 0; idx < grouping_infos.size(); ++idx) {
@@ -885,12 +897,11 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
             }
         }
-        log_info(tt::LogFabric, "Found {} valid candidates by node difference", candidates_by_diff.size());
 
         // Process difference levels from closest to farthest; commit only when embedding on PSD succeeds
-        log_info(tt::LogFabric, "Processing difference levels from closest to farthest");
         std::vector<MeshTopologyMatch> best_matches_topology;
         std::vector<MeshTopologyMatch> best_matches_psd_placed;
+        size_t last_topology_match_count = 0;
 
         bool committed_pgd_matches = false;
         for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
@@ -939,7 +950,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 if (mapping_result.success) {
                     best_matches_topology.push_back({name, idx, std::move(mapping_result)});
                 } else {
-                    log_info(
+                    log_debug(
                         tt::LogFabric,
                         "Failed to solve topology mapping for {} and {}, with error: {}",
                         mgd_grouping_info.name,
@@ -948,16 +959,10 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
             }
 
-            log_debug(
-                tt::LogFabric,
-                "Node-diff {}: {}/{} PGD groupings topology-matched MGD '{}'",
-                node_diff,
-                best_matches_topology.size(),
-                name_idx_pairs.size(),
-                mgd_grouping_info.name);
             if (best_matches_topology.empty()) {
                 continue;
             }
+            last_topology_match_count = best_matches_topology.size();
 
             // The grouping committed for this MGD mesh is the matched PGD topology variant itself. Each variant
             // already encodes its own topology (the MESH grid, or RING wrap edges for TORUSX/TORUSY/TORUSXY) and
@@ -1005,7 +1010,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     if (!mapped_asics.empty()) {
                         best_matches_psd_placed.push_back(match);
                     } else if (!psd_errors.empty()) {
-                        log_info(
+                        log_debug(
                             tt::LogFabric,
                             "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD under current "
                             "constraints: {}",
@@ -1013,7 +1018,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                             mgd_grouping_info.name,
                             psd_errors.front());
                     } else {
-                        log_info(
+                        log_debug(
                             tt::LogFabric,
                             "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD (no ASIC embedding "
                             "found)",
@@ -1033,26 +1038,35 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     }
                 }
                 committed_pgd_matches = true;
+                std::string committed_summary;
+                for (size_t i = 0; i < best_matches_psd_placed.size(); ++i) {
+                    const auto& match = best_matches_psd_placed[i];
+                    const auto& grouping = mesh_flat_groupings.at(match.name)[match.idx];
+                    if (i > 0) {
+                        committed_summary += ", ";
+                    }
+                    committed_summary += fmt::format("{} ({})", grouping.name, grouping.type);
+                }
                 log_info(
                     tt::LogFabric,
-                    "Committed {} PGD grouping(s) for {} that topology-match and embed in PSD",
-                    best_matches_psd_placed.size(),
-                    mgd_grouping_info.name);
+                    "Physical groupings: Mesh graph descriptor '{}': {} topology match(es), committed: {}",
+                    mgd_grouping_info.name,
+                    best_matches_topology.size(),
+                    committed_summary);
                 break;
             }
-
-            log_info(
-                tt::LogFabric,
-                "Node-diff {}: {} PGD grouping(s) matched {} topologically but none embed on PSD; trying farther "
-                "difference levels",
-                node_diff,
-                best_matches_topology.size(),
-                mgd_grouping_info.name);
         }
 
         if (!committed_pgd_matches) {
             // No PGD grouping both matched MGD and placed on PSD — use the MGD grouping info itself
-            log_info(tt::LogFabric, "Using MGD mesh grouping for {} (no PSD-viable PGD match)", mgd_grouping_info.name);
+            log_info(
+                tt::LogFabric,
+                "Physical groupings: Mesh graph descriptor '{}': {} topology match(es), fallback to Mesh graph "
+                "descriptor: {} ({})",
+                mgd_grouping_info.name,
+                last_topology_match_count,
+                mgd_grouping_info.name,
+                mgd_grouping_info.type);
             if (device_topo.has_value()) {
                 result[instance_type][instance_name].push_back(
                     finalize_mesh_grouping_with_device_topology(mgd_grouping_info, *device_topo));
@@ -1069,7 +1083,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     std::unordered_map<std::string, std::string> known_mappings;
     known_mappings["MESH"] = "MESH";
 
-    log_info(tt::LogFabric, "Matching higher-layer graph mgd groupings to higher-layer groupings");
     for (const auto& [mgd_type, mgd_instances] : mgd_grouping_infos) {
         if (mgd_type == "MESH") {
             continue;
@@ -1094,7 +1107,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // Ensure all types and instances from MGD have entries in result
     // Use MGD grouping info if no matches were found
-    log_info(tt::LogFabric, "Ensuring all types and instances from MGD have entries in result");
     for (const auto& [mgd_type, mgd_instances] : mgd_grouping_infos) {
         for (const auto& [instance_name, mgd_grouping_info] : mgd_instances) {
             // If not already present, use the MGD grouping info
@@ -1104,7 +1116,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         }
     }
 
-    log_info(tt::LogFabric, "Returning valid groupings map");
     return result;
 }
 

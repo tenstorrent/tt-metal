@@ -85,8 +85,7 @@ PhysicalGroupingDescriptor find_and_load_pgd(
     if (pgd_path.has_value() && !pgd_path->empty()) {
         std::filesystem::path explicit_path(*pgd_path);
         if (std::filesystem::exists(explicit_path) && std::filesystem::is_regular_file(explicit_path)) {
-            log_info(
-                tt::LogFabric, "Loading Physical Grouping Descriptor from provided path: {}", explicit_path.string());
+            log_info(tt::LogFabric, "Loaded physical groupings from: {}", explicit_path.string());
             return PhysicalGroupingDescriptor(explicit_path);
         }
         TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", explicit_path.string());
@@ -97,10 +96,7 @@ PhysicalGroupingDescriptor find_and_load_pgd(
     if (pgd_path_env && strlen(pgd_path_env) > 0) {
         std::filesystem::path explicit_path(pgd_path_env);
         if (std::filesystem::exists(explicit_path) && std::filesystem::is_regular_file(explicit_path)) {
-            log_info(
-                tt::LogFabric,
-                "Loading Physical Grouping Descriptor from environment variable: {}",
-                explicit_path.string());
+            log_info(tt::LogFabric, "Loaded physical groupings from: {}", explicit_path.string());
             return PhysicalGroupingDescriptor(explicit_path);
         }
         TT_THROW(
@@ -146,36 +142,29 @@ PhysicalGroupingDescriptor find_and_load_pgd(
     // Hardcoded if-else if statement for cluster type and architecture combinations
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
         arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
-        log_info(tt::LogFabric, "Wormhole Galaxy detected — using {}", arch_cluster_filename);
     } else if (
         (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || cluster.is_ubb_galaxy()) &&
         arch == tt::ARCH::BLACKHOLE) {
         if (psd != nullptr && psd->is_bh_galaxy_rev_c()) {
             arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
-            log_info(tt::LogFabric, "Blackhole Galaxy Rev C detected — using {}", arch_cluster_filename);
         } else {
             arch_cluster_filename = "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
-            log_info(tt::LogFabric, "Blackhole Galaxy Rev A/B detected — using {}", arch_cluster_filename);
         }
     } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
         arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
-        log_info(tt::LogFabric, "T3K detected — using {}", arch_cluster_filename);
     } else {
         arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
-        log_info(tt::LogFabric, "No architecture/cluster-type specific PGD — using default: {}", arch_cluster_filename);
     }
 
     // If we found a specific file, add it to search paths (checked before default)
     std::filesystem::path arch_cluster_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" /
                                               "tt_fabric" / "physical_groupings" / arch_cluster_filename;
     search_paths.push_back(arch_cluster_path);
-    log_info(
-        tt::LogFabric, "Will check for architecture/cluster-type specific default: {}", arch_cluster_path.string());
 
     // Try each path in order, but require explicit match (don't just take first existing)
     for (const auto& path : search_paths) {
         if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
-            log_info(tt::LogFabric, "Loading Physical Grouping Descriptor from: {}", path.string());
+            log_info(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
             return PhysicalGroupingDescriptor(path);
         }
     }
@@ -194,16 +183,46 @@ PhysicalGroupingDescriptor find_and_load_pgd(
 }
 
 /**
+ * @brief Print intermesh-level degree histogram in one line.
+ */
+template <typename NodeId>
+void print_intermesh_level_adjacency_map(const AdjacencyGraph<NodeId>& intermesh_graph, const std::string& label) {
+    const auto& nodes = intermesh_graph.get_nodes();
+
+    std::map<size_t, size_t> degree_hist;
+    for (const auto& node : nodes) {
+        const auto& neighbors = intermesh_graph.get_neighbors(node);
+        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
+        degree_hist[unique_neighbors.size()]++;
+    }
+
+    std::string degree_hist_str = "{";
+    bool first = true;
+    for (const auto& [degree, count] : degree_hist) {
+        if (!first) {
+            degree_hist_str += ", ";
+        }
+        first = false;
+        degree_hist_str += std::to_string(degree) + ":" + std::to_string(count);
+    }
+    degree_hist_str += "}";
+
+    log_info(
+        tt::LogFabric,
+        "{} intermesh-level adjacency map: {} mesh(es), degree histogram {}",
+        label,
+        nodes.size(),
+        degree_hist_str);
+
+    // Per-mesh neighbor list at debug (enable with TT_LOGGER_LEVEL=debug).
+    intermesh_graph.print_adjacency_map(label + " intermesh-level adjacency map", /*quiet_mode=*/true);
+}
+
+/**
  * @brief Print logical multi-mesh adjacency map
  */
 void print_logical_adjacency_map(const LogicalMultiMeshGraph& multi_mesh_graph) {
-    log_info(tt::LogFabric, "Logical Multi-Mesh Adjacency Map:");
-
-    // Print adjacency maps using topology solver's print functions (includes degree histograms)
-    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
-    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
-        graph.print_adjacency_map(fmt::format("Logical Mesh {} Internal Graph", mesh_id.get()), true);
-    }
+    print_intermesh_level_adjacency_map(multi_mesh_graph.mesh_level_graph_, "Logical");
 }
 
 /**
@@ -211,13 +230,7 @@ void print_logical_adjacency_map(const LogicalMultiMeshGraph& multi_mesh_graph) 
  */
 void print_physical_adjacency_map(
     const PhysicalMultiMeshGraph& multi_mesh_graph, const PhysicalSystemDescriptor& /*physical_system_descriptor*/) {
-    log_info(tt::LogFabric, "Physical Multi-Mesh Adjacency Map:");
-
-    // Print adjacency maps using topology solver's print functions (includes degree histograms)
-    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
-    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
-        graph.print_adjacency_map(fmt::format("Physical Mesh {} Internal Graph", mesh_id.get()), true);
-    }
+    print_intermesh_level_adjacency_map(multi_mesh_graph.mesh_level_graph_, "Physical");
 }
 
 /**
@@ -278,9 +291,8 @@ TopologyMappingResult run_topology_mapping(
             const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
             const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
             if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
-                const bool sub_galaxy_sliced = mesh_graph.get_mesh_shape(mesh_id, MeshHostRankId{0}).mesh_size() < 32;
                 auto mesh_pinnings = get_galaxy_fixed_asic_position_pinnings_for_mesh(
-                    mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/sub_galaxy_sliced);
+                    mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
                 for (const auto& [fabric_node, positions] : mesh_pinnings) {
                     for (const auto& position : positions) {
                         config.pinnings.emplace_back(position, fabric_node);
@@ -658,10 +670,7 @@ int main(int argc, char** argv) {
         MeshGraphDescriptor mgd(mgd_path);
         log_info(tt::LogFabric, "Mesh Graph Descriptor loaded");
 
-        // Stage: Load Physical Grouping Descriptor
-        log_info(tt::LogFabric, "Stage: Loading Physical Grouping Descriptor...");
         PhysicalGroupingDescriptor pgd = find_and_load_pgd(args.physical_grouping_descriptor_path, &psd);
-        log_info(tt::LogFabric, "Physical Grouping Descriptor loaded");
 
         // Get current rank - only rank 0 performs topology mapping and file generation
         auto current_rank = *context->rank();

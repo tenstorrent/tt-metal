@@ -1,19 +1,18 @@
-# --- Meshes ---------------------------------------------------------------
+# --- Mesh Descriptors ------------------------------------------------------
+# Subtorus superpod: sixty-four-stage 2x4 RING+RING pipeline ring (512 ASICs).
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 4, 2 ] dim_types: [ RING, RING ]}
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, RING ] }
   host_topology   { dims: [ 1, 1 ] }
-  channels {
-    count: 2
-    policy: RELAXED
-  }
+  channels { count: 2 policy: RELAXED }
 }
+
+# --- Graph Descriptors -----------------------------------------------------
 graph_descriptors {
   name: "G0"
   type: "FABRIC"
-  # Instances: mesh ids 0..1 (all 2x4)
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
@@ -79,7 +78,6 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 62 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
 
-
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
@@ -155,12 +153,10 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
     channels { count: 8 policy: RELAXED }
   }
-
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 16 } }
-    channels { count: 16 policy: RELAXED }
-    assign_z_direction: true
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 16 } }
@@ -240,8 +236,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
-    channels { count: 16 policy: RELAXED }
-    assign_z_direction: true
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
@@ -313,7 +308,6 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 46 } }
     channels { count: 8 policy: RELAXED }
   }
-
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 46 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
@@ -322,8 +316,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 48 } }
-    channels { count: 16 policy: RELAXED }
-    assign_z_direction: true
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 48 } }
@@ -403,8 +396,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    channels { count: 16 policy: RELAXED }
-    assign_z_direction: true
+    channels { count: 8 policy: RELAXED }
   }
 }
 

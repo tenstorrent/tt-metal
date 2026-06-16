@@ -26,6 +26,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
+#include <tt-metalium/experimental/internal/blitz_decode_pipeline.hpp>
 
 namespace {
 
@@ -2243,5 +2244,15 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
          fn_to_coord(*loopback_exit_fn)});
 
     validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
+
+    // Exercise the production pipeline builder (generate_blitz_decode_pipeline) on the same topology.
+    SCOPED_TRACE("generate_blitz_decode_pipeline");
+    const auto generated_stages = tt::tt_metal::internal::blitz::generate_blitz_decode_pipeline(true);
+    std::vector<Sp5BlitzPipelineStage> generated_sp5;
+    generated_sp5.reserve(generated_stages.size());
+    for (const auto& s : generated_stages) {
+        generated_sp5.push_back({s.stage_index, s.entry_node_coord, s.exit_node_coord});
+    }
+    validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, generated_sp5);
 }
 }  // namespace tt::tt_fabric::fabric_router_tests

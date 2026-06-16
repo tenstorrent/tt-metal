@@ -2521,4 +2521,64 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
     EXPECT_EQ(tray_ref_count, 2u) << "Should reference exactly 2 trays";
 }
 
+static size_t count_distinct_hosts_for_asics(
+    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::unordered_set<tt::tt_metal::AsicID>& asics) {
+    std::set<std::string> hosts;
+    for (const auto& asic : asics) {
+        hosts.insert(psd.get_host_name_for_asic(asic));
+    }
+    return hosts.size();
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLinePrefersSingleHost) {
+    // Single BH galaxy pod (32 ASICs on one host): a 4x4 LINE+LINE mesh with host_topology [1,1] can embed as
+    // Rev C 4x4_Mesh (two trays, single host) or 4x4_SplitHost (four half-trays). Both should be committed;
+    // PSD placement should still prefer single-host 4x4_Mesh when host_topology is [1,1].
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    const std::filesystem::path mgd_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_pod_4x4_line_line_mesh_graph_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_file_path)) << "PGD file not found: " << pgd_file_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_file_path)) << "MGD file not found: " << mgd_file_path;
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with bh_galaxy_xyz_cluster_desc.yaml";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+    MeshGraphDescriptor mgd(mgd_file_path);
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    ASSERT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    ASSERT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
+    ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
+
+    bool found_single_host_mesh = false;
+    bool found_split_host = false;
+    for (const auto& grouping : valid_groupings.at("MESH").at("M0")) {
+        if (grouping.name.find("4x4_Mesh") != std::string::npos &&
+            grouping.name.find("SplitHost") == std::string::npos) {
+            found_single_host_mesh = true;
+        }
+        if (grouping.name.find("SplitHost") != std::string::npos) {
+            found_split_host = true;
+        }
+    }
+    EXPECT_TRUE(found_single_host_mesh) << "Expected 4x4_Mesh (single-host two-tray) grouping to match";
+    EXPECT_TRUE(found_split_host) << "Expected 4x4_SplitHost grouping to be committed alongside 4x4_Mesh";
+
+    const auto& committed_groupings = valid_groupings.at("MESH").at("M0");
+    const auto placements = pgd.find_all_in_psd(committed_groupings, psd);
+    ASSERT_FALSE(placements.empty()) << "Should find at least one PSD placement for the 4x4 mesh";
+    for (const auto& asic_set : placements) {
+        EXPECT_EQ(asic_set.size(), 16u) << "Each 4x4 placement should cover 16 ASICs";
+        EXPECT_EQ(count_distinct_hosts_for_asics(psd, asic_set), 1u)
+            << "Set-packing should prefer single-host placements when host_topology is [1,1]";
+    }
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -454,14 +454,12 @@ void ControlPlane::init_control_plane(
                 const size_t mesh_chip_count = mesh_shape.mesh_size();
 
                 if (!is_1d && mesh_chip_count % 32 == 0) {
-                    const bool sub_galaxy_sliced =
-                        this->mesh_graph_->get_mesh_shape(mesh_id, MeshHostRankId{0}).mesh_size() < 32;
                     auto mesh_pinnings =
                         tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
                             mesh_id,
                             mesh_shape,
                             /*hard_pin_node_0=*/world_size == 1,
-                            /*nw_corner_only=*/sub_galaxy_sliced);
+                            /*nw_corner_only=*/false);
                     fixed_asic_position_pinnings.insert(
                         fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
                 }
