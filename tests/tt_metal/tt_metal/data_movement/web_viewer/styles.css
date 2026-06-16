@@ -314,13 +314,19 @@ header h1 {
     flex-wrap: wrap;
 }
 
-#series-checkboxes {
+#sweep-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.series-checkboxes {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
 }
 
-#series-checkboxes label {
+.series-checkboxes label {
     display: flex;
     align-items: center;
     gap: 4px;
@@ -331,15 +337,8 @@ header h1 {
     transition: background 0.15s;
 }
 
-#series-checkboxes label:hover {
+.series-checkboxes label:hover {
     background: var(--bg-hover);
-}
-
-.series-color-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    display: inline-block;
 }
 
 .chart-container {
