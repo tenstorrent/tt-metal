@@ -272,6 +272,68 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow) corrupted untouched rows";
 }
 
+// InputAndOutputRow + transpose_b: the moe_ffn forward hot path. gate_proj / up_proj /
+// down_proj all call variable_matmul with transpose_b=true, since the weights are stored
+// [N, K] and used as [K, N] (x_e @ w^T). The end-to-end MoE test exercises this, but a
+// kernel-level parity test localizes a regression to the op. Weight is stored [N, K]; the
+// reference transposes it to [K, N] for the standard minimal_matmul.
+TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow_TransposeB) {
+    const uint32_t M_parent = 320, K = 128, N = 64;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_parent, K, device, /*seed=*/56U);
+    auto weight_nk = create_random_device_tensor(N, K, device, /*seed=*/57U);  // stored [N, K]
+    auto parent_out = create_random_device_tensor(M_parent, N, device, /*seed=*/58U);
+    const auto parent_orig_vec = ttml::core::to_vector<float>(parent_out);
+
+    // start_index=2 → rows [96, 160) → actual_M = 64.
+    const std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 224U, 288U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    constexpr uint32_t kStart = 2U;
+    constexpr uint32_t m_lo = 96U;
+    constexpr uint32_t m_hi = 160U;
+    constexpr uint32_t actual_M = m_hi - m_lo;
+
+    ttml::metal::variable_matmul(
+        /*input_tensor=*/input,
+        /*weight_tensor=*/weight_nk,
+        /*config=*/kConfig,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
+        /*transpose_a=*/false,
+        /*transpose_b=*/true,
+        /*compute_kernel_config=*/std::nullopt,
+        /*output_tensor=*/parent_out,
+        /*offsets_start_index=*/kStart,
+        /*expected_M_tiles=*/M_parent / 32U);
+
+    auto input_slice = ttnn::slice(
+        input,
+        ttsl::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+        ttsl::SmallVector<uint32_t>{1U, 1U, m_hi, K},
+        ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    auto weight_kn = ttnn::transpose(weight_nk, -2, -1);  // [N, K] -> [K, N]
+    auto ref = minimal_matmul_hifi4(input_slice, weight_kn, kConfig);
+    const auto ref_vec = ttml::core::to_vector<float>(ref);
+    const auto written_vec = ttml::core::to_vector<float>(parent_out);
+
+    EXPECT_EQ(subregion_max_abs_error(written_vec, ref_vec, m_lo, actual_M, N), 0.0F)
+        << "variable(InputAndOutputRow, transpose_b) vs minimal not bit-exact at [" << m_lo << "," << m_hi << ")";
+
+    // Untouched rows of parent_out preserved exactly.
+    float untouched_err = 0.0F;
+    for (uint32_t m = 0; m < M_parent; ++m) {
+        if (m >= m_lo && m < m_hi) {
+            continue;
+        }
+        for (uint32_t n = 0; n < N; ++n) {
+            untouched_err = std::max(untouched_err, std::abs(written_vec[m * N + n] - parent_orig_vec[m * N + n]));
+        }
+    }
+    EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow, transpose_b) corrupted untouched rows";
+}
+
 // ---- Empty-expert probe: K-axis offset where count_e = 0 must produce all-zero output. ----
 
 namespace {
