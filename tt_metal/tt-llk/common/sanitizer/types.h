@@ -167,7 +167,7 @@ public:
 
     const T& get_underlying() const
     {
-        LLK_ASSERT(is_known(), "panic: llk_san: underlying value is not known");
+        LLK_ASSERT(is_known(), "llk::san | fault    | underlying value is not known");
         return underlying;
     }
 
