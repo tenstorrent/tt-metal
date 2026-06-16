@@ -125,7 +125,6 @@ void kernel_main() {
     // does not fill the width blocks evenly (each block spans a whole number of tiles).
     // For example, w=96 results in 3 tiles, which when sharded on two cores results in two real
     // tiles on the first core, and one real tile + one padding tile on the second core.
-
     constexpr uint32_t last_block_wt = get_compile_time_arg_val(19);
 
     // ---------------------------------------------------------------------------
