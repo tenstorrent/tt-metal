@@ -143,6 +143,7 @@ class _RebindPatch:
                     self._patched.append(m)
                     setattr(m, self._attr, replacement)
             except Exception:
+                # Some modules/proxies raise on getattr/setattr; skip them, rebinding is best-effort.
                 pass
         return self
 
@@ -447,6 +448,7 @@ def pytest_sessionfinish(session, exitstatus):
         try:
             device.enable_program_cache()
         except Exception:
+            # Cache may already be enabled or unsupported here; compile still warms the on-disk cache.
             pass
         n_prog, n_err, used, wall = ttnn.graph.up_front_compile(device, _WORKERS)
         print(
@@ -461,4 +463,5 @@ def pytest_sessionfinish(session, exitstatus):
             try:
                 ttnn.close_device(device)
             except Exception:
+                # Teardown is best-effort: a close failure must not fail the pytest session.
                 pass
