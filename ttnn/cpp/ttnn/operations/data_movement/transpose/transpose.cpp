@@ -98,9 +98,11 @@ inline Tensor transpose_(
             // the spec. Must precede the non-native fallback below so it isn't overridden.
             output_mem_constructed = output_mem_config.value();
         } else if (a.is_sharded()) {
-            // Non-native sharded input → mirror input's memory_layout (no shard_spec, device op
-            // synthesizes via adjust_shard_spec_to_shape / generate_transpose_shard_spec)
-            output_mem_constructed = MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type());
+            // Non-native sharded input keeps the input provenance but leaves the legacy shard_spec
+            // unset so output-spec synthesis still runs against the transposed padded shape.
+            output_mem_constructed = a.memory_config().created_with_nd_shard_spec()
+                                         ? MemoryConfig(a.memory_config().buffer_type(), a.memory_config().nd_shard_spec())
+                                         : MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type());
         } else {
             output_mem_constructed = a.memory_config();
         }
