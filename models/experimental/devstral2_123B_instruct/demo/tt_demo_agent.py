@@ -1399,9 +1399,9 @@ def parse_tt_args() -> TTAgentConfig:
     p.add_argument(
         "--max-seq-len",
         type=int,
-        default=98304,
+        default=262144,
         metavar="S",
-        help="KV/RoPE cap (default 98304; must be >= prompt + max-new, multiple of 128).",
+        help="KV/RoPE cap (default 262144; must be >= prompt + max-new, multiple of 128).",
     )
     p.add_argument(
         "--max-context-tokens",

@@ -13,7 +13,7 @@ TT weights are bf16 tensors extracted from that loaded model (not shard download
   one HF ``ref()`` forward), matching ``test_ministral3_single_layer.py``.
 
 **Note:** The HF reference forward stays short (129 tokens for decode PCC). The TT model uses
-``DEVSTRAL2_TEST_MAX_SEQ_LEN`` (98304) for KV/RoPE, matching other Devstral PCC tests.
+``DEVSTRAL2_TEST_MAX_SEQ_LEN`` (262144) for KV/RoPE, matching other Devstral PCC tests.
 
 This test loads the full checkpoint through Transformers; mark accordingly and only run on
 machines with sufficient DRAM/disk offload space and a populated HF cache (or ``HF_TOKEN``).

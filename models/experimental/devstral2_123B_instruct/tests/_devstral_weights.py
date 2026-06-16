@@ -30,7 +30,7 @@ from transformers.models.ministral3.configuration_ministral3 import Ministral3Co
 from models.experimental.devstral2_123B_instruct.tt.weight_loading import DEVSTRAL2_LARGE_REPO_ID
 
 # Fixed KV/RoPE budget for device tests so weight cache paths align (``seq_{max_seq_len}``).
-DEVSTRAL2_TEST_MAX_SEQ_LEN = 98304
+DEVSTRAL2_TEST_MAX_SEQ_LEN = 262144
 
 
 def devstral2_weight_cache_seq_len() -> int:
