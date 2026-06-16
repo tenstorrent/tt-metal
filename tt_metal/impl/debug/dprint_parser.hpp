@@ -40,6 +40,13 @@ public:
         std::vector<uint32_t> data;
     };
 
+    struct TopCallstackInfo {
+        // uint64_t fits both LP32 and LP64.
+        uint64_t pc;
+        uint64_t ra;
+        size_t skip_frames;
+    };
+
     using ArgumentValue = std::variant<
         bool,
         int8_t,
@@ -53,7 +60,8 @@ public:
         float,
         double,
         TileSliceDynamic,
-        TypedArray>;
+        TypedArray,
+        TopCallstackInfo>;
     struct FormatMessageBuffer {
         fmt::memory_buffer buffer;
         std::vector<ArgumentValue> argument_values;
