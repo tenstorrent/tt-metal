@@ -123,8 +123,8 @@ def _moe_layer_forward(
 ) -> ttnn.Tensor:
     """E-type block: pre-norm → gate + experts + shared_expert → residual.
 
-    cpu_gate=False: gate runs on device in bfloat16 (trace-compatible, default).
-    cpu_gate=True: gate runs on CPU in float32 (exact HF routing, not trace-compatible).
+    cpu_gate=True : gate on CPU float32 (exact HF routing, not trace-compatible).
+    cpu_gate=False: fully on-device gate (F32 linear+sigmoid+bias, BF16 topk) — trace-compatible.
     """
     residual = hidden_states
     p = f"backbone.layers.{layer_idx}"
@@ -138,14 +138,20 @@ def _moe_layer_forward(
     # Flatten for gate/experts: [B, S, H] → [B*S, H]
     flat_tt = ttnn.reshape(normed_tt, [B * S, H])
 
-    # Gate: returns dense [1,1,B*S,128] routing-weight tensor on device.
-    _gate_fn = moe_gate_forward_cpu if cpu_gate else moe_gate_forward
-    routing_weights_tt = _gate_fn(
-        mesh_device,
-        flat_tt,
-        wc[f"{p}.mixer.gate.weight"],
-        wc[f"{p}.mixer.gate.e_score_correction_bias"],
-    )
+    if cpu_gate:
+        routing_weights_tt = moe_gate_forward_cpu(
+            mesh_device,
+            flat_tt,
+            wc[f"{p}.mixer.gate.weight"],
+            wc[f"{p}.mixer.gate.e_score_correction_bias"],
+        )
+    else:
+        routing_weights_tt = moe_gate_forward(
+            mesh_device,
+            flat_tt,
+            wc[f"{p}.mixer.gate.weight"],
+            wc[f"{p}.mixer.gate.e_score_correction_bias"],
+        )
 
     # Lazily build and cache pre-stacked expert weight tensors on device.
     up_tt, down_tt = _get_stacked_expert_weights(mesh_device, layer_idx, wc)
@@ -176,8 +182,8 @@ def _layer_stack_forward(
 ) -> ttnn.Tensor:
     """Layer loop — stateless (decoder_state=None) or stateful (decoder_state provided).
 
-    cpu_gate=True: MoE gate runs on CPU float32 (correct routing, no trace).
-    cpu_gate=False: MoE gate runs on device bfloat16 (trace-compatible).
+    cpu_gate=True: MoE gate on CPU float32 (correct routing, not trace-compatible).
+    cpu_gate=False: fully on-device gate (trace-compatible, ~15 tok/s).
     """
     m_idx = 0  # index within M_LAYER_INDICES
     d_idx = 0  # index within D_LAYER_INDICES
@@ -205,11 +211,26 @@ def _layer_stack_forward(
                 conv_state=conv_state,
             )
             if decoder_state:
-                decoder_state.ssm_state_outs[m_idx] = state_new
-                decoder_state.conv_state_outs[m_idx] = conv_state_new
+                # In-place copy into pre-allocated output tensors (trace-compatible).
+                # Replacing ssm_state_outs[m_idx] frees the previous tensor's DRAM
+                # buffer during trace capture; later ops in the same trace can reuse
+                # that freed buffer and overwrite the SSM state before advance() reads it.
+                ttnn.assign(state_new, decoder_state.ssm_state_outs[m_idx])
+                state_new.deallocate(True)
+                h_tm2_out, h_tm1_out, hBC_out = conv_state_new
+                ttnn.assign(h_tm2_out, decoder_state.conv_state_outs[m_idx][0])
+                ttnn.assign(h_tm1_out, decoder_state.conv_state_outs[m_idx][1])
+                ttnn.assign(hBC_out, decoder_state.conv_state_outs[m_idx][2])
+                hBC_out.deallocate(True)
             m_idx += 1
         elif layer_type == "E":
-            hidden_states = _moe_layer_forward(mesh_device, hidden_states, li, wc, cpu_gate=cpu_gate)
+            hidden_states = _moe_layer_forward(
+                mesh_device,
+                hidden_states,
+                li,
+                wc,
+                cpu_gate=cpu_gate,
+            )
         else:
             kv_cache = decoder_state.kv_caches[d_idx] if decoder_state else None
             page_table = decoder_state.page_tables[d_idx] if decoder_state else None
@@ -298,23 +319,27 @@ def nemotron_h_forward_stateful(
 ) -> ttnn.Tensor:
     """Stateful NemotronH forward for generation.
 
-    cpu_gate=False (default): MoE gate runs on device bfloat16 — trace-compatible,
-      ~16 tok/s on TP=4 QB with ttnn.execute_trace.
-    cpu_gate=True: gate runs on CPU float32 — exact HF routing, not trace-compatible
-      (~7 tok/s eager).
+    cpu_gate=False (default): MoE gate on device — trace-compatible (~15 tok/s).
+    cpu_gate=True: gate on CPU float32 (exact routing, ~7 tok/s eager).
 
     After this call:
-      - decoder_state.ssm_state_outs[i] holds the new SSM state for M-layer i
+      - decoder_state.ssm_state_outs[i] has been written in-place with the new SSM state
       - decoder_state.kv_caches[j] have been updated in-place at current_pos
 
-    Call decoder_state.advance() after each forward to copy ssm_state_outs →
-    ssm_states for the next step (KV caches are already updated in-place).
+    Call decoder_state.advance() after each forward to copy outputs to inputs.
 
     Returns:
         Logits [B, S, 131072] bfloat16 on device.
     """
     hidden_states = embedding_forward_tt(mesh_device, ids_tt, wc["backbone.embeddings.weight"])
-    hidden_states = _layer_stack_forward(mesh_device, hidden_states, wc, num_layers, decoder_state, cpu_gate=cpu_gate)
+    hidden_states = _layer_stack_forward(
+        mesh_device,
+        hidden_states,
+        wc,
+        num_layers,
+        decoder_state,
+        cpu_gate=cpu_gate,
+    )
     return lm_head_forward_device(
         mesh_device,
         hidden_states,

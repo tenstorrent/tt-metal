@@ -149,7 +149,7 @@ def generate(
     for pos, tok in enumerate(input_ids):
         _update_ids(ids_tt, tok)
         _update_pos(state.current_pos, pos)
-        logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=cpu_gate)
+        logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=True)
         ttnn.synchronize_device(mesh_device)
         state.advance()
     elapsed_prefill = time.perf_counter() - t_prefill
@@ -208,6 +208,18 @@ def generate(
         if remaining > 0:
             _update_ids(ids_tt, next_token)
             _update_pos(state.current_pos, decode_pos)
+
+            # Warmup pass (cpu_gate=False, outside trace):
+            # moe_gate_forward uploads float32 gate weights (_GATE_W_F32_CACHE /
+            # _BIAS_F32_CACHE) on first call.  Without this, the cache is empty at
+            # begin_trace_capture, and ttnn.from_torch inside the trace triggers TT_FATAL
+            # ("Writes are not supported during trace capture") which deadlocks the trace
+            # machinery instead of raising a Python exception.
+            if verbose:
+                print("Warmup pass: priming F32 gate weight caches (cpu_gate=False)...")
+            nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=False)
+            ttnn.synchronize_device(mesh_device)
+            # All device weight caches warm; no advance().
 
             t_decode = time.perf_counter()
             if verbose:
