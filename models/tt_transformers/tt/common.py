@@ -839,7 +839,10 @@ def create_tt_model(
     # Avoid loading state_dict for every DP model. An empty dict is intentional
     # when --skip-model-load is used.
     if state_dict is None:
-        state_dict = tt_model_args.load_state_dict()
+        if os.getenv("MLPERF_READ_ONLY", "false").lower() == "true":
+            state_dict = {}
+        else:
+            state_dict = tt_model_args.load_state_dict()
 
     model = Transformer(
         args=tt_model_args,

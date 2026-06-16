@@ -6,6 +6,8 @@
 GPT-OSS specific implementation of create_tt_model that's compatible with tt_transformers
 """
 
+import os
+
 import ttnn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -53,11 +55,14 @@ def create_tt_model(
     # Avoid loading state_dict for every DP model. An empty dict is intentional
     # when --skip-model-load is used.
     if state_dict is None:
-        state_dict = gpt_oss_model_args.load_state_dict(
-            weights_path=gpt_oss_model_args.model_path,
-            dummy_weights=gpt_oss_model_args.dummy_weights,
-            convert_to_meta_format=True,
-        )
+        if os.getenv("MLPERF_READ_ONLY", "false").lower() == "true":
+            state_dict = {}
+        else:
+            state_dict = gpt_oss_model_args.load_state_dict(
+                weights_path=gpt_oss_model_args.model_path,
+                dummy_weights=gpt_oss_model_args.dummy_weights,
+                convert_to_meta_format=True,
+            )
 
     # Create GPT-OSS model using transformer-compatible constructor
     model = Model.create_transformer_compatible(
