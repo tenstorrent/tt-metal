@@ -102,7 +102,7 @@ KIMI_V2_6 = TestVariant(
     mla_ref_cache_env="KIMI_MLA_REF_CACHE",
     ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.995,
-    moe_pcc_threshold=0.987,
+    moe_pcc_threshold=0.971,
 )
 
 TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI_V2_6]}

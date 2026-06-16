@@ -170,6 +170,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.cpp
+    cpp/ttnn/operations/experimental/topk_large_indices/topk_large_indices_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
@@ -468,7 +469,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/graph/levelized_graph.hpp
     api/ttnn/mesh_device_operation_adapter.hpp
     api/ttnn/mesh_device_operation_utils.hpp
-    api/ttnn/metal2_artifacts.hpp
+    api/ttnn/metal_v2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
     api/ttnn/reports.hpp

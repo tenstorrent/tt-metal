@@ -84,20 +84,21 @@ Grep for "{function_name}" in tests/tt_metal/tt_metal/test_kernels/compute/ (*.c
 |-------|---------------|----------|
 | 1 | `tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_new_op.h` | Existing SFPU op in same arch |
 | 2 | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_new_op.h` | Existing wrapper in `llk_sfpu/` |
-| 2 | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_new_op.h` | Existing `llk_math_eltwise_unary_sfpu_*.h` |
 | 3 | `tt_metal/hw/inc/api/compute/eltwise_unary/new_op.h` | Existing op in `eltwise_unary/` |
+
+The Compute API in Layer 3 calls the SFPU functor directly via the `SFPU_UNARY_CALL` / `SFPU_UNARY_INIT*` macros (declared in `llk_math_eltwise_unary_sfpu_macros.h`), so no per-op `llk_math_eltwise_unary_sfpu_<op>.h` wrapper is required in Layer 2 for the standard pattern.
 
 **Update these files:**
 
 ```
-# Include the new wrapper in the SFPU API aggregator
-Read tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_math_unary_sfpu_api.h
+# Include the SFPU macro/op header where the compute API needs it
+Read tt_metal/hw/inc/api/compute/eltwise_unary/new_op.h
 
 # Include the new compute API header in the unary aggregator
 Read tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h
 ```
 
-**Pattern:** Look at how an existing SFPU op (e.g., `sigmoid`, `relu`) is wired through all 4 layers and replicate the pattern.
+**Pattern:** Look at how an existing SFPU op (e.g., `mish`, `lgamma`) is wired through all 4 layers and replicate the pattern. Avoid using ops like `sigmoid` as templates: their compute-API entry points live inline in `compute_kernel_api.h` rather than in a dedicated `eltwise_unary/<op>.h` header, so they don't follow the standard pattern.
 
 ### Scenario 3: Change Unpack/Pack Behavior
 

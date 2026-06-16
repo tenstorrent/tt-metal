@@ -298,6 +298,18 @@ class DispatcherData:
             return self.kernels[watcher_kernel_id]
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
 
+    @staticmethod
+    def _inspector_kernel_elf_path(kernel, proc_type: int) -> str | None:
+        """Per-processor ELF path resolved by Inspector at compile time, indexed by processor index.
+
+        Returns None when unavailable (older RPC/serialized data without the field, processor index out of
+        range, or an empty entry for a processor this kernel doesn't use), so callers can fall back.
+        """
+        elf_paths = getattr(kernel, "processorElfPaths", None)
+        if elf_paths is None or proc_type < 0 or proc_type >= len(elf_paths):
+            return None
+        return elf_paths[proc_type] or None
+
     def drisc_enabled(self) -> bool:
         return self._drisc_enabled_flag
 
@@ -605,28 +617,34 @@ class DispatcherData:
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if is_active_eth:
-                if proc_name.lower() == "erisc":
-                    kernel_path = kernel.path + "/erisc/erisc.elf"
-                elif proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = (
-                        kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
-                        if self._is_2_erisc_mode
-                        else kernel.path + "/active_erisc/active_erisc.elf"
-                    )
-            else:
-                if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+            # Prefer the per-processor ELF path resolved by Inspector at compile time. It is indexed by
+            # processor index.
+            kernel_path = self._inspector_kernel_elf_path(kernel, proc_type)
+            if not kernel_path:
+                if is_active_eth:
+                    if proc_name.lower() == "erisc":
+                        kernel_path = kernel.path + "/erisc/erisc.elf"
+                    elif proc_name.lower() == "erisc0":
+                        kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
+                    elif proc_name.lower() == "erisc1":
+                        kernel_path = (
+                            kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                            if self._is_2_erisc_mode
+                            else kernel.path + "/active_erisc/active_erisc.elf"
+                        )
                 else:
-                    kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
-            kernel_path = os.path.realpath(kernel_path)
+                    if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                        kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+                    elif proc_name.lower() == "erisc1":
+                        kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                    else:
+                        kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+            kernel_path = os.path.realpath(kernel_path) if kernel_path else None
             # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
-                kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location.device.is_wormhole()) else None
+                kernel_path + ".xip.elf"
+                if kernel_path and not (proc_name == "NCRISC" and location.device.is_wormhole())
+                else None
             )
             if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000

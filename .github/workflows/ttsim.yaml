@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.8.2"
+        default: "v1.8.4"
       job-timeout:
         required: false
         type: number
@@ -376,7 +376,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
             # ToDo: Re-enable this test once tt-sim supports NOC
@@ -384,24 +384,21 @@ jobs:
             # ./build/test/tt_metal/test_single_dm_l1_write
             :
           else
-            # BH issue with eth base fw and idle eth interactions
-            if [[ "${{ matrix.arch }}" == "wormhole_b0" ]]; then
-              ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
-              ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DevicePrintFixture.IdleEthTestPrint"
-              # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
-              # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
-            fi
+            # Exclude *TestQuasar fixtures (configure_mock_mode(QUASAR) triggers dispatch-core
+            # assertion in TTSim) and ProgramSpecHWTest.* (real HW tests that time out in TTSim)
+            # until they gain TTSim-aware GTEST_SKIP() guards in SetUp().
+            ./build/test/tt_metal/unit_tests_api --gtest_filter="-ProgramRunArgsTestQuasar.*:ProgramSpecTestQuasar.*:ProgramSpecHWTest.*"
+            ./build/test/tt_metal/unit_tests_data_movement
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DevicePrintFixture.IdleEthTestPrint"
+            # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
+            # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
-            if [[ "${{ matrix.arch }}" == "wormhole_b0" ]]; then
-              ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
-              ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
-              ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"
-              ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc1"
-              ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
-            fi
+            ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
+            ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
+            ./build/test/tt_metal/unit_tests_eth
+            ./build/test/tt_metal/unit_tests_legacy
           fi
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
