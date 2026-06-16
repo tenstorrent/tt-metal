@@ -162,7 +162,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, InvalidSize) {
     EXPECT_ANY_THROW((void)HostTensor::from_borrowed_data(
         std::span<TypeParam>(input),
         shape,
-        MemoryPin(/*on_creation_callback=*/[]() {}, /*on_destruction_callback=*/[]() {})));
+        MemoryPin(/*increment_ref_count=*/[]() {}, /*decrement_ref_count=*/[]() {})));
 }
 
 TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
@@ -175,8 +175,8 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
             std::span<TypeParam>(input),
             shape,
             MemoryPin(
-                /*on_creation_callback=*/[&]() { ctor_count++; },
-                /*on_destruction_callback=*/[&]() { dtor_count++; }));
+                /*increment_ref_count=*/[&]() { ctor_count++; },
+                /*decrement_ref_count=*/[&]() { dtor_count++; }));
 
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
@@ -208,8 +208,8 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
         std::span<TypeParam>(input),
         shape,
         MemoryPin(
-            /*on_creation_callback=*/[&]() { ctor_count++; },
-            /*on_destruction_callback=*/[&]() { dtor_count++; }));
+            /*increment_ref_count=*/[&]() { ctor_count++; },
+            /*decrement_ref_count=*/[&]() { dtor_count++; }));
 
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
@@ -229,7 +229,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
     auto tensor = HostTensor::from_borrowed_data(
         std::span<TypeParam>(input),
         shape,
-        MemoryPin(/*on_creation_callback=*/[]() {}, /*on_destruction_callback=*/[]() {}),
+        MemoryPin(/*increment_ref_count=*/[]() {}, /*decrement_ref_count=*/[]() {}),
         /*tile=*/Tile({16, 16}));
 
     // Retain row major layout, but use custom tile.

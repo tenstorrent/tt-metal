@@ -13,6 +13,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -51,7 +52,7 @@ TEST_F(TensorFromDeallocatedStorageTest, ConstructingTensorFromDeallocatedStorag
     TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
     // Step 1: Create initial tensor on device
-    Tensor tensor_a = create_device_tensor(tensor_spec, device_);
+    Tensor tensor_a = tt::tt_metal::create_device_tensor(tensor_spec, device_);
 
     ASSERT_NE(tensor_a.device(), nullptr) << "Tensor A should have valid device";
     ASSERT_TRUE(tensor_a.is_allocated()) << "Tensor A should be allocated";
