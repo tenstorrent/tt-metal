@@ -9,7 +9,8 @@
 #include "experimental/llk_math_eltwise_binary_custom.h"
 
 /*************************************************************************
- * LLK MATH ELTWISE BINARY CUSTOM - SDPA specialized blocked sub path
+ * LLK MATH ELTWISE BINARY CUSTOM - blocked bcast-col paths
+ *   SUB: SDPA   |   MUL: indexer_score gate reduction
  *************************************************************************/
 
 template <MathFidelity math_fidelity>
@@ -29,5 +30,27 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_custom(const std::uint32_t ds
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     _llk_math_sub_bcast_cols_reuse_custom_(ct_dim);
+    math::clear_dst_reg_addr();
+}
+
+// No fidelity template arg (unlike the SUB init above): the COL bcast init doesn't take one.
+inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
+    const std::uint32_t operandA, const std::uint32_t operandB) {
+    const std::uint32_t operand_id = get_operand_id(operandA);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+
+    _llk_math_eltwise_binary_init_custom_<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(num_faces);
+}
+
+// Dest-MAC head reduction (see _llk_math_bcast_cols_reuse_custom_): column j MACs onto
+// dest[dst_index + j], so calling once per head into the same dst_index reduces heads in place.
+inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
+    const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
+    LLK_ASSERT(
+        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "dst range out of bounds");
+
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL>(ct_dim);
     math::clear_dst_reg_addr();
 }
