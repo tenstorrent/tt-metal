@@ -306,10 +306,10 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
                 cb_q_buf, cb_k_buf, cb_qk_buf, cb_q_buf /*interm placeholder (num_k_blocks==1)*/, qk_shape);
 
-            if (u == 0 && j == 0) {
+            if (qi == 0 && j == 0) {
                 cb_wait_front(cb_qk, 1);
                 SliceRange r0 = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-                DEVICE_PRINT("DBG QK post-matmul row0col0-7: {}\n", TSLICE(cb_qk, 0, r0));
+                DEVICE_PRINT("DBG qi0 j0 QK post-mm row0: {}\n", TSLICE(cb_qk, 0, r0));
             }
 
             // ---- D: S *= scale  (scalar broadcast, in place) ----
@@ -367,10 +367,10 @@ void kernel_main() {
                 }
             }
 
-            if (u == 0 && j == 0) {
+            if (qi == 0 && j == 0) {
                 cb_wait_front(cb_qk, 1);
                 SliceRange r0 = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-                DEVICE_PRINT("DBG QK post-scale row0col0-7: {}\n", TSLICE(cb_qk, 0, r0));
+                DEVICE_PRINT("DBG qi0 j0 QK postmask row0: {}\n", TSLICE(cb_qk, 0, r0));
             }
 
             // ---- G: m_blk = rowmax(S)  (cb_qk retained for the P subtract) ----
@@ -443,6 +443,12 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
                 cb_p_buf, cb_v_buf, cb_pv_buf, cb_p_buf /*interm placeholder*/, pv_shape);
+
+            if (qi == 1) {
+                cb_wait_front(cb_pv, D_t);
+                SliceRange r1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
+                DEVICE_PRINT("DBG qi1 j={} PV row1: {}\n", (uint32_t)j, TSLICE(cb_pv, 0, r1));
+            }
 
             if (first) {
                 ckl::copy<cb_pv, cb_o_acc>(D_t);
