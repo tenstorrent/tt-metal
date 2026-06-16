@@ -4,8 +4,8 @@
 
 """Single-layer prefill+decode workload for Tracy / device-perf profiling.
 
-Mirrors ``test_ministral3_single_layer.py`` decode PCC setup (1 decoder layer, partial Hub
-weights, prefill 128 tokens then one decode step at position 128) without PCC assertions.
+Mirrors the single-layer model perf setup (1 decoder layer, partial Hub weights, prefill 128
+tokens then one decode step at position 128) without PCC assertions.
 
 Each measured iteration runs **both** prefill and decode inside the ``start``/``stop``
 signpost window. Run prefill before decode so phase-split tooling can separate prefill vs
@@ -44,10 +44,10 @@ import ttnn
 from loguru import logger
 
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import DEVSTRAL2_TEST_MAX_SEQ_LEN
-from models.experimental.devstral2_123B_instruct.tests.test_ministral3_single_layer import (
-    _current_pos_to_tt,
-    _input_ids_to_tt,
-    _setup_devstral_ministral3_partial_one_layer,
+from models.experimental.devstral2_123B_instruct.tests.model_test_helpers import (
+    current_pos_to_tt,
+    input_ids_to_tt,
+    setup_devstral_ministral3_partial_one_layer,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import DEVSTRAL2_LARGE_L1_SMALL_SIZE
 
@@ -77,10 +77,10 @@ def _tracy_signpost_available() -> bool:
 
 
 def _run_prefill_decode_step(tt_model, mesh_device, *, input_ids_prefill, input_ids_decode, decode_pos: int):
-    tt_model(_input_ids_to_tt(input_ids_prefill, mesh_device), mode="prefill", start_pos=0)
-    current_pos_tt = _current_pos_to_tt(torch.tensor([decode_pos], dtype=torch.long), mesh_device)
+    tt_model(input_ids_to_tt(input_ids_prefill, mesh_device), mode="prefill", start_pos=0)
+    current_pos_tt = current_pos_to_tt(torch.tensor([decode_pos], dtype=torch.long), mesh_device)
     return tt_model(
-        _input_ids_to_tt(input_ids_decode, mesh_device),
+        input_ids_to_tt(input_ids_decode, mesh_device),
         mode="decode",
         current_pos=current_pos_tt,
     )
@@ -105,7 +105,7 @@ def _run_prefill_decode_step(tt_model, mesh_device, *, input_ids_prefill, input_
 @pytest.mark.timeout(0)
 def test_profile_single_layer_prefill_decode(mesh_device, batch_size):
     """Prefill 128 + decode 1 on a 1-layer ``TtMinistral3Model`` (profile target for device perf)."""
-    fixtures = _setup_devstral_ministral3_partial_one_layer(
+    fixtures = setup_devstral_ministral3_partial_one_layer(
         mesh_device,
         max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, DECODE_POS + 1),
     )

@@ -8,9 +8,7 @@ Blackhole Loudbox (1×8 mesh).
 
 ## Introduction
 
-This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral-2-123B-Instruct-2512](https://huggingface.co/mistralai/Devstral-2-123B-Instruct-2512)** (Ministral3 text stack). PCC tests compare subgraphs and the full model against HuggingFace references.
-
-**Full-model PCC:** End-to-end parity for the whole TT stack (`TtMinistral3Model`, all **88** decoder layers) is measured in `tests/test_ministral3_full_model.py` — **0.99 PCC**.
+This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral-2-123B-Instruct-2512](https://huggingface.co/mistralai/Devstral-2-123B-Instruct-2512)** (Ministral3 text stack). PCC tests compare subgraphs and the full model against HuggingFace references (see [PCC tests](#pcc-tests)).
 
 **Maximum context length:** The HF checkpoint advertises very long context (YaRN / RoPE tables up to 256K positions). On Blackhole Loudbox (1×8), the working KV budget (`max_seq_len`) is what you can actually run. **Up to 96K tokens** has been verified end-to-end on this mesh (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len` default **262144** in `text_demo.py` and `tt_demo_agent.py`).
 
@@ -28,21 +26,69 @@ This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Dev
 
 
 
-## How to run (PCC tests)
+## PCC tests
 
-From repo root:
+### Decoder layer (prefill + decode)
 
-**All PCC tests** (building blocks + full model; long run, loads Devstral weights):
+Layer-0 PCC tests compare `TtDecoderLayer` against HuggingFace `Ministral3DecoderLayer` using **pretrained layer-0 weights** from the Hub checkpoint. Inputs are **random hidden states** (not token IDs), matching the tt-transformers decoder block test pattern.
+
+Shared helpers live in `tests/decoder_pcc_common.py`. Both tests reuse the on-disk weight cache at **`seq_262144`** (same as `text_demo.py` / teacher-forced sweep), under:
+
+`generated/ttnn/devstral2_123B_instruct/weight_cache/…/layers_88/seq_262144/`
+
+Override the cache key with `DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN` (default `262144`).
+
+| Setting | Value |
+|---------|--------|
+| Layer | 0 only |
+| Batch size | 1 |
+| PCC threshold | ≥ 0.99 |
+| TT `max_seq_len` / KV budget | `262144` (shared weight cache; not swept) |
+| Weights | Pretrained Hub checkpoint (FP8 → bf16); HF and TT share the same `state_dict` |
+
+**Decode** — `tests/test_decoder.py`
+
+- One token per step, random `[1, 1, hidden_size]` activations (`hidden_size=12288`).
+- **10** decode steps at positions **0 … 9** (RoPE at increasing positions, paged KV read/write).
+- No seq-length sweep (input shape is fixed; KV budget comes from the shared 256K cache).
 
 ```sh
-pytest models/experimental/devstral2_123B_instruct/tests/ -k pcc
+pytest models/experimental/devstral2_123B_instruct/tests/test_decoder.py -v
 ```
 
-Single file, e.g. attention only:
+**Prefill** — `tests/test_decoder_prefill.py`
+
+- Sweeps **input** seq length (powers of two **32 … 262144**); TT layer init and weight cache stay at **seq_262144**.
+- **128-token chunked prefill** on TT and HF (`kv_block_size=128`): random activations per chunk, HF via incremental `DynamicCache` forwards. Host memory stays **O(chunk)**, not O(seq_len).
+
+| Test | Input lengths | Purpose |
+|------|---------------|---------|
+| `test_decoder_prefill_pcc_sanity` | 32, 128 | CI gate (`-k sanity`) |
+| `test_decoder_prefill_pcc_sweep` | 32 … 262144 (14 points) | Full sweep (`-k sweep`); one mesh session per test, fresh TT KV per length, shared weight cache |
 
 ```sh
+# CI / quick gate
+pytest models/experimental/devstral2_123B_instruct/tests/test_decoder_prefill.py -k sanity -v
+
+# Full seq-length sweep
+pytest models/experimental/devstral2_123B_instruct/tests/test_decoder_prefill.py -k sweep -v
+```
+
+**Host memory:** Prefill PCC runs HF and TT in **128-token chunks** with per-chunk PCC ≥ 0.99, so host RAM stays bounded on long sweep points (32K … 256K). Each seq length rebuilds the TT layer (KV starts empty) but reuses the **`seq_262144`** on-disk weight cache.
+
+### Other PCC tests
+
+Building-block and full-model PCC (from repo root):
+
+```sh
+# All tests whose names match "pcc"
+pytest models/experimental/devstral2_123B_instruct/tests/ -k pcc
+
+# Example: attention only
 pytest models/experimental/devstral2_123B_instruct/tests/test_ministralattn.py -k pcc
 ```
+
+**Full-model PCC:** End-to-end parity for the whole TT stack (`TtMinistral3Model`, all **88** decoder layers) is in `tests/test_ministral3_full_model.py` — **0.99 PCC**.
 
 ## Demos
 
@@ -255,7 +301,7 @@ Re-runs with cached ``.refpt`` files finish much sooner.
 | **`tt/tt_ministral3_model.py`** | Top-level model: embed → decoder layers → RMSNorm. |
 | **`tt/tt_ministral3_decoder_layer.py`** | Decoder layer (attention + MLP + norms). |
 | **`tt/weight_loading.py`** | Host → device FP8 → bf16 weight dequant and upload (shard-by-shard, disk-cached). |
-| **`tests/`** | Per-op PCC tests (attention, MLP, norms, RoPE, decoder layer, full model). |
+| **`tests/`** | PCC and unit tests: decoder layer prefill/decode (`test_decoder_prefill.py`, `test_decoder.py`), per-op blocks (attention, MLP, norms, RoPE), full model (`test_ministral3_full_model.py`), teacher-forced accuracy. |
 | **`tests/perf/`** | Performance tests: e2e throughput (`test_e2e_performant.py`), single-layer wall-clock perf (`test_perf.py`), and single-layer prefill+decode device perf (`test_device_perf_single_layer_prefill_decode.py`, `test_profile_single_layer_prefill_decode.py`). |
 | **`reference/`** | Pure PyTorch / HF reference inference script (`devstral2_123b_inference.py`). |
 
