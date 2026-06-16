@@ -366,22 +366,26 @@ void emit_formats_array(
         fmt::join(arr, ","));
 }
 
+// Quasar HW DataFormat codes (mirror of the relevant entries in
+// tensix_types.h. A few host DataFormat
+// enumerators use a value that differs from the HW encoding to keep host enum
+// values unique / avoid collisions, so device compilation needs the real HW
+// code. Keep these in sync with tensix_types.h.
+using hw_format_t = std::underlying_type_t<DataFormat>;
+constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
+constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
+
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    // Remap host-only enum values to HW values for device compilation. Several
-    // formats use a host enum value that differs from the Quasar HW value in
-    // tensix_types.h (to keep host enum values unique / avoid collisions):
-    //   - Int16:      host 13 (UInt16 owns 9 on host) -> HW 9
-    //   - MxFp4_2x_B: host 29 (UInt32 owns 24 on host) -> HW 24
-    auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
+    auto as_int = [](DataFormat f) -> hw_format_t {
         switch (f) {
-            case DataFormat::Int16: return 9;
-            case DataFormat::MxFp4_2x_B: return 24;
-            default: return static_cast<std::underlying_type_t<DataFormat>>(f);
+            case DataFormat::Int16: return kHwInt16;
+            case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
+            default: return static_cast<hw_format_t>(f);
         }
     };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
