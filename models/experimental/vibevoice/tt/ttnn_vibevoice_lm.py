@@ -291,6 +291,36 @@ def _round_up(x: int, m: int) -> int:
     return ((x + m - 1) // m) * m
 
 
+def _max_pow2_divisor(n: int) -> int:
+    """Largest power-of-two dividing n (matches ttnn sdpa_decode get_chunk_size)."""
+    if n <= 0:
+        return 1
+    i = 1
+    while i < n and n % (1 << (i + 1)) == 0:
+        i += 1
+    return 1 << i
+
+
+def _k_chunk_from_cache_seq(cache_seq: int) -> int:
+    """Auto k_chunk_size for fused SDPA-decode given fixed cache length S."""
+    return min(512, _max_pow2_divisor(cache_seq))
+
+
+def _fused_sdpa_decode_safe(valid_len: int, k_chunk: int) -> bool:
+    """Return True when ``scaled_dot_product_attention_decode`` is safe on Blackhole.
+
+    Sweep-verified (scripts/vv_sdpa_decode_sweep.py): fused decode is OK for
+    0×k+r and 1×k+r (n_chunks < 2), and for an exact 2×k tail (rem == 0,
+    n_chunks == 2).  Any other multi-chunk layout hangs, including 2×k+1,
+    2×k+2, and long exact multiples like 25×512 or 26×512 @ climate lengths.
+    """
+    n_chunks = valid_len // k_chunk
+    rem = valid_len % k_chunk
+    if n_chunks < 2:
+        return True
+    return n_chunks == 2 and rem == 0
+
+
 def create_kv_cache(n_layers: int) -> KVCache:
     """Empty cache (tensors allocated lazily by TTVibeVoiceLM.alloc_kv_cache)."""
     return KVCache(keys=[None] * n_layers, values=[None] * n_layers, max_seq=0)
@@ -307,10 +337,12 @@ class TTVibeVoiceLM:
     forward() methods operate exclusively on ttnn.Tensor.
     """
 
-    # KV-cache seq length is rounded up to this multiple so the fused SDPA-decode
-    # auto k_chunk_size (must be a multiple of 32 and divide the padded length)
-    # always has clean divisors.
-    _KV_ALIGN = 256
+    # KV-cache seq length is rounded up to this multiple so fused SDPA-decode's auto
+    # k_chunk_size (largest pow2 divisor of S, cap 512) avoids known kernel hangs.
+    # 256-aligned caches pick k_chunk=256; valid_len=513 → layout 2×256+1 HANGs on
+    # Blackhole (see scripts/vv_sdpa_decode_sweep.py). 1024-aligned → k_chunk=512;
+    # valid_len=513 → 1×512+1 is OK (sweep-verified).
+    _KV_ALIGN = 1024
 
     def __init__(self, weights: LMWeights, device):
         self.w = weights
@@ -512,17 +544,67 @@ class TTVibeVoiceLM:
             assert kv_cache is not None and kv_cache.keys[layer_idx] is not None, "decode needs an allocated KV cache"
             ttnn.update_cache(kv_cache.keys[layer_idx], k, start_pos)  # k: [1, n_kv, 1, hd]
             ttnn.update_cache(kv_cache.values[layer_idx], v, start_pos)
-            q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, B, n_heads, hd] for sdpa_decode
-            attn = ttnn.transformer.scaled_dot_product_attention_decode(
-                q_dec,
-                kv_cache.keys[layer_idx],
-                kv_cache.values[layer_idx],
-                cur_pos=[start_pos],
-                scale=self.scale,
-                program_config=_SDPA_DECODE_CFG,
-                compute_kernel_config=_HIFI4,
-            )  # [1, B, n_heads, hd]
-            out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
+
+            cache_seq = kv_cache.max_seq or kv_cache.keys[layer_idx].shape[2]
+            valid_len = start_pos + S
+            k_chunk = _k_chunk_from_cache_seq(cache_seq)
+
+            if _fused_sdpa_decode_safe(valid_len, k_chunk):
+                q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, B, n_heads, hd] for sdpa_decode
+                attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                    q_dec,
+                    kv_cache.keys[layer_idx],
+                    kv_cache.values[layer_idx],
+                    cur_pos=[start_pos],
+                    scale=self.scale,
+                    program_config=_SDPA_DECODE_CFG,
+                    compute_kernel_config=_HIFI4,
+                )  # [1, B, n_heads, hd]
+                out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
+            else:
+                # Fallback: fp32 manual GQA decode over cache prefix (slower but no hang).
+                k_all = ttnn.slice(
+                    kv_cache.keys[layer_idx],
+                    [0, 0, 0, 0],
+                    [B, n_kv, valid_len, head_dim],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                v_all = ttnn.slice(
+                    kv_cache.values[layer_idx],
+                    [0, 0, 0, 0],
+                    [B, n_kv, valid_len, head_dim],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                repeat = n_heads // n_kv
+                k_slices, v_slices = [], []
+                for kv_idx in range(n_kv):
+                    kh = ttnn.slice(
+                        k_all,
+                        [0, kv_idx, 0, 0],
+                        [B, kv_idx + 1, valid_len, head_dim],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    vh = ttnn.slice(
+                        v_all,
+                        [0, kv_idx, 0, 0],
+                        [B, kv_idx + 1, valid_len, head_dim],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    for _ in range(repeat):
+                        k_slices.append(kh)
+                        v_slices.append(vh)
+                k_rep = ttnn.concat(k_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                v_rep = ttnn.concat(v_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                q_f32 = ttnn.typecast(q, ttnn.float32)
+                k_f32 = ttnn.typecast(k_rep, ttnn.float32)
+                v_f32 = ttnn.typecast(v_rep, ttnn.float32)
+                k_t = ttnn.permute(k_f32, (0, 1, 3, 2))
+                scores = ttnn.matmul(q_f32, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                scores = ttnn.mul(scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                out = ttnn.typecast(out, ttnn.bfloat16)
+                out = _reshape_tt(out, [B, 1, S, n_heads * head_dim])
 
         # Output projection
         out = ttnn.linear(out, layer_w.wo, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
