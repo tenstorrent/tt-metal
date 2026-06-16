@@ -130,9 +130,9 @@
 - name: LLK SD blackhole (full suite, nightly)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-MeshDeviceFixture.Top32RmDevPipelineCompletes'
   skus:
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 40
-    bh_p100a_civ2_viommu:
+    bh_p100:
       timeout: 40
   team: llk
   arch: blackhole
