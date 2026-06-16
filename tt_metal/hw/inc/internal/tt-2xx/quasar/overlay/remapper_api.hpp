@@ -52,6 +52,9 @@ private:
     tClientR_Config_Reg_u clientR_configs[REMAP_NUM_PAIRS]{};
     tClientL_Config_Reg_u clientL_configs[REMAP_NUM_PAIRS]{};
     uint32_t current_pair_idx;
+    // Highest pair index programmed to HW since last reset (0 if none yet)
+    // Updated by note_pair_configured()
+    uint32_t pair_high_watermark_ = 0;
 
 public:
     /**
@@ -86,6 +89,30 @@ public:
      * @return Current pair index
      */
     uint32_t get_pair_index() const { return current_pair_idx; }
+
+    /**
+     * @brief Reset the configured-pair high watermark
+     */
+    void reset_pair_high_watermark() { pair_high_watermark_ = 0; }
+
+    /**
+     * @brief Record that pair_idx was programmed to hardware; extends the high watermark.
+     *
+     * Stores the largest pair index seen. Teardown clears pairs [0, get_pair_high_watermark()].
+     *
+     * @param pair_idx Pair index (0-63)
+     */
+    void note_pair_configured(uint32_t pair_idx) {
+        ASSERT(pair_idx < REMAP_NUM_PAIRS);
+        if (pair_idx > pair_high_watermark_) {
+            pair_high_watermark_ = pair_idx;
+        }
+    }
+
+    /**
+     * @return Highest pair index programmed since the last reset (0 if none yet).
+     */
+    uint32_t get_pair_high_watermark() const { return pair_high_watermark_; }
 
     // ========================================================================
     // ClientR Configuration Methods
@@ -543,6 +570,77 @@ public:
 
         // Write back modified value
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), modified_val);
+    }
+
+    // ClientL.f.valid occupies bits [11:8]; bit (8 + slot) enables ClientR slot `slot`.
+    static constexpr uint32_t CLIENTL_VALID_FIELD_LSB = 8u;
+
+    /**
+     * @brief Clear one ClientR slot's valid bit in the ClientL config register (hardware RMW).
+     *
+     * ClientR slots do not have their own valid bits — validity is encoded in ClientL's
+     * 4-bit `valid` field (bits [11:8] of REMAP_CLIENT_L_CONFIG_REG). Slot 0 → bit 8,
+     * slot 1 → bit 9, etc. This reads the live register, clears the selected bit, and
+     * writes back without touching local clientL_configs[] (same pattern as setSyncBarrier).
+     *
+     * @param slot ClientR slot index (0-3)
+     * @param pair_idx Pair index (0-63)
+     */
+    static void clear_clientR_slot_valid_hw(uint32_t slot, uint32_t pair_idx) {
+        if (slot >= 4u || pair_idx >= REMAP_NUM_PAIRS) {
+            return;
+        }
+        const uint32_t addr = REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx);
+        const uint32_t clear_mask = ~(1u << (CLIENTL_VALID_FIELD_LSB + slot));
+        WRITE_REG32(addr, READ_REG32(addr) & clear_mask);
+    }
+
+    /**
+     * @brief Clear ClientR slot 0's valid bit on every remapper pair (hardware RMW).
+     *
+     * Iterates pairs [0, REMAP_NUM_PAIRS) and clears bit 8 of each ClientL config
+     * register. Use after remapper fan-out to drop the first consumer from the valid
+     * mask without reprogramming id/cnt_sel fields.
+     */
+    static void clear_clientR0_valid_all_pairs_hw() {
+        constexpr uint32_t clear_mask = ~(1u << CLIENTL_VALID_FIELD_LSB);  // bit 8
+        for (uint32_t pair_idx = 0; pair_idx < REMAP_NUM_PAIRS; pair_idx++) {
+            const uint32_t addr = REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx);
+            WRITE_REG32(addr, READ_REG32(addr) & clear_mask);
+        }
+    }
+
+    /**
+     * @brief Clear one ClientR slot's valid bit on every remapper pair (hardware RMW).
+     *
+     * @param slot ClientR slot index (0-3)
+     */
+    static void clear_clientR_slot_valid_all_pairs_hw(uint32_t slot) {
+        if (slot >= 4u) {
+            return;
+        }
+        const uint32_t clear_mask = ~(1u << (CLIENTL_VALID_FIELD_LSB + slot));
+        for (uint32_t pair_idx = 0; pair_idx < REMAP_NUM_PAIRS; pair_idx++) {
+            const uint32_t addr = REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx);
+            WRITE_REG32(addr, READ_REG32(addr) & clear_mask);
+        }
+    }
+
+    /**
+     * @brief Clear ClientL valid bits [11:8] on every configured pair (hardware RMW).
+     *
+     * Iterates pairs [0, pair_high_watermark_] inclusive — skips unconfigured pairs above.
+     * Preserves id_L, cnt_sel_L, and control flags; disables all ClientR slot routing.
+     */
+    void clear_clientL_valid_up_to_high_watermark_hw() {
+        constexpr uint32_t valid_field_mask = 0xFu << CLIENTL_VALID_FIELD_LSB;
+        const uint32_t limit = (pair_high_watermark_ + 1u < REMAP_NUM_PAIRS)
+                                   ? pair_high_watermark_ + 1u
+                                   : REMAP_NUM_PAIRS;
+        for (uint32_t pair_idx = 0; pair_idx < limit; pair_idx++) {
+            const uint32_t addr = REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx);
+            WRITE_REG32(addr, READ_REG32(addr) & ~valid_field_mask);
+        }
     }
 
     /**
