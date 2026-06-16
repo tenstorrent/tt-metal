@@ -198,6 +198,33 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
+ * Per-batch counts returned by CompilePrograms.
+ */
+struct ParallelCompileStats {
+    std::size_t num_programs = 0;  // programs handed in
+    std::size_t num_errors = 0;    // programs whose compile threw (caught, not propagated)
+    int max_workers = 0;           // worker threads actually used (resolved when the input is <= 0)
+};
+
+/**
+ * Compiles a batch of programs in parallel, warming the on-disk JIT cache.
+ *
+ * No command-queue or program-cache state is touched, so distinct programs compile
+ * concurrently and safely; buffer addresses are irrelevant to compilation. Per-program
+ * failures are caught, logged, and counted rather than propagated. The caller owns the
+ * programs' lifetime for the duration of the call.
+ *
+ * Return value: ParallelCompileStats
+ *
+ * | Argument    | Description                                     | Type                 | Required |
+ * |-------------|-------------------------------------------------|----------------------|----------|
+ * | device      | Which device the programs are compiled for      | IDevice*             | Yes      |
+ * | programs    | Programs to compile (borrowed, not owned)       | Span<Program* const> | Yes      |
+ * | max_workers | Worker threads; <= 0 uses hardware concurrency  | int                  | No       |
+ */
+ParallelCompileStats CompilePrograms(IDevice* device, tt::stl::Span<Program* const> programs, int max_workers = 0);
+
+/**
  * Writes runtime args that are saved in the program to device
  *
  * Return value: void

@@ -40,6 +40,7 @@ set(UNIT_TESTS_API_SOURCES
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
+    test_compile_programs.cpp
     test_compiler_include_paths.cpp
     test_direct.cpp
     test_dram_kernels.cpp

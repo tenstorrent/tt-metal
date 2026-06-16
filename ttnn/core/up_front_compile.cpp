@@ -4,18 +4,14 @@
 
 #include "ttnn/up_front_compile.hpp"
 
-#include <algorithm>
-#include <atomic>
 #include <chrono>
-#include <thread>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>  // tt::tt_metal::detail::CompileProgram
+#include <tt-metalium/tt_metal.hpp>  // tt::tt_metal::detail::CompilePrograms
 
 #include "ttnn/graph/graph_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>  // GraphTracker
@@ -111,13 +107,11 @@ CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int
     TT_FATAL(!devices.empty(), "up_front_compile: mesh device has no devices");
     tt::tt_metal::IDevice* dev = devices.front();
 
-    auto& store = ProgramCollector::instance();
-    // Take ownership of the collected workloads up front so the worker threads
-    // compile from a snapshot whose lifetime we control. up_front_compile releases
-    // the GIL, so without this a concurrent up_front_clear() / begin_collect(clear=true)
-    // could destroy the MeshWorkloads — and the Program* borrowed into them — while
-    // workers are still compiling (use-after-free).
-    auto workloads = store.take_workloads();
+    // Take ownership of the collected workloads up front so the compile reads from a snapshot
+    // whose lifetime we control. up_front_compile releases the GIL, so without this a concurrent
+    // up_front_clear() / begin_collect(clear=true) could destroy the MeshWorkloads — and the
+    // Program* borrowed into them — mid-compile (use-after-free).
+    auto workloads = ProgramCollector::instance().take_workloads();
     std::vector<tt::tt_metal::Program*> progs;
     for (auto& [hash, workload] : workloads) {
         for (auto& [range, program] : workload.get_programs()) {
@@ -125,51 +119,16 @@ CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int
         }
     }
 
-    if (max_workers <= 0) {
-        max_workers = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-    }
+    // The parallel-compile driver itself is a tt_metal primitive; ttnn only supplies the
+    // collected programs and times the call. The snapshot (and its workloads) drops on return.
+    auto t0 = clock::now();
+    auto result = tt::tt_metal::detail::CompilePrograms(dev, progs, max_workers);
 
     CompileStats stats;
-    stats.num_programs = progs.size();
-    stats.max_workers = max_workers;
-
-    auto t0 = clock::now();
-    if (!progs.empty()) {
-        std::atomic<std::size_t> next{0};
-        std::atomic<std::size_t> errors{0};
-        auto worker = [&]() {
-            std::size_t i;
-            while ((i = next.fetch_add(1)) < progs.size()) {
-                try {
-                    // Compile-only: builds kernels into the on-disk JIT cache. No command
-                    // queue / program-cache state is touched, so distinct programs compile
-                    // concurrently and safely. Buffer addresses are irrelevant to compile.
-                    tt::tt_metal::detail::CompileProgram(dev, *progs[i]);
-                } catch (const std::exception& e) {
-                    // Non-fatal: a failed warm-up compile just leaves that program cold for the
-                    // real run. Log the reason so the failure isn't silent behind the error count.
-                    errors.fetch_add(1);
-                    log_warning(tt::LogAlways, "up_front_compile: program {} failed to compile: {}", i, e.what());
-                } catch (...) {
-                    errors.fetch_add(1);
-                    log_warning(tt::LogAlways, "up_front_compile: program {} failed to compile (unknown exception)", i);
-                }
-            }
-        };
-        int n = std::min<int>(max_workers, static_cast<int>(progs.size()));
-        std::vector<std::thread> pool;
-        pool.reserve(n);
-        for (int w = 0; w < n; ++w) {
-            pool.emplace_back(worker);
-        }
-        for (auto& t : pool) {
-            t.join();
-        }
-        stats.num_errors = errors.load();
-    }
+    stats.num_programs = result.num_programs;
+    stats.num_errors = result.num_errors;
+    stats.max_workers = result.max_workers;
     stats.wall_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(clock::now() - t0).count();
-
-    // take_workloads() already emptied the store; the local snapshot drops here.
     return stats;
 }
 

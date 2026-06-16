@@ -21,11 +21,13 @@
 #include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <type_traits>
@@ -1119,6 +1121,52 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     program.impl().compile(device, force_slow_dispatch);
+}
+
+ParallelCompileStats CompilePrograms(IDevice* device, tt::stl::Span<Program* const> programs, int max_workers) {
+    ZoneScoped;
+    TT_FATAL(device != nullptr, "CompilePrograms: device must not be null");
+    if (max_workers <= 0) {
+        max_workers = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    }
+
+    ParallelCompileStats stats;
+    stats.num_programs = programs.size();
+    stats.max_workers = max_workers;
+    if (programs.empty()) {
+        return stats;
+    }
+
+    std::atomic<std::size_t> next{0};
+    std::atomic<std::size_t> errors{0};
+    auto worker = [&]() {
+        std::size_t i;
+        while ((i = next.fetch_add(1)) < programs.size()) {
+            try {
+                CompileProgram(device, *programs[i]);
+            } catch (const std::exception& e) {
+                // Non-fatal: a failed compile just leaves that program cold. Log the reason so
+                // the failure isn't silent behind the error count.
+                errors.fetch_add(1);
+                log_warning(tt::LogAlways, "CompilePrograms: program {} failed to compile: {}", i, e.what());
+            } catch (...) {
+                errors.fetch_add(1);
+                log_warning(tt::LogAlways, "CompilePrograms: program {} failed to compile (unknown exception)", i);
+            }
+        }
+    };
+
+    int n = std::min<int>(max_workers, static_cast<int>(programs.size()));
+    std::vector<std::thread> pool;
+    pool.reserve(n);
+    for (int w = 0; w < n; ++w) {
+        pool.emplace_back(worker);
+    }
+    for (auto& t : pool) {
+        t.join();
+    }
+    stats.num_errors = errors.load();
+    return stats;
 }
 
 }  // namespace detail
