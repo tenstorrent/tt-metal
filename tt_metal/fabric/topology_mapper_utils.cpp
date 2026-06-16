@@ -1890,10 +1890,10 @@ void add_pinning_constraints(
         for (const auto& position : positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
-                log_warning(
+                log_critical(
                     tt::LogFabric,
                     "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
-                    "{}) from MGD not found in physical topology; skipping this pin",
+                    "{}) from MGD not found in physical topology",
                     position.first.get(),
                     position.second.get(),
                     fabric_node.mesh_id.get(),
@@ -1927,14 +1927,7 @@ void add_pinning_constraints(
             }
         }
     }
-    // TODO: Would like to communicate this to the caller so they can fail the mapping if any pinnings are skipped.
-    // https://github.com/tenstorrent/tt-metal/issues/43451
-    if (!success) {
-        log_warning(
-            tt::LogFabric,
-            "Some pinning constraints were skipped because the ASIC (tray, location) was absent from the physical "
-            "mesh; topology mapping proceeds without those pins");
-    }
+    TT_FATAL(success, "Failed to add pinning constraints");
 }
 
 // Parallel physical inter-mesh edges from one exit ASIC to a destination mesh (each edge is one link / channel).
