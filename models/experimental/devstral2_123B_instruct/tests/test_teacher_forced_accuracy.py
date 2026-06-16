@@ -49,6 +49,7 @@ from models.experimental.devstral2_123B_instruct.demo.text_demo import (
 from models.experimental.devstral2_123B_instruct.reference.hf_reference_loader import (
     DEVSTRAL2_MODEL_ID,
     load_devstral2_causal_lm,
+    resolve_hf_input_device,
 )
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
     devstral2_weight_cache_seq_len,
@@ -257,15 +258,15 @@ def _generate_reference_file(
 
     model = load_devstral2_causal_lm()
     model.eval()
-    device = next(model.parameters()).device
+    input_device = resolve_hf_input_device(model)
 
-    encoded_tokens_tensor = torch.tensor(encoded_tokens, device=device).unsqueeze(0)
+    encoded_tokens_tensor = torch.tensor(encoded_tokens, dtype=torch.long).unsqueeze(0)
     all_top5_tokens: list[torch.Tensor] = []
 
     with torch.no_grad():
         for chunk_start in range(0, total_length - 1, chunk_size):
             chunk_end = min(chunk_start + chunk_size, total_length)
-            chunk_tokens = encoded_tokens_tensor[:, chunk_start:chunk_end]
+            chunk_tokens = encoded_tokens_tensor[:, chunk_start:chunk_end].to(input_device)
             chunk_next_tokens = encoded_tokens[chunk_start + 1 : chunk_end + 1]
             actual_chunk_size = min(len(chunk_tokens[0]), len(chunk_next_tokens))
             chunk_tokens = chunk_tokens[:, :actual_chunk_size]
