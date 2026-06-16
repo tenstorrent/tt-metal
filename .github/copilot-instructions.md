@@ -25,7 +25,7 @@ Respond in **English**. Be terse. Use code blocks for every actionable diff.
 
 ### 🔴 CRITICAL (Block merge)
 - **Correctness**: logic errors, data corruption risks, race conditions
-- **ABI Breakage**: struct layout change, symbol deleted from a public header in `tt_metal/api/` or `ttnn/core/`
+- **ABI Breakage**: struct layout change, symbol deleted from a public header in `tt_metal/api/` or `ttnn/api/ttnn/`
 - **Kernel Safety**: missing bounds check on L1 tile addressing; broken synchronization barrier order
 - **Security**: hardcoded credentials, secrets, or tokens anywhere in the diff
 
@@ -67,7 +67,7 @@ if (is_transient_direct_to_router) { ... }
 
 Use this format for every finding:
 
-```
+````
 **[🔴/🟡/🟢] Category: Short title**
 
 What the issue is and where (file:line).
@@ -75,10 +75,10 @@ What the issue is and where (file:line).
 **Why it matters:** one sentence on impact.
 
 **Suggested fix:**
-\`\`\`cpp
+```cpp
 // minimal diff
-\`\`\`
 ```
+````
 
 ## Testing Expectations
 
