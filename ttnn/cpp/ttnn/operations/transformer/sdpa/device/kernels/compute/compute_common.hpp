@@ -243,7 +243,7 @@ void calculate_recip_first_column() {
             // }
             // v_endif;
             if constexpr (!(DST_ACCUM_MODE || APPROX)) {
-                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::Nearest);
             }
             sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
@@ -259,7 +259,7 @@ void calculate_recip_first_column() {
                 out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
             } else {
                 out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::Nearest);
             }
             sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
