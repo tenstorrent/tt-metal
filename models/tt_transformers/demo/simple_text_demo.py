@@ -1542,11 +1542,7 @@ def test_demo_text(
             device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
-            config_params={
-                "data_parallel": data_parallel,
-                "tensor_parallel": num_devices // data_parallel,
-                "optimizations": "accuracy" if token_accuracy else "performance",
-            },
+            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
             device_hostname=socket.gethostname(),
