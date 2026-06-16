@@ -14,6 +14,7 @@
 #include "tt_fabric_test_constants.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
     for (const auto& sync_config : config.sync_configs) {
