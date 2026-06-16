@@ -20,6 +20,9 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_sdpa_fw.h"
+#endif
 
 constexpr uint32_t onetile = 1U;
 
@@ -37,26 +40,21 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
 // saving ~75% of SFPU cycles.
 #ifdef TRISC_MATH
-void calculate_recip_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat out;
-        if constexpr (DST_ACCUM_MODE) {
-            out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-        } else {
-            out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
-        }
-        sfpi::dst_reg[0] = out;
-        sfpi::dst_reg += 2;
-    }
+void recip_tile_first_column(uint32_t idst) {
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
 }
 
-void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, VectorMode::C);
+// First-column exp with fused scale: exp(scale * x) on column 0 only.
+// Uses _ckernel_sfpu_exp_accurate_ — the same function behind exp_tile<false, true>,
+// so accuracy is identical to the full-tile version. Stride-2 access skips column 1.
+// Combined with VectorMode::C (2 faces instead of 4), this gives 4× fewer SFPU iterations
+// compared to exp_tile<false, true>(idx, VectorMode::RC).
+template <uint16_t scale_bf16>
+void exp_tile_first_column(uint32_t idst) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exponential_first_column, (scale_bf16), idst, VectorMode::C);
 }
-#endif  // TRISC_MATH
+#endif
 
 // Apply an attention mask to a Q@K^T score tile already sitting in DST register `register_idx`.
 //
