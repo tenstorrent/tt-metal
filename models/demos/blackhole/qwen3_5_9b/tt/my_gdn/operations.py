@@ -49,7 +49,7 @@ def conv1d_weight_taps(conv_weight, kernel_size, mesh_device, *, dtype=ttnn.bflo
     return taps
 
 
-def causal_conv1d_silu(x, weight_taps, kernel_size, mesh_device, *, memory_config=None):
+def causal_conv1d_silu(x, weight_taps, kernel_size, mesh_device, *, pad, memory_config=None):
     """Depthwise causal conv1d followed by SiLU — matches HF bit-for-bit (up to dtype).
 
     Reproduces ``F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])`` for the no-cache
@@ -64,22 +64,12 @@ def causal_conv1d_silu(x, weight_taps, kernel_size, mesh_device, *, memory_confi
 
     * ``x``           — ttnn activation ``[B, 1, T, D]`` (TILE_LAYOUT).
     * ``weight_taps`` — the ``K`` tensors returned by :func:`conv1d_weight_taps`.
+    * ``pad``         — optional persistent ``[B, 1, K-1, D]`` zero buffer to prepend.
+                        Pass one (built once in ``__init__``) to keep this function
+                        trace-capturable; omit it and we allocate a fresh one.
     * returns         — ttnn ``[B, T, D]`` (TILE_LAYOUT).
     """
     B, T, D = x.shape[0], x.shape[2], x.shape[3]
-
-    # Left-pad the sequence with K-1 zeros. This is the whole trick behind making
-    # the conv causal: with the pad in front, output position t only ever reads
-    # inputs at or before t. It reproduces HF's `padding=K-1` together with the
-    # `[:seq_len]` slice — HF also right-pads, but that slice throws the right
-    # tail away, so we simply never create it.
-    pad = ttnn.zeros(
-        [B, 1, kernel_size - 1, D],
-        device=mesh_device,
-        dtype=x.dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=memory_config,
-    )
     x_padded = ttnn.concat([pad, x], dim=2, memory_config=memory_config)
 
     # FIR accumulation: out[:, t, :] = Σ_k taps[k] * x_padded[:, t+k, :]. Each

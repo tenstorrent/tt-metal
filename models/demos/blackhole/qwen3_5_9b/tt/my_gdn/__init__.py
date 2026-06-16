@@ -119,6 +119,44 @@ class Qwen35GatedDeltaNet(LightweightModule):
         self.eye = chunk_identity(self.chunk_size, self.mesh_device)
         self.triangular_masks = chunk_triangular_masks(self.chunk_size, self.mesh_device)
 
+        # Persistent zero pads for the prefill path, built once here next to the other
+        # per-shape constants so the forward never has to mint them. Allocating a
+        # constant buffer (ttnn.zeros / ttnn.pad with a fill value) inside the forward
+        # is a host-side write that ttnn trace capture rejects; concatenating against a
+        # pre-built buffer is pure device work and captures cleanly. All dims below are
+        # already the per-device (post-TP-shard) values, so we do NOT divide by tp.
+        #
+        # conv_pad: the K-1 zero columns causal_conv1d_silu prepends. bf16 + TILE to
+        # match the bf16 mixed_qkv it concats with (same shape family as conv_state).
+        self.conv_pad = ttnn.zeros(
+            [self.batch_size, 1, self.conv_kernel_size - 1, self.conv_dim],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+        )
+        # chunk_pad_*: the seq-dim tail that rounds the sequence up to a chunk_size
+        # multiple in chunk_gated_delta_rule. fp32 + TILE to match q/k/v/beta/g after
+        # their typecast. pad_size depends on the runtime seq_len, so we allocate at the
+        # full chunk_size width and slice the first pad_size columns at use. One qkv
+        # tail serves query/key/value because head_k_dim == head_v_dim (asserted); if
+        # they ever diverge, split into a head_k_dim tail and a head_v_dim tail.
+        assert self.head_k_dim == self.head_v_dim, (
+            "chunk_pad_qkv assumes head_k_dim == head_v_dim so one zero tail serves "
+            f"q/k/v; got {self.head_k_dim} vs {self.head_v_dim} — split into per-dim tails"
+        )
+        self.chunk_pad_qkv = ttnn.zeros(
+            [self.batch_size, self.num_v_heads, self.chunk_size, self.head_v_dim],
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+        )
+        self.chunk_pad_bg = ttnn.zeros(
+            [self.batch_size, self.num_v_heads, self.chunk_size],
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+        )
+
     def chunk_gated_delta_rule(
         self, query, key, value, g, beta, chunk_size, initial_state=None, use_qk_l2norm_in_kernel=False
     ):
@@ -142,13 +180,27 @@ class Qwen35GatedDeltaNet(LightweightModule):
 
         sequence_length = query.shape[2]
         pad_size = (chunk_size - sequence_length % chunk_size) % chunk_size
-        qkv_pad = [(0, 0), (0, 0), (0, pad_size), (0, 0)]  # pad seq (dim 2) at the end only
-        bg_pad = [(0, 0), (0, 0), (0, pad_size)]
-        query = ttnn.pad(query, padding=qkv_pad, value=0.0)
-        key = ttnn.pad(key, padding=qkv_pad, value=0.0)
-        value = ttnn.pad(value, padding=qkv_pad, value=0.0)
-        beta = ttnn.pad(beta, padding=bg_pad, value=0.0)
-        g = ttnn.pad(g, padding=bg_pad, value=0.0)
+        # Pad the seq dim (dim 2) up to a chunk_size multiple. ttnn.pad(value=0.0) does
+        # this in one op, but it materializes a host constant into a fresh buffer — a
+        # host-side write that ttnn trace capture forbids, and it issues that write even
+        # when pad_size == 0. So when the sequence is already chunk-aligned we skip the
+        # op entirely, and otherwise we concat a pad_size-wide slice of the persistent
+        # zero tails built in initialize_params_gated_delta_rule. That leaves only a
+        # device-side slice + concat in the traced graph. seq_len is tile-aligned (a
+        # multiple of 32), so pad_size is one of {0, 32, 64, 96} — always a whole number
+        # of tiles, which keeps the concat on the seq (tile) dim well-formed.
+        if pad_size > 0:
+            assert sequence_length % 32 == 0, (
+                f"seq_len {sequence_length} must be tile-aligned (a multiple of 32) for the "
+                "trace-safe pad concat, else pad_size straddles a partial tile"
+            )
+            qkv_tail = self.chunk_pad_qkv[:, :, :pad_size, :]  # [B, H, pad_size, head_dim]
+            bg_tail = self.chunk_pad_bg[:, :, :pad_size]  # [B, H, pad_size]
+            query = ttnn.concat([query, qkv_tail], dim=2)
+            key = ttnn.concat([key, qkv_tail], dim=2)
+            value = ttnn.concat([value, qkv_tail], dim=2)
+            beta = ttnn.concat([beta, bg_tail], dim=2)
+            g = ttnn.concat([g, bg_tail], dim=2)
 
         total_sequence_length = sequence_length + pad_size
         query = query * self.scale
@@ -465,6 +517,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
             weight_taps=weights.w_taps,
             kernel_size=self.conv_kernel_size,
             mesh_device=self.mesh_device,
+            pad=self.conv_pad,  # persistent zero pad so the conv stays trace-capturable
         )  # [B, 1, seq_len, conv_dim, dim]
 
         query, key, value = ttnn.split(mixed_qkv, [self.key_dim, self.key_dim, self.value_dim], dim=-1)
