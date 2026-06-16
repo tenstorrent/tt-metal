@@ -206,16 +206,21 @@ def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, prod
     import torch
 
     path = _act_path(subctx, chunk_idx, producer_rank)
+    fname = os.path.basename(path)
+    act_dir = _act_dir()
     attempts = int(os.environ.get("PREFILL_PP_RECV_RETRIES", "3000"))
     # Wait (poll) for the producer's atomic-renamed file; time it separately from the transfer cost.
+    # Poll with os.listdir, NOT os.path.exists: a failed name lookup is cached by NFS as a negative
+    # dentry for up to acdirmax (~60s here), so a consumer that polls before the producer writes would
+    # not see the file for ~60s. os.listdir issues a READDIR that revalidates the directory each poll.
     t_wait = time.perf_counter()
     waits = 0
     for attempt in range(attempts):
-        if os.path.exists(path):
+        if fname in os.listdir(act_dir):
             break
         if attempt == attempts - 1:
             raise FileNotFoundError(path)
-        waits += 1  # producer hasn't published this chunk yet (still computing, or cross-host NFS lag)
+        waits += 1  # producer hasn't published this chunk yet (still computing)
         time.sleep(0.1)
     ms_wait = (time.perf_counter() - t_wait) * 1000.0
     t_r = time.perf_counter()
@@ -444,10 +449,13 @@ def main() -> None:
     )
     runtime.compile()
 
-    # No distributed_context barrier anywhere: ranks run fully independently, coordinated only by the
-    # activation+metadata file handoff. A barrier would turn one rank's failure into a deadlock for the
-    # others (a dead producer hangs the barrier); without it, a missing producer just times out the
-    # consumer's bounded recv poll. The distributed context is used only for rank identity.
+    # Warm-up sync — the ONLY barrier. Every rank finishes compile before any chunk enters the
+    # pipeline, so a downstream rank isn't still warming up while an upstream one races ahead: the
+    # ranks actually overlap and activations don't pile up. The per-chunk loop takes no barrier, so
+    # ranks still run independently once started. Trade-off: a rank that dies during compile hangs the
+    # others here — acceptable for this POC.
+    ttnn.distributed_context_barrier()
+
     # The activation-handoff dir must exist before the first send (send_activation does not mkdir).
     os.makedirs(_act_dir(), exist_ok=True)
 
