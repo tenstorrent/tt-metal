@@ -15,10 +15,12 @@
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
 using namespace tt::tt_fabric::linear::experimental;
+using namespace dataflow_kernel_lib::ccl;  // FabricStreamSender (Direct path; mux stays raw)
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -193,7 +195,9 @@ void kernel_main() {
     }
 #else
     size_t arg_for_fab = arg_idx;
-    auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
+    // Direct path: build the egress through the helper (mux path above stays raw). Consumes
+    // the same fabric args (build_from_args); the open is deferred to tx.open() below.
+    FabricStreamSender tx(arg_for_fab, /*is_forward=*/direction == 0, /*alignment=*/1);
 #endif
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
@@ -211,20 +215,55 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect(*fabric_direction_connection);
     }
 #else
-    fabric_connection.open();
-
-    auto* fabric_direction_connection =
-        direction ? &fabric_connection.get_backward_connection() : &fabric_connection.get_forward_connection();
+    tx.open();
 #endif
-    // pre-populate packet headers
+#ifdef USE_WORKER_MUX
+    // pre-populate packet headers (mux path). The Direct path's headers are owned by tx and
+    // allocated lazily on each arm_* below.
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
+#endif
+
+    // Fabric-send shims: the Direct path routes each send through the helper (tx); the mux
+    // path keeps the raw connection-templated calls. The barrier/loop bodies below call these
+    // uniformly so the op orchestration stays connection-agnostic (the #ifdef lives only here).
+#ifdef USE_WORKER_MUX
+    auto send_scatter = [&](const uint64_t* addrs, uint32_t n, uint32_t src) {
+        uint16_t cs[3] = {page_size, page_size, page_size};
+        fabric_unicast_noc_scatter_write_with_state<
+            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+            UnicastScatterWriteUpdateMask::PayloadSize>(
+            fabric_direction_connection,
+            pkt_scatter_hdr,
+            src,
+            NocUnicastScatterCommandHeader(addrs, cs, static_cast<uint8_t>(n)),
+            page_size * n);
+    };
+    auto send_unicast = [&](uint64_t dst, uint32_t src) {
+        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+            fabric_direction_connection, pkt_unicast_hdr, src, NocUnicastCommandHeader{dst});
+    };
+    auto send_inc = [&](uint64_t dst) {
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_direction_connection, pkt_hdr_sem_inc, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dst, 0});
+    };
+    auto send_mcast_inc = [&](uint64_t dst) {
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_direction_connection, pkt_hdr_sem_inc, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dst, 0});
+    };
+#else
+    auto send_scatter = [&](const uint64_t* addrs, uint32_t n, uint32_t src) { tx.write_scatter(addrs, n, src); };
+    auto send_unicast = [&](uint64_t dst, uint32_t src) { tx.write(dst, src); };
+    auto send_inc = [&](uint64_t dst) { tx.inc(dst); };
+    auto send_mcast_inc = [&](uint64_t dst) { tx.multicast_inc(dst); };
+#endif
 
     if (use_barrier_sem) {
         if (detail::valid_targets(direction)) {
             // only initialize if we're actually going to send something over fabric
 
+#ifdef USE_WORKER_MUX
             ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_sem_inc, barrier_multicast_route_info);
             fabric_multicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
@@ -234,6 +273,10 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                     0,  // ignore
                     static_cast<uint32_t>(1)});
+#else
+            tx.set_route_multicast(barrier_multicast_route_info);
+            tx.arm_multicast_inc(1);
+#endif
 
             if constexpr (topology == Topology::Linear) {
                 // multicast to both the forward and backward worker on all devices that you write to.
@@ -243,27 +286,18 @@ void kernel_main() {
                 // device going in the same direction
                 uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_direction_connection,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
+                send_mcast_inc(same_direction_barrier_sem_noc_addr_in_pkt);
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_direction_connection,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
+                send_mcast_inc(opposite_direction_barrier_sem_noc_addr_in_pkt);
 
             } else if constexpr (topology == Topology::Ring) {
                 // multicast to entire ring of workers going in the same direction
                 uint64_t barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_direction_connection,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+                send_mcast_inc(barrier_sem_noc_addr_in_pkt);
             } else {
                 ASSERT(false);
             }
@@ -307,6 +341,7 @@ void kernel_main() {
     // only initialize if we're actually going to send something over fabric
     if (detail::valid_targets(direction)) {
         static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
+#ifdef USE_WORKER_MUX
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
         fabric_unicast_noc_scatter_write_set_state<
@@ -329,6 +364,14 @@ void kernel_main() {
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
+#else
+        // Arm the unicast write + scatter + counting-inc channels (re-arms sem_hdr_ from the
+        // barrier's multicast route back to unicast). Helper owns every UpdateMask.
+        tx.set_route_unicast(unicast_route_info);
+        tx.arm_scatter_write(page_size, num_tiles_to_write_per_packet);
+        tx.arm_unicast_write(page_size);
+        tx.arm_inc(1);
+#endif
     }
 
     uint64_t out_ready_sem_noc_addr_in_pkt =
@@ -346,7 +389,6 @@ void kernel_main() {
             cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
             size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-            uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
             uint64_t noc_addrs[4] = {0, 0, 0, 0};
             uint64_t local_noc_addrs[4] = {0, 0, 0, 0};
             for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
@@ -364,20 +406,9 @@ void kernel_main() {
             if (direction == 1) {
                 if constexpr (num_targets_backward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<
-                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                            UnicastScatterWriteUpdateMask::PayloadSize>(
-                            fabric_direction_connection,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                            page_size * tiles_to_put_in_current_packet);
+                        send_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
                     } else {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            fabric_direction_connection,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_addrs[0]});
+                        send_unicast(noc_addrs[0], l1_read_addr);
                     }
                 }
 
@@ -388,20 +419,9 @@ void kernel_main() {
             } else {
                 if constexpr (num_targets_forward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<
-                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                            UnicastScatterWriteUpdateMask::PayloadSize>(
-                            fabric_direction_connection,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                            page_size * tiles_to_put_in_current_packet);
+                        send_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
                     } else {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            fabric_direction_connection,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_addrs[0]});
+                        send_unicast(noc_addrs[0], l1_read_addr);
                     }
                 }
             }
@@ -415,10 +435,7 @@ void kernel_main() {
             if (chunk_count % chunks_per_sync == 0) {
                 // 2. unicast output ready semaphore
                 if (detail::valid_targets(direction)) {
-                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                        fabric_direction_connection,
-                        pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    send_inc(out_ready_sem_noc_addr_in_pkt);
                 }
             }
             noc_async_writes_flushed();
@@ -427,10 +444,7 @@ void kernel_main() {
         if (chunk_count % chunks_per_sync != 0) {
             // Write the unicast packet
             if (detail::valid_targets(direction)) {
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_direction_connection,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                send_inc(out_ready_sem_noc_addr_in_pkt);
             }
         }
 
@@ -563,7 +577,6 @@ void kernel_main() {
                 cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-                uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
                 uint64_t noc_addrs[4] = {0, 0, 0, 0};
                 for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
                     uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -575,20 +588,9 @@ void kernel_main() {
                     noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
                 }
                 if (tiles_to_put_in_current_packet > 1) {
-                    fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                        UnicastScatterWriteUpdateMask::PayloadSize>(
-                        fabric_direction_connection,
-                        pkt_scatter_hdr,
-                        l1_read_addr,
-                        NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                        page_size * tiles_to_put_in_current_packet);
+                    send_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
                 } else {
-                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                        fabric_direction_connection,
-                        pkt_unicast_hdr,
-                        l1_read_addr,
-                        NocUnicastCommandHeader{noc_addrs[0]});
+                    send_unicast(noc_addrs[0], l1_read_addr);
                 }
 
                 tiles_read += tiles_to_put_in_current_packet;
@@ -600,20 +602,14 @@ void kernel_main() {
                 chunk_count++;
                 if (chunk_count % chunks_per_sync == 0) {
                     // 2. unicast output ready semaphore
-                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                        fabric_direction_connection,
-                        pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    send_inc(out_ready_sem_noc_addr_in_pkt);
                 }
                 noc_async_writes_flushed();
             }
 
             if (chunk_count % chunks_per_sync != 0) {
                 // 2. unicast output ready semaphore
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    fabric_direction_connection,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                send_inc(out_ready_sem_noc_addr_in_pkt);
             }
 
             num_channels_processed_in_current_batch++;
@@ -657,9 +653,9 @@ void kernel_main() {
         slice_writes++;
     }
 
+#ifdef USE_WORKER_MUX
     noc_async_write_barrier();
     noc_async_atomic_barrier();
-#ifdef USE_WORKER_MUX
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*fabric_direction_connection);
 
@@ -675,9 +671,8 @@ void kernel_main() {
         }
     }
 #else
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close();
-    }
+    tx.drain();
+    tx.close();
 #endif
     noc_async_write_barrier();
 }

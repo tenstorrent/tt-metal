@@ -42,11 +42,14 @@
  *
  *   Richer collectives (e.g. all_gather) layer line-MULTICAST routes, real 4-chunk
  *   SCATTER writes, a multicast atomic-inc barrier, and a final fabric drain on top of
- *   this SAME armed-channel substrate, slotting in behind the same FabricStreamSender
- *   call sites. They are deliberately NOT shipped here yet: the only op that exercises
- *   them is all_gather, which is @c @skip_for_blackhole and therefore unverifiable on
- *   the available Blackhole hardware. Add them together WITH the all_gather migration
- *   and its Wormhole test — not as unverified surface ahead of a caller.
+ *   this SAME armed-channel substrate, behind the same FabricStreamSender call sites:
+ *   @c set_route_multicast, @c arm_scatter_write/@c write_scatter,
+ *   @c arm_multicast_inc/@c multicast_inc, and @c drain. These ARE shipped and are
+ *   exercised + PCC-verified by the migrated @c all_gather_async writer on a Wormhole
+ *   multi-chip simulator (bit-identical to the pre-migration kernel). The local barrier
+ *   wait/reset and the counting-semaphore threshold stay op-owned (see below). Worker-mux
+ *   is the one fabric path NOT yet wrapped — a ConnPolicy{Direct,Mux} follow-on; the
+ *   migrated writer keeps its mux path raw behind @c \#ifdef USE_WORKER_MUX.
  *
  * @par Recv-side coordination is op-owned (intentionally NOT wrapped).
  *   The receive INGRESS is a local NoC read the op already owns. Cross-device
