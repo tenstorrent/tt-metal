@@ -2,22 +2,18 @@
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
-This goal creates the TTI release handoff state. Start only after optimized-vLLM has completed or after any recoverable optimized-vLLM hardware reset blocker has been recovered and resumed.
+This goal creates the TTI release handoff state. Start only after optimized-vLLM has completed or any recoverable optimized-vLLM hardware blocker has been recovered.
 
 Goal completion requirements:
-- The model's optimized vLLM serving path is already complete, with models/autoports/<model>/doc/optimized_vllm/README.md and work_log.md present.
-- You run the tt-inference-server release workflow for HF_MODEL on the appropriate TTI device. For T3K loudboxes, use `t3k` unless the run context explicitly says otherwise.
-- If you are inside an IRD reservation/Codex container, use it for `tt-smi` health/reset and SSH to the physical loudbox host for Docker. Do not assume Docker exists inside the reservation container.
-- Clone or update tt-inference-server on the physical host and select the repo tag that matches the model spec or release Docker image. Do not assume a fixed tt-inference-server version.
-- Use the checkout's own `run.py --help` to choose the correct CLI spelling (`--device` vs `--tt-device`, etc.).
-- Run the release workflow through `run.py --workflow release --docker-server --no-auth`, with any checkout-required compatibility flags recorded.
-- Do not print Hugging Face tokens or copy `.env`, model weights, Hugging Face caches, Docker layers, persistent TT caches, or large raw eval sample dumps into the evidence directory.
-- If ARC, ERISC, remote-Ethernet, or reset failures occur during TTI server initialization, stop only the TTI release tmux/container, recover the devices with `tt-smi -r` from the reservation container, verify all devices are visible, and retry before treating the run as blocked.
-- If the release workflow has failing spec tests, API conformance tests, eval harness execution, benchmark harness execution, or report-marked test failures, use $autofix with the exact logs and repro command before treating the release stage as blocked. Do not use $autofix for pure infra failures; recover those first.
-- The final customer-facing release markdown report is copied to models/autoports/<model>/doc/tti_release/.
-- models/autoports/<model>/doc/tti_release/RUN_NOTES.md records the physical host, reservation/container context, tt-inference-server repo tag/SHA, Docker image/version, exact command, key env variables, reset/retry actions, report path, and pass/fail summary.
-- The release report is skimmed and any failing accuracy, benchmark target, API conformance, or missing/incomparable metric is called out in RUN_NOTES.md and the final response.
-- The physical host has no leftover TTI release tmux session or tt-inference-server Docker container from this run.
-- If the user requested notification, send it after copy-back and record that it was sent.
+- Optimized vLLM artifacts already exist under models/autoports/<model>/doc/optimized_vllm/.
+- The TTI release workflow evaluates the generated `models/autoports/<model>` implementation of HF_MODEL. Do not run stock `tt-transformers`, `models/demos`, or another packaged implementation. Such a report is invalid even if `run.py` exits 0.
+- The TTI model spec or equivalent release wiring points at `models/autoports/<model>` and the Docker/server path can import that autoport code.
+- Use the reservation container for `tt-smi` health/reset and the physical loudbox host for Docker. Use the checkout's own `run.py --help`, matching release tag/image, and required CLI spelling.
+- Run `run.py --workflow release --docker-server --no-auth` for the autoport spec, without printing tokens or copying secrets, caches, weights, Docker layers, persistent TT caches, or large raw eval dumps.
+- Recover ARC/ERISC/remote-Ethernet/reset failures before blocking; use $autofix for release test/spec/API/eval/benchmark harness failures, not pure infra failures.
+- Copy the final release report and small JSON/CSV/log artifacts to models/autoports/<model>/doc/tti_release/.
+- RUN_NOTES.md records host/context, TTI tag/SHA, Docker image, command, key env, recovery actions, report path, pass/fail summary, and an "Autoport implementation check" naming the matched run spec/report data.
+- The copied TTI run spec or report data proves the evaluated code path is `models/autoports/<model>` and does not identify stock `models/tt_transformers`, `models/demos`, or another packaged implementation.
+- The release report is skimmed; failing accuracy, benchmark target, API conformance, or incomparable metric rows are called out. No leftover TTI tmux session or Docker container remains.
 
 Do not mark this goal complete while any completion requirement is unmet.
