@@ -213,7 +213,7 @@ class DropInVisionTransformer(torch.nn.Module):
                                      Shape [num_images_or_videos, 3].
 
         Returns:
-            torch.Tensor: Output tensor matching the reference model's output shape [total_seq_len, out_hidden_size].
+            torch.Tensor: Output tensor with shape [1, B, seq_len, out_hidden_size].
         """
         # process pixel_values for each image/video separately
         all_pixel_values = pixel_values
@@ -303,23 +303,23 @@ class DropInVisionTransformer(torch.nn.Module):
             # The slice/reshape args are GLOBAL shapes; the tensor is already
             # fractured along dim=3 and ttnn handles the per-device extents internally.
             final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
-            ttnn.deallocate(tt_out)
+            # ttnn.deallocate(tt_out)
 
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
-                reference_output, deepstack_ref = self.reference_model.forward(pixel_values, grid_thw)
+                reference_output = self.reference_model.forward(pixel_values, grid_thw)
                 _, pcc = comp_pcc(reference_output, final_output)
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
             # 2. The merger already produces a tensor fractured along the hidden
             # dim (dim=3 in 4D / dim=1 in the 2D-reshaped view), which is the
             # desired output sharding.
-            final_output_sharded = final_output
+            # final_output_sharded = final_output
 
             # 3. Aggregate in batched users list
-            final_outputs.append(final_output_sharded)
+            final_outputs.append(tt_out)
 
         # concatenate all the outputs
-        tt_out = ttnn.concat(final_outputs, dim=0)
+        tt_out = ttnn.concat(final_outputs, dim=1)
         (ttnn.deallocate(final_outputs[i]) for i in range(len(final_outputs)))
         return tt_out
