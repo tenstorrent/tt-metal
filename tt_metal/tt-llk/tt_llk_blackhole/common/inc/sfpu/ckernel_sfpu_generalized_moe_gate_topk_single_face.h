@@ -349,7 +349,7 @@ inline void bitonic_top8_ph0_to_ph3()
     }
 }
 
-void reverse_sort_order()
+inline void reverse_sort_order()
 {
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
