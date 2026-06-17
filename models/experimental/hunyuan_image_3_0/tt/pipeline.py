@@ -205,3 +205,56 @@ def denoise_loop(
         ttnn.deallocate(te2)
 
     return latent  # torch [B, C, h, w] — feed to VAE decode
+
+
+def decode_latent(
+    mesh_device,  # ttnn.MeshDevice (replicated) — the VAE decoder's device context
+    latent,  # torch [B, C, h, w] diffusion latent (single frame)
+    *,
+    scaling_factor: float = 0.562679178327931,  # config.json vae.scaling_factor
+    decoder=None,  # optional prebuilt VAEDecoderTTNN (reuse across calls)
+    dtype=ttnn.bfloat16,
+):
+    """Decode a diffusion latent to an RGB image in [0, 1] via the TTNN VAE.
+
+    The VAE decoder runs on a (replicated) MeshDevice — a SEPARATE device context
+    from the single-device backbone — so this is a distinct stage and the latent
+    crosses host between the denoise loop and here. Mirrors the reference image
+    decode (hunyuan_image_3_pipeline.py):
+        latent = latent / scaling_factor
+        image  = vae.decode(latent)
+        image  = (image / 2 + 0.5).clamp(0, 1)
+
+    Returns torch [B, 3, H, W] in [0, 1].
+    """
+    from .vae.decoder import VAEDecoderTTNN, bcthw_to_bthwc, bthwc_to_bcthw
+
+    if decoder is None:
+        decoder = VAEDecoderTTNN(mesh_device, dtype=dtype)
+
+    # [B, C, h, w] -> scaled BCTHW [B, C, 1, h, w]
+    z = (latent / scaling_factor).unsqueeze(2)
+    host = z.bfloat16() if dtype == ttnn.bfloat16 else z.float()
+    x_bcthw = ttnn.from_torch(
+        host,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    x_bthwc = bcthw_to_bthwc(x_bcthw)
+    ttnn.deallocate(x_bcthw, force=False)
+
+    out_bthwc = decoder(x_bthwc)
+    ttnn.deallocate(x_bthwc, force=False)
+
+    out_bcthw = bthwc_to_bcthw(out_bthwc)
+    img = ttnn.to_torch(
+        ttnn.from_device(out_bcthw),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+    ttnn.deallocate(out_bthwc, force=False)
+    img = img[: img.shape[0] // mesh_device.get_num_devices()].float()  # [B, 3, 1, H, W]
+
+    return (img[:, :, 0] / 2 + 0.5).clamp(0, 1)  # drop T=1 -> [B, 3, H, W] in [0, 1]
