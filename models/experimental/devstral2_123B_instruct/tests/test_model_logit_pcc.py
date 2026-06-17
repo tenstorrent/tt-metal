@@ -30,7 +30,8 @@ Run sanity (CI gate)::
 
     pytest models/experimental/devstral2_123B_instruct/tests/test_model_logit_pcc.py -k sanity -v
 
-Run full sweep::
+Run full sweep (default pytest timeout **12 h**, includes HF CPU + TT; override with
+``DEVSTRAL2_LOGIT_PCC_SWEEP_TIMEOUT_SEC``)::
 
     pytest models/experimental/devstral2_123B_instruct/tests/test_model_logit_pcc.py -k sweep -v
 """
@@ -65,7 +66,7 @@ _DEVICE_PARAMS = [
 @pytest.mark.parametrize("mesh_device", [mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
 def test_model_logit_pcc_sweep(mesh_device):
-    """Teacher-forced logit PCC sweep: prefill 32 … 262144 (powers of two)."""
+    """HF-greedy logit PCC sweep: prefill 32 … 262144 (powers of two)."""
     run_logit_pcc_sweep(mesh_device, PREFILL_SWEEP_SEQ_LENGTHS)
 
 
