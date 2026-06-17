@@ -57,6 +57,12 @@ blackhole:
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
+  # MOVD2B failures
+  # https://github.com/tenstorrent/tt-metal/issues/41286
+  # https://github.com/tenstorrent/tt-metal/issues/40583
+  # https://github.com/tenstorrent/tt-metal/issues/43295
+  - tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py::test_rms_norm_sharded_uneven_multicore_logical_width
+
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
