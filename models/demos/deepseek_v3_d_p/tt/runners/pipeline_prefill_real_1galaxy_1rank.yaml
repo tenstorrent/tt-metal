@@ -29,5 +29,6 @@ mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_to
 global_env:
   # Per-rank KV-cache PCC gate against the golden trace.
   PREFILL_STANDALONE_PCC: "1"
-  # 4 chunks (20480 tokens) = full per-user cache; single-rank baseline for the 2-rank pipeline.
-  PREFILL_STANDALONE_NCHUNKS: "4"
+  # 11 chunks (56320 tokens = full golden trace); single-rank baseline. max_seq_len auto-derives.
+
+  PREFILL_STANDALONE_NCHUNKS: "11"
