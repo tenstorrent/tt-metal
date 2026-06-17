@@ -1312,17 +1312,31 @@ def _collect_ccl_device_perf_via_tracy(module_name, input_hash, suite_name):
     saved = {k: os.environ.get(k) for k in prof_env}
     os.environ.update(prof_env)
     command = "pytest tests/sweep_framework/perf/profile_ccl_vector.py::test_profile_ccl_vector"
+    cols = ["DEVICE KERNEL DURATION [ns]"]
+    # Subprocess-level retry: the first attempt may fail fast with a transient
+    # cold-build race (tt_elffile.cpp:405 on the profiler-instrumented eth
+    # kernels), but it warms the on-disk kernel cache. Each attempt is a FRESH
+    # tracy subprocess, so its get_risc_binary cache is clean (no carried-over
+    # empty slot that would deadlock an in-process retry). A warm-cache re-attempt
+    # opens FABRIC_2D cleanly and profiles. has_signposts=False + op_name=""
+    # aggregates device-kernel duration; filtering by op code / adding signposts
+    # for a tighter measurement is a follow-up.
+    max_attempts = 3
     try:
-        run_device_profiler(command, subdir)
-        cols = ["DEVICE KERNEL DURATION [ns]"]
-        # has_signposts=False + op_name="" -> aggregate device-kernel duration over
-        # the run. A future refinement can filter by the CCL op code or add
-        # signposts to the inner pytest for a tighter measurement.
-        result = post_process_ops_log(subdir, cols, op_name="", has_signposts=False)
-        return {"device_kernel_duration_ns": result.get(cols[0])}
-    except Exception as e:
-        logger.warning(f"CCL subprocess device-perf failed for input_hash='{input_hash}': {e}")
-        return None
+        for attempt in range(max_attempts):
+            try:
+                run_device_profiler(command, subdir)
+                result = post_process_ops_log(subdir, cols, op_name="", has_signposts=False)
+                return {"device_kernel_duration_ns": result.get(cols[0])}
+            except Exception as e:
+                if attempt < max_attempts - 1:
+                    logger.warning(
+                        f"CCL device-perf attempt {attempt + 1}/{max_attempts} failed for "
+                        f"input_hash='{input_hash}' ({e}); retrying in a fresh tracy subprocess (warm cache)."
+                    )
+                    continue
+                logger.warning(f"CCL subprocess device-perf failed for input_hash='{input_hash}': {e}")
+                return None
     finally:
         for k, v in saved.items():
             if v is None:
