@@ -1,0 +1,17 @@
+/goal Use $reorganize for the HF_MODEL optimized full model in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the reorganized-full-model state. Start from the completed optimized full model and refactor structure without degrading model behavior or speed.
+
+Goal completion requirements:
+- Scope the refactor before coding: document inheritance map, module migration plan, baseline metrics, and no-regression gates in doc/reorganize/work_log.md.
+- Taking the full model, with the fastest version of the decoder: (1) create a version that does not inherit from other versions of the decoder (optimized from functional etc); (2) refactor the model to be built out of TTTv2-style modules from `models/common/modules`, reusing existing modules where possible.
+- When no existing TTTv2-style module fits, add a new module alongside the model under `new_modules/modules` and add/extend tests under `new_modules/tests/modules` for that module.
+- Perform the refactor in small verified steps. Run targeted tests after each step before moving to the next.
+- Accuracy and quality are preserved: refresh prefill, teacher-forcing, and autoregressive checks after the final refactor; no degenerate output regressions are accepted.
+- Performance is preserved: refreshed warmed TTFT and trace-verified decode t/s/u are not materially worse than the pre-refactor baseline under the same workload and config.
+- Runtime fallback/trace contract is preserved in the measured path (no new host argmax, full-logits readback, untraced sampling, or per-token host feedback loop).
+- models/autoports/<model>/doc/reorganize/README.md and work_log.md record before/after structure, commands, tests, metrics, artifacts, and any unresolved limits.
+
+Do not mark this goal complete while any completion requirement is unmet.
