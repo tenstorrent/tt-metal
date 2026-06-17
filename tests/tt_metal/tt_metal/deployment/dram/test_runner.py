@@ -299,6 +299,8 @@ def print_test_summary(r: TestRun, bdfs: dict[str, str], outf: TextIO = stdout):
             row.append("PASS" if passes[d][i] else "FAIL")
         rows.append(row)
 
+    rows.sort(key=lambda x: x[1])
+
     print(table(f"{shortname(r.name)} summary", header, rows), file=outf)
 
 
