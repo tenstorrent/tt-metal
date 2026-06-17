@@ -165,8 +165,9 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
                         fabric_node_id,
                         direction,
                         planes_in_direction);
-                    // If there's only 1 or 2 devices, ring wrap-around can detect a neighbor though there's no fabric
-                    // link, causing planes_in_direction=0 which collapses the overall min to 0.
+                    // Skip over planes_in_direction=0 to avoid collapsing the running min to 0.
+                    // This can happen when, for example, there's only 1 or 2 devices, a wrap-around can detect a
+                    // neighbor though there's no fabric link.
                     if (planes_in_direction > 0) {
                         num_available_routing_planes = std::min(num_available_routing_planes, planes_in_direction);
                     }
@@ -178,9 +179,10 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         num_available_routing_planes -= 1;
     }
     log_debug(tt::LogOp, "num_available_routing_planes: {}", num_available_routing_planes);
-    TT_FATAL(
-        num_available_routing_planes > 0 && num_available_routing_planes != std::numeric_limits<size_t>::max(),
-        "Failed to discover available ethernet links");
+    if (num_available_routing_planes <= 0 || num_available_routing_planes == std::numeric_limits<size_t>::max()) {
+        log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
+        num_available_routing_planes = 1;
+    }
     return num_available_routing_planes;
 }
 
