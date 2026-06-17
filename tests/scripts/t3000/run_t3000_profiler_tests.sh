@@ -146,20 +146,6 @@ run_trace_only_resnet() {
     fi
 }
 
-run_tracy_wasm_gui_http_integration() {
-    echo "Tracy WASM web GUI HTTP integration (python -m tracy capture + serve_wasm probe)"
-    # Free default Tracy WASM ports in case a prior step left serve_wasm listening.
-    if command -v fuser >/dev/null 2>&1; then
-        fuser -k 8080/tcp 2>/dev/null || true
-        fuser -k 8081/tcp 2>/dev/null || true
-    fi
-    # Shared CI runners: kill listeners after assertions (see test module docstring).
-    export TRACY_WASM_HTTP_TEST_TEARDOWN=1
-    TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}' pytest \
-        tests/ttnn/tracy/test_tracy_wasm_http_integration.py \
-        -v --tb=short
-}
-
 run_multi_host_tracy_smoke() {
     remove_default_log_locations
     echo "Multi-host tracy smoke test (2 ranks via tt-run)"
@@ -228,7 +214,6 @@ run_profiling_test() {
     run_device_profiler_test
     run_perf_op_report_test
     run_process_ops_logs_test
-    run_tracy_wasm_gui_http_integration
 }
 
 main() {

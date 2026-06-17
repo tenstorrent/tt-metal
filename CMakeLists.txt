@@ -248,6 +248,12 @@ string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAK
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
+include(tracy)
+
+if(ENABLE_TRACY AND TARGET TracyClient)
+    message(STATUS "Adding -Wno-unused-variable to TracyClient")
+    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+endif()
 
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)
@@ -298,6 +304,7 @@ endif()
 
 ############################################################################################################################
 # Install targets for build artifacts and nanobinds
+#   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib

@@ -102,10 +102,6 @@ list(
     Library
     json-dev
     ttml
-    PPQSort_Development
-    Development
-    headers
-    pkgconfig
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
