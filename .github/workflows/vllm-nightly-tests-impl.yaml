@@ -456,7 +456,7 @@ jobs:
           mkdir -p output
 
       - name: 📀 Install vLLM
-        uses: ./.github/actions/run-with-log
+        uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_INSTALL_LOG }}
           run: |
@@ -593,7 +593,7 @@ jobs:
 
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
-        uses: ./.github/actions/run-with-log
+        uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_BENCHMARK_LOG }}
           run: |
@@ -637,7 +637,7 @@ jobs:
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
-        uses: ./.github/actions/run-with-log
+        uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
           run: |
@@ -680,7 +680,7 @@ jobs:
       - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
-        uses: ./.github/actions/run-with-log
+        uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_MULTIMODAL_TEST_LOG }}
           run: |
@@ -727,7 +727,7 @@ jobs:
       - name: 🧪 Run sampling tests
         if: ${{ matrix.test-group.sampling-tests }}
         timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
-        uses: ./.github/actions/run-with-log
+        uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_SAMPLING_TESTS_LOG }}
           run: |

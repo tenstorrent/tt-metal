@@ -121,7 +121,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        uses: ./.github/actions/run-with-log
+        uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: ${{ matrix.test-group.cmd }}

@@ -144,7 +144,7 @@ jobs:
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        uses: ./.github/actions/run-with-log
+        uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
