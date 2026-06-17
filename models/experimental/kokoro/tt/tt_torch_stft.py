@@ -75,7 +75,7 @@ from loguru import logger
 
 import ttnn
 
-from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config
+from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config, dram_height_slice_num_slices
 
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
 # precomputing the matrices and use conv_transpose2d OLA instead.
@@ -106,6 +106,7 @@ class TTTorchSTFTParams:
     # Synthesis kernels w[n]*iFFT_real/imag[k,n] — adjoint of the STFT forward conv.
     synth_real: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR, host
     synth_imag: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR, host
+    synth_combined: ttnn.Tensor  # [2K, 1, n_fft, 1], ROW_MAJOR, host — fused real+imag conv weight
     inv_denom_tt: ttnn.Tensor  # [1, output_length], TILE, device — COLA normalisation
 
     filter_length: int  # n_fft
@@ -310,6 +311,13 @@ def preprocess_tt_torch_stft(
     synth_real_np, synth_imag_np = _build_synth_kernels(filter_length, win_length)
     synth_real_t = ttnn.from_torch(torch.from_numpy(synth_real_np), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
     synth_imag_t = ttnn.from_torch(torch.from_numpy(synth_imag_np), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # Channel-stacked weight [2K, 1, n_fft, 1] for the fused real+imag conv_transpose: because
+    # conv_transpose2d sums over input channels, conv([X_real|X_imag], [W_real|W_imag]) equals
+    # conv(X_real, W_real) + conv(X_imag, W_imag) — one conv instead of two, and no trailing add.
+    synth_combined_np = np.concatenate([synth_real_np, synth_imag_np], axis=0)  # [2K, 1, n_fft, 1]
+    synth_combined_t = ttnn.from_torch(
+        torch.from_numpy(synth_combined_np), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
 
     # COLA normalisation on device for conv_transpose OLA path.
     inv_denom_np = _build_istft_inverse_denom_trim(input_length, filter_length, hop_length, window)
@@ -325,6 +333,7 @@ def preprocess_tt_torch_stft(
         istft_imag=istft_imag_t,
         synth_real=synth_real_t,
         synth_imag=synth_imag_t,
+        synth_combined=synth_combined_t,
         inv_denom_tt=inv_denom_t,
         filter_length=filter_length,
         hop_length=hop_length,
@@ -672,15 +681,19 @@ class TTTorchSTFT:
         ttnn.deallocate(x_bfk)
         return ttnn.reshape(x_rm, [B, 1, p.F, p.K], memory_config=mc)
 
-    def _ct_ola_run(self, xr_nhwc: ttnn.Tensor, xi_nhwc: ttnn.Tensor, n_frames: int) -> ttnn.Tensor:
-        """conv_transpose2d OLA on ``n_frames`` frames → raw windowed-sum ``[B, L_local, 1]`` ROW_MAJOR.
+    def _ct_ola_run(self, x_nhwc: ttnn.Tensor, n_frames: int) -> ttnn.Tensor:
+        """Fused conv_transpose2d OLA on ``n_frames`` frames → raw windowed-sum ``[B, L_local, 1]`` ROW_MAJOR.
 
+        ``x_nhwc`` is the channel-stacked ``[B, 1, n_frames, 2K]`` (real then imag bins) and the weight
+        is the stacked ``synth_combined`` ``[2K, 1, n_fft, 1]``.  Because conv_transpose2d sums over
+        input channels, this single conv yields ``y_real + y_imag`` directly — no second conv, no add.
         ``L_local = (n_frames - 1) * hop + n_fft``.  No reflect-pad trim, no COLA — the caller
-        slices/trims and applies COLA.  Consumes (deallocates) ``xr_nhwc`` / ``xi_nhwc``.
+        slices/trims and applies COLA.  Consumes (deallocates) ``x_nhwc``.
         """
         p = self.params
         mc = ttnn.DRAM_MEMORY_CONFIG
-        B = int(xr_nhwc.shape[0])
+        B = int(x_nhwc.shape[0])
+        in_channels = 2 * p.K
 
         # Match tt_conv_transpose1d_nlc dram-sliced path: no output_layout=TILE (avoids L1 OOM on BH).
         conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.float32)
@@ -690,6 +703,9 @@ class TTTorchSTFT:
             conv_cfg.enable_act_double_buffer = False
         except Exception:
             pass
+        # HiFi4 kept: at this conv_transpose shape the op is data-movement/reader-bound, so HiFi2
+        # halves MAC FLOPs but yields no device-time gain — not worth the (small) reconstruction-PCC
+        # risk on the thin kModel fallback margin.
         compute_cfg = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -702,58 +718,50 @@ class TTTorchSTFT:
         # count and a larger per-slice row budget (KOKORO_ISTFT_CT_ROWS_PER_SLICE) collapses the
         # 64 slices/direction down to a handful, cutting the per-slice
         # PaddedSlice/Halo/Move/Conv2d/SliceWrite op fan-out by the same factor.
+        # ``target_rows_per_slice`` is the real L1 guard: num_slices >= ceil(n_frames/rows_per_slice),
+        # so per-slice rows (hence activation footprint = rows * 2K * 2B) is bounded by it regardless
+        # of the slice count.  The generic helper also floors at min_slices=8, which only pads short
+        # sequences (production F~127k -> 64 slices is unaffected); drop that floor so this conv uses
+        # the minimum slices its row budget allows, halving the per-slice op fan-out again.
         rows_per_slice = int(os.getenv("KOKORO_ISTFT_CT_ROWS_PER_SLICE", "2048"))
-        slice_cfg = dram_height_slice_config(n_frames, channels=p.K, target_rows_per_slice=rows_per_slice)
+        num_slices = dram_height_slice_num_slices(n_frames, min_slices=1, target_rows_per_slice=rows_per_slice)
+        slice_cfg = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices)
         logger.debug(
-            f"TTTorchSTFT iSTFT conv_transpose OLA: n_frames={n_frames}, K={p.K}, "
-            f"rows_per_slice={rows_per_slice} -> {slice_cfg.num_slices} slices/direction"
+            f"TTTorchSTFT iSTFT fused conv_transpose OLA: n_frames={n_frames}, in_channels={in_channels}, "
+            f"rows_per_slice={rows_per_slice} -> {num_slices} slices"
         )
 
-        def _run_ct(x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor) -> ttnn.Tensor:
-            y, out_hw = ttnn.conv_transpose2d(
-                input_tensor=x_nhwc,
-                weight_tensor=synth_w,
-                device=self.device,
-                in_channels=p.K,
-                out_channels=1,
-                batch_size=B,
-                input_height=n_frames,
-                input_width=1,
-                kernel_size=(p.filter_length, 1),
-                stride=(p.hop_length, 1),
-                padding=(0, 0),
-                output_padding=(0, 0),
-                dilation=(1, 1),
-                groups=1,
-                bias_tensor=None,
-                conv_config=conv_cfg,
-                compute_config=compute_cfg,
-                dram_slice_config=slice_cfg,
-                mirror_kernel=True,
-                return_output_dim=True,
-            )
-            oh, ow = int(out_hw[0]), int(out_hw[1])
-            # y is in the conv_transpose2d internal layout; reshape to [B, L_local, C_out]
-            return ttnn.reshape(y, (y.shape[0], oh * ow, y.shape[-1]), memory_config=mc)
-
-        y_real = _run_ct(xr_nhwc, p.synth_real)
-        ttnn.deallocate(xr_nhwc)
-        y_imag = _run_ct(xi_nhwc, p.synth_imag)
-        ttnn.deallocate(xi_nhwc)
-
-        # Ensure TILE_LAYOUT for add (TTNN binary ops require TILE).
-        if y_real.layout != ttnn.TILE_LAYOUT:
-            y_real = ttnn.to_layout(y_real, ttnn.TILE_LAYOUT, memory_config=mc)
-        if y_imag.layout != ttnn.TILE_LAYOUT:
-            y_imag = ttnn.to_layout(y_imag, ttnn.TILE_LAYOUT, memory_config=mc)
-        y_sum = ttnn.add(y_real, y_imag, memory_config=mc)
-        ttnn.deallocate(y_real)
-        ttnn.deallocate(y_imag)
+        y, out_hw = ttnn.conv_transpose2d(
+            input_tensor=x_nhwc,
+            weight_tensor=p.synth_combined,
+            device=self.device,
+            in_channels=in_channels,
+            out_channels=1,
+            batch_size=B,
+            input_height=n_frames,
+            input_width=1,
+            kernel_size=(p.filter_length, 1),
+            stride=(p.hop_length, 1),
+            padding=(0, 0),
+            output_padding=(0, 0),
+            dilation=(1, 1),
+            groups=1,
+            bias_tensor=None,
+            conv_config=conv_cfg,
+            compute_config=compute_cfg,
+            dram_slice_config=slice_cfg,
+            mirror_kernel=True,
+            return_output_dim=True,
+        )
+        ttnn.deallocate(x_nhwc)
+        oh, ow = int(out_hw[0]), int(out_hw[1])
+        # y is in the conv_transpose2d internal layout; reshape to [B, L_local, C_out].
+        y_sum = ttnn.reshape(y, (y.shape[0], oh * ow, y.shape[-1]), memory_config=mc)
 
         # ROW_MAJOR so the caller can slice/concat along the sample axis at arbitrary boundaries.
-        y_rm = ttnn.to_layout(y_sum, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
-        ttnn.deallocate(y_sum)
-        return y_rm
+        if y_sum.layout != ttnn.ROW_MAJOR_LAYOUT:
+            y_sum = ttnn.to_layout(y_sum, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+        return y_sum
 
     def _inverse_conv_transpose(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
         """Conv-transpose OLA iSTFT — single device pass at any F, no CPU involvement.
@@ -768,7 +776,15 @@ class TTTorchSTFT:
         B = int(X_real.shape[0])
         pad = p.filter_length // 2
 
-        y_raw = self._ct_ola_run(self._to_nhwc_rm(X_real), self._to_nhwc_rm(X_imag), p.F)
+        # Channel-stack [X_real | X_imag] -> [B, 1, F, 2K] so a single fused conv_transpose computes
+        # y_real + y_imag.  The concat is along the last (channel) axis in ROW_MAJOR — no tilize/
+        # untilize round-trip (unlike a TILE concat along the non-aligned K axis).
+        xr_nhwc = self._to_nhwc_rm(X_real)  # [B, 1, F, K] ROW_MAJOR
+        xi_nhwc = self._to_nhwc_rm(X_imag)  # [B, 1, F, K] ROW_MAJOR
+        x_comb = ttnn.concat([xr_nhwc, xi_nhwc], dim=3, memory_config=mc)  # [B, 1, F, 2K]
+        ttnn.deallocate(xr_nhwc)
+        ttnn.deallocate(xi_nhwc)
+        y_raw = self._ct_ola_run(x_comb, p.F)
         y_trim = ttnn.slice(y_raw, [0, pad, 0], [B, pad + p.output_length, 1], [1, 1, 1], memory_config=mc)
         ttnn.deallocate(y_raw)
 
