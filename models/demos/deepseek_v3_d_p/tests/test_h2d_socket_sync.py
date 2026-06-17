@@ -99,7 +99,10 @@ def test_h2d_socket_sync_8x4_galaxy(mesh_device):
     )
 
     num_iters = 4
-    cache_entries = []
+    # Measure program-cache growth around ONLY the h2d_socket_sync call, so the
+    # check is decoupled from unrelated warmup (the embedding / to_torch
+    # legitimately compile a new program on their second invocation).
+    op_cache_delta = []
     for i in range(num_iters):
         # Vary tokens every iteration — a later push clobbering an earlier output
         # would make that iteration's PCC fail.
@@ -108,9 +111,9 @@ def test_h2d_socket_sync_8x4_galaxy(mesh_device):
         meta = struct.pack("<III", i, 0, isl_per_chip)  # slot_id=i, [actual_start, actual_end)
 
         service.forward_to_tensor_bytes(flat_tokens, metadata=meta)
+        pre = mesh_device.num_program_cache_entries()
         tt_tokens, tt_meta = h2d_socket_sync(service, worker_cores, metadata_size_bytes=_METADATA_SIZE_BYTES)
-
-        cache_entries.append(mesh_device.num_program_cache_entries())
+        op_cache_delta.append(mesh_device.num_program_cache_entries() - pre)
 
         # --- metadata round-trip (replicated across the mesh; read one copy) ---
         meta_host = ttnn.to_torch(tt_meta, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
@@ -122,14 +125,21 @@ def test_h2d_socket_sync_8x4_galaxy(mesh_device):
         torch_output = F.embedding(torch_tokens, torch_weight).squeeze(1)
         tt_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
         _, pcc = comp_pcc(torch_output.float(), tt_host.float())
-        logger.info(f"iter {i}: token PCC={pcc:.6f}, program_cache_entries={cache_entries[-1]}")
+        logger.info(f"iter {i}: token PCC={pcc:.6f}, h2d_op_cache_delta={op_cache_delta[-1]}")
         assert pcc > 0.999, f"iter {i}: token PCC {pcc:.6f} below threshold"
 
-    # --- program cache: built once on the first call, HIT thereafter ---
-    assert cache_entries[0] >= 1, "expected the op to register a program-cache entry"
-    assert all(c == cache_entries[0] for c in cache_entries[1:]), (
-        f"program cache grew across iterations {cache_entries}: the op is recompiling instead of "
-        "hitting the cache — exactly the dispatch-tax regression #46319 targets"
+    # --- program cache: the op builds its program on the first call, then every
+    # subsequent identical call must be a pure cache HIT (zero new entries). A
+    # recompiling op (the dispatch-tax regression #46319 targets) would add an
+    # entry on every iteration.
+    assert op_cache_delta[0] >= 1, f"expected the op to register a program-cache entry on first call: {op_cache_delta}"
+    assert all(d == 0 for d in op_cache_delta[1:]), (
+        f"h2d_socket_sync added program-cache entries after warmup (per-call deltas={op_cache_delta}): "
+        "it is recompiling instead of hitting the cache — exactly the dispatch-tax regression #46319 targets"
     )
 
+    # Drain in-flight writes, then drop the service while the device is still
+    # alive so its destructor doesn't run at interpreter exit (which trips the
+    # cq_id / service-core-L1 TT_FATALs after the mesh_device fixture closes).
     service.barrier()
+    del service
