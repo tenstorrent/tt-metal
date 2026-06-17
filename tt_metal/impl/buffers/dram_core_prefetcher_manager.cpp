@@ -21,6 +21,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -697,7 +698,8 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
 void DramCorePrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
-    const std::vector<experimental::DramCorePrefetcherInput>& tensors) {
+    const std::vector<experimental::DramCorePrefetcherInput>& tensors,
+    std::optional<uint8_t> cq_id) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueDramCorePrefetcherRequest called before StartDramCorePrefetcher");
     TT_FATAL(
@@ -731,16 +733,43 @@ void DramCorePrefetcherManager::queue(
         }
     }
 
+    // If the target command queue is mid trace-capture, capture this request into the trace
+    // instead of sending it now; it is (re)sent on every replay of that trace. Otherwise send
+    // immediately via the host worker.
+    const std::optional<MeshTraceId> recording_trace_id = mesh_device_->mesh_command_queue(cq_id).trace_id();
+
     {
-        // Push all pages of this call under one lock so worker_loop sends them in order
-        // (required for fifo_wr_ptr continuity across the split).
+        // Push all pages of this call under one lock so they stay contiguous and ordered
+        // (required for fifo_wr_ptr continuity across the split), whether captured or sent.
         std::lock_guard<std::mutex> lk(queue_mu_);
         for (auto& page : pages) {
             Request req;
             req.page = std::move(page);
             req.target_devices = target_devices;
-            pending_.push_back(std::move(req));
+            if (recording_trace_id.has_value()) {
+                trace_requests_[*recording_trace_id].push_back(std::move(req));
+            } else {
+                pending_.push_back(std::move(req));
+            }
         }
+    }
+    // Only the immediate path needs to wake the worker; captured requests wait for replay.
+    if (!recording_trace_id.has_value()) {
+        queue_cv_.notify_one();
+    }
+}
+
+void DramCorePrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
+    {
+        std::lock_guard<std::mutex> lk(queue_mu_);
+        auto it = trace_requests_.find(trace_id);
+        if (it == trace_requests_.end()) {
+            // No prefetcher requests were captured during this trace's capture.
+            return;
+        }
+        // Copy (not move) so the captured requests survive for the next replay. Pushed in
+        // capture order so fifo_wr_ptr continuity matches the original Queue calls.
+        pending_.insert(pending_.end(), it->second.begin(), it->second.end());
     }
     queue_cv_.notify_one();
 }
@@ -827,6 +856,11 @@ void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
         pending_.push_back(std::move(req));
     }
     queue_cv_.notify_one();
+}
+
+void DramCorePrefetcherManager::release_trace(const MeshTraceId& trace_id) {
+    std::lock_guard<std::mutex> lk(queue_mu_);
+    trace_requests_.erase(trace_id);
 }
 
 void DramCorePrefetcherManager::worker_loop() {
@@ -927,6 +961,7 @@ void DramCorePrefetcherManager::stop() {
     devices_.clear();
     device_index_by_coord_.clear();
     sender_logical_cores_.clear();
+    trace_requests_.clear();
     num_senders_ = 0;
     active_ = false;
 }
@@ -952,9 +987,10 @@ void QueueDramCorePrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
-    const std::vector<DramCorePrefetcherInput>& input_tensors) {
+    const std::vector<DramCorePrefetcherInput>& input_tensors,
+    std::optional<uint8_t> cq_id) {
     auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
-    manager.queue(gcb, device_subset, input_tensors);
+    manager.queue(gcb, device_subset, input_tensors, cq_id);
 }
 
 void WaitForCqOnDramCorePrefetcher(

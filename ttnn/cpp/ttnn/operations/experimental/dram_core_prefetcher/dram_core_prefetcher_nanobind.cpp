@@ -77,6 +77,10 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
                     ttnn.experimental.create_global_circular_buffer_with_dram_senders).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
+                cq_id (Optional[int]): command queue that may be recording a trace. When that
+                    CQ is mid trace-capture, the request is captured into the trace instead of
+                    being sent immediately, and is re-sent on every execute_trace of that trace.
+                    Defaults to the current/default command queue.
 
             Returns:
                 None
@@ -86,7 +90,8 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
         nb::arg("tensors"),
         nb::arg("global_cb"),
         nb::kw_only(),
-        nb::arg("device_subset") = std::nullopt);
+        nb::arg("device_subset") = std::nullopt,
+        nb::arg("cq_id") = std::nullopt);
 
     ttnn::bind_function<"wait_for_cq_on_dram_core_prefetcher", "ttnn.experimental.">(
         mod,

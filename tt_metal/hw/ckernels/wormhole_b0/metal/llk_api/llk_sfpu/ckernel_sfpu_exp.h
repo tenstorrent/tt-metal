@@ -12,7 +12,7 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 // clang-format on
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
@@ -34,7 +34,7 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
     sfpi::vInt exp = sfpi::exexp(val);
     sfpi::vInt man =
         sfpi::exman(val, sfpi::MantissaMode::ImplicitOne);  // get mantissa with implicit bit (man in [1; 2])
-    man = sfpi::reinterpret<sfpi::vInt>(sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
+    man = sfpi::shft(man, exp, sfpi::ShiftMode::Logical);
     return man;
 }
 
@@ -456,7 +456,7 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
         // Force sign to 0 (make number positive)
         out = _sfpu_exp_(sfpi::setsgn(in, 0));
 
-        v_if(in < 0) { out = _sfpu_reciprocal_<2>(out); }
+        v_if(in < 0) { out = sfpu_reciprocal_iter<2>(out); }
         v_endif;
     }
 
@@ -1035,7 +1035,7 @@ void exp_init() {
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
             // reciprocal LLK for negative inputs, so its constants must be
             // primed here.
-            _init_sfpu_reciprocal_<false>();
+            sfpu_reciprocal_init<false>();
         }
     }
 }
