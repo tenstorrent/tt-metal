@@ -352,6 +352,16 @@ static void update_boot_results_eth_link_status_check() {
 #endif
 }
 
+// This should only be run on ERISC0, and ERISC1 should not be sending/receiving traffic while this is called.
+static void recover_eth_link_if_down() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    if (!is_link_up()) {
+        reinterpret_cast<void (*)()>(
+            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr))();
+    }
+#endif
+}
+
 // Essentially a copy of what the base erisc main loop does
 FORCE_INLINE void aerisc_context_switch() {
 #if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)

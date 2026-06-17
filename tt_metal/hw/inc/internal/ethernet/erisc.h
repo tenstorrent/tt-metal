@@ -53,6 +53,7 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
     rtos_context_switch_ptr();
 #elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     update_boot_results_eth_link_status_check();
+    recover_eth_link_if_down();
 #endif
 #endif
 }
