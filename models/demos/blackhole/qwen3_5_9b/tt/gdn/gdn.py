@@ -626,7 +626,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
         core_attn_out = self.norm(core_attn_out, gate=z)
         core_attn_out = ttnn.reshape(core_attn_out, (batch_size, seq_len, -1))
         out = ttnn.linear(core_attn_out, weights.wo)
-        out = ttnn.reshape(out, (1, 1, out.shape[-2], out.shape[-1]))
+        out = ttnn.reshape(out, (1, 1, batch_size, out.shape[-1]))
         return tt_all_reduce(
             out,
             self.mesh_device,

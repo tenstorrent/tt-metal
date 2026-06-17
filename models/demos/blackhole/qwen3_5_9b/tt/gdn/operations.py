@@ -70,6 +70,9 @@ def causal_conv1d_silu(x, weight_taps, kernel_size, mesh_device, *, pad, memory_
     * returns         — ttnn ``[B, T, D]`` (TILE_LAYOUT).
     """
     B, T, D = x.shape[0], x.shape[2], x.shape[3]
+
+    # TODO ttnn.concat for TILE_LAYOUT inputs can return garbage values, may need to switch to ROW_LAYOUT to avoid for now
+    # Metal Issue: https://github.com/tenstorrent/tt-metal/issues/47293
     x_padded = ttnn.concat([pad, x], dim=2, memory_config=memory_config)
 
     # FIR accumulation: out[:, t, :] = Σ_k taps[k] * x_padded[:, t+k, :]. Each
@@ -142,6 +145,8 @@ def causal_conv1d_silu_update(x, conv_state, weight_taps, kernel_size, *, memory
 
     # The one structural change from prefill: prepend the cached history instead
     # of zeros. The buffer becomes [B, 1, state_len + T, D].
+    # TODO ttnn.concat for TILE_LAYOUT inputs can return garbage values, may need to switch to ROW_LAYOUT to avoid for now
+    # Metal Issue: https://github.com/tenstorrent/tt-metal/issues/47293
     x_padded = ttnn.concat([conv_state, x], dim=2, memory_config=memory_config)
 
     # Roll the window forward: the next step's left context is the last state_len
