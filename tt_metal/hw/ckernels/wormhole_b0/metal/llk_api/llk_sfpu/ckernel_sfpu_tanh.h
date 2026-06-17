@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,27 +47,19 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     r = r * s + f;
     scale = sfpi::setexp(sfpi::vConst0, e);
     bias0 = scale - w;
-    // nop
     x0 = r * scale + bias0;
-    // nop
     x1 = x0 + 1.0f;
     magic_seed = 0xfef30000;
     rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
-    // nop
     t = x1 * rcp + 1.0f;
-    // nop
     rcp = rcp * t + rcp;
-    // nop
     a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
     t = x1 * rcp + 1.0f;
-    // nop
     y = a * 0.0f + 1.0f;
     rcp = rcp * t + rcp;
     v_if(i < 61) {
         y = x0 * rcp;
-        // nop
         t = x1 * y + x0;
-        // nop
         y = t * rcp + y;
     }
     v_endif;
