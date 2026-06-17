@@ -165,11 +165,41 @@ inline DmRoute ccl_dm_route(
     return {static_cast<uint32_t>(line_hops), !line_is_forward, next_fabric_id};
 }
 
-// Line-MULTICAST route computation (for a ring barrier/broadcast, e.g. all_gather) is
-// deliberately omitted: its only consumer is all_gather, which is @skip_for_blackhole
-// and thus unverifiable on the available hardware. When all_gather is migrated (with a
-// test), add a `mcast_route(...)` here over ccl::get_forward_backward_line_mcast_distance
-// alongside the kernel-side multicast route setter — see the ccl_helpers_dataflow.hpp banner.
+// ===========================================================================
+// H5 — bidirectional line-route compile-time-arg packing (host<->kernel contract)
+// ===========================================================================
+
+/**
+ * @brief Append the bidirectional line-route block to a writer's compile-time args in the
+ *        EXACT order the kernel reads it — forward-unicast, forward-multicast,
+ *        backward-unicast, backward-multicast (see ccl_routing_utils::
+ *        get_line_{unicast,multicast}_route_info_from_args, e.g. all_gather_async's
+ *        minimal_default_writer). Owns the host<->kernel arg-layout contract in one place,
+ *        the same way append_ccl_fabric_rt_args owns the connection-arg layout.
+ *
+ * @note This PACKS; it does NOT compute. The route args are produced by the existing
+ *   ring-route abstraction @c ttnn::ccl::get_forward_backward_line_{unicast,mcast}_configuration —
+ *   a CCL host helper must not duplicate that route math. For the 1-D point_to_point
+ *   single-route case use @c ccl_dm_route above instead; the bidirectional ring case
+ *   (all_gather) is topology-specific and, unlike the kernel side
+ *   (@c FabricStreamSender::set_route_unicast / @c set_route_multicast), does not unify
+ *   with it host-side — hence two route surfaces, one packing contract.
+ */
+// @c UnicastArgs / @c MulticastArgs are the route-arg containers from
+// ttnn::ccl::get_forward_backward_line_{unicast,mcast}_configuration (today std::array<uint32_t,2>
+// and std::array<uint32_t,6>); templated so any contiguous uint32_t range packs identically.
+template <typename UnicastArgs, typename MulticastArgs>
+inline void append_ccl_line_route_ct_args(
+    std::vector<uint32_t>& ct_args,
+    const UnicastArgs& forward_unicast_args,
+    const MulticastArgs& forward_multicast_args,
+    const UnicastArgs& backward_unicast_args,
+    const MulticastArgs& backward_multicast_args) {
+    ct_args.insert(ct_args.end(), forward_unicast_args.begin(), forward_unicast_args.end());
+    ct_args.insert(ct_args.end(), forward_multicast_args.begin(), forward_multicast_args.end());
+    ct_args.insert(ct_args.end(), backward_unicast_args.begin(), backward_unicast_args.end());
+    ct_args.insert(ct_args.end(), backward_multicast_args.begin(), backward_multicast_args.end());
+}
 
 // ===========================================================================
 // H3 — fabric-connection runtime-arg append (kernel-matched layout)
