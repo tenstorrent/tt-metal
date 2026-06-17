@@ -18,7 +18,7 @@ inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_init = 
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x1,
+    TENSOR_SHAPE_FR8_NF1x1, // TODO(#47307): ndivnic to add a test in tt-llk to cover this case
     TENSOR_SHAPE_FR8_NF1x2,
     TENSOR_SHAPE_FR16_NF1x1,
     TENSOR_SHAPE_FR16_NF1x2,
@@ -30,7 +30,7 @@ inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_mop_con
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x1,
+    TENSOR_SHAPE_FR8_NF1x1, // TODO(#47307): ndivnic to add a test in tt-llk to cover this case
     TENSOR_SHAPE_FR8_NF1x2,
     TENSOR_SHAPE_FR16_NF1x1,
     TENSOR_SHAPE_FR16_NF1x2,
