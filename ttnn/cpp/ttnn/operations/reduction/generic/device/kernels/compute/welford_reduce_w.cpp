@@ -164,7 +164,7 @@ void kernel_main() {
         }
 #ifdef WELFORD_POST_MUL
         // Apply the user scalar to the reduced output: var(s*x)=s^2 var(x), std(s*x)=|s| std(x).
-        // mul_unary_tile is an SFPU op operating on DEST at full fp32 precision (issue #45222).
+        // mul_unary_tile is an SFPU op operating on DEST at full fp32 precision.
         binop_with_scalar_tile_init();
         mul_unary_tile(var_dst, post_mul_scaler_bits);
 #endif

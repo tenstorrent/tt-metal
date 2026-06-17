@@ -230,7 +230,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         });
     }
 
-    // Post-reduction scaling (issue #45222): the reduction always runs unscaled (the precise
+    // Post-reduction scaling: the reduction always runs unscaled (the precise
     // UnpackToDestFp32 path), and the user scalar is applied to the small-magnitude result via
     // SFPU mul_unary_tile inside the compute kernel, gated by the WELFORD_POST_MUL define.
     // Pre-scaling the input (the old do_scale path) read cb_in via the FPU SrcA operand at TF32
