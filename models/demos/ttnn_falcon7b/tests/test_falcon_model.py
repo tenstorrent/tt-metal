@@ -66,15 +66,21 @@ def test_falcon_model(
 ):
     torch.manual_seed(0)
 
-    causual_model = transformers.FalconForCausalLM.from_pretrained(PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True).eval()
+    causual_model = (
+        transformers.FalconForCausalLM.from_pretrained(PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True)
+        .eval()
+        .to(torch.float32)
+    )
     state_dict = causual_model.state_dict()
     filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
 
     configuration = transformers.FalconConfig.from_pretrained(model_version)
     configuration.num_hidden_layers = num_layers
-    torch_model = transformers.models.falcon.modeling_falcon.FalconModel.from_pretrained(
-        model_version, config=configuration
-    ).eval()
+    torch_model = (
+        transformers.models.falcon.modeling_falcon.FalconModel.from_pretrained(model_version, config=configuration)
+        .eval()
+        .to(torch.float32)
+    )
 
     torch_model.load_state_dict(filtered_state_dict, strict=False)
     model_config = get_model_config(model_config_str)
