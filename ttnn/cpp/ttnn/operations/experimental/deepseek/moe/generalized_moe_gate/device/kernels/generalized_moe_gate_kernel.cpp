@@ -9,12 +9,13 @@
 // BRISC: Waits for output CBs
 // TRISC: Computes gate logic (sigmoid, bias add, sorting, normalization)
 
-// MODE SELECT (enable AT MOST ONE; orchestration in api/compute/experimental/generalized_moe_gate.h):
-//   GMG_UNGROUPED_TOP8 (default ON): true global top-8 over all 256 experts (ungrouped). The proven
-//     4-group merge runs twice (topA=top8(groups 0-3) at cols {0,2}, topB=top8(groups 4-7) at {4,6},
-//     with FPU copy4rows stashing the idle half in rows 8-15), then finalize fully bitonic-sorts the
-//     16 candidates -> global top-8. (none enabled -> original grouped DeepSeek gate.)
-#define GMG_UNGROUPED_TOP8 1
+// MODE SELECT — GMG_UNGROUPED_TOP8 is injected by the device op as a compile DEFINE (NOT hardcoded here):
+//   = 1: true global top-8 over all 256 experts (ungrouped). The proven 4-group merge runs twice
+//        (topA=top8(groups 0-3) at cols {0,2}, topB=top8(groups 4-7) at {4,6}, with FPU copy4rows stashing
+//        the idle half in rows 8-15), then finalize fully bitonic-sorts the 16 candidates -> global top-8.
+//   = 0: the DeepSeek grouped gate (8 groups × 32 -> top-2-sum -> top-4 groups -> top-8).
+// The descriptor builder sets it from operation_attrs.grouped (false -> 1, true -> 0) on all three RISC
+// kernels; the compute API (#if GMG_UNGROUPED_TOP8) #errors if it is undefined, so there is no silent default.
 
 #include "../unified_kernels/kernel_op_api.hpp"
 #include "../unified_kernels/kernel_utils.hpp"

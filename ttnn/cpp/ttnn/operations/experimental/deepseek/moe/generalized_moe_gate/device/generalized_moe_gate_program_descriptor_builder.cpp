@@ -78,6 +78,11 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     const uint32_t num_blocks = (input_shard.shape[0] / 32) * (input_shard.shape[1] / 32);
     TT_FATAL(num_blocks >= 1, "input shard must hold at least one 32x32 tile");
     TT_FATAL(num_blocks <= 2, "generalized_moe_gate supports up to 2 blocks (<=512 experts), got {}", num_blocks);
+    // Grouped (DeepSeek) mode runs the single-256-block grouped gate only; the 2-block combine is ungrouped.
+    TT_FATAL(
+        !operation_attrs.grouped || num_blocks == 1,
+        "grouped mode (DeepSeek gate) is single-256-block only; got num_blocks={}",
+        num_blocks);
 
     TT_FATAL(input_shard.shape == bias_shard.shape, "Input and bias shard shapes must match");
     TT_FATAL(input_shard.orientation == bias_shard.orientation, "Input and bias shard orientations must match");
@@ -190,6 +195,13 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // that only survives if acquire does not swap banks.
     compute_config.dst_full_sync_en = true;
 
+    // Path-select for the unified kernel, injected as a compile DEFINE (NOT a named CT arg): the compute API
+    // picks ungrouped-vs-grouped with `#if GMG_UNGROUPED_TOP8` at PREPROCESS time, before CT-arg constexprs
+    // exist. =1 → ungrouped global top-k; =0 → DeepSeek grouped gate. Set on ALL THREE kernels: the single
+    // .cpp is compiled for every RISC and includes the compute API header, whose `#error` guard requires the
+    // macro to be defined (so a missing define is a hard compile error, never a silent grouped fallthrough).
+    const KernelDescriptor::Defines gmg_defines = {{"GMG_UNGROUPED_TOP8", operation_attrs.grouped ? "0" : "1"}};
+
     KernelDescriptor reader{
         .kernel_source = std::string(kGeneralizedMoeGateKernelPath),
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
@@ -223,6 +235,10 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .named_compile_time_args = std::move(trisc_named),
         .config = compute_config,
     };
+
+    reader.defines = gmg_defines;
+    writer.defines = gmg_defines;
+    compute_k.defines = gmg_defines;
 
     tt::tt_metal::ProgramDescriptor program_desc;
     program_desc.kernels.reserve(3);

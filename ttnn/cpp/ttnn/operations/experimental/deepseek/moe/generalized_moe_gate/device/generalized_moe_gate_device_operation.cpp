@@ -31,6 +31,16 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
         attrs.topk == 4 || attrs.topk == 6 || attrs.topk == 8,
         "topk must be one of {{4, 6, 8}} (the kernel rank-mask + op tests cover only these), got {}",
         attrs.topk);
+    // Grouped mode = the DeepSeek grouped gate (kernel `#else`): hardwired 8 groups × 32 → top-8 with linear
+    // renorm + scale. It ignores topk/output_softmax and is single-256-block only (num_blocks==1, enforced in
+    // the descriptor builder). Require the consistent attrs so a caller can't silently pass values the grouped
+    // kernel won't honor.
+    if (attrs.grouped) {
+        TT_FATAL(attrs.topk == 8, "grouped mode (DeepSeek gate) is hardwired to top-8; got topk={}", attrs.topk);
+        TT_FATAL(
+            !attrs.output_softmax,
+            "grouped mode (DeepSeek gate) normalizes linearly (score/Σ); output_softmax must be false");
+    }
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& input_indices_tensor = tensor_args.input_indices_tensor;
@@ -151,14 +161,16 @@ GeneralizedMoeGateDeviceOperation::invoke(
     float scaling_factor,
     bool enable_sigmoid,
     uint32_t topk,
-    bool output_softmax) {
+    bool output_softmax,
+    bool grouped) {
     return {
         operation_attributes_t{
             .eps = eps,
             .scaling_factor = scaling_factor,
             .enable_sigmoid = enable_sigmoid,
             .topk = topk,
-            .output_softmax = output_softmax},
+            .output_softmax = output_softmax,
+            .grouped = grouped},
         tensor_args_t{
             .input_tensor = input_tensor,
             .bias_tensor = bias_tensor,

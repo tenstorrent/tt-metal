@@ -4,9 +4,13 @@
 
 """Standalone unit test for the C++ op ``ttnn.experimental.deepseek.moe.generalized_moe_gate``.
 
-Exercises the device op directly against the inlined PyTorch ``_generalized_golden`` reference, so the
-op can be validated in isolation without running the full ``MoEGate`` module. Modeled on
-``models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py``.
+Exercises the device op directly against inlined PyTorch references, so the op can be validated in isolation
+without running the full ``MoEGate`` module. Covers all three of its modes:
+  - ungrouped global top-k, 256 experts (``test_generalized_moe_gate``, vs ``_generalized_golden``);
+  - ungrouped global top-k, 512 experts via the 2-block combine (``test_generalized_moe_gate_512_global``);
+  - DeepSeek grouped gate via ``grouped=True`` (``test_generalized_moe_gate_grouped``, vs ``_grouped_golden``) —
+    the path the standalone ``deepseek_moe_gate`` op used to own.
+Modeled on ``models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py``.
 """
 
 import pytest
@@ -37,6 +41,30 @@ def _generalized_golden(
     else:
         weights = topk_scores
     return weights / (torch.sum(weights, dim=-1, keepdim=True) + eps) * scaling_factor, topk_indices
+
+
+def _grouped_golden(input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, enable_sigmoid=True):
+    """PyTorch reference for the DeepSeek *grouped* gate (the op's ``grouped=True`` path): 256 experts as
+    8 groups × 32; per group take the top-2 bias-corrected scores and sum them, pick the top-4 groups by
+    that sum, then the top-8 (by bias-corrected score) over those 4 groups (128 experts), gather the
+    UNBIASED score at the chosen experts, linearly renormalize and scale. ``input_tensor``/``bias_tensor``:
+    [batch, 8, 32]. Returns (scores[batch, 8], global_indices[batch, 8])."""
+    row_offsets = torch.arange(input_tensor.shape[-2]) * input_tensor.shape[-1]  # group g -> base id g*32
+    batch_idx = torch.arange(input_tensor.shape[0]).unsqueeze(-1)
+    scores = torch.sigmoid(input_tensor) if enable_sigmoid else input_tensor
+    bias_scores = scores + bias_tensor
+    sorted_bias, sorted_indices = torch.sort(bias_scores, dim=-1, descending=True)
+    sorted_scores = torch.gather(scores, dim=-1, index=sorted_indices)
+    sorted_indices = sorted_indices + row_offsets.view(1, -1, 1)  # local -> global expert id
+    top2_sum = sorted_bias[:, :, 0] + sorted_bias[:, :, 1]  # per-group top-2-sum
+    _, sorted_top2_indices = torch.sort(top2_sum, dim=-1, descending=True)  # rank groups by it
+    top4_values = sorted_bias[batch_idx, sorted_top2_indices[:, :4]].flatten(1)  # top-4 groups' bias scores
+    top4_scores = sorted_scores[batch_idx, sorted_top2_indices[:, :4]].flatten(1)
+    top4_indices = sorted_indices[batch_idx, sorted_top2_indices[:, :4]].flatten(1)
+    _, top8_pos = torch.topk(top4_values, 8, dim=-1, sorted=True)  # top-8 of the 128 by bias score
+    top8_scores = torch.gather(top4_scores, dim=-1, index=top8_pos)  # UNBIASED scores at the chosen experts
+    top8_indices = torch.gather(top4_indices, dim=-1, index=top8_pos)
+    return top8_scores / (torch.sum(top8_scores, dim=-1, keepdim=True) + eps) * scaling_factor, top8_indices
 
 
 @skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
@@ -369,3 +397,127 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
     assert torch.allclose(
         dev_scores.sort(-1).values, expected.sort(-1).values, atol=2e-2
     ), f"512 normalized scores not consistent with device selection.\n dev={dev_scores}\n expected={expected}"
+
+
+@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("enable_sigmoid", [True, False])
+@pytest.mark.parametrize("seed", [42, 201, 512])
+def test_generalized_moe_gate_grouped(device, batch_size, enable_sigmoid, seed):
+    """DeepSeek GROUPED gate via ``generalized_moe_gate(grouped=True)``: 256 experts = 8 groups × 32 ->
+    top-2-sum per group -> top-4 groups -> top-8, linear renorm + scale. Confirms the unified op's grouped
+    path (compiled with GMG_UNGROUPED_TOP8=0) matches the grouped golden — the path the standalone
+    ``deepseek_moe_gate`` op used to own. grouped fixes top-8 + linear renorm, so topk / output_softmax are
+    not swept (the op rejects other values in that mode)."""
+    eps, scaling_factor = 1e-20, 2.5
+    input_shape = (batch_size, 8, 32)
+    reshaped_input_shape = (batch_size, 16, 16)
+    shard = (32, 32)
+    tile = ttnn.Tile(shard)
+    out_shape = (batch_size, 1, 16)
+
+    torch.manual_seed(seed)
+    torch_input = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1  # ~[-1, 1]
+    if not enable_sigmoid:
+        # No in-op sigmoid: keep scores in [0, 1] so the (Σ + eps) linear-renorm denominator is well-conditioned.
+        torch_input = torch.sigmoid(torch_input)
+    torch_bias = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
+
+    # Golden INDICES only — scores are validated against the device's OWN selection below (tie-robust).
+    _, gold_idx = _grouped_golden(torch_input, torch_bias, eps, scaling_factor, enable_sigmoid)
+
+    grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    # Same single-256-block device layout as the ungrouped 256 test — only grouped=True differs in the call.
+    ttnn_input = ttnn.from_torch(
+        torch.reshape(torch_input, reshaped_input_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+        tile=tile,
+    )
+    # Bias is transposed within each (16,16) block before upload (the kernel expects the transposed layout).
+    reshaped_bias = torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), -2, -1)
+    ttnn_bias = ttnn.from_torch(
+        reshaped_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem, tile=tile
+    )
+    # Transposed routing indices: 0..255 laid out as (16,16) then transposed.
+    torch_input_indices = torch.arange(reshaped_input_shape[1] * reshaped_input_shape[2], dtype=torch.int32)
+    torch_input_indices = torch_input_indices.unsqueeze(0).expand(reshaped_input_shape[0], -1)
+    torch_input_indices = torch_input_indices.reshape(reshaped_input_shape)
+    torch_input_indices = torch.transpose(torch_input_indices, -2, -1).to(torch.uint16)
+    ttnn_input_indices = ttnn.from_torch(
+        torch_input_indices, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem, tile=tile
+    )
+    ttnn_output = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+        tile=tile,
+    )
+    ttnn_output_indices = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+        tile=tile,
+    )
+
+    logger.info("Running generalized MoE gate (grouped=True) ...")
+    res_scores, res_idx = ttnn.experimental.deepseek.moe.generalized_moe_gate(
+        ttnn_input,
+        bias_tensor=ttnn_bias,
+        input_indices_tensor=ttnn_input_indices,
+        output_tensor=ttnn_output,
+        output_indices_tensor=ttnn_output_indices,
+        eps=eps,
+        scaling_factor=scaling_factor,
+        enable_sigmoid=enable_sigmoid,
+        topk=8,
+        output_softmax=False,
+        grouped=True,
+    )
+
+    output_torch = ttnn.to_torch(res_scores)[:, 0, :8]
+    output_indices_torch = ttnn.to_torch(res_idx)[:, 0, :8]
+    # Sort by index so the device's (tie-arbitrary) order lines up with the golden for the score check.
+    sorted_idx, i = torch.sort(output_indices_torch, dim=-1)
+    sorted_scores = torch.gather(output_torch, dim=-1, index=i)
+
+    ranking = torch.sigmoid(torch_input) if enable_sigmoid else torch_input
+    bias_key = (ranking + torch_bias).reshape(batch_size, -1).float()  # bias-corrected ranking key (256)
+    raw_scores = ranking.reshape(batch_size, -1).float()  # UNBIASED scores
+    dev_idx = sorted_idx.long()
+    gold_idx = torch.sort(gold_idx, dim=-1).values.long()
+
+    logger.info(f"grouped: dev_idx=\n{dev_idx}\ngold_idx=\n{gold_idx}")
+    assert dev_idx.min() >= 0 and dev_idx.max() < 256, f"device produced out-of-range expert id:\n{dev_idx}"
+
+    # (1) Selection: the device's chosen experts match the GROUPED golden's by bias-corrected key (sorted
+    #     multiset) — NOT a global top-8, the grouped golden's own selection. Tie-robust: a bf16 tie at the
+    #     group / rank-8 boundary may swap near-equal-key experts, so compare key VALUES not index positions;
+    #     a real grouping/wiring bug shifts a key by >> the tolerance.
+    dev_key = torch.gather(bias_key, -1, dev_idx).sort(-1).values
+    gold_key = torch.gather(bias_key, -1, gold_idx).sort(-1).values
+    assert torch.allclose(dev_key, gold_key, atol=1e-2), (
+        f"grouped selection not consistent with the grouped golden.\n dev_idx={dev_idx}\n gold_idx={gold_idx}\n"
+        f" dev_key={dev_key}\n gold_key={gold_key}"
+    )
+
+    # (2) Scores: self-consistent with the device's OWN selection — linear renorm of the UNBIASED scores at
+    #     the experts the device picked, scaled. Position-aligned (both indexed by the sorted dev ids).
+    dev_sel = torch.gather(raw_scores, -1, dev_idx)
+    expected = dev_sel / (dev_sel.sum(-1, keepdim=True) + eps) * scaling_factor
+    assert torch.allclose(
+        sorted_scores.float(), expected, atol=1e-2, rtol=1e-4
+    ), f"grouped normalized scores not consistent with device selection.\n dev={sorted_scores}\n expected={expected}"

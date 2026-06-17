@@ -10,8 +10,9 @@
 
 namespace ttnn::experimental::deepseek::moe {
 
-// DeepSeek V3 MoE gate (top-8 routing + score normalization) on height-sharded tensors.
-// Fills preallocated output_tensor and output_indices_tensor in place.
+// Generalized (ungrouped) MoE gate routing + score normalization on height-sharded tensors. With
+// grouped=true it instead runs the DeepSeek grouped gate (8 groups × 32 -> top-8). Fills the preallocated
+// output_tensor and output_indices_tensor in place.
 std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> generalized_moe_gate(
     const tt::tt_metal::Tensor& input_tensor,
     const tt::tt_metal::Tensor& bias_tensor,
@@ -22,6 +23,7 @@ std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> generalized_moe_gate(
     float scaling_factor,
     bool enable_sigmoid,
     uint32_t topk = 8,
-    bool output_softmax = false);
+    bool output_softmax = false,
+    bool grouped = false);
 
 }  // namespace ttnn::experimental::deepseek::moe

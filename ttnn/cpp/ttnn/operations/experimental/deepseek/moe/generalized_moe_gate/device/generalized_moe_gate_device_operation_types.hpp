@@ -17,6 +17,10 @@ struct operation_attributes_t {
     uint32_t topk{8};            // number of experts to keep (k). ONLY 4, 6, 8 supported (enforced in validate; the
                                  // finalize rank-mask + tests cover exactly these); 8 = full top-8.
     bool output_softmax{false};  // false = linear normalize (score/Σ); true = softmax over the selected top-k.
+    bool grouped{false};         // false = ungrouped global top-k (the generalized kernel path). true = DeepSeek
+                                 // grouped gate (8 groups × 32 → top-2-sum → top-4 groups → top-8): single 256-block,
+                                 // forced top-8 + linear renorm (topk/output_softmax ignored). Selects the kernel's
+                                 // grouped `#else` path via the GMG_UNGROUPED_TOP8=0 compile define (see builder).
 };
 
 struct tensor_args_t {

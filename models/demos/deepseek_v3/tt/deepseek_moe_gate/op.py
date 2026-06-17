@@ -9,7 +9,8 @@ import ttnn
 
 class DeepseekMoeGateOp:
     """
-    DeepSeek MoE gate routing via TTNN ``ttnn.experimental.deepseek.moe.deepseek_moe_gate``.
+    DeepSeek MoE gate routing via TTNN ``ttnn.experimental.deepseek.moe.generalized_moe_gate`` with
+    ``grouped=True`` (the unified op's DeepSeek grouped path).
 
     This class retains a PyTorch reference (``golden``) and delegates device execution to the C++
     operation (which runs the unified kernel on hardware).
@@ -68,9 +69,12 @@ class DeepseekMoeGateOp:
 
         Writes into ``output_tensor`` and ``output_indices_tensor`` and returns them.
 
-        See also: ``ttnn.experimental.deepseek.moe.deepseek_moe_gate`` (C++ implementation).
+        Runs on the unified ``ttnn.experimental.deepseek.moe.generalized_moe_gate`` op with ``grouped=True``,
+        which selects the DeepSeek grouped gate (8 groups × 32 -> top-2-sum -> top-4 groups -> top-8): the
+        same grouped kernel path the standalone ``deepseek_moe_gate`` op used. ``topk`` / ``output_softmax``
+        are fixed by the grouped path (top-8, linear renorm) and not exposed here.
         """
-        return ttnn.experimental.deepseek.moe.deepseek_moe_gate(
+        return ttnn.experimental.deepseek.moe.generalized_moe_gate(
             input_tensor,
             bias_tensor=bias_tensor,
             input_indices_tensor=input_indices_tensor,
@@ -79,4 +83,7 @@ class DeepseekMoeGateOp:
             eps=eps,
             scaling_factor=scaling_factor,
             enable_sigmoid=enable_sigmoid,
+            topk=8,
+            output_softmax=False,
+            grouped=True,
         )

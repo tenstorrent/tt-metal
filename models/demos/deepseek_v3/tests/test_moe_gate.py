@@ -252,8 +252,10 @@ def test_tt_moe_gate_real_weights(
 
     # Config-driven entry point (mirrors TTMoEDecode). deepseek's deep (7168) + tie-sensitive gate needs
     # HiFi2 + fp32 accumulation, else the default matmul flips near-tied experts → index accuracy drops
-    # (~0.83 vs ~0.90). Matches models/common/modules/moe/configs/deepseek_v3.yaml. The real
-    # e_score_correction_bias is passed as torch_gate_bias below (so the config flag isn't needed here).
+    # (~0.83 vs ~0.90). Matches models/common/modules/moe/configs/deepseek_v3.yaml. deepseek is a
+    # score-correction-bias (noaux_tc) model, so score_correction_bias=True is REQUIRED — it declares the
+    # model HAS the selection-only correction bias passed as torch_gate_bias below (TTMoEGate cross-checks
+    # the flag against the tensor and errors if they disagree).
     gate_config = TTMoEGateConfig(
         num_routed_experts=hf_config.n_routed_experts,
         select_experts_k=hf_config.num_experts_per_tok,
@@ -262,6 +264,7 @@ def test_tt_moe_gate_real_weights(
         n_group=hf_config.n_group,
         score_func="sigmoid",
         routed_scaling_factor=hf_config.routed_scaling_factor,
+        score_correction_bias=True,
         gate_matmul_compute={
             "math_fidelity": "HiFi2",
             "math_approx_mode": True,

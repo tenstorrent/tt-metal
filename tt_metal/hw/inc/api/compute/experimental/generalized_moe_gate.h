@@ -135,7 +135,15 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
     // Transpose dest step 0 (FPU) — always runs; puts each group g at DEST row g.
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0<DST_ACCUM_MODE, is_32bit>()));
-#ifdef GMG_UNGROUPED_TOP8
+    // Path select — REQUIRED, NO silent default. The including kernel (.cpp) must define GMG_UNGROUPED_TOP8
+    // to 1 (ungrouped top-k — every non-DeepSeek model) or 0 (grouped DeepSeek gate). Leaving it undefined is
+    // a hard compile error on purpose: it used to fall through to the grouped path with no diagnostic, which
+    // is wrong for every non-DeepSeek model. (Note `#if`, not `#ifdef`: `=0` selects grouped, `=1` ungrouped.)
+#if !defined(GMG_UNGROUPED_TOP8)
+#error \
+    "generalized_moe_gate(): define GMG_UNGROUPED_TOP8 (to 1 = ungrouped top-k, or 0 = grouped DeepSeek) in the including kernel before this header — the silent grouped default was removed to avoid selecting the wrong HW sequence."
+#endif
+#if GMG_UNGROUPED_TOP8
     // TRUE GLOBAL TOP-8 over all 256 experts (ungrouped). post-step0: group g at DEST row g.
     // SFPU merges stay in rows 0-7 (only rows 0-7 are SFPU-addressable); FPU copy4rows (a plain
     // MOVD2B->MOVB2D copy) stashes 4-row blocks in rows 8-15. topA -> {0,2} (rows 0-3), topB -> {4,6}
