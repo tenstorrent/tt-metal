@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
 #include "indexer_score_device_operation_types.hpp"
 #include "indexer_score_program_factory.hpp"
 
@@ -28,6 +29,12 @@ struct IndexerScoreDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Matmul-FLOP performance model (mirrors SDPAOperation::create_op_performance_model): reports ideal
+    // matmul cycles so tracy's ideal/actual utilization equals the math-util test's mm_flops/(cores x
+    // cycles x peak). FLOPs count causal-valid tiles only; cores/fidelity match the factory.
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& q,

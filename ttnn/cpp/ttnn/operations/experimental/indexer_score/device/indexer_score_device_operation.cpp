@@ -4,6 +4,9 @@
 
 #include "indexer_score_device_operation.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
@@ -130,6 +133,67 @@ IndexerScoreDeviceOperation::spec_return_value_t IndexerScoreDeviceOperation::co
 IndexerScoreDeviceOperation::tensor_return_value_t IndexerScoreDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
+}
+
+// Matmul-FLOP performance model. Mirrors SDPAOperation::create_op_performance_model: report ideal
+// matmul cycles = num_mul_adds / (cores * peak), and the profiler's ideal/actual ratio is then exactly
+// the math-util test's math_util = mm_flops / (cores * device_cycles * peak). Every term is matched to
+// the test (test_indexer_score_sp7_math_util): causal-valid output tiles only, actual cores, and the
+// fidelity-scaled Blackhole matmul peak.
+tt::tt_metal::operation::OpPerformanceModelGeneral<IndexerScoreDeviceOperation::tensor_return_value_t>
+IndexerScoreDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_WIDTH;
+
+    const auto& q = tensor_args.q;
+    const auto& k = tensor_args.k;
+    const tt::tt_metal::operation::Tensors input_tensors = {q, k, tensor_args.weights};
+
+    // Matmul throughput model is Blackhole-specific (the only validated arch). q is always on device.
+    const tt::ARCH arch = q.device()->arch();
+    if (arch != tt::ARCH::BLACKHOLE) {
+        return tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>(input_tensors, output, 0);
+    }
+
+    const auto& q_shape = q.logical_shape();
+    const auto& k_shape = k.logical_shape();
+    const uint32_t B = q_shape[0];
+    const uint32_t Hi = q_shape[1];
+    const uint32_t D = q_shape[3];
+    const uint32_t Sqt = q_shape[2] / TILE_HEIGHT;
+    const uint32_t Tt = k_shape[2] / TILE_WIDTH;
+    const uint32_t chunk_t = attrs.chunk_start_idx / TILE_WIDTH;
+
+    // Causal-valid output tiles V = sum over q-tile-rows of min(Tt, chunk_t + row + 1) -- the useful
+    // matmul work, masked future tiles excluded (matches the test's sp7_valid_tiles()).
+    uint64_t valid_tiles = 0;
+    for (uint32_t s = 0; s < Sqt; ++s) {
+        valid_tiles += std::min<uint64_t>(Tt, (uint64_t)chunk_t + s + 1);
+    }
+
+    // Per valid 32x32 output tile, per head: a 32x32 x D matmul = (32*32) outputs x 2*D FLOPs (2/FMA);
+    // summed over heads, valid tiles, and batch (matches the test's indexer_mm_flops()).
+    const uint64_t num_mul_adds = 2ull * valid_tiles * Hi * B * static_cast<uint64_t>(TILE_HEIGHT * TILE_WIDTH) * D;
+
+    // Actual cores used: total_units = groups x ceil(Tt/KC), clamped to the grid (matches the factory),
+    // so the perf model's core count equals tracy's CORE COUNT and the utilization ratio lines up.
+    const uint32_t QC = attrs.program_config.q_chunk_size / TILE_HEIGHT;
+    const uint32_t KC = attrs.program_config.k_chunk_size / TILE_WIDTH;
+    const uint64_t total_units = static_cast<uint64_t>(Sqt / QC) * ((Tt + KC - 1) / KC);
+    const auto grid = q.device()->compute_with_storage_grid_size();
+    const uint64_t num_cores = std::min<uint64_t>(total_units, static_cast<uint64_t>(grid.x) * grid.y);
+
+    // Blackhole matmul peak: 4096 mul-adds/cycle/core at LoFi, scaled by the fidelity multiplier (the
+    // test's peak table is 4096 / multiplier). Fidelity comes from the resolved compute config.
+    const auto math_fidelity = std::get<0>(ttnn::get_compute_kernel_config_args(arch, attrs.compute_kernel_config));
+    constexpr uint64_t tensix_mul_adds_per_cycle_lofi = 4096;
+    const int ideal_compute_cycles = static_cast<int>(std::ceil(
+        (static_cast<double>(num_mul_adds) / static_cast<double>(num_cores * tensix_mul_adds_per_cycle_lofi)) *
+        static_cast<double>(tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(math_fidelity))));
+
+    return tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>(
+        input_tensors, output, ideal_compute_cycles);
 }
 
 std::tuple<IndexerScoreDeviceOperation::operation_attributes_t, IndexerScoreDeviceOperation::tensor_args_t>
