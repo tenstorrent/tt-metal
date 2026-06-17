@@ -78,6 +78,22 @@ def skip_if_seq_too_small_for_sp(seq_len: int, mesh_device) -> None:
         )
 
 
+# DeepSeek index_topk: at/below this global length the MLA router takes the DENSE (v3) path.
+INDEX_TOPK = 2048
+
+
+def skip_if_tp1_dense_mla(seq_len: int, mesh_device, index_topk: int = INDEX_TOPK) -> None:
+    """Skip the dense 128-head MLA path at TP=1. When seq_len <= index_topk the router runs the dense
+    (v3 ring-SDPA) path, whose 128-head ops (e.g. nlp_concat_heads) overflow L1 without TP head-sharding
+    (~2.2 MB > 1.57 MB). The DSA/sparse path (seq_len > index_topk) is lighter and fits at TP=1, so it
+    is not skipped. The chunked path is gated separately (it always uses the 128-head epilogue)."""
+    if list(mesh_device.shape)[1] == 1 and seq_len <= index_topk:
+        pytest.skip(
+            f"dense 128-head MLA (seq_len {seq_len} ≤ index_topk {index_topk}) needs TP head-sharding; "
+            f"TP=1 overflows L1"
+        )
+
+
 def _shape_id(shape) -> str:
     """Stable pytest id for a (sp, tp) shape, e.g. (2, 4) -> 'sp2xtp4'."""
     sp, tp = shape

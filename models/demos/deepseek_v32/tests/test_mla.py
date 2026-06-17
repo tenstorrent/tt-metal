@@ -32,7 +32,11 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v32.reference_cpu.model import MLACPU, ModelArgs
 from models.demos.deepseek_v32.reference_cpu.utils import precompute_freqs_cis
 from models.demos.deepseek_v32.reference_cpu.weights import DEFAULT_REPO, initialize_weights
-from models.demos.deepseek_v32.tests.mesh_utils import parametrize_mesh_device, skip_if_seq_too_small_for_sp
+from models.demos.deepseek_v32.tests.mesh_utils import (
+    parametrize_mesh_device,
+    skip_if_seq_too_small_for_sp,
+    skip_if_tp1_dense_mla,
+)
 from models.demos.deepseek_v32.tt.mla import ttMLA as ttMLAv32
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -178,6 +182,7 @@ def test_v32_mla_vs_cpu_reference(
     # NOTE: input is generated inside v3 run_mla_inference (seeded); --ds-input does
     # not apply here. Use the chunked test for file-driven input.
     skip_if_seq_too_small_for_sp(seq_len, mesh_device)
+    skip_if_tp1_dense_mla(seq_len, mesh_device)  # dense path overflows L1 at TP=1
     config = config_only
     seed = 42
     args, mla_cpu, weights, src_tag = build_cpu_reference(seq_len, seed, ds_layer, ds_checkpoint, ds_repo)

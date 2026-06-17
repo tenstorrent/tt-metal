@@ -234,14 +234,16 @@ def _make_mla(config, layer, mesh_device, is_chunked=False):
     )
 
 
-def _shard_tp(t, mesh_device):
-    """Input [1,1,S,hidden] sharded on hidden across TP (indexer-stem layout)."""
+def _shard_idx_input(t, mesh_device):
+    """Indexer input [1,1,S,hidden]: SP-shard the sequence (dim -2, mesh axis 0) and TP-shard hidden
+    (dim -1, axis 1) — the same SP×TP layout the MLA forward uses. At SP=1 the SP shard is a no-op;
+    at SP>1 each chip holds S/sp tokens, so _indexer_topk's SP all-gather rebuilds the global seq."""
     return ttnn.from_torch(
         t,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, -1)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
     )
 
 
@@ -259,7 +261,8 @@ def test_indexer_device_vs_reference(mesh_device, layer, device_params, variant,
     captured = {}
     orig = ops.indexer_logits
     monkeypatch.setattr(ops, "indexer_logits", lambda *a, **k: captured.setdefault("logits", orig(*a, **k)))
-    idx = mla._indexer_topk(_shard_tp(x, mesh_device), SEQ_LEN)
+    # _indexer_topk takes the per-chip (SP-local) sequence; it all-gathers back to the global glob.
+    idx = mla._indexer_topk(_shard_idx_input(x, mesh_device), SEQ_LEN // mesh_device.shape[0])
 
     logits = ops._to_host(captured["logits"]).float()[0, 0]  # [S, S]; future cols -inf
     got_topk = ops._to_host(idx).long()[0, 0]  # [S, k]
