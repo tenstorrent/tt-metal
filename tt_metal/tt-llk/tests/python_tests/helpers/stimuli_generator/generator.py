@@ -242,6 +242,14 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
         return StimuliSpec.gaussian(
             mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P]
         )
+    if stimuli_format == DataFormat.MxFp6R:
+        return StimuliSpec.gaussian(
+            mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp6R]
+        )
+    if stimuli_format == DataFormat.MxFp6P:
+        return StimuliSpec.gaussian(
+            mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp6P]
+        )
     if stimuli_format == DataFormat.Bfp8_b:
         return StimuliSpec(distribution=_default_bfp8b_face)
     if stimuli_format == DataFormat.Bfp4_b:

@@ -86,6 +86,8 @@ tolerances = {
     DataFormat.Bfp2_b: Tolerance(atol=0.5, rtol=0.4),
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
+    DataFormat.MxFp6R: Tolerance(atol=0.3, rtol=0.3),
+    DataFormat.MxFp6P: Tolerance(atol=0.2, rtol=0.2),
     DataFormat.MxFp4: Tolerance(atol=0.5, rtol=0.35),
     DataFormat.MxInt8: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.MxInt4: Tolerance(atol=0.5, rtol=0.35),
@@ -446,6 +448,8 @@ _MXFP_COMPARE_PARAMS = {
     DataFormat.MxFp4: (1, 2),  # E2M1
     DataFormat.MxFp8R: (2, 2),  # E5M2
     DataFormat.MxFp8P: (3, 2),  # E4M3
+    DataFormat.MxFp6R: (2, 2),  # E3M2
+    DataFormat.MxFp6P: (3, 2),  # E2M3
 }
 
 

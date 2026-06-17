@@ -25,6 +25,8 @@ from helpers.llk_params import (
 )
 from helpers.pack import (
     pack_mxfp4,
+    pack_mxfp6p,
+    pack_mxfp6r,
     pack_mxfp8p,
     pack_mxfp8r,
     pack_mxint2,
@@ -34,6 +36,8 @@ from helpers.pack import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import (
     unpack_mxfp4,
+    unpack_mxfp6p,
+    unpack_mxfp6r,
     unpack_mxfp8p,
     unpack_mxfp8r,
     unpack_mxint2,
@@ -449,6 +453,12 @@ def quantize_mx_stimuli(
         case DataFormat.MxFp4:
             packed = pack_mxfp4(tensor, num_faces=num_faces)
             return unpack_mxfp4(packed, num_faces=num_faces)
+        case DataFormat.MxFp6R:
+            packed = pack_mxfp6r(tensor, num_faces=num_faces)
+            return unpack_mxfp6r(packed, num_faces=num_faces)
+        case DataFormat.MxFp6P:
+            packed = pack_mxfp6p(tensor, num_faces=num_faces)
+            return unpack_mxfp6p(packed, num_faces=num_faces)
         case DataFormat.MxInt8:
             packed = pack_mxint8(tensor, num_faces=num_faces)
             return unpack_mxint8(packed, num_faces=num_faces)
@@ -565,6 +575,8 @@ class SrcFormatModel:
             DataFormat.Float32: SrcFormatModel._fp32_to_tf32,
             DataFormat.MxFp8R: SrcFormatModel._mxfp8r_to_tf32,
             DataFormat.MxFp8P: SrcFormatModel._mxfp8p_to_tf32,
+            DataFormat.MxFp6R: SrcFormatModel._mxfp6r_to_tf32,
+            DataFormat.MxFp6P: SrcFormatModel._mxfp6p_to_tf32,
             DataFormat.MxFp4: SrcFormatModel._mxfp4_to_tf32,
             DataFormat.MxInt8: SrcFormatModel._mxint8_to_tf32,
             DataFormat.MxInt4: SrcFormatModel._mxint4_to_tf32,
@@ -729,6 +741,32 @@ class SrcFormatModel:
         Golden generators work on the original stimuli data (before compression).
         MxFp4 stimuli are generated as torch.bfloat16, so we delegate to Float16_b conversion.
         The pack/unpack functions handle the MxFp4 compression/decompression separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
+
+    @staticmethod
+    def _mxfp6r_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MxFp6R format (MX E3M2 variant).
+
+        Golden generators work on the original stimuli data (before compression).
+        MxFp6R stimuli are generated as torch.bfloat16, so we delegate to Float16_b
+        conversion. The pack/unpack functions handle the MxFp6 roundtrip separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
+
+    @staticmethod
+    def _mxfp6p_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MxFp6P format (MX E2M3 variant).
+
+        Golden generators work on the original stimuli data (before compression).
+        MxFp6P stimuli are generated as torch.bfloat16, so we delegate to Float16_b
+        conversion. The pack/unpack functions handle the MxFp6 roundtrip separately.
         """
         return SrcFormatModel._fp16b_to_tf32(tensor)
 

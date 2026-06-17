@@ -458,6 +458,149 @@ def unpack_mxfp4(
     return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
 
 
+# MX-FP6 element parameters (must match pack._MXFP6_PARAMS).
+_MXFP6_PARAMS = {
+    "r": dict(exp_bits=3, man_bits=2, exp_bias=3),  # E3M2
+    "p": dict(exp_bits=2, man_bits=3, exp_bias=1),  # E2M3
+}
+
+
+def _unpack_mxfp6(packed_bytes, *, variant, num_faces=4, face_r_dim=MAX_FACE_R_DIM):
+    """
+    Unpack MXFP6R/MXFP6P (E3M2 / E2M3) to a bfloat16 tensor.
+
+    Layout: [scales padded to 16B][elements padded to 16B], one E8M0 scale byte
+    per 32-element block and one 8-bit container per element. The 6-bit element
+    code lives in the upper bits of each byte (byte >> 2 == code).
+
+    Mirrors unpack_mxfp4's special-case handling: block scale 0xFF -> NaN block;
+    combined (block + element) exponent >= 128 -> ±Inf; < -127 -> 0.
+    """
+    params = _MXFP6_PARAMS[variant]
+    exp_bits = params["exp_bits"]
+    man_bits = params["man_bits"]
+    exp_bias = params["exp_bias"]
+    sign_shift = exp_bits + man_bits
+
+    block_size = MX_FORMAT_BLOCK_SIZE
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_blocks = num_elements // block_size
+    if num_elements % block_size != 0:
+        raise ValueError(
+            "Invalid MXFP6 tile geometry: num_elements must be a multiple of "
+            f"{block_size}, got {num_elements}."
+        )
+
+    # 1 scale byte per block (16B-aligned) + 1 byte per element.
+    scale_section_len = _align16(num_blocks)
+    expected_len = scale_section_len + num_elements
+    if len(packed_bytes) != expected_len:
+        raise ValueError(
+            "Invalid packed_bytes length for MXFP6: got "
+            f"{len(packed_bytes)} bytes, expected {expected_len} bytes."
+        )
+
+    scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
+    elem_u8 = np.frombuffer(
+        bytes(packed_bytes[scale_section_len : scale_section_len + num_elements]),
+        dtype=np.uint8,
+    )
+
+    # Recover the 6-bit code and split into sign / exponent / mantissa fields.
+    code = (elem_u8 >> 2).astype(np.int32)
+    sign = (code >> sign_shift) & 0x1
+    exp_field = (code >> man_bits) & ((1 << exp_bits) - 1)
+    man = code & ((1 << man_bits) - 1)
+
+    is_sub = exp_field == 0
+    # Normal: exp = exp_field - bias, hidden 1. Subnormal: exp = 1 - bias, hidden 0.
+    elem_exp_unbiased = np.where(is_sub, 1 - exp_bias, exp_field - exp_bias).astype(
+        np.int32
+    )
+    hidden = np.where(is_sub, 0.0, 1.0).astype(np.float32)
+    mant_frac = man.astype(np.float32) / float(1 << man_bits)
+    elem_val = (hidden + mant_frac) * np.exp2(elem_exp_unbiased.astype(np.float32))
+    elem_val = np.where(sign == 1, -elem_val, elem_val).reshape(num_blocks, block_size)
+
+    block_exp_unbiased = scales_u8.astype(np.int32) - 127  # E8M0 bias=127
+    scaled_blocks = elem_val * np.exp2(block_exp_unbiased.astype(np.float32))[:, None]
+
+    combined_unbiased = block_exp_unbiased[:, None] + elem_exp_unbiased.reshape(
+        num_blocks, block_size
+    )
+    nan_blocks = scales_u8 == 0xFF
+    overflow_mask = (combined_unbiased >= 128) & ~nan_blocks[:, None]
+    underflow_mask = (combined_unbiased < -127) & ~nan_blocks[:, None]
+
+    if np.any(nan_blocks):
+        scaled_blocks[nan_blocks] = np.nan
+    scaled_blocks[overflow_mask] = np.where(
+        scaled_blocks[overflow_mask] >= 0.0, np.inf, -np.inf
+    )
+    scaled_blocks[underflow_mask] = 0.0
+
+    return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
+
+
+def _unpack_mxfp6_srcs(packed_bytes, *, variant, dest_acc: bool = False):
+    """Unpack sequential SrcS slices for MXFP6 (mirrors _unpack_mxfp8_srcs)."""
+    if dest_acc:
+        slice_len = MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
+        slice_row_dim = SRCS_SLICE_32B_ROW_DIM
+    else:
+        slice_len = MXFP8_SRCS_SLICE_PACKED_BYTE_LEN
+        slice_row_dim = SRCS_SLICE_ROW_DIM
+
+    num_bytes = len(packed_bytes)
+    if num_bytes % slice_len != 0:
+        raise ValueError(
+            f"Invalid packed_bytes length for use_srcs=True: got {num_bytes} bytes, "
+            f"expected a multiple of {slice_len} bytes per SrcS slice."
+        )
+
+    out = []
+    for i in range(0, num_bytes, slice_len):
+        out.append(
+            _unpack_mxfp6(
+                packed_bytes[i : i + slice_len],
+                variant=variant,
+                num_faces=1,
+                face_r_dim=slice_row_dim,
+            )
+        )
+    return torch.cat(out)
+
+
+def unpack_mxfp6r(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """Unpack MXFP6R format (E3M2 variant) to a bfloat16 tensor."""
+    if use_srcs:
+        return _unpack_mxfp6_srcs(packed_bytes, variant="r", dest_acc=dest_acc)
+    return _unpack_mxfp6(
+        packed_bytes, variant="r", num_faces=num_faces, face_r_dim=face_r_dim
+    )
+
+
+def unpack_mxfp6p(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """Unpack MXFP6P format (E2M3 variant) to a bfloat16 tensor."""
+    if use_srcs:
+        return _unpack_mxfp6_srcs(packed_bytes, variant="p", dest_acc=dest_acc)
+    return _unpack_mxfp6(
+        packed_bytes, variant="p", num_faces=num_faces, face_r_dim=face_r_dim
+    )
+
+
 def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
     """
     Shared unpack core for MxInt formats. Given E8M0 scale bytes and a
@@ -671,6 +814,10 @@ def unpack_res_tiles(
         unpack_func = unpack_mxfp8p
     elif output_format == DataFormat.MxFp4:
         unpack_func = unpack_mxfp4
+    elif output_format == DataFormat.MxFp6R:
+        unpack_func = unpack_mxfp6r
+    elif output_format == DataFormat.MxFp6P:
+        unpack_func = unpack_mxfp6p
     elif output_format == DataFormat.MxInt8:
         unpack_func = unpack_mxint8
     elif output_format == DataFormat.MxInt4:
@@ -696,6 +843,8 @@ def unpack_res_tiles(
             unpack_mxfp8r,
             unpack_mxfp8p,
             unpack_mxfp4,
+            unpack_mxfp6r,
+            unpack_mxfp6p,
             unpack_mxint8,
             unpack_mxint4,
             unpack_mxint2,
