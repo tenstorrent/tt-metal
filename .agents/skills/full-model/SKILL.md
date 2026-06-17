@@ -166,7 +166,7 @@ Do not compare a sampling-inclusive serving result against a teacher-forcing/log
 
 Treat host steps between decode iterations as implementation bugs to remove from the steady-state path, not just performance terms to report. Add counters for trace replays, token-input refreshes, current-position/RoPE refreshes, page-table refreshes, synchronizations, and readbacks, then drive the steady-state refresh counts to zero except where the caller-visible API truly requires a readback or the scheduler changes state. If current-position/RoPE refreshes happen once per generated token, the full model still has a host-stepped decode loop; fix it with device-side state advance where possible before claiming optimized full-model performance.
 
-Measure the reported batch-1 TTFT and trace-verified decode t/s/u with the same workload shape the serving benchmark uses (prompt 128 / generate 128 unless the project specifies otherwise), separate from the accuracy workload, and record the workload shape next to every number. This keeps full-model and vLLM serving numbers directly comparable in later stages.
+Measure the reported batch-1 TTFT and trace-verified decode t/s/u with the same workload shape as the vLLM primary single-user profile (prompt 128 / generate 128 by default unless the project specifies otherwise), separate from the accuracy workload, and record the workload shape next to every number. Compare this to `vllm_benchmark.json` in later stages. The CI serving-burst 100/100/32 benchmark is a concurrent serving profile and is not a direct replacement for batch-1 full-model timing.
 
 If performance regresses badly from block-level evidence, inspect data movement between embeddings, blocks, final norm, LM head, and sampling before changing precision.
 

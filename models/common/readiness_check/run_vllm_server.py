@@ -16,9 +16,14 @@ Stages:
                 live server. ``--sampling-profile`` selects full vs smoke.
   qualitative   Run qualitative prompts and save completions for manual
                 review.
-  benchmark     Fire synthetic random-token prompts at the server under
-                concurrency and report TTFT, ITL, and per-user / aggregate
-                throughput. Saves ``vllm_benchmark.json`` for the work log.
+  benchmark     Run ``vllm bench serve``. The primary headline profile is a
+                greedy single-user 128/128/1 decode run that reports TTFT
+                separately from TPOT/ITL and writes raw ``vllm_result.json``
+                plus normalized ``vllm_benchmark.json``. By default the runner
+                also runs the vLLM-nightly-shaped 100/100/32 serving-burst
+                profile as a secondary CI/capacity artifact. Defaults to greedy
+                ``--temperature 0.0``; opt into exact server-generation-config
+                behavior with ``--benchmark-use-server-generation-config``.
 
 Default: ``--stages serve,sampling,qualitative,benchmark`` (launch, run all
 checks, shut down). Full launch with the typical tuning flags:
@@ -53,18 +58,16 @@ omit ``serve`` from the stages:
         --model-dir models/autoports/<model_name> \\
         --hf-model <hf-model-id>
 
-To install vllm, if not already present:
+To install vLLM, if not already present:
 1. Clone `https://github.com/tenstorrent/vllm.git`
 2. Switch to the `dev` branch
-3. Follow installation instructions in `plugins/vllm-tt-plugin/README.md`
+3. Follow the Tenstorrent vLLM installation instructions for that checkout.
 
 Before invoking it, two things must already be true:
 
   1. `<model_dir>/tt/generator_vllm.py` exists and implements the model.
-  2. The model architecture is registered in
-     `vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py`
-     via `_register_model_if_missing(...)`. Without that registration vLLM
-     will reject the architecture at startup with
+  2. The model architecture is registered in the TT vLLM platform registry.
+     Without that registration vLLM will reject the architecture at startup with
      "architecture not in TT registry".
 
 The launch command and env vars match `.github/workflows/vllm-nightly-tests-impl.yaml`.
@@ -82,6 +85,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -108,14 +112,21 @@ STAGE_BENCHMARK = "benchmark"
 ALL_STAGES: tuple[str, ...] = (STAGE_SERVE, STAGE_SAMPLING, STAGE_QUALITATIVE, STAGE_BENCHMARK)
 DEFAULT_STAGES: tuple[str, ...] = ALL_STAGES
 
-# Benchmark defaults: 128-tok prompts × 128-tok outputs × 32 requests × 8
-# concurrent. The output-length mirrors the per-token-decode metric in the
-# productize SKILL; concurrency lets the scheduler exercise real batching
-# without saturating it (default max_num_seqs = 32).
+# Primary benchmark shape: single-user decode, used for headline t/s/u.
+# We force greedy temperature for readiness t/s/u unless the caller explicitly
+# asks to reproduce exact server-generation-config behavior.
 DEFAULT_BENCH_PROMPT_LEN = 128
 DEFAULT_BENCH_OUTPUT_LEN = 128
-DEFAULT_BENCH_NUM_REQUESTS = 32
-DEFAULT_BENCH_CONCURRENCY = 8
+DEFAULT_BENCH_NUM_REQUESTS = 1
+DEFAULT_BENCH_CONCURRENCY: Optional[int] = 1
+DEFAULT_BENCH_TEMPERATURE = 0.0
+
+# Secondary serving-burst profile matching `.github/workflows/vllm-nightly-tests-impl.yaml`.
+DEFAULT_CI_SERVING_BENCHMARK = True
+DEFAULT_CI_BENCH_PROMPT_LEN = 100
+DEFAULT_CI_BENCH_OUTPUT_LEN = 100
+DEFAULT_CI_BENCH_NUM_REQUESTS = 32
+DEFAULT_CI_BENCH_CONCURRENCY: Optional[int] = None
 
 SAMPLING_PROFILE_FULL = "full"
 SAMPLING_PROFILE_SMOKE = "smoke"
@@ -152,31 +163,28 @@ _MESH_SHAPES: dict[str, tuple[int, int]] = {
 }
 
 
-def _stream_choice_is_token_event(choice: Any) -> bool:
-    """Return true for streamed completion chunks that represent output tokens."""
-    text = getattr(choice, "text", None)
-    finish_reason = getattr(choice, "finish_reason", None)
-    if text is None:
-        return False
-    return text != "" or finish_reason is None
-
-
 def _find_plugin_tests_dir() -> Path:
-    """Locate `vllm-tt-plugin/tests/tt/` from the installed editable package."""
-    spec = importlib.util.find_spec("vllm_tt_plugin")
-    if spec is None or spec.origin is None:
-        raise RuntimeError(
-            "vllm_tt_plugin is not importable. Install it with "
-            "`uv pip install -e <vllm-repo>/plugins/vllm-tt-plugin --no-deps`."
-        )
-    # spec.origin -> <plugin_root>/src/vllm_tt_plugin/__init__.py
-    plugin_root = Path(spec.origin).resolve().parent.parent.parent
-    tests_dir = plugin_root / "tests" / "tt"
-    if not tests_dir.is_dir():
-        raise RuntimeError(
-            f"Expected plugin tests at {tests_dir} but did not find them. Plugin layout may have changed."
-        )
-    return tests_dir
+    """Locate the TT vLLM pytest suite in either old plugin or in-tree layouts."""
+    candidates: List[Path] = []
+
+    plugin_spec = importlib.util.find_spec("vllm_tt_plugin")
+    if plugin_spec is not None and plugin_spec.origin is not None:
+        # Old layout: <plugin_root>/src/vllm_tt_plugin/__init__.py
+        plugin_root = Path(plugin_spec.origin).resolve().parent.parent.parent
+        candidates.append(plugin_root / "tests" / "tt")
+
+    vllm_spec = importlib.util.find_spec("vllm")
+    if vllm_spec is not None and vllm_spec.origin is not None:
+        # Current Tenstorrent fork layout: <vllm_repo>/vllm/__init__.py
+        vllm_repo = Path(vllm_spec.origin).resolve().parent.parent
+        candidates.append(vllm_repo / "tests" / "tt")
+
+    for tests_dir in candidates:
+        if tests_dir.is_dir():
+            return tests_dir
+
+    checked = ", ".join(str(path) for path in candidates) or "no importable vllm/vllm_tt_plugin package"
+    raise RuntimeError(f"Could not find TT vLLM pytest tests. Checked: {checked}")
 
 
 def _check_port_available(port: int) -> None:
@@ -442,176 +450,230 @@ def _run_qualitative_prompts(
     print("  - greedy and sampled outputs both reasonable")
 
 
-def _run_serving_benchmark(
+def _vllm_cli_command() -> List[str]:
+    """Return a vLLM CLI invocation in the active Python environment."""
+    vllm_exe = shutil.which("vllm")
+    if vllm_exe is not None:
+        return [vllm_exe]
+    return [sys.executable, "-m", "vllm.entrypoints.cli.main"]
+
+
+def _quoted_cmd(cmd: List[str]) -> str:
+    return " ".join(shlex.quote(part) for part in cmd)
+
+
+def _json_number(data: dict[str, Any], key: str) -> Optional[float]:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _decode_tps_from_ms(ms: Optional[float]) -> Optional[float]:
+    return (1000.0 / ms) if ms and ms > 0 else None
+
+
+def _metric_summary(raw: dict[str, Any], metric: str) -> dict[str, Optional[float]]:
+    return {
+        "p50": _json_number(raw, f"median_{metric}_ms"),
+        "p99": _json_number(raw, f"p99_{metric}_ms"),
+        "mean": _json_number(raw, f"mean_{metric}_ms"),
+    }
+
+
+def _write_normalized_vllm_benchmark_summary(
     *,
-    server_url: str,
-    hf_model: str,
-    output_dir: Path,
+    raw: dict[str, Any],
+    output_file: Path,
+    raw_result_file: Path,
+    command: List[str],
+    profile_name: str,
+    comparison_scope: str,
     prompt_len: int,
     output_len: int,
     num_requests: int,
-    concurrency: int,
-) -> None:
-    """
-    Measure serving-path TTFT, ITL, and throughput under concurrent load.
+    concurrency: Optional[int],
+    temperature: Optional[float],
+) -> dict[str, Any]:
+    total_output_tokens = _json_number(raw, "total_output_tokens")
+    requested_output_tokens = output_len * num_requests
+    mean_tpot_ms = _json_number(raw, "mean_tpot_ms")
+    median_itl_ms = _json_number(raw, "median_itl_ms")
+    mean_itl_ms = _json_number(raw, "mean_itl_ms")
 
-    Generates `num_requests` synthetic random-token prompts of length
-    `prompt_len`, fires them at the server with up to `concurrency` in flight,
-    streams completions, and aggregates per-request timings. Uses
-    `ignore_eos=True` so every request emits exactly `output_len` tokens
-    regardless of natural EOS, which keeps the workload deterministic.
-
-    Reports TTFT P50/P99, ITL P50/P99, aggregate output throughput, mean
-    per-user decode throughput, and ITL P50-implied decode throughput. Saves
-    the full summary to `vllm_benchmark.json`.
-    """
-    import asyncio
-    import random
-
-    from transformers import AutoTokenizer
-
-    print("\n=== Running vLLM serving benchmark ===")
-    print(
-        f"  prompt_len={prompt_len}, output_len={output_len}, "
-        f"num_requests={num_requests}, concurrency={concurrency}"
-    )
-    print(f"  Loading tokenizer for {hf_model}...")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
-    rng = random.Random(0)
-    vocab_size = tokenizer.vocab_size
-    prompts: List[List[int]] = [[rng.randrange(0, vocab_size) for _ in range(prompt_len)] for _ in range(num_requests)]
-
-    client = openai.AsyncOpenAI(base_url=f"{server_url.rstrip('/')}/v1", api_key="dummy")
-
-    async def _one(token_ids: List[int]) -> dict[str, Any]:
-        start = time.perf_counter()
-        first: Optional[float] = None
-        token_times: List[float] = []
-        empty_text_token_events = 0
-        non_token_stream_events = 0
-        stream = await client.completions.create(
-            model=hf_model,
-            prompt=token_ids,
-            max_tokens=output_len,
-            temperature=0.0,
-            stream=True,
-            extra_body={"ignore_eos": True},
-        )
-        async for chunk in stream:
-            if not chunk.choices:
-                non_token_stream_events += 1
-                continue
-            choice = chunk.choices[0]
-            if not _stream_choice_is_token_event(choice):
-                non_token_stream_events += 1
-                continue
-            now = time.perf_counter()
-            if first is None:
-                first = now
-            token_times.append(now)
-            if getattr(choice, "text", None) == "":
-                empty_text_token_events += 1
-        end = time.perf_counter()
-        return {
-            "start": start,
-            "end": end,
-            "ttft_s": (first - start) if first is not None else None,
-            "total_s": end - start,
-            "token_count": len(token_times),
-            "empty_text_token_events": empty_text_token_events,
-            "non_token_stream_events": non_token_stream_events,
-            "itl_s": [token_times[i] - token_times[i - 1] for i in range(1, len(token_times))],
-        }
-
-    sem = asyncio.Semaphore(concurrency)
-
-    async def _gated(token_ids: List[int]) -> dict[str, Any]:
-        async with sem:
-            return await _one(token_ids)
-
-    async def _run_all() -> List[dict[str, Any]]:
-        return await asyncio.gather(*[_gated(p) for p in prompts])
-
-    bench_start = time.perf_counter()
-    results = asyncio.run(_run_all())
-    elapsed = time.perf_counter() - bench_start
-
-    def _pct(xs: List[float], p: float) -> Optional[float]:
-        if not xs:
-            return None
-        s = sorted(xs)
-        return s[max(0, min(len(s) - 1, int(round(p * (len(s) - 1)))))]
-
-    def _ms(v: Optional[float]) -> Optional[float]:
-        return v * 1000 if v is not None else None
-
-    ttfts: List[float] = [r["ttft_s"] for r in results if r["ttft_s"] is not None]
-    itls: List[float] = [t for r in results for t in r["itl_s"]]
-    total_output_tokens = sum(r["token_count"] for r in results)
-    requested_output_tokens = output_len * len(results)
-    empty_text_token_events = sum(r["empty_text_token_events"] for r in results)
-    non_token_stream_events = sum(r["non_token_stream_events"] for r in results)
-    itl_p50_s = _pct(itls, 0.5)
-    itl_mean_s = (sum(itls) / len(itls)) if itls else None
-
-    per_request_tsu: List[float] = []
-    for r in results:
-        if r["ttft_s"] is None or r["token_count"] <= 1:
-            continue
-        decode_time = r["total_s"] - r["ttft_s"]
-        if decode_time > 0:
-            per_request_tsu.append((r["token_count"] - 1) / decode_time)
-
-    summary = {
+    summary: dict[str, Any] = {
+        "source": "vllm bench serve",
+        "profile": profile_name,
+        "comparison_scope": comparison_scope,
+        "raw_result_file": str(raw_result_file),
+        "command": command,
+        "command_string": _quoted_cmd(command),
         "config": {
             "prompt_len": prompt_len,
             "output_len": output_len,
             "num_requests": num_requests,
             "concurrency": concurrency,
+            "temperature": temperature,
+            "generation_config_mode": "server_default" if temperature is None else "explicit",
+            "dataset_name": "random",
+            "ignore_eos": True,
         },
-        "elapsed_s": elapsed,
-        "completed_requests": len(results),
+        "elapsed_s": _json_number(raw, "duration"),
+        "completed_requests": raw.get("completed"),
+        "total_input_tokens": _json_number(raw, "total_input_tokens"),
         "total_output_tokens": total_output_tokens,
         "requested_output_tokens": requested_output_tokens,
-        "missing_output_tokens": max(0, requested_output_tokens - total_output_tokens),
-        "empty_text_token_events": empty_text_token_events,
-        "non_token_stream_events": non_token_stream_events,
-        "ttft_ms": {
-            "p50": _ms(_pct(ttfts, 0.5)),
-            "p99": _ms(_pct(ttfts, 0.99)),
-            "mean": _ms(sum(ttfts) / len(ttfts)) if ttfts else None,
-        },
-        "itl_ms": {
-            "p50": _ms(itl_p50_s),
-            "p99": _ms(_pct(itls, 0.99)),
-            "mean": _ms(itl_mean_s),
-        },
-        "itl_p50_decode_tps": (1.0 / itl_p50_s) if itl_p50_s else None,
-        "itl_mean_decode_tps": (1.0 / itl_mean_s) if itl_mean_s else None,
-        "output_throughput_tok_per_s": (total_output_tokens / elapsed) if elapsed > 0 else None,
-        "request_throughput_per_s": (len(results) / elapsed) if elapsed > 0 else None,
-        "mean_per_request_decode_tps": (sum(per_request_tsu) / len(per_request_tsu)) if per_request_tsu else None,
+        "missing_output_tokens": (
+            max(0, requested_output_tokens - int(total_output_tokens)) if total_output_tokens is not None else None
+        ),
+        "ttft_ms": _metric_summary(raw, "ttft"),
+        "tpot_ms": _metric_summary(raw, "tpot"),
+        "itl_ms": _metric_summary(raw, "itl"),
+        "e2el_ms": _metric_summary(raw, "e2el"),
+        "itl_p50_decode_tps": _decode_tps_from_ms(median_itl_ms),
+        "itl_mean_decode_tps": _decode_tps_from_ms(mean_itl_ms),
+        "vllm_mean_tpot_decode_tps": _decode_tps_from_ms(mean_tpot_ms),
+        "mean_per_request_decode_tps": _decode_tps_from_ms(mean_tpot_ms),
+        "mean_per_request_decode_tps_basis": (
+            "1000 / mean_tpot_ms from vllm bench serve; this is the TPOT-derived "
+            "decode value. For burst-serving profiles, scheduler admission and "
+            "chunked prefill can affect TPOT, so use the single-user profile for "
+            "headline decode t/s/u."
+        ),
+        "output_throughput_tok_per_s": _json_number(raw, "output_throughput"),
+        "request_throughput_per_s": _json_number(raw, "request_throughput"),
+        "total_token_throughput_tok_per_s": _json_number(raw, "total_token_throughput"),
     }
+    output_file.write_text(json.dumps(summary, indent=2) + "\n")
+    return summary
 
-    output_file = output_dir / "vllm_benchmark.json"
-    output_file.write_text(json.dumps(summary, indent=2))
+
+def _print_file_tail(log_file: Path, lines: int = 40) -> None:
+    if not log_file.exists():
+        return
+    print(f"\n=== Log tail ({log_file}, last {lines} lines) ===")
+    for line in log_file.read_text(errors="replace").splitlines()[-lines:]:
+        print(line)
+
+
+def _run_serving_benchmark(
+    *,
+    server_url: str,
+    hf_model: str,
+    output_dir: Path,
+    profile_name: str,
+    comparison_scope: str,
+    raw_result_filename: str,
+    summary_filename: str,
+    log_filename: str,
+    prompt_len: int,
+    output_len: int,
+    num_requests: int,
+    concurrency: Optional[int],
+    temperature: Optional[float],
+    additional_args: List[str],
+) -> dict[str, Any]:
+    """
+    Run one vLLM serving benchmark profile.
+
+    The primary caller writes `vllm_result.json` and `vllm_benchmark.json`;
+    secondary profiles use distinct filenames.
+    """
+    print(f"\n=== Running vLLM serving benchmark: {profile_name} ===")
+    print(
+        f"  prompt_len={prompt_len}, output_len={output_len}, "
+        f"num_requests={num_requests}, concurrency={concurrency}, temperature={temperature}"
+    )
+    print(f"  comparison_scope: {comparison_scope}")
+
+    raw_result_file = output_dir / raw_result_filename
+    summary_file = output_dir / summary_filename
+    log_file = output_dir / log_filename
+    for stale_file in (raw_result_file, summary_file):
+        if stale_file.exists():
+            stale_file.unlink()
+
+    cmd: List[str] = [
+        *_vllm_cli_command(),
+        "bench",
+        "serve",
+        "--backend",
+        "vllm",
+        "--model",
+        hf_model,
+        "--base-url",
+        server_url.rstrip("/"),
+        "--endpoint",
+        "/v1/completions",
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        str(prompt_len),
+        "--random-output-len",
+        str(output_len),
+        "--num-prompts",
+        str(num_requests),
+        "--ignore-eos",
+        "--percentile-metrics",
+        "ttft,tpot,itl,e2el",
+        "--save-result",
+        "--result-filename",
+        str(raw_result_file),
+    ]
+    if concurrency is not None:
+        cmd.extend(["--max-concurrency", str(concurrency)])
+    if temperature is not None:
+        cmd.extend(["--temperature", str(temperature)])
+    cmd.extend(additional_args)
+
+    print(f"  command: {_quoted_cmd(cmd)}")
+    print(f"  log: {log_file}")
+    with open(log_file, "wb") as f:
+        result = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+    if result.returncode != 0:
+        _print_file_tail(log_file)
+        raise RuntimeError(f"`vllm bench serve` failed with exit code {result.returncode}; inspect {log_file}")
+    if not raw_result_file.exists():
+        _print_file_tail(log_file)
+        raise RuntimeError(f"`vllm bench serve` succeeded but did not write {raw_result_file}")
+
+    raw = json.loads(raw_result_file.read_text())
+    expected_completed = raw.get("num_prompts", num_requests)
+    if raw.get("completed") != expected_completed:
+        _print_file_tail(log_file)
+        raise RuntimeError(
+            "`vllm bench serve` did not complete every prompt: "
+            f"completed={raw.get('completed')} num_prompts={expected_completed}. "
+            f"Raw result: {raw_result_file}"
+        )
+
+    summary = _write_normalized_vllm_benchmark_summary(
+        raw=raw,
+        output_file=summary_file,
+        raw_result_file=raw_result_file,
+        command=cmd,
+        profile_name=profile_name,
+        comparison_scope=comparison_scope,
+        prompt_len=prompt_len,
+        output_len=output_len,
+        num_requests=num_requests,
+        concurrency=concurrency,
+        temperature=temperature,
+    )
 
     def _fmt(v: Optional[float], unit: str) -> str:
         return f"{v:.1f}{unit}" if v is not None else "n/a"
 
-    print("\n=== Serving benchmark summary ===")
-    print(f"  Requests : {len(results)} completed in {elapsed:.1f}s")
+    print(f"\n=== Serving benchmark summary: {profile_name} ===")
+    print(f"  Requests : {summary['completed_requests']}/{expected_completed} completed")
     print(f"  TTFT     : P50={_fmt(summary['ttft_ms']['p50'], 'ms')}  P99={_fmt(summary['ttft_ms']['p99'], 'ms')}")
+    print(f"  TPOT     : mean={_fmt(summary['tpot_ms']['mean'], 'ms')}  P99={_fmt(summary['tpot_ms']['p99'], 'ms')}")
     print(f"  ITL      : P50={_fmt(summary['itl_ms']['p50'], 'ms')}  P99={_fmt(summary['itl_ms']['p99'], 'ms')}")
-    print(f"  ITL P50  : {_fmt(summary['itl_p50_decode_tps'], ' t/s/u')} implied")
     print(f"  Output   : {_fmt(summary['output_throughput_tok_per_s'], ' tok/s')} aggregate")
-    print(
-        "  Tokens   : "
-        f"{total_output_tokens}/{requested_output_tokens} events"
-        f" ({empty_text_token_events} empty-text token events, {non_token_stream_events} non-token stream events)"
-    )
-    print(f"  Per-user : {_fmt(summary['mean_per_request_decode_tps'], ' t/s/u')} (mean over requests)")
-    print(f"  Saved to {output_file}")
+    print(f"  Decode   : {_fmt(summary['vllm_mean_tpot_decode_tps'], ' t/s/u')} from mean TPOT")
+    print(f"  Raw      : {raw_result_file}")
+    print(f"  Summary  : {summary_file}")
+    return summary
 
 
 def _shutdown(proc: subprocess.Popen, log_file: Path) -> None:
@@ -755,25 +817,109 @@ def _main() -> None:
         "--benchmark-prompt-len",
         type=int,
         default=DEFAULT_BENCH_PROMPT_LEN,
-        help=f"Tokens per synthetic prompt for the benchmark stage (default {DEFAULT_BENCH_PROMPT_LEN}).",
+        help=(
+            "Tokens per synthetic prompt for the primary single-user benchmark "
+            f"(default {DEFAULT_BENCH_PROMPT_LEN})."
+        ),
     )
     parser.add_argument(
         "--benchmark-output-len",
         type=int,
         default=DEFAULT_BENCH_OUTPUT_LEN,
-        help=f"Tokens to generate per request in the benchmark stage (default {DEFAULT_BENCH_OUTPUT_LEN}).",
+        help=(
+            "Tokens to generate per request in the primary single-user benchmark "
+            f"(default {DEFAULT_BENCH_OUTPUT_LEN})."
+        ),
     )
     parser.add_argument(
         "--benchmark-num-requests",
         type=int,
         default=DEFAULT_BENCH_NUM_REQUESTS,
-        help=f"Total requests sent in the benchmark stage (default {DEFAULT_BENCH_NUM_REQUESTS}).",
+        help=("Total requests sent in the primary single-user benchmark " f"(default {DEFAULT_BENCH_NUM_REQUESTS})."),
     )
     parser.add_argument(
         "--benchmark-concurrency",
         type=int,
         default=DEFAULT_BENCH_CONCURRENCY,
-        help=f"Max in-flight requests during the benchmark (default {DEFAULT_BENCH_CONCURRENCY}).",
+        help=(
+            "`vllm bench serve --max-concurrency` for the primary single-user benchmark "
+            f"(default {DEFAULT_BENCH_CONCURRENCY})."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-temperature",
+        type=float,
+        default=DEFAULT_BENCH_TEMPERATURE,
+        help=(
+            "Temperature passed to `vllm bench serve` for the benchmark. "
+            f"Default {DEFAULT_BENCH_TEMPERATURE} preserves greedy t/s/u comparability. "
+            "Use --benchmark-use-server-generation-config to omit this flag and reproduce exact nightly "
+            "server-generation-config behavior."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-use-server-generation-config",
+        action="store_true",
+        help=(
+            "Do not pass `--temperature` to `vllm bench serve`; the server/model generation_config decides "
+            "sampling parameters. This matches current vLLM nightly behavior for models that do not add "
+            "temperature via additional benchmark args, but is not comparable to the default greedy single-user "
+            "t/s/u metric."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-ci-serving",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_CI_SERVING_BENCHMARK,
+        help=(
+            "Also run the vLLM-nightly-shaped 100/100/32 serving-burst profile as secondary evidence "
+            f"(default {DEFAULT_CI_SERVING_BENCHMARK}). Use --no-benchmark-ci-serving to skip it."
+        ),
+    )
+    parser.add_argument(
+        "--ci-benchmark-prompt-len",
+        type=int,
+        default=DEFAULT_CI_BENCH_PROMPT_LEN,
+        help=(
+            "Tokens per synthetic prompt for the secondary CI serving-burst benchmark "
+            f"(default {DEFAULT_CI_BENCH_PROMPT_LEN})."
+        ),
+    )
+    parser.add_argument(
+        "--ci-benchmark-output-len",
+        type=int,
+        default=DEFAULT_CI_BENCH_OUTPUT_LEN,
+        help=(
+            "Tokens to generate per request in the secondary CI serving-burst benchmark "
+            f"(default {DEFAULT_CI_BENCH_OUTPUT_LEN})."
+        ),
+    )
+    parser.add_argument(
+        "--ci-benchmark-num-requests",
+        type=int,
+        default=DEFAULT_CI_BENCH_NUM_REQUESTS,
+        help=(
+            "Total requests sent in the secondary CI serving-burst benchmark "
+            f"(default {DEFAULT_CI_BENCH_NUM_REQUESTS})."
+        ),
+    )
+    parser.add_argument(
+        "--ci-benchmark-concurrency",
+        type=int,
+        default=DEFAULT_CI_BENCH_CONCURRENCY,
+        help=(
+            "Optional `vllm bench serve --max-concurrency` for the secondary CI serving-burst benchmark. "
+            "Default is unset, matching vLLM nightly CI."
+        ),
+    )
+    parser.add_argument(
+        "--additional-benchmark-args",
+        type=str,
+        default="",
+        help=(
+            "Catch-all for other `vllm bench serve` args not covered by the typed flags. "
+            'Quoted, e.g. "--request-rate 0.25 --metric-percentiles 50,90,99".'
+        ),
     )
     args = parser.parse_args()
 
@@ -795,7 +941,9 @@ def _main() -> None:
         parser.error(f"--tt-config must be a JSON object, got {type(tt_config).__name__}")
     merged_tt_config: dict[str, Any] = {**DEFAULT_TT_CONFIG, **tt_config}
 
-    additional = shlex.split(args.additional_server_args) if args.additional_server_args else []
+    additional_server_args = shlex.split(args.additional_server_args) if args.additional_server_args else []
+    additional_benchmark_args = shlex.split(args.additional_benchmark_args) if args.additional_benchmark_args else []
+    benchmark_temperature = None if args.benchmark_use_server_generation_config else args.benchmark_temperature
 
     model_dir = args.model_dir.resolve()
     output_dir = model_dir / "readiness_vllm"
@@ -816,7 +964,7 @@ def _main() -> None:
                 log_file=server_log,
                 max_model_len=args.max_model_len,
                 tt_config=merged_tt_config,
-                additional_args=additional,
+                additional_args=additional_server_args,
             )
             _wait_for_server(
                 proc=server_proc,
@@ -857,15 +1005,58 @@ def _main() -> None:
                     output_dir=output_dir,
                 )
             elif stage == STAGE_BENCHMARK:
-                _run_serving_benchmark(
+                primary_summary = _run_serving_benchmark(
                     server_url=server_url,
                     hf_model=args.hf_model,
                     output_dir=output_dir,
+                    profile_name="single_user_decode",
+                    comparison_scope=(
+                        "Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately "
+                        "and is not blended into the TPOT-derived decode value beyond normal single-request timing."
+                    ),
+                    raw_result_filename="vllm_result.json",
+                    summary_filename="vllm_benchmark.json",
+                    log_filename="vllm_benchmark.log",
                     prompt_len=args.benchmark_prompt_len,
                     output_len=args.benchmark_output_len,
                     num_requests=args.benchmark_num_requests,
                     concurrency=args.benchmark_concurrency,
+                    temperature=benchmark_temperature,
+                    additional_args=additional_benchmark_args,
                 )
+                if args.benchmark_ci_serving:
+                    ci_summary = _run_serving_benchmark(
+                        server_url=server_url,
+                        hf_model=args.hf_model,
+                        output_dir=output_dir,
+                        profile_name="ci_serving_burst",
+                        comparison_scope=(
+                            "vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving "
+                            "capacity. Do not use as headline decode t/s/u because burst admission and chunked "
+                            "prefill can affect TPOT."
+                        ),
+                        raw_result_filename="vllm_ci_serving_result.json",
+                        summary_filename="vllm_ci_serving_benchmark.json",
+                        log_filename="vllm_ci_serving_benchmark.log",
+                        prompt_len=args.ci_benchmark_prompt_len,
+                        output_len=args.ci_benchmark_output_len,
+                        num_requests=args.ci_benchmark_num_requests,
+                        concurrency=args.ci_benchmark_concurrency,
+                        temperature=benchmark_temperature,
+                        additional_args=additional_benchmark_args,
+                    )
+                    primary_summary["secondary_benchmarks"] = {
+                        "ci_serving_burst": {
+                            "summary_file": str(output_dir / "vllm_ci_serving_benchmark.json"),
+                            "raw_result_file": str(output_dir / "vllm_ci_serving_result.json"),
+                            "log_file": str(output_dir / "vllm_ci_serving_benchmark.log"),
+                            "config": ci_summary["config"],
+                            "output_throughput_tok_per_s": ci_summary["output_throughput_tok_per_s"],
+                            "vllm_mean_tpot_decode_tps": ci_summary["vllm_mean_tpot_decode_tps"],
+                            "comparison_scope": ci_summary["comparison_scope"],
+                        }
+                    }
+                    (output_dir / "vllm_benchmark.json").write_text(json.dumps(primary_summary, indent=2) + "\n")
 
         print("\n" + "=" * 60)
         print(f"vLLM checks complete. Results in {output_dir}")
