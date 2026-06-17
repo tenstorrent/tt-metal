@@ -1,5 +1,23 @@
 # ltx-audio-galaxy
 
+## cq-1 routing TESTED on device — deadlock PERSISTS: child cq1 op OK, but returning to parent cq0 HANGS (overlapping submesh CQs not independent)
+**2026-06-17 00:52 UTC / 2026-06-16 17:52 PT** · `tt-metal@079d567769b` (branch smarton/audio-submesh-e2e)
+
+First on-device test of the PRIMARY cq-isolation fix (commit 079d567769b: open mesh with num_command_queues=2, wrap audio decode in `ttnn.command_queue(1)`). Job 005204-2, test_submesh_repro.py::test_submesh_cq1_repro, warm cache.
+
+**Board is HEALTHY.** The 06:00 PCIe wedge (job 060002-13) cleared on its own over the ~18h idle window. This run opened all 32 devices, initialized FABRIC_1D_RING fabric with num_command_queues=2 across all 32 devices, real-time profiler synced all chips. No setup error. (`tt-smi -s` also clean beforehand.)
+
+**The cq-1 fix is INSUFFICIENT — deadlock persists.** Sequence in the repro:
+1. `[REPRO] all_gather OK (parent cq0, before audio submesh): (1,1,32,2048)` — parent on cq0 OK.
+2. `[REPRO] all_gather OK (child cq1): (1,1,32,1024)` — child 1x4 submesh all_gather on cq1 **SUCCEEDS** (this is new — the first child op now runs, where cq0-shared previously hung immediately).
+3. `_run_ag(ccl, mesh, "parent cq0, after audio submesh")` — the NEXT parent cq0 all_gather **HANGS**. No further output for ~14.5 min until the broker 900s timeout killed the job. Never printed the 3rd "OK" nor PASS.
+
+**Interpretation:** routing the child onto cq1 lets the child's CCL run once, but switching back to the parent on cq0 after cq1 activity on the OVERLAPPING 1x4 submesh deadlocks the dispatcher. The two HW command queues are NOT independent across the physically-overlapping chips for CCL/fabric ops — fabric/CCL state is shared per-chip regardless of cq_id. So cq routing alone cannot isolate an overlapping live-parent + child. This is exactly the FALLBACK condition the SHARPENED FIX PLAN named ("still deadlock on Blackhole → ttnn C++ change").
+
+**Consequence:** PRIMARY (Python config + cq routing) path is exhausted and does NOT work. The wall is confirmed at the ttnn/fabric layer: an overlapping child submesh cannot drive CCL on a distinct CQ while the parent remains live on cq0. The real fix is a ttnn C++ change for true per-submesh CQ/fabric isolation (or a parent-quiesce/hand-off API) — a metal-team PR, not an ltx-perf push.
+
+**Op note:** auto-triage did NOT fire at a 30s op-timeout (the env.yaml I seeded lacked TT_METAL_OPERATION_TIMEOUT_SECONDS + the dispatch-timeout callback per the tt:run auto-triage contract); the broker's own 900s timeout killed it instead, so there is no per-core triage artifact for this hang. The hang point is unambiguous from stdout (3rd op) regardless.
+
 ## FINAL (Phase 4.5): LTX_AUDIO_SUBMESH=1x4 E2E does NOT land — genuine ttnn cq-isolation wall; not pushed
 **2026-06-15 23:25 UTC / 16:25 PT** · `tt-metal@7af5fbf5974` (branch smarton/audio-submesh-e2e)
 
@@ -185,3 +203,32 @@ Measured on bh Galaxy 4x8, synthetic stage_b/stage_c at real girl-clip mel shape
 | 0 | baseline (conv1d, single-axis T-shard factor 8) | 1188.5 | — | pending | cdfce61bf20 |
 
 **Next:** Fix A (ROW_MAJOR `_partition_t`, `vocoder_ltx.py` ~351-366) to drop T-pad align from `32*factor`→`factor` (256→128); then BWE channel-TP factor-4 crossover (`LTX_BWE_CHANNEL_TP`).
+---
+
+## 2026-06-17 03:06 UTC / 2026-06-16 20:06 PT — RESUME: build landed, reset binding built, device wedged
+
+**Build (isolated worktree, fabric-lock-reset fix):** Prior worker's `build_worktree` died mid-build on
+a process restart, INCOMPLETE (no libtt_metal.so/_ttnn.so). The stall was a COMPILE ERROR:
+`ttnn-nanobind/device.cpp:117` called `tt::tt_metal::ResetFabricConnectionLock` but the fn is in
+`tt::tt_metal::detail` (decl tt_metal.hpp:364, impl tt_metal.cpp:287). Fixed the qualifier
+(commit a46f2e3c6f5), resumed `cmake --build build_worktree --target install` → BUILD COMPLETE.
+`reset_fabric_connection_lock` symbol present in the new `_ttnn.so`; exposed as
+`ttnn.reset_fabric_connection_lock`. MAIN's build untouched.
+
+**Force-load (editable .pth caveat solved):** `ttnn-custom.pth` + an `__editable__` finder both hard-map
+`import ttnn` → MAIN's `ttnn/ttnn/_ttnn.so` (reset symbol ABSENT). Prepending the worktree's ttnn dir to
+PYTHONPATH (`<wt>/ttnn:<wt>:<wt>/tools`) makes the worktree `_ttnn.so` win (`reset present: True`) and
+pulls the worktree `libtt_metal.so` via rpath (verified /proc/self/maps). Main's .so never overwritten.
+
+**BLOCKED — board FW-init wedged (NOT code):** repro jobs 030411-6 + 030522-8 both FAILED at fixture
+SETUP (~30s, during device open, before fix code runs):
+`Device 0: Timeout (10000ms) waiting for physical cores to finish ...` →
+`Device 0 init: failed to initialize FW! Try resetting the board.`
+Cause: my own prior E2E (012356-5) was broker-killed -9 at 01:49 → SIGKILL of a live CCL job wedges the
+board. Queue idle, no foreign tenant active. RESUME mission HARD rule = ABSOLUTELY NO device resets →
+did NOT reset; a 2nd fresh open didn't clear it (hard wedge). Stopped per do-not-thrash; board self-healed
+over an idle gap last time.
+
+**Status: fix UNTESTED on device. NOT landed, NOT pushed.** Build + force-load plumbing proven; the L1
+fabric-lock-reset's correctness is unproven. Resume = re-run the repro on a healthy board (env file
+`~/.tt-buddy/mcp/20260617T0303Z-repro/env.yaml`), expect HANG→PASS, then E2E.

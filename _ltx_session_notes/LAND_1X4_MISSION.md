@@ -201,3 +201,108 @@ go as a ttnn PR for metal-team review, NOT a silent ltx-perf push — open the P
   now but foreign tenant active. Per HARD safety: NOT resetting under a foreign tenant whose own resets
   are failing (collision risk); re-queuing/waiting for the board to recover. cq-1 fix is UNTESTED on
   device (board never reached my code). Code committed (079d567769b).
+- 2026-06-17 00:49 UTC / 2026-06-16 17:49 PT (RESUME): New worker resumed. Queue IDLE, no foreign jobs
+  running/queued. Board RECOVERED on its own over the ~18h idle gap (the foreign tenant ran a full E2E
+  to completion at 03:40-03:58, exit 0, so the board healed). `tt-smi -s` (job 005141-1) clean.
+- 2026-06-17 00:52 UTC / 17:52 PT: PRIMARY cq-1 fix TESTED on device (repro job 005204-2). DECISIVE +
+  NEGATIVE. Board healthy: opened all 32 devices, FABRIC_1D_RING + num_command_queues=2 init OK.
+  Repro sequence: (1) parent cq0 all_gather OK (1,1,32,2048); (2) child 1x4 submesh all_gather on cq1
+  OK (1,1,32,1024) — NEW: the first child op now RUNS (cq0-shared used to hang here immediately);
+  (3) the NEXT parent cq0 all_gather HANGS — no output for 14.5 min until broker 900s timeout killed it.
+  => cq-1 routing lets the child run ONCE, but returning to the parent on cq0 after cq1 activity on the
+  OVERLAPPING 1x4 submesh deadlocks the dispatcher. The two HW CQs are NOT independent across the
+  physically-overlapping chips for CCL/fabric. PRIMARY (Python config+cq-routing) path EXHAUSTED, does
+  NOT work. This is the FALLBACK condition ("still deadlock on BH -> ttnn C++ change"). Recorded note
+  (ltx-audio-galaxy.md). Next: assess FALLBACK feasibility (ttnn C++ per-submesh CQ/fabric isolation,
+  isolated worktree build) vs documented stop. Op-hygiene: triage didn't auto-fire (env.yaml lacked
+  TT_METAL_OPERATION_TIMEOUT_SECONDS seeding) — broker 900s timeout killed the job; will seed next run.
+
+## PROGRESS LOG (CONTAINED FIX attempt — host L1 fabric-sync reset, option B)
+- 2026-06-17 02:01 UTC / 19:01 PT (RESUME, new mission scope): VERIFIED the supplied root cause in
+  source (do not re-litigate): fabric_connection_sync_t {lock,initialized}+128B WorkerToFabricEdmSender
+  live at FIXED per-physical-chip L1 addr MEM_FABRIC_CONNECTION_LOCK_BASE (blackhole/dev_mem_map.h:138,
+  size 144=lock4+init4+conn128+pad8). get_or_open_fabric_connection (tt_fabric_udm_impl.hpp:406,419)
+  gates placement-new+open() on `if(!sync->initialized)` — REUSES the parent's stale connection for the
+  overlapping child, cq-unaware. cq routing cannot fix (per-chip L1). PLAN: option B — host-zero the
+  144B FABRIC_CONNECTION_LOCK region on every worker core of the 4 audio-submesh chips between video and
+  the first audio CCL, forcing the child to open a FRESH connection.
+  PATH DECISION: no pure-Python per-core L1 write exists (Explore swept ttnn/tt_metal nanobind — confirmed
+  WriteToDeviceL1 is C++-only at tt_metal/impl/host_api/tt_metal.cpp:253, unbound; the only .py hits parse
+  log text). => must add a minimal C++ nanobind + ISOLATED worktree build (build symlink currently points
+  at main's build_Release — MUST NOT clobber). RISK ack (mission's own caveat): if a fresh child open()
+  still deadlocks against a half-open EDM router, the L1 reset is insufficient and the fix needs a fabric
+  EDM teardown API (core fabric-team change) — STOP+document, do not thrash. Proceeding TDD on the cheap
+  repro first.
+- 2026-06-17 02:05 UTC / 19:05 PT: Implemented the C++ binding (commit 569b45332a2): tt_metal.hpp
+  declares + tt_metal.cpp implements ResetFabricConnectionLock(IDevice*, CoreCoord) (HAL resolves
+  FABRIC_CONNECTION_LOCK addr+size, host-zeros via existing detail::WriteToDeviceL1); ttnn-nanobind
+  device.cpp adds reset_fabric_connection_lock(MeshDevice*) looping every worker core of every chip.
+  clang-format + validate-metalium-includes pre-commit hooks PASSED. Surfaces as
+  ttnn._ttnn.device.reset_fabric_connection_lock.
+- 2026-06-17 02:10 UTC / 19:10 PT: ISOLATED BUILD. Editable ttnn .pth resolves import ttnn to MAIN's
+  /home/smarton/tt-metal/ttnn (+ its _ttnn.so copied into ttnn/ttnn/_ttnn.so) regardless of cwd, so the
+  worktree must build into its OWN dir AND its rebuilt _ttnn.so must be force-loaded at run via PYTHONPATH
+  (NOT by overwriting main's .so). Worktree submodules were empty (init'd from local objects: umd
+  5a722db4 / tracy 4963ee0e / llama 29125b7 - identical SHAs to main). Launched clean
+  build_metal.sh --release -c --build-dir build_worktree (ccache on; build symlink still -> main's
+  build_Release, will repoint AFTER the build succeeds). ~20-40min. TDD test + pipeline wiring in parallel.
+- 2026-06-17 03:04 UTC / 2026-06-16 20:04 PT (RESUME, new worker): Prior build had DIED on the process
+  restart MID-build — it was INCOMPLETE (libtt_stl/umd/fmt .so present, but NO libtt_metal.so / _ttnn.so).
+  Root cause of the stall: a COMPILE ERROR in the prior worker's binding — device.cpp:117 called
+  tt::tt_metal::ResetFabricConnectionLock but the fn lives in tt::tt_metal::DETAIL (decl tt_metal.hpp:364,
+  impl tt_metal.cpp:287 — both under `namespace detail`). Fixed the qualifier (commit a46f2e3c6f5),
+  resumed `cmake --build build_worktree --target install` (ccache reused on-disk objects, ~few min for the
+  remaining 72 LTO targets). BUILD COMPLETE: build_worktree/lib/{libtt_metal.so,_ttnn.so,_ttnncpp.so}
+  + ttnn/ttnn/_ttnn.so all rebuilt @03:00; reset_fabric_connection_lock symbol present in the new _ttnn.so.
+  NOTE: worktree `build` symlink ALREADY repointed to build_worktree (prior worker did it at 02:09);
+  MAIN's /home/smarton/tt-metal/build -> build_Release is INTACT/untouched (other tenants safe).
+  FORCE-LOAD verified end-to-end: ttnn-custom.pth + an __editable__ finder both hard-resolve `import ttnn`
+  to MAIN's ttnn/ttnn/_ttnn.so (reset symbol ABSENT there). Prepending the worktree's ttnn dir to
+  PYTHONPATH (PYTHONPATH=<wt>/ttnn:<wt>:<wt>/tools) makes the worktree's _ttnn.so win (reset present:True)
+  AND pulls the worktree libtt_metal.so via rpath (confirmed via /proc/self/maps) — main's .so NEVER
+  overwritten. Launched the cheap repro test_submesh_cq1_repro (job 030411-6) with this PYTHONPATH +
+  warm cache + TT_METAL_OPERATION_TIMEOUT_SECONDS=300 (op-hygiene). Device was idle, no foreign tenants.
+- 2026-06-17 03:06 UTC / 2026-06-16 20:06 PT: REPRO BLOCKED — board g03blx02 is FW-INIT WEDGED, NOT a
+  code failure. Both repro attempts (job 030411-6, then 030522-8) FAILED at fixture SETUP (~28-30s, during
+  ttnn device-open, BEFORE any repro/fix code runs) with the mission's flagged wedge signature:
+  `Device 0: Timeout (10000 ms) waiting for physical cores to finish: 4-2,11-2,...` then
+  `Device 0 init: failed to initialize FW! Try resetting the board.`
+  (risc_firmware_initializer.cpp:1402 -> ttnn/distributed/distributed.py:671 RuntimeError). tt-smi -s
+  (read-only, job 030522 era) reads telemetry fine (PCIe alive) but worker-core FW won't come up.
+  CAUSE: my OWN prior E2E job 012356-5 was killed -9 at 01:49 (broker-killed, runtime 1555s) — a SIGKILL
+  of a live CCL job wedges the board exactly as the mission warns. recent_jobs: queue IDLE, NO foreign
+  tenant running or queued now (last bare-`smarton`/sulphur activity hours ago: a foreign glx_reset at
+  01:09, a sulphur E2E completed 03:58 on 06-16). So the wedge is mine to clear in principle.
+  BUT the RESUME mission's HARD SAFETY is absolute: "ABSOLUTELY NO device resets (no tt-smi -glx_reset,
+  no tt_device_reset)" — supersedes the older mission-body text that allowed sanctioned resets; prior
+  agent was fired for violating it. => I did NOT reset. A second fresh device-open (030522-8) did NOT
+  clear the wedge (same signature), so it is a hard wedge, not transient. Per "do not thrash / let it
+  hit broker timeout / queue behind foreign", STOPPING device attempts. Last time the board self-healed
+  over an idle gap (a foreign tenant's later E2E ran to completion); expect the same here.
+  STATE LEFT READY: build complete + reset binding verified present; force-load PYTHONPATH proven;
+  env file /home/smarton/.tt-buddy/mcp/20260617T0303Z-repro/env.yaml ready. The moment the board
+  recovers, RESUME = re-run job command below (no rebuild, no re-setup needed):
+    workspace=/home/smarton/tt-metal/.claude/worktrees/audio-submesh-e2e
+    env=/home/smarton/.tt-buddy/mcp/20260617T0303Z-repro/env.yaml
+    cmd=python_env/bin/python -m pytest \
+        models/tt_dit/tests/models/ltx/test_submesh_repro.py::test_submesh_cq1_repro -s -q --timeout=0
+  Expected: HANG->PASS (parent cq0 + child cq1 + 2x reset_fabric_connection_lock, clean close). Then E2E.
+  NOT LANDED, NOT PUSHED: the fabric-lock-reset fix is UNTESTED on device (board never reached the code).
+  HONEST: zero evidence the L1 reset fixes the deadlock yet — the build/force-load plumbing is proven,
+  the fix's correctness is not. Do NOT claim success or push until the repro PASSES on a healthy board.
+- 2026-06-17 03:14 UTC / 20:14 PT (RESUME, new worker): STEP-1 repro re-attempted. BOARD STILL WEDGED —
+  NOT self-healed over the ~3h idle gap since the prior worker's stop (03:06). Pre-flight: queue IDLE, NO
+  foreign tenant running/queued (recent_jobs clean since the 03:40-03:58 06-16 sulphur E2E). Force-load
+  plumbing re-verified GREEN via broker (job 031330-9): `import ttnn` resolves to worktree
+  ttnn/ttnn/__init__.py and `reset present: True` — the rebuilt _ttnn.so with reset_fabric_connection_lock
+  wins under the env.yaml PYTHONPATH. Ran the repro (job 031341-10, warm cache, env.yaml, --timeout=600).
+  FAILED at fixture SETUP in 17.2s (device-open, BEFORE any repro/fix code): same wedge signature —
+  `Device 0: Timeout (10000 ms) waiting for physical cores to finish: 4-2,11-2,... (25 cores)` →
+  `Device 0 init: failed to initialize FW! Try resetting the board.`
+  (risc_firmware_initializer.cpp:1402 → distributed.py:671 RuntimeError). Identical to prior jobs
+  030411-6 / 030522-8. This is the mission's STEP-1 board-wedge case → HARD-STOP, no retry, NO reset
+  (HARD SAFETY: ABSOLUTELY NO device resets; the wedge originates from the OWN prior E2E job 012356-5
+  SIGKILLed -9 at 01:49, exactly the warned cause — not my code). Made ONE fresh device-open attempt
+  (the repro), did not thrash. The fabric-lock-reset fix remains UNTESTED on device. STATE LEFT READY,
+  no rebuild/re-setup needed; resume command unchanged (see prior log entry @289). Awaiting board
+  recovery (last time it healed over an idle gap when a foreign tenant's later E2E ran to completion).
