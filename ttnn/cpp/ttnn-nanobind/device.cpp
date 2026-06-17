@@ -114,7 +114,7 @@ void ttnn_device(nb::module_& mod) {
                 const CoreCoord grid = dev->compute_with_storage_grid_size();
                 for (uint32_t y = 0; y < grid.y; ++y) {
                     for (uint32_t x = 0; x < grid.x; ++x) {
-                        tt::tt_metal::ResetFabricConnectionLock(dev, CoreCoord(x, y));
+                        tt::tt_metal::detail::ResetFabricConnectionLock(dev, CoreCoord(x, y));
                     }
                 }
             }
