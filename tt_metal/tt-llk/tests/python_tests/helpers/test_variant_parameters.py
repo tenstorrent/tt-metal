@@ -233,6 +233,17 @@ class MATH_FIDELITY(TemplateParameter):
 
 
 @dataclass
+class UNINIT_NUM_FACES(TemplateParameter):
+    # z-dim value that _llk_unpack_tilize_uninit_ restores into the tile descriptor.
+    # 4 = full-tile face count (correct for BFP matmul consumers, see tt-metal#47016),
+    # any other value reproduces the regression from #45179.
+    num_faces: int = 4
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t UNINIT_NUM_FACES = {self.num_faces};"
+
+
+@dataclass
 class APPROX_MODE(TemplateParameter):
     approx_mode: ApproximationMode = ApproximationMode.No
 
