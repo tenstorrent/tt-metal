@@ -266,6 +266,44 @@ def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
     return torch.cat(shards, dim=0)
 
 
+def prepare_attn_qkv(wq, wk, wv, n_heads, n_kv_heads, head_dim, tp):
+    """Reorder the full-attention Q/K/V projection weights into the per-device
+    [local_Q | local_K | local_V] grouping that ``nlp_create_qkv_heads`` expects.
+
+    The op splits a fused [.., (n_heads + 2*n_kv_heads)*head_dim] tensor as
+    all-Q-heads then all-K-heads then all-V-heads.
+
+    For TP we must hand each device its OWN heads in that order, so we lay the rows out as
+    cat_over_devices([q_shard | k_shard | v_shard]); ``shard_w(dim=-1)`` (column-parallel,
+    which shards the out dim into ``tp`` equal contiguous chunks after the
+    transpose) then gives device ``s`` exactly its [q_s | k_s | v_s] block.
+
+    * wq: [n_heads*head_dim, hidden]   (gate already split out)
+    * wk, wv: [n_kv_heads*head_dim, hidden]
+    Returns the reordered [(n_heads + 2*n_kv_heads)*head_dim, hidden] weight.
+    The attention analog of prepare_gdn_qkv; reduces to a plain cat at tp=1.
+    """
+    if tp == 1:
+        return torch.cat([wq, wk, wv], dim=0)
+
+    q_per = n_heads // tp
+    kv_per = max(1, n_kv_heads // tp)
+    kv_replicated = n_kv_heads < tp  # each device replicates the GQA-assigned KV head
+    shards = []
+    for s in range(tp):
+        q_s = wq[s * q_per * head_dim : (s + 1) * q_per * head_dim, :]
+        if kv_replicated:
+            # GQA: device s's Q heads all map to this single KV head (mirrors gemma4).
+            kv_idx = (s * q_per) * n_kv_heads // n_heads
+            k_s = wk[kv_idx * head_dim : (kv_idx + 1) * head_dim, :]
+            v_s = wv[kv_idx * head_dim : (kv_idx + 1) * head_dim, :]
+        else:
+            k_s = wk[s * kv_per * head_dim : (s + 1) * kv_per * head_dim, :]
+            v_s = wv[s * kv_per * head_dim : (s + 1) * kv_per * head_dim, :]
+        shards.append(torch.cat([q_s, k_s, v_s], dim=0))
+    return torch.cat(shards, dim=0)
+
+
 def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):
     """Split the fused conv1d weight [qkv_dim, 1, kernel] into ``kernel`` taps,
     each reordered to match the per-device Q/K/V head grouping of prepare_gdn_qkv."""

@@ -22,7 +22,12 @@ fractured along dim=3 (reduce-scatter). Column-parallel q/k/v, row-parallel wo.
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.qwen3_5_9b.tt.attention.kv_cache import init_kv_cache
-from models.demos.blackhole.qwen3_5_9b.tt.attention.operations import apply_qkvg_projection
+from models.demos.blackhole.qwen3_5_9b.tt.attention.operations import (
+    apply_gate_projection,
+    apply_qkv_projection,
+    split_qkv_heads_decode,
+    split_qkv_heads_prefill,
+)
 from models.demos.blackhole.qwen3_5_9b.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
 from models.demos.blackhole.qwen3_5_9b.tt.attention.weights import load_attention_weights
 from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import qwen35_rms_norm
@@ -83,22 +88,23 @@ class Qwen35Attention(LightweightModule):
         page_table=None,
         user_id=0,
     ):
+        """
+        hidden_states: [B, 1, S, dim]
+        cos_tt, sin_tt: [max_seq_len, rope_dim] RoPE tensors
+        """
         weights = self.weights
         NH, NKV, HD = self.NH, self.NKV, self.HD
-        S = hidden_states.shape[-2]
+        B, _, S, _ = hidden_states.shape
 
-        # 1. apply q/k/v/g projections
-        q, k, v, gate = apply_qkvg_projection(hidden_states, weights)
+        # 1. fused Q+K+V projection + separate gate projection
+        xqkv = apply_qkv_projection(hidden_states, weights)
+        gate = apply_gate_projection(hidden_states, weights)
 
-        # 2. reshape to heads format / shape for attention
-        # reshape from [1, 1, S, NH * HD] -> [1, NH, S, HD] for q and gate
-        # reshape from [1, 1, S, NKV * HD] -> [1, NKV, S, HD] for k and v
-        # NOTE ttnn.experimental.nlp_create_qkv_heads performns the reshapes
-        # TODO remove this when we optimize to use ttnn.experimental.nlp_create_qkv_heads
-        q = ttnn.transpose(ttnn.reshape(q, (1, S, NH, HD)), 1, 2)
-        gate = ttnn.transpose(ttnn.reshape(gate, (1, S, NH, HD)), 1, 2)
-        k = ttnn.transpose(ttnn.reshape(k, (1, S, NKV, HD)), 1, 2)
-        v = ttnn.transpose(ttnn.reshape(v, (1, S, NKV, HD)), 1, 2)
+        # 2. create QKV heads. nlp_create_qkv_heads does the [B,1,S,*] -> [B,H,S,HD]
+        # The gate is a Qwen3.5-specific 4th projection (NH heads) the QKV op can't emit,
+        # so it keeps the explicit reshape+transpose and lands in q's [B, NH, S, HD] layout.
+        q, k, v = split_qkv_heads_prefill(xqkv, NH, NKV)
+        gate = ttnn.transpose(ttnn.reshape(gate, (B, S, NH, HD)), 1, 2)
 
         # 3. apply RMS norms
         q = qwen35_rms_norm(q, weight=weights.w_q_norm, eps=self.eps, scale=True)
@@ -108,15 +114,28 @@ class Qwen35Attention(LightweightModule):
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
-        # 5. update kv cache
+        # 5. update kv cache. fill_cache / paged_fill_cache each write exactly ONE batch row
+        #    (the op asserts input batch == 1), so a B>1 prefill fills users one at a time:
+        #    user b's [1,NKV,S,HD] slice lands in cache slot user_id+b. B==1 keeps the original
+        #    single-user fast path (no slicing). The paged path with B>1 is rejected below
+        #    rather than guessed at: batched paged fills need a per-row page_table mapping that
+        #    this contiguous-cache caller doesn't supply, so assert + TODO instead of a wrong fill.
         if self.kv_cache is not None:
             k_cache, v_cache = self.kv_cache  # unpack the single [k_cache, v_cache] slot
             if page_table is not None:
+                assert B == 1, (
+                    "batched (B>1) paged prefill fill is not implemented — paged_fill_cache needs a "
+                    "per-user page_table row mapping. TODO: thread a batch_idx_tensor / per-row page "
+                    "table once a batched paged caller exists."
+                )
                 ttnn.experimental.paged_fill_cache(k_cache, k, page_table, batch_idx=user_id)
                 ttnn.experimental.paged_fill_cache(v_cache, v, page_table, batch_idx=user_id)
             else:
-                ttnn.fill_cache(k_cache, k, batch_idx=user_id)
-                ttnn.fill_cache(v_cache, v, batch_idx=user_id)
+                for b in range(B):
+                    k_b = k if B == 1 else ttnn.slice(k, (b, 0, 0, 0), (b + 1, NKV, S, HD))
+                    v_b = v if B == 1 else ttnn.slice(v, (b, 0, 0, 0), (b + 1, NKV, S, HD))
+                    ttnn.fill_cache(k_cache, k_b, batch_idx=user_id + b)
+                    ttnn.fill_cache(v_cache, v_b, batch_idx=user_id + b)
 
         # 6. global attention
         attn = ttnn.transformer.scaled_dot_product_attention(
@@ -124,11 +143,11 @@ class Qwen35Attention(LightweightModule):
         )
 
         # 7. apply gate and output projection
-        gated = attn * ttnn.sigmoid(gate)  # [1,NH,S,HD]
+        gated = attn * ttnn.sigmoid(gate)  # [B,NH,S,HD]
 
-        # [1,NH,S,HD] -> [1,S,NH,HD] -> [1,1,S,NH*HD]
+        # [B,NH,S,HD] -> [B,S,NH,HD] -> [B,1,S,NH*HD]
         gated = ttnn.transpose(gated, 1, 2)
-        gated = ttnn.reshape(gated, (1, 1, S, NH * HD))
+        gated = ttnn.reshape(gated, (B, 1, S, NH * HD))
         out = ttnn.linear(gated, weights.wo)
 
         return tt_all_reduce(
@@ -142,33 +161,34 @@ class Qwen35Attention(LightweightModule):
         )
 
     def forward_decode(self, hidden_states, cur_pos_tt, cos_tt, sin_tt, page_table=None):
+        """
+        hidden_states: [1, 1, B, dim] (framework layout for decode)
+        cur_pos_tt: [1] scalar tensor with the current decode position (0-based)
+        cos_tt, sin_tt: [max_seq_len, rope_dim] RoPE tensors
+        """
         assert self.kv_cache is not None, "forward_decode requires allocated KV caches"
         k_cache, v_cache = self.kv_cache
 
         weights = self.weights
         B, NH, NKV, HD = self.B, self.NH, self.NKV, self.HD
 
-        q, k, v, gate = apply_qkvg_projection(hidden_states, weights)
+        # 1. fused Q+K+V projection + separate gate projection. xqkv: [1, B, H, HD]
+        # The gate is projected + reshaped separately into q's [1, B, NH, HD] layout.
+        xqkv = apply_qkv_projection(hidden_states, weights)
+        gate = apply_gate_projection(hidden_states, weights)
 
-        q = ttnn.reshape(q, (1, B, NH, HD))
+        # 2. Split QKV heads.
+        q, k, v = split_qkv_heads_decode(xqkv, NH, NKV)
         gate = ttnn.reshape(gate, (1, B, NH, HD))
-
-        k = ttnn.reshape(k, (1, B, NKV, HD))
-        v = ttnn.reshape(v, (1, B, NKV, HD))
-
+        # 3. apply RMS norms
         q = qwen35_rms_norm(q, weight=weights.w_q_norm, eps=self.eps, scale=True)
         k = qwen35_rms_norm(k, weight=weights.w_k_norm, eps=self.eps, scale=True)
 
+        # 4. apply RoPE.
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
-        # Single KV-cache slot; the op variant is chosen by page_table, not by a separate
-        # cache attribute (mirrors gemma4 decode.py). The demo path binds an internal
-        # contiguous cache (init_kv_cache); the vLLM path binds an external paged cache
-        # (set_paged_kv_cache). Both are [B, n_local_kv_heads, max_seq, HD] handles here, so
-        # the pad-to-32 (TILE_SIZE) + height-sharded update is identical — only the SDPA op
-        # differs (paged variant takes the page_table). ONE in-place update of all local
-        # heads at cur_pos, then SDPA-decode straight off the cache.
+        # TODO This is not trace compatible
         k = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
         v = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
 
@@ -176,26 +196,9 @@ class Qwen35Attention(LightweightModule):
         v = ttnn.to_memory_config(v, self.args.kv_update_shard_cfg)
 
         # The cache update is identical for both paths: paged_update_cache's page_table
-        # kwarg defaults to None, so passing page_table=None is exactly the contiguous
-        # (demo) update. SDPA cannot merge the same way — the paged op is a separate ttnn
-        # entry point that takes page_table_tensor as a REQUIRED positional, so the op
-        # choice stays a one-line fork on whether a page table was supplied.
+        # kwarg defaults to None, so passing page_table=None is exactly the contiguous tensor cache update.
         ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=cur_pos_tt, page_table=page_table)
         ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-
-        # SDPA-decode needs an explicit program config. With program_config=None the op falls
-        # back to the full device grid, whose static circular buffers (a) clash with the
-        # height-sharded K/V still resident in L1 from the cache update above, and (b) exceed
-        # the 64-cores/head reduction-tree cap (MAX_TREE_REDUCTION_ROUNDS=6) when n_local_kv_heads
-        # is small (1 at TP=4). SDPAProgramConfig's default max_cores_per_head_batch=16 caps the
-        # tree; the q/k chunk sizes mirror gemma4's validated decode path. Output to DRAM since
-        # the caches it reads are DRAM-resident.
-        sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=32,
-            k_chunk_size=64,
-            exp_approx_mode=False,
-        )
 
         if page_table is not None:
             attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -205,7 +208,6 @@ class Qwen35Attention(LightweightModule):
                 page_table_tensor=page_table,
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
-                program_config=sdpa_program_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
@@ -215,7 +217,6 @@ class Qwen35Attention(LightweightModule):
                 v_cache,
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
-                program_config=sdpa_program_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 

@@ -10,11 +10,14 @@ from models.demos.blackhole.qwen3_5_9b.utils.general_utils import get_cache_file
 
 @dataclass(frozen=True)
 class Qwen35AttentionWeights:
-    wq: ttnn.Tensor  # q_proj
-    wg: ttnn.Tensor  # gate_proj
-    wk: ttnn.Tensor  # k_proj
-    wv: ttnn.Tensor  # v_proj
-    wo: ttnn.Tensor  # o_proj
+    # Q/K/V are fused into one column-parallel weight so the on-device head split
+    # can use ttnn.experimental.nlp_create_qkv_heads (and ..._decode) instead of a
+    # linear-per-projection + manual reshape/transpose. The gate (Qwen3.5 gated
+    # attention) is a 4th projection with n_heads heads that the 3-way QKV head op
+    # cannot split, so it stays separate.
+    wqkv: ttnn.Tensor  # fused q_proj | k_proj | v_proj, per-device [Q|K|V], column-parallel
+    wg: ttnn.Tensor  # gate_proj, column-parallel
+    wo: ttnn.Tensor  # o_proj, row-parallel
     w_q_norm: ttnn.Tensor  # Replicated across devices
     w_k_norm: ttnn.Tensor  # Replicated across devices
 
@@ -42,13 +45,27 @@ def load_attention_weights(mesh_device, state_dict, args, tensor_cache_path=None
 
     wq, wg = split_q_and_gate(state_dict["q_proj.weight"])
 
+    # Fuse Q+K+V along the out dim in the per-device [Q|K|V] order nlp_create_qkv_heads
+    # consumes. prepare_attn_qkv reduces to cat([wq, wk, wv]) at tp=1 (the 9B / rob.py
+    # single-device case) and interleaves per device for TP>1. shard_w(dim=-1) then
+    # column-parallel-shards it, handing each device its own [q|k|v] heads.
+    wqkv = tpc.prepare_attn_qkv(
+        wq,
+        state_dict["k_proj.weight"],
+        state_dict["v_proj.weight"],
+        args.n_heads,
+        args.n_kv_heads,
+        args.head_dim,
+        args.num_devices,
+    )
+
     return Qwen35AttentionWeights(
-        wq=tpc.shard_w(
-            wq,
+        wqkv=tpc.shard_w(
+            wqkv,
             mesh_device,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_path=get_cache_file_name(tensor_cache_path, "wq"),
+            cache_path=get_cache_file_name(tensor_cache_path, "wqkv"),
             dtype=ttnn.bfloat8_b,
         ),
         wg=tpc.shard_w(
@@ -57,22 +74,6 @@ def load_attention_weights(mesh_device, state_dict, args, tensor_cache_path=None
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_path=get_cache_file_name(tensor_cache_path, "wg"),
-            dtype=ttnn.bfloat8_b,
-        ),
-        wk=tpc.shard_w(
-            state_dict["k_proj.weight"],
-            mesh_device,
-            dim=-1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_path=get_cache_file_name(tensor_cache_path, "wk"),
-            dtype=ttnn.bfloat8_b,
-        ),
-        wv=tpc.shard_w(
-            state_dict["v_proj.weight"],
-            mesh_device,
-            dim=-1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_path=get_cache_file_name(tensor_cache_path, "wv"),
             dtype=ttnn.bfloat8_b,
         ),
         # Row-parallel: shard input dim → reduce-scatter after

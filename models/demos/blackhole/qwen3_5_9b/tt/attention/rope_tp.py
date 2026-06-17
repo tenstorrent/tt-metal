@@ -102,13 +102,20 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
 
 
 def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
-    """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim]."""
+    """x: [B, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim].
+
+    B is read off the tensor (not hardcoded to 1): every slice spans the full batch so a
+    multi-user prefill rotates all users, not just user 0. cos/sin stay [1,1,seq,rope_dim]
+    and broadcast over both the batch and head axes (positions 0..seq-1 are shared by all
+    users), so the rotary math is unchanged from the single-user path.
+    """
+    B = x.shape[0]
     hd = x.shape[-1]
     seq_len = x.shape[-2]
-    x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim))
-    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, n_heads, seq_len, hd))
-    r1 = ttnn.slice(x_rope, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim // 2))
-    r2 = ttnn.slice(x_rope, (0, 0, 0, rope_dim // 2), (1, n_heads, seq_len, rope_dim))
+    x_rope = ttnn.slice(x, (0, 0, 0, 0), (B, n_heads, seq_len, rope_dim))
+    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (B, n_heads, seq_len, hd))
+    r1 = ttnn.slice(x_rope, (0, 0, 0, 0), (B, n_heads, seq_len, rope_dim // 2))
+    r2 = ttnn.slice(x_rope, (0, 0, 0, rope_dim // 2), (B, n_heads, seq_len, rope_dim))
     x_rot = ttnn.concat([ttnn.neg(r2), r1], dim=-1)
     ttnn.deallocate(r1)
     ttnn.deallocate(r2)
