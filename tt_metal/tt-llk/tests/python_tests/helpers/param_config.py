@@ -415,8 +415,7 @@ def is_invalid_quasar_sfpu_format_combination(
     # Sub-32-bit integer input cannot use a 32-bit dest: the packer input format must stay at the
     # narrow width (UInt16 collapses to Int16). Mirrors the data_format_inference guard.
     if (
-        in_fmt
-        in (DataFormat.Int16, DataFormat.UInt16, DataFormat.Int8, DataFormat.UInt8)
+        in_fmt in (DataFormat.Int16, DataFormat.UInt16)
         and dest_acc == DestAccumulation.Yes
     ):
         return True

@@ -107,7 +107,7 @@ SFPU_FILL_FLOAT_FORMATS = [
 # Fill int path: _calculate_fill_int_ with p_sfpu::sfpmem::INT32/UINT16/INT8/UINT8.
 # Quasar integer formats and their SFPMEM store modes:
 #   Int32 → sfpmem::INT32  (32-bit sign-magnitude)
-#   Int16 → sfpmem::UINT16 (16-bit truncate)
+#   Int16 → sfpmem::INT16 (16-bit truncate)
 #   Int8  → sfpmem::INT8   (0b0101, sign-magnitude 8-bit)
 #   UInt8 → sfpmem::UINT8  (0b1011, true unsigned 8-bit; validated on the emulator — see
 #           ckernel_sfpu_fill.h)
