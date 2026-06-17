@@ -64,6 +64,8 @@ IMAGE_TOKEN_MARGIN = 1280
 
 # (id, batch_size, max_seq_len) sweep points: batch 1 over context windows 128..128k.
 ISL_SWEEP = [
+    ("b1_isl1k", 1, 1 * 1024),
+    ("b1_isl2k", 1, 2 * 1024),
     ("b1_isl4k", 1, 4 * 1024),
     ("b1_isl8k", 1, 8 * 1024),
     ("b1_isl16k", 1, 16 * 1024),

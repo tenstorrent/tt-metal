@@ -17,7 +17,7 @@ Modeled on ``models/tt_transformers/tests/test_model.py`` decode loop.
 
 PCC thresholds:
   * Prefill last-token logits: ≥ 0.99
-  * Per-step decode logits:    ≥ 0.91  (each of the 32 steps)
+  * Per-step decode logits:    ≥ 0.97  (each of the 32 steps)
 """
 
 import bz2
@@ -33,6 +33,7 @@ from models.experimental.mistral_24b.tests.pipeline_tests.test_end2end import (
     fabric_1d_trace_device_params,
     setup_vision_model_args,
 )
+from models.experimental.mistral_24b.tests.reference_text_model import load_reference_text_model
 from models.experimental.mistral_24b.tt.generator import MistralGenerator
 from models.experimental.mistral_24b.tt.model import MistralTransformer as Transformer
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
@@ -72,12 +73,10 @@ PROMPT_FILE = os.path.join(TT_METAL_HOME, "models/tt_transformers/tests/tale-of-
     ],
     indirect=True,
 )
-def test_text_decoder_decode_logits(
-    prefill_len, generation_length, max_seq_len, page_params, mesh_device, reset_seeds
-):
+def test_text_decoder_decode_logits(prefill_len, generation_length, max_seq_len, page_params, mesh_device, reset_seeds):
     """Prefill real tokens (PCC ≥ 0.99), then compare 32 decode-step logits vs HF (``test_model.py`` token policy)."""
     pcc_required_prefill = 0.99
-    pcc_required_decode = 0.91
+    pcc_required_decode = 0.97
     dtype = ttnn.bfloat8_b
     batch_size = 1
 
@@ -134,7 +133,7 @@ def test_text_decoder_decode_logits(
     )
 
     # --- HF prefill (populates reference KV cache) ---
-    reference_model = model_args.reference_transformer(load_checkpoint=True)
+    reference_model = load_reference_text_model(model_args)
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd = model_args.reference_embedding()
     weight = state_dict[f"{state_dict_prefix}tok_embeddings.weight"]
@@ -144,7 +143,9 @@ def test_text_decoder_decode_logits(
     ref_prefill_logits = reference_model(pt_prefill, start_pos=0)
     ref_last_prefill = ref_prefill_logits[:, -1:, : model_args.vocab_size]
 
-    passing, pcc_message = comp_pcc(ref_last_prefill, tt_prefill_logits[:, :, : model_args.vocab_size], pcc_required_prefill)
+    passing, pcc_message = comp_pcc(
+        ref_last_prefill, tt_prefill_logits[:, :, : model_args.vocab_size], pcc_required_prefill
+    )
     logger.info(f"Prefill last-token logits PCC: {pcc_message}")
     assert passing, f"Prefill last-token logits PCC below {pcc_required_prefill}. {pcc_message}"
 
@@ -229,15 +230,11 @@ def test_text_decoder_decode_logits(
             pt_decode_input = embd(pt_out_tok)
             tt_decode_input = pt_decode_input
 
-        passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc_required_decode)
+        passing, pcc_val = comp_pcc(ref_output, tt_output_torch, pcc_required_decode)
         logger.info(comp_allclose(ref_output, tt_output_torch))
-        logger.info(f"Decode logits PCC (pos={generation_start_pos + i}): {pcc_message}")
+        logger.info(f"Decode logits PCC (pos={generation_start_pos + i}): {pcc_val}")
 
-        # Extract numeric PCC value from message string (format: "PCC: X.XXXXXX")
-        import re as _re
-        _pcc_match = _re.search(r"PCC:\s*([\d.eE+\-]+)", pcc_message)
-        _pcc_val = float(_pcc_match.group(1)) if _pcc_match else float("nan")
-        decode_pcc_results.append((i, generation_start_pos + i, _pcc_val, passing))
+        decode_pcc_results.append((i, generation_start_pos + i, float(pcc_val), passing))
 
         if not passing:
             logger.warning(f"Decode logits failed at position {generation_start_pos + i}")
@@ -246,7 +243,7 @@ def test_text_decoder_decode_logits(
     # --- PCC summary table (32 generation steps) ---
     logger.info("")
     logger.info("=== Decode Logits PCC Summary (32 generation steps) ===")
-    logger.info(f"{'Step':>4}  {'Position':>8}  {'PCC':>10}  {'Pass?':>6}")
+    logger.info(f"{'Step':>4}  {'Position':>8}  {'PCC':>10}")
     logger.info("-" * 38)
     for step, pos, pcc_val, passed in decode_pcc_results:
         status = "PASS" if passed else "FAIL"
