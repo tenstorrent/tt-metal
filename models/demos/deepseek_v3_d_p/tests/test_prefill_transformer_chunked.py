@@ -25,6 +25,7 @@ Override the trace dir with PREFILL_TRACE_DIR.
 import gc
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -39,12 +40,23 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import build_h2d_service
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = 5 * 1024  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
+
+# H2D stream-service constants (mirror prefill_runner.py). Used by the with-service variant of the
+# no-PCC test: build the H2D service so its persistent receiver kernel spins on its worker core during
+# the whole prefill, reproducing the request-loop's service-presence dispatch tax WITHOUT any producer
+# or socket (tokens still come from the local path). See run_chunked_transformer_no_pcc(with_h2d_service).
+H2D_METADATA_SIZE_BYTES = 12
+H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
+    placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
+)
+H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 
 
 def _resolve_trace_dir(variant) -> Path:
@@ -751,5 +763,249 @@ def test_kimi_prefill_transformer_chunked_padded(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
+        routing_use_l1_small_for_semaphores=True,
+    )
+
+
+def run_chunked_transformer_no_pcc(
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    num_iters,
+    with_h2d_service=False,
+    routing_use_l1_small_for_semaphores=False,
+):
+    """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
+    full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
+    readback, no PCC). Tokens are the real (longbook) ids from the golden trace when present, else a
+    deterministic in-vocab pattern, so this is trace-optional. With with_h2d_service the H2D stream
+    service is built so its persistent receiver kernel spins on its worker core for the whole prefill,
+    reproducing the request-loop's service-presence dispatch tax WITHOUT any producer or socket (the
+    service is never fed). The KV cache is reused across iterations (each chunk overwrites the same
+    [0, total_len) region in order)."""
+    if weight_cache_path is None:
+        pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+
+    profiler.clear()
+    profiler.start("total_test_time")
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    assert (sp, tp) == (8, 4), f"this test targets mesh-8x4, got {mesh_shape}"
+
+    chunk_local = CHUNK // sp  # 640
+    total_len = n_chunks * CHUNK
+    assert total_len <= SEQ_CACHE, f"{n_chunks} chunks ({total_len}) exceed cache {SEQ_CACHE}"
+
+    kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    config.max_seq_len = SEQ_CACHE
+
+    logger.info(
+        f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
+        f"total_len={total_len} cache={SEQ_CACHE} chunk={CHUNK} num_iters={num_iters} "
+        f"with_h2d_service={with_h2d_service}"
+    )
+
+    # Token ids: prefer the real (longbook) ids from the golden trace (same source as the PCC test) but
+    # never compared here; fall back to a deterministic in-vocab pattern so this stays trace-optional.
+    vocab_size = config.vocab_size
+    trace_dir = _resolve_trace_dir(variant)
+    if trace_dir.exists():
+        trace_tokens = _load_metadata_token_ids(trace_dir, total_len)
+        if trace_tokens.numel() < total_len:
+            reps = (total_len + trace_tokens.numel() - 1) // trace_tokens.numel()
+            trace_tokens = trace_tokens.repeat(reps)[:total_len]
+        token_ids_full = trace_tokens % vocab_size
+        logger.info(f"no-PCC: loaded {token_ids_full.numel()} token ids from trace {trace_dir}")
+    else:
+        token_ids_full = torch.arange(total_len, dtype=torch.int64) % vocab_size
+        logger.info(f"no-PCC: trace not found ({trace_dir}); using synthetic token ids")
+
+    # --- Weights from the prebuilt TTNN cache (empty state_dict when complete). ---
+    effective_cache_path = weight_cache_path / f"{sp}x{tp}"
+    experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
+    assert TtPrefillTransformer.check_cache_complete(
+        effective_cache_path,
+        num_layers,
+        experts_per_chip=experts_per_chip,
+        first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
+
+    profiler.start("tt_transformer_creation")
+    transformer = TtPrefillTransformer(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=variant.model_config,
+        state_dict={},
+        num_layers=num_layers,
+        seq_len=CHUNK,  # per-chunk size -> MoE/FFN dispatch buffers
+        max_seq_len=SEQ_CACHE,  # KV ring buffer = full cache
+        dispatch_buffer_capacity_factor=8,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        gate_fallback_mode=gate_fallback_mode,
+        weight_cache_path=effective_cache_path,
+        lm_head_is_column_parallel=True,
+        is_chunked=True,
+        slot_num=1,
+        routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+    )
+    ttnn.synchronize_device(mesh_device)
+    gc.collect()
+    profiler.end("tt_transformer_creation")
+
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_CACHE,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=1,
+    )
+
+    # Precompute per-chunk SP-sharded token tiles once (reused across iterations). Chunk-aligned offsets
+    # make the block-cyclic rotation degenerate to a plain per-chip reshape.
+    chunk_tok_host = []
+    for c in range(n_chunks):
+        kv_actual = c * CHUNK
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
+        chunk_tok_host.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
+
+    mesh_device.enable_program_cache()
+
+    # Background H2D-service variant: build the H2D stream service so its persistent receiver kernel
+    # spins for the whole prefill, reproducing the request-loop's service-presence dispatch tax WITHOUT
+    # a producer or socket (tokens still come from the local path; the service is never fed). Mirrors
+    # prefill_runner request-mode: clear the model's custom sub-device manager first so the service's
+    # init program validates against the whole-chip default.
+    bg_h2d_service = None
+    if with_h2d_service:
+        mesh_device.clear_loaded_sub_device_manager()
+        bg_h2d_service = build_h2d_service(
+            mesh_device,
+            mesh_shape=tuple(mesh_shape),
+            chunk_size=CHUNK,
+            mapper_config=H2D_MAPPER_CONFIG,
+            worker_cores=H2D_SYNC_WORKER_CORES,
+            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+        )
+        logger.info("[h2d-bg] H2D service built and spinning in the background (unused; no producer/socket)")
+
+    profiler.start("tt_forward")
+    for it in range(num_iters):
+        iter_start = time.time()
+        for c in range(n_chunks):
+            kv_actual = c * CHUNK
+            tt_tokens = ttnn.from_torch(
+                chunk_tok_host[c],
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
+            chunk_start = time.time()
+            # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
+            # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
+            # uses self.indexed_rope. The small (first_token) return is discarded.
+            transformer.forward(
+                tt_tokens,
+                tt_kvpe_cache,
+                number_of_non_padded_tokens=CHUNK,
+                actual_start=kv_actual,
+                actual_end=kv_actual + CHUNK,
+                cache_user_id=0,
+                return_intermediates=False,
+            )
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(tt_tokens)
+            logger.info(f"  iter {it} chunk {c}: {time.time() - chunk_start:.3f}s")
+        logger.info(f"iter {it} done ({n_chunks} chunks) in {time.time() - iter_start:.3f}s")
+    profiler.end("tt_forward")
+
+    # Release the H2D service while the mesh + command queues + service core are still alive (its dtor
+    # frees a command queue and the service-core L1; running it after mesh close aborts).
+    if bg_h2d_service is not None:
+        del bg_h2d_service
+        gc.collect()
+        logger.info("[h2d-bg] H2D service released")
+
+    profiler.end("total_test_time")
+    logger.success(
+        f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, "
+        f"num_iters={num_iters}, with_h2d_service={with_h2d_service})"
+    )
+    for key in profiler.times:
+        logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+
+
+# No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
+# trace dependency, no intermediate readback, and no PCC. with_h2d_service toggles the background H2D
+# stream service (service-presence dispatch-tax study). Requires only the Kimi TTNN weight cache (set
+# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
+@pytest.mark.parametrize("with_h2d_service", [False, True], ids=["nosvc", "h2dsvc"])
+@pytest.mark.parametrize("num_iters", [1, 10, 20], ids=["iters1", "iters10", "iters20"])
+@pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
+@pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
+                "l1_small_size": 512,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_prefill_transformer_chunked_no_pcc(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    num_iters,
+    with_h2d_service,
+    num_links,
+    topology,
+):
+    run_chunked_transformer_no_pcc(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        num_iters,
+        with_h2d_service=with_h2d_service,
         routing_use_l1_small_for_semaphores=True,
     )
