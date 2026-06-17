@@ -12,6 +12,7 @@ This module provides shared helper functions used across MoE tests including:
 - Fabric configuration helpers (create_fabric_router_config)
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -464,6 +465,22 @@ def compute_constants(
     else:
         experts_per_chip = num_routed_experts // num_devices
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
+
+    # Perf-testing knob: artificially inflate the per-token metadata payload by a fixed number
+    # of bytes (must be a multiple of 4, since metadata is INT32). This grows the metadata
+    # tensor's last dim, which propagates to aligned_metadata_page_size and thus to the per-token
+    # NOC/fabric metadata payload. The dispatch kernel only fills the first 5 fields, so the extra
+    # columns are uninitialized scratch -- only use this for perf runs (run_pcc_check=False).
+    extra_metadata_bytes = int(os.environ.get("TT_DISPATCH_EXTRA_METADATA_BYTES", "0"))
+    if extra_metadata_bytes != 0:
+        assert (
+            extra_metadata_bytes > 0 and extra_metadata_bytes % 4 == 0
+        ), f"TT_DISPATCH_EXTRA_METADATA_BYTES must be a positive multiple of 4, got {extra_metadata_bytes}"
+        metadata_len += extra_metadata_bytes // 4
+        logger.warning(
+            f"TT_DISPATCH_EXTRA_METADATA_BYTES set: metadata_len inflated to {metadata_len} "
+            f"(+{extra_metadata_bytes}B per token); use for perf testing only (PCC will not match)"
+        )
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
     # we support replicated experts (See Issue #41293)
