@@ -10,6 +10,7 @@
 #include "impl/buffers/h2d_socket_internal.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -442,12 +443,20 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
 
+            // Streaming-split A/B toggle: set TT_DRAM_PREFETCHER_STREAMING_SPLIT=0 to fall back
+            // to the legacy per-round physical-wrap clamp. Default on (per-receiver source split).
+            static const uint32_t streaming_split = [] {
+                const char* env = std::getenv("TT_DRAM_PREFETCHER_STREAMING_SPLIT");
+                return (env != nullptr && env[0] == '0') ? 0u : 1u;
+            }();
+
             std::vector<uint32_t> compile_args = {
                 stage_ring_base,
                 stage_ring_size,
                 kRemoteCBId,
                 socket_page_size,
                 cq_signal_l1_addr_,
+                streaming_split,
             };
 
             KernelHandle kernel_id = CreateKernel(
