@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 #
 # SPDX-License-Identifier: Apache-2.0
 """kimi_preflight.py — Kimi K2.5 hardware readiness checker.

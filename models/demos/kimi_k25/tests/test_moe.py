@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 #
 # SPDX-License-Identifier: Apache-2.0
 """test_moe.py — M4 single-layer MoE accuracy test for Kimi K2.5.

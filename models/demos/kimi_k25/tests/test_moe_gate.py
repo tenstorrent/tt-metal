@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 #
 # SPDX-License-Identifier: Apache-2.0
 """test_moe_gate.py — Validate DSV3 MoEGate with Kimi K2.5 config (n_group=1, 384 experts).
