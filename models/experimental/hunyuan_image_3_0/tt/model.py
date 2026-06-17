@@ -55,6 +55,7 @@ class HunyuanTtModel(LightweightModule):
         apply_final_norm: bool = True,
         ccl_manager=None,
         expert_mesh_axis: int = 1,
+        bf16_layers=None,
     ):
         """
         Args:
@@ -90,9 +91,15 @@ class HunyuanTtModel(LightweightModule):
         if layer_loader is None:
             raise ValueError("layer_loader is required")
 
+        # Per-layer mixed precision: layers in `bf16_layers` keep bf16 expert
+        # weights (more accurate, 2x memory); the rest use `weight_dtype` (bf8).
+        # Lets us trade DRAM headroom for accuracy on the most sensitive layers.
+        bf16_layers = set(bf16_layers or [])
+
         self.layers = []
         for i in range(num_layers):
             sd = layer_loader(i)
+            layer_dtype = ttnn.bfloat16 if i in bf16_layers else weight_dtype
             self.layers.append(
                 HunyuanTtDecoderLayer(
                     device,
@@ -108,7 +115,7 @@ class HunyuanTtModel(LightweightModule):
                     use_mixed_mlp_moe=use_mixed_mlp_moe,
                     norm_topk_prob=norm_topk_prob,
                     rms_norm_eps=rms_norm_eps,
-                    weight_dtype=weight_dtype,
+                    weight_dtype=layer_dtype,
                     stream_experts=stream_experts,
                     ccl_manager=ccl_manager,
                     expert_mesh_axis=expert_mesh_axis,
