@@ -161,14 +161,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     buffer_descriptor_u bd_val = ckernel::trisc::get_buf_desc_from_tensor_shape(tensor_shape_A);
 
-    // buffer_descriptor_u bd_val = {0};
     tdma_descriptor_t tdma_desc;
 
     bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-    // bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    // bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    // bd_val.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
 
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
