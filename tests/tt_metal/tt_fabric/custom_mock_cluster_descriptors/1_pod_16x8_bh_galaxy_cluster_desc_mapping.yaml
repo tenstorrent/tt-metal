@@ -1,8 +1,0 @@
-# Single-pod 16x8 BH galaxy mock: one pod = 4 adjacent galaxies (c01u02/c01u08/c02u02/c02u08),
-# 128 chips wired as a 16x8 fabric. Pairs with the 16x8 quad_bh_galaxy MGDs (quad_1x2/quad_2x2)
-# so the device mesh shape matches the physical fabric. (Copied as one pod from the 3-pod 16x8 mock.)
-rank_to_cluster_mock_cluster_desc:
-  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/1_pod_16x8_bh_galaxy_cluster_desc/1_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c01u02.yaml"
-  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/1_pod_16x8_bh_galaxy_cluster_desc/1_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c01u08.yaml"
-  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/1_pod_16x8_bh_galaxy_cluster_desc/1_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c02u02.yaml"
-  3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/1_pod_16x8_bh_galaxy_cluster_desc/1_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c02u08.yaml"

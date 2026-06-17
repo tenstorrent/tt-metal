@@ -9,7 +9,7 @@
 // lines (GCC treats backslash-newline inside `//` as a multi-line // comment).
 /*
  *   tt-run --mock-cluster-rank-binding \
- *     tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml
+ *     tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml
  * \
  *     --rank-bindings-mapping \
  *     tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml \

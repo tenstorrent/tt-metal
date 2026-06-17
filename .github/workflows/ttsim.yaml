@@ -411,11 +411,11 @@ jobs:
         include:
           - arch: wormhole_b0
             build_suffix: release_wh
-            cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml
+            cluster_desc: tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
             soc_desc: wormhole_b0_80_arch.yaml
           - arch: blackhole
             build_suffix: release_bh
-            cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
+            cluster_desc: tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml
             soc_desc: blackhole_140_arch.yaml
     container:
       image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}

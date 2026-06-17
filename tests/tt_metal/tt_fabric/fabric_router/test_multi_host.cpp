@@ -236,7 +236,7 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
 // fabric_node_id_to_mapping_), not from pre-solved mesh_graph, PSD, or local bindings. Uses discovery path
 // (no set_custom_fabric_topology). Run with:
 //   tt-run --mock-cluster-rank-binding
-//   tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml
+//   tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml
 //   --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--allow-run-as-root"
 //   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual2x4DiscoveryMappingDerivedAPIs"
 TEST(MultiHost, TestDual2x4DiscoveryMappingDerivedAPIs) {

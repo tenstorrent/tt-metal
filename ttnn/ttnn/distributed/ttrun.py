@@ -2192,9 +2192,9 @@ def legacy_flow(
     Mock Cluster Rank Binding YAML Example:
         rank_to_cluster_mock_cluster_desc:
           - rank: 0
-            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_0.yaml"
+            filename: "tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc/6u_dual_host_cluster_desc_rank_0.yaml"
           - rank: 1
-            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_1.yaml"
+            filename: "tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc/6u_dual_host_cluster_desc_rank_1.yaml"
 
     See examples/ttrun/ for example configuration files.
 

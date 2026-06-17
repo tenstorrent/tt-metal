@@ -754,22 +754,44 @@ public:
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
     // Set mock cluster descriptor from a filename.
-    // Searches the tt-metal custom mock cluster descriptors directory first
-    // (these take precedence when the same filename exists in both locations),
-    // then falls back to the UMD cluster_descriptor_examples directory.
+    // Searches the tt-cluster-descriptors submodule first (these take precedence when
+    // the same filename exists in both locations), then falls back to the UMD
+    // cluster_descriptor_examples directory.
+    // The descriptors submodule is organized into architecture subdirectories
+    // (wormhole/, blackhole/, superclusters/...), so a bare filename is resolved by
+    // recursively searching the submodule tree.
     // NOTE: Must be called before Cluster is created (e.g., in MetalContext constructor).
     void set_mock_cluster_desc(const std::string& filename) {
         if (filename.empty()) {
             return;
         }
-        auto custom_path = std::filesystem::path(get_root_dir()) /
-                           "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors" / filename;
+        namespace fs = std::filesystem;
         std::error_code ec;
-        mock_cluster_desc_path = std::filesystem::exists(custom_path, ec) && !ec
-                                     ? custom_path.string()
-                                     : (std::filesystem::path(get_root_dir()) /
-                                        "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename)
-                                           .string();
+        const fs::path root = get_root_dir();
+        const fs::path custom_root = root / "tt_metal/third_party/tt-cluster-descriptors";
+
+        // Try the path as given (relative to the submodule root), then fall back to a
+        // recursive search by filename across the arch subdirectories.
+        fs::path resolved = custom_root / filename;
+        if (!(fs::exists(resolved, ec) && !ec)) {
+            resolved.clear();
+            const fs::path wanted = fs::path(filename).filename();
+            if (fs::exists(custom_root, ec) && !ec) {
+                for (auto it = fs::recursive_directory_iterator(custom_root, ec);
+                     !ec && it != fs::recursive_directory_iterator();
+                     it.increment(ec)) {
+                    if (!it->is_directory(ec) && it->path().filename() == wanted) {
+                        resolved = it->path();
+                        break;
+                    }
+                }
+            }
+        }
+
+        mock_cluster_desc_path =
+            !resolved.empty()
+                ? resolved.string()
+                : (root / "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename).string();
         // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
         // request for a fully mocked environment, so libttsim must not be used even if
         // TT_METAL_SIMULATOR is set in the environment.

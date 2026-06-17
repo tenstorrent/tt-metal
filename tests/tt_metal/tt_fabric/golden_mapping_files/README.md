@@ -36,7 +36,7 @@ For single-host tests, run the test with appropriate environment variables and c
 - `ControlPlaneFixture_SingleGalaxy`:
   ```bash
   TT_METAL_SLOW_DISPATCH_MODE=1 \
-  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml \
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.*SingleGalaxy*"
 
   cp generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml \
@@ -46,7 +46,7 @@ For single-host tests, run the test with appropriate environment variables and c
 - `ControlPlaneFixture_T3k`:
   ```bash
   TT_METAL_SLOW_DISPATCH_MODE=1 \
-  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml \
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.*T3k*"
 
   cp generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml \
@@ -56,7 +56,7 @@ For single-host tests, run the test with appropriate environment variables and c
 - `ControlPlaneFixture_Custom2x2`:
   ```bash
   TT_METAL_SLOW_DISPATCH_MODE=1 \
-  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/2x2_n300_cluster_desc.yaml \
+  TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/2x2_n300_cluster_desc/2x2_n300_cluster_desc.yaml \
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.*Custom2x2*"
 
   cp generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml \
@@ -98,7 +98,7 @@ For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_
 - `TestDualGalaxyControlPlaneInit` (world_size=2):
   ```bash
   tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto \
-         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_mapping.yaml \
+         --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc_mapping.yaml \
          --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit"
@@ -110,7 +110,7 @@ For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_
 - `TestDual2x4ControlPlaneInit` (world_size=2):
   ```bash
   tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto \
-         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml \
+         --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml \
          --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestDual2x4ControlPlaneInit"
@@ -122,7 +122,7 @@ For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_
 - `TestBigMesh2x4ControlPlaneInit` (world_size=4):
   ```bash
   tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto \
-         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_2x4_big_mesh_cluster_desc_mapping.yaml \
+         --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_cluster_desc_mapping.yaml \
          --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestBigMesh2x4ControlPlaneInit"
@@ -134,7 +134,7 @@ For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_
 - `TestBHQB4x4ControlPlaneInit` (world_size=4):
   ```bash
   tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto \
-         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_qb_4x4_cluster_desc_mapping.yaml \
+         --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_qb_4x4/bh_qb_4x4_cluster_desc_mapping.yaml \
          --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestBHQB4x4ControlPlaneInit"
@@ -146,7 +146,7 @@ For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_
 - `TestClosetBox3PodTTSwitchControlPlaneInit` (world_size=3):
   ```bash
   tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto \
-         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc_mapping.yaml \
+         --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/superclusters/wormhole/wh_closetbox/wh_closetbox_cluster_desc_mapping.yaml \
          --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestClosetBox3PodTTSwitchControlPlaneInit"
