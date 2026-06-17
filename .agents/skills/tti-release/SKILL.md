@@ -1,13 +1,15 @@
 ---
 name: tti-release
-description: Run the tt-inference-server model release workflow for a completed TTNN/vLLM model and produce the customer-facing readiness markdown report. Use after optimized-vLLM or at model readiness handoff time, especially from an IRD reservation container where Codex must SSH to the physical loudbox host for Docker while using the reservation container for tt-smi health/reset.
+description: Run the tt-inference-server model release workflow for the completed generated autoport TTNN/vLLM model and produce the customer-facing readiness markdown report. Use after optimized-vLLM or at model readiness handoff time, especially from an IRD reservation container where Codex must SSH to the physical loudbox host for Docker while using the reservation container for tt-smi health/reset.
 ---
 
 # TTI Release
 
 ## Overview
 
-This skill runs the Tenstorrent `tt-inference-server` release workflow for a model whose vLLM serving path is already complete. The goal is a copied-back markdown release report plus a short local handoff note with exact commands, versions, recovery actions, and residual readiness gaps.
+This skill runs the Tenstorrent `tt-inference-server` release workflow for the generated `models/autoports/<model>` implementation whose vLLM serving path is already complete. The goal is a copied-back markdown release report plus a short local handoff note with exact commands, versions, recovery actions, and residual readiness gaps.
+
+The release stage is only valid when the release workflow evaluates the just-brought-up autoport model. Do not run a stock `tt-transformers`, `models/demos`, or other packaged implementation for the same Hugging Face model. That measures a different model and must be treated as a failed release-stage artifact, even if `run.py` exits `0`.
 
 ## Topology
 
@@ -41,6 +43,8 @@ experiment evidence directory, if separate from models/autoports/<model>/doc/
 
 If the prompt does not give the physical host, infer it from reservation metadata or the reservation container hostname only when obvious. Otherwise stop and ask for the host; a wrong host can use the wrong hardware.
 
+The model autoport directory is the target implementation. Keep its exact relative path, for example `models/autoports/meta_llama_llama_3_1_8b_instruct`, and use that path in later spec checks.
+
 2. Check Docker on the physical host and devices in the reservation container:
 
 ```bash
@@ -59,6 +63,13 @@ models/autoports/<model>/readiness_vllm/
 ```
 
 If optimized-vLLM is blocked only by a recoverable ARC/reset error, recover and resume optimized-vLLM first. Do not jump to TTI release ahead of a recoverable earlier-stage hardware blocker.
+
+4. Confirm that the TTI release plan can target the autoport implementation:
+
+- The TTI model spec or runtime spec must point at the target `models/autoports/<model>` code path.
+- The launched server must import or otherwise use the target autoport vLLM implementation, usually `models/autoports/<model>/tt/generator_vllm.py`.
+- A built-in TTI model name such as `Llama-3.1-8B-Instruct` is not enough. Built-in model names commonly select stock `models/tt_transformers` implementations.
+- If the only available `tt-inference-server` path selects `models/tt_transformers`, `models/demos`, or another stock implementation, stop and fix the release integration. Do not benchmark the stock model as a substitute.
 
 ## Checkout And Version Selection
 
@@ -79,9 +90,22 @@ Use one of these evidence-backed methods:
 
 After checkout, run `python3 run.py --help` and use that checkout's CLI flags. Older releases use `--device`; newer docs may show `--tt-device`.
 
-## Model Name Selection
+## Autoport Model Selection
 
-Find the TTI CLI model name that corresponds to the HF model. Prefer an exact instruct/chat variant. If exact matching is unclear, inspect `model_spec.json`:
+Find or create the TTI model spec that corresponds to the target autoport implementation. Prefer a temporary model spec JSON under the TTI work root and pass it through the checkout's supported `--model-spec-json` or equivalent flag. If the checkout requires editing its local model spec registry, make the smallest local edit and record it.
+
+The selected spec must identify the generated code path:
+
+```text
+impl.code_path = models/autoports/<model>
+hf_model_repo = HF model id
+inference_engine = vLLM
+device = target TTI device
+```
+
+The spec may reuse benchmark, eval, and API-test definitions from the matching stock model, but it must not reuse the stock implementation path.
+
+If exact matching is unclear, inspect `model_spec.json` only to find the benchmark/eval recipe and to see how the local checkout names fields:
 
 ```bash
 python3 - <<'PY'
@@ -94,7 +118,7 @@ for item in specs:
 PY
 ```
 
-For Llama 3.1 8B instruct on T3K, the working TTI name was `Llama-3.1-8B-Instruct`.
+Do not stop at a matching TTI model name. Before launching, print the selected spec path and check that it contains `models/autoports/<model>`. After the run, inspect the copied run spec and release report data and confirm the same autoport path is present.
 
 ## Run The Release Workflow
 
@@ -110,6 +134,7 @@ export PERSISTENT_VOLUME_ROOT="$WORK_ROOT/persistent_volume"
 export JWT_SECRET=dummy
 python3 run.py \
   --model "$TTI_MODEL" \
+  --model-spec-json "$AUTOPORT_MODEL_SPEC" \
   --device "$TTI_DEVICE" \
   --workflow release \
   --docker-server \
@@ -122,6 +147,8 @@ Notes:
 - `JWT_SECRET=dummy` may still be needed on older tags even with `--no-auth`.
 - `--skip-system-sw-validation` is acceptable when running from the physical host because `tt-smi` health is validated from the reservation container.
 - If the checkout supports `--tt-device` instead of `--device`, use the checkout's help output.
+- If the checkout does not support `--model-spec-json`, use the checkout's supported mechanism to point the workflow at the autoport spec. If no such mechanism exists, the stage is blocked on release integration; do not fall back to a built-in stock implementation.
+- If Docker is used, make sure the container can see the generated autoport code path. Mount, copy, or build from the current tt-metal checkout as needed. A Docker image that only contains stock `models/tt_transformers` cannot validate this stage.
 - If a Hugging Face cache location is already provided by the experiment, use it rather than re-downloading.
 
 Run the command in `tmux` or another durable session on the physical host. Tee stdout/stderr to a timestamped log under `WORK_ROOT`.
@@ -179,6 +206,8 @@ Include:
 - small benchmark JSON files;
 - a `RUN_NOTES.md` with commands, versions, host/session, reset actions, report path, and pass/fail summary.
 
+Also include the run spec or report data that proves the implementation path. `RUN_NOTES.md` must have an "Autoport implementation check" line showing the target `models/autoports/<model>` path and whether the copied TTI artifacts matched it.
+
 Do not copy:
 
 - `.env`;
@@ -194,6 +223,8 @@ After copy-back, remove any `.env` left in the physical-host repo and stop the f
 Done means:
 
 - `run.py --workflow release` exited `0`, or a terminal blocker is documented with exact evidence.
+- The copied run spec or release report data proves that the evaluated implementation path is the target `models/autoports/<model>` directory.
+- No copied final report or run spec identifies the evaluated implementation as stock `models/tt_transformers`, `models/demos`, or another packaged implementation for the same HF model.
 - Any failing release tests or API conformance rows were either fixed with `$autofix` and rerun, or explicitly classified as non-test readiness gaps with evidence.
 - Final release markdown is copied under `models/autoports/<model>/doc/tti_release/`.
 - `RUN_NOTES.md` records the exact physical host, repo tag, Docker image/version, command, env variables that mattered, reset/retry actions, copied artifacts, and residual readiness gaps.
