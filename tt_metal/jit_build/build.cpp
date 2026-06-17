@@ -526,7 +526,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     }
 
     if (settings) {
-        defines += fmt::format("-DFULL_KERNEL_NAME=\"\\\"{}\\\"\" ", settings->get_full_kernel_name());
+        defines += fmt::format(R"(-DFULL_KERNEL_NAME="\"{}\"" )", settings->get_full_kernel_name());
 
         // Append user args
         if (process_defines_at_compile_) {
