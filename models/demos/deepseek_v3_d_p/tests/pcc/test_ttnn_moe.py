@@ -55,7 +55,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
     visualize_expert_dispatch_table,
 )
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 from tests.ttnn.utils_for_testing import comp_pcc
+
+# First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
+# trace stores its post-attention RMSNorm output, i.e. the MoE block input.
+_MOE_LAYER_IDX = 3
 
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
@@ -228,8 +233,21 @@ def run_model(
     # ========================================
     profiler.start("input_creation")
 
+    # Prefer a realistic MoE-block input (post-attention RMSNorm of the first MoE
+    # layer) from the golden trace; fall back to synthetic noise when unavailable.
+    # Restricted to PCC runs on the DeepSeek hidden dim so perf baselines and the
+    # Kimi variant keep their established synthetic input.
     # currently cannot use ttnn.empty on x; because indices become ND beyond max dispatch token limit.
-    x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
+    x = None
+    if run_pcc_check and emb_dim == DeepSeekV3Config.EMB_SIZE:
+        total_tokens = dispatch_group_size * seq_len_per_chip
+        trace_input = load_trace_gate_input(
+            GOLDEN_LONGBOOK_TRACE, layer_idx=_MOE_LAYER_IDX, max_seq_len=total_tokens, dim=emb_dim
+        )
+        if trace_input is not None:
+            x = trace_input.reshape(dispatch_group_size, seq_len_per_chip, emb_dim).to(torch.bfloat16)
+    if x is None:
+        x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
     profiler.end("input_creation")
 
     # TtMoe.forward deallocates its input (tt_moe.py:522), so tt_x must be re-uploaded each iter.

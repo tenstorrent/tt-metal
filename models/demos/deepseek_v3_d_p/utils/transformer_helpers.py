@@ -1020,3 +1020,64 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
         logits=logits,
         metadata=metadata,
     )
+
+
+# Golden bit_sculpt prefill trace (DeepSeek-R1-0528, 256 experts, hidden_dim 7168).
+# Layer 3 is the first MoE layer (metadata moe_layer_offset == 3).
+GOLDEN_LONGBOOK_TRACE = Path("/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad")
+
+
+def load_trace_gate_input(
+    trace_dir: Path,
+    layer_idx: int,
+    max_seq_len: int,
+    dim: int,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor | None:
+    """Load the MoE/gate block input from a bit_sculpt golden trace.
+
+    The trace stores ``post_attn_norm_layer_{i}`` per layer — the post-attention
+    RMSNorm output, which is exactly the tensor fed into the gate + experts at
+    layer ``i`` (unlike ``decoder_output_layer_{i}``, the unnormalized residual
+    stream). Returns ``[max_seq_len, dim]`` (tiled if the trace is shorter than
+    ``max_seq_len``), or ``None`` if the trace/key is unavailable or ``dim``
+    exceeds the trace hidden dim.
+
+    A sliced read is used so only the requested ``[max_seq_len, dim]`` block is
+    materialized rather than the full (seq, hidden_dim) tensor.
+    """
+    from safetensors import safe_open
+
+    layer_path = Path(trace_dir) / "hidden_states" / f"layer_{layer_idx}.safetensors"
+    if not layer_path.exists():
+        logger.warning(f"Trace file not found: {layer_path}. Falling back to synthetic input.")
+        return None
+
+    key = f"post_attn_norm_layer_{layer_idx}"
+    try:
+        with safe_open(layer_path, framework="pt") as f:
+            if key not in f.keys():
+                logger.warning(f"{key} not in {layer_path}. Falling back to synthetic input.")
+                return None
+            sl = f.get_slice(key)
+            seq_total, hidden_dim = sl.get_shape()
+            if dim > hidden_dim:
+                logger.warning(
+                    f"Requested dim {dim} > trace hidden_dim {hidden_dim} ({key}). Falling back to synthetic input."
+                )
+                return None
+            n = min(max_seq_len, seq_total)
+            hidden = sl[:n, :dim].to(dtype)
+    except Exception as e:  # safetensors / IO errors — fall back to synthetic
+        logger.warning(f"Could not load {key} from {layer_path}: {e}. Falling back to synthetic input.")
+        return None
+
+    if hidden.shape[0] < max_seq_len:
+        repeats = (max_seq_len + hidden.shape[0] - 1) // hidden.shape[0]
+        hidden = hidden.repeat(repeats, 1)[:max_seq_len]
+
+    logger.info(
+        f"Loaded gate input from {Path(trace_dir).name} {key} "
+        f"(trace {seq_total}x{hidden_dim}, sliced to {tuple(hidden.shape)})"
+    )
+    return hidden
