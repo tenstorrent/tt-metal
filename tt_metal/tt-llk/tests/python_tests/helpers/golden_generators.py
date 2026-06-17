@@ -1620,7 +1620,6 @@ class DataCopyGolden:
         face_r_dim: int = 16,  # Default to 16 for backward compatibility
         input_format=None,
         tile_shape=None,
-        tile_dimensions: list[int] = None,
     ):
         torch_format = format_dict[data_format]
 
@@ -1636,15 +1635,11 @@ class DataCopyGolden:
         #   is required for full-width tiny tiles (e.g. 16x32, num_faces=2) where
         #   face_r_dim is still 16 but a tensor packs into more, smaller tiles than
         #   the 32x32 assumption below would compute.
-        # - tile_dimensions given: same as above, but for compatibility with Wormhole tests only.
         # - face_r_dim < 16: legacy partial-face path treats the input as one tile.
         # - otherwise: assume standard 32x32 tiles (backward compatible).
         if tile_shape is not None:
             tile_rows = tile_shape.total_row_dim()
             tile_cols = tile_shape.total_col_dim()
-            tile_cnt = (height // tile_rows) * (width // tile_cols)
-        elif tile_dimensions is not None:
-            tile_rows, tile_cols = tile_dimensions
             tile_cnt = (height // tile_rows) * (width // tile_cols)
         elif face_r_dim < 16:
             tile_cnt = 1
