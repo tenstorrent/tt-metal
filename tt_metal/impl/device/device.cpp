@@ -330,7 +330,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-        for (const auto& dram_core : cluster.get_soc_desc(id_).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+        const auto& soc_desc = cluster.get_soc_desc(id_);
+        for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
         }
     }

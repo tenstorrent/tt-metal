@@ -418,9 +418,10 @@ void WatcherDeviceReader::Dump(FILE* file) {
         bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
         if (has_dram_fw) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
-                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
-                    .Dump();
+            // get_metal_dram_cores omits the syseng-owned NOC0 endpoints (no Metal DRISC firmware),
+            // whose launch message / debug mailbox is never initialized and would read as garbage.
+            for (const auto& logical_dram_core : soc_d.get_metal_dram_cores(CoordSystem::LOGICAL)) {
+                Core::Create(logical_dram_core, HalProgrammableCoreType::DRAM, *this, dump_data).Dump();
             }
         }
     }
