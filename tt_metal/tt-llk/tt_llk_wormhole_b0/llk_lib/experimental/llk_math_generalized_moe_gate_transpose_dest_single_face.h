@@ -185,7 +185,6 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init
 {
     generalized_moe_gate_transpose_dest_single_face_step0_configure_mop<4, is_32bit>();
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    // TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 }
 
 // Initialize for single face transpose
