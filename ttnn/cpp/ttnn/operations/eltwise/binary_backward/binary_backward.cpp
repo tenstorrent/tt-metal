@@ -347,11 +347,7 @@ std::vector<Tensor> ldexp_bw(
     grad.emplace_back(tpow_o);
     Tensor result = ttnn::multiply(
         input_a,
-<<<<<<< HEAD
         ttnn::multiply(tpow_o, std::numbers::ln2_v<float>, std::nullopt, output_memory_config),
-=======
-        ttnn::multiply(tpow_o, static_cast<float>(M_LN2), std::nullopt, output_memory_config),
->>>>>>> 4eeb1142238 (#23179: Enable int32 and uint32 scalars in binary_ng)
         std::nullopt,
         output_memory_config);
     grad.emplace_back(result);
