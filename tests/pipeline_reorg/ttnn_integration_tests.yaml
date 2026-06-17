@@ -25,7 +25,7 @@
     cd scripts/basic_dev_image
     uv pip install -r minimum-testing-kit.txt
     cd /work
-    apt-get update && apt-get install -y curl
+    apt-get update && apt-get install -y curl uuid-runtime
     source /opt/venv/bin/activate
     uv pip install --index-strategy unsafe-best-match --no-cache -r ./tools/triage/requirements.txt
     python3 -m pytest tests/ttnn/notebook_tests/test_tutorials.py -v

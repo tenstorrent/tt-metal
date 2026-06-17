@@ -71,12 +71,10 @@ ttnn:
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
-    wh_n150: 970
-    wh_n300: 970
-    bh_p100: 905
-    bh_p150b_civ2: 940
-    wh_n150_civ2: 130
-    wh_n300_civ2: 110
+    bh_p100: 760
+    bh_p150b_civ2: 1015
+    wh_n150_civ2: 1175
+    wh_n300_civ2: 1155
     bh_p150b_civ2_viommu: 110
   e2e:
     wh_llmbox: 90
@@ -183,7 +181,7 @@ llk:
     wh_n150_civ2: 180
     wh_n300_civ2: 40
     bh_p150: 40
-    bh_p150b_civ2_viommu: 70
+    bh_p150b_civ2_viommu: 110
     bh_p150b_civ2_viommu_prio: 70
     bh_p100: 40
   e2e:
@@ -204,8 +202,8 @@ models:
   stress:
     wh_galaxy_perf: 500
   l2:
-    wh_n150: 90
-    wh_n300: 115
+    wh_n150_civ2: 90
+    wh_n300_civ2: 115
     bh_p150b_civ2: 70
   e2e:
     wh_llmbox: 198
