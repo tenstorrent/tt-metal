@@ -356,6 +356,9 @@ class TestTriage:
     def test_check_core_magic(self):
         self.run_triage_script("check_core_magic.py")
 
+    def test_check_l1_status(self):
+        self.run_triage_script("check_l1_status.py")
+
     def test_check_eth_status(self):
         self.run_triage_script("check_eth_status.py")
 

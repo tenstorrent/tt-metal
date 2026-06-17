@@ -84,6 +84,7 @@ struct BuildEnvData {
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
     # Whether DRAM programmable RISC cores are enabled on this device (Blackhole only)
     dramProgrammableCoresEnabled @3 :Bool;
+    tensixFwLaunchAddrValue @4 :UInt32; # Expected value at L1[0] for TENSIX worker cores
 }
 
 struct BuildEnvPerDevice {

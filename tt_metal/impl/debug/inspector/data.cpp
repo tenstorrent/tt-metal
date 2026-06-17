@@ -278,6 +278,12 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
     // Populate RPC response with build environment info for all devices
     auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
     const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
+    const auto tensix_fw_launch_addr_value = [] {
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto tensix_core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        return hal.get_jit_build_config(tensix_core_type_idx, 0, 0).fw_launch_addr_value;
+    }();
+
     size_t i = 0;
     for (const auto& build_env : build_envs_info) {
         auto item = result_build_envs[i++];
@@ -291,6 +297,7 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         // This reflects the runtime option used when initializing HAL on silicon.
         build_info.setDramProgrammableCoresEnabled(
             tt::tt_metal::MetalContext::instance().rtoptions().get_enable_blackhole_dram_programmable_cores());
+        build_info.setTensixFwLaunchAddrValue(tensix_fw_launch_addr_value);
     }
 }
 
