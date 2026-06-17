@@ -1,0 +1,66 @@
+name: "test: run-with-log"
+
+# Mechanics smoke test for the run-with-log action: a completed run appends the
+# marker; a timeout-minutes kill does not. Dispatch-only (the timeout case waits
+# ~60s). Classification of the marker is the ai_summary parser's concern, tested
+# in tenstorrent/tt-github-actions — not here.
+on:
+  workflow_dispatch:
+
+jobs:
+  success-case:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/run-with-log
+        with:
+          working-directory: ${{ github.workspace }}
+          log-file: out/ok.log
+          run: |
+            echo hello
+            echo world
+      - name: Assert marker present, exit 0
+        run: |
+          tail -3 out/ok.log
+          tail -1 out/ok.log | grep -qx '\[==tt-log-finish-line==\] exit_code=0'
+
+  failure-case:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/run-with-log
+        id: run
+        continue-on-error: true
+        with:
+          working-directory: ${{ github.workspace }}
+          log-file: out/fail.log
+          run: |
+            echo before
+            exit 7
+      - name: Assert failure forwarded, marker carries exit code
+        run: |
+          test "${{ steps.run.outcome }}" = failure
+          tail -1 out/fail.log | grep -qx '\[==tt-log-finish-line==\] exit_code=7'
+
+  timeout-case:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/run-with-log
+        id: run
+        continue-on-error: true
+        timeout-minutes: 1
+        with:
+          working-directory: ${{ github.workspace }}
+          log-file: out/timeout.log
+          run: |
+            echo started
+            sleep 120
+      - name: Assert killed, marker absent
+        run: |
+          test "${{ steps.run.outcome }}" != success
+          grep -q '^started$' out/timeout.log
+          if grep -q tt-log-finish-line out/timeout.log; then
+            echo "::error::marker present after timeout kill — bug"; exit 1
+          fi
+          echo "marker correctly absent (outcome=${{ steps.run.outcome }})"

@@ -764,6 +764,9 @@ jobs:
         run: |
           cat output/vllm_result_structured.json
 
+      # vllm-nightly tees ~6 phase logs with no single end-of-run point, so it
+      # can't emit the run-with-log completion marker. Opt out of marker-based
+      # timeout detection so a markerless log isn't misread as a timeout kill.
       - name: 🤖 AI job summary
         if: always() && !cancelled()
         continue-on-error: true
@@ -772,6 +775,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "log_complete_marker": null,
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["output"],
               "output_dir": "ai_summaries"
