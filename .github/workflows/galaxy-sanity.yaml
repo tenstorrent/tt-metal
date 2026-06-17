@@ -43,13 +43,16 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
+      actions: read
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+      use-artifacts-from-run: "26591314582"
 
   galaxy-sanity-test:
     needs: build-artifact
@@ -59,3 +62,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+
