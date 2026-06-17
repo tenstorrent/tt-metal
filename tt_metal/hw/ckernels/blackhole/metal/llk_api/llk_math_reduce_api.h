@@ -44,7 +44,7 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
     bool enforce_fp32_accumulation = false /*unused*/>
-inline void llk_math_reduce_init(const std::uint32_t operandA = 0, const std::uint32_t operandB = 0) {
+inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operand_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, math_fidelity>(tensor_shape);
@@ -52,5 +52,5 @@ inline void llk_math_reduce_init(const std::uint32_t operandA = 0, const std::ui
 
 template <bool enforce_fp32_accumulation = false>
 inline void llk_math_reduce_uninit() {
-    _llk_math_reduce_uninit_<>();
+    _llk_math_reduce_uninit_();
 }

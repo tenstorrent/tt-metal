@@ -81,8 +81,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
-#include "llk_math_reduce.h"
 #include "tensor_shape.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -104,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE);
+        _llk_math_reduce_init_wrapper_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -129,7 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU>(block_tile, DEFAULT_TENSOR_SHAPE);
+                    _llk_math_reduce_wrapper_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU>(block_tile, DEFAULT_TENSOR_SHAPE);
                 }
             }
         }
@@ -145,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU>(block_tile, DEFAULT_TENSOR_SHAPE);
+                    _llk_math_reduce_wrapper_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU>(block_tile, DEFAULT_TENSOR_SHAPE);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
