@@ -982,6 +982,14 @@ inline bool is_quasar_sim() {
            tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
 }
 
+// Wrapper template that marks any base fixture as the Quasar-simulator-only variant; the constructor
+// sets quasar_simulator_variant_ before gtest's SetUp() reads it.
+template <class FDFixture>
+class QuasarSimulatorVariant : public FDFixture {
+public:
+    QuasarSimulatorVariant() { this->quasar_simulator_variant_ = true; }
+};
+
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
 class BaseTestFixture : public tt_metal::GenericMeshDeviceFixture {
@@ -1009,6 +1017,10 @@ protected:
     // Knobs
     uint32_t dispatch_buffer_page_size_ = 0;
     bool send_to_all_ = false;
+    // Set to true by QuasarSimulatorVariant<> subclasses. The gate in SetUp skips this fixture
+    // when is_quasar_sim() != quasar_simulator_variant_, so the Quasar simulator runs only its
+    // variant and WH/BH run only the default fixture.
+    bool quasar_simulator_variant_ = false;
 
     // Test Config defaults
     DispatchTestConfig cfg_;
@@ -1048,18 +1060,30 @@ protected:
         // Initialize common HW properties
         host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
         max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+
+        // Arch selection gate: on Quasar only the QuasarSimulatorVariant runs; on WH/BH only the default fixture runs.
+        if (Common::is_quasar_sim() != quasar_simulator_variant_) {
+            GTEST_SKIP()
+                << (quasar_simulator_variant_ ? "Quasar-only variant; skipped on non-Quasar"
+                                              : "FD default variant; skipped on Quasar (use QuasarSimulatorVariant)");
+        }
     }
 
     bool validate_dispatch_mode() {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             return false;
         }
         return true;
     }
 
-    CoreCoord worker_start() const { return Common::is_quasar_sim() ? CoreCoord{1, 0} : default_worker_start; }
+    CoreCoord worker_start() const {
+        if (!Common::is_quasar_sim()) {
+            return default_worker_start;
+        }
+        const bool fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+        return fast_dispatch ? CoreCoord{0, 0} : CoreCoord{1, 0};
+    }
 
     CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
         if (Common::is_quasar_sim()) {
@@ -1070,11 +1094,11 @@ protected:
     }
 
     // SD (slow dispatch) issue + completion queue sizes. Must fit in one device's hugepage slot
-    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. On Quasar simulation, command
-    // queues must be stored in DRAM due to limitations, and only 64 MB of physical DRAM space
+    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. On Quasar simulation host
+    // hugepages are not available, so command queues must be stored in DRAM, and only 64 MB of physical DRAM space
     // (QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) is available even though the bank size is 1 GB. The remaining addresses
     // alias this physical space. The SD command queue must therefore fit in a single 64-MB window, so each half is
-    // capped at 8 MB on Quasar.
+    // capped at 8 MB on the Quasar simulator.
     uint32_t sd_issue_queue_size() const {
         return Common::is_quasar_sim() ? QUASAR_SIMULATION_ISSUE_QUEUE_SIZE
                                        : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
@@ -1086,6 +1110,7 @@ protected:
 
     // Helper function that polls completion queue until expected data is written into by dispatcher
     // Without this, we can fail validation as there can a be an occasional race condition
+    // Timeout check is disabled if timeout_ms=0 or if running on the Quasar simulator
     // TODO: Alternatively, could we use tt_driver_atomics::mfence before validation?
     void wait_for_completion_queue_bytes(uint32_t total_expected_cq_payload, uint32_t timeout_ms = 0) {
         std::atomic<bool> exit_condition{false};
@@ -1108,16 +1133,19 @@ protected:
                 avail = (limit - completion_q_read_ptr) + completion_q_write_ptr;
             }
 
-            const auto elapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-            if (elapsed > timeout_ms) {
-                exit_condition.store(true);
-                TT_FATAL(
-                    false,
-                    "CQ wait timed out after {} ms (needed {} bytes, had {})",
-                    elapsed,
-                    total_expected_cq_payload,
-                    avail);
+            if (timeout_ms > 0 && !Common::is_quasar_sim()) {
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
+                if (elapsed > timeout_ms) {
+                    exit_condition.store(true);
+                    TT_FATAL(
+                        false,
+                        "CQ wait timed out after {} ms (needed {} bytes, had {})",
+                        elapsed,
+                        total_expected_cq_payload,
+                        avail);
+                }
             }
         }
 
@@ -1143,6 +1171,13 @@ protected:
             num_iterations,
             num_cores_to_log);
     }
+
+    // Called after the dispatcher has written host completion data and before device_data.validate().
+    // On the Quasar simulator host hugepages are unavailable, so the completion queue lives in DRAM and
+    // the host pointer is a staging mirror that must be re-synced from DRAM before validation. Default
+    // no-op (WH/BH completion queue is PCIe-mapped host memory, already visible; non-host tests don't
+    // validate completion data).
+    virtual void refresh_completion_data() {}
 
     // Helper function to execute generated commands
     // Orchestrates the command buffer reservation, writing, and submission
@@ -1236,6 +1271,9 @@ protected:
 
         const std::chrono::duration<double> elapsed = end - start;
         log_info(tt::LogTest, "Ran in {:f} ms (for {} iterations)", elapsed.count() * 1000.0, num_iterations);
+
+        // On the Quasar simulator the completion queue is DRAM-backed; sync the host staging mirror before validating.
+        this->refresh_completion_data();
 
         // Validate results
         const bool pass = device_data.validate(device_);
