@@ -928,9 +928,10 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         result["user"] = get_username()
 
         # PROTOTYPE (opt-in): collect device perf for multi-device CCL vectors via
-        # the tracy subprocess instead of the in-process profiler (which deadlocks
-        # on FABRIC_2D — that path stays gated off in main()). The correctness run
-        # above already happened profiler-free; this adds a separate profiled pass.
+        # the tracy subprocess instead of the in-process profiler (which is gated
+        # off for all CCL in main(): in-process device-perf is unsupported for >1
+        # device and deadlocks on FABRIC_2D). The correctness run above already
+        # happened profiler-free; this adds a separate profiled pass.
         if (
             config.measure_device_perf
             and _is_multidevice_ccl_module(module_name)
@@ -1529,7 +1530,11 @@ if __name__ == "__main__":
     elif config.measure_device_perf:
         logger.info(
             f"Skipping device profiler for multi-device CCL module(s) {config.module_name!r}: "
-            "device-perf is unsupported there and the profiler deadlocks FABRIC_2D ops."
+            "device-perf is unsupported for >1 device (gather_single_test_perf bails on "
+            "get_num_devices()>1 before reading any profiler data), so enabling the profiler yields "
+            "no perf number for 1D or 2D; and on FABRIC_2D the profiler-instrumented dispatch kernel "
+            "(cq_prefetch on idle-erisc) overflows the idle-erisc code region at mesh open and "
+            "deadlocks. Skipping it for all CCL avoids the hang at no measurable cost."
         )
 
     # Generate run contents description
