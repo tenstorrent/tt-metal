@@ -250,7 +250,7 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"trace_region_size\": 76000000}",
+              "tt-config": "{\"trace_region_size\": 150000000}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
