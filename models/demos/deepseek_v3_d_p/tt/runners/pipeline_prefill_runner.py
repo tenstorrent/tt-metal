@@ -507,10 +507,12 @@ def run_pipeline_loop(
             inp, meta = recv_activation(runtime, subctx, c, rank - 1)
             slot_id = meta["slot_id"]
 
-        # Absolute (epoch) start/end of this rank's compute. time.time() so the timestamps are
-        # comparable ACROSS hosts (NTP-synced) — perf_counter is process-local and would not be. The
-        # synchronize before reading t_end makes end reflect actual device completion, not just enqueue,
-        # so the cross-rank handoff gap (next rank's start - this rank's end) is the real transport cost.
+        # Per-chunk compute START (epoch, comparable across NTP-synced hosts). Always logged with NO
+        # barrier — the real per-chunk wall is the delta between consecutive starts (CHUNK_START), which
+        # equals device throughput wherever the host is throttled (the recv's metadata to_torch on every
+        # non-first rank; rank0 can race ahead so its deltas are enqueue-bound until the CQ saturates).
+        # time_chunks adds a synchronize so compute= reflects device completion (isolated-chunk use only,
+        # at the cost of serializing the per-chunk pipeline and over-counting overlapped D2D work).
         t_start_epoch = time.time()
         if loop_first_compute_start is None:
             loop_first_compute_start = t_start_epoch
@@ -533,11 +535,10 @@ def run_pipeline_loop(
         if d2d_out is not None:
             d2d_out.release_fabric_links()
 
-        if time_chunks:
-            logger.info(
-                f"[pp rank {rank}] PREFILL c={c} compute={ms_compute:.2f}ms "
-                f"start={t_start_epoch:.6f} end={t_end_epoch:.6f} lease_reclaim={ms_lease:.2f}ms"
-            )
+        extra = (
+            f" compute={ms_compute:.2f}ms end={t_end_epoch:.6f} lease_reclaim={ms_lease:.2f}ms" if time_chunks else ""
+        )
+        logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start_epoch:.6f}{extra}")
 
         n_done += 1
         c += 1
