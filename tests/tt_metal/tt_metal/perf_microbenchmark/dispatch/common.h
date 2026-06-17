@@ -268,29 +268,25 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
 }
 
 inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank, tt::CoreType core_type) {
-    const CoreDataKey key{core_type, core};
-    if (this->all_data.contains(key)) {
-        std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(key)->second;
-        if (core_data.contains(bank)) {
-            return true;
-        }
-    }
-    return false;
+    const auto core_it = this->all_data.find(CoreDataKey{core_type, core});
+    return core_it != this->all_data.end() && core_it->second.contains(bank);
 }
 
 inline void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum, tt::CoreType core_type) {
     if (core_and_bank_present(core, bank, core_type)) {
         this->amt_written++;
-        this->all_data[{core_type, core}][bank].data.push_back(datum);
-        this->all_data[{core_type, core}][bank].valid.push_back(true);
+        one_core_data_t& entry = this->all_data[{core_type, core}][bank];
+        entry.data.push_back(datum);
+        entry.valid.push_back(true);
     }
 }
 
 inline void DeviceData::push_one(CoreCoord core, uint32_t datum, tt::CoreType core_type) {
     if (core_and_bank_present(core, 0, core_type)) {
         this->amt_written++;
-        this->all_data[{core_type, core}][0].data.push_back(datum);
-        this->all_data[{core_type, core}][0].valid.push_back(true);
+        one_core_data_t& entry = this->all_data[{core_type, core}][0];
+        entry.data.push_back(datum);
+        entry.valid.push_back(true);
     }
 }
 
@@ -307,8 +303,9 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
                 }
 
                 TT_FATAL(this->all_data.contains(key), "Core {} not found in all_data", core);
-                this->all_data[key][0].data.push_back(datum);
-                this->all_data[key][0].valid.push_back(true);
+                one_core_data_t& entry = this->all_data[key][0];
+                entry.data.push_back(datum);
+                entry.valid.push_back(true);
             }
         }
     }
@@ -320,10 +317,10 @@ inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
 
 inline void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment, tt::CoreType core_type) {
     if (core_and_bank_present(core, bank, core_type)) {
-        const CoreDataKey key{core_type, core};
-        uint32_t padded = padded_size(this->all_data[key][bank].data.size(), alignment / sizeof(uint32_t));
-        this->all_data[key][bank].data.resize(padded);
-        this->all_data[key][bank].valid.resize(padded);  // pushes false
+        one_core_data_t& entry = this->all_data[{core_type, core}][bank];
+        uint32_t padded = padded_size(entry.data.size(), alignment / sizeof(uint32_t));
+        entry.data.resize(padded);
+        entry.valid.resize(padded);  // pushes false
     }
 }
 
@@ -362,8 +359,9 @@ inline void DeviceData::relevel(CoreRange range) {
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             const CoreDataKey key{tt::CoreType::WORKER, CoreCoord{x, y}};
-            this->all_data[key][bank].data.resize(max);
-            this->all_data[key][bank].valid.resize(max);
+            one_core_data_t& entry = this->all_data[key][bank];
+            entry.data.resize(max);
+            entry.valid.resize(max);
         }
     }
 }
@@ -388,9 +386,9 @@ inline uint32_t DeviceData::get_base_result_addr(tt::CoreType core_type) {
 }
 
 inline uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id, tt::CoreType core_type) {
-    const CoreDataKey key{core_type, core};
-    uint32_t base_addr = this->base_result_data_addr[static_cast<int>(this->all_data[key][bank_id].core_type)];
-    return base_addr + (this->all_data[key][bank_id].data.size() * sizeof(uint32_t));
+    const one_core_data_t& entry = this->all_data[{core_type, core}][bank_id];
+    uint32_t base_addr = this->base_result_data_addr[static_cast<int>(entry.core_type)];
+    return base_addr + (entry.data.size() * sizeof(uint32_t));
 }
 
 inline uint32_t DeviceData::size_at(CoreCoord core, int bank_id, tt::CoreType core_type) {
