@@ -96,7 +96,6 @@ Apply the same principle to array bounds, vector indexing, and any lookup that c
 - **Don't `std::move` on return**: it prevents Return Value Optimization. Just `return obj;`.
 - **Never `const T&&`** or return `const` values from functions — both block move semantics silently.
 - **Move constructors must be `noexcept`**: STL containers will fall back to copying if the move constructor can throw. Flag any move constructor without `noexcept`.
-- **`emplace_back` with lvalues**: if you pass a named variable to `emplace_back`, it copies. Either `std::move` it or use `push_back` — don't use `emplace_back` assuming it's inherently better.
 
 ## Static Storage & Globals
 
