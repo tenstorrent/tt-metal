@@ -63,3 +63,34 @@ Useful environment controls:
 - `TTNN_AUTO_MATMUL_CACHE_DIR`
 - `TTNN_AUTO_MATMUL_VERSION`
 - `TTNN_AUTO_MATMUL_FORCE_RETUNE=1`
+
+## Full Timing Reports
+
+Use `--save-report` to dump the full selector result for each case, including
+the winning descriptor, every measured candidate timing, and selector
+recommendations:
+
+```bash
+TTNN_AUTO_MATMUL_FORCE_RETUNE=1 \
+python3 tools/auto_matmul/tune_matmul_cache.py \
+  --manifest /path/to/cases.json \
+  --mesh-shape 1x8 \
+  --save-report /tmp/auto-matmul-report.json
+```
+
+This is the repo-native way to produce isolated op-level evidence that the
+selector chose the fastest legal recipe for a representative shape set.
+
+## Refresh / Retrain Workflow
+
+When underlying matmul kernels or fused CCL implementations change:
+
+1. Bump the cache version by setting `TTNN_AUTO_MATMUL_VERSION`, or let the
+   default `ttnn.model_preprocessing.git_hash()` change invalidate the old
+   cache automatically.
+2. Re-run `tools/auto_matmul/tune_matmul_cache.py` on the supported single-device
+   and multi-device shape manifests.
+3. Save the full timing report with `--save-report` so winner changes and
+   fallback behavior can be reviewed directly.
+4. Re-run the correctness / model tests on the refreshed cache before updating
+   model-side perf claims.

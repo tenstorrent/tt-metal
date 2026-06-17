@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from types import SimpleNamespace
 
 import torch
@@ -207,3 +208,208 @@ def test_supported_distributed_candidates_skip_local_default(monkeypatch):
     candidates = auto_matmul._build_candidates(signature, prepared, {}, base_operation=None)
 
     assert [candidate.descriptor["kind"] for candidate in candidates] == ["matmul_then_reduce_scatter"]
+
+
+def test_unsupported_distributed_candidates_do_not_fall_back_to_local_default(monkeypatch):
+    signature = _make_distributed_signature(lhs_shard_dim=2)
+    prepared = SimpleNamespace()
+
+    monkeypatch.setattr(
+        auto_matmul,
+        "_build_default_candidate",
+        lambda **kwargs: auto_matmul.Candidate(descriptor={"kind": "default_matmul"}, run=lambda: None),
+    )
+    monkeypatch.setattr(auto_matmul, "_build_local_minimal_candidates", lambda *args, **kwargs: [])
+
+    candidates = auto_matmul._build_candidates(signature, prepared, {}, base_operation=None)
+
+    assert candidates == []
+
+
+def test_blackhole_reduce_scatter_candidates_skip_unstable_fused_path():
+    signature = dataclasses.replace(_make_distributed_signature(rhs_shard_dim=2), arch="blackhole")
+    prepared = SimpleNamespace(bias=None)
+
+    candidates = auto_matmul._build_minimal_matmul_reduce_scatter_candidates(
+        signature,
+        prepared,
+        {},
+        auto_matmul._infer_distributed_plan(signature),
+    )
+
+    assert candidates == []
+
+
+def test_select_candidate_chooses_fastest_and_persists_record(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_VERSION", "unit-test-version")
+    auto_matmul.AutoMatmulCache.clear_runtime()
+
+    signature = _make_signature()
+    prepared = SimpleNamespace(
+        input_tensor_a=SimpleNamespace(device=lambda: "device"),
+        staged_rhs_from_host=False,
+        staged_bias_from_host=False,
+    )
+    candidates = [
+        auto_matmul.Candidate(descriptor={"kind": "default_matmul"}, run=lambda: None),
+        auto_matmul.Candidate(descriptor={"kind": "minimal_matmul"}, run=lambda: None),
+    ]
+
+    monkeypatch.setattr(auto_matmul, "_build_candidates", lambda *args, **kwargs: candidates)
+    monkeypatch.setattr(
+        auto_matmul,
+        "_benchmark_candidate",
+        lambda candidate, device: (
+            (20.0, [20.0, 20.0, 20.0], "trace")
+            if candidate.descriptor["kind"] == "default_matmul"
+            else (10.0, [10.0, 10.0, 10.0], "trace")
+        ),
+    )
+    monkeypatch.setattr(auto_matmul, "_make_recommendations", lambda *args, **kwargs: ["unit-test"])
+
+    selection = auto_matmul._select_candidate(
+        signature,
+        prepared,
+        {},
+        base_operation=None,
+        allow_tuning=True,
+    )
+
+    assert selection["winner"] == {"kind": "minimal_matmul"}
+    assert selection["candidate"].descriptor == {"kind": "minimal_matmul"}
+    assert [entry["descriptor"]["kind"] for entry in selection["candidate_timings_us"]] == [
+        "default_matmul",
+        "minimal_matmul",
+    ]
+
+    cached_record = auto_matmul.AutoMatmulCache().load(signature)
+    assert cached_record is not None
+    assert cached_record["winner"] == {"kind": "minimal_matmul"}
+
+
+def test_select_candidate_uses_runtime_winner_when_tuning_is_disabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_VERSION", "unit-test-version")
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_FORCE_RETUNE", "1")
+    auto_matmul.AutoMatmulCache.clear_runtime()
+
+    signature = _make_signature()
+    prepared = SimpleNamespace()
+    cache = auto_matmul.AutoMatmulCache()
+    runtime_record = {
+        "winner": {"kind": "matmul_then_reduce_scatter"},
+        "candidate_timings_us": [{"descriptor": {"kind": "matmul_then_reduce_scatter"}, "status": "ok"}],
+        "recommendations": ["runtime winner"],
+    }
+    cache.save_runtime(signature, runtime_record)
+
+    selection = auto_matmul._select_candidate(
+        signature,
+        prepared,
+        {},
+        base_operation=None,
+        allow_tuning=False,
+    )
+
+    assert selection["winner"] == runtime_record["winner"]
+    assert selection["candidate_timings_us"] == runtime_record["candidate_timings_us"]
+    assert selection["recommendations"] == runtime_record["recommendations"]
+    assert selection["candidate"] is None
+
+
+def test_dispatch_matmul_stages_host_rhs_even_when_auto_config_disabled(monkeypatch):
+    class FakeTensor:
+        def device(self):
+            return "device"
+
+    prepared = auto_matmul.PreparedMatmulInputs(
+        input_tensor_a=FakeTensor(),
+        input_tensor_b="staged-rhs",
+        bias="staged-bias",
+        staged_rhs_from_host=True,
+        staged_bias_from_host=True,
+    )
+    calls = []
+
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: SimpleNamespace(Tensor=FakeTensor))
+    monkeypatch.setattr(auto_matmul, "_prepare_inputs", lambda *args, **kwargs: prepared)
+
+    def base_operation(lhs, rhs, **kwargs):
+        calls.append((lhs, rhs, kwargs))
+        return "base-result"
+
+    result = auto_matmul.dispatch_matmul(
+        base_operation=base_operation,
+        input_tensor_a=FakeTensor(),
+        input_tensor_b=torch.ones((4, 4), dtype=torch.float32),
+        bias=torch.ones((4,), dtype=torch.float32),
+        is_linear=True,
+        auto_config=False,
+    )
+
+    assert result == "base-result"
+    assert calls == [(prepared.input_tensor_a, prepared.input_tensor_b, {"bias": prepared.bias})]
+
+
+def test_dispatch_matmul_bypasses_selector_for_unsupported_distributed_plan(monkeypatch):
+    class FakeTensor:
+        def device(self):
+            return "device"
+
+    prepared = auto_matmul.PreparedMatmulInputs(
+        input_tensor_a=FakeTensor(),
+        input_tensor_b=FakeTensor(),
+        bias=None,
+    )
+    signature = _make_distributed_signature(lhs_shard_dim=2)
+    calls = []
+
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: SimpleNamespace(Tensor=FakeTensor))
+    monkeypatch.setattr(auto_matmul, "_prepare_inputs", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(auto_matmul, "_build_signature", lambda *args, **kwargs: signature)
+    monkeypatch.setattr(
+        auto_matmul,
+        "_select_candidate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("selector should be bypassed")),
+    )
+
+    def base_operation(lhs, rhs, **kwargs):
+        calls.append((lhs, rhs, kwargs))
+        return "base-result"
+
+    result = auto_matmul.dispatch_matmul(
+        base_operation=base_operation,
+        input_tensor_a=FakeTensor(),
+        input_tensor_b=FakeTensor(),
+        bias=None,
+        is_linear=False,
+        auto_config=True,
+    )
+
+    assert result == "base-result"
+    assert calls == [(prepared.input_tensor_a, prepared.input_tensor_b, {})]
+
+
+def test_explain_matmul_reports_unsupported_topology_passthrough(monkeypatch):
+    class FakeTensor:
+        def device(self):
+            return "device"
+
+    prepared = auto_matmul.PreparedMatmulInputs(
+        input_tensor_a=FakeTensor(),
+        input_tensor_b=FakeTensor(),
+        bias=None,
+    )
+    signature = _make_distributed_signature(lhs_shard_dim=2)
+
+    monkeypatch.setattr(auto_matmul, "_ttnn", lambda: SimpleNamespace(Tensor=FakeTensor))
+    monkeypatch.setattr(auto_matmul, "_prepare_inputs", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(auto_matmul, "_build_signature", lambda *args, **kwargs: signature)
+
+    result = auto_matmul.explain_matmul(FakeTensor(), FakeTensor(), allow_tuning=True)
+
+    assert result["winner"] == {"kind": "unsupported_topology_passthrough"}
+    assert result["candidate_timings_us"] == []
+    assert result["distributed_plan"]["kind"] == "unsupported"
+    assert any("bypassed" in recommendation for recommendation in result["recommendations"])

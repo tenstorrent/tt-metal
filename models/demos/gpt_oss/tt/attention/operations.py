@@ -5,6 +5,13 @@ import ttnn
 
 from .weights import AttentionWeights
 
+_REDUCE_SCATTER_WINNER_KINDS = {
+    "linear_then_reduce_scatter",
+    "matmul_then_reduce_scatter",
+    "minimal_matmul_then_reduce_scatter",
+    "minimal_matmul_strided_reduce_scatter_async",
+}
+
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     """
@@ -117,14 +124,6 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
           - whether the selector already performed the TP reduce-scatter
     """
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
-    plan = ttnn.experimental.auto_config.explain_matmul(
-        tensor,
-        weights.o_proj,
-        bias=weights.o_proj_bias,
-        dtype=activation_dtype,
-        is_linear=True,
-        allow_tuning=False,
-    )["distributed_plan"]["kind"]
     out = ttnn.linear(
         tensor,
         weights.o_proj,
@@ -132,8 +131,17 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
         dtype=activation_dtype,
         auto_config=True,
     )
+    selection = ttnn.experimental.auto_config.explain_matmul(
+        tensor,
+        weights.o_proj,
+        bias=weights.o_proj_bias,
+        dtype=activation_dtype,
+        is_linear=True,
+        allow_tuning=False,
+    )
     tensor.deallocate(True)
-    return out, plan == "matmul_before_reduce_scatter"
+    winner_kind = (selection.get("winner") or {}).get("kind")
+    return out, winner_kind in _REDUCE_SCATTER_WINNER_KINDS
 
 
 def apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size: int):

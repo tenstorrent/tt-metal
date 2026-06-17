@@ -256,6 +256,8 @@ def _get_default_version() -> str:
 
 
 class AutoMatmulCache:
+    _runtime_records: dict[tuple[str, str], dict[str, Any]] = {}
+
     def __init__(self) -> None:
         cache_dir = pathlib.Path(os.environ.get("TTNN_AUTO_MATMUL_CACHE_DIR", _DEFAULT_CACHE_DIR))
         self.root_dir = cache_dir
@@ -267,6 +269,9 @@ class AutoMatmulCache:
 
     def path_for(self, signature: AutoMatmulSignature) -> pathlib.Path:
         return self.version_dir / f"{signature.cache_key}{_CACHE_FILE_SUFFIX}"
+
+    def _runtime_key_for(self, signature: AutoMatmulSignature) -> tuple[str, str]:
+        return (self.version, signature.cache_key)
 
     def load(self, signature: AutoMatmulSignature) -> dict[str, Any] | None:
         if os.environ.get("TTNN_AUTO_MATMUL_FORCE_RETUNE") == "1":
@@ -291,6 +296,19 @@ class AutoMatmulCache:
         path = self.path_for(signature)
         if path.exists():
             path.unlink()
+
+    def load_runtime(self, signature: AutoMatmulSignature) -> dict[str, Any] | None:
+        return self._runtime_records.get(self._runtime_key_for(signature))
+
+    def save_runtime(self, signature: AutoMatmulSignature, payload: dict[str, Any]) -> None:
+        self._runtime_records[self._runtime_key_for(signature)] = payload
+
+    def invalidate_runtime(self, signature: AutoMatmulSignature) -> None:
+        self._runtime_records.pop(self._runtime_key_for(signature), None)
+
+    @classmethod
+    def clear_runtime(cls) -> None:
+        cls._runtime_records.clear()
 
 
 def _get_local_num_devices(mesh_device: Any) -> int:
@@ -1375,6 +1393,8 @@ def _build_candidates(
         candidates.extend(
             _build_minimal_matmul_reduce_scatter_candidates(signature, prepared, kwargs, distributed_plan)
         )
+    elif distributed_plan.kind == "unsupported":
+        return []
     else:
         candidates.append(
             _build_default_candidate(
@@ -1484,6 +1504,38 @@ def _make_recommendations(signature: AutoMatmulSignature, prepared: PreparedMatm
     return recommendations
 
 
+def _append_recommendation(recommendations: list[str], message: str) -> list[str]:
+    if message in recommendations:
+        return recommendations
+    return [*recommendations, message]
+
+
+def _make_passthrough_selection(
+    signature: AutoMatmulSignature,
+    prepared: PreparedMatmulInputs,
+    *,
+    winner_kind: str,
+    message: str,
+) -> dict[str, Any]:
+    cache = AutoMatmulCache()
+    return {
+        "cache_hit": False,
+        "cache_path": str(cache.path_for(signature)),
+        "winner": {"kind": winner_kind},
+        "candidate_timings_us": [],
+        "recommendations": _append_recommendation(_make_recommendations(signature, prepared), message),
+        "candidate": None,
+    }
+
+
+def _selection_summary(selection: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "winner": selection.get("winner"),
+        "candidate_timings_us": list(selection.get("candidate_timings_us", [])),
+        "recommendations": list(selection.get("recommendations", [])),
+    }
+
+
 def _select_candidate(
     signature: AutoMatmulSignature,
     prepared: PreparedMatmulInputs,
@@ -1514,6 +1566,16 @@ def _select_candidate(
         cache.invalidate(signature)
 
     if not allow_tuning:
+        runtime_record = cache.load_runtime(signature)
+        if runtime_record is not None:
+            return {
+                "cache_hit": False,
+                "cache_path": str(cache.path_for(signature)),
+                "winner": runtime_record.get("winner"),
+                "candidate_timings_us": runtime_record.get("candidate_timings_us", []),
+                "recommendations": runtime_record.get("recommendations", []),
+                "candidate": None,
+            }
         return {
             "cache_hit": False,
             "cache_path": str(cache.path_for(signature)),
@@ -1524,6 +1586,14 @@ def _select_candidate(
         }
 
     candidates = _build_candidates(signature, prepared, kwargs, base_operation=base_operation)
+    if not candidates:
+        return _make_passthrough_selection(
+            signature,
+            prepared,
+            winner_kind="no_supported_candidates",
+            message="No supported auto-config candidates were available for this signature.",
+        )
+
     device = prepared.input_tensor_a.device()
     candidate_timings: list[dict[str, Any]] = []
     winner: Candidate | None = None
@@ -1594,6 +1664,20 @@ def _execute_selected_candidate(selection: dict[str, Any]) -> Any:
     return candidate.run()
 
 
+def _run_base_operation(
+    *,
+    base_operation: Any,
+    input_tensor_a: Any,
+    input_tensor_b: Any,
+    bias: Any | None,
+    is_linear: bool,
+    kwargs: dict[str, Any],
+) -> Any:
+    if is_linear:
+        return base_operation(input_tensor_a, input_tensor_b, bias=bias, **kwargs)
+    return base_operation(input_tensor_a, input_tensor_b, **kwargs)
+
+
 def dispatch_matmul(
     *,
     base_operation: Any,
@@ -1605,26 +1689,47 @@ def dispatch_matmul(
     **kwargs: Any,
 ) -> Any:
     ttnn = _ttnn()
-    if not auto_config:
-        if is_linear:
-            return base_operation(input_tensor_a, input_tensor_b, bias=bias, **kwargs)
-        return base_operation(input_tensor_a, input_tensor_b, **kwargs)
-
+    cache = AutoMatmulCache()
     if not isinstance(input_tensor_a, ttnn.Tensor):
-        if is_linear:
-            return base_operation(input_tensor_a, input_tensor_b, bias=bias, **kwargs)
-        return base_operation(input_tensor_a, input_tensor_b, **kwargs)
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=input_tensor_a,
+            input_tensor_b=input_tensor_b,
+            bias=bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
 
     prepared = _prepare_inputs(input_tensor_a, input_tensor_b, bias)
+    if not auto_config:
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=prepared.input_tensor_a,
+            input_tensor_b=prepared.input_tensor_b,
+            bias=prepared.bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
+
     if not isinstance(prepared.input_tensor_b, ttnn.Tensor):
-        if is_linear:
-            return base_operation(input_tensor_a, input_tensor_b, bias=bias, **kwargs)
-        return base_operation(input_tensor_a, input_tensor_b, **kwargs)
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=prepared.input_tensor_a,
+            input_tensor_b=prepared.input_tensor_b,
+            bias=prepared.bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
 
     if _has_explicit_override(kwargs):
-        if is_linear:
-            return base_operation(prepared.input_tensor_a, prepared.input_tensor_b, bias=prepared.bias, **kwargs)
-        return base_operation(prepared.input_tensor_a, prepared.input_tensor_b, **kwargs)
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=prepared.input_tensor_a,
+            input_tensor_b=prepared.input_tensor_b,
+            bias=prepared.bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
 
     signature = _build_signature(
         prepared.input_tensor_a,
@@ -1637,6 +1742,16 @@ def dispatch_matmul(
         activation=kwargs.get("activation"),
         is_linear=is_linear,
     )
+    if _infer_distributed_plan(signature).kind == "unsupported":
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=prepared.input_tensor_a,
+            input_tensor_b=prepared.input_tensor_b,
+            bias=prepared.bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
+
     selection = _select_candidate(
         signature,
         prepared,
@@ -1644,11 +1759,25 @@ def dispatch_matmul(
         base_operation=base_operation,
         allow_tuning=True,
     )
+    if selection.get("candidate") is None:
+        cache.save_runtime(signature, _selection_summary(selection))
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=prepared.input_tensor_a,
+            input_tensor_b=prepared.input_tensor_b,
+            bias=prepared.bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
+
     try:
-        return _execute_selected_candidate(selection)
+        result = _execute_selected_candidate(selection)
+        cache.save_runtime(signature, _selection_summary(selection))
+        return result
     except Exception:
         if selection.get("cache_hit"):
             AutoMatmulCache().invalidate(signature)
+            cache.invalidate_runtime(signature)
             selection = _select_candidate(
                 signature,
                 prepared,
@@ -1656,7 +1785,9 @@ def dispatch_matmul(
                 base_operation=base_operation,
                 allow_tuning=True,
             )
-            return _execute_selected_candidate(selection)
+            result = _execute_selected_candidate(selection)
+            cache.save_runtime(signature, _selection_summary(selection))
+            return result
         raise
 
 
@@ -1713,6 +1844,7 @@ def explain_matmul(
         activation=activation,
         is_linear=is_linear,
     )
+    distributed_plan = _infer_distributed_plan(signature)
     if _has_explicit_override(kwargs):
         cache = AutoMatmulCache()
         return {
@@ -1724,7 +1856,23 @@ def explain_matmul(
             "recommendations": [
                 "Auto-config is bypassed because explicit low-level configuration arguments were supplied."
             ],
-            "distributed_plan": dataclasses.asdict(_infer_distributed_plan(signature)),
+            "distributed_plan": dataclasses.asdict(distributed_plan),
+        }
+    if distributed_plan.kind == "unsupported":
+        selection = _make_passthrough_selection(
+            signature,
+            prepared,
+            winner_kind="unsupported_topology_passthrough",
+            message="Auto-config tuning was bypassed because this distributed topology is outside the supported v1 candidate families.",
+        )
+        return {
+            "signature": signature.to_dict(),
+            "cache_hit": selection["cache_hit"],
+            "cache_path": selection["cache_path"],
+            "winner": selection["winner"],
+            "candidate_timings_us": selection["candidate_timings_us"],
+            "recommendations": selection["recommendations"],
+            "distributed_plan": dataclasses.asdict(distributed_plan),
         }
     selection = _select_candidate(
         signature,
@@ -1740,5 +1888,5 @@ def explain_matmul(
         "winner": selection["winner"],
         "candidate_timings_us": selection["candidate_timings_us"],
         "recommendations": selection["recommendations"],
-        "distributed_plan": dataclasses.asdict(_infer_distributed_plan(signature)),
+        "distributed_plan": dataclasses.asdict(distributed_plan),
     }

@@ -102,11 +102,16 @@ def main() -> None:
         action="store_true",
         help="Force the RHS tensor for every case to remain on host so host staging is exercised.",
     )
+    parser.add_argument(
+        "--save-report",
+        help="Optional path to write the full per-case selection report as JSON, including candidate timings.",
+    )
     args = parser.parse_args()
 
     manifest_path = Path(args.manifest)
     cases = _load_manifest(manifest_path)
     mesh_shape = _normalize_mesh_shape(args.mesh_shape)
+    report_cases = []
 
     device, close_device = _open_target_device(device_id=args.device_id, mesh_shape=mesh_shape)
     try:
@@ -176,21 +181,29 @@ def main() -> None:
                 allow_tuning=True,
             )
 
-            print(
-                json.dumps(
-                    {
-                        "name": name,
-                        "cache_hit": result["cache_hit"],
-                        "cache_path": result["cache_path"],
-                        "distributed_plan": result["distributed_plan"],
-                        "winner": result["winner"],
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
+            summarized_result = {
+                "name": name,
+                "cache_hit": result["cache_hit"],
+                "cache_path": result["cache_path"],
+                "distributed_plan": result["distributed_plan"],
+                "winner": result["winner"],
+            }
+            print(json.dumps(summarized_result, indent=2, sort_keys=True))
+            report_cases.append(
+                {
+                    **summarized_result,
+                    "candidate_timings_us": result["candidate_timings_us"],
+                    "recommendations": result["recommendations"],
+                    "signature": result["signature"],
+                }
             )
     finally:
         close_device(device)
+
+    if args.save_report:
+        report_path = Path(args.save_report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps({"cases": report_cases}, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
