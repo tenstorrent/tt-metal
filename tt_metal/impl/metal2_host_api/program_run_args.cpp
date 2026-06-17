@@ -319,26 +319,29 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     ValidateTensorArgs(program, params.tensor_args);
 }
 
-// Compute the CRTA values for a single tensor binding:
+// Emit the CRTA words for a single tensor binding, in order:
 //   [base_address_word, optional runtime_field_words...]
-// Total length = 1 + handle.num_runtime_field_crta_words.
+// invoking emit(uint32_t) once per word. Total = 1 + handle.num_runtime_field_crta_words.
 //
 // The base address always lives in CRTAs (per-enqueue, since the bound MeshTensor's
 // address can change between binds). Additional runtime field words appear immediately
 // after, when the TensorParameter opts into a dynamic accessor field. Currently the
 // only such field is tensor_shape_in_pages, for sharded TensorParameters with
 // dynamic_tensor_shape=true; in that case there are `rank` shape words.
-std::vector<uint32_t> ComputeBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& tensor) {
-    std::vector<uint32_t> values;
-    values.reserve(1u + handle.num_runtime_field_crta_words);
-
+//
+// Allocation-free by design: this runs once per binding on every enqueue, so callers
+// emit straight into their destination (push_back onto the assembled CRTA vector on the
+// full path, or write into the kernel's existing CRTA buffer slot on the partial paths)
+// rather than through a per-binding temporary vector.
+template <typename Emit>
+void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& tensor, Emit&& emit) {
     const auto address = tensor.address();
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(),
         "TensorParameter '{}' base address {} exceeds uint32_t max",
         handle.tensor_parameter_name,
         address);
-    values.push_back(static_cast<uint32_t>(address));
+    emit(static_cast<uint32_t>(address));
 
     if (handle.num_runtime_field_crta_words > 0) {
         // Currently the only runtime accessor field that lives in CRTAs is tensor_shape_in_pages
@@ -367,10 +370,9 @@ std::vector<uint32_t> ComputeBindingCrtaValues(const TensorBindingHandle& handle
             tensor_shape.rank(),
             handle.num_runtime_field_crta_words);
         for (size_t i = 0; i < tensor_shape.rank(); ++i) {
-            values.push_back(static_cast<uint32_t>(tensor_shape[i]));
+            emit(static_cast<uint32_t>(tensor_shape[i]));
         }
     }
-    return values;
 }
 
 // Attach the actual L1 Buffer to every borrowed-memory DFB, by resolving each DFB's named
@@ -389,19 +391,15 @@ std::vector<uint32_t> ComputeBindingCrtaValues(const TensorBindingHandle& handle
 // has a corresponding TensorArgument, so the lookup below cannot miss for any registered binding.
 void AttachBorrowedDFBBuffers(
     detail::ProgramImpl& program_impl,
-    const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,
+    const std::unordered_map<std::string, const MeshTensor*>& tensor_by_param,
     bool require_all = true) {
     const auto& borrowed_bindings = program_impl.get_dfb_borrowed_bindings();
     if (borrowed_bindings.empty()) {
         return;
     }
 
-    std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
-    tensor_by_param.reserve(tensor_args.size());
-    for (const auto& [param_name, tensor_arg] : tensor_args) {
-        tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
-    }
-
+    // tensor_by_param is the param_name -> MeshTensor lookup the caller already built to fill the
+    // binding CRTA sections; reuse it here rather than rebuilding an identical map per enqueue.
     for (const auto& [dfb_id, tp_name] : borrowed_bindings) {
         auto it = tensor_by_param.find(tp_name);
         if (it == tensor_by_param.end()) {
@@ -493,8 +491,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have caught "
                 "this).",
                 handle.tensor_parameter_name);
-            const auto values = ComputeBindingCrtaValues(handle, *t_it->second);
-            out.insert(out.end(), values.begin(), values.end());
+            EmitBindingCrtaValues(handle, *t_it->second, [&out](uint32_t w) { out.push_back(w); });
         }
     };
 
@@ -658,7 +655,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Process DFB runtime parameters:
     //   - Borrowed-memory DFB backing L1 Buffer*
     //   - Later, add DFB size overrides (not yet implemented)
-    AttachBorrowedDFBBuffers(program_impl, params.tensor_args);
+    AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
 }
 
 void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args) {
@@ -709,17 +706,14 @@ void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunA
                 "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have "
                 "caught this).",
                 handle.tensor_parameter_name);
-            const auto values = ComputeBindingCrtaValues(handle, *t_it->second);
             // addr_crta_offset is a byte offset; data() is uint32_t*.
-            const uint32_t base_word = handle.addr_crta_offset / sizeof(uint32_t);
-            for (size_t i = 0; i < values.size(); ++i) {
-                crta.data()[base_word + i] = values[i];
-            }
+            uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
+            EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
         }
     }
 
     // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
-    AttachBorrowedDFBBuffers(program_impl, tensor_args);
+    AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
 }
 
 // Union the args of `src` into `dst` for a single kernel (same kernel name). Used by
@@ -1132,16 +1126,13 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 if (t_it == tensor_by_param.end()) {
                     continue;  // invariant tensor omitted → binding slot retained.
                 }
-                const auto values = ComputeBindingCrtaValues(handle, *t_it->second);
-                const uint32_t base_word = handle.addr_crta_offset / sizeof(uint32_t);
-                for (size_t i = 0; i < values.size(); ++i) {
-                    crta.data()[base_word + i] = values[i];
-                }
+                uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
+                EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
             }
         }
 
         // Re-attach borrowed-memory DFBs for the supplied tensors (skip omitted invariant ones).
-        AttachBorrowedDFBBuffers(program_impl, params.tensor_args, /*require_all=*/false);
+        AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
     }
 }
 
