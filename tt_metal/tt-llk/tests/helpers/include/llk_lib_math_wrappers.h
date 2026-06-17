@@ -13,7 +13,9 @@
 #include "experimental/llk_math_reduce_custom.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_reduce.h"
 #include "llk_math_transpose_dest.h"
+#include "tensor_shape.h"
 
 using ckernel::PackMode;
 
@@ -61,6 +63,18 @@ inline bool _llk_math_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const 
     return false;
 }
 
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+inline void _llk_math_reduce_init_wrapper_([[maybe_unused]] const ckernel::TensorShape& tensor_shape)
+{
+    _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, math_fidelity>();
+}
+
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
+inline void _llk_math_reduce_wrapper_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
+{
+    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
+}
+
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_reinit_wrapper_()
 {
@@ -106,6 +120,18 @@ inline void _llk_math_reconfig_remap_wrapper_(const bool remap_enable)
 inline bool _llk_math_skip_bh_tilize_workaround_wrapper_(const std::uint32_t unpack_src_format)
 {
     return IS_8BIT_FORMAT(unpack_src_format);
+}
+
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+inline void _llk_math_reduce_init_wrapper_(const ckernel::TensorShape& tensor_shape)
+{
+    _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, math_fidelity>(tensor_shape);
+}
+
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
+inline void _llk_math_reduce_wrapper_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
+{
+    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
 }
 
 template <[[maybe_unused]] std::uint32_t block_ct_dim, [[maybe_unused]] bool is_fp32_dest_acc_en = false>
