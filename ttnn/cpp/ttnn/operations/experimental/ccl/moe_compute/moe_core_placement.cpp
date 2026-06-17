@@ -243,61 +243,6 @@ MoEComputeCoreSelection select_moe_compute_cores(
 
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
 
-    // The tilize phase multicasts data and semaphores to the matmul bounding box rectangle.
-    // All NOC nodes inside the rectangle receive the multicast, including non-matmul cores.
-    // When the mux cores fall inside this rectangle (common with ROW dispatch on WH where
-    // DRAM-optimal cores scatter across the entire 8×9 grid), the multicast corrupts their
-    // L1 while they are actively running the fabric mux kernel — causing connection state
-    // corruption and fabric teardown hangs.
-    // Detect this and fall back to a compact matmul core block whose bounding box is
-    // entirely below or above the mux region.  Also avoid the rightmost
-    // kMoEComputeCombineStripWidth columns so the combine strip stays available.
-    if (!mux_core_range_set.ranges().empty()) {
-        const CoreRange matmul_bbox_trial = CoreRangeSet(matmul_cores).bounding_box();
-        const CoreRange mux_bbox = mux_core_range_set.bounding_box();
-        if (matmul_bbox_trial.intersects(mux_bbox)) {
-            const uint32_t num_matmul = static_cast<uint32_t>(matmul_cores.size());
-            const uint32_t start_y = static_cast<uint32_t>(mux_bbox.end_coord.y) + 1;
-            const uint32_t max_x = worker_grid.x > kMoEComputeCombineStripWidth
-                                       ? static_cast<uint32_t>(worker_grid.x) - kMoEComputeCombineStripWidth
-                                       : static_cast<uint32_t>(worker_grid.x);
-            std::vector<CoreCoord> compact;
-            compact.reserve(num_matmul);
-            for (uint32_t y = start_y; y < worker_grid.y && compact.size() < num_matmul; ++y) {
-                for (uint32_t x = 0; x < max_x && compact.size() < num_matmul; ++x) {
-                    compact.emplace_back(x, y);
-                }
-            }
-            TT_FATAL(
-                compact.size() == num_matmul,
-                "moe_compute: DRAM-optimal matmul bbox {} overlaps mux bbox {} but compact "
-                "placement only found {}/{} cores (worker_grid {}x{}, start_y={}, max_x={}). "
-                "Tilize multicast to the overlapping rectangle would corrupt mux L1.",
-                matmul_bbox_trial.str(),
-                mux_bbox.str(),
-                compact.size(),
-                num_matmul,
-                worker_grid.x,
-                worker_grid.y,
-                start_y,
-                max_x);
-            const CoreRange compact_bbox = CoreRangeSet(compact).bounding_box();
-            TT_FATAL(
-                !compact_bbox.intersects(mux_bbox),
-                "Compact matmul bbox {} still intersects mux bbox {}",
-                compact_bbox.str(),
-                mux_bbox.str());
-            log_info(
-                tt::LogOp,
-                "moe_compute: DRAM-optimal matmul bbox {} overlaps mux bbox {}; "
-                "using compact matmul cores (bbox {}) to avoid L1 corruption from tilize multicast",
-                matmul_bbox_trial.str(),
-                mux_bbox.str(),
-                compact_bbox.str());
-            matmul_cores = compact;
-        }
-    }
-
     const CoreCoordPairSet matmul_avoid_set = core_coords_to_pair_set(matmul_cores);
     const CoreCoordPairSet placement_avoid_set = build_moe_compute_avoid_set(matmul_avoid_set, mux_core_range_set);
     const CoreRangeSet matmul_core_range_set = CoreRangeSet(matmul_cores);
