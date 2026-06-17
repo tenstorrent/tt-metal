@@ -5,6 +5,7 @@ import math
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
@@ -93,7 +94,8 @@ def test_reduce(
     # REDUCE_ROW SUM/AVG uses MVMUL with operand swap (scaler→SrcA). MVMUL needs a
     # full 16-row SrcA for the dot product, so the scaler tile must use full face dims.
     needs_full_face_scaler = (
-        reduce_dim == ReduceDimension.Row
+        TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
+        and reduce_dim == ReduceDimension.Row
         and pool_type != ReducePool.Max
         and tile_shape.face_r_dim < 16
     )
