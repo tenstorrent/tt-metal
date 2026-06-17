@@ -139,8 +139,7 @@ class MLP(LightweightModule):
         k_tiles_gu, n_tiles_gu = k_gu // 32, n_padded_gu // 32
         # Halve num_cores from the K-N gcd so in0_block_w lifts from 1 → 2.
         # At in0_block_w=1 the DRAM-sharded matmul inner loop runs K_tiles times
-        # with high per-iteration overhead → ~30% slower than at in0_block_w=2.
-        # See "in0_block_w sweep" experiment.
+        # with high per-iteration overhead.
         rows_gu, cols_gu = _pick_grid_for_in0_block_w2(k_tiles_gu, n_tiles_gu)
         self._decode_gate_up_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_gu, n=n_padded_gu, num_cores=rows_gu * cols_gu

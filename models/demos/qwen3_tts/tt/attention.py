@@ -567,11 +567,7 @@ class Attention(LightweightModule):
         else:
             wqkv_progcfg = wo_progcfg = None
 
-        # QKV projection — DRAM-sharded matmul path. Originally gated to
-        # decode (seq=1); relaxed to all seq_len <= 32 (one tile in M) so
-        # CP_prefill (seq=2) also takes the sharded fast path → 16-core
-        # nlp_create_qkv_heads instead of single-core. Larger prefill buckets
-        # (64, 128) need separate per-m shard configs to engage — TODO.
+        # QKV projection — DRAM-sharded matmul path for seq_len <= 32.
         use_dram_shard_qkv = seq_len <= 32
         use_prefill128_qkv = (not is_decode) and (seq_len == 128) and (self._prefill128_wqkv_progcfg is not None)
         # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
