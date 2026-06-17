@@ -357,6 +357,25 @@ def wh_tp4_o_proj_pc(device, *, seq_len: int = 11264, ctx_dim: int = 384):
             fused_activation=None,
             fuse_batch=False,
         )
+    if int(grid.x) >= 8 and int(grid.y) >= 8 and seq_len == 11264 and ctx_dim == 1536:
+        # Replicated o_proj (Option B): full gathered ctx K=1536, BFP8×BFP8→BFP8 L1.
+        # Silicon sweep 2026-06-17 (bench_vision_attn_tp2_wh_sweep.py o_proj_repl):
+        # grid=(8,8) tm=False M=44 N=6 obh=4 ibw=8 sub=(4,2) ~619 µs vs the generic
+        # 48-core fallback ~1817 µs (~2.9×). obh=4 keeps the interm CB ~49 KB/core,
+        # well under the live-block L1 high-water (cf. the obh cap on the 384 case).
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=8,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            out_block_h=4,
+            out_block_w=6,
+            per_core_M=44,
+            per_core_N=6,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
     ctx_resident = _l1_shard_bytes_per_core(device, seq_len, ctx_dim, ttnn.bfloat8_b)
     return wh_tp4_matmul_pc(
         device,

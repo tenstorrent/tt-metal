@@ -1865,15 +1865,15 @@ class TTNNDotsVisionAttention(TTNNModule):
             # TP head-sharding: regroup the fused QKV columns by device, then
             # keep transposed [in, out] torch weights so move_weights can build
             # the per-device shards with a mesh mapper (mirrors the decoder TP
-            # linears). o_proj is row-parallel (contraction dim sharded), so its
-            # input head order already matches the per-device concat order -- no
-            # permutation needed there.
+            # linears). o_proj is kept as the full transposed weight and uploaded
+            # replicated: forward gathers ctx to full hidden before a replicated
+            # o_proj, so no contraction-dim shard is needed.
             perm = self._qkv_head_shard_perm(ndev)
             qkv_w = self._qkv_weight[perm, :].contiguous()  # [out=3*H, in=H]
             self._qkv_weight_t_tp = qkv_w.t().contiguous()  # [in=H, out=3*H]
             self._qkv_bias_tp = self._qkv_bias[perm].contiguous().reshape(1, -1) if self._qkv_bias is not None else None
-            self._o_proj_weight_t_tp = self._o_proj_weight.t().contiguous()  # [in=H, out=H]
-            self._o_proj_bias_tp = self._o_proj_bias  # replicated, added post all-reduce
+            self._o_proj_weight_t_tp = self._o_proj_weight.t().contiguous()  # [in=H, out=H] (full, replicated)
+            self._o_proj_bias_tp = self._o_proj_bias  # replicated, fused into the matmul
             return
 
         self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
@@ -1902,10 +1902,11 @@ class TTNNDotsVisionAttention(TTNNModule):
         self._tp_ndev = self._attn_tp_ndev()
         if self._tp_ndev > 1:
             # Column-shard the (head-regrouped) QKV weight/bias on the output dim
-            # -> each rank holds its heads' Q/K/V. Row-shard the o_proj weight on
-            # the contraction dim -> each rank multiplies its head outputs; the
-            # partial sums are all-reduced in forward. o_proj bias stays
-            # replicated (added once, post all-reduce).
+            # -> each rank holds its heads' Q/K/V. The o_proj weight is REPLICATED
+            # (full [in=H, out=H]): forward all_gathers this rank's head-group ctx
+            # to the full hidden and runs the replicated o_proj locally, so only a
+            # single all_gather of the (smaller) ctx is needed -- no row-shard +
+            # all-reduce. o_proj bias is replicated and fused into the matmul.
             self.tt_qkv_weight = ttnn.as_tensor(
                 self._qkv_weight_t_tp,
                 device=self.device,
@@ -1931,7 +1932,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 device=self.device,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=_tp_mesh_mapper(self.device, -2),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
                 memory_config=mem,
             )
             self.tt_o_proj_bias = (
@@ -1951,8 +1952,9 @@ class TTNNDotsVisionAttention(TTNNModule):
             if _tp4_prefill_vision_enabled(self.device):
                 from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_o_proj_pc
 
-                heads_per_tp = self.num_heads // self._tp_ndev
-                self._tp_o_ctx_dim = heads_per_tp * self.head_dim
+                # Replicated o_proj contracts the FULL gathered hidden (K=hidden_size),
+                # not this rank's head-group width -- so the pc is for the full shape.
+                self._tp_o_ctx_dim = self.hidden_size
                 self._tp_o_proj_pc = tp4_o_proj_pc(self.device, ctx_dim=self._tp_o_ctx_dim)
         else:
             self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
@@ -2260,42 +2262,36 @@ class TTNNDotsVisionAttention(TTNNModule):
         def _run_o_proj(ctx: ttnn.Tensor) -> ttnn.Tensor:
             ctx = self._concat_heads(ctx)
             if ndev > 1:
-                # Row-parallel o_proj: each rank multiplies its head outputs by
-                # its weight shard -> partial [1,1,S,o_n]; all-reduce (decomposed
-                # into reduce_scatter + all_gather for trace stability, matching
-                # the decoder TP linears) sums the partials so every rank holds
-                # the full output. Bias is added once, after the reduction.
-                partial = ttnn.linear(
+                # Head-parallel recombination with a SINGLE collective: instead of
+                # a row-parallel o_proj + all-reduce (reduce_scatter + all_gather of
+                # the full-width [1,1,S,H] partial), all_gather this rank's narrower
+                # head-group context [1,1,S,ctx/TP] up to the full [1,1,S,H], then
+                # run a *replicated* (full-weight) o_proj locally. One collective
+                # instead of two and ~half the CCL bytes (the gathered ctx is the
+                # smaller tensor); the gathered o_proj is replicated so every rank
+                # already holds the full output -- no post-matmul gather. The mandatory
+                # head exchange is unavoidable (o_proj mixes all heads), but it moves
+                # the cheaper tensor. Bias is replicated and fused into the matmul.
+                num_links = _ccl_num_links(self.device)
+                ctx_full = ttnn.all_gather(
                     ctx,
+                    dim=3,
+                    num_links=num_links,
+                    cluster_axis=1,
+                    memory_config=tp_out_mem,
+                    topology=ttnn.Topology.Linear,
+                )
+                ttnn.deallocate(ctx)
+                out = ttnn.linear(
+                    ctx_full,
                     self.tt_o_proj_weight,
-                    bias=None,
+                    bias=self.tt_o_proj_bias,
                     dtype=tp_out_dtype,
                     memory_config=tp_out_mem,
                     compute_kernel_config=self.compute_kernel_config,
                     program_config=o_pc,
                 )
-                ttnn.deallocate(ctx)
-                num_links = _ccl_num_links(self.device)
-                scattered = ttnn.reduce_scatter(
-                    partial,
-                    dim=3,
-                    num_links=num_links,
-                    cluster_axis=1,
-                    memory_config=tp_out_mem,
-                    topology=ttnn.Topology.Linear,
-                )
-                ttnn.deallocate(partial)
-                out = ttnn.all_gather(
-                    scattered,
-                    dim=3,
-                    num_links=num_links,
-                    cluster_axis=1,
-                    memory_config=tp_out_mem,
-                    topology=ttnn.Topology.Linear,
-                )
-                ttnn.deallocate(scattered)
-                if self.tt_o_proj_bias is not None:
-                    out = ttnn.add(out, self.tt_o_proj_bias, memory_config=tp_out_mem)
+                ttnn.deallocate(ctx_full)
                 return out
             # BFP8 output keeps the post-attn residual on the BFP8 stream.
             if out_bs is not None and o_bs_pc is not None:
