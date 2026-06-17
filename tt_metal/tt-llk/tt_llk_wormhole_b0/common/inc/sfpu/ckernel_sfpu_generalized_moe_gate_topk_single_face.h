@@ -426,19 +426,13 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale)
 }
 
 // ============================================================================
-// UNGROUPED top-8 (DRAFT — needs HW validation against the golden test)
+// UNGROUPED top-8
 //
 // Merges the 4 sorted-descending top-8 runs at columns {read_base, +2, +4, +6}
 // into a single top-8 and stores it (bias value + LO16 index + HI16 score) at
 // columns {store_lo, store_hi}. This is exactly the existing top8's 4-column
 // merge (stage 1 + stage 2 of _generalized_moe_gate_top8), with the initial load
 // offsets and the final store offsets parameterized. Stage 2 is base-independent.
-//
-// VERIFY on HW:
-//  - that reading read_base=8 (groups 4-7) behaves identically to read_base=0
-//  - that the interm-region scratch (cols 0,4) used by the two store/load helpers
-//    does not collide between the two merge4 calls (it shouldn't: they run serially)
-//  - that no transpose (step0/step1) is needed before consuming the sum_top2 layout
 // ============================================================================
 template <bool is_fp32_dest_acc_en, std::uint32_t read_base, std::uint32_t store_lo, std::uint32_t store_hi>
 inline void _gmg_merge4_top8()
