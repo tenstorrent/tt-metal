@@ -7,6 +7,7 @@
 #include <umd/device/types/arch.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <tuple>
 #include <unordered_map>
@@ -272,7 +273,11 @@ std::vector<CBInfo> get_cb_info(
     // (dest-reuse path, no partials CB).
     const bool single_output_block = (per_core_out_ntiles == out_block_num_tiles);
     const bool can_alias_partials_onto_out =
-        single_output_block && (partial_dtype == output_datatype) && !untilize_out && !is_1d_depthwise_conv;
+        single_output_block && (partial_dtype == output_datatype) && !untilize_out && !is_1d_depthwise_conv
+        // PoC (TT_CONV_TRM_CALLER_OWNS): the caller_owns path packs the matmul into a DEDICATED partials
+        // region and bias-add reads partials while writing a DISTINCT OUT buffer. Aliasing partials onto
+        // OUT would make bias-add read and write the same L1 — so force partials dedicated under the flag.
+        && (std::getenv("TT_CONV_TRM_CALLER_OWNS") == nullptr);
     const uint32_t matmul_partials_num_pages =
         is_1d_depthwise_conv ? 0
         : can_alias_partials_onto_out
