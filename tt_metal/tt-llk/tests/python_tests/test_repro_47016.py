@@ -5,23 +5,39 @@
 
 This is the *genuine* "unpack-tilize followed by matmul" pattern from the issues
 (the lm_head path: in-kernel tilize of activations, then a matmul against
-bfloat8_b weights). It uses the real fused tilize->matmul kernel
-(matmul_unpack_tilize_test.cpp), which drives all three cores with the proper
-PACK_DONE handshake:
+bfloat8_b weights). The fused tilize->matmul kernel drives all three cores with
+the proper PACK_DONE handshake:
 
     run 0: unpack-TILIZE A and B from L1 -> datacopy -> PACK back to L1 as Bfp8_b
-    run 1: _llk_unpack_tilize_uninit_(z=UNINIT_NUM_FACES) -> matmul on the
-           (Bfp8_b) tilized operands
+    run 1: matmul straight on the (Bfp8_b) tilized operands, with NO
+           reconfig(FACE_ROW_MAJOR) before it (the model binding does not reconfig).
 
-Because the matmul now consumes BFP-compressed operands, the tile-descriptor
-z-dim that the uninit restores actually matters: it sizes the per-tile exponent
-array (NumBlobs = BlobsPerXYPlane * ZDim * WDim).
+Why this is the faithful repro
+------------------------------
+For a BFP-compressed operand the unpack tile-descriptor z-dim sizes the per-tile
+exponent / RowStart arrays (NumBlobs = BlobsPerXYPlane * ZDim * WDim). That z-dim
+is PERSISTENT operand state - written only by _llk_unpack_hw_configure_ and by
+reconfig(FACE_ROW_MAJOR). Neither the tilize datapath nor the matmul unpack
+*execute* maintains it (both drive face iteration from the ADC counters). So the
+matmul decodes its exponents using whatever value is sitting in the descriptor
+when it runs.
 
-    UNINIT_NUM_FACES == 4  -> FIXED behaviour   -> matches golden    -> PASS
-    UNINIT_NUM_FACES == 2  -> #45179 regression  -> corrupt logits    -> FAIL
+In the model that value is NOT guaranteed to be 4: it is whatever a prior op left
+there, and nothing between the tilize and the matmul refreshes it. The kernel
+models that by stamping the SEC0/SEC1 descriptor z-dim to STALE_DESC_Z just before
+the matmul (no reconfig to fix it):
 
-A correct run prints BOTH parametrizations passing: the z=4 control reproduces
-golden, and the z=2 case is corrupt (which is what the z=2 case asserts).
+    STALE_DESC_Z == 4 : control - descriptor already holds the full-tile count, so
+                        the BFP matmul is correct regardless of the fix.
+    STALE_DESC_Z == 2 : the bug condition - a non-full-tile z reaches the BFP
+                        matmul. Correct ONLY if _llk_unpack_AB_matmul_init_ itself
+                        re-establishes the descriptor z-dim from its num_faces.
+
+So this test FAILS (STALE_DESC_Z=2) whenever nothing in the matmul unpack path owns
+the z-dim - which is the state of #45179 AND of the partial "just stop writing z in
+uninit" attempt (why that still broke the model). It PASSES both parametrizations
+only once the matmul init programs the z-dim. A register-only test cannot catch
+this, because the corruption is in the BFP exponent decode, not a face count.
 
 The data-format inference model cannot express "tilize Float16_b, then matmul a
 Bfp8_b operand" across two runs (it would infer math=Bfp8_b, which the FPU can't
@@ -44,7 +60,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
-    UNINIT_NUM_FACES,
+    STALE_DESC_Z,
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize
@@ -87,10 +103,11 @@ def _bfp_matmul_formats():
 
 @parametrize(
     math_fidelity=[MathFidelity.HiFi4],
-    # 4 = fixed/correct restore value, 2 = reproduces the #45179 regression.
-    uninit_num_faces=[4, 2],
+    # Descriptor z-dim the matmul inherits from prior ops (no reconfig refreshes it).
+    # 4 = full-tile control; 2 = stale non-full-tile state that triggers #47016.
+    stale_desc_z=[4, 2],
 )
-def test_repro_47016(math_fidelity, uninit_num_faces):
+def test_repro_47016(math_fidelity, stale_desc_z):
     torch_format = format_dict[_OUTPUT]
     input_dimensions = [32, 32]
 
@@ -128,7 +145,7 @@ def test_repro_47016(math_fidelity, uninit_num_faces):
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
-            UNINIT_NUM_FACES(uninit_num_faces),
+            STALE_DESC_Z(stale_desc_z),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -155,15 +172,11 @@ def test_repro_47016(math_fidelity, uninit_num_faces):
 
     ok = passed_test(golden_tensor, res_tensor, _OUTPUT)
 
-    if uninit_num_faces == 4:
-        assert ok, (
-            "Control (z-dim=4, the FIXED restore value) should match golden. "
-            "If this fails, the fused tilize->BFP-matmul baseline itself is off, "
-            "not the bug."
-        )
-    else:
-        assert not ok, (
-            "Expected the Bfp8_b matmul to be CORRUPT when the tilize-uninit "
-            "restores z-dim != 4 (the #45179 regression). It matched golden "
-            "instead, which would mean this build already has the z-dim=4 fix."
-        )
+    assert ok, (
+        f"Fused tilize->Bfp8_b matmul must match golden with an inherited descriptor "
+        f"z-dim of {stale_desc_z}. A failure at stale_desc_z=2 means nothing in the "
+        f"matmul unpack path re-establishes the tile-descriptor z-dim, so the stale "
+        f"non-full-tile value mis-sizes the BFP exponent array -> the tt-metal#47016 "
+        f"regression. The fix is _llk_unpack_AB_matmul_init_ programming z-dim from "
+        f"its own num_faces."
+    )

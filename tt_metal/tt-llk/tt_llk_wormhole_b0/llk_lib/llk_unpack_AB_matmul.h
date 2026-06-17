@@ -213,6 +213,17 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     // in large matmul, datacopy will disable the transpose of faces, so we need it turn it back on for matmul.
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
 
+    // Establish the tile-descriptor Z-dim (number of faces) for both operands. This
+    // is persistent operand state that sizes the per-tile BFP exponent / RowStart
+    // arrays (NumBlobs = BlobsPerXYPlane * ZDim * WDim) of compressed operands. The
+    // matmul can be fed straight from an in-kernel tilize (e.g. lm_head) without a
+    // reconfig(FACE_ROW_MAJOR) in between, so the descriptor may still hold a stale
+    // value left by a prior op; program it here so the unpack is correct regardless
+    // of prior state (tenstorrent/tt-metal#47016). Operand A -> SrcB/SEC1, operand
+    // B -> SrcA/SEC0.
+    // cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(unpB_num_faces);
+    // cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(unpA_num_faces);
+
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
     if (unpA_partial_face)

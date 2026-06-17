@@ -12,18 +12,38 @@
 //          PACK them back to L1 as the tilized operands (here as Bfp8_b, so the
 //          following matmul is a BFP-compressed consumer, exactly like lm_head's
 //          bfloat8_b weights).
-//   run 1: _llk_unpack_tilize_uninit_(...) restores the srcA tile-descriptor
-//          z-dim, then _llk_unpack_AB_matmul_ consumes the (BFP) tilized
-//          operands.
+//   run 1: _llk_unpack_tilize_uninit_(...) tears down tilize mode, then
+//          _llk_unpack_AB_matmul_ consumes the (BFP) tilized operands DIRECTLY,
+//          with NO reconfig(FACE_ROW_MAJOR) in between - exactly like the model
+//          path Viktor reported (the binding does not reconfig before the mmul).
 //
-// The single regression under test is the z-dim value the uninit restores
-// (UNINIT_NUM_FACES, injected by the Python test). Pre-#45179 it was the
-// full-tile face count 4; #45179 (bb78d08) restores the operand's num_faces.
-// For BFP matmul consumers that z-dim sizes the per-tile exponent array
-// (NumBlobs = BlobsPerXYPlane * ZDim * WDim), so the wrong value corrupts the
-// exponent decode of the following matmul. The matmul init does NOT re-establish
-// the descriptor z-dim (it only programs the ADC X/Z counters), so whatever the
-// uninit leaves is what the BFP matmul uses.
+// What actually decides correctness: the SEC0/SEC1 tile-descriptor z-dim that the
+// BFP matmul reads sizes the per-tile exponent / RowStart arrays
+// (NumBlobs = BlobsPerXYPlane * ZDim * WDim). That z-dim is PERSISTENT operand
+// state - it is written only by _llk_unpack_hw_configure_ and by
+// reconfig(FACE_ROW_MAJOR). The tilize datapath drives face iteration from the ADC
+// counters (not the descriptor), and the matmul unpack EXECUTE only programs ADC
+// counters too. So whatever value is sitting in that descriptor when the matmul
+// runs is what sizes its exponent decode.
+//
+// In the real model that value is NOT 4: it is whatever a prior op (or the
+// operand's reported num_faces) left there, and nothing between the tilize and the
+// matmul refreshes it. We model that precisely: just before the matmul we stamp the
+// SEC0/SEC1 descriptor z-dim to STALE_DESC_Z (injected by the Python test) to stand
+// in for that inherited state, with no reconfig to fix it.
+//
+//   STALE_DESC_Z == 4 : control - descriptor already holds the full-tile count,
+//                       so the BFP matmul is correct no matter what.
+//   STALE_DESC_Z == 2 : the bug condition - a non-full-tile z reaches the BFP
+//                       matmul. This matches golden ONLY if _llk_unpack_AB_matmul_init_
+//                       re-establishes the descriptor z-dim from its own num_faces.
+//
+// Discriminating power (verified by device A/B):
+//   - matmul unpack init does NOT program z-dim  -> STALE_DESC_Z=2 FAILS
+//       (this is the state of #45179, and also of "just stop writing z in uninit",
+//        which is why that partial fix still broke the model);
+//   - matmul unpack init programs z-dim = num_faces (the fix) -> both PASS.
+// So a green run of BOTH parametrizations proves the matmul path owns its z-dim.
 
 #include <algorithm>
 #include <cstdint>
@@ -92,17 +112,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
 
-    // Second run: unpack matmul on the now-tilized (Bfp8_b) operands.
+    // Second run: matmul straight on the now-tilized (Bfp8_b) operands.
     run = 1;
+
+    // Switch the unpack data format to Bfp8_b for the matmul operands. With
+    // p_dim_stride_target::IGNORE this sets src/dst format + tile size but does NOT
+    // refresh the tile-descriptor z-dim - exactly the model path (format is
+    // established, but no reconfig(FACE_ROW_MAJOR) runs before the matmul to fix z).
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, tile_size);
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
 
-    // *** The defect under test (#47016 / #45179): the z-dim restore value. ***
-    // 4 = full-tile face count (correct for BFP matmul consumers).
-    // UNINIT_NUM_FACES is injected by the Python test (4 = fixed, 2 = regression).
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, UNINIT_NUM_FACES);
+    // Tear down tilize mode. Post-fix this no longer touches the descriptor z-dim
+    // (its num_faces arg is the tilized operand's real full-tile count).
+    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, 4 /* operand num_faces */);
+
+    // Model the descriptor state the matmul inherits: a (possibly non-4) z-dim left
+    // by prior ops with nothing in between to refresh it. SrcA=SEC0, SrcB=SEC1.
+    // For a BFP matmul this z-dim sizes the exponent array, so the matmul is correct
+    // only if its own init re-establishes z-dim (tenstorrent/tt-metal#47016).
+    ckernel::cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(STALE_DESC_Z);
+    ckernel::cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(STALE_DESC_Z);
 
     _llk_unpack_AB_matmul_init_<>();
     _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A_tilized), L1_ADDRESS(buffer_B_tilized), 0, 0, tile_size, tile_size);

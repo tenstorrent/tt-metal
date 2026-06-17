@@ -233,14 +233,17 @@ class MATH_FIDELITY(TemplateParameter):
 
 
 @dataclass
-class UNINIT_NUM_FACES(TemplateParameter):
-    # z-dim value that _llk_unpack_tilize_uninit_ restores into the tile descriptor.
-    # 4 = full-tile face count (correct for BFP matmul consumers, see tt-metal#47016),
-    # any other value reproduces the regression from #45179.
-    num_faces: int = 4
+class STALE_DESC_Z(TemplateParameter):
+    # Tile-descriptor z-dim value left in the unpack SEC0/SEC1 descriptors by prior
+    # ops, as seen by a following matmul that runs WITHOUT a reconfig(FACE_ROW_MAJOR)
+    # to refresh it (the lm_head tilize->bfloat8_b-matmul path). For a BFP matmul this
+    # z-dim sizes the per-tile exponent array, so a stale value != 4 corrupts the
+    # decode unless the matmul unpack init re-establishes it (tenstorrent/tt-metal#47016).
+    # 4 = full-tile (control); 2 = stale non-full-tile state that triggers the bug.
+    z_dim: int = 4
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t UNINIT_NUM_FACES = {self.num_faces};"
+        return f"constexpr std::uint32_t STALE_DESC_Z = {self.z_dim};"
 
 
 @dataclass

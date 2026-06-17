@@ -4,13 +4,20 @@
 
 """Register-level regression for tt-llk#1161 (Wormhole _llk_unpack_tilize_uninit_).
 
-The fix makes _llk_unpack_tilize_uninit_ restore the unpack tile-descriptor
-z-dim to the operand's num_faces (the default state set by _llk_unpack_init_)
-instead of a hardcoded 4. End-to-end PCC tests cannot catch this because plain
-unpack drives its face iteration from the MOP loop count, not the descriptor
-z-dim. So we assert the restored register value directly: run a tilize-only
-kernel (which ends on the uninit) and read back THCON_SEC0_REG0_TileDescriptor
-z-dim via get_tensix_state.
+_llk_unpack_tilize_uninit_ must NOT clobber the unpack tile-descriptor z-dim.
+The tilize datapath never modifies that register, so the value programmed by the
+operand's _llk_unpack_hw_configure_ (z-dim == num_faces) must survive the uninit
+untouched. A pre-fix uninit that wrote a hardcoded 4 left a <4-face operand in
+the wrong state (tt-llk#1161); a later variant that wrote the consumer's
+num_faces corrupted a following BFP matmul (tenstorrent/tt-metal#47016). The fix
+simply stops writing z-dim in uninit, so each downstream op sees the value its
+own hw_configure/reconfig programmed.
+
+End-to-end PCC tests cannot catch this because plain unpack drives its face
+iteration from the MOP loop count, not the descriptor z-dim. So we assert the
+register value directly: run a tilize-only kernel (which ends on the uninit) and
+read back THCON_SEC0_REG0_TileDescriptor z-dim via get_tensix_state. For a
+num_faces=2 operand it must still read 2 (hw_configure's value, left intact).
 """
 
 from dataclasses import asdict
@@ -48,6 +55,10 @@ def test_tilize_uninit_restores_z_dim(test_name, num_faces, regenerate_cpp):
 
     assert z_dims[0] == num_faces, (
         f"_llk_unpack_tilize_uninit_ left tile-descriptor z_dim={z_dims[0]}, "
-        f"expected num_faces={num_faces}. A value of 4 indicates "
-        f"the pre-fix hardcoded restore regressed."
+        f"expected num_faces={num_faces} (the value hw_configure programmed, which "
+        f"uninit must leave untouched). A value of 4 means uninit is clobbering "
+        f"z-dim back to a hardcoded full-tile count (tt-llk#1161). NOTE: this test "
+        f"only guards #1161 - it cannot detect tt-metal#47016, where uninit's "
+        f"num_faces equals this operand's, so the register reads the expected value "
+        f"either way; #47016 is covered behaviourally by test_repro_47016.py."
     )
