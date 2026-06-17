@@ -7,7 +7,7 @@ description: Build a complete TTNN autoregressive model and generator from a Hug
 
 This skill starts from working TTNN block or decoder code and turns it into a complete autoregressive model that can run end-to-end on real weights. The output should be a model wrapper plus a generator appropriate to the project. If a project-specific orchestration skill defines filenames, class names, readiness runners, or artifact locations, follow that contract there; this skill describes the general engineering work.
 
-Full vLLM integration is out of scope here, but design the model and generator so a later serving adapter can drive the same low-level prefill/decode path without duplicating model logic.
+The full model stage does not implement the vLLM adapter, but it must design the model and generator so a later serving adapter can drive the same low-level prefill/decode path without duplicating model logic.
 
 ## What To Build
 
@@ -23,6 +23,12 @@ Implement the model-specific pieces around the working block stack:
 - a generator that owns high-level token-in/token-out generation and exposes a clean low-level prefill/decode API for external callers.
 
 Use the strongest correct implementation available as your block stack. If there are several candidates, choose the one with the best evidence for the target mesh and explain the choice.
+
+## Context-Length Contract
+
+The full model must support the context length advertised by the HF config. Start from `models/autoports/<model>/doc/context_contract.json`, then recompute it for the full layer stack. Include all loaded weights, the full-layer KV cache, page tables, trace buffers, persistent CCL buffers, and other long-lived tensors that consume device DRAM.
+
+Do not reduce `max_model_len` to make full-model bringup pass. A smaller context is acceptable only when device DRAM cannot fit the full model plus KV cache. In that case, record the byte calculation or failed capacity probe, the largest feasible supported context, and the exact construction/server setting that uses it.
 
 ## How To Approach It
 
@@ -44,6 +50,8 @@ The full-model stage owns sampling. A full model is complete only when token-out
 The same path supports top-k/top-p sampling. Do not complete the full model with a one-off greedy-only path and leave sampled serving to be invented in vLLM.
 
 The delivered token-out path has no host argmax, full-logits readback, untraced sampling inside the model trace, or Python readback/writeback loop. If this contract does not work, keep the full-model stage failing and debug it there before starting vLLM.
+
+Some shared tests require host-side sampling. Support that as an explicit compatibility mode in the generator when needed, but keep it separate from the optimized measured path. Host sampling must never replace the on-device traced sampling path used for token-out performance or vLLM serving.
 
 Build decode around persistent device state:
 
@@ -182,6 +190,7 @@ Done means all of these are true and recorded:
 - carried-forward decoder contract: weight/activation/KV/CCL dtype policy, tensor-group exceptions, and residual layout;
 - state-dict mapping, tied-embedding behavior if relevant, and real-weight loading behavior;
 - KV-cache, page-table or position handling, prompt lengths, and repeated decode reuse;
+- context contract: HF-advertised context, full-model supported context, and any DRAM-only reduction evidence;
 - full-model accuracy and qualitative generation evidence;
 - split-sampling trace evidence: model trace to logits, internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, current-position coherence, and page-table refresh coverage;
 - determinism or repeated-run coverage appropriate to the implementation risk, including logit reproducibility across runs and batch positions;

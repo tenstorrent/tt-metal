@@ -8,6 +8,7 @@ Goal completion requirements:
 - models/autoports/<model>/tt/multichip_decoder.py exists and uses the optimized decoder as the single-chip baseline.
 - Implement a parallelization scheme for all tensors that matches the model to the hardware as well as possible. Load-time tensor padding is acceptable when it enables better parallelism.
 - Choose the target mesh/hardware strategy before coding the final path. Record the tensor, activation, KV-cache, collective, and MoE/expert strategy with calculated per-device shapes, shard specs, padding, and rejected alternatives.
+- Revisit doc/context_contract.json for the multichip plan. Tensor parallelism changes per-device KV-cache and weight memory, so the stage must preserve the HF-advertised context unless device DRAM evidence proves the largest feasible multichip context is smaller.
 - Multi-chip prefill and decode PCC are validated against the single-chip TTNN optimized baseline for every meaningful layer kind.
 - Paged KV-cache behavior, page tables, current positions, local KV-head/cache layout, and stacked-decoder input/output layout contracts are validated on the target mesh.
 - Warmed trace replay works for decode on the target mesh.

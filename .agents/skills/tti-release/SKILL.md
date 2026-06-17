@@ -11,6 +11,8 @@ This skill runs the Tenstorrent `tt-inference-server` release workflow for the g
 
 The release stage is only valid when the release workflow evaluates the just-brought-up autoport model. Do not run a stock `tt-transformers`, `models/demos`, or other packaged implementation for the same Hugging Face model. That measures a different model and must be treated as a failed release-stage artifact, even if `run.py` exits `0`.
 
+The release stage must evaluate the autoport at the context length recorded in `models/autoports/<model>/doc/context_contract.json`. Do not cap context, LongBench, benchmark prompt/completion lengths, or API limits to hide a model context bug. Only adjust a request that is mathematically invalid because prompt plus completion exceeds the real supported context, and record that as a harness issue.
+
 ## Topology
 
 Assume the agent usually starts inside an IRD reservation/Codex container:
@@ -68,6 +70,7 @@ If optimized-vLLM is blocked only by a recoverable ARC/reset error, recover and 
 
 - The TTI model spec or runtime spec must point at the target `models/autoports/<model>` code path.
 - The launched server must import or otherwise use the target autoport vLLM implementation, usually `models/autoports/<model>/tt/generator_vllm.py`.
+- The serving max context must match `doc/context_contract.json`.
 - A built-in TTI model name such as `Llama-3.1-8B-Instruct` is not enough. Built-in model names commonly select stock `models/tt_transformers` implementations.
 - If the only available `tt-inference-server` path selects `models/tt_transformers`, `models/demos`, or another stock implementation, stop and fix the release integration. Do not benchmark the stock model as a substitute.
 
@@ -174,6 +177,17 @@ timeout 60 tt-smi -ls --local
 
 If reset hangs or devices do not return, report that host-level reboot/reacquire is needed rather than marking model readiness blocked.
 
+## Context And Harness Integrity
+
+Before changing release specs, eval configs, benchmark configs, or server launch flags, compare them to the context contract. Do not make a failing model pass by lowering context. Examples of invalid fixes:
+
+- setting `max_model_len` below the context contract;
+- lowering LongBench or other long-context eval limits because the model implementation cannot handle them;
+- shortening benchmark prompt or completion lengths to avoid an L1, KV-cache, or trace bug;
+- marking a context failure as a harness issue when the request fits inside the HF-advertised context.
+
+Valid harness fixes are narrower: wrong autoport path, wrong tokenizer/chat template, host-sampling-only tests that need an explicit host-sampling compatibility mode, or requests whose prompt plus completion exceeds the true supported context.
+
 ## Failing Release Tests
 
 If the release workflow exits nonzero because `spec_tests`, `tests`, API parameter conformance, eval harness execution, or benchmark harness execution failed, use `$autofix` before declaring the TTI release stage blocked. Give `$autofix` the exact failed command, model, device, physical host, workflow log path, server log path, report/test output path, and the smallest local repro command that preserves the failure.
@@ -225,6 +239,7 @@ Done means:
 - `run.py --workflow release` exited `0`, or a terminal blocker is documented with exact evidence.
 - The copied run spec or release report data proves that the evaluated implementation path is the target `models/autoports/<model>` directory.
 - No copied final report or run spec identifies the evaluated implementation as stock `models/tt_transformers`, `models/demos`, or another packaged implementation for the same HF model.
+- The copied run spec, server launch, and report data preserve the supported context from `doc/context_contract.json`.
 - Any failing release tests or API conformance rows were either fixed with `$autofix` and rerun, or explicitly classified as non-test readiness gaps with evidence.
 - Final release markdown is copied under `models/autoports/<model>/doc/tti_release/`.
 - `RUN_NOTES.md` records the exact physical host, repo tag, Docker image/version, command, env variables that mattered, reset/retry actions, copied artifacts, and residual readiness gaps.

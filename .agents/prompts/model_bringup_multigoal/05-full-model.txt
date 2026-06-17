@@ -7,6 +7,7 @@ This goal creates the full-model state for the repo-local TTNN autoport pipeline
 Goal completion requirements:
 - models/autoports/<model>/tt/model.py and tt/generator.py implement the full HF autoregressive path and standard Metal readiness generator contract.
 - The full model preserves the optimized multichip decoder strategy, dtype/fidelity/KV-cache/activation/CCL policy, paged-cache dtype split, rejection ledger, and inter-layer residual layout. Fallback to single-chip, replicated, host-side, or less optimized behavior is not acceptable.
+- The full model preserves the context contract for the full layer stack. Recompute full-stack weight plus KV-cache DRAM capacity, update doc/context_contract.json, and do not lower max context unless device DRAM evidence proves the largest feasible context is smaller than the HF-advertised value.
 - Generate a fresh AIME24 HF-tokenizer chat-template readiness reference with 100 generated tokens. Reuse is allowed only when current-autoport metadata proves the same HF model/revision, tokenizer, prompt source, chat-template flag, gen length, top-k, and command. Otherwise regenerate. Raw book references are supplemental only.
 - run_prefill_check and run_teacher_forcing report top-1/top-5/top-100 for prefill and decode. The expected bar is top-5 >= 98% and top-100 = 100%.
 - run_autoregressive produces HF and TT completions, and the outputs are read for coherence, repetition, wrong-language drift, and early divergence.
@@ -17,6 +18,7 @@ Goal completion requirements:
 - Runtime fallback audit covers model/generator paths, cache ownership, host-logit boundaries, sampling, and reset behavior.
 - models/autoports/<model>/doc/full_model/README.md and work_log.md record commands, top-k accuracy, qualitative verdict, perf, limitations, and exact artifacts.
 - Canonical split sampling is required for completion. If force-argmax, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampler op dominates token-out decode, fix the LM-head/sampling contract before completing the goal.
+- The generator supports an explicit host-sampling compatibility mode for tests that require host sampling, while the optimized measured token-out path remains on-device traced sampling.
 - A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
 
 Do not mark this goal complete while any completion requirement is unmet.

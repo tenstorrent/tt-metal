@@ -8,6 +8,7 @@ Goal completion requirements:
 - Optimized vLLM artifacts already exist under models/autoports/<model>/doc/optimized_vllm/.
 - The TTI release workflow evaluates the generated `models/autoports/<model>` implementation of HF_MODEL. Do not run stock `tt-transformers`, `models/demos`, or another packaged implementation. Such a report is invalid even if `run.py` exits 0.
 - The TTI model spec or equivalent release wiring points at `models/autoports/<model>` and the Docker/server path can import that autoport code.
+- The release spec, server launch, evals, and benchmarks preserve doc/context_contract.json. Do not cap context, LongBench, benchmark request length, or API limits to hide a model context bug. Only reject or adjust mathematically invalid requests whose prompt plus completion exceeds the real supported context, and record that as a harness issue.
 - Use the reservation container for `tt-smi` health/reset and the physical loudbox host for Docker. Use the checkout's own `run.py --help`, matching release tag/image, and required CLI spelling.
 - Run `run.py --workflow release --docker-server --no-auth` for the autoport spec, without printing tokens or copying secrets, caches, weights, Docker layers, persistent TT caches, or large raw eval dumps.
 - Recover ARC/ERISC/remote-Ethernet/reset failures before blocking; use $autofix for release test/spec/API/eval/benchmark harness failures, not pure infra failures.

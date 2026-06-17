@@ -28,9 +28,9 @@ ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # exhausted, no further stages are launched). Any other exit (including the
 # checker-internal-error convention of 3) is a broken check or misconfigured
 # environment: it is retried once for transients and then, by default, stops
-# the pipeline as a runner/infra failure - a silently disabled guardrail
-# would restore exactly the self-graded completion the gates exist to
-# prevent. Use --check-error-policy continue to override in an emergency.
+# the pipeline as a runner/infra failure. A silently disabled guardrail would
+# bypass the evidence gate. Use --check-error-policy continue to override in an
+# emergency.
 CHECK_PASS = 0
 CHECK_ADVISORY = 1
 CHECK_CRITICAL = 2

@@ -7,24 +7,13 @@ description: Independently review a TTNN model bringup stage before it is allowe
 
 ## Mission
 
-Prevent completion-biased stage closure. A stage review is an independent,
+Prevent unsupported stage closure. A stage review is an independent,
 inspection-first review of one bringup stage against the stage's actual goal
 contract and evidence. Hard checks are a floor, not proof of correctness.
 
 The reviewer is looking for anything that should be investigated or fixed in
 the spirit of bringing up a correct, fast, production-worthy model, even when
 the scripted checks pass.
-
-Every bringup goal that uses this skill should include this completion line:
-
-```text
-The stage is complete only after $stage-review in a fresh xhigh subagent gives
-the stage a clean pass.
-```
-
-Do not include a user-waiver escape hatch in autonomous bringup goals. If Mark
-wants to override a blocker, he will instruct the model directly outside the
-normal stage-completion contract.
 
 ## Required Inputs
 
@@ -94,6 +83,9 @@ Block the stage when evidence shows one of these:
 - logs or code show a plausible bug in a stage-critical subsystem, such as
   cache ownership, trace replay, token feedback, sampling, precision policy,
   page-table handling, or model output correctness;
+- the stage lowers context length, eval length, benchmark length, or advertised
+  `max_model_len` below the HF-advertised context without device-DRAM evidence
+  proving the largest feasible context;
 - the stage dismisses a material anomaly with prose instead of investigation.
 
 Do not block only because a stronger evidence format would be nice. If the goal
@@ -130,6 +122,9 @@ For generation or serving stages, also inspect:
   odd leading text, or degraded coherence;
 - sampling tests and skipped/xfailed cases, separating expected framework limits
   from correctness failures.
+- context-length evidence: `doc/context_contract.json`, served `max_model_len`,
+  eval/benchmark context settings, and any cap or truncation introduced by the
+  stage.
 
 For optimization stages, also inspect:
 

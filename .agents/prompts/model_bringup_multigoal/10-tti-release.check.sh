@@ -162,4 +162,8 @@ if [ "$autoport_check_status" -ne 0 ]; then
 fi
 printf '%s\n' "$autoport_check_output"
 
+python .agents/scripts/check_context_contract.py \
+  --model-dir "$model_dir" --hf-model "${HF_MODEL:-}" \
+  --stage tti-release --require-contract
+
 echo "TTI release evidence present under $release_dir ($report_count release report(s))."
