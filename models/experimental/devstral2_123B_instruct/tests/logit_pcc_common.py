@@ -2,7 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared helpers for full-model teacher-forced logit PCC (prefill + decode)."""
+"""Shared helpers for full-model logit PCC (chunked prefill + HF-greedy decode).
+
+Prefill uses golden corpus tokens (Tale of Two Cities). Decode follows the
+tt-transformers ``test_model.py`` pattern: compare raw logits, then advance both
+HF and TT with the **HF greedy** (temperature=0 argmax) token.
+"""
 
 from __future__ import annotations
 
@@ -80,7 +85,7 @@ def device_params(l1_small_size: int) -> dict:
 
 
 def sweep_timeout_seconds(prefill_lengths: list[int]) -> int:
-    """Budget HF load, chunked TT prefill, and teacher-forced decode logit PCC per point."""
+    """Budget HF load, chunked TT prefill, and HF-greedy decode logit PCC per point."""
     tt_model_setup_sec = 600
     hf_load_once_sec = 600
     hf_forward_sec_per_token = 0.072
@@ -223,6 +228,12 @@ def assert_logit_pcc(
     assert passing, f"{label}: PCC below {PCC_REQUIRED}: {msg}"
 
 
+def _hf_greedy_token_id(logits: torch.Tensor) -> int:
+    """Greedy next token from a logits row (temperature=0), matching ``sample_host(..., temperature=0)``."""
+    row = _logits_row_for_pcc(logits.float().cpu())
+    return int(row.argmax(dim=-1).item())
+
+
 @torch.no_grad()
 def hf_causal_lm_prefill_chunk(
     causal_lm,
@@ -270,7 +281,7 @@ def hf_teacher_forced_top5_reference(
     """Top-5 HF predictions at positions ``0 .. len(token_ids)-2`` (teacher-forced reference).
 
     Uses the same incremental ``DynamicCache`` + ``kv_block_size`` chunked prefill as
-    :func:`hf_prefill_and_decode_logits` (O(chunk) host memory, correct global positions).
+    logit PCC prefill (O(chunk) host memory, correct global positions).
     Returns ``[len(token_ids)-1, 5]`` int64 on CPU.
     """
     n = len(token_ids)
@@ -301,18 +312,17 @@ def hf_teacher_forced_top5_reference(
 
 
 @torch.no_grad()
-def hf_prefill_and_decode_logits(
+def hf_chunked_prefill_last_logits(
     causal_lm,
     token_ids: list[int],
     *,
     prefill_len: int,
     kv_block_size: int,
-) -> tuple[torch.Tensor, list[torch.Tensor], DynamicCache]:
-    """Chunked HF prefill + teacher-forced decode logits (O(chunk) CPU/host per prefill step)."""
+) -> tuple[torch.Tensor, DynamicCache]:
+    """Chunked HF prefill; return last-position logits and ``DynamicCache`` for decode."""
     input_device = resolve_hf_input_device(causal_lm)
-    need_len = prefill_len + DECODE_GENERATION_LENGTH
-    if len(token_ids) < need_len:
-        raise ValueError(f"token_ids length {len(token_ids)} < required {need_len}")
+    if len(token_ids) < prefill_len:
+        raise ValueError(f"token_ids length {len(token_ids)} < prefill_len {prefill_len}")
 
     cache = DynamicCache()
     prefill_last_logits: torch.Tensor | None = None
@@ -331,27 +341,33 @@ def hf_prefill_and_decode_logits(
             prefill_last_logits = logits[:, -1, :].cpu()
 
     assert prefill_last_logits is not None
-
-    decode_logits: list[torch.Tensor] = []
-    for step in range(DECODE_GENERATION_LENGTH):
-        pos = prefill_len + step
-        tok = torch.tensor([[token_ids[pos]]], dtype=torch.long, device=input_device)
-        out = causal_lm(tok, past_key_values=cache, use_cache=True)
-        decode_logits.append(out.logits[:, -1, :].cpu())
-
-    return prefill_last_logits, decode_logits, cache
+    return prefill_last_logits, cache
 
 
 @torch.no_grad()
-def tt_prefill_and_decode_logits(
+def hf_decode_step_logits(
+    causal_lm,
+    token_id: int,
+    *,
+    cache: DynamicCache,
+) -> torch.Tensor:
+    """Single HF decode forward; returns last-position logits ``[1, vocab]`` on CPU."""
+    input_device = resolve_hf_input_device(causal_lm)
+    tok = torch.tensor([[token_id]], dtype=torch.long, device=input_device)
+    out = causal_lm(tok, past_key_values=cache, use_cache=True)
+    return out.logits[:, -1, :].cpu()
+
+
+@torch.no_grad()
+def tt_chunked_prefill_last_logits(
     tt_model: TtMinistral3ForCausalLM,
     args: Devstral2Args,
     mesh_device,
     token_ids: list[int],
     *,
     prefill_len: int,
-) -> tuple[torch.Tensor, list[torch.Tensor]]:
-    """Chunked TT prefill + teacher-forced decode; return logits matching HF positions."""
+) -> torch.Tensor:
+    """Chunked TT prefill; return last-position logits ``[1, vocab]`` on host."""
     kv_block_size = args.kv_block_size
     vocab_size = args.vocab_size
     pad_id = args.pad_token_id if args.pad_token_id is not None else 0
@@ -386,26 +402,67 @@ def tt_prefill_and_decode_logits(
     prefill_logits_torch = _logits_to_torch(prefill_logits_tt, mesh_device, vocab_size)
     prefill_last = prefill_logits_torch[local_pos : local_pos + 1]
     prefill_logits_tt.deallocate(True)
+    ttnn.synchronize_device(mesh_device)
+    return prefill_last
 
-    decode_logits: list[torch.Tensor] = []
+
+@torch.no_grad()
+def tt_decode_step_logits(
+    tt_model: TtMinistral3ForCausalLM,
+    args: Devstral2Args,
+    mesh_device,
+    token_id: int,
+    *,
+    current_pos: int,
+    decode_tok_dev: ttnn.Tensor,
+) -> torch.Tensor:
+    """Single TT decode forward; returns last-position logits ``[1, vocab]`` on host."""
+    ttnn.copy_host_to_device_tensor(
+        _input_ids_host(torch.tensor([[token_id]], dtype=torch.long), mesh_device),
+        decode_tok_dev,
+    )
+    decode_pos_dev = _current_pos_to_tt(torch.tensor([current_pos], dtype=torch.long), mesh_device)
+    decode_logits_tt = tt_model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
+    decode_logits_torch = _logits_to_torch(decode_logits_tt, mesh_device, args.vocab_size)
+    decode_logits_tt.deallocate(True)
+    return decode_logits_torch[:1]
+
+
+@torch.no_grad()
+def run_hf_greedy_decode_logit_pcc(
+    causal_lm,
+    hf_cache: DynamicCache,
+    tt_model: TtMinistral3ForCausalLM,
+    args: Devstral2Args,
+    mesh_device,
+    *,
+    prefill_len: int,
+    first_input_token_id: int,
+) -> None:
+    """Compare HF vs TT logits for ``DECODE_GENERATION_LENGTH`` HF-greedy decode steps."""
     decode_tok_dev = _input_ids_to_tt(torch.zeros((1, 1), dtype=torch.long), mesh_device)
+    next_tok = first_input_token_id
     current_pos = prefill_len
 
     for step in range(DECODE_GENERATION_LENGTH):
-        ref_tok = token_ids[prefill_len + step]
-        ttnn.copy_host_to_device_tensor(
-            _input_ids_host(torch.tensor([[ref_tok]], dtype=torch.long), mesh_device),
-            decode_tok_dev,
+        ref_logits = hf_decode_step_logits(causal_lm, next_tok, cache=hf_cache)
+        tt_logits = tt_decode_step_logits(
+            tt_model,
+            args,
+            mesh_device,
+            next_tok,
+            current_pos=current_pos,
+            decode_tok_dev=decode_tok_dev,
         )
-        decode_pos_dev = _current_pos_to_tt(torch.tensor([current_pos], dtype=torch.long), mesh_device)
-        decode_logits_tt = tt_model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
-        decode_logits_torch = _logits_to_torch(decode_logits_tt, mesh_device, vocab_size)
-        decode_logits.append(decode_logits_torch[:1])
-        decode_logits_tt.deallocate(True)
+        assert_logit_pcc(
+            ref_logits,
+            tt_logits,
+            label=f"decode logits seq_len={prefill_len} step={step} pos={current_pos}",
+        )
+        next_tok = _hf_greedy_token_id(ref_logits)
         current_pos += 1
 
     ttnn.synchronize_device(mesh_device)
-    return prefill_last, decode_logits
 
 
 @torch.no_grad()
@@ -418,22 +475,22 @@ def run_logit_pcc_at_prefill_len(
     *,
     prefill_len: int,
 ) -> None:
-    """Teacher-forced logit PCC after prefill and for ``DECODE_GENERATION_LENGTH`` decode steps."""
-    total_tokens = prefill_len + DECODE_GENERATION_LENGTH
-    token_ids = build_token_sequence(tokenizer, total_tokens)
+    """Logit PCC: golden chunked prefill, then ``DECODE_GENERATION_LENGTH`` HF-greedy decode steps."""
+    token_ids = build_token_sequence(tokenizer, prefill_len)
 
     logger.info(
         f"Logit PCC: prefill_len={prefill_len}, decode_steps={DECODE_GENERATION_LENGTH}, "
-        f"chunk={args.kv_block_size}, pcc≥{PCC_REQUIRED}, layer_max_seq_len={args.max_seq_len}"
+        f"decode_teacher=HF_greedy, chunk={args.kv_block_size}, pcc≥{PCC_REQUIRED}, "
+        f"layer_max_seq_len={args.max_seq_len}"
     )
 
-    ref_prefill, ref_decode_steps, _ = hf_prefill_and_decode_logits(
+    ref_prefill, hf_cache = hf_chunked_prefill_last_logits(
         causal_lm,
         token_ids,
         prefill_len=prefill_len,
         kv_block_size=args.kv_block_size,
     )
-    tt_prefill, tt_decode_steps = tt_prefill_and_decode_logits(
+    tt_prefill = tt_chunked_prefill_last_logits(
         tt_model,
         args,
         mesh_device,
@@ -442,18 +499,20 @@ def run_logit_pcc_at_prefill_len(
     )
 
     assert_logit_pcc(ref_prefill, tt_prefill, label=f"prefill last logits seq_len={prefill_len}")
-    for step, (ref_logits, tt_logits) in enumerate(zip(ref_decode_steps, tt_decode_steps)):
-        pos = prefill_len + step
-        assert_logit_pcc(
-            ref_logits,
-            tt_logits,
-            label=f"decode logits seq_len={prefill_len} step={step} pos={pos}",
-        )
+    run_hf_greedy_decode_logit_pcc(
+        causal_lm,
+        hf_cache,
+        tt_model,
+        args,
+        mesh_device,
+        prefill_len=prefill_len,
+        first_input_token_id=_hf_greedy_token_id(ref_prefill),
+    )
 
 
 @torch.no_grad()
 def run_logit_pcc_sweep(mesh_device, prefill_lengths: list[int]) -> None:
-    """Run teacher-forced logit PCC for each prefill length (one HF + TT model build)."""
+    """Run logit PCC for each prefill length (one HF + TT model build; HF-greedy decode)."""
     model_max_seq_len = e2e_sweep_model_max_seq_len()
     logger.info(
         f"Logit PCC sweep: points={prefill_lengths}, model_max_seq_len={model_max_seq_len}, "
