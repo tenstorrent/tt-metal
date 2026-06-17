@@ -1172,10 +1172,16 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
 # from_legacy_cache / to_legacy_cache / key_cache / value_cache (per-layer KV now
 # lives at cache.layers[i].keys/.values). These helpers work on both 4.x and 5.x.
 def hf_cache_layer_kv(cache, layer_idx):
-    """Return (key, value) tensors for a layer of a transformers Cache."""
-    if hasattr(cache, "key_cache"):  # transformers < 5.x
+    """Return (key, value) tensors for a layer of a transformers Cache.
+
+    Handles the legacy tuple-of-tuples past_key_values, transformers <5 Cache
+    (key_cache/value_cache), and transformers >=5 Cache (layers[i].keys/.values).
+    """
+    if isinstance(cache, (tuple, list)):  # legacy tuple-of-tuples past_key_values
+        return cache[layer_idx][0], cache[layer_idx][1]
+    if hasattr(cache, "key_cache"):  # transformers < 5.x Cache
         return cache.key_cache[layer_idx], cache.value_cache[layer_idx]
-    layer = cache.layers[layer_idx]  # transformers >= 5.x
+    layer = cache.layers[layer_idx]  # transformers >= 5.x Cache
     return layer.keys, layer.values
 
 
