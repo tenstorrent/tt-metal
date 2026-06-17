@@ -102,8 +102,6 @@ public:
         return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, page_alignment, num_banks);
     }
 
-    TensorSpec with_memory_config(MemoryConfig memory_config) const;
-
     static constexpr auto attribute_names = std::forward_as_tuple("logical_shape", "tensor_layout");
     auto attribute_values() const { return std::forward_as_tuple(logical_shape_, tensor_layout_); }
 

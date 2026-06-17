@@ -720,7 +720,7 @@ def run_generation(
             return inputs
 
         def _fwd(device_inputs):
-            return model.ttnn_decode_forward(
+            out = model.ttnn_decode_forward(
                 x=device_inputs["tokens"],
                 current_pos=device_inputs["position"],
                 rot_mat_idxs=device_inputs["position_int32"],  # pos_int32 passed as rot_mat_idxs
@@ -729,6 +729,10 @@ def run_generation(
                 on_device_logits=on_device_sampling,
                 pli_combined=device_inputs.get("pli"),
             )
+            # ttnn_decode_forward returns a bare logits tensor on the on-device-sampling
+            # path (on_device_logits=True) and a (logits, None) tuple otherwise. Normalize
+            # to a 2-tuple so the trace-capture call sites below can always unpack two values.
+            return out if isinstance(out, tuple) else (out, None)
 
         def _inputs_to_device(inputs):
             return {k: ttnn.to_device(v, device=mesh_device) for k, v in inputs.items() if v is not None}

@@ -52,7 +52,12 @@ namespace tt::tt_metal {
 // it is the *unaligned* payload size, distinct from the pcie-aligned socket page size.
 // Larger packs more tensors per page but grows the per-socket DRISC L1 FIFO by
 // kSocketFifoPages × this.
-inline constexpr uint32_t kRequestPageBytes = 1024;
+//
+// Sized for fine-grained queueing (one matmul per request → one entry per page): a single
+// tensor needs header + one layout + one entry = 72 B, so 128 B holds one comfortably with
+// room for a few entries that share a layout. The per-socket L1 FIFO is held constant by
+// scaling kSocketFifoPages inversely (see dram_core_prefetcher_manager.hpp).
+inline constexpr uint32_t kRequestPageBytes = 128;
 
 // Number of per-DRAM-core CQ signal slots (one uint32 counter per command queue).
 // WaitForCqOnDramCorePrefetcher writes an incrementing value into slot[cq_id] via
