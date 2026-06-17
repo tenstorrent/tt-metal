@@ -70,7 +70,9 @@ SDMeshCommandQueue::SDMeshCommandQueue(
 }
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
-    TT_THROW("Trace not supported for slow dispatch");
+    // Slow dispatch never records traces, so no trace is ever in progress. Return nullopt
+    // ("not recording") rather than throwing, so callers can query trace state unconditionally
+    // (e.g. QueueDramCorePrefetcherRequest deciding capture-vs-send) under slow dispatch.
     return std::nullopt;
 }
 

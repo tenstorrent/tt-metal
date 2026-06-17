@@ -118,12 +118,15 @@ class TtPrefillTransformer(LightweightModule):
         is_chunked: bool = False,
         slot_num: int = 1,
         max_seq_len: Optional[int] = None,
+        kv_only_last_layer: bool = False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
         self.is_chunked = is_chunked
+        self.num_layers = num_layers
+        self.kv_only_last_layer = kv_only_last_layer
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -145,9 +148,11 @@ class TtPrefillTransformer(LightweightModule):
         )
 
         # --- Transformer layers ---
+        # When `kv_only_last_layer`, the last block is constructed with
+        # `kv_only=True`: only attn_norm + the KV branch of MLA are built.
         self.layers = []
-        for i in range(num_layers):
-            logger.info(f"Building layer {i}/{num_layers}...")
+        for i in range(self.num_layers):
+            is_last = i == self.num_layers - 1
             # Get layer weights or empty dict if loading from cache
             layer_state = state_dict["layers"][i] if state_dict.get("layers") else {}
             layer = TtPrefillBlock(
@@ -173,21 +178,36 @@ class TtPrefillTransformer(LightweightModule):
                 slot_num=slot_num,
                 layer_num=num_layers,
                 max_seq_len=max_seq_len,
+                kv_only=kv_only_last_layer and is_last,
             )
             self.layers.append(layer)
 
-        # --- Final norm ---
-        self.norm = TtDistributedRmsNorm(
-            mesh_device=mesh_device,
-            emb_dim=config.hidden_size,
-            torch_weight=state_dict.get("norm_weight"),  # None if cache exists
-            epsilon=config.rms_norm_eps,
-            cluster_axis=tp_axis,
-            num_links=num_links,
-            topology=topology,
-            weight_cache_path=weight_cache_path,
-            cache_name_prefix="norm",
-        )
+        # --- Final norm + LM Head ---
+        # Both are skipped when `kv_only_last_layer`: there is no output token
+        # to sample. Migration handles downstream signaling.
+        if not kv_only_last_layer:
+            self.norm = TtDistributedRmsNorm(
+                mesh_device=mesh_device,
+                emb_dim=config.hidden_size,
+                torch_weight=state_dict.get("norm_weight"),  # None if cache exists
+                epsilon=config.rms_norm_eps,
+                cluster_axis=tp_axis,
+                num_links=num_links,
+                topology=topology,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix="norm",
+            )
+            self.lm_head = TtLMHead(
+                mesh_device=mesh_device,
+                emb_dim=config.hidden_size,
+                vocab_size=config.vocab_size,
+                torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
+                num_links=num_links,
+                topology=topology,
+                is_balanced=is_balanced,
+                weight_cache_path=weight_cache_path,
+                is_column_parallel=lm_head_is_column_parallel,
+            )
 
         # --- RoPE (computed once, reused across all layers) ---
         self.rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
@@ -202,19 +222,6 @@ class TtPrefillTransformer(LightweightModule):
             )
             if is_chunked
             else None
-        )
-
-        # --- LM Head ---
-        self.lm_head = TtLMHead(
-            mesh_device=mesh_device,
-            emb_dim=config.hidden_size,
-            vocab_size=config.vocab_size,
-            torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
-            num_links=num_links,
-            topology=topology,
-            is_balanced=is_balanced,
-            weight_cache_path=weight_cache_path,
-            is_column_parallel=lm_head_is_column_parallel,
         )
 
         self.is_balanced = is_balanced
@@ -302,6 +309,11 @@ class TtPrefillTransformer(LightweightModule):
                 cache_user_id=cache_user_id,
             )
             signpost(f"forward_layer_{i}_end")
+            if self.kv_only_last_layer and i == len(self.layers) - 1:
+                # Last layer was kv-only — KV cache filled, migration callback
+                # fired, no hidden state flowing forward. Skip norm + lm_head +
+                # sample; no first_token to produce.
+                return None, None, intermediates
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
                 intermediates[f"layer_{i}"] = self._to_host(h)
