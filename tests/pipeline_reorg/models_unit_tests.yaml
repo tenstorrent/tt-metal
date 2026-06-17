@@ -271,7 +271,7 @@
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox:
-      timeout: 20
+      timeout: 30
       tier: 2
     bh_quietbox_2:
       timeout: 15
@@ -299,7 +299,7 @@
   model: gemma-4-31b
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 25
       tier: 2
     bh_quietbox_2:
       timeout: 15
