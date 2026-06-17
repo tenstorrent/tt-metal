@@ -5,6 +5,8 @@ import pytest
 import torch
 
 import ttnn
+from models.tt_dit.layers.audio_ops import _t_neighbor_pad
+from models.tt_dit.parallel.config import ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.tensor import bf16_tensor
 
@@ -25,6 +27,18 @@ def _run_ag_persistent(ccl, mesh, label):
     out = ccl.all_gather_persistent_buffer(t, dim=1, mesh_axis=1)
     ttnn.synchronize_device(mesh)
     print(f"[REPRO] all_gather(persistent) OK ({label}): {tuple(out.shape)}", flush=True)
+
+
+def _run_neighbor_pad(ccl, mesh, label, padding_mode="zeros"):
+    """Run the vocoder conv's actual CCL: a T-axis halo exchange (neighbor_pad_async) on a
+    T-sharded BTC tensor, via the same _t_neighbor_pad the vocoder uses. This — not all_gather —
+    is the op the E2E hangs on (manager.py:310, get_np_ping_pong_buffer, first neighbor_pad)."""
+    pcfg = ParallelFactor(factor=mesh.shape[1], mesh_axis=1)
+    t_total = 128
+    x = bf16_tensor(torch.randn(1, t_total, 256), device=mesh, mesh_axis=1, shard_dim=1, layout=ttnn.ROW_MAJOR_LAYOUT)
+    out = _t_neighbor_pad(x, pad_left=3, pad_right=0, parallel_config=pcfg, ccl_manager=ccl, padding_mode=padding_mode)
+    ttnn.synchronize_device(mesh)
+    print(f"[REPRO] neighbor_pad({padding_mode}) OK ({label}): {tuple(out.shape)}", flush=True)
 
 
 _PARAMS = [
@@ -196,3 +210,35 @@ def test_heavy_parent_then_child_persistent_cq0(mesh_device):
     ttnn.reset_cq_in_use(audio)
     ttnn.reset_cq_in_use(mesh)
     print("[REPRO] PASS: heavy parent + child persistent-buffer cq0 completed", flush=True)
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
+def test_heavy_parent_then_child_neighbor_pad_cq0(mesh_device):
+    """H7: heavy parent CCL (cq0), quiesce, then a child NEIGHBOR_PAD chain (cq0) — the actual op
+    the E2E hangs on (vocoder conv T-causal halo exchange, not all_gather).
+
+    The E2E traceback hangs at manager.py:310 (get_np_ping_pong_buffer) on the first neighbor_pad
+    of the overlapping child. H5/H6 (all_gather child) pass; if H7 hangs the failing primitive is
+    neighbor_pad_async on the overlapping child, isolated from the rest of the vocoder.
+    """
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(4, 8))
+    ccl = CCLManager(mesh, num_links=2, topology=ttnn.Topology.Ring)
+
+    HEAVY_REPS = 64
+    for i in range(HEAVY_REPS):
+        _run_ag(ccl, mesh, f"parent 4x8 cq0 heavy {i}")
+    print(f"[REPRO] parent heavy CCL volume done ({HEAVY_REPS} all_gathers)", flush=True)
+
+    audio = mesh.create_submesh(ttnn.MeshShape(1, 4))
+    audio_ccl = CCLManager(audio, num_links=2, topology=ttnn.Topology.Linear)
+    ttnn.synchronize_device(parent)
+
+    CHILD_OPS = 8
+    for i in range(CHILD_OPS):
+        mode = "replicate" if i % 2 == 0 else "zeros"
+        _run_neighbor_pad(audio_ccl, audio, f"child 1x4 cq0 npad {i}", padding_mode=mode)
+
+    ttnn.reset_cq_in_use(audio)
+    ttnn.reset_cq_in_use(mesh)
+    print("[REPRO] PASS: heavy parent + child neighbor_pad cq0 completed", flush=True)
