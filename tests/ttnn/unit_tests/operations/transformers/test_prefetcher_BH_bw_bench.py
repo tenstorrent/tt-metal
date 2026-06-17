@@ -440,12 +440,10 @@ def test_bw_dram_core_prefetcher_streaming(device, op_name, shape):
         )
     ttnn.end_trace_capture(device, bench_trace, cq_id=0)
 
-    aiclk_pre = device.get_clock_rate_mhz()
     t0 = time.perf_counter()
     ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
     elapsed = time.perf_counter() - t0
-    aiclk_post = device.get_clock_rate_mhz()
     ttnn.release_trace(device, bench_trace)
     ttnn.experimental.stop_dram_core_prefetcher(device)
 
@@ -456,13 +454,11 @@ def test_bw_dram_core_prefetcher_streaming(device, op_name, shape):
     bytes_total = bytes_per_recv * num_receivers
     bw_total = _gbps(bytes_total, elapsed)
     bw_per_recv = bw_total / num_receivers
-    bw_at_ref = bw_total * 1350.0 / max(aiclk_post, 1)
     logger.info(
         f"[dram_core_bw_stream][{op_name}] dual_senders={dual_senders} window_blocks={window_blocks} "
         f"trace_elapsed={elapsed * 1e3:.2f}ms bytes_per_recv={bytes_per_recv / 1e6:.1f}MB "
         f"total_bytes={bytes_total / 1e9:.2f}GB aggregate_bw={bw_total:.2f} GB/s "
-        f"per_recv_bw={bw_per_recv:.3f} GB/s aiclk_pre={aiclk_pre}MHz aiclk_post={aiclk_post}MHz "
-        f"bw@1.35GHz={bw_at_ref:.2f} GB/s"
+        f"per_recv_bw={bw_per_recv:.3f} GB/s"
     )
 
 
