@@ -110,7 +110,7 @@ jobs:
             SET+="${TARGET}.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
           done
           SET+="${TARGET}.tags=${TAG_NAME}"$'\n'
-          SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"$'\n'
+          SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
           SET+="${TARGET}.args.WHEEL_FILENAME=${WHEEL_FILENAME}"$'\n'
           SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
           {
