@@ -35,8 +35,15 @@ def test_submesh_cq1_repro(mesh_device):
     """Parent video (cq 0) + child audio submesh (cq 1) must not deadlock or throw at close.
 
     Models the LTX_AUDIO_SUBMESH=1x4 routing: the parent 4x8 keeps cq 0, the overlapping 1x4
-    audio child runs its CCL on cq 1. With distinct cqs the per-cq close guard (mesh_device.cpp)
-    must NOT throw in conftest teardown (the prior cq-0-shared case SIGABRT'd at process exit).
+    audio child runs its CCL on cq 1. cq routing alone is not enough — fabric/EDM connection
+    and event state are per physical chip, not per cq, so after the child runs CCL on cq 1 the
+    parent's next cq-0 CCL on the 4 shared chips deadlocks against the child's stale fabric
+    connection. ``synchronize_device`` only drains the submesh it is called on, so it does not
+    fix this. ``quiesce_devices`` on the common parent recursively drains every submesh's CQs
+    and resets in-use/event state across the shared chips — the intended cross-submesh barrier
+    between phases that touch overlapping submeshes — so the parent op can re-open fabric cleanly.
+    The same drain leaves the shared cq idle, so the per-cq close guard (mesh_device.cpp) also
+    does not throw at conftest teardown.
     """
     parent = mesh_device
     mesh = parent.create_submesh(ttnn.MeshShape(4, 8))
@@ -50,6 +57,10 @@ def test_submesh_cq1_repro(mesh_device):
         audio = mesh.create_submesh(ttnn.MeshShape(1, 4))
         audio_ccl = CCLManager(audio, num_links=2, topology=ttnn.Topology.Linear)
         _run_ag(audio_ccl, audio, "child cq1")
+
+    # Cross-submesh barrier on the common parent before returning to cq 0 on the shared chips.
+    parent.quiesce_devices()
+    print("[REPRO] quiesce_devices() returned", flush=True)
 
     # Parent again on cq 0 after the child ran on cq 1.
     _run_ag(ccl, mesh, "parent cq0, after audio submesh")
