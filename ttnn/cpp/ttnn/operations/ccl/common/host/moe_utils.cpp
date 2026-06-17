@@ -32,6 +32,23 @@ uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const 
     TT_THROW("Device not found in device_index");
     return std::numeric_limits<uint32_t>::max();
 }
+
+void validate_mesh_shape(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
+    const auto& mgd_shape = physical_mesh_shapes.begin()->second;
+    const auto& mesh_shape = mesh_device.shape();
+    for (size_t i = 0; i < std::min(mesh_shape.dims(), mgd_shape.dims()); ++i) {
+        if (mesh_shape[i] > mgd_shape[i]) {
+            log_warning(
+                tt::LogOp,
+                "mesh_device shape {} is not a subset of the MGD (mesh graph descriptor) device_topology "
+                "shape {} (dim {} exceeds it), CCL op is not guaranteed to function correctly.",
+                mesh_shape,
+                mgd_shape,
+                i);
+        }
+    }
+}
 }  // namespace detail
 
 std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
@@ -104,6 +121,8 @@ uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const
 
 // TODO: once #27196 is fixed we can remove the is_mesh_mmio_capable check
 size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis) {
+    detail::validate_mesh_shape(mesh_device);
+
     auto mesh_range = tt::tt_metal::distributed::MeshCoordinateRange(mesh_device.shape());
     auto mesh_range_set = tt::tt_metal::distributed::MeshCoordinateRangeSet(mesh_range);
     const auto& mesh_view = mesh_device.get_view();

@@ -1697,7 +1697,7 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     return worker_slice_shapes;
 }
 
-void validate_fabric_2d_dynamic_config(MeshDevice* mesh_device) {
+void validate_fabric_2d_dynamic_config() {
     auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
     TT_FATAL(
         physical_mesh_shapes.size() == 1,
@@ -1707,22 +1707,6 @@ void validate_fabric_2d_dynamic_config(MeshDevice* mesh_device) {
     TT_FATAL(
         physical_mesh_shape.dims() == 2,
         "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
-    // The 2D CCL line multicast routing assumes all targets along a cluster axis lie in a single
-    // physical direction. When the mesh shape exceeds the MGD device_topology in any dimension,
-    // get_line_coordinates creates a path that turns corners in the physical grid, and the 2D
-    // ERISC rectangular multicast can't follow the resulting L-shaped/S-shaped path — causing
-    // semaphore signals to not reach all downstream devices and a hang.
-    auto mesh_shape = mesh_device->shape();
-    for (size_t i = 0; i < std::min(mesh_shape.dims(), physical_mesh_shape.dims()); ++i) {
-        TT_FATAL(
-            mesh_shape[i] <= physical_mesh_shape[i],
-            "FABRIC_2D CCLs require mesh_device shape {} to be a subset of the MGD (mesh graph descriptor) "
-            "device_topology shape {}. Shape dim {} violates this. "
-            "To resolve this, either edit the mesh_device shape or the MGD shape or use FABRIC_1D.",
-            mesh_shape,
-            physical_mesh_shape,
-            i);
-    }
 }
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
@@ -1765,7 +1749,7 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
-        validate_fabric_2d_dynamic_config(mesh_device);
+        validate_fabric_2d_dynamic_config();
         if (forward_device_coord) {
             auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             forward_args[0] = *forward_device_fabric_node_id.mesh_id;
@@ -1826,7 +1810,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
     if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
-        validate_fabric_2d_dynamic_config(mesh_device);
+        validate_fabric_2d_dynamic_config();
         auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
         auto set_mcast_args = [&src_fabric_node_id](
                                   std::array<uint32_t, 6>& args,
