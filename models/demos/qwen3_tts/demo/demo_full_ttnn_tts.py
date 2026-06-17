@@ -20,8 +20,7 @@ Usage:
         --output /tmp/ttnn_tts_output.wav \\
         --seed 42
 
-    Trace + KV cache + 2CQ are ON by default. Use --no-trace / --no-kv-cache /
-    --no-2cq to disable.
+    Trace + KV cache + 2CQ are always on.
 """
 
 import argparse
@@ -72,9 +71,6 @@ def run_full_ttnn_tts(
     language: str = "english",
     greedy: bool = False,
     repetition_penalty: float = 1.0,
-    use_kv_cache: bool = True,
-    use_trace: bool = True,
-    use_2cq: bool = True,
     seed: Optional[int] = None,
     ref_cache: str = None,
     trim_frames: int = 4,
@@ -89,7 +85,7 @@ def run_full_ttnn_tts(
     print(f"Reference: {ref_audio}")
     print(f"Max tokens: {max_new_tokens}")
     print(f"Decoding: {'greedy' if greedy else f'sampling (temp=0.9, top_k=50, rep_penalty={repetition_penalty})'}")
-    print(f"KV cache: {'enabled' if use_kv_cache else 'disabled'}")
+    print(f"KV cache: enabled")
     if seed is not None:
         print(f"RNG seed: {seed} (torch.manual_seed before codec generation)")
     else:
@@ -110,7 +106,7 @@ def run_full_ttnn_tts(
 
     # Open device with explicit trace region.
     print(f"\nOpening TT device {device_id}...")
-    _ncq = 2 if use_2cq else 1
+    _ncq = 2
     device = ttnn.open_device(
         device_id=device_id,
         l1_small_size=32768,
@@ -219,9 +215,6 @@ def run_full_ttnn_tts(
             tts_pad_embed=tts_pad_embed,
             code_pred_embeds=code_pred_embeds,
             config=config,
-            use_kv_cache=use_kv_cache,
-            use_trace=use_trace,
-            use_2cq=use_2cq,
             streaming_decoder=streaming_decoder,
         )
         timings["generation"] = time.time() - gen_start
@@ -281,7 +274,7 @@ def run_full_ttnn_tts(
         print(f"{'Decode audio':<30} {timings['decode']*1000:>10.1f}   Reference (Speech Tok Dec)")
         print("-" * 70)
         print(f"{'Inference time (no compile)':<30} {inference_time*1000:>10.1f}   speaker+ICL+prefill+decode")
-        print(f"{'2 CQ (H2D / trace overlap)':<30} {('yes' if use_2cq else 'no'):>10}   device queues")
+        print(f"{'2 CQ (H2D / trace overlap)':<30} {'yes':>10}   device queues")
         if timings.get("avg_decode_ms", 0) > 0:
             print(f"{'Avg decode (all steps)':<30} {timings['avg_decode_ms']:>10.1f}   ms/frame (fair vs other runs)")
         if timings.get("steady_avg_decode_ms", 0) > 0:
@@ -380,15 +373,6 @@ def main():
         default=4,
         help="Codec frames to trim from start (removes reference echo, default: 4)",
     )
-    parser.add_argument("--no-kv-cache", action="store_true", help="Disable KV cache (slower)")
-    parser.add_argument("--no-trace", action="store_true", help="Disable trace (use non-traced KV cache decode)")
-    parser.add_argument(
-        "--no-2cq",
-        dest="use_2cq",
-        action="store_false",
-        default=True,
-        help="Disable two command queues (default ON: H2D on CQ1 overlapped with trace on CQ0)",
-    )
     parser.add_argument(
         "--seed",
         type=int,
@@ -422,9 +406,6 @@ def main():
         language=args.language,
         greedy=args.greedy,
         repetition_penalty=args.repetition_penalty,
-        use_kv_cache=not args.no_kv_cache,
-        use_trace=not args.no_trace,
-        use_2cq=args.use_2cq,
         seed=args.seed,
         ref_cache=args.ref_cache,
         trim_frames=args.trim_frames,

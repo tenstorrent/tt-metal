@@ -101,7 +101,6 @@ def _read_device_token(token_tt: Any, index: int = 0) -> int:
 def ar_decode_loop(
     state: DecodeLoopState,
     config: Any,
-    use_2cq: bool,
     *,
     streaming_decoder: Optional[Any] = None,
     sample_token_fn: Any,
@@ -118,8 +117,8 @@ def ar_decode_loop(
     ``None`` if no frames generated).
     """
     device = state.device
-    h2d_cq = 1 if use_2cq else 0
-    trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
+    h2d_cq = 1
+    trace_cq0_idle = ttnn.record_event(device, 0)
     cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
 
     _device_cp_sampling = False  # batch=1 regression, kept disabled.
@@ -161,10 +160,7 @@ def ar_decode_loop(
     tts_pad_embed = state.tts_pad_embed
 
     for step in range(config.max_new_tokens):
-        if use_2cq:
-            ttnn.wait_for_event(1, trace_cq0_idle)
-        else:
-            ttnn.synchronize_device(device)
+        ttnn.wait_for_event(1, trace_cq0_idle)
         t_step_start = time.time()
         _step_pc = time.perf_counter()
 
@@ -189,14 +185,10 @@ def ar_decode_loop(
         cp_prefill_embed_cpu.copy_(cp_input.bfloat16())
         pfembed_host = ttnn.from_torch(cp_prefill_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         ttnn.copy_host_to_device_tensor(pfembed_host, state.cp_trace_prefill_embed_tt, cq_id=h2d_cq)
-        if use_2cq:
-            write_ev = ttnn.record_event(device, 1)
-            ttnn.wait_for_event(0, write_ev)
+        write_ev = ttnn.record_event(device, 1)
+        ttnn.wait_for_event(0, write_ev)
         ttnn.execute_trace(device, state.cp_prefill_trace_id, cq_id=0, blocking=False)
-        if use_2cq:
-            trace_cq0_idle = ttnn.record_event(device, 0)
-        else:
-            ttnn.synchronize_device(device)
+        trace_cq0_idle = ttnn.record_event(device, 0)
 
         _prefill_sp: dict = {}
         if config.greedy and state.cp_prefill_token_tt is not None:
@@ -221,7 +213,7 @@ def ar_decode_loop(
         _decode_sp_agg = {"device_logits": 0.0, "cpu_sample": 0.0}
         _cp_decode_count = config.num_code_groups - 2
         for _trace_i, code_idx in enumerate(range(2, 2 + _cp_decode_count)):
-            _buf_i = (_trace_i % 2) if use_2cq else 0
+            _buf_i = _trace_i % 2
 
             # H2D embed for this iteration's input.
             prev_embed_idx = code_idx - 2
@@ -234,16 +226,13 @@ def ar_decode_loop(
 
             cp_decode_embed_cpu.copy_(next_embed)
             e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            if use_2cq:
-                ttnn.wait_for_event(1, cp_decode_input_ready[_buf_i])
+            ttnn.wait_for_event(1, cp_decode_input_ready[_buf_i])
             ttnn.copy_host_to_device_tensor(e_h, state.cp_trace_decode_embed_tts[_buf_i], cq_id=h2d_cq)
-            if use_2cq:
-                write_ev = ttnn.record_event(device, 1)
-                ttnn.wait_for_event(0, write_ev)
+            write_ev = ttnn.record_event(device, 1)
+            ttnn.wait_for_event(0, write_ev)
             ttnn.execute_trace(device, state.cp_decode_trace_ids[_buf_i][_trace_i], cq_id=0, blocking=False)
-            if use_2cq:
-                cp_decode_input_ready[_buf_i] = ttnn.record_event(device, 0)
-                trace_cq0_idle = cp_decode_input_ready[_buf_i]
+            cp_decode_input_ready[_buf_i] = ttnn.record_event(device, 0)
+            trace_cq0_idle = cp_decode_input_ready[_buf_i]
 
             _dsp: dict = {}
             if (config.greedy or _device_cp_sampling) and state.cp_decode_token_tts is not None:
@@ -265,8 +254,6 @@ def ar_decode_loop(
         all_codes.append(code_row)
         if streaming_decoder is not None:
             streaming_decoder.add_tokens(torch.tensor(code_row, dtype=torch.long))
-        if not use_2cq:
-            ttnn.synchronize_device(device)
         t_cp_end = time.time()
         _t_after_cp_decode = time.perf_counter()
 
@@ -300,23 +287,18 @@ def ar_decode_loop(
 
         talker_embed_cpu.copy_(next_embed.bfloat16())
         embed_host = ttnn.from_torch(talker_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        if use_2cq:
-            ttnn.wait_for_event(1, trace_cq0_idle)
+        ttnn.wait_for_event(1, trace_cq0_idle)
         ttnn.copy_host_to_device_tensor(embed_host, state.trace_embed_tt, cq_id=h2d_cq)
         ttnn.copy_host_to_device_tensor(cos_host, state.trace_cos_tt, cq_id=h2d_cq)
         ttnn.copy_host_to_device_tensor(sin_host, state.trace_sin_tt, cq_id=h2d_cq)
         ttnn.copy_host_to_device_tensor(cur_pos_host, state.trace_cur_pos_tt, cq_id=h2d_cq)
         ttnn.copy_host_to_device_tensor(mask_host, state.trace_mask_tt, cq_id=h2d_cq)
-        if use_2cq:
-            write_ev = ttnn.record_event(device, 1)
-            ttnn.wait_for_event(0, write_ev)
+        write_ev = ttnn.record_event(device, 1)
+        ttnn.wait_for_event(0, write_ev)
         ttnn.execute_trace(device, state.talker_decode_trace_id, cq_id=0, blocking=False)
         talker_hidden_tt = state.trace_hidden_out
         talker_pos += 1
-        if use_2cq:
-            trace_cq0_idle = ttnn.record_event(device, 0)
-        else:
-            ttnn.synchronize_device(device)
+        trace_cq0_idle = ttnn.record_event(device, 0)
         t_talker_end = time.time()
         state.talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
         state.cp_times_ms.append((t_cp_end - t_step_start) * 1000)
@@ -367,8 +349,6 @@ def ar_decode_loop(
             print(f"  EOS at step {step + 1}")
             break
 
-        if not use_2cq:
-            ttnn.synchronize_device(device)
         t_step_end = time.time()
         step_ms = (t_step_end - t_step_start) * 1000
         if step == 0:

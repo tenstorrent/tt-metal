@@ -832,9 +832,6 @@ def generate_codes_ttnn(
     tts_pad_embed: torch.Tensor,
     code_pred_embeds: list,
     config: TTSConfig,
-    use_kv_cache: bool = True,
-    use_trace: bool = True,
-    use_2cq: bool = False,
     streaming_decoder=None,
 ) -> Union[Tuple[torch.Tensor, dict], Tuple[None, dict]]:
     """
@@ -857,25 +854,15 @@ def generate_codes_ttnn(
         tts_pad_embed: Padding embedding
         code_pred_embeds: List of CodePredictor embedding weights (for codes 1-15)
         config: TTS configuration
-        use_kv_cache: Whether to use KV cache optimization (default True)
-        use_trace: Whether to use trace (default True)
-        use_2cq: If True, issue H2D copies on CQ1 and overlap with trace on CQ0 (requires
-            device opened with num_command_queues=2; see tech_reports/AdvancedPerformanceOptimizationsForModels).
-
     Returns:
         (codes, compile_timings): codes are [seq_len, 16] or None. compile_timings holds
         warmup, trace_capture, avg_decode_ms, steady_avg_decode_ms, steady_frames_per_sec,
-        num_generated_frames, and use_2cq.
+        and num_generated_frames.
     """
     from models.demos.qwen3_tts.tt.rope import compute_rope_frequencies, get_rope_tensors, get_transformation_mat
 
-    mode_str = "with KV cache" if use_kv_cache else "without KV cache"
-    print(f"\nGenerating codes with TTNN ({mode_str})...")
-    if use_2cq and not use_trace:
-        print("  Note: 2 CQ mode requires trace; ignoring --use-2cq")
-        use_2cq = False
-    if use_2cq:
-        print("2 CQ: H2D on CQ1, traces on CQ0 (AdvancedPerformanceOptimizationsForModels §2.3.2)")
+    print(f"\nGenerating codes with TTNN (with KV cache)...")
+    print("2 CQ: H2D on CQ1, traces on CQ0 (AdvancedPerformanceOptimizationsForModels §2.3.2)")
 
     # Get transformation matrices
     talker_trans_mat = get_transformation_mat(model.talker_config.head_dim, device)
@@ -1119,7 +1106,7 @@ def generate_codes_ttnn(
     # k=freshly projected (sliced, width=bucket) + fused SDPA (is_causal=True).
     # Numerics identical to non-traced run. Cache write goes through fill_cache
     # (constant batch_idx=0 → trace-safe).
-    TRACE_PREFILL_BUCKETS = globals().get("TRACE_PREFILL_BUCKETS_OVERRIDE", [32, 64, 128])
+    TRACE_PREFILL_BUCKETS = [32, 64, 128]
     talker_prefill_traces = {}
     print(f"  Capturing Talker prefill traces for buckets {TRACE_PREFILL_BUCKETS}...")
     for _bucket in TRACE_PREFILL_BUCKETS:
@@ -1254,7 +1241,6 @@ def generate_codes_ttnn(
             "steady_avg_decode_ms": 0.0,
             "steady_frames_per_sec": 0.0,
             "num_generated_frames": 0,
-            "use_2cq": use_2cq,
         }
 
     talker_pos = real_seq_len
@@ -1516,16 +1502,13 @@ def generate_codes_ttnn(
     print(f"  Captured {len(cp_decode_trace_ids[0])} CP decode traces x2 buffers.")
     t_trace_end = time.time()
     print("  All traces captured. Starting measured inference...")
-    print(f"  Device CQ mode: {'2 (H2D on CQ1, traces on CQ0)' if use_2cq else '1 (H2D and traces share CQ0)'}")
+    print(f"  Device CQ mode: 2 (H2D on CQ1, traces on CQ0)")
 
     # === STEP 6: Measured inference (generation loop only; prefill already ran in STEP 4) ===
     decode_step_times = []
     talker_times_ms = []
     cp_times_ms = []
     t_first_decode_end = 0.0
-    trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
-    h2d_cq = 1 if use_2cq else 0
-    cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
 
     # Preallocated host buffers (generation hot loop): avoids per-step torch/tensor churn.
     token_id_buf = torch.zeros((1, 1), dtype=torch.long)
@@ -1608,7 +1591,6 @@ def generate_codes_ttnn(
         codes_tensor, frame_breakdown_avg_ms_helper, t_first_decode_end, _t_last = ar_decode_loop(
             loop_state,
             config,
-            use_2cq,
             streaming_decoder=streaming_decoder,
             sample_token_fn=sample_token,
             sample_from_tt_vocab_logits_fn=sample_from_tt_vocab_logits,
@@ -1655,7 +1637,6 @@ def generate_codes_ttnn(
             "steady_avg_decode_ms": 0.0,
             "steady_frames_per_sec": 0.0,
             "num_generated_frames": 0,
-            "use_2cq": use_2cq,
             "frame_breakdown_avg_ms": {},
         }
 
@@ -1726,7 +1707,6 @@ def generate_codes_ttnn(
         "steady_avg_decode_ms": steady_avg_decode_ms,
         "steady_frames_per_sec": tokens_per_sec,
         "num_generated_frames": len(all_codes),
-        "use_2cq": use_2cq,
         "frame_breakdown_avg_ms": frame_breakdown_avg_ms,
         "frame_breakdown_frames": frame_breakdown_frames,
     }
@@ -2426,7 +2406,6 @@ def run_inference(
     trailing_text_hidden: torch.Tensor,
     tts_pad_embed: torch.Tensor,
     config: TTSConfig,
-    use_2cq: bool = False,
 ) -> tuple:
     """
     Run TTS inference using server context.
@@ -2436,9 +2415,6 @@ def run_inference(
     - Zero CP trace capture (pre-captured in ctx)
     - One Talker KV alloc + standard prefill + Talker trace capture per request
     - Fast decode loop (all traces executed)
-
-    use_2cq:
-        If True, device must be opened with num_command_queues=2; overlaps H2D (CQ1) with trace exec (CQ0).
 
     Returns:
         (codes, timings, perf_text)
@@ -2548,9 +2524,6 @@ def run_inference(
         decode_step_times = []
         talker_times_ms = []
         cp_times_ms = []
-        trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
-        h2d_cq = 1 if use_2cq else 0
-        cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
 
         _th = model.talker_config.hidden_size
         token_id_buf = torch.zeros((1, 1), dtype=torch.long)
@@ -2611,7 +2584,6 @@ def run_inference(
         codes_tensor, _frame_breakdown, _t_first, _t_last = ar_decode_loop(
             loop_state,
             config,
-            use_2cq,
             sample_token_fn=sample_token,
             sample_from_tt_vocab_logits_fn=sample_from_tt_vocab_logits,
         )
