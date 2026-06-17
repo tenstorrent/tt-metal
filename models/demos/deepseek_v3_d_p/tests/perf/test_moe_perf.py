@@ -65,7 +65,7 @@ def test_deepseek_v3_moe_perf_galaxy():
     margin = adjust_margin_for_ddr_speed(0.03)
 
     run_model_device_perf_test_with_merge(
-        command=_CMD_8X4,
+        command=_CMD_8X4_pad0,
         expected_device_perf_ns_per_iteration=41_294_210,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
