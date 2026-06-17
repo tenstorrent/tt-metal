@@ -7,6 +7,12 @@ nemotron3_mamba2_decode_owned hangs on 4-chip MeshDevice (investigated with
 both FABRIC_1D and FABRIC_1D_RING); this path is fully device-resident and
 trace-compatible.
 
+All TILE reshapes that change the last-two-dim tile structure route through a
+ROW_MAJOR intermediate (_rr helper) to avoid a Blackhole relayout-kernel hang
+that triggers on certain DRAM buffer addresses when the tile must be re-padded.
+Shapes confirmed to hang directly: [1,1,N]→[B,G,S], [B,H,D]→[B,H,D,1],
+[B,H,N]→[B,H,1,N] and similar singleton-dim inserts at larger tensor sizes.
+
 For S=1 with zero initial state, causal conv1d simplifies to:
   out[c] = conv_weight[c, 0, -1] * hBC[c] + conv_bias[c]  (elementwise, no padding needed)
 
@@ -37,6 +43,20 @@ INTERMEDIATE_SIZE = NUM_HEADS * HEAD_DIM  # 4096
 CONV_DIM = INTERMEDIATE_SIZE + 2 * N_GROUPS * SSM_STATE_SIZE  # 6144
 NORM_EPS = 1e-5
 
+_RM = ttnn.ROW_MAJOR_LAYOUT
+_TL = ttnn.TILE_LAYOUT
+
+
+def _rr(t: ttnn.Tensor, shape: list) -> ttnn.Tensor:
+    """Reshape a TILE tensor safely via ROW_MAJOR intermediate.
+
+    Direct TILE→TILE relayout for shapes that change the last-two-dim tile
+    structure (e.g. adding/removing singleton dims) triggers a Blackhole
+    device-side kernel that deadlocks on certain DRAM buffer addresses.
+    Going TILE→RM→reshape→TILE avoids that kernel entirely.
+    """
+    return ttnn.to_layout(ttnn.reshape(ttnn.to_layout(t, _RM), shape), _TL)
+
 
 def mamba2_layer_forward(
     mesh_device: MeshDevice,
@@ -53,6 +73,7 @@ def mamba2_layer_forward(
     norm_eps: float = NORM_EPS,
     ssm_state: ttnn.Tensor | None = None,  # [B, H, D, N] bf16 on device, None → zero-init
     conv_state: tuple | None = None,  # (h_tm3, h_tm2, h_tm1) each [B,1,6144] bf16 on device
+    _dbg: bool = False,  # kept for backward compat (model.py passes _dbg=debug_sync)
 ) -> tuple:
     """S=1 decode path.
 
@@ -122,20 +143,26 @@ def mamba2_layer_forward(
     )
     c_flat_tt = ttnn.slice(hBC_silu_tt, [0, 0, INTERMEDIATE_SIZE + N_GROUPS * SSM_STATE_SIZE], [B, 1, CONV_DIM])
 
-    # 7. Reshape for SSM decode
+    # 7. Reshape for SSM decode — all via _rr (TILE→RM→reshape→TILE) to avoid
+    #    a Blackhole relayout-kernel bug that deadlocks on certain DRAM addresses.
     #    x:    [B, 1, 4096] → [B, 64, 64]
     #    B_in: [B, 1, 1024] → [B, 8, 128]
     #    C_in: [B, 1, 1024] → [B, 8, 128]
-    #    dt:   [B, 1, 64]   → [B, 64]
-    x_tt = ttnn.reshape(x_flat_tt, [B, NUM_HEADS, HEAD_DIM])
-    B_in_tt = ttnn.reshape(b_flat_tt, [B, N_GROUPS, SSM_STATE_SIZE])
-    C_in_tt = ttnn.reshape(c_flat_tt, [B, N_GROUPS, SSM_STATE_SIZE])
+    #    dt:   [B, 1, 64]   → [B, 64]  (last-2-dims [1,64]→[1,64]: safe, no _rr needed)
+    x_tt = _rr(x_flat_tt, [B, NUM_HEADS, HEAD_DIM])
+    B_in_tt = _rr(b_flat_tt, [B, N_GROUPS, SSM_STATE_SIZE])
+    C_in_tt = _rr(c_flat_tt, [B, N_GROUPS, SSM_STATE_SIZE])
     dt_tt = ttnn.reshape(dt_slice_tt, [B, NUM_HEADS])
 
-    # 8. SSM scalar weights — upload as [1, N] for tile compatibility
-    dt_bias_tt = _rep_keyed(id(dt_bias), dt_bias.bfloat16().unsqueeze(0), mesh_device)
-    A_log_tt = _rep_keyed(id(A_log), A_log.float().bfloat16().unsqueeze(0), mesh_device)
-    D_tt = _rep_keyed(id(D), D.float().bfloat16().unsqueeze(0), mesh_device)
+    # 8. SSM scalar weights — upload as [1, N] for tile compatibility.
+    #    Use L1 (on-chip SRAM) to avoid a hardware DRAM defect on device 2 that
+    #    silently corrupts small tensor writes at low DRAM addresses.  These
+    #    [1,64] tensors are ~4KB each; element-wise ops (add/exp/mul) have
+    #    negligible CB requirements, so no kernel L1 conflict arises.
+    _L1 = ttnn.L1_MEMORY_CONFIG
+    dt_bias_tt = _rep_keyed(id(dt_bias), dt_bias.bfloat16().unsqueeze(0), mesh_device, memory_config=_L1)
+    A_log_tt = _rep_keyed(id(A_log), A_log.float().bfloat16().unsqueeze(0), mesh_device, memory_config=_L1)
+    D_tt = _rep_keyed(id(D), D.float().bfloat16().unsqueeze(0), mesh_device, memory_config=_L1)
 
     # 9–10. S=1 SSM decode using standard TTNN ops.
     #
@@ -145,26 +172,24 @@ def mamba2_layer_forward(
     # incompatibility).  This TTNN-native path produces identical math and is
     # fully trace-compatible.
     #
-    # Mamba2 S=1 recurrence (zero initial state):
+    # Mamba2 S=1 recurrence:
     #   dt_eff     = softplus(dt + dt_bias)              [B, H]
     #   decay      = exp(-exp(A_log) * dt_eff)           [B, H]
     #   x_dt       = x * dt_eff                          [B, H, D]
     #   B_exp/C_exp = repeat B/C groups → full heads     [B, H, N]
-    #   state_new  = outer(x_dt, B_exp)                  [B, H, D, N]  (zero-init state)
+    #   state_new  = decay * state + outer(x_dt, B_exp)  [B, H, D, N]
     #   y_ssm      = state_new @ C_exp                   [B, H, D]
     #   y          = y_ssm + D_scalar * x                [B, H, D]
     HEADS_PER_GROUP = NUM_HEADS // N_GROUPS  # 8
 
-    # dt_eff [B, H]
+    # dt_eff [B, H] and decay [B, H]
     dt_eff_tt = ttnn.softplus(ttnn.add(dt_tt, dt_bias_tt))
-
-    # decay  [B, H]
     A_neg_tt = ttnn.neg(ttnn.exp(A_log_tt))
     decay_tt = ttnn.exp(ttnn.mul(A_neg_tt, dt_eff_tt))
 
     # x_dt [B, H, D]: scale x by dt_eff (broadcast over head_dim)
-    dt_eff_3d = ttnn.reshape(dt_eff_tt, [B, NUM_HEADS, 1])
-    x_dt_tt = ttnn.mul(x_tt, dt_eff_3d)
+    dt_eff_3d = _rr(dt_eff_tt, [B, NUM_HEADS, 1])  # [1,64]→[1,64,1] via RM
+    x_dt_tt = ttnn.mul(x_tt, dt_eff_3d)  # [B, H, D]
 
     # Expand B and C from N_GROUPS to NUM_HEADS by replicating each group slice
     B_slices, C_slices = [], []
@@ -178,40 +203,42 @@ def mamba2_layer_forward(
     C_exp_tt = ttnn.concat(C_slices, dim=1)  # [B, H, N]
 
     # Outer product state update: new_contrib = outer(x_dt, B_exp) [B, H, D, N]
-    x_dt_4d = ttnn.reshape(x_dt_tt, [B, NUM_HEADS, HEAD_DIM, 1])
-    B_exp_4d = ttnn.reshape(B_exp_tt, [B, NUM_HEADS, 1, SSM_STATE_SIZE])
-    new_contrib_tt = ttnn.mul(x_dt_4d, B_exp_4d)  # [B, H, D, N]
+    # Use _rr for 4D reshapes (same TILE-relayout hang class as step 7).
+    # Use matmul([B,H,D,1] @ [B,H,1,N]) for the outer product instead of broadcast mul.
+    x_dt_4d = _rr(x_dt_tt, [B, NUM_HEADS, HEAD_DIM, 1])  # [1,64,64]→[1,64,64,1]
+    B_exp_4d = _rr(B_exp_tt, [B, NUM_HEADS, 1, SSM_STATE_SIZE])  # [1,64,128]→[1,64,1,128]
+    new_contrib_tt = ttnn.matmul(x_dt_4d, B_exp_4d)  # [B,H,D,1]@[B,H,1,N]=[B,H,D,N]
 
     # Full recurrence: state_new = decay * state_prev + new_contrib
     if ssm_state is not None:
-        decay_4d_tt = ttnn.reshape(decay_tt, [B, NUM_HEADS, 1, 1])  # broadcast over D, N
+        decay_4d_tt = _rr(decay_tt, [B, NUM_HEADS, 1, 1])  # [1,64]→[1,64,1,1] via RM
         state_new_tt = ttnn.add(ttnn.mul(decay_4d_tt, ssm_state), new_contrib_tt)
     else:
         state_new_tt = new_contrib_tt  # zero initial state
 
     # y_ssm = state_new @ C_exp  (matmul over state_size dim)
-    C_exp_4d = ttnn.reshape(C_exp_tt, [B, NUM_HEADS, SSM_STATE_SIZE, 1])
+    C_exp_4d = _rr(C_exp_tt, [B, NUM_HEADS, SSM_STATE_SIZE, 1])  # [1,64,128]→[1,64,128,1]
     y_4d_tt = ttnn.matmul(state_new_tt, C_exp_4d)  # [B, H, D, 1]
-    y_ssm_tt = ttnn.reshape(y_4d_tt, [B, NUM_HEADS, HEAD_DIM])  # [B, H, D]
+    y_ssm_tt = _rr(y_4d_tt, [B, NUM_HEADS, HEAD_DIM])  # [1,64,64,1]→[1,64,64]
 
     # D skip: y = y_ssm + D * x
-    D_3d_tt = ttnn.reshape(D_tt, [1, NUM_HEADS, 1])
+    D_3d_tt = _rr(D_tt, [1, NUM_HEADS, 1])  # [1,64]→[1,64,1] via RM
     y_tt = ttnn.add(y_ssm_tt, ttnn.mul(D_3d_tt, x_tt))  # [B, H, D]
 
     # 11. MambaRMSNormGated — gate-first, per-group RMS, scale
     #     y:    [B, 64, 64] → [B, 1, 4096]
     #     gate: [B, 1, 4096] (already sliced above as gate_tt)
-    y_flat_tt = ttnn.reshape(y_tt, [B, 1, INTERMEDIATE_SIZE])
+    y_flat_tt = _rr(y_tt, [B, 1, INTERMEDIATE_SIZE])  # [1,64,64]→[1,1,4096] via RM
     gate_silu_tt = ttnn.silu(gate_tt)  # [B, 1, 4096]
     xg_tt = ttnn.mul(y_flat_tt, gate_silu_tt)  # [B, 1, 4096]
 
     # Per-group RMS: group_size = 4096 / 8 = 512
     GROUP_SIZE = INTERMEDIATE_SIZE // N_GROUPS
-    xg_grouped_tt = ttnn.reshape(xg_tt, [B, 1, N_GROUPS, GROUP_SIZE])  # [B, 1, 8, 512]
+    xg_grouped_tt = _rr(xg_tt, [B, 1, N_GROUPS, GROUP_SIZE])  # [1,1,4096]→[1,1,8,512]
     xg_sq_tt = ttnn.pow(xg_grouped_tt, 2)
     var_tt = ttnn.mean(xg_sq_tt, dim=3, keepdim=True)  # [B, 1, 8, 1]
     xg_normed_tt = ttnn.mul(xg_grouped_tt, ttnn.rsqrt(ttnn.add(var_tt, norm_eps)))
-    xg_normed_flat_tt = ttnn.reshape(xg_normed_tt, [B, 1, INTERMEDIATE_SIZE])
+    xg_normed_flat_tt = _rr(xg_normed_tt, [B, 1, INTERMEDIATE_SIZE])  # [1,1,8,512]→[1,1,4096]
 
     norm_w_tt = _rep_keyed(id(norm_mixer_weight), norm_mixer_weight.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)
     scan_out_tt = ttnn.mul(xg_normed_flat_tt, norm_w_tt)  # [B, 1, 4096]

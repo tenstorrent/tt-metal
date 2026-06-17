@@ -30,6 +30,7 @@ from .mamba2_layer import mamba2_layer_forward
 from .moe_experts import moe_experts_forward
 from .moe_gate import moe_gate_forward, moe_gate_forward_cpu
 from .shared_expert import shared_expert_forward
+from .tp import _rep_keyed
 
 # Per-layer cache for pre-stacked expert weight tensors on device.
 # Column-parallel TP sharding: intermediate dim split 4 ways across devices.
@@ -167,6 +168,43 @@ def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
     return up_tt, down_tt
 
 
+_MAMBA_PREWARM_DONE: set = set()  # set of id(mesh) that have been prewarmed
+
+
+def prewarm_mamba2_weights(wc: "WeightCache", mesh_device) -> None:
+    """Pre-upload all mamba2 _rep_keyed weights into _DERIVED_CACHE before the first forward pass.
+
+    During the forward pass the TTNN DRAM allocator's state changes as intermediate tensors
+    are allocated/freed.  For certain M-layers (4, 14, 23) the allocator ends up picking
+    physically-defective DRAM addresses on device 2 for small weight tensors.  Uploading
+    those tensors here — before any forward-pass intermediates exist — assigns them to
+    good addresses.  All subsequent _rep_keyed calls during the forward pass are cache hits,
+    so no new DRAM allocations happen for these weights.
+    """
+    m_indices = [li for li, t in enumerate(PATTERN) if t == "M"]
+    print(f"  [prewarm] pre-uploading mamba2 weights for {len(m_indices)} M-layers...", flush=True)
+    for li in m_indices:
+        p = f"backbone.layers.{li}"
+        norm_w = wc[f"{p}.norm.weight"]
+        conv_w = wc[f"{p}.mixer.conv1d.weight"]
+        conv_b = wc[f"{p}.mixer.conv1d.bias"]
+        norm_mix_w = wc[f"{p}.mixer.norm.weight"]
+        # Pre-block norm weight
+        _rep_keyed(id(norm_w), norm_w.bfloat16().unsqueeze(0), mesh_device)
+        # Conv1d bias
+        _rep_keyed(id(conv_b), conv_b.bfloat16().unsqueeze(0).unsqueeze(0).contiguous(), mesh_device)
+        # Conv1d weight slices k=0..3
+        for k in range(4):
+            _rep_keyed(
+                ("conv_w", id(conv_w), k),
+                conv_w[:, 0, k].bfloat16().unsqueeze(0).unsqueeze(0).contiguous(),
+                mesh_device,
+            )
+        # MambaRMSNormGated scale weight
+        _rep_keyed(id(norm_mix_w), norm_mix_w.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)
+    print(f"  [prewarm] done ({len(_MAMBA_PREWARM_DONE)+1} mesh).", flush=True)
+
+
 def _moe_layer_forward(
     mesh_device,
     hidden_states: ttnn.Tensor,  # [B, S, 2688] bf16 on device
@@ -232,12 +270,16 @@ def _layer_stack_forward(
     num_layers: int,
     decoder_state: "DecoderState | None" = None,
     cpu_gate: bool = False,
+    debug_sync: bool = False,
 ) -> ttnn.Tensor:
     """Layer loop — stateless (decoder_state=None) or stateful (decoder_state provided).
 
     cpu_gate=True: MoE gate on CPU float32 (correct routing, not trace-compatible).
     cpu_gate=False: fully on-device gate (trace-compatible, ~15 tok/s).
+    debug_sync=True: synchronize + print after every layer (for hang diagnosis).
     """
+    import time as _time
+
     m_idx = 0  # index within M_LAYER_INDICES
     d_idx = 0  # index within D_LAYER_INDICES
 
@@ -248,6 +290,8 @@ def _layer_stack_forward(
         if layer_type == "M":
             ssm_state = decoder_state.ssm_states[m_idx] if decoder_state else None
             conv_state = decoder_state.conv_states[m_idx] if decoder_state else None
+            if debug_sync:
+                print(f"  [dbg] M li={li} m_idx={m_idx}: calling mamba2...", flush=True)
             hidden_states, state_new, conv_state_new = mamba2_layer_forward(
                 mesh_device,
                 hidden_states,
@@ -262,18 +306,25 @@ def _layer_stack_forward(
                 out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
                 ssm_state=ssm_state,
                 conv_state=conv_state,
+                _dbg=debug_sync,
             )
+            if debug_sync:
+                print(f"  [dbg] M li={li} m_idx={m_idx}: mamba2 returned, assigning states...", flush=True)
             if decoder_state:
                 # In-place copy into pre-allocated output tensors (trace-compatible).
                 # Replacing ssm_state_outs[m_idx] frees the previous tensor's DRAM
                 # buffer during trace capture; later ops in the same trace can reuse
                 # that freed buffer and overwrite the SSM state before advance() reads it.
                 ttnn.assign(state_new, decoder_state.ssm_state_outs[m_idx])
+                if debug_sync:
+                    print(f"  [dbg] M li={li} m_idx={m_idx}: ssm_assign done", flush=True)
                 state_new.deallocate(True)
                 h_tm2_out, h_tm1_out, hBC_out = conv_state_new
                 ttnn.assign(h_tm2_out, decoder_state.conv_state_outs[m_idx][0])
                 ttnn.assign(h_tm1_out, decoder_state.conv_state_outs[m_idx][1])
                 ttnn.assign(hBC_out, decoder_state.conv_state_outs[m_idx][2])
+                if debug_sync:
+                    print(f"  [dbg] M li={li} m_idx={m_idx}: conv_assigns done", flush=True)
                 hBC_out.deallocate(True)
             m_idx += 1
         elif layer_type == "E":
@@ -301,6 +352,12 @@ def _layer_stack_forward(
                 current_pos=current_pos,
             )
             d_idx += 1
+
+        if debug_sync:
+            _t0 = _time.perf_counter()
+            ttnn.synchronize_device(mesh_device)
+            print(f"  [dbg] layer {li} ({layer_type}) sync: {(_time.perf_counter()-_t0)*1000:.0f}ms", flush=True)
+
     return hidden_states
 
 
@@ -369,6 +426,7 @@ def nemotron_h_forward_stateful(
     decoder_state: DecoderState,
     num_layers: int = N_LAYERS,
     cpu_gate: bool = False,
+    debug_sync: bool = False,
 ) -> ttnn.Tensor:
     """Stateful NemotronH forward for generation.
 
@@ -384,6 +442,10 @@ def nemotron_h_forward_stateful(
     Returns:
         Logits [B, S, 131072] bfloat16 on device.
     """
+    if id(mesh_device) not in _MAMBA_PREWARM_DONE:
+        prewarm_mamba2_weights(wc, mesh_device)
+        _MAMBA_PREWARM_DONE.add(id(mesh_device))
+
     hidden_states = embedding_forward_tt(mesh_device, ids_tt, wc["backbone.embeddings.weight"])
     hidden_states = _layer_stack_forward(
         mesh_device,
@@ -392,6 +454,7 @@ def nemotron_h_forward_stateful(
         num_layers,
         decoder_state,
         cpu_gate=cpu_gate,
+        debug_sync=debug_sync,
     )
     return lm_head_forward_device(
         mesh_device,

@@ -12,6 +12,8 @@ data-parallel across TP within a layer).
 """
 from __future__ import annotations
 
+import json
+import pathlib
 from dataclasses import dataclass, field
 
 import torch
@@ -19,6 +21,14 @@ import torch
 import ttnn
 
 from .tp import _R
+
+# HF checkpoint snapshot — single source of truth for this model.
+# generate.py imports SNAP from here rather than defining it separately.
+SNAP = (
+    "/home/ttuser/.cache/huggingface/hub/"
+    "models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16/snapshots/"
+    "cbd3fa9f933d55ef16a84236559f4ee2a0526848"
+)
 
 # Dense-attention constants (from dense_attention.py)
 N_KV_HEADS = 2
@@ -40,9 +50,37 @@ N_D_LAYERS = len(D_LAYER_INDICES)  # 6
 N_E_LAYERS = len(E_LAYER_INDICES)  # 23
 N_ROUTED_EXPERTS = 128  # matches moe_gate.py
 
-# Default paged-cache geometry
+
+def _read_max_position_embeddings(snap: str) -> int:
+    """Read max_position_embeddings from config.json at the HF snapshot path.
+
+    Falls back to the known value for this model if the checkpoint is not
+    present (CI environments, fresh clones before hf download).
+    """
+    cfg_path = pathlib.Path(snap) / "config.json"
+    if cfg_path.exists():
+        return json.loads(cfg_path.read_text())["max_position_embeddings"]
+    return 262_144  # known value for nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+
+
+# Model capability limit — read from config.json so it stays in sync with the
+# HF checkpoint rather than being manually stamped.
+MODEL_MAX_SEQ_LEN: int = _read_max_position_embeddings(SNAP)
+
+# Default paged-cache geometry.
+# max_seq_len controls KV-cache allocation for the 6 dense-attention layers only;
+# the 23 Mamba2 SSM layers have fixed-size state regardless of sequence length.
+# Memory cost: 6 layers × 2 (K+V) × max_seq_len × 256 bytes ≈ max_seq_len × 3 KB total.
+#   4k   →   25 MB    64k  → 402 MB
+#   32k  →  201 MB   256k  → 1.57 GB
+# All sizes fit within the 32 GB DRAM budget.
+#
+# Prefill is currently sequential (S=1 steps) so long-context prefill is slow
+# (~45 ms/tok); 256k ISL → ~3 h prefill.  A batched/chunked prefill kernel
+# would remove that constraint.  DEFAULT_MAX_SEQ_LEN is set to 32k as a
+# practical default covering most demos and short-to-medium context use cases.
 DEFAULT_BLOCK_SIZE = 32
-DEFAULT_MAX_SEQ_LEN = 4096
+DEFAULT_MAX_SEQ_LEN = 32_768
 
 
 @dataclass
@@ -138,7 +176,19 @@ def allocate_decoder_state(
       - 6 paged KV cache pairs (k, v) for the Dense attention layers
       - 6 sequential page tables
       - current_pos = [B] zeros on device
+
+    Raises:
+        ValueError: if max_seq_len exceeds the model's max_position_embeddings (262144).
     """
+    if max_seq_len > MODEL_MAX_SEQ_LEN:
+        raise ValueError(
+            f"max_seq_len={max_seq_len} exceeds the model's max_position_embeddings "
+            f"({MODEL_MAX_SEQ_LEN}). RoPE would produce undefined positional encodings "
+            f"beyond this limit."
+        )
+    if block_size < 1 or (max_seq_len % block_size != 0 and max_seq_len > block_size):
+        # Round up silently — the page table covers the full range either way.
+        pass
     num_blocks = (max_seq_len + block_size - 1) // block_size
 
     # SSM states: [B, H, D, N] = [B, 64, 64, 128]
