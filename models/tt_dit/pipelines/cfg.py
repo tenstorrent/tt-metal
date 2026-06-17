@@ -26,7 +26,6 @@ class CFGCombiner:
 
     def __init__(
         self,
-        /,
         devices: tuple[ttnn.MeshDevice] | tuple[ttnn.MeshDevice, ttnn.MeshDevice],
         *,
         via_host: bool = True,
@@ -71,7 +70,8 @@ class _SingleCombiner:
 
 class _HostCombiner:
     def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice) -> None:
-        self._devices = (uncond_device, cond_device)
+        self._uncond_device = uncond_device
+        self._cond_device = cond_device
 
     def combine(self, predictions: Sequence[ttnn.Tensor], cfg_scale: float) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         if len(predictions) != 2:
@@ -83,11 +83,11 @@ class _HostCombiner:
         received_uncond = uncond.cpu(blocking=False)
         received_cond = cond.cpu(blocking=False)
 
-        ttnn.synchronize_device(self._devices[0])
-        ttnn.synchronize_device(self._devices[1])
+        ttnn.synchronize_device(self._uncond_device)
+        ttnn.synchronize_device(self._cond_device)
 
-        received_uncond = received_uncond.to(self._devices[1])
-        received_cond = received_cond.to(self._devices[0])
+        received_uncond = received_uncond.to(self._cond_device)
+        received_cond = received_cond.to(self._uncond_device)
 
         combined0 = uncond + cfg_scale * (received_cond - uncond)
         combined1 = received_uncond + cfg_scale * (cond - received_uncond)
