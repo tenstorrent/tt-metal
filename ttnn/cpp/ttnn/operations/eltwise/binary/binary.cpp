@@ -74,10 +74,10 @@
             sub_device_id);                                                                                   \
     }
 
-#define TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(NAME, OP_TYPE)                                                 \
+#define TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(NAME, OP_TYPE)                                                \
     Tensor NAME(                                                                                              \
         const Tensor& lhs,                                                                                    \
-        float rhs,                                                                                            \
+        operations::unary::ScalarVariant rhs,                                                                 \
         const std::optional<const DataType>& output_dtype,                                                    \
         const std::optional<MemoryConfig>& memory_config,                                                     \
         const std::optional<Tensor>& output,                                                                  \
@@ -118,10 +118,10 @@
             lhs, b, dtype, memory_config, output);                                                            \
     }
 
-#define TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(NAME, OP_TYPE)                              \
+#define TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(NAME, OP_TYPE)                             \
     Tensor NAME(                                                                     \
         const Tensor& lhs,                                                           \
-        float rhs,                                                                   \
+        operations::unary::ScalarVariant rhs,                                        \
         const std::optional<const DataType>& output_dtype,                           \
         const std::optional<MemoryConfig>& memory_config,                            \
         const std::optional<Tensor>& output,                                         \
@@ -170,7 +170,7 @@
     }                                                                                \
     Tensor NAME(                                                                     \
         const Tensor& lhs,                                                           \
-        float rhs,                                                                   \
+        operations::unary::ScalarVariant rhs,                                        \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
@@ -205,7 +205,7 @@
     }                                                                                                     \
     Tensor NAME(                                                                                          \
         const Tensor& lhs,                                                                                \
-        float rhs,                                                                                        \
+        operations::unary::ScalarVariant rhs,                                                             \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                      \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                       \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                       \
@@ -240,7 +240,7 @@
     }                                                                                \
     Tensor NAME(                                                                     \
         const Tensor& lhs,                                                           \
-        float rhs,                                                                   \
+        operations::unary::ScalarVariant rhs,                                        \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
@@ -324,6 +324,7 @@ inline Tensor to_dtype(const Tensor& input, DataType dtype) {
 }
 
 inline float to_dtype(float input, [[maybe_unused]] DataType dtype) { return input; }
+inline unary::ScalarVariant to_dtype(unary::ScalarVariant input, [[maybe_unused]] DataType dtype) { return input; }
 
 inline bool is_block_format(DataType dtype) {
     using enum DataType;
@@ -337,6 +338,9 @@ inline bool is_block_format(DataType dtype) {
 inline bool is_layout_or_scalar(const Tensor& input, Layout layout) { return input.layout() == layout; }
 
 inline bool is_layout_or_scalar([[maybe_unused]] float input, [[maybe_unused]] Layout layout) { return true; }
+inline bool is_layout_or_scalar([[maybe_unused]] unary::ScalarVariant input, [[maybe_unused]] Layout layout) {
+    return true;
+}
 
 inline Tensor to_layout(const Tensor& input, Layout layout) {
     if (detail::is_layout_or_scalar(input, layout)) {
@@ -347,6 +351,7 @@ inline Tensor to_layout(const Tensor& input, Layout layout) {
 }
 
 inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
+inline unary::ScalarVariant to_layout(unary::ScalarVariant input, [[maybe_unused]] Layout layout) { return input; }
 
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
@@ -605,35 +610,7 @@ Tensor invoke_binary_ng(
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
-    float rhs,
-    operations::binary::BinaryOpType binary_op_type,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    return invoke_binary_ng_impl(
-        lhs,
-        rhs,
-        binary_op_type,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        fast_and_approximate_mode,
-        sub_core_grids,
-        sub_device_id);
-}
-
-Tensor invoke_binary_ng(
-    const Tensor& lhs,
-    int32_t rhs,
+    operations::unary::ScalarVariant rhs,
     operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
@@ -734,7 +711,7 @@ namespace ttnn::operations::binary {
 template <BinaryOpType binary_op_type>
 Tensor relational_binary(
     const ttnn::Tensor& lhs,
-    const float rhs,
+    unary::ScalarVariant rhs,
     const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
@@ -796,7 +773,7 @@ Tensor inplace_relational_binary(
 template <BinaryOpType binary_op_type>
 Tensor inplace_relational_binary(
     const ttnn::Tensor& lhs,
-    const float rhs,
+    unary::ScalarVariant rhs,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
@@ -845,7 +822,7 @@ Tensor inplace_mul_operation_with_fast_approx(
 template <BinaryOpType binary_op_type>
 Tensor inplace_mul_operation_with_fast_approx(
     const ttnn::Tensor& lhs,
-    const float rhs,
+    unary::ScalarVariant rhs,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
@@ -961,49 +938,49 @@ template Tensor where_operation_with_scalar<BinaryOpType::WHERE_TTS>(
 namespace ttnn {
 
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(add, ADD)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(add, ADD)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(add, ADD)
 TTNN_BINARY_OP_INPLACE_IMPL(add_, ADD)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(subtract, SUB)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(subtract, SUB)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(subtract, SUB)
 TTNN_BINARY_OP_INPLACE_IMPL(subtract_, SUB)
 TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(eq, EQ)
-TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(eq, EQ)
+TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(eq, EQ)
 TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(eq, EQ)
 TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(ne, NE)
-TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(ne, NE)
+TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(ne, NE)
 TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(ne, NE)
 TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(ge, GE)
-TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(ge, GE)
+TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(ge, GE)
 TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(ge, GE)
 TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(gt, GT)
-TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(gt, GT)
+TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(gt, GT)
 TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(gt, GT)
 TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(le, LE)
-TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(le, LE)
+TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(le, LE)
 TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(le, LE)
 TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(lt, LT)
-TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(lt, LT)
+TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(lt, LT)
 TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(lt, LT)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_and, LOGICAL_AND)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(logical_and, LOGICAL_AND)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logical_and, LOGICAL_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_or, LOGICAL_OR)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(logical_or, LOGICAL_OR)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logical_or, LOGICAL_OR)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_xor, LOGICAL_XOR)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(logical_xor, LOGICAL_XOR)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logical_xor, LOGICAL_XOR)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(ldexp, LDEXP)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(ldexp, LDEXP)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(ldexp, LDEXP)
 TTNN_BINARY_OP_INPLACE_IMPL(ldexp_, LDEXP)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logaddexp, LOGADDEXP)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(logaddexp, LOGADDEXP)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logaddexp, LOGADDEXP)
 TTNN_BINARY_OP_INPLACE_IMPL(logaddexp_, LOGADDEXP)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logaddexp2, LOGADDEXP2)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(logaddexp2, LOGADDEXP2)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logaddexp2, LOGADDEXP2)
 TTNN_BINARY_OP_INPLACE_IMPL(logaddexp2_, LOGADDEXP2)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(squared_difference, SQUARED_DIFFERENCE)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(squared_difference, SQUARED_DIFFERENCE)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(squared_difference, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_INPLACE_IMPL(squared_difference_, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_or, BITWISE_OR)
@@ -1017,7 +994,7 @@ TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_right_shift, RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(logical_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(logical_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(xlogy, XLOGY)
-TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(xlogy, XLOGY)
+TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(xlogy, XLOGY)
 
 Tensor divide(
     const Tensor& lhs,
@@ -1047,7 +1024,7 @@ Tensor divide(
 }
 Tensor divide(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
@@ -1096,7 +1073,7 @@ Tensor divide_(
 }
 Tensor divide_(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
@@ -1147,7 +1124,7 @@ Tensor multiply(
 }
 Tensor multiply(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
@@ -1187,7 +1164,7 @@ Tensor multiply(const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_
         fast_and_approximate_mode,
         std::nullopt);
 }
-Tensor multiply(const Tensor& lhs, float rhs, bool fast_and_approximate_mode) {
+Tensor multiply(const Tensor& lhs, operations::unary::ScalarVariant rhs, bool fast_and_approximate_mode) {
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -1222,7 +1199,7 @@ Tensor multiply_(
 }
 Tensor multiply_(
     const Tensor& lhs,
-    float rhs,
+    operations::unary::ScalarVariant rhs,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
@@ -1252,9 +1229,9 @@ TTNN_BINARY_OP_INPLACE_INVOKE_IMPL(rsub_, RSUB)
 TTNN_BINARY_OP_INPLACE_INVOKE_IMPL(bias_gelu_, BIAS_GELU)
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_IMPL
 #undef TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL
-#undef TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL
+#undef TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL
-#undef TTNN_BINARY_OP_TENSOR_FLOAT_IMPL
+#undef TTNN_BINARY_OP_TENSOR_SCALAR_IMPL
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL
 #undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL
 #undef TTNN_BINARY_OP_INPLACE_IMPL
