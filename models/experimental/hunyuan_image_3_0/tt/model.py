@@ -53,6 +53,8 @@ class HunyuanTtModel(LightweightModule):
         embed_state_dict: dict = None,
         norm_state_dict: dict = None,
         apply_final_norm: bool = True,
+        ccl_manager=None,
+        expert_mesh_axis: int = 1,
     ):
         """
         Args:
@@ -108,6 +110,8 @@ class HunyuanTtModel(LightweightModule):
                     rms_norm_eps=rms_norm_eps,
                     weight_dtype=weight_dtype,
                     stream_experts=stream_experts,
+                    ccl_manager=ccl_manager,
+                    expert_mesh_axis=expert_mesh_axis,
                 )
             )
 

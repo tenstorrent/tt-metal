@@ -23,6 +23,7 @@ from models.common.lightweightmodule import LightweightModule
 from .attention.attention import HunyuanTtAttention
 from .attention.rms_norm import HunyuanTtRMSNorm
 from .moe.moe import HunyuanTtMoE
+from .moe.moe_parallel import HunyuanTtMoEParallel
 
 
 class HunyuanTtDecoderLayer(LightweightModule):
@@ -43,6 +44,8 @@ class HunyuanTtDecoderLayer(LightweightModule):
         rms_norm_eps: float = 1e-6,
         weight_dtype=ttnn.bfloat16,
         stream_experts: bool = True,
+        ccl_manager=None,
+        expert_mesh_axis: int = 1,
     ):
         super().__init__()
         self.device = device
@@ -67,18 +70,35 @@ class HunyuanTtDecoderLayer(LightweightModule):
         self.post_attention_layernorm = HunyuanTtRMSNorm(
             device, hidden_size, state_dict, f"{prefix}.post_attention_layernorm", eps=rms_norm_eps
         )
-        self.mlp = HunyuanTtMoE(
-            device,
-            hidden_size,
-            num_experts,
-            moe_topk,
-            state_dict,
-            f"{prefix}.mlp",
-            use_mixed_mlp_moe=use_mixed_mlp_moe,
-            norm_topk_prob=norm_topk_prob,
-            weight_dtype=weight_dtype,
-            stream_experts=stream_experts,
-        )
+        # MoE: expert-parallel (sharded, resident) when a CCLManager is provided
+        # for a mesh device; otherwise the single-device dense/streaming MoE.
+        if ccl_manager is not None:
+            self.mlp = HunyuanTtMoEParallel(
+                device,
+                ccl_manager,
+                state_dict,
+                f"{prefix}.mlp",
+                num_experts=num_experts,
+                hidden_size=hidden_size,
+                moe_topk=moe_topk,
+                norm_topk_prob=norm_topk_prob,
+                use_mixed_mlp_moe=use_mixed_mlp_moe,
+                mesh_axis=expert_mesh_axis,
+                weight_dtype=weight_dtype,
+            )
+        else:
+            self.mlp = HunyuanTtMoE(
+                device,
+                hidden_size,
+                num_experts,
+                moe_topk,
+                state_dict,
+                f"{prefix}.mlp",
+                use_mixed_mlp_moe=use_mixed_mlp_moe,
+                norm_topk_prob=norm_topk_prob,
+                weight_dtype=weight_dtype,
+                stream_experts=stream_experts,
+            )
 
     def forward(self, x, seq_len, image_infos=None, attention_mask=None, cos_sin=None):
         """
