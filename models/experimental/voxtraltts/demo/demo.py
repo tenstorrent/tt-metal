@@ -56,6 +56,7 @@ from scipy.io import wavfile
 import ttnn
 
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
+from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
 from models.experimental.voxtraltts.tests.common import close_voxtral_runtime_mesh, open_voxtral_runtime_mesh
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
@@ -173,6 +174,12 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         help="Use HF-aligned text decode (slower, higher PCC). Default uses production perf optimizations.",
     )
     p.add_argument(
+        "--no-decode-trace",
+        action="store_true",
+        default=False,
+        help="Disable 2CQ input staging only (trace replay stays on for audio quality).",
+    )
+    p.add_argument(
         "--dense-alibi-sdpa",
         action="store_true",
         default=False,
@@ -184,6 +191,9 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         p.error("--text is only valid with --mode text")
     if inline_texts and any(not text for text in inline_texts):
         p.error("--text requires a non-empty prompt")
+    if ns.no_decode_trace:
+        os.environ["VOXTRAL_DECODE_TRACE"] = "0"
+        os.environ["VOXTRAL_DECODE_TRACE_2CQ"] = "0"
     use_dense_alibi = (not ns.native_sdpa) or ns.dense_alibi_sdpa
     return DemoArgs(
         model=ModelArgs(model_name_or_path=ns.model),
@@ -214,17 +224,14 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
 
 
 def _open_device():
-    from models.experimental.voxtraltts.demo.decode_trace_2cq import (
-        decode_trace_enabled,
-        num_command_queues_for_decode,
-    )
+    from models.experimental.voxtraltts.demo.decode_trace_2cq import num_command_queues_for_decode
 
-    params = {}
-    # Traced decode needs a trace region; 2CQ needs a second command queue. Both default on
-    # (see decode_trace_2cq). trace_region_size is env-tunable for the 26-layer decode graph.
-    if decode_trace_enabled():
-        params["trace_region_size"] = int(os.environ.get("VOXTRAL_TRACE_REGION_SIZE", str(200_000_000)))
-        params["num_command_queues"] = num_command_queues_for_decode()
+    # Production decode always trace-replays; trace region is required regardless of
+    # VOXTRAL_DECODE_TRACE (that flag only toggles 2CQ overlap for perf experiments).
+    params = {
+        "trace_region_size": int(os.environ.get("VOXTRAL_TRACE_REGION_SIZE", str(200_000_000))),
+        "num_command_queues": num_command_queues_for_decode(),
+    }
     runtime = open_voxtral_runtime_mesh(params)
     return runtime
 
@@ -353,52 +360,297 @@ def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
     wavfile.write(str(path), sample_rate, w)
 
 
-def _min_speech_tokens(text: str) -> int:
-    """Lower-bound estimate of acoustic tokens needed for *text* with a 1.4× safety margin.
+def _short_chunking_enabled() -> bool:
+    """Short-chunk + crossfade path is for ``VOXTRAL_DECODE_TRACE=0`` only.
 
-    Voxtral generates at ~12.5 acoustic tokens/second.  Typical narration speed is
-    ~130 words/minute (2.17 words/second) → ~5.8 tokens/word.  Multiplied by 1.4 gives
-    ~8 tokens/word.  The returned value is a FLOOR; callers should take
-    ``max(user_supplied, _min_speech_tokens(text))``.
+    Trace-enabled runs keep the original single-pass / large-chunk demo behavior (RTF + quality
+    validated with trace replay). Production compute in ``voxtral_tts`` is unchanged either way.
     """
-    return max(4096, len(text.split()) * 8)
+    from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_enabled
+
+    return not decode_trace_enabled()
 
 
-def _resolve_max_speech_tokens(text: str, max_tokens: int, *, log_prefix: str = "tt_generate") -> int:
-    """Apply the same max-token floor as the measured run (``--max-speech-tokens`` + auto-raise)."""
+def _min_speech_tokens(text: str) -> int:
+    n_words = len(text.split())
+    if _short_chunking_enabled():
+        return max(64, _estimate_acoustic_frames(n_words))
+    # Trace path: original demo floor (~8 tok/word, min 4096 for long single-pass runs).
+    return max(4096, n_words * _TOKENS_PER_WORD_ESTIMATE)
+
+
+def _prompt_seq_len(text: str, voice: str, model_name_or_path: str) -> int:
+    request = compose_speech_request(text, model_name_or_path, voice=voice)
+    return len(request["prompt_token_ids"])
+
+
+def _max_decode_tokens(prompt_seq_len: int, text_max_seq_len: int) -> int:
+    if prompt_seq_len >= text_max_seq_len:
+        raise ValueError(
+            f"Prompt token length ({prompt_seq_len}) exceeds text KV cache "
+            f"(text_max_seq_len={text_max_seq_len}). Shorten the prompt or raise --text-max-seq-len."
+        )
+    return text_max_seq_len - prompt_seq_len
+
+
+def _resolve_max_speech_tokens(
+    text: str,
+    voice: str,
+    model_name_or_path: str,
+    max_tokens: int,
+    text_max_seq_len: int,
+    *,
+    log_prefix: str = "tt_generate",
+) -> int:
+    if not _short_chunking_enabled():
+        min_needed = _min_speech_tokens(text)
+        if max_tokens < min_needed:
+            logger.warning(
+                f"[{log_prefix}] max_tokens={max_tokens} is below the estimated minimum "
+                f"({min_needed}) for {len(text.split())} words. Auto-raising to {min_needed}."
+            )
+            return min_needed
+        return max_tokens
+
+    prompt_seq_len = _prompt_seq_len(text, voice, model_name_or_path)
+    max_decode = _max_decode_tokens(prompt_seq_len, text_max_seq_len)
     min_needed = _min_speech_tokens(text)
     if max_tokens < min_needed:
         logger.warning(
-            f"[{log_prefix}] max_tokens={max_tokens} is below the estimated minimum "
-            f"({min_needed}) for {len(text.split())} words. Auto-raising to {min_needed}."
+            f"[{log_prefix}] max_tokens={max_tokens} below estimate {min_needed} for "
+            f"{len(text.split())} words; raising to {min_needed}."
         )
-        return min_needed
+        max_tokens = min_needed
+    if max_tokens > max_decode:
+        logger.warning(f"[{log_prefix}] Capping max_tokens {max_tokens} → {max_decode} (KV: prompt={prompt_seq_len}).")
+        max_tokens = max_decode
+    if max_tokens > _CHUNK_MAX_ACOUSTIC_FRAMES:
+        logger.warning(
+            f"[{log_prefix}] Capping max_tokens {max_tokens} → {_CHUNK_MAX_ACOUSTIC_FRAMES} "
+            f"(AR collapses after ~200 frames / ~16 s)."
+        )
+        max_tokens = _CHUNK_MAX_ACOUSTIC_FRAMES
     return max_tokens
 
 
-def _text_generation_passes(text: str, max_tokens: int, text_max_seq_len: int) -> list[tuple[str, int]]:
+def _text_generation_passes(
+    text: str,
+    max_tokens: int,
+    text_max_seq_len: int,
+    *,
+    voice: str,
+    model_name_or_path: str,
+) -> list[tuple[str, int]]:
     """Return ``(chunk_text, max_tokens)`` pairs using the same rules as ``run_text_mode``."""
-    chunk_threshold = _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _CHUNK_THRESHOLD_WORDS_SHORT
-    if len(text.split()) > chunk_threshold:
-        passes: list[tuple[str, int]] = []
-        for chunk in _split_into_chunks(text):
-            n_words = len(chunk.split())
-            passes.append((chunk, max(600, n_words * 12)))
-        return passes
-    return [(text, _resolve_max_speech_tokens(text, max_tokens, log_prefix="tt_generate"))]
+    if not _needs_chunking(text, text_max_seq_len):
+        return [
+            (
+                text,
+                _resolve_max_speech_tokens(
+                    text, voice, model_name_or_path, max_tokens, text_max_seq_len, log_prefix="tt_generate"
+                ),
+            )
+        ]
+
+    passes: list[tuple[str, int]] = []
+    for chunk in _split_into_chunks(text):
+        n_words = len(chunk.split())
+        if _short_chunking_enabled():
+            chunk_budget = _chunk_token_budget(n_words)
+        else:
+            chunk_budget = max(600, n_words * 12)
+        passes.append(
+            (
+                chunk,
+                _resolve_max_speech_tokens(
+                    chunk,
+                    voice,
+                    model_name_or_path,
+                    chunk_budget,
+                    text_max_seq_len,
+                    log_prefix="chunked",
+                ),
+            )
+        )
+    return passes
 
 
-# Threshold above which text is split into chunks to prevent AR degeneration.
-# The model's free-run PCC (~0.79) causes accumulated errors that collapse the
-# semantic code distribution to a single repeated value after ~200 tokens (~20 words).
-# Keeping each chunk ≤ _CHUNK_MAX_WORDS prevents that collapse.
-_CHUNK_THRESHOLD_WORDS = 100  # threshold for text_max_seq_len > 4096 (long context)
-_CHUNK_THRESHOLD_WORDS_SHORT = 200  # threshold for text_max_seq_len <= 4096 (short context)
-_CHUNK_MAX_WORDS = 200
+# Short-chunk path (VOXTRAL_DECODE_TRACE=0): small passes for AR stability + crossfade joins.
+_ACOUSTIC_FRAME_RATE_HZ = 12.5
+_CHUNK_MAX_ACOUSTIC_FRAMES = 100  # ~8 s per pass
+_TOKENS_PER_WORD_ESTIMATE = 8
+_CHUNK_THRESHOLD_WORDS = 25
+_CHUNK_THRESHOLD_WORDS_SHORT = 8
+_CHUNK_MAX_WORDS = 8
+_CHUNK_CROSSFADE_MS = 40.0
+_CHUNK_TAIL_RELEASE_MS = 40.0
+_CHUNK_LEAD_TRIM_MS = 0.0
+_DEGENERACY_WINDOW_FRAMES = 20
+_DEGENERACY_MIN_UNIQUE = 6
+
+# Trace-enabled path: original large-chunk thresholds (single pass for typical demo prompts).
+_TRACE_CHUNK_THRESHOLD_WORDS = 100
+_TRACE_CHUNK_THRESHOLD_WORDS_SHORT = 200
+_TRACE_CHUNK_MAX_WORDS = 200
 
 
-def _split_into_chunks(text: str, max_words: int = _CHUNK_MAX_WORDS) -> list[str]:
+def _estimate_acoustic_frames(n_words: int) -> int:
+    return max(0, n_words) * _TOKENS_PER_WORD_ESTIMATE
+
+
+def _chunk_token_budget(n_words: int) -> int:
+    if n_words <= 2:
+        return max(48, _estimate_acoustic_frames(n_words))
+    return _CHUNK_MAX_ACOUSTIC_FRAMES
+
+
+def _chunking_threshold_words(text_max_seq_len: int) -> int:
+    if _short_chunking_enabled():
+        return _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _CHUNK_THRESHOLD_WORDS_SHORT
+    return _TRACE_CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _TRACE_CHUNK_THRESHOLD_WORDS_SHORT
+
+
+def _chunk_max_words() -> int:
+    return _CHUNK_MAX_WORDS if _short_chunking_enabled() else _TRACE_CHUNK_MAX_WORDS
+
+
+def _needs_chunking(text: str, text_max_seq_len: int) -> bool:
+    n_words = len(text.split())
+    if n_words > _chunking_threshold_words(text_max_seq_len):
+        return True
+    if _short_chunking_enabled():
+        return _estimate_acoustic_frames(n_words) > _CHUNK_MAX_ACOUSTIC_FRAMES
+    return False
+
+
+def _find_degeneracy_cut_frame(shifted_codes_t37: torch.Tensor) -> int | None:
+    if shifted_codes_t37.numel() == 0:
+        return None
+    sem = shifted_codes_t37[:, 0].detach().long().cpu()
+    n = int(sem.numel())
+    if n < _DEGENERACY_WINDOW_FRAMES:
+        return None
+    for end in range(_DEGENERACY_WINDOW_FRAMES, n + 1):
+        window = sem[end - _DEGENERACY_WINDOW_FRAMES : end]
+        if int(window.unique().numel()) <= _DEGENERACY_MIN_UNIQUE:
+            return max(0, end - _DEGENERACY_WINDOW_FRAMES)
+    return None
+
+
+def _speech_activity_bounds(wav: torch.Tensor, *, peak_ratio: float = 0.02) -> tuple[int, int]:
+    x = wav.detach().float().reshape(-1)
+    n = int(x.numel())
+    if n == 0:
+        return 0, 0
+    peak = float(x.abs().max())
+    if peak <= 0:
+        return 0, n
+    idx = np.flatnonzero((x.abs().numpy() >= peak * peak_ratio))
+    if idx.size == 0:
+        return 0, n
+    return int(idx[0]), int(idx[-1]) + 1
+
+
+def _prepare_chunk_waveform(
+    wav: torch.Tensor,
+    sample_rate: int,
+    *,
+    is_first: bool,
+    hit_end_audio: bool,
+    n_acoustic_frames: int | None = None,
+    downsample_factor: int | None = None,
+    shifted_codes_t37: torch.Tensor | None = None,
+) -> torch.Tensor:
+    x = wav.detach().float().reshape(-1)
+    if x.numel() == 0:
+        return x
+    if n_acoustic_frames is not None and downsample_factor is not None and n_acoustic_frames > 0:
+        x = x[: n_acoustic_frames * downsample_factor]
+    deg_cut = _find_degeneracy_cut_frame(shifted_codes_t37) if shifted_codes_t37 is not None else None
+    if deg_cut is not None and downsample_factor is not None:
+        deg_samples = deg_cut * downsample_factor
+        if deg_samples < x.numel():
+            logger.warning(
+                f"[chunked] trimming {int(x.numel()) - deg_samples} samples before semantic collapse "
+                f"(frame {deg_cut})"
+            )
+            x = x[:deg_samples]
+    elif not hit_end_audio and n_acoustic_frames is not None and downsample_factor is not None:
+        tail_frames = min(16, max(8, n_acoustic_frames // 6))
+        tail_samples = tail_frames * downsample_factor
+        if tail_samples < x.numel():
+            logger.warning(
+                f"[chunked] trimming {tail_samples} samples ({tail_frames} frames) — "
+                "max_tokens reached without END_AUDIO"
+            )
+            x = x[: x.numel() - tail_samples]
+    start, end = _speech_activity_bounds(x)
+    if not is_first:
+        start = min(start + int(sample_rate * _CHUNK_LEAD_TRIM_MS / 1000.0), end)
+    release_ms = _CHUNK_TAIL_RELEASE_MS if hit_end_audio else 10.0
+    end = min(int(x.numel()), end + int(sample_rate * release_ms / 1000.0))
+    return x[start:end] if end > start else x
+
+
+def _crossfade_concat(parts: list[torch.Tensor], sample_rate: int) -> torch.Tensor:
+    if not parts:
+        return torch.tensor([], dtype=torch.float32)
+    if len(parts) == 1:
+        return parts[0]
+    fade_n = max(8, int(sample_rate * _CHUNK_CROSSFADE_MS / 1000.0))
+    out = parts[0]
+    for nxt in parts[1:]:
+        if out.numel() == 0:
+            out = nxt
+            continue
+        if nxt.numel() == 0:
+            continue
+        n = min(fade_n, int(out.numel()) // 2, int(nxt.numel()) // 2)
+        if n < 8:
+            out = torch.cat([out, nxt])
+            continue
+        # Equal-power crossfade; keep a short linear ramp at chunk edges so tail words are not
+        # fully attenuated (cosine fade_out→0 was dropping last words like "Portuguese, Dutch").
+        t = torch.linspace(0, 1, n, dtype=torch.float32)
+        fade_out = 1.0 - t
+        fade_in = t
+        overlap = out[-n:] * fade_out + nxt[:n] * fade_in
+        out = torch.cat([out[:-n], overlap, nxt[n:]])
+    return out
+
+
+def _take_word_chunk(words: list[str], max_words: int) -> tuple[list[str], list[str]]:
+    """Take up to *max_words* from the front of *words*, preferring comma clause boundaries."""
+    if len(words) <= max_words:
+        return words, []
+    split_at = max_words
+    mid = max(3, max_words // 2)
+    # Prefer a comma break in the upper half of the window (keeps list tails out of chunk ends).
+    for j in range(mid, max_words + 1):
+        if words[j - 1].rstrip().endswith(","):
+            split_at = j
+            break
+    else:
+        # Otherwise take the earliest comma in the lower half (short clausal prefix).
+        for j in range(3, mid):
+            if words[j - 1].rstrip().endswith(","):
+                split_at = j
+                break
+    # Comma-dense run (language lists): if we'd end on list items, take the whole run in one chunk.
+    head = words[:split_at]
+    tail = words[split_at:]
+    if tail and head:
+        comma_head = sum(1 for w in head if w.rstrip().endswith(","))
+        if comma_head >= 3 and len(head) + len(tail) <= max_words + 4:
+            combined = words[: min(len(words), max_words + 4)]
+            return combined, words[len(combined) :]
+    return head, tail
+
+
+def _split_into_chunks(text: str, max_words: int | None = None) -> list[str]:
     """Split *text* into sentence-aligned chunks of at most *max_words* words each."""
+    if max_words is None:
+        max_words = _chunk_max_words()
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
     chunks: list[str] = []
     buf: list[str] = []
@@ -408,14 +660,20 @@ def _split_into_chunks(text: str, max_words: int = _CHUNK_MAX_WORDS) -> list[str
             continue
         if len(buf) + len(words) <= max_words:
             buf.extend(words)
-        else:
-            if buf:
-                chunks.append(" ".join(buf))
-            # If a single sentence exceeds the limit, hard-split it word-by-word.
-            while len(words) > max_words:
-                chunks.append(" ".join(words[:max_words]))
-                words = words[max_words:]
-            buf = words
+            continue
+        if buf:
+            chunks.append(" ".join(buf))
+            buf = []
+        while words:
+            if _short_chunking_enabled():
+                head, words = _take_word_chunk(words, max_words)
+            else:
+                if len(words) <= max_words:
+                    head, words = words, []
+                else:
+                    head, words = words[:max_words], words[max_words:]
+            if head:
+                chunks.append(" ".join(head))
     if buf:
         chunks.append(" ".join(buf))
     return [c for c in chunks if c.strip()]
@@ -428,25 +686,34 @@ def _run_chunked_text_mode(
     seed: int,
     sample_rate: int,
     out_path: Path,
+    text_max_seq_len: int = 4096,
 ) -> None:
-    """Generate audio chunk-by-chunk to avoid AR degeneration on long texts.
-
-    Each chunk is generated by an independent ``forward_device_resident`` call so the
-    AR loop never accumulates enough errors to collapse the semantic-code distribution.
-    The chunk waveforms are concatenated and peak-normalised before saving.
-    """
+    """Generate audio chunk-by-chunk (trace: hard concat; non-trace: trim + crossfade)."""
+    short = _short_chunking_enabled()
+    max_w = _chunk_max_words()
     chunks = _split_into_chunks(text)
-    logger.info(f"[chunked] {len(text.split())} words → {len(chunks)} chunks " f"(max {_CHUNK_MAX_WORDS} words each)")
+    mode = "short-chunk" if short else "trace"
+    logger.info(f"[chunked/{mode}] {len(text.split())} words → {len(chunks)} chunks (max {max_w} words)")
+    prepared: list[torch.Tensor] = []
     all_wavs: list[torch.Tensor] = []
     n_frames_total = 0
-    first_frame_s: float | None = None  # TTFA = first audible frame of the whole run (first chunk)
+    first_frame_s: float | None = None
     t_start = perf_counter()
 
     for i, chunk in enumerate(chunks):
         n_words = len(chunk.split())
-        # Give each chunk 12 tokens/word headroom (vs 8 for full-text estimate) because
-        # short prompts generate slower speech and may have longer pauses.
-        chunk_max_tokens = max(600, n_words * 12)
+        if short:
+            chunk_budget = _chunk_token_budget(n_words)
+        else:
+            chunk_budget = max(600, n_words * 12)
+        chunk_max_tokens = _resolve_max_speech_tokens(
+            chunk,
+            voice,
+            pipe.model_name_or_path,
+            chunk_budget,
+            text_max_seq_len,
+            log_prefix=f"chunked {i + 1}/{len(chunks)}",
+        )
         logger.info(f"[chunked] chunk {i + 1}/{len(chunks)}: {n_words} words | max_tokens={chunk_max_tokens}")
 
         out = pipe.forward_device_resident(
@@ -457,17 +724,44 @@ def _run_chunked_text_mode(
         )
         if first_frame_s is None and out.first_frame_s is not None:
             first_frame_s = out.first_frame_s
-        n_frames_total += int(out.codes_b37t.shape[2])
+        n_frames = int(out.codes_b37t.shape[2])
+        n_frames_total += n_frames
         if out.waveform.numel() > 0:
-            all_wavs.append(out.waveform.reshape(-1))
+            wav = out.waveform.reshape(-1)
+            if short:
+                shifted = out.shifted_codes_t37.cpu() if out.shifted_codes_t37.numel() > 0 else None
+                if shifted is not None and shifted.numel() > 0:
+                    sem = shifted[:, 0]
+                    logger.info(
+                        f"[chunked] chunk {i + 1}/{len(chunks)} codes: frames={n_frames} "
+                        f"unique={int(sem.unique().numel())} hit_end={out.hit_end_audio}"
+                    )
+                trimmed = _prepare_chunk_waveform(
+                    wav,
+                    sample_rate,
+                    is_first=(i == 0),
+                    hit_end_audio=bool(out.hit_end_audio),
+                    n_acoustic_frames=n_frames,
+                    downsample_factor=int(pipe._downsample_factor),
+                    shifted_codes_t37=shifted,
+                )
+                if trimmed.numel() > 0:
+                    prepared.append(trimmed)
+            else:
+                all_wavs.append(wav)
         if not out.hit_end_audio:
-            logger.warning(
-                f"[chunked] chunk {i + 1}: reached max_tokens={chunk_max_tokens} without END_AUDIO — "
-                f"chunk may be cut off."
-            )
+            logger.warning(f"[chunked] chunk {i + 1}: no END_AUDIO at max_tokens={chunk_max_tokens}")
 
     total_s = perf_counter() - t_start
-    n_samples = sum(int(w.numel()) for w in all_wavs)
+    if short:
+        n_samples = sum(int(w.numel()) for w in prepared)
+        combined = _crossfade_concat(prepared, sample_rate) if prepared else torch.tensor([], dtype=torch.float32)
+        join_note = f"crossfade={_CHUNK_CROSSFADE_MS:.0f} ms"
+    else:
+        n_samples = sum(int(w.numel()) for w in all_wavs)
+        combined = torch.cat(all_wavs, dim=0) if all_wavs else torch.tensor([], dtype=torch.float32)
+        join_note = "hard concat"
+
     audio_s = n_samples / sample_rate if sample_rate > 0 else None
     _log_perf(
         "chunked_generate",
@@ -479,16 +773,12 @@ def _run_chunked_text_mode(
         bitrate_bps=_codec_bitrate_bps(pipe),
     )
 
-    if not all_wavs:
-        logger.error("[chunked] No audio generated from any chunk.")
+    if combined.numel() == 0:
+        logger.error("[chunked] No audio generated.")
         return
 
-    combined = torch.cat(all_wavs, dim=0)
     _save_wav(out_path, combined, sample_rate)
-    logger.info(
-        f"Saved chunked waveform → {out_path}  "
-        f"({combined.numel()} samples @ {sample_rate} Hz, {len(chunks)} chunks)"
-    )
+    logger.info(f"Saved chunked waveform → {out_path} ({combined.numel()} samples, {len(chunks)} chunks, {join_note})")
 
 
 def _codec_bitrate_bps(pipe: "VoxtralTTSPipeline") -> float | None:
@@ -561,18 +851,24 @@ def run_text_mode(
 ) -> None:
     """Full TT TTS (device-resident AR loop): text → acoustic codes → waveform.
 
-    For texts longer than the chunk threshold words the input is split into
-    sentence-aligned chunks and each chunk is generated independently.  This prevents the
-    AR degeneration (semantic-code collapse) that occurs after ~200 acoustic tokens when
-    running in free-run mode with PCC ≈ 0.79.
+    Chunking (demo layer only — ``voxtral_tts`` trace replay is unchanged):
 
-    Chunking thresholds:
-      - text_max_seq_len > 4096  (long context / paged KV): chunk at > 35 words
-      - text_max_seq_len <= 4096 (short context):           chunk at > 200 words
+      Trace enabled (``VOXTRAL_DECODE_TRACE=1``, default):
+        - Single pass for prompts under ~200 words (``text_max_seq_len`` ≤ 4096)
+        - Large-chunk split only for very long texts; hard-concat waveforms
+
+      Non-trace (``VOXTRAL_DECODE_TRACE=0`` / ``--no-decode-trace``):
+        - Short 8-word chunks, 100-frame cap, crossfade + edge trim (clarity fix)
     """
-    passes = _text_generation_passes(text, max_tokens, text_max_seq_len)
+    passes = _text_generation_passes(
+        text,
+        max_tokens,
+        text_max_seq_len,
+        voice=voice,
+        model_name_or_path=pipe.model_name_or_path,
+    )
     if len(passes) > 1:
-        _run_chunked_text_mode(pipe, text, voice, seed, sample_rate, out_path)
+        _run_chunked_text_mode(pipe, text, voice, seed, sample_rate, out_path, text_max_seq_len)
         return
 
     chunk_text, max_tokens = passes[0]
@@ -691,10 +987,15 @@ def run_demo(args: DemoArgs) -> None:
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Default the demo to traced decode (bit-identical output, ~1.58x faster decode; verified).
-    # Only affects the demo entry point — the pytest device fixture path leaves it off. Override
-    # with VOXTRAL_DECODE_TRACE=0. (2CQ stays opt-in; it regresses on this loop — see decode_trace_2cq.)
+    # Default 2CQ overlap on. Production decode always trace-replays (see voxtral_tts).
     os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
+    os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
+    from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, decode_trace_enabled
+
+    logger.info(
+        f"[demo] trace replay=always, 2CQ={'on' if decode_trace_2cq_enabled() else 'off'}, "
+        f"chunking={'short (non-trace)' if not decode_trace_enabled() else 'trace default'}"
+    )
 
     runtime = _open_device()
     pipe: VoxtralTTSPipeline | None = None
@@ -720,7 +1021,13 @@ def run_demo(args: DemoArgs) -> None:
 
                     if is_warmup:
                         # Warmup: same text/chunking/max_tokens as the measured run (untimed, no WAV).
-                        passes = _text_generation_passes(text, args.data.max_speech_tokens, args.tt.text_max_seq_len)
+                        passes = _text_generation_passes(
+                            text,
+                            args.data.max_speech_tokens,
+                            args.tt.text_max_seq_len,
+                            voice=voice,
+                            model_name_or_path=pipe.model_name_or_path,
+                        )
                         logger.info(
                             f"[warmup] {len(text.split())} words → {len(passes)} pass(es); "
                             f"max_tokens={[mt for _, mt in passes]}"
