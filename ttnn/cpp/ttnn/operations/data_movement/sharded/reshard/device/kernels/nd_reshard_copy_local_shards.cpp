@@ -8,38 +8,34 @@
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
+// Metal 2.0 nd reshard local-shard copy.
 // Kernel that:
 // if (is_reader) {
 //     iterate over local shards of sharded src tensor, and write them to the dst tensor.
 // } else {
 //     iterate over local shards of sharded dst tensor, and read them from the src tensor.
 // }
+//
+// Tensors are addressed via TensorAccessor(ta::src) / TensorAccessor(ta::dst); the base address
+// and sharding layout come from the TensorBindings (filled from the TensorArguments at enqueue).
 
 void kernel_main() {
-    auto args_src = TensorAccessorArgs<0, 0>();
-    auto args_dst =
-        TensorAccessorArgs<args_src.next_compile_time_args_offset(), args_src.next_common_runtime_args_offset()>();
-    constexpr uint32_t base_idx_cta = args_dst.next_compile_time_args_offset();
-    constexpr uint32_t base_idx_crta = args_dst.next_common_runtime_args_offset();
+    constexpr uint32_t src_page_size = get_arg(args::src_page_size);
+    constexpr uint32_t dst_page_size = get_arg(args::dst_page_size);
+    constexpr uint32_t is_reader = get_arg(args::is_reader);
+    constexpr uint32_t logical_width = get_arg(args::logical_width);
+    constexpr uint32_t src_width = get_arg(args::src_width);
+    constexpr uint32_t dst_width = get_arg(args::dst_width);
+    constexpr uint32_t transfer_size = get_arg(args::transfer_size);
 
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(base_idx_cta);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(base_idx_cta + 1);
-    constexpr uint32_t is_reader = get_compile_time_arg_val(base_idx_cta + 2);
-    constexpr uint32_t logical_width = get_compile_time_arg_val(base_idx_cta + 3);
-    constexpr uint32_t src_width = get_compile_time_arg_val(base_idx_cta + 4);
-    constexpr uint32_t dst_width = get_compile_time_arg_val(base_idx_cta + 5);
-    constexpr uint32_t transfer_size = get_compile_time_arg_val(base_idx_cta + 6);
+    const uint32_t num_shards = get_arg(args::num_shards);
+    const uint32_t shard_id_stride = get_arg(args::shard_id_stride);
+    const uint32_t first_shard_id = get_arg(args::first_shard_id);
 
-    const uint32_t bank_base_address_src = get_common_arg_val<uint32_t>(base_idx_crta);
-    const uint32_t bank_base_address_dst = get_common_arg_val<uint32_t>(base_idx_crta + 1);
-    const uint32_t num_shards = get_common_arg_val<uint32_t>(base_idx_crta + 2);
-    const uint32_t shard_id_stride = get_common_arg_val<uint32_t>(base_idx_crta + 3);
-
-    const uint32_t first_shard_id = get_arg_val<uint32_t>(0);
-
-    auto accessor_src = TensorAccessor(args_src, bank_base_address_src);
-    auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst);
+    TensorAccessor accessor_src(ta::src);
+    TensorAccessor accessor_dst(ta::dst);
 
     Noc noc;
 

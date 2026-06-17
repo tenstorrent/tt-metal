@@ -2,39 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include "api/tensor/tensor_accessor.h"
+// Metal 2.0 reshard copy-pages consumer.
+// Pops entries from the DFB bound via dfb::reshard_dfb and writes them as pages
+// [start_page, end_page) to the output tensor via TensorAccessor(ta::output). The base address
+// and sharding layout come from the TensorBinding (filled from the TensorArgument at enqueue).
+//
+// Runtime args (positional varargs):
+//   arg 0: start_page
+//   arg 1: end_page
+
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
-#include "api/tensor/noc_traits.h"
 
-// Simple kernel that copies [start_page, end_page) pages from dst to dst.
 void kernel_main() {
-    auto args_dst = TensorAccessorArgs<0, 0>();
-    constexpr uint32_t base_idx_cta = args_dst.next_compile_time_args_offset();
-    constexpr uint32_t base_idx_crta = args_dst.next_common_runtime_args_offset();
-
-    constexpr uint32_t cb_id = get_compile_time_arg_val(base_idx_cta);
-    constexpr uint32_t page_size = get_compile_time_arg_val(base_idx_cta + 1);
-
-    const uint32_t bank_base_address_dst = get_common_arg_val<uint32_t>(base_idx_crta);
-
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t end_page = get_arg_val<uint32_t>(1);
 
-    auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst);
+    TensorAccessor accessor(ta::output);
+    DataflowBuffer buf(dfb::reshard_dfb);
+    const uint32_t entry_size = buf.get_entry_size();
 
-    Noc noc;
-    CircularBuffer cb(cb_id);
-
-    constexpr uint32_t one_tile = 1;
-    auto pages = accessor_dst.pages(start_page, end_page);
-    for (const auto& page : pages) {
-        cb.wait_front(one_tile);
-        noc.async_write(
-            cb, accessor_dst, page_size, {.offset_bytes = 0}, {.page_id = page.page_id(), .offset_bytes = 0});
-        noc.async_write_barrier();
-        cb.pop_front(one_tile);
+    for (uint32_t page_id = start_page; page_id < end_page; page_id++) {
+        buf.wait_front(1);
+        uint64_t dst_noc_addr = accessor.get_noc_addr(page_id);
+        noc_async_write(buf.get_read_ptr(), dst_noc_addr, entry_size);
+        noc_async_write_barrier();
+        buf.pop_front(1);
     }
 }
