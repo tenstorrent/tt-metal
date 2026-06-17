@@ -13,7 +13,6 @@ set(TTNN_OP_CCL_SRCS
     common/host/ccl_worker_builder.cpp
     common/host/ccl_command_stream_builders.cpp
     common/host/moe_utils.cpp
-    common/host/moe_core_placement.cpp
     all_broadcast/all_broadcast.cpp
     all_broadcast/device/all_broadcast_device_operation.cpp
     all_broadcast/device/all_broadcast_program_factory.cpp

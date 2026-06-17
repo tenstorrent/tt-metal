@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/ccl/common/host/moe_core_placement.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 
 #include <algorithm>
 #include <array>
