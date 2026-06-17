@@ -571,6 +571,29 @@ def _is_device_fatal_message(message) -> bool:
     return any(sig in msg for sig in _DEVICE_FATAL_SIGNATURES)
 
 
+# Signatures of a transient kernel-ELF build/load failure. When the persisted
+# cache is cold (CI clears it before the job) and FABRIC_2D opens all chips at
+# once, the fabric_erisc_router ELF is built+loaded concurrently across devices;
+# a device can load a partially-written ELF and throw "tt_elffile.cpp:405". The
+# build itself completes (the .elf is written), so simply resetting and retrying
+# the SAME vector in a fresh child — whose cache is now warm — loads it cleanly.
+# (Observed on T3K [2D] all_gather: first FABRIC_2D config 0dd01b5f after a cache
+# clear.) Genuinely-corrupt ELFs just exhaust the retries and fail as before.
+_ELF_LOAD_RETRY_SIGNATURES = (
+    "tt_elffile.cpp",
+    "failed to generate binaries",
+)
+
+
+def _is_elf_load_error(message) -> bool:
+    """Return True if a returned exception looks like a transient kernel-ELF
+    build/load failure that a warm-cache retry should clear."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _ELF_LOAD_RETRY_SIGNATURES)
+
+
 def _set_crash_hang_defaults(result):
     """Populate result fields for a FAIL_CRASH_HANG outcome."""
     result["status"] = TestStatus.FAIL_CRASH_HANG
@@ -672,6 +695,26 @@ def _execute_vector_with_retry(
                 result["_abort_suite"] = False
                 result["_device_recovered"] = True
                 return result
+
+            # A transient kernel-ELF build/load failure (tt_elffile.cpp:405),
+            # typically a cold-cache concurrent fabric_erisc_router build race on
+            # the first FABRIC_2D open. The .elf is written by the time we get
+            # here, so reset + respawn (warm cache) and retry the SAME vector;
+            # it loads cleanly on the next attempt. Fall through to fail only
+            # after exhausting retries.
+            if _is_elf_load_error(result.get("message")) and attempt < MAX_RETRIES:
+                logger.warning(
+                    f"KERNEL ELF load failure (likely cold-cache concurrent build) for "
+                    f"input_hash='{input_hash}': {result.get('message')}. "
+                    f"Resetting + retrying on warm cache (attempt {attempt + 1}/{1 + MAX_RETRIES})."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                continue
 
             result["_child_process"] = p
             result["_abort_suite"] = False
