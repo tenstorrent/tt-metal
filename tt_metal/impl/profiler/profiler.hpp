@@ -238,6 +238,11 @@ private:
     void generateAnalysesForDeviceMarkers(
         const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
 
+    // Dump a compact per-(op, core, counter) CSV of perf-counter markers for the fast path
+    void writePerfCountersToCSV(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
+        const std::filesystem::path& report_path) const;
+
     // Dump device results to files
     void writeDeviceResultsToFiles() const;
 

@@ -127,14 +127,20 @@ ethernet hang is fabric/multi-chip init only.
 
 ## Open items (not yet implemented)
 
-- **Counters on the C++ fast post-process path (Phase 2a) — this is also the
-  Phase 2b OOM fix.** Verified: `load_device_perf_report` (the cpp path) already
-  streams row-by-row and is bounded (~ops×devices). The 140 GB OOM is the
-  *legacy* `pd.read_csv` of the full per-core device log, and capturing counters
-  currently *forces* that legacy path (the CLI disables cpp post-process when
-  `--profiler-capture-perf-counters` is set). Teaching the cpp path to carry
-  per-core/per-RISC counters removes the OOM for the counter case outright;
-  chunking the legacy path is a strictly worse band-aid.
+- **Counters on the C++ fast post-process path (Phase 2a) — staged opt-in,
+  default off.** Set `TT_METAL_PROFILER_COUNTERS_CPP=1` to route counters
+  through the cpp path: C++ emits a compact per-(op,core,counter) table
+  (`cpp_perf_counters.csv`); `perf_counter_fastpath.merge_counter_metrics_into_cpp_report`
+  computes the validated utilization metrics from it and folds the
+  `PERF_COUNTER_CSV_HEADERS` columns into `cpp_device_perf_report.csv` (unit
+  tested). **Open device blocker:** enabling the cpp path also runs
+  `generatePerfResultsForPrograms` over the op's full marker set, which on a
+  data-movement-heavy op (e.g. the 8192² eltwise, ~402 MB of NoC traffic) blows
+  up time/memory — observed as a 300 s `ReadDeviceProfiler` stall (warm cache)
+  and an OOM SIGKILL. That is existing cpp-analysis scalability work, not the
+  counter merge. Until it's bounded, counters default to the legacy path. The
+  earlier 2b reframing still holds: `load_device_perf_report` already streams;
+  the OOM is the legacy `pd.read_csv` of the full per-core device log.
 - **NoC BW % vs analytical for a CCL op** (Phase 3 full gate) and **the
   noc-trace fabric/ethernet hang** (Phase 3b) — need a multi-chip run.
 - **Tracy GUI zone tooltips** (Phase 4) — a vendored-fork change

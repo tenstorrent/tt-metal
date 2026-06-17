@@ -304,8 +304,15 @@ def main():
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
             logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
 
+    # Counters can ride the C++ fast path (compact counter table folded into the
+    # per-op report, avoiding the OOM-prone legacy full-device-log load) when
+    # opted in via TT_METAL_PROFILER_COUNTERS_CPP. Off by default: that path has
+    # an open device-side slowdown under ReadDeviceProfiler (see PERF_COUNTERS.md),
+    # so counters default to the proven legacy post-process.
+    counters_use_cpp = bool(options.perf_counter_groups) and os.environ.get("TT_METAL_PROFILER_COUNTERS_CPP")
+    perf_counters_force_legacy = bool(options.perf_counter_groups) and not counters_use_cpp
     if not (
-        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
+        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or perf_counters_force_legacy
     ):
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
     else:
@@ -316,7 +323,7 @@ def main():
             reasons.append("--enable-sum-profiling")
         if options.profile_dispatch_cores:
             reasons.append("--profile-dispatch-cores")
-        if options.perf_counter_groups:
+        if perf_counters_force_legacy:
             reasons.append("--profiler-capture-perf-counters")
 
         reason_str = ", ".join(reasons)

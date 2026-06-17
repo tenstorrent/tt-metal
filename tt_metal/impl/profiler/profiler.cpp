@@ -2348,6 +2348,48 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
 
     writeProgramsPerfResultsToCSV(
         programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME);
+
+    // Opt-in (default off): emit the compact counter table for the fast-path merge.
+    // Gated so the default profile path is byte-for-byte unchanged. The fast-path
+    // counter integration is staged but not yet the default -- see PERF_COUNTERS.md.
+    if (std::getenv("TT_METAL_PROFILER_COUNTERS_CPP") != nullptr) {
+        writePerfCountersToCSV(device_markers, this->device_logs_output_dir / "cpp_perf_counters.csv");
+    }
+#endif
+}
+
+void DeviceProfiler::writePerfCountersToCSV(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
+    const std::filesystem::path& report_path) const {
+#if defined(TRACY_ENABLE)
+    // Compact per-(op, core, counter) table of just the perf-counter markers, so the
+    // Python fast path can compute utilization without parsing the full per-core device
+    // log (which OOMs at mesh scale). Column names match the perf_counter dataframe the
+    // post-process already validates against.
+    std::stringstream rows;
+    size_t num_rows = 0;
+    for (const auto& marker_ref : device_markers) {
+        const auto& marker = marker_ref.get();
+        if (marker.marker_id != PERF_COUNTER_PROFILER_ID) {
+            continue;
+        }
+        const PerfCounter perf_counter(marker.data);
+        const uint32_t counter_type_raw = perf_counter.counter_type;
+        if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
+            continue;
+        }
+        rows << marker.runtime_host_id << "," << marker.trace_id_counter << "," << marker.core_x << "," << marker.core_y
+             << "," << enchantum::to_string(marker.risc) << ","
+             << enchantum::to_string(static_cast<PerfCounterType>(counter_type_raw)) << ","
+             << perf_counter.counter_value << "," << perf_counter.ref_cnt << "\n";
+        num_rows++;
+    }
+    if (num_rows == 0) {
+        return;
+    }
+    std::ofstream ofs(report_path);
+    ofs << "run_host_id,trace_id_count,core_x,core_y,risc_type,counter type,value,ref cnt\n";
+    ofs << rows.str();
 #endif
 }
 

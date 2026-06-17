@@ -39,6 +39,7 @@ from tracy.common import (
 from tracy import device_post_proc_config
 from tracy.perf_counter_scope import sample_cores_per_op
 from tracy.noc_bandwidth import noc_bytes_from_trace_dir
+from tracy.perf_counter_fastpath import merge_counter_metrics_into_cpp_report
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
     compute_device_only_metrics,
@@ -1008,6 +1009,25 @@ def _build_trace_ops_mapping(host_ops_by_device: DeviceOpsDict, ops: Dict[int, O
     return trace_ops_by_augmented_id
 
 
+def _read_arch_and_compute_cores(device_side_log):
+    """Parse arch and max compute cores from the device-side log banner line:
+    'ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 130'."""
+    arch, cores = "", 1
+    try:
+        with open(device_side_log) as f:
+            banner = f.readline()
+        for part in banner.split(","):
+            key, _, val = part.partition(":")
+            key, val = key.strip(), val.strip()
+            if key == "ARCH":
+                arch = val.lower()
+            elif key == "Max Compute Cores":
+                cores = int(val)
+    except (OSError, ValueError):
+        pass
+    return arch, cores
+
+
 # Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(
     ops: Dict[int, OpDict],
@@ -1030,6 +1050,10 @@ def append_device_data(
             logger.warning(
                 "device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option."
             )
+        # Fast path with counters: fold the compact per-core counter table into the
+        # cpp report before loading it, so counters ride the bounded-memory path.
+        arch, compute_cores = _read_arch_and_compute_cores(Path(logFolder) / PROFILER_DEVICE_SIDE_LOG)
+        merge_counter_metrics_into_cpp_report(logFolder, device_arch=arch, total_compute_cores=compute_cores)
         device_perf_by_device = load_device_perf_report(device_perf_report)
         host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
     else:
