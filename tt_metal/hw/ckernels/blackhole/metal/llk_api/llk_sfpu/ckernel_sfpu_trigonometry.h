@@ -848,22 +848,20 @@ inline void calculate_acosh() {
         // DST severs the sqrt/reciprocal expression from the log1p polynomial so
         // the SFPU register allocator stays within its reload budget. The x <= 1
         // lanes are overwritten with their exact results afterwards.
-        // The three branches below cover every lane, so arg needs no initializer.
-        sfpi::vFloat arg;
-        v_if(inp >= LOG1P_LARGE) {
-            // Large region: acosh(x) ~= ln(2x) = LN2 + log1p(x - 1). Forming
-            // x - 1 (not 2x - 1) avoids fp32 overflow near the top of the range.
-            arg = inp - sfpi::vConst1;
+        //
+        // arg = x - 1 is the common term in every region, so it is computed once
+        // and the per-region sqrt term is accumulated onto it:
+        //   x >= 2^28   -> arg = x - 1            (large; acosh ~= LN2 + log1p(x-1),
+        //                                          the +LN2 is added after log1p)
+        //   1 < x < 1.5 -> arg += sqrt((x-1)(x+1))  (small; avoids x^2-1 cancellation)
+        //   else        -> arg += sqrt(x^2 - 1)     (safe reconstruction)
+        // The large region falls through both predicated blocks and keeps arg = x-1.
+        sfpi::vFloat arg = inp - sfpi::vConst1;
+        v_if(inp < 1.5f) {
+            arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(arg * (inp + sfpi::vConst1));
         }
-        v_elseif(inp < 1.5f) {
-            // Small region: argument of log1p is (x-1) + sqrt((x-1)*(x+1)),
-            // which stays away from 0 and avoids cancellation in x^2 - 1.
-            sfpi::vFloat xm1 = inp - sfpi::vConst1;
-            arg = xm1 + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(xm1 * (inp + sfpi::vConst1));
-        }
-        v_else {
-            // Safe region: t = x + sqrt(x^2 - 1); pass (t - 1) to log1p.
-            arg = (inp + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(inp * inp - sfpi::vConst1)) - sfpi::vConst1;
+        v_elseif(inp < LOG1P_LARGE) {
+            arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(inp * inp - sfpi::vConst1);
         }
         v_endif;
         sfpi::dst_reg[0] = arg;
