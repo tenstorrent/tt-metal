@@ -71,6 +71,7 @@ GATE_FALLBACK_MODE = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.defaul
 # When on (default), the last transformer layer runs kv-only: it fills the KV
 # cache for migration and skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+PREFILL_DEBUG = os.environ.get("PREFILL_DEBUG", "0") == "1"
 # Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
 # L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs. This
 # requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
