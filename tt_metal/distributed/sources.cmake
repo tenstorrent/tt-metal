@@ -32,4 +32,5 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/h2d_stream_service_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pcie_core_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/internal_cluster.cpp
 )

@@ -132,28 +132,23 @@ def _attach_migration_client(strict: bool):
 
 
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
-    """Row-major ``(umd_physical_chip_id, fabric_mesh_id, fabric_chip_id)`` for
-    this rank's local mesh — ported from the decode demo's migration_table_hook.
+    """Row-major ``(umd_chip_id, fabric_mesh_id, fabric_chip_id)`` for this rank's local mesh.
 
-    UMD chip ids must be PHYSICAL. ``mesh_device.get_device_id`` returns the
-    LOGICAL id, which equals the physical id only when no TT_VISIBLE_DEVICES
-    remap is in effect. Under a remap, logical d is the d-th smallest visible
-    physical id (UMD parses the env into an unordered set and renumbers in
-    ascending-physical order), so we re-resolve via the sorted env list.
+    ``umd_chip_id`` is the chip's HARDWARE-STABLE 64-bit ASIC unique id, resolved from the
+    FabricNodeId via ``ttnn.cluster.get_chip_unique_id_from_fabric_node_id`` — the SAME id the
+    migration worker keys ``dram_by_umd`` on (``UmdDevice::unique_id()`` from the cluster
+    descriptor). It is NOT the process-local logical id (``get_device_id``, 0..n-1) NOR the
+    physical UMD ChipId — those don't match the worker's unique-id-keyed device map, so a
+    physical-id device map reaches WORKER_READY but fails to resolve at migrate time.
     """
-    visible_env = os.environ.get("TT_VISIBLE_DEVICES")
-    phys_by_logical = None
-    if visible_env:
-        phys_by_logical = sorted(int(x) for x in visible_env.split(",") if x != "")
     rows, cols = mesh_device.shape[0], mesh_device.shape[1]
     out: list[tuple[int, int, int]] = []
     for r in range(rows):
         for c in range(cols):
             coord = ttnn.MeshCoordinate(r, c)
-            logical = int(mesh_device.get_device_id(coord))
-            phys = phys_by_logical[logical] if phys_by_logical is not None else logical
             fnid = mesh_device.get_fabric_node_id(coord)
-            out.append((phys, int(fnid.mesh_id), int(fnid.chip_id)))
+            unique_id = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(fnid.mesh_id), int(fnid.chip_id)))
+            out.append((unique_id, int(fnid.mesh_id), int(fnid.chip_id)))
     return out
 
 
