@@ -82,6 +82,7 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -115,6 +116,119 @@ private:
     FabricConnectionManager conn_;
     SenderT* dir_ = nullptr;
     bool is_forward_ = true;
+};
+
+/**
+ * @brief Worker-mux fabric-connection policy. Many workers share one fabric link through a
+ *        WorkerToFabricMuxSender<NumBuffers>, instead of DirectConn's 1:1 link<->worker bind.
+ *        Slots in behind the same open()/close()/sender() interface as DirectConn, so
+ *        FabricStreamSender's arm/send methods are unchanged.
+ *
+ * The ctor reads the mux runtime-arg block (advancing arg_idx), builds the connection, and
+ * waits for the mux endpoint to be ready. A worker with no link in its direction has
+ * valid==false: it builds nothing and sender() returns nullptr — the op gates sends on valid
+ * targets, so it is never issued to. close() runs the mux teardown handshake: every client
+ * disconnects, non-masters inc the termination-master's sync semaphore, and the master waits
+ * for all clients before signalling the mux endpoint to terminate.
+ *
+ * @note The factory enables worker-mux (the USE_WORKER_MUX compile define + this arg block)
+ *   when a link is shared by more than one worker; the compile-time mux params (buffer size,
+ *   status/termination addresses, client count) are passed to the ctor from compile-time args.
+ * @tparam NumBuffers  fabric_mux_num_buffers_per_channel (compile-time).
+ */
+template <uint8_t NumBuffers>
+class MuxConn {
+public:
+    using SenderT = tt::tt_fabric::WorkerToFabricMuxSender<NumBuffers>;
+    /**
+     * @brief Read the mux runtime-arg block from arg_idx (advancing it), build the connection,
+     *        and wait for the mux endpoint to become ready.
+     * @param arg_idx                  Cursor at the start of the mux RT-arg block; ADVANCED past it.
+     * @param channel_buffer_size_bytes  fabric_mux_channel_buffer_size_bytes (compile-time arg).
+     * @param status_address           fabric_mux_status_address (compile-time arg).
+     * @param termination_signal_address fabric_mux_termination_signal_address (compile-time arg).
+     * @param num_mux_clients          number of workers sharing this mux (compile-time arg).
+     */
+    FORCE_INLINE MuxConn(
+        size_t& arg_idx,
+        size_t channel_buffer_size_bytes,
+        size_t status_address,
+        size_t termination_signal_address,
+        uint32_t num_mux_clients) :
+        termination_signal_address_(termination_signal_address), num_mux_clients_(num_mux_clients) {
+        valid_ = get_arg_val<uint32_t>(arg_idx++) == 1;
+        is_termination_master_ = get_arg_val<uint32_t>(arg_idx++);
+        mux_x_ = get_arg_val<uint32_t>(arg_idx++);
+        mux_y_ = get_arg_val<uint32_t>(arg_idx++);
+        const size_t channel_base_address = get_arg_val<uint32_t>(arg_idx++);
+        const size_t connection_info_address = get_arg_val<uint32_t>(arg_idx++);
+        const size_t connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
+        const size_t flow_control_address = get_arg_val<uint32_t>(arg_idx++);
+        const size_t buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+        const uint8_t channel_id = get_arg_val<uint32_t>(arg_idx++);
+        termination_sync_address_ = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        const uint32_t local_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        const uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        const uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        termination_master_noc_x_ = get_arg_val<uint32_t>(arg_idx++);
+        termination_master_noc_y_ = get_arg_val<uint32_t>(arg_idx++);
+        if (valid_) {
+            mux_ = tt::tt_fabric::build_connection_to_fabric_endpoint<NumBuffers>(
+                mux_x_,
+                mux_y_,
+                channel_id,
+                NumBuffers,
+                channel_buffer_size_bytes,
+                channel_base_address,
+                connection_info_address,
+                connection_handshake_address,
+                flow_control_address,
+                buffer_index_address,
+                local_flow_control_address,
+                local_teardown_address,
+                local_buffer_index_address);
+            // The mux endpoint is a separate kernel; block until it is ready to accept connections.
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(mux_x_, mux_y_, status_address, local_status_address);
+        }
+    }
+    /// Connect to the mux endpoint (no-op for a worker with no link in its direction).
+    FORCE_INLINE void open() {
+        if (valid_) {
+            tt::tt_fabric::fabric_client_connect(mux_);
+        }
+    }
+    /// Disconnect, then the mux termination handshake (master waits for all clients then signals
+    /// the mux to terminate; non-masters inc the master's sync semaphore). No-op if not valid.
+    FORCE_INLINE void close() {
+        if (!valid_) {
+            return;
+        }
+        tt::tt_fabric::fabric_client_disconnect(mux_);
+        if (is_termination_master_) {
+            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address_);
+            noc_semaphore_wait(termination_sync_ptr, num_mux_clients_ - 1);
+            tt::tt_fabric::fabric_endpoint_terminate(mux_x_, mux_y_, termination_signal_address_);
+        } else {
+            const uint64_t dest_addr =
+                safe_get_noc_addr(termination_master_noc_x_, termination_master_noc_y_, termination_sync_address_, 0);
+            noc_semaphore_inc(dest_addr, 1);
+            noc_async_atomic_barrier();
+        }
+    }
+    FORCE_INLINE SenderT* sender() { return valid_ ? &mux_ : nullptr; }
+
+private:
+    SenderT mux_;
+    bool valid_ = false;
+    bool is_termination_master_ = false;
+    uint8_t mux_x_ = 0;
+    uint8_t mux_y_ = 0;
+    size_t termination_signal_address_ = 0;
+    uint32_t termination_sync_address_ = 0;
+    uint32_t termination_master_noc_x_ = 0;
+    uint32_t termination_master_noc_y_ = 0;
+    uint32_t num_mux_clients_ = 0;
 };
 
 /**
