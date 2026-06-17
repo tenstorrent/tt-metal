@@ -78,6 +78,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major
+  - tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py::test_rms_norm_sharded_uneven_multicore_logical_width
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
