@@ -307,12 +307,12 @@ class ttMLA:
         # re-allocated per layer.
         if self.is_chunked:
             # Single combined gathered-KV scratch buffer for ring_mla: K and V both come from the
-            # latent kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the
-            # separate per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other
-            # mode. cache_batch = slot_num * layer_num is forced by the op's TT_FATAL (gathered-KV
-            # batch == cache batch) even though only the kv_cache_batch_idx slot is ever gathered.
+            # latent kvpe cache, so one (1, 1, seq_len, kvpe_dim) buffer replaces the separate
+            # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
+            # ring_mla's single-slot gather (kv_cache_batch_idx) writes only the active cache slot
+            # into gathered slot 0, so the scratch is batch-1 regardless of slot_num * layer_num.
             self._chunked_kv_buf = self.tt_ccl.get_mla_chunked_kv_buffer(
-                cache_batch=self.slot_num * self.layer_num,
+                cache_batch=1,
                 seq_len=seq_len,
                 kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
             )
@@ -538,7 +538,7 @@ class ttMLA:
         tt_kvpe: ttnn.Tensor,
         kvpe_cache: ttnn.Tensor,
         kv_actual_isl: int,
-        actual_isl: Optional[int],
+        actual_end: Optional[int],
         cache_batch_idx: int,
         cache_layer_idx: int,
         cache_user_id: int,
@@ -577,17 +577,17 @@ class ttMLA:
         )
 
         # Migration-gated: update_padded_kv_cache wrote full 32-row tiles, so the tokens between the
-        # last real token (kv_actual_isl + actual_isl) and the next 128-boundary hold stale data. Zero
-        # that pad window so the decode side reads clean zeros, then fire the per-layer ack. The op
-        # handles the window spilling across a chip border (block-cyclic layout).
+        # last real token (actual_end) and the next 128-boundary hold stale data. Zero that pad window
+        # so the decode side reads clean zeros, then fire the per-layer ack. The op handles the window
+        # spilling across a chip border (block-cyclic layout).
         if on_layer_complete is not None:
-            assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
+            assert actual_end is not None, "actual_end required when on_layer_complete is set"
             ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                 kvpe_cache,
                 cache_user_id,
                 cache_layer_idx,
                 self.layer_num,
-                kv_actual_isl + actual_isl,
+                actual_end,
                 chunk_size_global,
                 self.sp_axis,
             )
@@ -644,32 +644,29 @@ class ttMLA:
         kvpe_cache: ttnn.Tensor,
         cache_layer_idx: int = 0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
-        actual_isl: Optional[int] = None,
-        kv_actual_isl: Optional[int] = None,
+        actual_start: Optional[int] = None,
+        actual_end: Optional[int] = None,
         cache_user_id: int = 0,
+        return_kv_intermediates: bool = False,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
 
-        # Chunked-prefill mode is selected by passing kv_actual_isl (the cumulative count of valid
-        # KV tokens already in the cache before this chunk; 0 for the first chunk). When None we run
-        # the original single-shot path. The two paths share the Q/KV projection + rope prologue and
-        # the nlp_concat_heads + o_proj epilogue; they differ only in cache write, attention op, and
-        # where wkv_b2 is applied. See _chunked_attn for the unified chunked implementation.
-        is_chunked = kv_actual_isl is not None
-        # Buffers are pre-allocated per-mode in __init__, so the per-call mode must match how this
-        # ttMLA was constructed (chunked -> _chunked_kv_buf; non-chunked -> persistent_k/v + joint).
-        assert is_chunked == self.is_chunked, (
-            f"forward mode (is_chunked={is_chunked}, from kv_actual_isl) does not match construction "
-            f"(self.is_chunked={self.is_chunked}); the required ring buffers are not allocated"
+        # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
+        # __init__ and the rope variant, and forward honors that flag — it does not infer the mode from
+        # the arguments. actual_start/actual_end are the chunk parameters, supplied iff chunked:
+        # actual_start is the absolute KV position of this chunk's first real token (cumulative valid
+        # count before it; 0 for the first chunk) — the cache write + rotation offset (the internal
+        # kv_actual_isl); actual_end is the absolute position past the chunk's last real token — the
+        # migration pad-zero boundary. The single-shot and chunked paths share the Q/KV projection +
+        # rope prologue and the nlp_concat_heads + o_proj epilogue; they differ only in cache write,
+        # attention op, and where wkv_b2 is applied. See _chunked_attn for the unified chunked impl.
+        kv_actual_isl = actual_start
+        assert (actual_start is not None) == self.is_chunked, (
+            f"actual_start ({'set' if actual_start is not None else 'None'}) does not match construction "
+            f"(self.is_chunked={self.is_chunked}); pass actual_start/actual_end iff built with is_chunked=True"
         )
-
-        # Cache batch dim is user-major: each user reserves self.layer_num contiguous slots, so the
-        # flat slot is cache_user_id * layer_num + cache_layer_idx (reduces to cache_layer_idx for the
-        # single-user default cache_user_id == 0).
-        assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
-        cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
 
         # q_projection
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
@@ -775,6 +772,9 @@ class ttMLA:
                 tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
             )
 
+        # Raw compressed KV (pre-norm/pre-rope, [.., 576]) for debug/PCC against golden traces.
+        kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
+
         # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
         tt_kv_rope = ttnn.slice(
@@ -792,12 +792,21 @@ class ttMLA:
 
         tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
 
+        if return_kv_intermediates:
+            # post-RMSNorm latent ([.., 512]) and post-RoPE k_pe ([.., 64]); clone before concat.
+            kv_intermediates["tt_kv_nope"] = ttnn.clone(tt_kv_nope)
+            kv_intermediates["tt_kv_rope"] = ttnn.clone(tt_kv_rope)
+
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
-        if not is_chunked:
+        if return_kv_intermediates:
+            # post-transform concat ([.., 576], bf8) — what actually gets written to the cache.
+            kv_intermediates["tt_kvpe"] = ttnn.clone(tt_kvpe)
+
+        if not self.is_chunked:
             # === single-shot prefill: fill the whole local slot, run on-device ring SDPA with a
             # materialized V (wkv_b2 applied before attention). Unchanged from the original path. ===
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
@@ -838,12 +847,17 @@ class ttMLA:
             # === chunked prefill: write this chunk into the cache at its per-chip offset, then run
             # ring_mla over the populated prefix with V materialized in-op from the latent KV. wkv_b2
             # is applied to the compact attention output afterwards (see _chunked_attn). ===
+            # Cache batch dim is user-major: each user reserves self.layer_num contiguous slots, so the
+            # flat slot is cache_user_id * layer_num + cache_layer_idx. Computed here (chunked-only) so
+            # the non-chunked path never multiplies by layer_num (None unless built for chunked prefill).
+            assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
+            cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
             attn_out = self._chunked_attn(
                 tt_q=tt_q,
                 tt_kvpe=tt_kvpe,
                 kvpe_cache=kvpe_cache,
                 kv_actual_isl=kv_actual_isl,
-                actual_isl=actual_isl,
+                actual_end=actual_end,
                 cache_batch_idx=cache_batch_idx,
                 cache_layer_idx=cache_layer_idx,
                 cache_user_id=cache_user_id,
@@ -872,4 +886,6 @@ class ttMLA:
         else:
             out = v_out
         signpost(header="MLA_END")
+        if return_kv_intermediates:
+            return out, kv_intermediates
         return out
