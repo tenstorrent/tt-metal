@@ -138,7 +138,7 @@ struct DataflowBufferSpec {
 
 // NOTE: Cross-Node DataflowBuffer is not yet supported!
 //       A sketch is included in the experimental Metal 2.0 APIs for visibility.
-//       See also Global DataFlowBuffer (which has a user-managed lifetime).
+//       See also Global DataflowBuffer (which has a user-managed lifetime).
 //
 // CrossNodeDataflowBufferSpec is the descriptor for a "cross-node" DFB:
 // A DFB whose producer and consumer kernels run on different nodes, with data
