@@ -97,6 +97,14 @@ the indexer is <b>fully on device</b> (stems, RoPE, key cache, <code>indexer_sco
 prefix it consumes is now <b>gathered entirely on device</b> (no host readback) — with the <code>indices</code> SP-reshard
 done via <code>ttnn.mesh_partition</code>. <b>The DSA path no longer touches the host.</b> This report focuses on the
 <b>chunked-prefill</b> path.</p>
+<p class="sub"><b>Updated 2026-06-17</b>: the <b>chunked-prefill DSA path now runs on multi-chip SP&gt;1</b> (validated on LoudBox
+sp2×tp4 and sp4×tp2, chunked seq4k PCC ≈ 0.997). The prior guard that forced 2×2 chunked back to 1×4 is <b>removed</b>: the
+root cause was <code>_gather_kvpe_prefix</code>'s un-rotate using <code>reshape</code>+<code>permute</code>, which leaves the
+latent prefix <b>physically non-contiguous</b> (a strided view). <code>to_torch</code> honours the strides — so every
+host readback looked correct (0.9998) — but <code>sparse_sdpa</code>'s reader consumes <b>raw physical order</b> and
+silently read garbage. The un-rotate now <b>concatenates the contiguous per-(slab,chip) slabs</b> into a fresh contiguous
+tensor. The device tests are also now <b>hardware-adaptive</b> (<code>tests/mesh_utils.py</code>, exact device-count match):
+QuietBox single / 1×4 / 2×2, LoudBox sp8×tp1 / sp4×tp2 / sp2×tp4, Galaxy sp8×tp4.</p>
 
 <div class="note">
 <b>The one structural fact.</b> <code>forward()</code> is a router (<code>mla.py:226</code>). When the global end position
@@ -110,7 +118,7 @@ run: <code>_indexer_topk → _dsa_forward</code>.</div>
 <table>
 <tr><th>Symbol</th><th>Meaning</th><th>Value (V3.2 671B)</th></tr>
 <tr><td><code>S</code> / <code>S_local</code></td><td>global / per-device seq (<code>S_local = S/sp</code>)</td><td>runtime</td></tr>
-<tr><td><code>sp</code> / <code>tp</code></td><td>devices on sequence- / tensor-parallel mesh axis</td><td><code>sp_axis=0, tp_axis=1</code>; DSA func path <b>sp=1</b></td></tr>
+<tr><td><code>sp</code> / <code>tp</code></td><td>devices on sequence- / tensor-parallel mesh axis</td><td><code>sp_axis=0, tp_axis=1</code>; DSA runs at <b>any SP</b> (multi-chip chunked fixed 2026-06-17)</td></tr>
 <tr><td><code>glob</code></td><td>global query/key count this chunk = <code>S_local·sp</code></td><td>runtime</td></tr>
 <tr><td><code>start_pos</code> / <code>end_pos</code></td><td><code>kv_actual_isl</code> / <code>start_pos + glob</code></td><td>runtime</td></tr>
 <tr><td><code>dim</code></td><td>model hidden (<code>hidden_size</code>)</td><td>7168</td></tr>
@@ -274,7 +282,10 @@ serves every head.</div>
 cached exactly as v3, then attention runs over <b>only the k selected latents</b>. Like v3's chunked path it keeps attention
 latent and applies <code>wkv_b2</code> <i>after</i>. The <b>chunked</b> cache write is
 <code>update_padded_kv_cache</code> (block-cyclic across SP); the latent prefix for the op is then gathered and un-rotated to
-natural order <b>on device</b> (<code>_gather_kvpe_prefix</code>), with no host round-trip.</p>
+natural order <b>on device</b> (<code>_gather_kvpe_prefix</code>), with no host round-trip. The un-rotate must yield a
+<b>physically contiguous</b> tensor — it <code>concat</code>s the per-(slab,chip) slabs rather than
+<code>reshape</code>+<code>permute</code> (a strided view) — because <code>sparse_sdpa</code> reads the prefix in raw
+physical order.</p>
 
 <div class="fr"><pre class="mermaid">
 flowchart TD
@@ -317,7 +328,7 @@ flowchart TD
   H --> KVA
 
   CACHE["KVPE cache write<br/>single-shot: fill_cache_for_user_<br/>chunked: update_padded_kv_cache"]:::sp
-  GATHER["on-device latent gather (no host)<br/>chunked: _gather_kvpe_prefix — ND→INTER · SP all_gather ·<br/>typecast bf8→bf16 · TILE→RM · block-cyclic un-rotate<br/>single-shot: SP all_gather + to_layout RM"]:::comm
+  GATHER["on-device latent gather (no host)<br/>chunked: _gather_kvpe_prefix — ND→INTER · SP all_gather ·<br/>typecast bf8→bf16 · TILE→RM · un-rotate (concat→contiguous)<br/>single-shot: SP all_gather + to_layout RM"]:::comm
   IRS["ttnn.mesh_partition (device, sp&gt;1)<br/>replicated → SP-sharded on dim2<br/>[1,1,glob,k] → [1,1,S/sp,k]"]:::comm
   SMLA["ttnn.transformer.sparse_sdpa (device, 🟫RM-only)<br/>SPMD per chip: gather k latents + online-softmax<br/>V = kv[..,:512]; sentinel-masked"]:::tp
   WB2["linear wkv_b2 → v_head_dim 128"]:::tp
@@ -378,7 +389,7 @@ full device-residency that avoids materializing the full-T replica (backlog 12).
 <tr><td>11</td><td><code>slice + rms_norm kv_a_layernorm</code></td><td><code>nope[512]</code></td><td><span class="pill prep">replicated</span></td></tr>
 <tr><td>12</td><td><code>_apply_rope</code> + <code>concat</code></td><td><code>rope[64] → kvpe [1,1,S/sp,576]</code></td><td><span class="pill prep">rep</span> · <span class="pill psp">SP-seq</span></td></tr>
 <tr><td>13</td><td><code>typecast bf8 + cache write</code></td><td><code>fill_cache_for_user_</code> / <code>update_padded_kv_cache</code></td><td><span class="pill psp">SP-sharded cache</span></td></tr>
-<tr><td>14</td><td><code>_gather_kvpe_prefix</code> (on device)</td><td>chunked: <code>to_memory_config</code> ND→INTER · SP <code>all_gather</code> · <code>typecast</code> bf8→bf16 · <code>to_layout</code> RM · block-cyclic un-rotate → <code>[1,1,end_pos,576]</code> 🟫RM; single-shot: <code>all_gather</code> + <code>to_layout</code></td><td><span class="pill pcomm">CCL+device</span> → <span class="pill prep">rep</span></td></tr>
+<tr><td>14</td><td><code>_gather_kvpe_prefix</code> (on device)</td><td>chunked: <code>to_memory_config</code> ND→INTER · SP <code>all_gather</code> · <code>typecast</code> bf8→bf16 · <code>to_layout</code> RM · block-cyclic un-rotate (<code>concat</code> of contiguous per-(slab,chip) slabs → fresh contiguous tensor; a <code>reshape</code>+<code>permute</code> view is silently mis-read by <code>sparse_sdpa</code>) → <code>[1,1,end_pos,576]</code> 🟫RM; single-shot: <code>all_gather</code> + <code>to_layout</code></td><td><span class="pill pcomm">CCL+device</span> → <span class="pill prep">rep</span></td></tr>
 <tr><td>15a</td><td><code>ttnn.mesh_partition</code> indices (sp&gt;1)</td><td>🟫RM <code>[1,1,glob,k]</code> replicated → <code>[1,1,S/sp,k]</code> SP-sharded (dim2), on device</td><td><span class="pill pcomm">CCL</span> → <span class="pill psp">SP</span></td></tr>
 <tr><td>15b</td><td><code>ops.sparse_mla</code> (<code>sparse_sdpa</code>, device, 🟫RM-only)</td><td>q TILE→RM; <code>tt_q + kv + idx → [1,H/tp,S/sp,512]</code> RM→TILE; SPMD per chip</td><td><span class="pill ptp">TP</span>·<span class="pill psp">SP</span></td></tr>
 <tr><td>16</td><td><code>linear wkv_b2</code></td><td><code>[..,512] → [..,128]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
@@ -393,10 +404,9 @@ full device-residency that avoids materializing the full-T replica (backlog 12).
 <h2>7. Worked example — 50k cached, processing a fresh 5k chunk</h2>
 <p class="sub">Concrete trace with <code>kv_actual_isl = 51200</code> (50·1024), this chunk = 5120 tokens (5·1024), on an
 <code>8×4</code> mesh (<code>sp=8, tp=4</code>). Because <code>kv_actual_isl</code> is passed, this is the <b>chunked</b> path.
-(The code's DSA path is validated at <code>sp=1</code> (1×4, single-shot + chunked) and <code>sp=2</code> (2×2 single-shot);
-<b>2×2 chunked is currently guarded back to 1×4</b> over the open block-cyclic read issue (status.md 5.5). <code>sp=8</code>
-here is illustrative — it exercises the general SP wiring, where the indexer all-gathers and the <code>indices</code> SP-reshard
-become real, not no-ops.)</p>
+(The DSA path — single-shot <b>and</b> chunked — is validated on multi-chip SP&gt;1: LoudBox sp2×tp4 and sp4×tp2, chunked
+seq4k PCC ≈ 0.997, after the un-rotate contiguity fix. <code>sp=8</code> here is illustrative — it exercises the general SP
+wiring, where the indexer all-gathers and the <code>indices</code> SP-reshard become real, not no-ops.)</p>
 
 <table>
 <tr><th>Quantity</th><th>Value</th><th>Set by</th></tr>
@@ -466,13 +476,17 @@ for functional parity):</p>
 <tr><th>Test / param</th><th>seq</th><th>Path taken</th><th>What it proves</th></tr>
 <tr><td><code>test_v32_mla_vs_cpu_reference</code> · seq256 / seq2k</td><td>≤ 2048</td><td>dense passthrough (v3)</td><td>DSA mask is zero over the causal region → v32 must match dense v3 (PCC ≥ 0.98)</td></tr>
 <tr><td>… · seq4k</td><td>4096</td><td><b>DSA active</b></td><td>device indexer + <code>sparse_mla</code> vs the CPU index mask; logs banded PCC for rows&lt;2048 vs ≥2048</td></tr>
-<tr><td><code>test_v32_mla_chunked_vs_cpu_reference</code></td><td>4k, chunk 1k</td><td>DSA + chunked cache</td><td>block-cyclic cache read-back (un-rotated) feeds <code>sparse_mla</code>; per-chunk + KVPE PCC</td></tr>
+<tr><td><code>test_v32_mla_chunked_vs_cpu_reference</code></td><td>4k, chunk 1k</td><td>DSA + chunked cache</td><td>block-cyclic cache read-back (<code>concat</code> un-rotate → contiguous) feeds <code>sparse_mla</code>; per-chunk + KVPE PCC. Runs multi-chip (LoudBox sp2×tp4 / sp4×tp2)</td></tr>
 <tr><td><code>test_v32_mla_determinism</code></td><td>4096 ×3</td><td>DSA active</td><td>bit-exact run-to-run (PCC 1.0) across CCL reductions, the <code>sparse_sdpa</code> device op, and topk ties</td></tr>
 </table>
-<p class="sub">Meshes: <code>1×4</code> pure TP (<code>sp=1</code>; <code>_sp_all_gather</code> no-ops) and <code>2×2</code> SP×TP
-(<code>sp=2</code>; the SP all-gathers and the <code>indices</code> SP-reshard are real). DSA now runs on both meshes:
-<b>single-shot</b> validated at 1×4 and 2×2 (seq4k 0.9974); <b>chunked</b> validated at 1×4 (4k+1k 0.9982) but currently
-<b>guarded back to 1×4</b> for 2×2 over the open block-cyclic cache-read issue (status.md 5.5).</p>
+<p class="sub">Meshes are chosen from the box at collection time (<code>tests/mesh_utils.py</code>, exact device-count match):
+QuietBox single / <code>1×4</code> (pure TP, <code>sp=1</code>) / <code>2×2</code>; LoudBox <code>sp8×tp1</code> /
+<code>sp4×tp2</code> / <code>sp2×tp4</code>; Galaxy <code>sp8×tp4</code> (prod TP=4, SP=8). At <code>sp&gt;1</code> the SP
+all-gathers and the <code>indices</code> SP-reshard are real, not no-ops. DSA runs <b>single-shot and chunked on multi-chip
+SP&gt;1</b> — chunked validated on LoudBox <code>sp2×tp4</code> and <code>sp4×tp2</code> (seq4k + 1k ≈ 0.997) after the
+un-rotate contiguity fix. Two configs are skipped for unrelated reasons: <b>seq256 / SP=8</b> (32 tok/chip is below the
+kvpe ND-shard minimum) and <b>chunked at TP=1</b> (the 128-head <code>nlp_concat_heads</code> epilogue overflows L1 without
+TP head-sharding).</p>
 
 <p class="ctrl"><button onclick="document.body.classList.toggle('still')">⏸ toggle animation</button>
 &nbsp;(also respects your OS “reduce motion” setting)</p>
