@@ -47,9 +47,14 @@ constexpr uint32_t page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_iters = get_compile_time_arg_val(4);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(5);
 constexpr uint32_t produce_downstream = get_compile_time_arg_val(6);
+constexpr uint32_t metadata_enabled = get_compile_time_arg_val(7);
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(8);
+// L1 address (uniform on every worker core) where the UPSTREAM service multicast
+// this iter's metadata blob; the designated worker forwards it downstream.
+constexpr uint32_t upstream_metadata_l1_addr = get_compile_time_arg_val(9);
 // Upstream backing and downstream dest share the same per-shard spec, so a single
 // TensorAccessorArgs set is reused with the two distinct base addresses.
-constexpr auto acc_args = TensorAccessorArgs<7>();
+constexpr auto acc_args = TensorAccessorArgs<10>();
 
 void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(0);
@@ -61,6 +66,11 @@ void kernel_main() {
     const uint32_t downstream_data_ready_counter_addr = get_arg_val<uint32_t>(5);
     const uint32_t downstream_service_noc_x = get_arg_val<uint32_t>(6);
     const uint32_t downstream_service_noc_y = get_arg_val<uint32_t>(7);
+    // Metadata fields: only the designated writer (is_metadata_writer == 1) forwards,
+    // and only when this stage produces downstream. downstream_metadata_l1_addr is the
+    // D2D sender service core's metadata L1 buffer.
+    const uint32_t is_metadata_writer = get_arg_val<uint32_t>(8);
+    const uint32_t downstream_metadata_l1_addr = get_arg_val<uint32_t>(9);
 
     auto upstream = TensorAccessor(acc_args, upstream_backing_addr);
     auto downstream = TensorAccessor(acc_args, downstream_dest_addr);
@@ -95,6 +105,22 @@ void kernel_main() {
             noc_async_write<page_size>(cb_l1, downstream.get_noc_addr(p), page_size);
         }
         noc_async_write_barrier();
+
+        // 2b. (designated producer worker only) forward the metadata the upstream
+        //     service multicast into this core's L1 to the downstream D2D sender
+        //     service core, so the sender ships it with this iter's transfer. Done
+        //     before acking the upstream (which may refill the metadata L1) and
+        //     before signaling downstream data_ready (so it is in place to forward).
+        //     The terminal stage produces nothing: its metadata already landed in the
+        //     worker L1 from the upstream receiver's multicast (verified by the host).
+        if constexpr (produce_downstream && metadata_enabled) {
+            if (is_metadata_writer != 0) {
+                const uint64_t md_noc =
+                    get_noc_addr(downstream_service_noc_x, downstream_service_noc_y, downstream_metadata_l1_addr);
+                noc_async_write(upstream_metadata_l1_addr, md_noc, metadata_size_bytes);
+                noc_async_write_barrier();
+            }
+        }
 
         // 3. Ack the upstream: it may now refill upstream_backing with the next iter.
         noc_semaphore_inc(up_consumed_noc, 1);

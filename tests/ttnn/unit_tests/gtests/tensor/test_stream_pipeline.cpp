@@ -30,8 +30,10 @@
 // MeshSocket pair), service cores (Blackhole / UBB Galaxy under Fast Dispatch), and
 // >= num_stages devices to carve one 1x1 submesh per stage.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <span>
@@ -40,6 +42,7 @@
 
 #include "gtest/gtest.h"
 
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -67,6 +70,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
+
+#include "stream_service_test_utils.hpp"  // replicate_all, service_cores_supported, make_spec, worker_page_range, ...
 
 namespace ttnn::distributed::test {
 namespace {
@@ -113,28 +118,13 @@ using ::tt::tt_metal::distributed::SocketMemoryConfig;
 // FABRIC_2D over the system mesh (D2D needs fabric; H2D is PCIe and unaffected).
 using StreamPipelineTest = ::tt::tt_metal::GenericMeshDeviceFabric2DFixture;
 
-// Mirror the ServiceCoreManager precondition so we skip cleanly elsewhere.
-bool service_cores_supported() {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    return cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE;
-}
+// service_cores_supported / h2d_host_pinning_supported / replicate_all / make_spec /
+// all_cores_for / worker_index / worker_page_range / fifo_bytes_for live in
+// stream_service_test_utils.hpp (shared with the D2D stream-service gtest).
 
-// Single worker core per stage (num_workers == 1).
+// Single worker core per stage (num_workers == 1) for the basic smoke tests; the
+// shape/dtype/longer-pipeline tests pass the full compute grid (all_cores_for).
 const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{0, 0}};
-
-// Fully-replicated placement sized to the submesh dimensionality (identity on 1x1).
-ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(const MeshDevice& mesh) {
-    return ttsl::SmallVector<MeshMapperConfig::Placement>(mesh.shape().dims(), MeshMapperConfig::Replicate{});
-}
-
-TensorSpec make_spec(const ttnn::Shape& global_shape) {
-    return TensorSpec(
-        global_shape,
-        TensorLayout(
-            DataType::UINT32,
-            PageConfig(Layout::ROW_MAJOR),
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt}));
-}
 
 // Carve `n` distinct 1x1 submeshes (one per pipeline stage) from the parent mesh,
 // walking coords in row-major order.
@@ -156,6 +146,9 @@ struct UpstreamHandle {
     DeviceAddr data_ready_sem_addr = 0;
     std::function<DeviceAddr(const MeshCoordinate&)> consumed_counter_addr;
     std::function<CoreCoord(const MeshCoordinate&)> service_core;
+    // L1 address (uniform mesh-wide) where this service multicasts the metadata blob
+    // into every worker core. Only invoked when metadata is enabled.
+    std::function<DeviceAddr()> metadata_addr;
 };
 
 template <typename Svc>
@@ -165,6 +158,7 @@ UpstreamHandle make_upstream(Svc& svc) {
         .data_ready_sem_addr = svc.get_data_ready_sem_addr(),
         .consumed_counter_addr = [&svc](const MeshCoordinate& c) { return svc.get_consumed_counter_addr(c); },
         .service_core = [&svc](const MeshCoordinate& c) { return svc.get_service_core(c); },
+        .metadata_addr = [&svc] { return svc.get_metadata_addr(); },
     };
 }
 
@@ -176,6 +170,9 @@ struct DownstreamHandle {
     bool produce = false;
     std::function<DeviceAddr(const MeshCoordinate&)> data_ready_counter_addr;
     std::function<CoreCoord(const MeshCoordinate&)> service_core;
+    // Per-coord L1 address of the D2D sender service core's metadata buffer (the
+    // designated worker forwards into it). Producer-only; only invoked with metadata.
+    std::function<DeviceAddr(const MeshCoordinate&)> metadata_addr;
 };
 
 // The relay only SIGNALS the D2D sender (data_ready_counter) and returns — it does
@@ -187,6 +184,7 @@ DownstreamHandle make_downstream_producer(D2DStreamServiceSender& s) {
         .produce = true,
         .data_ready_counter_addr = [&s](const MeshCoordinate& c) { return s.get_data_ready_counter_addr(c); },
         .service_core = [&s](const MeshCoordinate& c) { return s.get_service_core(c); },
+        .metadata_addr = [&s](const MeshCoordinate& c) { return s.get_metadata_addr(c); },
     };
 }
 
@@ -201,10 +199,15 @@ MeshWorkload build_relay_workload(
     const CoreRange& workers,
     uint32_t num_iters,
     const UpstreamHandle& up,
-    const DownstreamHandle& down) {
+    const DownstreamHandle& down,
+    uint32_t metadata_size_bytes = 0) {
     const auto* up_buf = up.backing->buffer();
     const uint32_t page_size = up_buf->aligned_page_size();
     const uint32_t num_pages = up_buf->num_pages();
+    const bool metadata_enabled = metadata_size_bytes > 0;
+    // The designated metadata writer (only when this stage produces downstream) is the
+    // highest-id worker, matching the receiver service's multicast-to-all fan-out.
+    const bool forwards_metadata = metadata_enabled && down.produce;
     constexpr auto kScratchCb = CBIndex::c_0;
 
     MeshWorkload workload;
@@ -227,6 +230,9 @@ MeshWorkload build_relay_workload(
             num_iters,
             static_cast<uint32_t>(kScratchCb),
             down.produce ? 1u : 0u,
+            metadata_enabled ? 1u : 0u,
+            metadata_size_bytes,
+            metadata_enabled ? static_cast<uint32_t>(up.metadata_addr()) : 0u,
         };
         ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -241,23 +247,33 @@ MeshWorkload build_relay_workload(
         const auto up_svc_phys = device->worker_core_from_logical_core(up.service_core(coord));
         CoreCoord down_svc_phys{0, 0};
         uint32_t down_counter_addr = 0;
+        uint32_t down_metadata_addr = 0;
         if (down.produce) {
             down_svc_phys = device->worker_core_from_logical_core(down.service_core(coord));
             down_counter_addr = static_cast<uint32_t>(down.data_ready_counter_addr(coord));
+            if (metadata_enabled) {
+                down_metadata_addr = static_cast<uint32_t>(down.metadata_addr(coord));
+            }
         }
 
+        const uint32_t num_workers = core_range_volume(workers);
         for (const auto& wc : workers) {
-            // Single-core worker grid → this worker owns the whole page range.
-            // (Partition start/end_page here to scale to multi-core grids.)
+            // Each worker owns its row-major page slice (remainder spread over the
+            // first workers); empty ranges still handshake, so the service's
+            // num_workers ack count is always satisfied.
+            const auto [start_page, end_page] = worker_page_range(worker_index(wc, workers), num_workers, num_pages);
+            const uint32_t is_metadata_writer = (forwards_metadata && wc == workers.end_coord) ? 1u : 0u;
             const std::vector<uint32_t> rt_args = {
-                0u,
-                num_pages,
+                start_page,
+                end_page,
                 static_cast<uint32_t>(up.consumed_counter_addr(coord)),
                 static_cast<uint32_t>(up_svc_phys.x),
                 static_cast<uint32_t>(up_svc_phys.y),
                 down_counter_addr,
                 static_cast<uint32_t>(down_svc_phys.x),
                 static_cast<uint32_t>(down_svc_phys.y),
+                is_metadata_writer,
+                down_metadata_addr,
             };
             SetRuntimeArgs(program, kernel, wc, rt_args);
         }
@@ -271,10 +287,37 @@ MeshWorkload build_relay_workload(
 // per-iteration loop below for the production-mirroring cadence). Hangs loudly
 // (Finish / wait_for_fabric_links never returns) if any stage's handshake or the
 // fabric lease desyncs; mismatches surface per-iter so stale/dropped data is caught.
-void run_pipeline(MeshDevice& parent, uint32_t num_stages, const ttnn::Shape& global_shape, uint32_t num_iters) {
+//
+// Templated on the element type T so one harness covers every dtype: source data is
+// built with from_vector<T> and verified with to_vector<T>, byte-faithful because
+// every hop is a raw page copy. `modulus` bounds low-precision dtypes (src is a
+// rotating modular iota (iter+i) % modulus, distinct per element AND rotated per iter
+// so a stale page reads back wrong); pass modulus == 0 for a full-range uint32 iota.
+// `use_all_cores` selects the full compute grid (exercises per-core page partitioning)
+// vs a single worker core. When `metadata_size_bytes > 0`, each transfer also carries an
+// inline metadata blob (made by `make_metadata`, default {-1,0,1+iter}); it is forwarded
+// stage-by-stage and the last iter's blob is verified on every terminal worker core.
+template <typename T>
+void run_pipeline(
+    MeshDevice& parent,
+    uint32_t num_stages,
+    const ttnn::Shape& global_shape,
+    uint32_t num_iters,
+    DataType dtype = DataType::UINT32,
+    Layout layout = Layout::ROW_MAJOR,
+    uint32_t modulus = 0,
+    bool use_all_cores = false,
+    uint32_t metadata_size_bytes = 0,
+    std::function<std::vector<uint32_t>(uint32_t iter)> make_metadata = {}) {
     ASSERT_GE(num_stages, 2u);
     auto stages = carve_stages(parent, num_stages);
-    const TensorSpec global_spec = make_spec(global_shape);
+    const TensorSpec global_spec = make_spec(global_shape, dtype, layout);
+    const CoreRange workers = use_all_cores ? all_cores_for(*stages[0]) : kWorkerCores;
+    const uint32_t fifo_bytes = fifo_bytes_for(global_spec);
+    const bool metadata_enabled = metadata_size_bytes > 0;
+    if (metadata_enabled && !make_metadata) {
+        make_metadata = [](uint32_t iter) { return std::vector<uint32_t>{static_cast<uint32_t>(-1), 0u, 1u + iter}; };
+    }
 
     // Stage 0 front end: H2D service with a worker grid (so the relay can handshake).
     H2DStreamService h2d(
@@ -283,9 +326,10 @@ void run_pipeline(MeshDevice& parent, uint32_t num_stages, const ttnn::Shape& gl
             .global_spec = global_spec,
             .mapper = create_mesh_mapper(*stages[0], MeshMapperConfig{.placements = replicate_all(*stages[0])}),
             .socket_buffer_type = BufferType::L1,
-            .fifo_size_bytes = 4096,
-            .scratch_cb_size_bytes = 4096,
-            .worker_cores = kWorkerCores,
+            .fifo_size_bytes = fifo_bytes,
+            .scratch_cb_size_bytes = fifo_bytes,
+            .worker_cores = workers,
+            .metadata_size_bytes = metadata_size_bytes,
         });
 
     // One D2D pair per stage boundary: d2d[i] forwards stage i → stage i+1.
@@ -297,9 +341,10 @@ void run_pipeline(MeshDevice& parent, uint32_t num_stages, const ttnn::Shape& gl
             D2DStreamConfig{
                 .global_spec = global_spec,
                 .mapper = create_mesh_mapper(*stages[i], MeshMapperConfig{.placements = replicate_all(*stages[i])}),
-                .socket_mem_config = SocketMemoryConfig{BufferType::L1, /*fifo_size=*/4096},
-                .sender_worker_cores = kWorkerCores,
-                .receiver_worker_cores = kWorkerCores,
+                .socket_mem_config = SocketMemoryConfig{BufferType::L1, fifo_bytes},
+                .sender_worker_cores = workers,
+                .receiver_worker_cores = workers,
+                .metadata_size_bytes = metadata_size_bytes,
                 // LEASE mode: drive the fabric-link handshake per iteration, mirroring
                 // the production path where the model graph grants the links around
                 // each transfer. No CCLs compete here, so every grant succeeds, but the
@@ -314,9 +359,17 @@ void run_pipeline(MeshDevice& parent, uint32_t num_stages, const ttnn::Shape& gl
     Tensor output_tensor = create_device_tensor(
         last_recv.get_per_shard_spec(), stages[num_stages - 1].get(), last_recv.get_backing_tensor().tensor_topology());
 
-    auto out_buf = output_tensor.device_storage().get_mesh_buffer_leak_ownership();
-    const size_t num_u32 = global_spec.compute_packed_buffer_size_bytes() / sizeof(uint32_t);
-    ASSERT_GT(num_u32, 0u);
+    const uint32_t num_elems = static_cast<uint32_t>(global_shape.volume());
+    ASSERT_GT(num_elems, 0u);
+    auto mapper = create_mesh_mapper(*stages[0], MeshMapperConfig{.placements = replicate_all(*stages[0])});
+    auto make_src = [&](uint32_t iter) {
+        std::vector<T> v(num_elems);
+        for (uint32_t i = 0; i < num_elems; ++i) {
+            v[i] = modulus ? static_cast<T>(static_cast<float>((iter + i) % modulus))
+                           : static_cast<T>(1u + iter * 0x1000u + i);  // full-range uint32 iota
+        }
+        return v;
+    };
 
     // Per-iteration loop. Push one tensor, then walk the stages IN ORDER. The body of
     // the stage loop is EXACTLY what one host does per iter in the distributed
@@ -328,13 +381,17 @@ void run_pipeline(MeshDevice& parent, uint32_t num_stages, const ttnn::Shape& gl
     // On a single host the stages run sequentially, so each stage's outbound release
     // feeds the next stage's inbound within the same iter — carrying src all the way to
     // the output, so each iter validates its own data with no pipeline-fill latency.
-    std::vector<uint32_t> readback;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        std::vector<uint32_t> src(num_u32);
-        std::iota(src.begin(), src.end(), 1u + iter * 0x1000u);  // distinct per iter
-
-        h2d.forward_to_tensor(
-            ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(src.data()), src.size() * sizeof(uint32_t)));
+        const Tensor host_src = Tensor::from_vector<T>(make_src(iter), global_spec);
+        std::vector<uint32_t> md;
+        ttsl::Span<const std::byte> md_span;
+        if (metadata_enabled) {
+            md = make_metadata(iter);
+            ASSERT_EQ(md.size() * sizeof(uint32_t), metadata_size_bytes);
+            md_span = ttsl::Span<const std::byte>(
+                reinterpret_cast<const std::byte*>(md.data()), md.size() * sizeof(uint32_t));
+        }
+        h2d.forward_to_tensor(ttnn::distributed::distribute_tensor(host_src, *mapper), md_span);
 
         for (uint32_t i = 0; i < num_stages; ++i) {
             // ---- host i's per-iter work (collapses to single calls in multi-host) ----
@@ -364,7 +421,8 @@ void run_pipeline(MeshDevice& parent, uint32_t num_stages, const ttnn::Shape& gl
             UpstreamHandle up = has_inbound ? make_upstream(*d2d[i - 1].second) : make_upstream(h2d);
             DownstreamHandle down =
                 has_outbound ? make_downstream_producer(*d2d[i].first) : make_downstream_terminal(output_tensor);
-            MeshWorkload relay = build_relay_workload(*stages[i], kWorkerCores, /*num_iters=*/1, up, down);
+            MeshWorkload relay =
+                build_relay_workload(*stages[i], workers, /*num_iters=*/1, up, down, metadata_size_bytes);
             EnqueueMeshWorkload(stages[i]->mesh_command_queue(), relay, /*blocking=*/false);
             Finish(stages[i]->mesh_command_queue());
 
@@ -377,10 +435,29 @@ void run_pipeline(MeshDevice& parent, uint32_t num_stages, const ttnn::Shape& gl
         }
 
         // src has reached the output tensor (last stage's relay Finished above).
-        for (const auto& coord : output_tensor.tensor_topology().mesh_coords()) {
-            readback.clear();
-            ReadShard(stages[num_stages - 1]->mesh_command_queue(), readback, out_buf, coord);
-            EXPECT_EQ(readback, src) << "pipeline output mismatch at iter " << iter << " coord " << coord;
+        // Single-chip (1x1) stages, so to_vector returns the one replica unambiguously.
+        const std::vector<T> expected = host_src.to_vector<T>();
+        const std::vector<T> got = output_tensor.to_vector<T>();
+        EXPECT_EQ(got, expected) << "pipeline output mismatch at iter " << iter << " (dtype " << static_cast<int>(dtype)
+                                 << ")";
+    }
+
+    // Metadata is forwarded stage-by-stage and the last D2D receiver multicasts it into
+    // every terminal worker core's L1 (at the uniform get_metadata_addr()). The blob is
+    // overwritten each iter, so assert the final iter's blob persisted everywhere.
+    if (metadata_enabled) {
+        const std::vector<uint32_t> expected_md = make_metadata(num_iters - 1);
+        const uint32_t recv_md_addr = static_cast<uint32_t>(last_recv.get_metadata_addr());
+        const CoreRange recv_workers = last_recv.get_worker_cores();
+        std::vector<uint32_t> rb;
+        for (const auto& coord : last_recv.get_backing_tensor().tensor_topology().mesh_coords()) {
+            auto* device = stages[num_stages - 1]->get_device(coord);
+            for (const auto& wc : recv_workers) {
+                rb.clear();
+                tt::tt_metal::detail::ReadFromDeviceL1(device, wc, recv_md_addr, metadata_size_bytes, rb);
+                EXPECT_EQ(rb, expected_md)
+                    << "pipeline metadata mismatch at coord " << coord << " core (" << wc.x << "," << wc.y << ")";
+            }
         }
     }
 }
@@ -389,38 +466,392 @@ bool enough_devices(MeshDevice& mesh, uint32_t num_stages) {
     return mesh.shape().dims() == 2 && mesh.num_devices() >= num_stages;
 }
 
-// 2 stages, one transfer: proves Host→H2D→D2D→output composes.
-TEST_F(StreamPipelineTest, TwoStageSingleTransfer) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "Pipeline service cores require Blackhole or UBB Galaxy.";
+// Shared skip guard: service cores (Blackhole / UBB Galaxy), H2D host-DMA pinning
+// (the front end pins a DMA buffer; iommu=pt hosts can't), and >= n_stages devices
+// to carve one 1x1 submesh per stage. Lease mode leases the link per transfer, so
+// the stages need not be colinear (unlike the own-mode chains).
+#define PIPELINE_GUARD(n_stages)                                                                                    \
+    if (!service_cores_supported()) {                                                                               \
+        GTEST_SKIP() << "Pipeline service cores require Blackhole or UBB Galaxy.";                                  \
+    }                                                                                                               \
+    if (!h2d_host_pinning_supported()) {                                                                            \
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not "                     \
+                        "iommu=pt); see notes/d2d_galaxy_h2d_pinning_failure.md.";                                  \
+    }                                                                                                               \
+    if (!enough_devices(*this->mesh_device_, (n_stages))) {                                                         \
+        GTEST_SKIP() << "Need a 2D mesh with >= " << (n_stages) << " devices; got " << this->mesh_device_->shape(); \
     }
-    if (!enough_devices(*this->mesh_device_, /*num_stages=*/2)) {
-        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices; got " << this->mesh_device_->shape();
-    }
-    run_pipeline(*this->mesh_device_, /*num_stages=*/2, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/1);
-}
 
-// 2 stages, several transfers: proves the persistent pipeline streams repeatedly.
+// ===========================================================================
+// Basic 2/3-stage smoke (uint32, single worker core): the minimal composition
+// proofs. Larger grids, shapes, dtypes, and longer pipelines are below.
+// ===========================================================================
+
+// 2 stages, several transfers: proves Host→H2D→D2D→output composes AND the persistent
+// pipeline streams repeatedly (iter 0 alone is the single-transfer case).
 TEST_F(StreamPipelineTest, TwoStageReuse) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "Pipeline service cores require Blackhole or UBB Galaxy.";
-    }
-    if (!enough_devices(*this->mesh_device_, /*num_stages=*/2)) {
-        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices; got " << this->mesh_device_->shape();
-    }
-    run_pipeline(*this->mesh_device_, /*num_stages=*/2, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
+    PIPELINE_GUARD(2);
+    run_pipeline<uint32_t>(*this->mesh_device_, /*num_stages=*/2, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
 }
 
 // 3 stages: exercises a middle stage whose relay is D2D-consumer + D2D-producer (a
 // D2D pair on both ends of one device), the multi-stage generalization.
 TEST_F(StreamPipelineTest, ThreeStage) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "Pipeline service cores require Blackhole or UBB Galaxy.";
-    }
-    if (!enough_devices(*this->mesh_device_, /*num_stages=*/3)) {
-        GTEST_SKIP() << "Need a 2D mesh with >= 3 devices; got " << this->mesh_device_->shape();
-    }
-    run_pipeline(*this->mesh_device_, /*num_stages=*/3, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
+    PIPELINE_GUARD(3);
+    run_pipeline<uint32_t>(*this->mesh_device_, /*num_stages=*/3, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
+}
+
+// ===========================================================================
+// Shape matrix (uint32, full grid, 2 stages): exercises the page partition +
+// socket chunk plan across edge shapes. The unevenness that stresses the
+// partition is the PAGE COUNT (row count); the last dim only sets the page size.
+//   - large         big page count, wide page > FIFO (one tensor page per chunk)
+//   - uneven        711 pages mod num_workers -> remainder partition; wide page
+//   - long-uneven   thin remainder (just over num_workers); wide page
+//   - narrow-uneven 256 B page -> multi-page chunks AND 711 not divisible by the
+//                   per-chunk count, so derive_chunk_plan's reduction loop fires
+// ===========================================================================
+
+// ~536 MB / tensor; 2 iters (still catches stale/ignored transfers via the
+// per-iteration value bump) to bound runtime + fabric traffic.
+TEST_F(StreamPipelineTest, ShapeLarge) {
+    PIPELINE_GUARD(2);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 8, 4096, 4096}),
+        /*num_iters=*/2,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, ShapeUneven) {
+    PIPELINE_GUARD(2);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 711, 5120}),
+        /*num_iters=*/3,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, ShapeLongUneven) {
+    PIPELINE_GUARD(2);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 155, 3712}),
+        /*num_iters=*/3,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, ShapeNarrowUneven) {
+    PIPELINE_GUARD(2);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 711, 64}),
+        /*num_iters=*/3,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true);
+}
+
+// ===========================================================================
+// Multi-dtype matrix (full grid, 2 stages, no metadata). BFLOAT16 / FLOAT32 /
+// UINT8 are ROW_MAJOR; BFLOAT8_B / BFLOAT4_B are block-float -> TILE. Values are
+// a rotating modular iota (bounded so low-precision dtypes don't saturate);
+// verification is exact because every hop is a byte copy. Fixed-per-core shape
+// (32 pages/core) for the dense even split, plus a [1,1,711,5120] uneven variant.
+// ===========================================================================
+
+// fixed_per_core_shape == 32 pages/core, 512 u32/page (dense, perfectly even).
+static ttnn::Shape fixed_per_core_shape(const CoreRange& workers) {
+    return ttnn::Shape({1, 1, 32u * core_range_volume(workers), 512u});
+}
+
+TEST_F(StreamPipelineTest, DtypeBfloat16) {
+    PIPELINE_GUARD(2);
+    const auto shape = fixed_per_core_shape(all_cores_for(*this->mesh_device_));
+    run_pipeline<bfloat16>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        shape,
+        /*num_iters=*/2,
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        /*modulus=*/256,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, DtypeFloat32) {
+    PIPELINE_GUARD(2);
+    const auto shape = fixed_per_core_shape(all_cores_for(*this->mesh_device_));
+    run_pipeline<float>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        shape,
+        /*num_iters=*/2,
+        DataType::FLOAT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/4096,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, DtypeUint8) {
+    PIPELINE_GUARD(2);
+    const auto shape = fixed_per_core_shape(all_cores_for(*this->mesh_device_));
+    run_pipeline<uint8_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        shape,
+        /*num_iters=*/2,
+        DataType::UINT8,
+        Layout::ROW_MAJOR,
+        /*modulus=*/128,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, DtypeBfloat8B) {
+    PIPELINE_GUARD(2);
+    const auto shape = fixed_per_core_shape(all_cores_for(*this->mesh_device_));
+    run_pipeline<float>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        shape,
+        /*num_iters=*/2,
+        DataType::BFLOAT8_B,
+        Layout::TILE,
+        /*modulus=*/256,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, DtypeBfloat4B) {
+    PIPELINE_GUARD(2);
+    const auto shape = fixed_per_core_shape(all_cores_for(*this->mesh_device_));
+    run_pipeline<float>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        shape,
+        /*num_iters=*/2,
+        DataType::BFLOAT4_B,
+        Layout::TILE,
+        /*modulus=*/64,
+        /*use_all_cores=*/true);
+}
+
+// Same dtype matrix on a fixed uneven shape [1,1,711,5120] (711 pages mod workers).
+TEST_F(StreamPipelineTest, DtypeBfloat16ShapeUneven) {
+    PIPELINE_GUARD(2);
+    run_pipeline<bfloat16>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 711, 5120}),
+        /*num_iters=*/3,
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        /*modulus=*/256,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, DtypeFloat32ShapeUneven) {
+    PIPELINE_GUARD(2);
+    run_pipeline<float>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 711, 5120}),
+        /*num_iters=*/3,
+        DataType::FLOAT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/4096,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, DtypeUint8ShapeUneven) {
+    PIPELINE_GUARD(2);
+    run_pipeline<uint8_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 711, 5120}),
+        /*num_iters=*/3,
+        DataType::UINT8,
+        Layout::ROW_MAJOR,
+        /*modulus=*/128,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, DtypeBfloat8BShapeUneven) {
+    PIPELINE_GUARD(2);
+    run_pipeline<float>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 711, 5120}),
+        /*num_iters=*/3,
+        DataType::BFLOAT8_B,
+        Layout::TILE,
+        /*modulus=*/256,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, DtypeBfloat4BShapeUneven) {
+    PIPELINE_GUARD(2);
+    run_pipeline<float>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 711, 5120}),
+        /*num_iters=*/3,
+        DataType::BFLOAT4_B,
+        Layout::TILE,
+        /*modulus=*/64,
+        /*use_all_cores=*/true);
+}
+
+// ===========================================================================
+// Longer pipelines (full grid): 4-stage (~Quietbox) and 8-stage (~Loudbox). In
+// lease mode each boundary leases the link per transfer, so the stages need not
+// be colinear. num_iters > 1 covers reuse (the chain is rebuilt-free; each iter
+// re-enqueues the per-stage relays against the persistent services).
+// ===========================================================================
+
+TEST_F(StreamPipelineTest, FourStageAllCores) {
+    PIPELINE_GUARD(4);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/4,
+        ttnn::Shape({1, 1, 32, 64}),
+        /*num_iters=*/4,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, FourStageLargeAllCores) {
+    PIPELINE_GUARD(4);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/4,
+        ttnn::Shape({1, 1, 711, 5120}),
+        /*num_iters=*/3,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, EightStageAllCores) {
+    PIPELINE_GUARD(8);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/8,
+        ttnn::Shape({1, 1, 32, 64}),
+        /*num_iters=*/4,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true);
+}
+
+TEST_F(StreamPipelineTest, EightStageLargeAllCores) {
+    PIPELINE_GUARD(8);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/8,
+        ttnn::Shape({1, 1, 711, 5120}),
+        /*num_iters=*/3,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true);
+}
+
+// ===========================================================================
+// Metadata (uint32, full grid): an inline blob ships with every transfer and is
+// forwarded stage-by-stage; the last iter's blob is verified on every terminal
+// worker core. 1-word (smallest), 3-word triple {-1,0,base}, and a full
+// socket-page iota (4096 B) cover the metadata size range. The 3-stage variant
+// proves a middle relay forwards the blob (consume + produce) like the stage-0
+// bridge does.
+// ===========================================================================
+
+constexpr uint32_t kMetadataWord = static_cast<uint32_t>(sizeof(uint32_t));
+constexpr uint32_t kMetadataTriple = 3u * static_cast<uint32_t>(sizeof(uint32_t));
+constexpr uint32_t kMetadataFullPageWords = 1024u;  // 4096 B == one socket page
+
+// 2 stages, 3-word triple {-1,0,1+iter}: basic end-to-end metadata.
+TEST_F(StreamPipelineTest, MetadataTriple) {
+    PIPELINE_GUARD(2);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 32, 512}),
+        /*num_iters=*/4,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true,
+        kMetadataTriple);
+}
+
+// Single metadata word (4 B): smallest payload, distinct from the 3-word triple.
+TEST_F(StreamPipelineTest, MetadataOneWord) {
+    PIPELINE_GUARD(2);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 32, 512}),
+        /*num_iters=*/4,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true,
+        kMetadataWord,
+        [](uint32_t iter) { return std::vector<uint32_t>{1u + iter}; });
+}
+
+// Full socket-page metadata: 1024 uint32 words (4096 B) iota [0..1023].
+TEST_F(StreamPipelineTest, MetadataFullPage) {
+    PIPELINE_GUARD(2);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/2,
+        ttnn::Shape({1, 1, 32, 512}),
+        /*num_iters=*/2,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true,
+        kMetadataFullPageWords * kMetadataWord,
+        [](uint32_t /*iter*/) {
+            std::vector<uint32_t> words(kMetadataFullPageWords);
+            std::iota(words.begin(), words.end(), 0u);
+            return words;
+        });
+}
+
+// 3 stages with metadata: the middle relay forwards the blob (consume + produce) like
+// the stage-0 bridge does, so the final {-1,0,base} must reach the terminal workers.
+TEST_F(StreamPipelineTest, MetadataThreeStage) {
+    PIPELINE_GUARD(3);
+    run_pipeline<uint32_t>(
+        *this->mesh_device_,
+        /*num_stages=*/3,
+        ttnn::Shape({1, 1, 32, 512}),
+        /*num_iters=*/4,
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        /*modulus=*/0,
+        /*use_all_cores=*/true,
+        kMetadataTriple);
 }
 
 }  // namespace
