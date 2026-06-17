@@ -37,7 +37,8 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vInt i = m;
 
     sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
-    sfpi::vFloat t, rcp, x0, x1;
+    sfpi::vFloat t, rcp, x0, x1, neg_two;
+    sfpi::vInt magic_seed;
 
     a = sfpi::setsgn(x, 0);
     f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
@@ -48,34 +49,35 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     r = r * f + 4.166680202e-2f;
     s = f * f;  // hide SFPMAD latency
     r = r * f + sfpi::vConstFloatPrgm2;
-    r = r * f + 4.999999702e-1f;
+    w = 0.5f;
+    r = __builtin_rvtt_sfpmad(r.get(), f.get(), w.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    sfpi::vInt e = i + 127;
-    scale = sfpi::setexp(sfpi::vConst0, e);
-    bias1 = scale + 1.0f;
+    sfpi::vInt e = i + 126;
     r = r * s + f;
-
+    scale = sfpi::setexp(sfpi::vConst0, e);
+    bias1 = scale + w;
+    bias0 = scale - w;
+    x1 = r * scale + bias1;
+    x0 = r * scale + bias0;
+    magic_seed = 0xfef30000;
+    rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
+    t = x1 * rcp + 1.0f;
+    // nop
     a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
+    rcp = rcp * t + rcp;
+    // nop
     y = a * 0.0f + 1.0f;
-
+    t = x1 * rcp + 1.0f;
+    // nop
+    rcp = rcp * t + rcp;
     v_if(i < 61) {
-        x1 = r * scale + bias1;
-        sfpi::vInt magic_seed = 0xfef30000;  // 392e0;
-
-        // initial estimate recip = -reciprocal(x)
-        rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
-        t = x1 * rcp + 1.0f;
-        bias0 = scale - 1.0f;
-        rcp = rcp * t + rcp;
-        x0 = r * scale + bias0;
-        t = x1 * rcp + 1.0f;
-        rcp = rcp * t + rcp;
         y = x0 * rcp;
+        // nop
         t = x1 * y + x0;
+        // nop
         y = t * rcp + y;
     }
     v_endif;
-
     return sfpi::copysgn(y, x);
 }
 
