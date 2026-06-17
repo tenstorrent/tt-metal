@@ -260,15 +260,7 @@ def create_decoder_golden_tensors(
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
-        127,
-        511,
-        1023,
-        2047,
-        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
-        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
-        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
-        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        8190,  # deep position (the alternating-PCC issue position)
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
@@ -283,7 +275,7 @@ def create_decoder_golden_tensors(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize("num_internal_iterations", [1, 2])
 @pytest.mark.parametrize(
     "expert_upload_mode",
     [

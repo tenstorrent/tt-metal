@@ -499,6 +499,15 @@ struct FlashMLADecode {
                     noc_async_read(q_noc_addr, get_write_ptr(args.cb_q_in), args.q_chunk_size_bytes, READ_NOC_INDEX);
                     mask_last_chunk(args.cb_mask, args.k_chunk_size, cur_pos, k_chunk_end, k_num_chunks);
                     noc_async_read_barrier(READ_NOC_INDEX);
+                    // #43562/3 experiment: force Q=0 so the QK matmul output mm1 = Q@K = 0 exactly,
+                    // isolating any iteration/bank-dependent residue carried by mm1 with no real signal.
+                    {
+                        volatile tt_l1_ptr uint32_t* _qz =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(args.cb_q_in));
+                        for (uint32_t _i = 0; _i < args.q_chunk_size_bytes / 4; _i++) {
+                            _qz[_i] = 0;
+                        }
+                    }
                     cb_push_back(args.cb_q_in, q_chunk_tiles);
                 }
                 noc_semaphore_set(q_input_mcast_semaphore_ptr, 0);
