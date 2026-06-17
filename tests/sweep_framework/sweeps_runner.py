@@ -337,6 +337,11 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 
 MAX_RETRIES = 1
 
+# After a device-fatal wedge we reset and continue with the next vector. Guard
+# against a permanently-wedged device (every vector re-faults) by aborting the
+# suite once this many consecutive resets fail to recover it.
+MAX_CONSECUTIVE_DEVICE_RECOVERIES = 3
+
 
 def _create_main_proc_runner(module_name, input_queue, output_queue, config):
     """Create a persistent runner for main process mode that keeps device open.
@@ -534,6 +539,29 @@ def _is_device_hang_message(message) -> bool:
     return any(sig in msg for sig in _DEVICE_HANG_SIGNATURES)
 
 
+# Signatures of a device-level *fatal* (distinct from a hang): one vector leaves
+# a core in a bad run state, so the NEXT program launch on that device aborts
+# reading the stale run mailbox ("Read unexpected run_mailbox value: 0x40").
+# Unlike a hang we do NOT abort the whole suite — the fault is tied to the single
+# offending vector, so we reset the device and continue with the next vector on a
+# clean mesh. Without this, one bad vector wedges the device and every remaining
+# vector in the process cascade-fails with the same error (observed on N300: a
+# clamp (12,1,1) config wedging cores 25-16/25-17 then ~25 false FAIL_ASSERT).
+_DEVICE_FATAL_SIGNATURES = (
+    "unexpected run_mailbox value",
+    "read unexpected run_mailbox",
+)
+
+
+def _is_device_fatal_message(message) -> bool:
+    """Return True if a returned exception indicates a device-fatal wedge that
+    requires a device reset before the next vector can run."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _DEVICE_FATAL_SIGNATURES)
+
+
 def _set_crash_hang_defaults(result):
     """Populate result fields for a FAIL_CRASH_HANG outcome."""
     result["status"] = TestStatus.FAIL_CRASH_HANG
@@ -611,6 +639,31 @@ def _execute_vector_with_retry(
                 result["_abort_suite"] = config.skip_on_timeout
                 return result
 
+            # A device-fatal wedge (e.g. "Read unexpected run_mailbox value")
+            # corrupts the mesh: this vector failed AND every later vector on
+            # the same device would abort the same way. Reset the device and
+            # respawn the child so the REST of the suite runs on a clean mesh —
+            # but, unlike a hang, do NOT abort the suite: the fault is tied to
+            # this one vector, not the whole device session. A repeatedly-faulting
+            # device is caught by the consecutive-recovery cap in execute_suite.
+            if _is_device_fatal_message(result.get("message")):
+                logger.error(
+                    f"DEVICE FATAL detected for input_hash='{input_hash}': {result.get('message')}. "
+                    f"Resetting device and continuing with the next vector."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                result["status"] = TestStatus.FAIL_CRASH_HANG
+                result["exception"] = str(result.get("message", "DEVICE FATAL"))
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                result["_child_process"] = p
+                result["_abort_suite"] = False
+                result["_device_recovered"] = True
+                return result
+
             result["_child_process"] = p
             result["_abort_suite"] = False
             return result
@@ -666,6 +719,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
+    # Consecutive device-fatal resets; reset to 0 on any vector that runs without
+    # a device-fatal wedge. Abort the suite if it exceeds the cap (device won't recover).
+    consecutive_device_recoveries = 0
     # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
     child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     timeout_before_rejoin = 5
@@ -733,6 +789,20 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 )
                 p = result.pop("_child_process", p)
                 abort_suite = result.pop("_abort_suite", False)
+
+                # Track device-fatal recoveries. We continue past a single wedge,
+                # but if the device keeps faulting it isn't recovering — abort the
+                # suite rather than reset+respawn for every remaining vector.
+                if result.pop("_device_recovered", False):
+                    consecutive_device_recoveries += 1
+                    if consecutive_device_recoveries > MAX_CONSECUTIVE_DEVICE_RECOVERIES:
+                        logger.error(
+                            f"{consecutive_device_recoveries} consecutive device-fatal resets in suite "
+                            f"'{suite_name}'; device is not recovering. Aborting remaining tests in suite."
+                        )
+                        abort_suite = True
+                else:
+                    consecutive_device_recoveries = 0
 
                 if abort_suite:
                     if config.skip_on_timeout:
