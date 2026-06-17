@@ -447,7 +447,7 @@ def test_flux1_pipeline_performance_accuracy(
         clip_scores.append(100 * clip.get_clip_score(prompt, image).item())
 
     for prompt, score in zip(TEST_PROMPTS, clip_scores):
-        logger.info(f'Propmpt "{prompt[:50]}". Score {score}')
+        logger.info(f'Prompt "{prompt[:50]}". Score {score}')
         assert score > 30.0
 
 
