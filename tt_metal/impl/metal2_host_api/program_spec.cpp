@@ -464,6 +464,20 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Validate kernel tensor bindings
     for (const auto& kernel : spec.kernels) {
+        // TEMPORARY: tensor bindings on compute kernels are not yet supported end-to-end. A
+        // TensorAccessor cannot currently be constructed in a compute kernel, so a spec that binds a
+        // tensor to a compute kernel looks valid here but fails once it reaches the kernel. Reject it
+        // up front with an honest message until the compute-path support lands (expected within a day
+        // or two of 2026-06-16). Remove this guard when that ships.
+        TT_FATAL(
+            !kernel.is_compute_kernel() || kernel.tensor_bindings.empty(),
+            "Kernel '{}' is a compute kernel with a tensor binding ('{}'). Tensor bindings on compute "
+            "kernels are not yet supported — a TensorAccessor cannot currently be constructed in a "
+            "compute kernel, so this spec would compile but fail in the kernel. This is a temporary "
+            "restriction that will be lifted soon.",
+            kernel.unique_id,
+            kernel.tensor_bindings.empty() ? std::string{} : kernel.tensor_bindings.front().accessor_name);
+
         std::unordered_set<std::string> accessor_names;
         for (const auto& binding : kernel.tensor_bindings) {
             auto [it, inserted] = accessor_names.insert(binding.accessor_name);
@@ -1058,29 +1072,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // Validate local DFB endpoint placement and multi-binding consistency.
     //
-    // The hardware invariant is local: at each node where the DFB is instantiated, exactly one
-    // producer kernel instance and one consumer kernel instance run on that node. This is
-    // sufficient — but not strictly necessary — to enforce at the spec level via "one producer
-    // KernelSpec, one consumer KernelSpec". Metal 2.0 also permits multiple PRODUCER KernelSpecs
-    // (and multiple CONSUMER KernelSpecs) per DFB, provided:
-    //   1. Within each role (producer / consumer): KernelSpecs' WorkUnitSpec memberships are
-    //      pairwise disjoint (so no node has two same-role instances).
-    //   2. Across roles: union of producer KernelSpecs' WU memberships ==
-    //      union of consumer KernelSpecs' WU memberships (so every node where the DFB lives
-    //      has both a producer instance and a consumer instance).
+    // The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
+    // node where the DFB is instantiated, exactly one producer kernel instance and exactly one
+    // consumer kernel instance must run on that node. Metal 2.0 permits multiple PRODUCER
+    // KernelSpecs (and multiple CONSUMER KernelSpecs) per DFB, so we enforce that invariant directly
+    // as a per-node census, plus per-role uniformity of the binding-site config:
+    //   1./2. Placement: every node hosting the DFB runs exactly one producer instance and exactly
+    //         one consumer instance (the per-node census below). This subsumes both "no node has two
+    //         same-role instances" and "producer and consumer node coverage coincide".
     //   3. All bindings on the same role have matching `access_pattern` (the DFB scheduler
     //      config is shared per role).
     //   4. All KernelSpecs on the same role have matching `num_threads` (the per-side
     //      credit-tracking config is shared per role).
     // Self-loop (a kernel that appears in both producers and consumers of a DFB) is currently
     // restricted to the simple single-producer-single-consumer case.
-    auto kernel_work_unit_set = [&](const KernelSpecName& name) {
-        std::set<const WorkUnitSpec*> work_units;
-        for (const WorkUnitSpec* w : collected.kernel_work_units.at(name)) {
-            work_units.insert(w);
-        }
-        return work_units;
-    };
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
 
@@ -1132,36 +1137,85 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         check_role_uniformity(endpoints.producers, "PRODUCER");
         check_role_uniformity(endpoints.consumers, "CONSUMER");
 
-        // (1) and (2): WU membership disjointness within each role + cross-role equality.
-        // Compute per-role unions while also checking within-role pairwise disjointness.
-        auto compute_role_union = [&](const auto& records, std::string_view role) {
-            std::set<const WorkUnitSpec*> role_union;
+        // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
+        // every node it is instantiated on must run exactly one producer instance and exactly one
+        // consumer instance. Tally instances per node directly from the bindings: this subsumes the
+        // old within-role disjointness check (a node with >1 same-role instance) and the cross-role
+        // coverage check (a node with one role but not the other), and reports the offending node in
+        // node terms rather than WorkUnitSpec terms. It counts actual node occupancy, so overlapping
+        // same-role placements are caught regardless of how the WorkUnitSpec bookkeeping produced
+        // them. (Self-loops fall out naturally: a self-looping kernel tallies as one producer AND
+        // one consumer on each of its nodes.)
+        std::unordered_map<NodeCoord, std::vector<const KernelSpec*>> producers_on_node;
+        std::unordered_map<NodeCoord, std::vector<const KernelSpec*>> consumers_on_node;
+        auto tally_role = [&](const auto& records, auto& on_node) {
             for (const auto& rec : records) {
-                const auto wu_set = kernel_work_unit_set(rec.kernel->unique_id);
-                for (const WorkUnitSpec* wu : wu_set) {
-                    auto [it, inserted] = role_union.insert(wu);
-                    TT_FATAL(
-                        inserted,
-                        "DFB '{}' has multiple {} KernelSpecs sharing WorkUnitSpec '{}' (kernel '{}' collides with a "
-                        "prior {} binding). Same-role bindings must have pairwise-disjoint WorkUnitSpec membership.",
-                        dfb.unique_id,
-                        role,
-                        wu->name,
-                        rec.kernel->unique_id,
-                        role);
+                for (const NodeCoord& node : corerange_to_cores(collected.kernel_node_set.at(rec.kernel->unique_id))) {
+                    on_node[node].push_back(rec.kernel);
                 }
             }
-            return role_union;
         };
-        const auto producer_wu_union = compute_role_union(endpoints.producers, "PRODUCER");
-        const auto consumer_wu_union = compute_role_union(endpoints.consumers, "CONSUMER");
-        TT_FATAL(
-            producer_wu_union == consumer_wu_union,
-            "Local DFB '{}' producer and consumer KernelSpecs do not cover the same WorkUnitSpec(s). "
-            "Local DFBs require every node where the DFB is instantiated to host both a producer "
-            "and a consumer kernel instance; either refactor the placement, or model this as "
-            "a RemoteDataflowBufferSpec.",
-            dfb.unique_id);
+        tally_role(endpoints.producers, producers_on_node);
+        tally_role(endpoints.consumers, consumers_on_node);
+
+        // Footprint = every node hosting any instance of either role. A std::set gives deterministic
+        // iteration order, hence deterministic error messages.
+        std::set<NodeCoord> footprint;
+        for (const auto& [node, kernels] : producers_on_node) {
+            footprint.insert(node);
+        }
+        for (const auto& [node, kernels] : consumers_on_node) {
+            footprint.insert(node);
+        }
+
+        auto names_at = [](const std::unordered_map<NodeCoord, std::vector<const KernelSpec*>>& on_node,
+                           const NodeCoord& node) -> std::string {
+            auto it = on_node.find(node);
+            if (it == on_node.end() || it->second.empty()) {
+                return "none";
+            }
+            std::string names;
+            for (const KernelSpec* k : it->second) {
+                names += (names.empty() ? "'" : ", '") + k->unique_id.get() + "'";
+            }
+            return names;
+        };
+
+        for (const NodeCoord& node : footprint) {
+            auto p_it = producers_on_node.find(node);
+            auto c_it = consumers_on_node.find(node);
+            const size_t num_producers = p_it == producers_on_node.end() ? 0 : p_it->second.size();
+            const size_t num_consumers = c_it == consumers_on_node.end() ? 0 : c_it->second.size();
+            if (num_producers == 1 && num_consumers == 1) {
+                continue;
+            }
+            std::string_view guidance;
+            if (num_producers == 0) {
+                guidance =
+                    "This node has a consumer but no producer — ensure a producer kernel covers it "
+                    "(via its WorkUnitSpec membership).";
+            } else if (num_consumers == 0) {
+                guidance =
+                    "This node has a producer but no consumer — ensure a consumer kernel covers it "
+                    "(via its WorkUnitSpec membership).";
+            } else {
+                guidance =
+                    "Multiple same-role kernel instances land on this node — their placements overlap; "
+                    "give each disjoint nodes.";
+            }
+            TT_FATAL(
+                false,
+                "Local DFB '{}' is malformed at node {}: {} producer instance(s) ({}) and {} consumer "
+                "instance(s) ({}). A local DFB lives in shared SRAM on each node, so every node it is "
+                "instantiated on must run exactly one producer and one consumer kernel instance. {}",
+                dfb.unique_id,
+                node.str(),
+                num_producers,
+                names_at(producers_on_node, node),
+                num_consumers,
+                names_at(consumers_on_node, node),
+                guidance);
+        }
 
         // Self-loop interplay with multi-binding: when ANY kernel self-loops a DFB (appears in
         // both producers and consumers), the producer set must equal the consumer set as sets
@@ -1262,9 +1316,9 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             tp_name);
         const TensorSpec& tensor_spec = it->second->spec;
         TT_FATAL(
-            tensor_spec.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
+            tensor_spec.memory_config().is_l1(),
             "DFB '{}' borrows memory from TensorParameter '{}', but its TensorSpec is not L1-resident (L1 is "
-            "required).",
+            "required). Both L1 and L1_SMALL are accepted.",
             dfb.unique_id,
             tp_name);
         // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is

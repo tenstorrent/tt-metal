@@ -145,6 +145,9 @@ void kernel_main() {
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
+
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -201,7 +204,7 @@ void kernel_main() {
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
-    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
 
     // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
@@ -216,6 +219,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
     constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
+    constexpr uint32_t tiles_per_step_shared = Cfg::in2_tiles_per_step_shared;
 
     //-------------------------------------------------------------------------
     // Compute
@@ -304,7 +308,13 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
-            for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
+            // Shared experts are TP-split + front-packed: produce only the real TpNt prefix
+            // (dm0 reads the matching shortened W0/W1), then zero-fill the rest of the full
+            // tiles_per_step stride below. The unchanged full W2 walk then contracts real×real
+            // in the prefix and (zero in2)×(front-packed zero W2) past it.
+            const bool is_shared_expert = expert_id >= num_experts - num_shared_experts;
+            const uint32_t prod_tiles_per_step = is_shared_expert ? tiles_per_step_shared : tiles_per_step;
+            for (uint32_t tile_id = 0; tile_id < prod_tiles_per_step; tile_id += 2) {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
                 tile_regs_acquire();
@@ -371,6 +381,21 @@ void kernel_main() {
 
                 pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
                 pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
+                tile_regs_release();
+            }
+
+            // Zero-fill the unproduced tail [prod_tiles_per_step, tiles_per_step) of this core's in2
+            // stride for shared experts, so the full W2 walk reads zeros there (annihilated by the
+            // front-packed zero W2 rows) rather than stale data from a prior expert.
+            if (is_shared_expert) {
+                tile_regs_acquire();
+                fill_tile_init();
+                fill_tile(0, 0.0f);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t tile_id = prod_tiles_per_step; tile_id < tiles_per_step; ++tile_id) {
+                    pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
+                }
                 tile_regs_release();
             }
 
