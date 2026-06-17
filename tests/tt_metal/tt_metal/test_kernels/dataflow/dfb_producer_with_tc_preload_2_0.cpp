@@ -8,6 +8,7 @@
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
@@ -33,6 +34,17 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
         if (producer_idx == 0) {
             preload_posted_counter(dfb, kPreloadPostedValue);
+            // Cross-kernel rendezvous: this kernel preloads POSTED; the consumer kernel
+            // preloads ACKED. They run on separate DM RISCs with no implicit ordering, so
+            // without a barrier this producer could start issuing async_reads (advancing
+            // posted) before the consumer has bumped acked — leaving occupancy != 0 and
+            // corrupting the first entry. Signal "producer ready", then wait for the
+            // consumer's "ready" so neither side enters its data loop until both counters
+            // are preloaded (occupancy == 0).
+            Semaphore prod_ready(sem::prod_ready);
+            Semaphore cons_ready(sem::cons_ready);
+            prod_ready.set(1);
+            cons_ready.wait_min(1);
         }
 #endif
     }
