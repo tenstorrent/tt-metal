@@ -222,9 +222,9 @@ static inline void unpack_operand_check_impl(
         operand_assert<Trigger::ERROR>(
             state.src_b.output_format, dst_fmt_B, CTSTR("configured vs provided SRC B FORMAT are mismatched"), context.configure_b, current);
         operand_assert<Trigger::ERROR>(
-            state.src_b.face_height, face_height_B, CTSTR("configured vs provided UNPACK A L1 FACE HEIGHT are mismatched"), context.configure_b, current);
+            state.src_a.face_height, face_height_A, CTSTR("configured vs provided UNPACK A L1 FACE HEIGHT are mismatched"), context.configure_a, current);
         operand_assert<Trigger::ERROR>(
-            state.src_a.face_height, face_height_A, CTSTR("configured vs provided UNPACK B L1 FACE HEIGHT are mismatched"), context.configure_a, current);
+            state.src_b.face_height, face_height_B, CTSTR("configured vs provided UNPACK B L1 FACE HEIGHT are mismatched"), context.configure_b, current);
         operand_assert<Trigger::ERROR>(
             state.src_a.num_faces, num_faces_A, CTSTR("configured vs provided UNPACK A L1 NUM FACES are mismatched"), context.configure_a, current);
         operand_assert<Trigger::ERROR>(
