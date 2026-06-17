@@ -10,7 +10,6 @@ Keeping one implementation avoids drift between gate/up/down and wqkv/wo tuning.
 from __future__ import annotations
 
 import math
-import os
 
 import ttnn
 
@@ -38,9 +37,7 @@ def make_linear_1d_program_config(
     num_cores = max(1, grid_x * grid_y)
 
     per_core_m = max(1, m // tile_h)
-    # Optional sweep / tuning: multiply effective K-split before ceil (see optimization plan Phase 3).
-    _k_scale = float(os.environ.get("QWEN3_TTS_LINEAR_PER_CORE_K_SCALE", "1.0"))
-    per_core_k = max(1, math.ceil((k / tile_w) / num_cores * _k_scale))
+    per_core_k = max(1, math.ceil((k / tile_w) / num_cores))
     per_core_n = max(1, math.ceil((n / tile_w) / num_cores))
 
     subblock_limit = 4 if fp32_dest_acc_en else 8
