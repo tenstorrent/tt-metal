@@ -219,10 +219,22 @@
     # test_bridge_* in test_vllm_parity.py import generator_vllm which needs
     # the vllm package; vllm is not installed in this CI image, so skip them
     # here (they still run in environments that have vllm).
+    # CI-burden reduction, following #45818 (Gemma-4 reduce CI burden): the
+    # heavy full-model-build + device-trace tests added *after* that PR by #45355
+    # (prefill device trace + batched prefill) time out the larger variants on
+    # constrained runners (e.g. 26B/31B on wh_llmbox), so the whole
+    # test_prefill_trace_* and test_batched_prefill_perf files are ignored here.
+    # test_full_model_parity_* (vLLM full-model parity decode loops, from #44265)
+    # is likewise deselected. The tier-1 promotion of 26B/31B/12B is intentionally
+    # kept — only the heavy test cases are removed, not the tiers.
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e2b
   skus:
@@ -241,8 +253,12 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e4b
   skus:
@@ -265,8 +281,12 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-26b-a4b
   skus:
@@ -293,8 +313,12 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-31b
   skus:
@@ -319,8 +343,12 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-12b
   skus:
