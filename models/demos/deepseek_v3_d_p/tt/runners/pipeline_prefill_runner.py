@@ -64,7 +64,11 @@ _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 4 * CHUNK_SIZE))
+# Chunks this run drives. The per-user KV cache is sized to exactly hold them
+# (max_seq_len = chunk_size * num_chunks), so there is no separate cache-length knob to keep in sync.
+# PREFILL_MAX_SEQ_LEN still overrides if a larger cache is wanted.
+NUM_CHUNKS = int(os.environ.get("PREFILL_STANDALONE_NCHUNKS", 4))
+MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * NUM_CHUNKS))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_gate_mode)
@@ -316,22 +320,17 @@ def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, h2d_
     slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % cfg.num_users
 
     token_ids = None
-    n_chunks = None
+    n_chunks = NUM_CHUNKS if cfg.is_first_rank else None
     if cfg.is_first_rank:
-        # Only the first rank needs the schedule length; later ranks learn the end from is_last.
-        if h2d_service is not None:
-            # Socket mode: tokens arrive per push; the producer streams PREFILL_STANDALONE_NCHUNKS of them.
-            n_chunks = int(os.environ["PREFILL_STANDALONE_NCHUNKS"])
-        else:
+        # The first rank drives n_chunks (NUM_CHUNKS); later ranks learn the end from is_last. The cache
+        # is sized to chunk*num_chunks by default so this fits; the guard only catches a smaller override.
+        if h2d_service is None:
             token_ids = _load_token_ids()
-            actual_isl = len(token_ids)
-            nchunks_env = os.environ.get("PREFILL_STANDALONE_NCHUNKS")
-            n_chunks = int(nchunks_env) if nchunks_env else ((actual_isl + cfg.chunk_size - 1) // cfg.chunk_size)
             token_ids = (token_ids + [1] * (n_chunks * cfg.chunk_size))[: n_chunks * cfg.chunk_size]
         if n_chunks * cfg.chunk_size > cfg.max_seq_len:
             raise ValueError(
-                f"{n_chunks} chunks x {cfg.chunk_size} exceeds per-user cache max_seq_len={cfg.max_seq_len}. "
-                f"Lower PREFILL_STANDALONE_NCHUNKS or bump PREFILL_MAX_SEQ_LEN."
+                f"{n_chunks} chunks x {cfg.chunk_size} exceeds per-user cache max_seq_len={cfg.max_seq_len}; "
+                f"raise PREFILL_MAX_SEQ_LEN."
             )
 
     logger.info(
