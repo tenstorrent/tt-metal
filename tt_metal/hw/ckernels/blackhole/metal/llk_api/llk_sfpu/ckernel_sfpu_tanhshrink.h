@@ -31,18 +31,18 @@ inline void calculate_tanhshrink() {
         sfpi::vFloat u = x * x;
         sfpi::vFloat Q;
         if constexpr (is_fp32_dest_acc_en) {
-            Q = sfpi::vFloat(4.2079269770e-04f);
-            Q = Q * u + sfpi::vFloat(-2.5107525289e-03f);
-            Q = Q * u + sfpi::vFloat(8.2192532718e-03f);
-            Q = Q * u + sfpi::vFloat(-2.1660288796e-02f);
-            Q = Q * u + sfpi::vFloat(5.3934831172e-02f);
-            Q = Q * u + sfpi::vFloat(-1.3333128393e-01f);
-            Q = Q * u + sfpi::vFloat(3.3333331347e-01f);
+            Q = PolynomialEvaluator::eval(
+                u,
+                3.3333331347e-01f,
+                -1.3333128393e-01f,
+                5.3934831172e-02f,
+                -2.1660288796e-02f,
+                8.2192532718e-03f,
+                -2.5107525289e-03f,
+                4.2079269770e-04f);
         } else {
-            Q = sfpi::vFloat(-1.0762925260e-02f);
-            Q = Q * u + sfpi::vFloat(4.8076551408e-02f);
-            Q = Q * u + sfpi::vFloat(-1.3223160803e-01f);
-            Q = Q * u + sfpi::vFloat(3.3329936862e-01f);
+            Q = PolynomialEvaluator::eval(
+                u, 3.3329936862e-01f, -1.3223160803e-01f, 4.8076551408e-02f, -1.0762925260e-02f);
         }
         sfpi::vFloat result = x * u * Q;  // default = small path
 
@@ -50,15 +50,16 @@ inline void calculate_tanhshrink() {
         v_if(ax > sfpi::vFloat(1.0f)) {
             sfpi::vFloat tanhx;
             if constexpr (is_fp32_dest_acc_en) {
-                tanhx = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(x);
+                // ax > 1 here, so the accurate helper's |x| < 0.6 polynomial branch is dead;
+                // inline its sigmoid form directly to skip that abs+poly+predication.
+                sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(2.f * x);
+                tanhx = 2.f * sig - sfpi::vConst1;
             } else {
-                // tanh(|x|) via a degree-3 minimax fit on [1,3.3] (coeffs high->low power).
+                // tanh(|x|) via a degree-3 minimax fit on [1,3.3].
                 // The poly crosses 1.0 monotonically near x~3.12 and stays >1 beyond, so the
                 // clamp to 1.0 holds the saturation tail exactly (including +/-inf).
-                sfpi::vFloat p = sfpi::vFloat(5.3348409333e-02f);
-                p = p * ax + sfpi::vFloat(-4.0859283753e-01f);
-                p = p * ax + sfpi::vFloat(1.0561303143e+00f);
-                p = p * ax + sfpi::vFloat(6.1829000893e-02f);
+                sfpi::vFloat p = PolynomialEvaluator::eval(
+                    ax, 6.1829000893e-02f, 1.0561303143e+00f, -4.0859283753e-01f, 5.3348409333e-02f);
                 sfpi::vFloat one = sfpi::vConst1;
                 sfpi::vec_min_max(p, one);    // p = min(p, 1.0)
                 tanhx = sfpi::copysgn(p, x);  // tanh(-x) = -tanh(x)
@@ -78,9 +79,11 @@ inline void calculate_tanhshrink() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanhshrink_init() {
-    // Set up the non-approx tanh the large-|x| path relies on (bf16: polynomial coeff
-    // registers; fp32: sigmoid/reciprocal init).
-    tanh_init<false, is_fp32_dest_acc_en>();
+    // The bf16 large-|x| path uses only local literal polynomials, so it needs no init.
+    if constexpr (is_fp32_dest_acc_en) {
+        // The fp32 large-|x| path uses the sigmoid-based accurate tanh.
+        sigmoid_init<false>();
+    }
 }
 
 }  // namespace ckernel::sfpu
