@@ -40,7 +40,8 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_named_compile_time_arg_val("moe_gate_num_blocks");
 
     // Setup sharded persistent buffers (all tensor-backed). input + bias each have num_blocks tiles/core
-    // (one 256-expert block per tile); indices is 1 tile (arange 0-255), reused for every block.
+    // (one 256-expert block per tile); input_indices likewise has num_blocks tiles/core — block b's tile
+    // holds that block's GLOBAL expert ids (arange + b*256), uploaded by the host.
     if constexpr (Core::is_active_core) {
         unified_kernels::setup_sharded_buffer(input_cb, num_blocks);
         unified_kernels::setup_sharded_buffer(bias_cb, num_blocks);
