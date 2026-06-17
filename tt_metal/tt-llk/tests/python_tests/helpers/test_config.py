@@ -1434,7 +1434,10 @@ class TestConfig:
                     TestConfig.BRISC_ELF_LOADED = True
                     break
                 else:
-                    raise last_err
+                    raise TimeoutError(
+                        f"BRISC bring-up did not become ready after "
+                        f"{TestConfig.BRISC_BOOT_MAX_ATTEMPTS} attempts"
+                    ) from last_err
 
             # Reset only TRISCs, BRISC stays alive in its polling loop
             commit_brisc_command(

@@ -49,12 +49,21 @@ while IFS=":" read -r FILE GIDX TOTAL ITEMS; do
     $SPLIT_ARGS \
     "$FILE"
   tt-smi -r 0
-  pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 \
+  pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 -x \
     -m "perf" --timeout=60 \
     $SPLIT_ARGS \
     --junitxml="pytest-report-blackhole-${GROUP}-${REPORT_NAME}.xml" \
     "$FILE"
 done <<< "$ASSIGNMENTS"
 
-junitparser merge pytest-report-blackhole-${GROUP}-*-run.xml \
-  pytest-report-blackhole-${GROUP}.xml
+# Merge this group's per-slice run reports. Guard the glob with nullglob so an
+# early exit that produced no per-slice reports doesn't turn a real failure
+# into a confusing junitparser "file not found".
+shopt -s nullglob
+run_reports=(pytest-report-blackhole-${GROUP}-*-run.xml)
+shopt -u nullglob
+if [ "${#run_reports[@]}" -gt 0 ]; then
+  junitparser merge "${run_reports[@]}" pytest-report-blackhole-${GROUP}.xml
+else
+  echo "No per-slice run reports for group ${GROUP}; skipping merge."
+fi

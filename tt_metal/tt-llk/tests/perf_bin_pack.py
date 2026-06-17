@@ -25,22 +25,48 @@ import sys
 
 
 def collect_counts(files):
-    """Return {file: collected perf-test count} via `pytest --collect-only`."""
+    """Return {file: collected perf-test count} via `pytest --collect-only`.
+
+    Fails loudly on a genuine collection error -- silently recording 0 would
+    corrupt the bin-pack and produce oversized shards / timeouts. pytest exit
+    code 5 ("no tests collected") is a legitimate 0, not an error.
+    """
     counts = {}
     for f in files:
-        out = subprocess.run(
+        proc = subprocess.run(
             ["pytest", "--collect-only", "-q", "-m", "perf", f],
             capture_output=True,
             text=True,
-        ).stdout
-        n = 0
-        for line in out.splitlines():
-            m = re.match(r"^\s*(\d+) tests? collected", line)
-            if m:
-                n = int(m.group(1))
-                break
-        counts[f] = n
+        )
+        if proc.returncode == 5:  # pytest: no tests collected for this file
+            counts[f] = 0
+            continue
+        if proc.returncode != 0:
+            sys.exit(
+                f"pytest collection failed for {f} (exit {proc.returncode}):\n"
+                f"{proc.stdout}\n{proc.stderr}"
+            )
+        counts[f] = _parse_count(f, proc.stdout)
     return counts
+
+
+def _parse_count(f, out):
+    """Parse the collected-test count from `pytest --collect-only -q` output.
+
+    Handles both summary spellings pytest has used -- "<N> tests collected"
+    and "collected <N> items" -- and falls back to counting collected node
+    IDs, so a future format change can't silently read as 0.
+    """
+    for line in out.splitlines():
+        m = re.search(r"(\d+) tests? collected", line) or re.search(
+            r"collected (\d+) items?", line
+        )
+        if m:
+            return int(m.group(1))
+    nodes = [ln for ln in out.splitlines() if "::" in ln]
+    if nodes:
+        return len(nodes)
+    sys.exit(f"could not parse collected test count for {f}:\n{out}")
 
 
 def assign(counts, group, n_groups):
@@ -65,7 +91,8 @@ def assign(counts, group, n_groups):
             slice_items = base + (1 if i < rem else 0)
             slices.append((f, i + 1, K, slice_items))
 
-    # Greedy bin-pack slices into n_groups bins (first-fit-decreasing).
+    # Greedy LPT (longest-processing-time) bin-pack: take slices largest
+    # first and drop each into the currently lightest bin.
     bins = [[0, []] for _ in range(n_groups)]
     for s in sorted(slices, key=lambda x: -x[3]):
         bins.sort(key=lambda b: (b[0], len(b[1])))  # lightest bin first
