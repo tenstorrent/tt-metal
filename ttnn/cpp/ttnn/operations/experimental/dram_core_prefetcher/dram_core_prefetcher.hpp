@@ -49,7 +49,8 @@ void queue_dram_core_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
-    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt);
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
+    std::optional<uint8_t> cq_id = std::nullopt);
 
 // Fence the prefetcher against command queue `cq_id`: every prefetch request queued
 // after this call waits until all work previously enqueued on `cq_id` has completed

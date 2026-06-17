@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <numbers>
 #include <utility>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -317,7 +318,7 @@ std::vector<std::optional<Tensor>> sqrt_bw(
     ttnn::sqrt(input, false, output_mem_config, input_grad);
     ttnn::multiply(
         grad,
-        ttnn::reciprocal(ttnn::multiply(input_grad.value(), 2.0, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::reciprocal(ttnn::multiply(input_grad.value(), 2.0f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config,
         input_grad);
@@ -347,7 +348,7 @@ std::vector<Tensor> multigammaln_bw(
         ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor digamma_result_2 = ttnn::multiply(
         grad,
-        ttnn::digamma(ttnn::add(input, -0.5, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::digamma(ttnn::add(input, -0.5f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
 
@@ -355,14 +356,14 @@ std::vector<Tensor> multigammaln_bw(
 
     digamma_result = ttnn::multiply(
         grad,
-        ttnn::digamma(ttnn::add(input, -1.0, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::digamma(ttnn::add(input, -1.0f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
     digamma_result = ttnn::multiply(
         grad,
-        ttnn::digamma(ttnn::add(input, -1.5, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::digamma(ttnn::add(input, -1.5f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
@@ -485,7 +486,7 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
     ttnn::power(input_grad.value(), 3, output_mem_config, input_grad);
     ttnn::multiply(
         ttnn::multiply(grad, input_grad.value(), std::nullopt, output_mem_config),
-        -0.5,
+        -0.5f,
         std::nullopt,
         output_mem_config,
         input_grad);
@@ -544,12 +545,12 @@ std::vector<Tensor> hardsigmoid_bw(
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = ttnn::where(
         ttnn::logical_or(
-            ttnn::le(input, -3, std::nullopt, output_mem_config),
-            ttnn::ge(input, 3, std::nullopt, output_mem_config),
+            ttnn::le(input, -3.0f, std::nullopt, output_mem_config),
+            ttnn::ge(input, 3.0f, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         0.f,
-        ttnn::multiply(grad, 1.0 / 6),
+        ttnn::multiply(grad, 1.0f / 6.0f),
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
@@ -574,7 +575,7 @@ std::vector<Tensor> acosh_bw(
     std::vector<Tensor> grad_tensor;
     Tensor in_sq = ttnn::square(input, output_mem_config);
     Tensor in_rsqrt =
-        ttnn::rsqrt(ttnn::subtract(in_sq, 1.0, std::nullopt, output_mem_config), false, output_mem_config);
+        ttnn::rsqrt(ttnn::subtract(in_sq, 1.0f, std::nullopt, output_mem_config), false, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     float t_nan = tt::tt_metal::hal::get_nan();
     float t_inf = tt::tt_metal::hal::get_inf();
@@ -783,7 +784,7 @@ std::vector<Tensor> celu_bw(
     Tensor div_result = ttnn::multiply(input, div_alpha, std::nullopt, output_mem_config);
     Tensor exp_result = ttnn::exp(div_result, false, output_mem_config);
     Tensor grad_result = where(
-        ttnn::gt(input, 0.0, std::nullopt, output_mem_config),
+        ttnn::gt(input, 0.0f, std::nullopt, output_mem_config),
         grad,
         ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config),
         output_mem_config);
@@ -1074,10 +1075,10 @@ std::vector<Tensor> sinh_bw(
         output_mem_config);
     t_inf.deallocate();
     grad_a = where(
-        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
+        ttnn::ge(grad_a, 3.4e+38f, std::nullopt, output_mem_config),
         std::numeric_limits<float>::infinity(),
         where(
-            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
+            ttnn::le(grad_a, -3.4e+38f, std::nullopt, output_mem_config),
             -std::numeric_limits<float>::infinity(),
             grad_a,
             output_mem_config),
@@ -1097,7 +1098,8 @@ std::vector<Tensor> log10_bw(
         output_mem_config);
     Tensor grad_a = ttnn::multiply(
         grad,
-        ttnn::reciprocal(ttnn::multiply(input, M_LN10, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::reciprocal(
+            ttnn::multiply(input, std::numbers::ln10_v<float>, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_a = where(
@@ -1141,7 +1143,7 @@ std::vector<Tensor> erfc_bw(
             grad,
             std::nullopt,
             output_mem_config),
-        -M_2_SQRTPI,
+        static_cast<float>(-M_2_SQRTPI),
         std::nullopt,
         output_mem_config);
     grad_tensor.emplace_back(result);
@@ -1194,10 +1196,10 @@ std::vector<Tensor> cosh_bw(
     t_neg_inf.deallocate();
     t_inf.deallocate();
     grad_a = where(
-        ttnn::ge(grad_a, 3.4e+38, std::nullopt, output_mem_config),
+        ttnn::ge(grad_a, 3.4e+38f, std::nullopt, output_mem_config),
         std::numeric_limits<float>::infinity(),
         where(
-            ttnn::le(grad_a, -3.4e+38, std::nullopt, output_mem_config),
+            ttnn::le(grad_a, -3.4e+38f, std::nullopt, output_mem_config),
             -std::numeric_limits<float>::infinity(),
             grad_a,
             output_mem_config),
@@ -1244,8 +1246,8 @@ std::vector<Tensor> logiteps_bw(
         where(ttnn::ltz(t_eps, output_mem_config), std::nanf(" "), 0.f, output_mem_config),
         where(
             ttnn::logical_or(
-                ttnn::eq(input, 0.0, std::nullopt, output_mem_config),
-                ttnn::eq(input, 1.0, std::nullopt, output_mem_config),
+                ttnn::eq(input, 0.0f, std::nullopt, output_mem_config),
+                ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
                 std::nullopt,
                 output_mem_config),
             ttnn::multiply(
@@ -1271,7 +1273,8 @@ std::vector<Tensor> log2_bw(
         output_mem_config);
     Tensor grad_a = ttnn::multiply(
         grad,
-        ttnn::reciprocal(ttnn::multiply(input, M_LN2, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::reciprocal(
+            ttnn::multiply(input, std::numbers::ln2_v<float>, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_a = where(
@@ -1311,7 +1314,7 @@ std::vector<Tensor> exp2_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor exp_result = ttnn::exp2(input, output_mem_config);
-    exp_result = ttnn::multiply(exp_result, M_LN2, std::nullopt, output_mem_config);
+    exp_result = ttnn::multiply(exp_result, std::numbers::ln2_v<float>, std::nullopt, output_mem_config);
     Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
@@ -1461,7 +1464,7 @@ std::vector<Tensor> polygamma_bw(
         ttnn::multiply(grad, ttnn::polygamma(input, (n + 1), output_mem_config), std::nullopt, output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::le(input, 0.0, std::nullopt, output_mem_config),
+            ttnn::le(input, 0.0f, std::nullopt, output_mem_config),
             ttnn::eqz(grad, output_mem_config),
             std::nullopt,
             output_mem_config),
@@ -1502,7 +1505,7 @@ std::vector<Tensor> erfinv_bw(
             m_sqrtpi,
             std::nullopt,
             output_mem_config),
-        0.5,
+        0.5f,
         std::nullopt,
         output_mem_config);
     Tensor t_inf = ttnn::multiply(
@@ -1534,7 +1537,7 @@ std::vector<Tensor> erf_bw(
             grad,
             std::nullopt,
             output_mem_config),
-        M_2_SQRTPI,
+        2.0f * std::numbers::inv_sqrtpi_v<float>,
         std::nullopt,
         output_mem_config);
     grad_tensor.emplace_back(result);
@@ -1566,7 +1569,7 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'None', 'tanh')");
 
     if (approximate == "tanh") {
-        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
+        float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5f;
         float kKappa = 0.044715;
         Tensor x_sq = ttnn::multiply(input, input, std::nullopt, output_memory_config);
         Tensor x_cube = ttnn::multiply(x_sq, input, std::nullopt, output_memory_config);
@@ -1577,15 +1580,15 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
             output_mem_config);
         Tensor tanh_inner = ttnn::tanh(inner, output_memory_config);
 
-        Tensor left = ttnn::multiply(input, 0.5, std::nullopt, output_memory_config);
-        Tensor right = ttnn::add(tanh_inner, 1, std::nullopt, output_memory_config);
+        Tensor left = ttnn::multiply(input, 0.5f, std::nullopt, output_memory_config);
+        Tensor right = ttnn::add(tanh_inner, 1.0f, std::nullopt, output_memory_config);
 
-        Tensor left_derivative = ttnn::multiply(right, 0.5, std::nullopt, output_memory_config);
+        Tensor left_derivative = ttnn::multiply(right, 0.5f, std::nullopt, output_memory_config);
 
         Tensor tanh_derivative = ttnn::neg(
             ttnn::subtract(
                 ttnn::multiply(tanh_inner, tanh_inner, std::nullopt, output_memory_config),
-                1,
+                1.0f,
                 std::nullopt,
                 output_mem_config),
             output_memory_config);
@@ -1593,10 +1596,10 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
             (ttnn::add(
                 ttnn::multiply(
                     ttnn::multiply(x_sq, kKappa, std::nullopt, output_memory_config),
-                    3,
+                    3.0f,
                     std::nullopt,
                     output_memory_config),
-                1,
+                1.0f,
                 std::nullopt,
                 output_mem_config)),
             kBeta);
