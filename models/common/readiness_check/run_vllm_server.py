@@ -174,15 +174,6 @@ _MESH_SHAPES: dict[str, tuple[int, int]] = {
 }
 
 
-def _stream_choice_is_token_event(choice: Any) -> bool:
-    """Return true for streamed completion chunks that represent output tokens."""
-    text = getattr(choice, "text", None)
-    finish_reason = getattr(choice, "finish_reason", None)
-    if text is None:
-        return False
-    return text != "" or finish_reason is None
-
-
 def _find_plugin_tests_dir() -> Path:
     """Locate the TT vLLM pytest suite in either old plugin or in-tree layouts."""
     candidates: List[Path] = []
@@ -723,7 +714,6 @@ def _run_serving_benchmark(
     print(f"  TTFT     : P50={_fmt(summary['ttft_ms']['p50'], 'ms')}  P99={_fmt(summary['ttft_ms']['p99'], 'ms')}")
     print(f"  TPOT     : mean={_fmt(summary['tpot_ms']['mean'], 'ms')}  P99={_fmt(summary['tpot_ms']['p99'], 'ms')}")
     print(f"  ITL      : P50={_fmt(summary['itl_ms']['p50'], 'ms')}  P99={_fmt(summary['itl_ms']['p99'], 'ms')}")
-    print(f"  ITL P50  : {_fmt(summary['itl_p50_decode_tps'], ' t/s/u')} implied")
     print(f"  Output   : {_fmt(summary['output_throughput_tok_per_s'], ' tok/s')} aggregate")
     print(f"  Decode   : {_fmt(summary['vllm_mean_tpot_decode_tps'], ' t/s/u')} from mean TPOT")
     print(f"  Raw      : {raw_result_file}")
