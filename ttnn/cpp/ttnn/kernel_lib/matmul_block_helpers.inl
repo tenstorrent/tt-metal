@@ -563,7 +563,18 @@ ALWI void matmul_block(
                             // width on DRAM-sharded; equal to in1_per_core_w on most
                             // factories). The per-row-group reserve on the pack target supplies
                             // the M-row-group base; only the in1 col offset remains.
-                            const uint32_t col_base = in1_subblock * shape.out_subblock_w;
+                            //
+                            // caller_owns_pack_target: the helper does NOT reserve_back per
+                            // M-row-group (the caller did ONE reserve over the whole output
+                            // block and the FIFO wr_ptr stays at the block base for all
+                            // in0_subblocks). The per-row-group base that the FIFO advance
+                            // would otherwise supply must therefore be added to the absolute
+                            // offset here: in0_subblock * row_group_tiles. Without this every
+                            // M-row-group packs on top of row 0 (the in0_num_subblocks==1
+                            // L4a control hides the bug; in0_num_subblocks>1 convs garble).
+                            const uint32_t row_base =
+                                caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
+                            const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
@@ -628,7 +639,13 @@ ALWI void matmul_block(
                                 pack_tile<true>(t, interm_cb_id, subblock_pin_offset + t);
                             }
                         } else if constexpr (spill_row_grouped) {
-                            const uint32_t col_base = in1_subblock * shape.out_subblock_w;
+                            // caller_owns_pack_target: same per-row-group base fix as the
+                            // last-block pack above — the FIFO does not advance per
+                            // M-row-group under caller-owns, so the in0_subblock row base
+                            // must be folded into the absolute offset.
+                            const uint32_t row_base =
+                                caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
+                            const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else {
