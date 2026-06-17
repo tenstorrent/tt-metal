@@ -125,6 +125,27 @@ void ttnn_device(nb::module_& mod) {
         the mesh. Forces the next worker fabric op to open a fresh connection. Call only when the chips
         are idle (device synchronized, no in-flight CCL).
     )doc");
+
+    // A mesh command queue is flagged in_use by any enqueue on it; the per-cq close guard
+    // (mesh_device.cpp) then refuses to close a mesh while a parent/child mesh sharing that physical
+    // cq still has it in_use, to avoid a teardown hang. An overlapping child submesh dirties cq 0 just
+    // by building its global semaphores (GlobalSemaphore init writes via cq 0), so closing either the
+    // parent or the child throws even though the child ran its CCL on cq 1. This finishes each cq and
+    // clears its in_use flag, so the cq is genuinely idle and close is clean. Call when the mesh is
+    // done with work on these cqs (e.g. before releasing an audio submesh).
+    mod.def(
+        "reset_cq_in_use",
+        [](ttnn::MeshDevice* device) {
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+                device->mesh_command_queue(cq_id).finish_and_reset_in_use();
+            }
+        },
+        nb::arg("device"),
+        R"doc(
+        Finish every command queue on the mesh and clear its in_use flag, so the per-cq close guard
+        does not throw when a parent/child mesh shares the same physical cq. Call when the mesh is done
+        with work on these cqs (device synchronized, no in-flight ops).
+    )doc");
 }
 
 }  // namespace

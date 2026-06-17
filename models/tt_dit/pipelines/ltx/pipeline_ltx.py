@@ -440,15 +440,20 @@ class LTXPipeline:
     def release_audio_submesh(self) -> None:
         """Drop the pipeline's references to the audio decode submesh (LTX_AUDIO_SUBMESH).
 
-        The submesh shares the parent mesh's command queue. ttnn forbids closing a
-        cq-sharing child while the parent is alive (close hangs) and forbids closing
-        the parent while the child is alive ("cq in use by child submesh"), so the
-        submesh's lifetime is bound to the parent: it is reclaimed when the parent mesh
-        closes at process teardown. This only frees the audio device tensors. No-op when
-        audio runs on the full mesh.
+        The submesh shares the parent mesh's command queues, so its lifetime is bound to the
+        parent: it is reclaimed when the parent mesh closes at process teardown. But the per-cq
+        close guard (mesh_device.cpp) throws if a child sharing a physical cq still has it flagged
+        in_use when the parent closes -- and the child dirties cq 0 just by building its global
+        semaphores (GlobalSemaphore init writes via cq 0) even though its CCL ran on cq 1. So
+        finish + reset in_use on both the child submesh and our parent mesh here, while idle (audio
+        is done), to let the chain close cleanly (clearing the parent's flag also short-circuits the
+        guard before it walks to the physical mesh above us). Also frees the audio device tensors.
+        No-op on the full mesh.
         """
         if self._owned_audio_submesh is not None:
             ttnn.synchronize_device(self._owned_audio_submesh)
+            ttnn.reset_cq_in_use(self._owned_audio_submesh)
+            ttnn.reset_cq_in_use(self.mesh_device)
             self.tt_audio_decoder = None
             self.tt_vocoder_with_bwe = None
             self.audio_ccl_manager = self.vae_ccl_manager

@@ -207,6 +207,7 @@ EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
 reset_fabric_connection_lock = ttnn._ttnn.device.reset_fabric_connection_lock
+reset_cq_in_use = ttnn._ttnn.device.reset_cq_in_use
 
 
 @contextlib.contextmanager

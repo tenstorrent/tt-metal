@@ -71,4 +71,10 @@ def test_submesh_cq1_repro(mesh_device):
     ttnn.reset_fabric_connection_lock(audio)
 
     _run_ag(ccl, mesh, "parent cq0, after audio submesh")
-    print("[REPRO] PASS: parent cq0 + child cq1 ran; close must not throw at teardown", flush=True)
+
+    # The child dirtied cq 0 building its global semaphores even though its CCL ran on cq 1, so the
+    # per-cq close guard would throw at teardown for every mesh in the chain sharing cq 0. Finish +
+    # reset in_use on the child and the parent submesh so conftest teardown closes them cleanly.
+    ttnn.reset_cq_in_use(audio)
+    ttnn.reset_cq_in_use(mesh)
+    print("[REPRO] PASS: parent cq0 + child cq1 ran; cqs reset for clean teardown", flush=True)
