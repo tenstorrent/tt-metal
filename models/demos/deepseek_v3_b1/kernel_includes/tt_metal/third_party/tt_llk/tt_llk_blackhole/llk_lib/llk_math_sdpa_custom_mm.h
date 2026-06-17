@@ -103,9 +103,14 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
         // Zero Dest
         uint32_t dst_face = dst_offset / 16;
-        // #43562/3 experiment: replace the coherent MOVB2D DEST write with a pure 100-NOP delay
-        // (no DEST clear). Tests whether the deep-position fix in the mask path is just a timing delay
-        // rather than the MOVB2D coherent write specifically.
+        // #43562/3 experiment: ZEROACC DEST clear (defined mm1 base, like the non-mask path) + a
+        // 100-NOP delay, in place of the coherent MOVB2D write. Disambiguates whether adding the
+        // clear back snaps the PCC to the real MOVB2D fix (0.993524) while the small delay keeps the
+        // deep-position alternation gone.
+        for (uint32_t i = 0; i < ct_dim; i++) {
+            TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);
+            dst_face++;
+        }
         for (volatile uint32_t _noploop = 0; _noploop < 100; _noploop++) {
             TTI_NOP;
         }
