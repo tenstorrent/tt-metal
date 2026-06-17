@@ -42,30 +42,57 @@ runtime doesn't reliably support sub-meshes; see the mesh_utils note). LoudBox(8
 `sp4xtp2`; QuietBox(4) → `sp1xtp1`, `sp2xtp2`; single → `sp1xtp1`. Run with the whole box
 visible — no `TT_VISIBLE_DEVICES` juggling.
 
-## Environment
-- **`transformers == 4.53.0`** (tt-metal's pin). 5.x removes `no_init_weights` /
-  `is_torch_fx_available` used by the vendored `deepseek_v3/reference/modeling_deepseek.py`,
-  which the device path (`ttMLA`/`RotarySetup`) imports. Install with `uv pip install transformers==4.53.0`.
-  A defensive `no_init_weights` shim lives at the top of `deepseek_v32/tests/conftest.py`
-  (no-op at 4.53.0).
-- **GLM weights need NO newer transformers.** Download = `huggingface_hub.hf_hub_download` +
-  `safetensors`; config is built by hand (never `AutoConfig` — transformers doesn't know
-  `glm_moe_dsa`). So 4.53.0 is sufficient end-to-end; no upgrade/revert dance.
+## Setup / prerequisites
+1. **`transformers == 4.53.0`** (tt-metal's pin). 5.x removed `no_init_weights` /
+   `is_torch_fx_available` used by the vendored `deepseek_v3/reference/modeling_deepseek.py`
+   that the device path (`ttMLA`/`RotarySetup`) imports → the device/host tests won't even import
+   on 5.x. `uv pip install transformers==4.53.0`. (GLM itself needs nothing newer: the config is
+   built by hand, never `AutoConfig`, since transformers doesn't know `glm_moe_dsa`.)
+2. **Built ttnn** with the DSA ops (`./build_metal.sh` — provides `IndexerScoreProgramConfig`,
+   `topk_large_indices`, `sparse_sdpa`). Phase 3 needs **Blackhole** hardware; Phase 1/2 are CPU-only.
+3. **HF access to `zai-org/GLM-5.1`** for weights, and **the trace present** — both auto/described below.
 
-## Weights (per-layer only — never the full 700 GB)
-`reference_cpu.weights.initialize_weights(mla, layer=L, repo="zai-org/GLM-5.1")` resolves and
-downloads only the shard(s) holding layer L's `self_attn.*` (bf16 → no fp8 dequant). GLM's HF
-weight names are **identical to DeepSeek-V3.2**, so the existing `_HF_TO_MLA` loader works
-unchanged. Layers 0/30/60/77 live in shards 00001/00083/00204/00271. Cached under
-`~/.cache/huggingface/hub/models--zai-org--GLM-5.1/`. Needs HF access (token if gated).
+### Weights — downloaded automatically, per-layer (never the full ~700 GB)
+No manual step: the first test run that needs layer `L` calls
+`reference_cpu.weights.initialize_weights(mla, layer=L, repo="zai-org/GLM-5.1")`, which uses
+`huggingface_hub.hf_hub_download` to pull **only the shard(s) holding that layer's `self_attn.*`**
+(bf16 → no fp8 dequant; GLM's HF weight names are identical to DeepSeek-V3.2, so the `_HF_TO_MLA`
+loader is unchanged). Layers 0/30/60/77 live in shards `00001/00083/00204/00271` (~6 GB each,
+~24 GB for all four). Cached at `~/.cache/huggingface/hub/models--zai-org--GLM-5.1/`.
+- **Auth:** the repo may be gated → `huggingface-cli login` once, or `export HF_TOKEN=...`; the
+  loader forwards the token via huggingface_hub. Override the repo with `GLM51_REPO` if needed.
 
-## Trace
-- Default dir `bit_sculpt/results/glm-51` (5K bundle); override with **`GLM51_REF_DIR`**.
-- `indexer_logits` captured only for layers **0/30/60/77**; `dsa_topk_indices` + `kv_cache` for all 78.
-- Stream → our tensor: `module_io/mla_input` = ttMLA input (post input_layernorm, == indexer input);
-  `module_io/mla_output` = forward output (post o_proj, pre-residual); `dsa/indexer_logits` =
-  index_score **pre causal mask** (compare over tril); `dsa/dsa_topk_indices` (−1 = pad);
-  `kv_cache/layer_L` = `[latent 512 ‖ k_pe 64]`.
+### Trace — the GPU golden bundle (vLLM 5120-token prefill)
+The harness reads it from **`GLM51_REF_DIR`** (env), defaulting to `<repo>/bit_sculpt/results/glm-51`.
+The bundle is git-LFS-tracked in the **`bit_sculpt`** repo on branch `nmilicevic/v3_2-trace`. Clone
+with LFS smudge off (pointers only), then **selectively** pull just the four captured layers' streams
+— the full bundle is huge (all 78 layers of `module_io`, etc.):
+
+```bash
+# from the tt-metal repo root, so the default GLM51_REF_DIR (<repo>/bit_sculpt/results/glm-51) resolves:
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/tenstorrent/bit_sculpt.git
+cd bit_sculpt
+GIT_LFS_SKIP_SMUDGE=1 git switch --track origin/nmilicevic/v3_2-trace   # fetches LFS pointers only
+# download only layers 0/30/60/77 (the ones with indexer_logits that the device/host tests use):
+RUN=results/glm-51; INC=""
+for L in 0 30 60 77; do
+  for s in module_io/mla_input_layer module_io/mla_output_layer module_io/indexer_input_layer \
+           dsa/indexer_logits_layer dsa/dsa_topk_indices_layer; do
+    INC="$INC,$RUN/${s}_${L}/*"
+  done
+  INC="$INC,$RUN/kv_cache/layer_${L}/*"
+done
+git lfs pull --include="${INC#,}"
+```
+(Or clone `bit_sculpt` anywhere and point `GLM51_REF_DIR` at its `results/glm-51`.) The bundle's
+`results/glm-51/TRACE_MANUAL.md` documents the streams; regeneration on a GPU node is in
+`bit_sculpt/docs/model_traces/zai_org/glm_5_1_gpu_node_guide.md`. If the streams are absent the
+tests **skip** (not fail), printing the path they looked for.
+
+**Streams** (`indexer_logits` only for layers 0/30/60/77; `dsa_topk_indices` + `kv_cache` for all 78):
+`module_io/mla_input` = ttMLA input (post input_layernorm, == indexer input); `module_io/mla_output`
+= forward output (post o_proj, pre-residual); `dsa/indexer_logits` = index_score **pre causal mask**
+(compared over tril); `dsa/dsa_topk_indices` (−1 = pad); `kv_cache/layer_L` = `[latent 512 ‖ k_pe 64]`.
 
 ## Run it
 ```bash
@@ -82,8 +109,8 @@ python models/demos/deepseek_v32/tests/test_vs_gpu_ref_glm.py --layers 0,30,60,7
 python -m pytest .../test_vs_gpu_ref_glm.py -k "device" --ds-kpe-layout vllm -s              # all meshes × all layers
 python -m pytest .../test_vs_gpu_ref_glm.py -k "device and sp4xtp2" --ds-kpe-layout vllm -s  # one mesh, all layers
 python -m pytest .../test_vs_gpu_ref_glm.py -k "device and L30" -s                           # one layer, all meshes
-#   only MLA output: -k "mla_output_device and L30 and 1x2"
-#   hard k_pe element-wise check: append  --ds-kpe-layout vllm  (see caveat)
+#   only MLA output: -k "mla_output_device and L30 and sp4xtp2"
+#   drop --ds-kpe-layout vllm to use the frame-invariant k_pe L2 check instead (see caveat)
 ```
 
 ## Caveats (all expected, not bugs)
