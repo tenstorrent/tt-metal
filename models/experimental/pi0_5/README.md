@@ -654,11 +654,16 @@ torch-PCC check.
 | `PI05_E2E_PCC` | off | after replay, also compare all-socket actions vs the torch reference (target ≥0.95; gets ≈0.998796). |
 | `PI05_SOCK_CONN` | `2` | socket connections per hop. `2` spreads `send_direct_async` across the adjacent pair's 2 fabric links (~7% faster e2e); `1` is the single-link baseline. |
 | `PERF_ITERS` | `20` | replays averaged for the `PERF:` latency line. |
+| `PI05_E2E_STAGES` | `on` | add `PERF/stage:` lines splitting the SAME captured traces into vision/prefill/denoise groups, each timed with its own drain. Attribution only — inserts 2 extra sync barriers, so the staged sum runs slightly above the device-only `PERF:` e2e number (both logged). |
+| `PI05_E2E_IO` | off | add a second `PERF+IO:` line that wraps each timed iter with the host transfers a real serving loop pays: h2d re-upload of inputs + noise, then replay, then d2h action readback. The device-only `PERF:` number excludes all three; the printed `[h2d+d2h overhead = … ms]` is the delta. |
 | `EAGER` | off | **no trace** — 1 warm-up + 1 profiled eager iter with tracy signposts. Use under `python -m tracy` for true per-op device-kernel durations. |
 | `TRACY` | off | capture + 1 warm-up + 1 profiled replay, then stop. Use under `python -m tracy --device-trace-profiler`. |
 
 Prints, per replay, `PCC vs eager` (trace fidelity, expect 1.000000), then `PCC vs torch`
-(numerics, ≈0.998796), then `PERF: traced all-socket e2e replay = <ms>/inference`.
+(numerics, ≈0.998796), then `PERF: traced all-socket e2e replay = <ms>/inference`. The
+`PERF:` number is **device-only** — inputs are pre-staged once and outputs are never read
+back inside the timed loop. Add `PI05_E2E_IO=1` for the IO-inclusive serving latency
+(h2d inputs+noise + replay + d2h actions) and the host-transfer delta.
 
 ### Latest measured (validated 2026-06-14, clean reset, production flags on)
 

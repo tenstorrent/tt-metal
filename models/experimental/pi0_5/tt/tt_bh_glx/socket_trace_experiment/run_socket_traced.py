@@ -48,6 +48,19 @@ def _apply_production_env_defaults():
     print(f"[sock-traced] production env defaults applied ({len(applied)}): {', '.join(applied)}", flush=True)
 
 
+# Run-mode defaults for the standard traced-baseline run: whole-pipeline trace,
+# pinned noise (valid PCC), 2 socket connections/hop, per-stage breakdown on, 20
+# timed iters. setdefault → anything set explicitly on the command line still wins.
+# Set before imports so PI05_SOCK_CONN is in place when transport.py reads it.
+for _k, _v in {
+    "TRACE_SCOPE": "full",
+    "FIXED_NOISE": "1",
+    "PI05_SOCK_CONN": "2",
+    "PI05_E2E_STAGES": "1",
+    "PERF_ITERS": "20",
+}.items():
+    os.environ.setdefault(_k, _v)
+
 _apply_production_env_defaults()
 
 import torch
@@ -393,6 +406,61 @@ def main():
         log(
             f"PERF: traced all-socket e2e replay = {dt_ms:.2f} ms/inference (avg of {nperf}); {1000.0/dt_ms:.1f} infer/s"
         )
+
+        # --- perf (opt-in): per-stage traced breakdown ----------------------------------
+        # PI05_E2E_STAGES=1 splits the SAME captured per-submesh traces into the three
+        # stage groups (all_subs is built vision+prefill+denoise, so slicing by chip count
+        # is exact) and times each group's replay+drain separately. Drain on each stage's
+        # last-in-chain chip; sockets enforce the chain so that chip finishing implies its
+        # upstream did. This inserts 2 extra sync barriers vs the flat e2e loop above, so
+        # the per-stage sum runs slightly higher than dt_ms — read it as attribution, not
+        # a replacement for the e2e number. No recapture: reuses ordered/tids as-is.
+        if os.environ.get("PI05_E2E_STAGES", "").lower() in ("1", "true", "yes", "on"):
+            nv, npf = len(h.vision_per_chip), len(h.prefill_per_chip)
+            groups = [
+                ("vision ", ordered[:nv], h.vision_per_chip[-1]),
+                ("prefill", ordered[nv : nv + npf], h.prefill_per_chip[-1]),
+                ("denoise", ordered[nv + npf :], h.denoise_per_chip[0]),
+            ]
+            sums = {name: 0.0 for name, _, _ in groups}
+            ttnn.synchronize_device(h.denoise_per_chip[0])
+            for _ in range(nperf):
+                pipe._refresh_noise_buffer()
+                for name, grp, drain in groups:
+                    t0 = time.perf_counter()
+                    for sm, tid in grp:
+                        ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(drain)
+                    sums[name] += (time.perf_counter() - t0) * 1000.0
+            total = sum(sums.values()) / nperf
+            for name, grp, _ in groups:
+                ms = sums[name] / nperf
+                log(f"PERF/stage: {name} ({len(grp):2d} chips) = {ms:6.2f} ms  ({100.0*ms/total:4.1f}% of staged sum)")
+            log(f"PERF/stage: staged sum = {total:.2f} ms/inference (avg of {nperf}; +2 barriers vs e2e {dt_ms:.2f})")
+
+        # --- perf (opt-in): IO-inclusive end-to-end serving latency ---------------------
+        # PI05_E2E_IO=1 wraps each timed iteration with the host<->device transfers a real
+        # serving loop pays per inference: h2d re-upload of inputs (images + lang tokens via
+        # _ensure_persistent_input_buffers) and noise (_refresh_noise_buffer), then the trace
+        # replay, then d2h readback of the action chunk (ttnn.to_torch). The device-only
+        # number above excludes all three (inputs pre-staged once, outputs never read back),
+        # so the delta = the host-transfer overhead. Same persistent buffers as the real path.
+        if os.environ.get("PI05_E2E_IO", "").lower() in ("1", "true", "yes", "on"):
+            ttnn.synchronize_device(h.denoise_per_chip[0])
+            t0 = time.perf_counter()
+            for _ in range(nperf):
+                pipe._ensure_persistent_input_buffers(images, lang_tokens)  # h2d: images + lang
+                pipe._refresh_noise_buffer()  # h2d: noise
+                for sm, tid in ordered:
+                    ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+                _ = ttnn.to_torch(  # d2h: action chunk readback (also drains the device)
+                    pipe.x_t_fp32, mesh_composer=ttnn.ConcatMeshToTensor(h.denoise_per_chip[0], dim=0)
+                )[0]
+            io_ms = (time.perf_counter() - t0) * 1000.0 / nperf
+            log(
+                f"PERF+IO: traced all-socket e2e replay+h2d+d2h = {io_ms:.2f} ms/inference "
+                f"(avg of {nperf}); {1000.0/io_ms:.1f} infer/s  [h2d+d2h overhead = {io_ms-dt_ms:.2f} ms]"
+            )
 
         # ===================== numerical validation vs torch (opt-in) =====================
         # PI05_E2E_PCC=1 compares the all-socket eager actions against the torch
