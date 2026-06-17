@@ -18,12 +18,17 @@
 # it before launch so a previous run's files can't be mistaken for this one's. Override by exporting
 # PP_DIR before invoking.
 #
+# Rank-binding YAMLs + mesh-graph descriptors live in topology_configuration/.
+#
 # Examples:
-#   # 2-galaxy half-and-half split (rank0 u02 layers 0-30, rank1 u08 layers 31-60):
-#   ./run_pipeline_prefill.sh models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_rank_binding_2rank.yaml
+#   # 2-galaxy D2D pipeline (connected MGD, FABRIC_2D):
+#   ./run_pipeline_prefill.sh models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_rank_binding_2rank_d2d.yaml bh-glx-d07u02:1,bh-glx-d07u08:1
+#
+#   # 4-galaxy D2D pipeline (ring-chain host order — see the 4-galaxy connected MGD):
+#   ./run_pipeline_prefill.sh models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_rank_binding_4rank_d2d.yaml bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u08:1,bh-glx-d08u02:1
 #
 #   # single-galaxy 1-rank full-model de-risk:
-#   ./run_pipeline_prefill.sh models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_real_1galaxy_1rank.yaml bh-glx-d03u02:1
+#   ./run_pipeline_prefill.sh models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_real_1galaxy_1rank.yaml bh-glx-d07u02:1
 set -euo pipefail
 
 RANK_BINDING="${1:?usage: run_pipeline_prefill.sh <rank_binding.yaml> [host_list] [tcp_iface]}"

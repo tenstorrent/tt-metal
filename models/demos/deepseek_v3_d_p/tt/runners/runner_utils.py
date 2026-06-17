@@ -117,9 +117,22 @@ def load_hf_config(variant: RunnerVariant):
 # Device / weight-cache / H2D-service setup
 # ---------------------------------------------------------------------------
 def open_mesh_device(mesh_shape: tuple, model_cfg: type) -> ttnn.MeshDevice:
-    """Configure fabric (1D for sp<=8, else 2D) and open the mesh device."""
+    """Configure fabric and open the mesh device.
+
+    Default fabric is 1D for sp<=8, else 2D. PREFILL_FABRIC_MODE (1d|2d) overrides
+    this: the D2D-socket pipeline needs 2D even at sp=8 because a MeshSocket routes
+    over 2D fabric, and set_fabric_config is one global config for the whole run."""
     sp = mesh_shape[0]
-    fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+    fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
+    if fabric_mode == "2d":
+        fabric_config = ttnn.FabricConfig.FABRIC_2D
+    elif fabric_mode == "1d":
+        fabric_config = ttnn.FabricConfig.FABRIC_1D
+    elif fabric_mode:
+        raise ValueError(f"PREFILL_FABRIC_MODE must be '1d' or '2d', got {fabric_mode!r}")
+    else:
+        fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+    logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
     fabric_router_config = create_fabric_router_config(
         max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,

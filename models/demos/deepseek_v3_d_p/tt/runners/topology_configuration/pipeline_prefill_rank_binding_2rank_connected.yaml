@@ -1,0 +1,40 @@
+# tt-run rank binding for the 2-rank pipeline prefill on the CONNECTED 2-galaxy MGD.
+#
+# Same two ranks as pipeline_prefill_rank_binding_2rank.yaml (rank 0 -> mesh 0, rank 1 -> mesh 1),
+# but the mesh graph descriptor declares an inter-galaxy fabric link, and fabric is forced to 2D
+# (PREFILL_FABRIC_MODE=2d) — the config the D2D MeshSocket needs.
+#
+# This binding still uses the HOST/NFS file transport (PREFILL_PP_DIR), no D2D op. Its purpose is
+# the de-risk: prove the inter-galaxy fabric trains under 2D AND the model's intra-galaxy CCLs still
+# produce correct KV PCC at sp=8 under 2D, before any socket code is wired in.
+#
+# Launch (hostnames in --mpi-args, not here) on d07u02 + d07u08:
+#   ./run_pipeline_prefill.sh \
+#     models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_rank_binding_2rank_connected.yaml \
+#     bh-glx-d07u02:1,bh-glx-d07u08:1
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides: {}
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides: {}
+
+# Connected 2x 8x4 BH-galaxy MGD: one inter-galaxy fabric link (mesh 0 <-> mesh 1).
+mesh_graph_desc_path: models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
+
+global_env:
+  # Force 2D fabric (D2D MeshSocket requires it; default at sp=8 would be 1D).
+  PREFILL_FABRIC_MODE: "2d"
+
+  # Host->host activation handoff dir (shared across both hosts).
+  PREFILL_PP_DIR: "/data/jjovicic/pp_acts"
+
+  # Per-rank KV-cache PCC gate.
+  PREFILL_STANDALONE_PCC: "1"
+
+  # 11 chunks x 5120 = 56320 tokens (full golden trace); max_seq_len auto-derives.
+  PREFILL_STANDALONE_NCHUNKS: "11"
