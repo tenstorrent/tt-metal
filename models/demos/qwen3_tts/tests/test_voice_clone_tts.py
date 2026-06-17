@@ -362,7 +362,6 @@ class TestVoiceCloneTTS:
             tts_pad_embed=tts_pad_embed,
             code_pred_embeds=code_pred_embeds,
             config=config,
-            use_kv_cache=True,
         )
         assert gen_ret is not None, "generate_codes_ttnn returned None"
         codes, _compile_timings = gen_ret
@@ -438,7 +437,6 @@ class TestVoiceCloneTTS:
             tts_pad_embed=tts_pad_embed,
             code_pred_embeds=code_pred_embeds,
             config=config,
-            use_kv_cache=True,
         )
         assert gen_ret is not None, "generate_codes_ttnn returned None"
         codes_tensor, _compile_timings = gen_ret
