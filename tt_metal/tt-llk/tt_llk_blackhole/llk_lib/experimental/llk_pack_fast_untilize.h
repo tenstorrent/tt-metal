@@ -384,7 +384,9 @@ inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
         _llk_pack_fast_untilize_clear_output_row_stride_();
     }
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
-    _llk_pack_init_<PackMode::Default, false, false>(FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1);
+    // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        pack_src_format, FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 }
 
 } // namespace ckernel

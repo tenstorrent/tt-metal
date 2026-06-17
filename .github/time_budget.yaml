@@ -83,12 +83,12 @@ ttnn:
     wh_llmbox: 30
     wh_galaxy: 340
   l2:
-    wh_n150: 970
-    wh_n300: 970
-    bh_p100: 795
-    bh_p150b_civ2: 940
-    wh_n150_civ2: 20
-    wh_n300_civ2: 20
+    wh_n150: 825
+    wh_n300: 825
+    bh_p100: 650
+    bh_p150b_civ2: 1050
+    wh_n150_civ2: 250
+    wh_n300_civ2: 250
     bh_p100a_civ2_viommu: 20
     bh_p150b_civ2_viommu: 20
   # Profiler budgets are kept under their own subheading for now while team /
@@ -179,8 +179,12 @@ debug:
 
 llk:
   unit:
-    wh_n150_civ2: 140
-    bh_p150b_civ2: 70
+    wh_n150_civ2: 180
+    wh_n300_civ2: 40
+    bh_p150: 40
+    bh_p150b_civ2_viommu: 70
+    bh_p150b_civ2_viommu_prio: 70
+    bh_p100a_civ2_viommu: 40
   e2e:
     wh_n150_civ2: 1800
     bh_p150b_civ2: 1800

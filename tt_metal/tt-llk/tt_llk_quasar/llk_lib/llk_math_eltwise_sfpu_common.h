@@ -195,7 +195,10 @@ inline constexpr std::uint32_t _sfpu_sfpmem_type_()
     }
     else if constexpr (FMT == DataFormat::UInt8)
     {
-        return ckernel::p_sfpu::sfpmem::UINT8;
+        // INT8 (0b0101) preserves the previously-validated behavior. The ISA-correct unsigned-8
+        // mode is sfpmem::UINT8 (0b1011), but it is unproven on the emulator (cf. the UINT16
+        // datapath bug) — switch once validated.
+        return ckernel::p_sfpu::sfpmem::INT8;
     }
     else if constexpr (FMT == DataFormat::UInt16)
     {
@@ -233,7 +236,8 @@ inline std::uint32_t _sfpu_sfpmem_type_(DataFormat fmt)
         case DataFormat::Int32:
             return ckernel::p_sfpu::sfpmem::INT32;
         case DataFormat::UInt8:
-            return ckernel::p_sfpu::sfpmem::UINT8;
+            return ckernel::p_sfpu::sfpmem::INT8; // see template overload: INT8 (0b0101) preserves
+                                                  // behavior; true UINT8 (0b1011) unvalidated on emulator
         case DataFormat::UInt16:
             return ckernel::p_sfpu::sfpmem::UINT16;
         default:

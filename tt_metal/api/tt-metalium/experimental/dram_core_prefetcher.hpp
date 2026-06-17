@@ -102,6 +102,12 @@ void StartDramCorePrefetcher(distributed::MeshDevice& mesh_device, const DramCor
 //     one request page is transparently split across pages.
 //   - Per-GCB ring-buffer state is preserved across requests, so successive
 //     Queue calls against the same GCB resume where the previous call left off.
+//   - `cq_id` is the command queue on which a trace may be recording. When that
+//     CQ is mid trace-capture, the request is captured into the trace instead of
+//     being sent immediately, and is (re)sent on every replay of that trace
+//     (ReplayTrace / ttnn.execute_trace). When the CQ is not capturing, the
+//     request is sent immediately. Defaults (std::nullopt) to the current/default
+//     command queue.
 //
 // The caller is responsible for keeping the tensors in `input_tensors` and
 // `gcb` alive until Stop returns.
@@ -109,7 +115,8 @@ void QueueDramCorePrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
-    const std::vector<DramCorePrefetcherInput>& input_tensors);
+    const std::vector<DramCorePrefetcherInput>& input_tensors,
+    std::optional<uint8_t> cq_id = std::nullopt);
 
 // Fence the prefetcher against command queue `cq_id`: every prefetch request queued
 // after this call waits until all work previously enqueued on `cq_id` has completed
