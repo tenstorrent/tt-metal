@@ -212,7 +212,7 @@ def _hadamard_transform_recursive(x: torch.Tensor) -> torch.Tensor:
 # ===== Rotary positional embeddings (shared by Indexer + MLA) =====
 
 
-def precompute_freqs_cis(args) -> torch.Tensor:
+def precompute_freqs_cis(args, apply_yarn: bool = None) -> torch.Tensor:
     """
     Precomputes frequency-based complex exponential values for rotary positional embeddings.
 
@@ -220,6 +220,11 @@ def precompute_freqs_cis(args) -> torch.Tensor:
         args: Model arguments containing positional embedding parameters
             (``qk_rope_head_dim``, ``max_seq_len``, ``beta_fast``, ``beta_slow``,
             ``rope_theta``, ``rope_factor``, ``original_seq_len``).
+        apply_yarn: whether to apply the YaRN frequency rescaling. ``None`` (default) keeps the
+            official gate (``max_seq_len > original_seq_len``); pass ``True``/``False`` to force it.
+            The YaRN ramp itself depends only on ``original_seq_len``/``rope_factor`` — NOT
+            ``max_seq_len`` — so forcing it lets the table length (``max_seq_len``) be sized to the
+            sequence independently of whether long-context scaling is active.
 
     Returns:
         torch.Tensor: Precomputed complex exponential values [seq_len, rope_head_dim//2]
@@ -252,8 +257,11 @@ def precompute_freqs_cis(args) -> torch.Tensor:
     # Compute base frequencies
     freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
 
-    # Apply correction for extended sequence lengths (YaRN)
-    if seqlen > args.original_seq_len:
+    # Apply correction for extended sequence lengths (YaRN). The gate is on max_seq_len by default
+    # (official behaviour); callers that size the table to a short sequence but still want the model's
+    # long-context scaling pass apply_yarn=True.
+    do_yarn = (seqlen > args.original_seq_len) if apply_yarn is None else apply_yarn
+    if do_yarn:
         low, high = find_correction_range(beta_fast, beta_slow, dim, base, args.original_seq_len)
         smooth = 1 - linear_ramp_factor(low, high, dim // 2)
         freqs = freqs / factor * (1 - smooth) + freqs * smooth

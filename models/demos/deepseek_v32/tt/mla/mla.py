@@ -67,7 +67,12 @@ class ttMLA(_ttMLAv3):
         # Indexer weights are v32-only — pop before v3 sees them, upload to device
         # after super().__init__ (which sets mesh_device / tp_axis / tp_factor).
         idx_host = {n: weights.pop(f"{n}.weight") for n in INDEXER_WEIGHT_NAMES if f"{n}.weight" in weights}
-        self.index_args = ModelArgs(max_batch_size=1)
+        # ModelArgs supplies the indexer's architecture constants (heads/dims/θ/YaRN factors); the rope
+        # TABLE LENGTH comes from the HF config — the single source of truth — so it scales with the
+        # model (production 128k). YaRN itself is applied unconditionally in _build_index_rope_tables
+        # (matching the HF MLA rope, which is always-on), so the table length is decoupled from the
+        # long-context gate and config.max_seq_len can be sized straight to the sequence.
+        self.index_args = ModelArgs(max_batch_size=1, max_seq_len=int(config.max_seq_len))
         super().__init__(config, weights, mesh_device, **kwargs)
         self._has_indexer = bool(idx_host)
         # Device index key cache (backlog 19): replicated, natural order, grown by
@@ -81,7 +86,10 @@ class ttMLA(_ttMLAv3):
         """Precompute device cos/sin for the indexer's non-interleaved RoPE
         (backlog 19 / issue #4). HF rotate_half layout: halves repeated → [1,1,max_seq,64].
         Probe-verified vs reference apply_rotary_emb(interleaved=False), PCC 0.99999."""
-        freqs = precompute_freqs_cis(self.index_args)  # [max_seq, 32] complex; rope half = 64
+        # YaRN forced on (apply_yarn=True): the indexer is a long-context rope like the MLA path, so the
+        # table length (config.max_seq_len) is independent of the long-context gate. Per-position freqs
+        # are identical to the reference's (gated-on at 16384) — they depend only on original_seq_len.
+        freqs = precompute_freqs_cis(self.index_args, apply_yarn=True)  # [max_seq, 32] complex; rope half = 64
         cos = torch.cat([freqs.real, freqs.real], dim=-1).reshape(1, 1, freqs.shape[0], 64).to(torch.bfloat16)
         sin = torch.cat([freqs.imag, freqs.imag], dim=-1).reshape(1, 1, freqs.shape[0], 64).to(torch.bfloat16)
         repl = lambda t: ttnn.from_torch(
