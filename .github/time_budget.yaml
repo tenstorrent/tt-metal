@@ -73,11 +73,10 @@ ttnn:
     wh_galaxy: 35
     wh_n150: 970
     wh_n300: 970
-    bh_p100: 795
+    bh_p100: 905
     bh_p150b_civ2: 940
     wh_n150_civ2: 130
     wh_n300_civ2: 110
-    bh_p100a_civ2_viommu: 110
     bh_p150b_civ2_viommu: 110
   e2e:
     wh_llmbox: 90
@@ -91,7 +90,7 @@ ttnn:
     wh_llmbox: 30
     wh_galaxy: 340
     wh_n150_civ2: 60
-    bh_p100a_civ2_viommu: 30
+    bh_p100: 30
     bh_p150b_civ2_viommu: 30
   # Profiler budgets are kept under their own subheading for now while team /
   # test-framework assignment is being settled. Tracked in
@@ -110,12 +109,12 @@ train:
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
-    bh_p100a_civ2_viommu: 90
+    bh_p100: 90
     bh_p150b_civ2: 90
   perf:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
-    bh_p100a_civ2_viommu: 90
+    bh_p100: 90
     bh_p150b_civ2: 240
 
 ttsim:
@@ -186,7 +185,7 @@ llk:
     bh_p150: 40
     bh_p150b_civ2_viommu: 70
     bh_p150b_civ2_viommu_prio: 70
-    bh_p100a_civ2_viommu: 40
+    bh_p100: 40
   e2e:
     wh_n150_civ2: 1800
     bh_p150b_civ2: 1800

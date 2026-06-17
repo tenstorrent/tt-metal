@@ -325,7 +325,7 @@
       timeout: 20
     wh_n300_civ2:
       timeout: 20
-    bh_p100a_civ2_viommu:
+    bh_p100:
       timeout: 20
     bh_p150b_civ2_viommu:
       timeout: 20
@@ -342,7 +342,7 @@
       timeout: 45
     wh_n300_civ2:
       timeout: 45
-    bh_p100a_civ2_viommu:
+    bh_p100:
       timeout: 45
     bh_p150b_civ2_viommu:
       timeout: 45
@@ -357,7 +357,7 @@
       timeout: 45
     wh_n300_civ2:
       timeout: 45
-    bh_p100a_civ2_viommu:
+    bh_p100:
       timeout: 45
     bh_p150b_civ2_viommu:
       timeout: 45

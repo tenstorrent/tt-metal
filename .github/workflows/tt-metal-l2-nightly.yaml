@@ -137,7 +137,7 @@ jobs:
             l2_nightly_skus+=("wh_n150" "wh_n300" "wh_n150_civ2" "wh_n300_civ2" "sim_wormhole_b0")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            l2_nightly_skus+=("bh_p100" "bh_p150b_civ2" "bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu" "sim_blackhole")
+            l2_nightly_skus+=("bh_p100" "bh_p150b_civ2" "bh_p150b_civ2_viommu" "sim_blackhole")
           fi
           l2_nightly_skus_str=$(IFS=,; echo "${l2_nightly_skus[*]}")
           echo "l2-nightly-skus=$l2_nightly_skus_str" >> $GITHUB_OUTPUT
@@ -247,14 +247,14 @@ jobs:
         || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-integration-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
+    needs: [build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tutorials_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/ttnn-integration-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-ttnn-runtime-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
@@ -278,7 +278,7 @@ jobs:
   # tt-train team
   # =============================================================================
   tt-train-unit-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
+    needs: [build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
@@ -287,12 +287,12 @@ jobs:
     with:
       test-category: unit
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-perf-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
+    needs: [build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
@@ -301,7 +301,7 @@ jobs:
     with:
       test-category: perf
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
@@ -310,7 +310,7 @@ jobs:
   # Models team
   # =============================================================================
   models-unit-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
+    needs: [build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_models_unit_tests) &&
       contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150')
@@ -319,7 +319,7 @@ jobs:
     with:
       arch: wormhole_b0
       runner-label: N150
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
