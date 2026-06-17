@@ -228,6 +228,8 @@ Do not copy:
 - Hugging Face model cache;
 - Docker or persistent TT cache volume;
 - model weights;
+- generated tensor dumps or reference tensors (`*.tensorbin`, `*.pt`, `*.refpt`);
+- raw profiler/op CSV bulk such as `tracy_ops_times.csv`, `profile_log_device.csv`, `ops_perf_results.csv`, and `*_decode_ops.csv`;
 - large raw eval sample dumps unless explicitly requested.
 
 After copy-back, remove any `.env` left in the physical-host repo and stop the finished tmux session. Do not release the reservation unless the user or monitor asks.
