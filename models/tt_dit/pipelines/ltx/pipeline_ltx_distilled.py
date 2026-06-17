@@ -402,10 +402,8 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             video_ts_pair_tt = video_pin_mask_tt = None
             if needs_video_ts:
-                # The per-token video timestep has just two distinct values: pinned frame-0 tokens
-                # at pinned_ts, everything else at sigma. Pass the (2,) pair + a {0,1} pin mask so the
-                # transformer evaluates AdaLN on only those two timesteps and blends per token —
-                # this avoids the dense per-token modulation + its tile-padded reshape (OOM at full res).
+                # Per-token timestep has 2 values (pinned frame-0 vs. sigma): pass the (2,) pair +
+                # {0,1} pin mask so the transformer blends per token (avoids dense modulation, OOM).
                 pinned_scale = (1.0 - image_cond_strength) if (image_cond and n_cond > 0) else 1.0
                 ts_pair = torch.tensor([pinned_scale * sigma, sigma], dtype=torch.float32)
                 state._tt_video_ts_pair.update(ts_pair.reshape(1, 1, 2, 1) * 1000.0, traced, device=self.mesh_device)
