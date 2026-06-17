@@ -931,9 +931,8 @@ class LTXSpaceToDepthDownsample(Module):
 
         B, T, H, W, C = x_BTHWC.shape
 
-        # Pad H/W so the space-to-depth reshape is exact (same idea as the temporal p1 pad).
-        # ttnn.pad only reliably pads the lowest dims on a <=4D tensor, so collapse (B, T)
-        # into a single leading dim, pad both spatial dims at once, then restore the 5D shape.
+        # Pad H/W so the space-to-depth reshape is exact. ttnn.pad only pads the low dims of a <=4D
+        # tensor, so collapse (B, T), pad both spatial dims, then restore 5D.
         pad_h = (p2 - H % p2) % p2 if p2 > 1 else 0
         pad_w = (p3 - W % p3) % p3 if p3 > 1 else 0
         if pad_h or pad_w:
