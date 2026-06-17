@@ -98,7 +98,6 @@ jobs:
         --privileged
         --cap-add=ALL
         --security-opt seccomp=unconfined
-        --security-opt apparmor:unconfined
         -v /sys:/sys
     defaults:
       run:
