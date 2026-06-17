@@ -68,6 +68,12 @@ class DataFormat(Enum):
     UInt8 = DataFormatInfo("UInt8", 1)
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
+    MxFp6R = DataFormatInfo(
+        "MxFp6R", 1
+    )  # QSR specific - E3M2, 6 bits used in an 8-bit L1 container
+    MxFp6P = DataFormatInfo(
+        "MxFp6P", 1
+    )  # QSR specific - E2M3, 6 bits used in an 8-bit L1 container
     MxFp4 = DataFormatInfo(
         "MxFp4", Fraction(1, 2)
     )  # QSR specific - 4 bits (0.5 bytes) per element
@@ -172,6 +178,8 @@ class DataFormat(Enum):
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,
@@ -191,6 +199,8 @@ class DataFormat(Enum):
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
         }
 
@@ -225,6 +235,8 @@ MX_FORMAT_MAX_NORMAL = {
     DataFormat.MxFp8P: float(
         ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
     ),  # 448.0 from dtype,
+    DataFormat.MxFp6R: 28.0,  # E3M2: 2^4 × 1.75
+    DataFormat.MxFp6P: 7.5,  # E2M3: 2^2 × 1.875
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).max
     ),  # 6.0 from dtype,
@@ -238,6 +250,8 @@ MX_FORMAT_MAX_NORMAL = {
 MX_FORMAT_MIN_NORMAL = {
     DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal),
     DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal),
+    DataFormat.MxFp6R: 0.25,  # E3M2: 2^-2
+    DataFormat.MxFp6P: 1.0,  # E2M3: 2^0
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal
     ),  # 1.0 from dtype
@@ -253,6 +267,8 @@ MX_FORMAT_MAX_SUBNORMAL = {
     * 0.75,
     DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal)
     * 0.875,
+    DataFormat.MxFp6R: 0.1875,  # E3M2: 2^-2 × 0.75
+    DataFormat.MxFp6P: 0.875,  # E2M3: 2^0 × 0.875
     DataFormat.MxFp4: float(ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal)
     * 0.5,
 }
@@ -267,6 +283,8 @@ MX_FORMAT_MIN_SUBNORMAL = {
     DataFormat.MxFp8P: float(
         ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_subnormal
     ),
+    DataFormat.MxFp6R: 0.0625,  # E3M2: 2^-2 × 0.25
+    DataFormat.MxFp6P: 0.125,  # E2M3: 2^0 × 0.125
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_subnormal
     ),
@@ -276,6 +294,8 @@ MX_FORMAT_MIN_SUBNORMAL = {
 MX_FORMAT_MIN_MAGNITUDE = {
     DataFormat.MxFp8R: 2.44e-4,
     DataFormat.MxFp8P: 0.0625,
+    DataFormat.MxFp6R: 0.25,  # min normal (E3M2)
+    DataFormat.MxFp6P: 1.0,  # min normal (E2M3)
     DataFormat.MxFp4: 1.0,
 }
 
@@ -628,6 +648,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.MxFp8R: 18,
     DataFormat.MxFp8P: 20,
+    DataFormat.MxFp6R: 19,
+    DataFormat.MxFp6P: 21,
     DataFormat.MxFp4: 22,
     DataFormat.MxInt8: 2,
     DataFormat.MxInt4: 3,

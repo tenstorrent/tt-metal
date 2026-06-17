@@ -479,6 +479,10 @@ def _clamp_mx_tensors(
             -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
             MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
         )
+    elif output_format in (DataFormat.MxFp6R, DataFormat.MxFp6P):
+        elem_max = MX_FORMAT_MAX_NORMAL[output_format]
+        srcA_tensor = torch.clamp(srcA_tensor, -elem_max, elem_max)
+        srcB_tensor = torch.clamp(srcB_tensor, -elem_max, elem_max)
 
     return srcA_tensor, srcB_tensor
 
