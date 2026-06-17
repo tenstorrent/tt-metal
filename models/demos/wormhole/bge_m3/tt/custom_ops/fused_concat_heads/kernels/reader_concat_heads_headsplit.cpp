@@ -26,6 +26,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
@@ -47,6 +50,10 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_id);
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 
+    // Device 2.0 data-movement API (see device_api_migration_guide.md).
+    Noc noc;
+    CircularBuffer cb(cb_id);
+
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const uint32_t work_unit = work_unit_start + w;
         const uint32_t block = work_unit / head_groups;
@@ -55,19 +62,20 @@ void kernel_main() {
         const uint32_t h_tile = block - batch * in0_h_tiles;
         const uint32_t head_start = group * heads_per_group;
 
-        cb_reserve_back(cb_id, group_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
+        cb.reserve_back(group_tiles);
+        uint32_t l1_write_offset = 0;
 
         // For each head in this group, read in0_w_tiles tiles at row h_tile.
         uint32_t row_base = batch * in0_CHtWt + head_start * in0_HtWt + h_tile * in0_w_tiles;
         for (uint32_t h = 0; h < heads_per_group; ++h) {
             for (uint32_t w_dim = 0; w_dim < in0_w_tiles; ++w_dim) {
-                noc_async_read_tile(row_base + w_dim, s0, l1_write_addr);
-                l1_write_addr += tile_size_bytes;
+                noc.async_read(
+                    s0, cb, tile_size_bytes, {.page_id = row_base + w_dim}, {.offset_bytes = l1_write_offset});
+                l1_write_offset += tile_size_bytes;
             }
             row_base += in0_HtWt;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id, group_tiles);
+        noc.async_read_barrier();
+        cb.push_back(group_tiles);
     }
 }

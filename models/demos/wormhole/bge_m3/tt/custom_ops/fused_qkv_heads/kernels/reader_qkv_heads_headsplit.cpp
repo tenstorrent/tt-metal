@@ -32,6 +32,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
@@ -51,6 +54,10 @@ void kernel_main() {
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
     const uint32_t tile_size_bytes = get_tile_size(cb_id);
 
+    // Device 2.0 data-movement API (see device_api_migration_guide.md).
+    Noc noc;
+    CircularBuffer cb(cb_id);
+
     constexpr uint32_t group_q_tiles = heads_per_group * q_heads_per_kv * head_dim_tiles;
     constexpr uint32_t group_kv_tiles = heads_per_group * head_dim_tiles;
     constexpr uint32_t q_tiles_total = num_kv_heads * q_heads_per_kv * head_dim_tiles;
@@ -67,43 +74,46 @@ void kernel_main() {
         // ---- Q chunk ----
         // Q tile range inside the fused row: [group * group_q_tiles, group * group_q_tiles + group_q_tiles)
         const uint32_t q_offset_in_row = group * group_q_tiles;
-        cb_reserve_back(cb_id, group_q_tiles);
+        cb.reserve_back(group_q_tiles);
         {
-            uint32_t l1_write_addr = get_write_ptr(cb_id);
+            uint32_t l1_write_offset = 0;
             const uint32_t q_base_tile = block_base + q_offset_in_row;
             for (uint32_t i = 0; i < group_q_tiles; ++i) {
-                noc_async_read_tile(q_base_tile + i, s0, l1_write_addr);
-                l1_write_addr += tile_size_bytes;
+                noc.async_read(
+                    s0, cb, tile_size_bytes, {.page_id = q_base_tile + i}, {.offset_bytes = l1_write_offset});
+                l1_write_offset += tile_size_bytes;
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id, group_q_tiles);
+        noc.async_read_barrier();
+        cb.push_back(group_q_tiles);
 
         // ---- K chunk ----
         const uint32_t kv_offset_in_row = group * group_kv_tiles;
-        cb_reserve_back(cb_id, group_kv_tiles);
+        cb.reserve_back(group_kv_tiles);
         {
-            uint32_t l1_write_addr = get_write_ptr(cb_id);
+            uint32_t l1_write_offset = 0;
             const uint32_t k_base_tile = block_base + q_tiles_total + kv_offset_in_row;
             for (uint32_t i = 0; i < group_kv_tiles; ++i) {
-                noc_async_read_tile(k_base_tile + i, s0, l1_write_addr);
-                l1_write_addr += tile_size_bytes;
+                noc.async_read(
+                    s0, cb, tile_size_bytes, {.page_id = k_base_tile + i}, {.offset_bytes = l1_write_offset});
+                l1_write_offset += tile_size_bytes;
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id, group_kv_tiles);
+        noc.async_read_barrier();
+        cb.push_back(group_kv_tiles);
 
         // ---- V chunk ----
-        cb_reserve_back(cb_id, group_kv_tiles);
+        cb.reserve_back(group_kv_tiles);
         {
-            uint32_t l1_write_addr = get_write_ptr(cb_id);
+            uint32_t l1_write_offset = 0;
             const uint32_t v_base_tile = block_base + q_tiles_total + kv_tiles_total + kv_offset_in_row;
             for (uint32_t i = 0; i < group_kv_tiles; ++i) {
-                noc_async_read_tile(v_base_tile + i, s0, l1_write_addr);
-                l1_write_addr += tile_size_bytes;
+                noc.async_read(
+                    s0, cb, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
+                l1_write_offset += tile_size_bytes;
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id, group_kv_tiles);
+        noc.async_read_barrier();
+        cb.push_back(group_kv_tiles);
     }
 }

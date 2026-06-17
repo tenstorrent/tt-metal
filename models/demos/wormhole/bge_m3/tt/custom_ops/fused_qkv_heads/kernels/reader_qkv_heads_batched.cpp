@@ -8,10 +8,10 @@
 // Replaces ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/
 // device/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp.
 //
-// Difference vs stock: stock issues `cb_reserve(1) / read_tile / barrier /
-// cb_push(1)` once per tile (192 NoC barriers per block-of-96-tiles). This
-// kernel batches each of the Q/K/V tile groups into a single CB reservation
-// and a single barrier, dropping per-block barrier count from 96 to 3.
+// Difference vs stock: stock performs a one-tile CB reserve/read/barrier/push
+// sequence for each tile (192 NoC barriers per block-of-96-tiles). This kernel
+// batches each of the Q/K/V tile groups into a single CB reservation and a
+// single barrier, dropping per-block barrier count from 96 to 3.
 //
 // Compile-time args (matching stock layout for accessor offsets):
 //   0: q_num_tiles      = num_q_heads * head_dim_tiles                  (= 32)
@@ -31,6 +31,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // ---- runtime args ----
@@ -52,38 +55,45 @@ void kernel_main() {
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
     const uint32_t tile_size_bytes = get_tile_size(cb_id);
 
+    // Device 2.0 data-movement API (see device_api_migration_guide.md).
+    Noc noc;
+    CircularBuffer cb(cb_id);
+
     for (uint32_t block = 0; block < num_blocks; block++) {
         // ---- Q chunk: q_num_tiles in one reserve / one barrier / one push ----
-        cb_reserve_back(cb_id, q_num_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
+        cb.reserve_back(q_num_tiles);
+        uint32_t l1_write_offset = 0;
         for (uint32_t i = 0; i < q_num_tiles; i++) {
-            noc_async_read_tile(in0_tensor_tile_id + i, s0, l1_write_addr);
-            l1_write_addr += tile_size_bytes;
+            noc.async_read(
+                s0, cb, tile_size_bytes, {.page_id = in0_tensor_tile_id + i}, {.offset_bytes = l1_write_offset});
+            l1_write_offset += tile_size_bytes;
         }
         in0_tensor_tile_id += q_num_tiles;
-        noc_async_read_barrier();
-        cb_push_back(cb_id, q_num_tiles);
+        noc.async_read_barrier();
+        cb.push_back(q_num_tiles);
 
         // ---- K chunk ----
-        cb_reserve_back(cb_id, kv_num_tiles);
-        l1_write_addr = get_write_ptr(cb_id);
+        cb.reserve_back(kv_num_tiles);
+        l1_write_offset = 0;
         for (uint32_t i = 0; i < kv_num_tiles; i++) {
-            noc_async_read_tile(in0_tensor_tile_id + i, s0, l1_write_addr);
-            l1_write_addr += tile_size_bytes;
+            noc.async_read(
+                s0, cb, tile_size_bytes, {.page_id = in0_tensor_tile_id + i}, {.offset_bytes = l1_write_offset});
+            l1_write_offset += tile_size_bytes;
         }
         in0_tensor_tile_id += kv_num_tiles;
-        noc_async_read_barrier();
-        cb_push_back(cb_id, kv_num_tiles);
+        noc.async_read_barrier();
+        cb.push_back(kv_num_tiles);
 
         // ---- V chunk ----
-        cb_reserve_back(cb_id, kv_num_tiles);
-        l1_write_addr = get_write_ptr(cb_id);
+        cb.reserve_back(kv_num_tiles);
+        l1_write_offset = 0;
         for (uint32_t i = 0; i < kv_num_tiles; i++) {
-            noc_async_read_tile(in0_tensor_tile_id + i, s0, l1_write_addr);
-            l1_write_addr += tile_size_bytes;
+            noc.async_read(
+                s0, cb, tile_size_bytes, {.page_id = in0_tensor_tile_id + i}, {.offset_bytes = l1_write_offset});
+            l1_write_offset += tile_size_bytes;
         }
         in0_tensor_tile_id += kv_num_tiles;
-        noc_async_read_barrier();
-        cb_push_back(cb_id, kv_num_tiles);
+        noc.async_read_barrier();
+        cb.push_back(kv_num_tiles);
     }
 }
