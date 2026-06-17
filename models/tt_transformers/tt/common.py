@@ -342,6 +342,22 @@ def preprocess_inputs_prefill(
     )
 
 
+def _chat_template_ids(encoded):
+    """Normalize apply_chat_template(tokenize=True) output to a flat List[int].
+
+    transformers <5 returned a plain List[int]; transformers 5.x can return a
+    `tokenizers.Encoding` (exposes ``.ids``) or a `BatchEncoding`/dict (exposes
+    ``input_ids``), neither of which ``torch.tensor`` can consume directly.
+    """
+    if isinstance(encoded, dict):  # BatchEncoding / dict
+        encoded = encoded["input_ids"]
+    if hasattr(encoded, "ids"):  # tokenizers.Encoding
+        return list(encoded.ids)
+    if hasattr(encoded, "tolist"):  # torch tensor / np array
+        return encoded.tolist()
+    return list(encoded)  # already a List[int]
+
+
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []
@@ -350,9 +366,10 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
             chat.append({"role": "system", "content": system_prompt_text})
         if prompt_text:
             chat.append({"role": "user", "content": prompt_text})
-        return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+        encoded = tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
     else:
-        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+        encoded = tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+    return _chat_template_ids(encoded)
 
 
 def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
