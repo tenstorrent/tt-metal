@@ -401,7 +401,10 @@ inline void _llk_pack_init_(
         _llk_pack_configure_addrmod_<pack_mode>();
     }
     _llk_pack_mop_config_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
-    set_packer_l1_offset(pack_dst_format, face_r_dim);
+    if constexpr (!skip_packer_strides)
+    {
+        set_packer_l1_offset(pack_dst_format, face_r_dim);
+    }
 
     // Program the packer X (datum) counter. This value is pack_mode-dependent (Untilize packs a single
     // face row, Default packs a full face), so it is per-op state that must be (re)established by init
