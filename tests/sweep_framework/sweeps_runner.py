@@ -1265,6 +1265,24 @@ def disable_watcher():
     os.environ.pop("TT_METAL_WATCHER_APPEND", None)
 
 
+def _is_multidevice_ccl_module(module_name):
+    """CCL / multi-device ops (all_gather, all_reduce, reduce_scatter, ...) where
+    device-perf is unsupported (gather_single_test_perf returns None for >1 device).
+
+    The device profiler not only measures nothing for them, it deadlocks multi-device
+    FABRIC_2D ops: TT_METAL_DEVICE_PROFILER + MID_RUN_DUMP make the host read profiler
+    data from the ETH/fabric (erisc) cores mid-run, which hangs the gather (5-min
+    timeout -> FAIL_CRASH_HANG, then run_mailbox 0x40 wedge on the erisc cores). The
+    runner can't disable it per-op (it's a process-global env read at ttnn import), so
+    never enable it when the run targets a CCL module. Validated on T3K: --device-perf
+    + profiler -> hang; --device-perf + this gate -> 36/36 pass.
+    """
+    if not module_name:
+        return False
+    _ccl = ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "all_broadcast")
+    return any(any(c in m for c in _ccl) for m in str(module_name).split(",") if m)
+
+
 def enable_profiler():
     logger.info("Enabling Device Profiler")
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
@@ -1426,8 +1444,13 @@ if __name__ == "__main__":
     if config.watcher:
         enable_watcher()
 
-    if config.measure_device_perf:
+    if config.measure_device_perf and not _is_multidevice_ccl_module(config.module_name):
         enable_profiler()
+    elif config.measure_device_perf:
+        logger.info(
+            f"Skipping device profiler for multi-device CCL module(s) {config.module_name!r}: "
+            "device-perf is unsupported there and the profiler deadlocks FABRIC_2D ops."
+        )
 
     # Generate run contents description
     config.run_contents = get_run_contents(config)

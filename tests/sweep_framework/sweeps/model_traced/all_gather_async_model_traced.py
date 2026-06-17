@@ -394,34 +394,11 @@ if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() 
     parameters["model_traced"] = model_traced_params
 
 
-# Config hashes that hang the all_gather_async op *after a clean FABRIC_2D
-# bring-up* on the CI T3K (n300/4c) fleet. The byte-identical build passes on a
-# healthy T3K dev box (validated 2026-06-17: 36/36 of the 2x4 set, incl. these,
-# cold and warm cache), so this is a CI-runner fabric/ETH health issue in the
-# C++ fabric layer — not a sweep or op-config bug fixable here, and not caught by
-# the 30s op timeout (the wait is in fabric, not dispatch). Each one otherwise
-# burns ~2x300s before FAIL_CRASH_HANG and skips the rest of the suite. See
-# project notes; escalated to the fabric/CCL team.
-# NOTE: the hang is the *first* FABRIC_2D op and may be positional — if CI shows
-# it shift to another config, add that hash here too.
-_CI_T3K_FABRIC2D_HANG_HASHES = {
-    "0dd01b5fb84c1974ad5a135e98c2918edaf0c7adc4a3d383468c42784a889738",  # 2x4, dim=2, cluster_axis=0, (1,1,1536,1536) bf16 (mochi)
-}
-
-
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # Check if this is a model_traced vector (has input_a_memory_config instead of buffer_type)
     is_model_traced = "input_a_memory_config" in test_vector
 
     if is_model_traced:
-        # Known CI T3K fabric-hang configs (see _CI_T3K_FABRIC2D_HANG_HASHES).
-        cfg_hash = test_vector.get("config_hash") or test_vector.get("input_hash")
-        if cfg_hash in _CI_T3K_FABRIC2D_HANG_HASHES:
-            return (
-                True,
-                "Hangs all_gather op after clean FABRIC_2D bring-up on CI T3K fleet (passes on healthy T3K dev box); CI-runner fabric health issue",
-            )
-
         # Model traced vectors are pre-validated by the tracer.
         # Do NOT check device count here — vector generation may run on a
         # smaller machine (e.g., N150) than the actual test runner (Galaxy).
