@@ -87,6 +87,7 @@ static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
     {"S", RoutingDirection::S},
     {"E", RoutingDirection::E},
     {"W", RoutingDirection::W},
+    {"Z", RoutingDirection::Z},
 });
 
 static const StringEnumMapper<Topology> topology_mapper({
@@ -126,6 +127,13 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"neighbor_exchange", HighLevelTrafficPattern::NeighborExchange},
     {"sequential_neighbor_exchange", HighLevelTrafficPattern::SequentialNeighborExchange},
     {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
+    {"sequential_mesh_passthrough", HighLevelTrafficPattern::SequentialMeshPassthrough},
+});
+
+static const StringEnumMapper<MeshTrafficScope> mesh_scope_mapper({
+    {"all", MeshTrafficScope::ALL},
+    {"intra_mesh", MeshTrafficScope::INTRA_MESH},
+    {"inter_mesh", MeshTrafficScope::INTER_MESH},
 });
 
 // Optimized string concatenation utility to avoid multiple allocations
@@ -170,8 +178,8 @@ void append_with_separator(std::string& target, std::string_view separator, cons
 inline bool high_level_pattern_is_sequential(HighLevelTrafficPattern pattern){
     switch(pattern){
     case HighLevelTrafficPattern::SequentialNeighborExchange: [[fallthrough]];
-    case HighLevelTrafficPattern::SequentialAllToAll:
-        return true;
+    case HighLevelTrafficPattern::SequentialAllToAll: [[fallthrough]];
+    case HighLevelTrafficPattern::SequentialMeshPassthrough: return true;
     case HighLevelTrafficPattern::AllToAll: [[fallthrough]];
     case HighLevelTrafficPattern::OneToAll: [[fallthrough]];
     case HighLevelTrafficPattern::AllToOne: [[fallthrough]];
@@ -436,11 +444,17 @@ public:
     std::vector<TestConfig> build_tests(
         const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser);
 
-    // Helper function to check if a test should be skipped based on architecture or cluster type.
+    // Helper function to check if a test should be skipped based on architecture, cluster type, or
+    // being on a multi-mesh system.
     bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const;
 
     // Helper function to check if a test should be skipped based on topology incompatibilities.
     bool should_skip_test_on_topology(const ParsedTestConfig& test_config) const;
+
+    // Returns true if the test uses the experimental sequential_mesh_passthrough pattern but the
+    // TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH runtime option is not set. The pattern is meaningless
+    // (and far-mesh destinations are unreachable) without VC1 pass-through enabled, so we skip it.
+    bool should_skip_test_for_disabled_mesh_passthrough(const ParsedTestConfig& test_config) const;
 
 private:
     static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
@@ -486,7 +500,15 @@ private:
         ParsedTestConfig& test, const std::vector<HighLevelPatternConfig>& patterns, uint32_t iteration_idx);
 
     void expand_one_or_all_to_all_unicast(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        HighLevelTrafficPattern pattern_type,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
+
+    // Filters device pairs to intra/inter-mesh subsets based on the requested scope.
+    // On single-mesh systems all pairs are intra-mesh; INTER_MESH yields an empty set.
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> filter_pairs_by_mesh_scope(
+        const std::vector<std::pair<FabricNodeId, FabricNodeId>>& all_pairs, MeshTrafficScope mesh_scope) const;
 
     void expand_all_to_one_unicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
@@ -496,7 +518,26 @@ private:
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_sequential_all_to_all_unicast(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        uint32_t iteration_idx,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
+
+    // Sequential inter-mesh pass-through: one iteration per mesh, where that mesh is the sole sender.
+    // In iteration k, every device in the k-th mesh sends to the destinations selected by mesh_scope:
+    //   ALL (default) -> every other device (same mesh + all other meshes),
+    //   INTER_MESH    -> only devices in *other* meshes (adjacent or not; far meshes via pass-through),
+    //   INTRA_MESH    -> only devices in the sender mesh.
+    // Unlike filter_pairs_by_mesh_scope, INTER_MESH/ALL here are NOT restricted to adjacent meshes,
+    // since reaching non-adjacent meshes via pass-through hops is the point of this pattern.
+    // Restricting to a single sender mesh per pass avoids the cyclic cross-mesh VC1 dependency that
+    // makes simultaneous all-mesh inter-mesh traffic deadlock-prone (VC1 pass-through is not
+    // deadlock-safe). Requires a multi-mesh system.
+    void expand_sequential_mesh_passthrough(
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        uint32_t iteration_idx,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
@@ -506,10 +547,16 @@ private:
     void expand_unidirectional_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
-    void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
+    void expand_neighbor_exchange(
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_sequential_neighbor_exchange(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        uint32_t iteration_idx,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);

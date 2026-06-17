@@ -29,6 +29,9 @@ public:
 
     static TensorToMesh create(const MeshDevice& mesh_device, const MeshMapperConfig& config);
 
+    // Shape-only overload for callers that do not hold a `MeshDevice` handle.
+    static TensorToMesh create(const MeshShape& mesh_shape, const MeshMapperConfig& config);
+
     // Maps a tensor onto a mesh.
     // The input tensor is expected to be host-side tensor consisting of 1 device shard (i.e., mapped to 1x1 mesh).
     // The output tensor will be a host-side tensor mapped to a mesh of the same shape as the mesh device.
@@ -56,6 +59,9 @@ private:
 
 // Creates an ND mesh mapper that distributes a tensor according to the `config`.
 std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config);
+
+// Shape-only overload; the returned mapper retains no device-side state.
+std::unique_ptr<TensorToMesh> create_mesh_mapper(const MeshShape& mesh_shape, const MeshMapperConfig& config);
 
 // Creates a mapper that replicates a tensor across all devices.
 // Shorthand for specifying a MeshMapperConfig that replicates the tensor over the entire mesh.

@@ -123,6 +123,10 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
             kernel.setPath(kernel_data.path);
             kernel.setSource(kernel_data.source);
             kernel.setProgramId(program_id);
+            auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
+            for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
+                elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
+            }
         }
     }
 }
@@ -263,6 +267,10 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     kernel.setPath(kernel_data.path);
     kernel.setSource(kernel_data.source);
     kernel.setProgramId(program_id);
+    auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
+    for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
+        elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
+    }
 }
 
 // Get build environment information for all devices
@@ -564,7 +572,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(arc_debug_buffer_size);
     RT(validate_kernel_binaries);
     RT(record_noc_transfers);
-    RT(use_device_print);
 
     // Timeouts
     RT_CUSTOM("timeout_duration_for_operations", fmt::format("{}s", rt.get_timeout_duration_for_operations().count()));
@@ -579,6 +586,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(fabric_trimming_profile_path);
     RT(fabric_trimming_override_path);
     RT(enable_fabric_vc2);
+    RT(enable_fabric_mesh_pass_through);
     RT(fabric_router_sync_timeout_ms);
     RT(fabric_kernel_opt_level);
     RT(reliability_mode);

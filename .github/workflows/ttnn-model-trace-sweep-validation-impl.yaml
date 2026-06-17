@@ -46,12 +46,16 @@ permissions:
   contents: read
   packages: write
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
       platform: Ubuntu 22.04
@@ -68,6 +72,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Display validation request
         env:
@@ -207,6 +212,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -322,6 +328,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -392,7 +399,7 @@ jobs:
 
   run-sweeps-with-tracer:
     name: ${{ matrix.batch_display }}
-    needs: [build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
+    needs: [check-harbor, build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
     strategy:
       fail-fast: false
       matrix:
@@ -425,6 +432,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -448,61 +456,18 @@ jobs:
           name: ${{ matrix.vectors_artifact_name }}
           path: /work/tests/sweep_framework/vectors_export
 
-      - name: Detect mesh device shape from vectors
+      - name: Set mesh device shape from matrix
         run: |
-          # Extract the mesh_device_shape from vector tensor_placement metadata.
-          # This ensures the sweep fixture creates a mesh device matching the
-          # traced topology (e.g., 4x8 for Galaxy, 1x2 for N300).
-          MESH=$(python3 -c "
-          import json, glob, sys, os
-          test_group = os.environ.get('TEST_GROUP_NAME', '').lower()
-          arch = os.environ.get('ARCH_NAME', '').lower()
-          arch_filter = 'wormhole' if 'wormhole' in arch else ('blackhole' if 'blackhole' in arch else '')
-          is_galaxy = 'galaxy' in test_group
-          # Derive the hardware suffix from the test group name so we only
-          # scan vectors belonging to THIS runner's hardware group.
-          # e.g., test_group='wormhole-n150-sweeps' -> look for '_n150_' in filenames
-          #        test_group='wormhole-n300-sweeps' -> look for '_n300_' in filenames
-          hw_series_filter = ''
-          for series in ['n150', 'n300', 'p150b', 'p100a', 'galaxy']:
-              if series in test_group:
-                  hw_series_filter = series
-                  break
-          for f in glob.glob('/work/tests/sweep_framework/vectors_export/*.json'):
-              fname = os.path.basename(f).lower()
-              if arch_filter and arch_filter not in fname:
-                  continue
-              # Exclude galaxy vectors on non-galaxy runners and vice versa
-              if is_galaxy and 'galaxy' not in fname:
-                  continue
-              if not is_galaxy and 'galaxy' in fname:
-                  continue
-              # Filter by device series to avoid N300 vectors on N150 runners
-              if hw_series_filter and hw_series_filter not in fname:
-                  continue
-              with open(f) as fh:
-                  data = json.load(fh)
-              for suite in data.values():
-                  if not isinstance(suite, dict):
-                      continue
-                  for cfg in suite.values():
-                      if not isinstance(cfg, dict):
-                          continue
-                      for key, val in cfg.items():
-                          if key.endswith('_tensor_placement') and isinstance(val, dict):
-                              ms = val.get('mesh_device_shape', '')
-                              if isinstance(ms, str) and ',' in ms:
-                                  nums = [int(x.strip().strip('[]')) for x in ms.split(',')]
-                                  if len(nums) == 2 and nums != [1, 1]:
-                                      print(f'{nums[0]}x{nums[1]}')
-                                      sys.exit(0)
-          print('')
-          " 2>/dev/null || true)
+          # Use the mesh_device_shape from the matrix (computed by
+          # compute_validation_sweep_matrix.py based on vector file mesh suffixes).
+          # This ensures each batch opens the device with the exact mesh topology
+          # its configs were traced with.
+          MESH="${{ matrix.mesh_device_shape }}"
           if [[ -n "$MESH" ]]; then
-            echo "Detected MESH_DEVICE_SHAPE=$MESH from vector metadata"
+            echo "Using MESH_DEVICE_SHAPE=$MESH from matrix"
             echo "MESH_DEVICE_SHAPE=$MESH" >> "$GITHUB_ENV"
           else
-            echo "No multi-device mesh shape detected in vectors, using default"
+            echo "No mesh_device_shape in matrix, using default"
           fi
 
       - name: Split sweep vectors by required dispatch axis
@@ -542,8 +507,12 @@ jobs:
           # Two-pass run: COL first, then ROW. generic_ops_tracer appends to
           # the same -o trace file across both passes, so the validation
           # aggregator sees a unified trace covering both dispatch axes.
-          # Skip a pass when the matching partition has no vectors for any
-          # module in this batch (sweeps_runner errors on empty inputs).
+          #
+          # Each pass filters MODULE_SELECTOR down to only the modules that
+          # have vector files in that axis partition. This prevents the
+          # sweep runner from falling back to sample configs (and producing
+          # 0 trace files) for modules whose vectors live in the other
+          # partition. A pass is skipped entirely when no modules match.
           run_pass() {
             local axis="$1"
             local vectors_dir="tests/sweep_framework/vectors_export_${axis}"
@@ -551,25 +520,37 @@ jobs:
               echo "[two-pass] $axis partition missing — skipping"
               return 0
             fi
-            local matched=0
-            local _IFS_old="$IFS"; IFS=','
-            for module in $MODULE_SELECTOR; do
-              for f in "$vectors_dir/${module}".*.json "$vectors_dir/${module}.json"; do
-                [[ -f "$f" ]] && matched=1 && break 2
-              done
-            done
-            IFS="$_IFS_old"
-            if [[ "$matched" == "0" ]]; then
-              echo "[two-pass] $axis partition has no vectors for batch modules — skipping"
-              return 0
-            fi
-            # Check if any vector file in this partition has vectors for
-            # the current hardware.  Use ARCH_NAME + galaxy detection to
-            # avoid matching Galaxy vectors on N300 runners and vice versa.
+            # Derive hardware identity from CI env for filtering vector files
             local arch_tag="${ARCH_NAME:-}"
             local tg="${TEST_GROUP_NAME:-}"
             local is_galaxy=0
             [[ "$tg" == *galaxy* ]] && is_galaxy=1
+            local hw_series_filter=""
+            for series in n150 n300 p150b p100a galaxy; do
+              if [[ "$tg" == *"$series"* ]]; then hw_series_filter="$series"; break; fi
+            done
+            # Filter MODULE_SELECTOR to modules with vector files matching our
+            # hardware. Without hw filtering, a Galaxy batch picks up N300 files
+            # for the same module name and spawns a pass that loads 0 vectors.
+            local filtered_modules=""
+            local _IFS_old="$IFS"; IFS=','
+            for module in $MODULE_SELECTOR; do
+              for f in "$vectors_dir/${module}".*.json "$vectors_dir/${module}.json"; do
+                if [[ -f "$f" ]]; then
+                  local fn="$(basename "$f")"
+                  if [[ -n "$hw_series_filter" && "$fn" != *"$hw_series_filter"* ]]; then continue; fi
+                  if [[ $is_galaxy -eq 1 && "$fn" != *galaxy* ]]; then continue; fi
+                  if [[ $is_galaxy -eq 0 && "$fn" == *galaxy* ]]; then continue; fi
+                  filtered_modules="${filtered_modules:+$filtered_modules,}$module"
+                  break
+                fi
+              done
+            done
+            IFS="$_IFS_old"
+            if [[ -z "$filtered_modules" ]]; then
+              echo "[two-pass] $axis partition has no vectors for $hw_series_filter modules — skipping"
+              return 0
+            fi
             if [[ -n "$arch_tag" ]]; then
               local arch_base="${arch_tag%%_*}"  # e.g. wormhole from wormhole_b0
               local arch_matched=0
@@ -581,14 +562,16 @@ jobs:
                 # Galaxy exclusion: skip galaxy vectors on non-galaxy and vice versa
                 if [[ $is_galaxy -eq 1 && "$bname" != *galaxy* ]]; then continue; fi
                 if [[ $is_galaxy -eq 0 && "$bname" == *galaxy* ]]; then continue; fi
+                # Device series filter: only match files for this runner's hw series
+                if [[ -n "$hw_series_filter" && "$bname" != *"$hw_series_filter"* ]]; then continue; fi
                 arch_matched=1; break
               done
               if [[ "$arch_matched" == "0" ]]; then
-                echo "[two-pass] $axis partition has no vectors for $arch_tag (galaxy=$is_galaxy) — skipping"
+                echo "[two-pass] $axis partition has no vectors for $arch_tag/$hw_series_filter (galaxy=$is_galaxy) — skipping"
                 return 0
               fi
             fi
-            echo "[two-pass] === axis=$axis ==="
+            echo "[two-pass] === axis=$axis modules=$filtered_modules ==="
             TTNN_DISPATCH_AXIS="$axis" \
               TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
               TTNN_MASTER_JSON_PATH="/work/model_tracer/traced_operations/ttnn_operations_master.json" \
@@ -596,7 +579,7 @@ jobs:
                 tests/sweep_framework/sweeps_runner.py \
                 -o "$TRACE_OUT" \
                 -- \
-                --module-name "$MODULE_SELECTOR" \
+                --module-name "$filtered_modules" \
                 --suite-name "${{ matrix.suite_name }}" \
                 --vector-source vectors_export \
                 --result-dest results_export \
@@ -636,6 +619,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Download master JSON artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -740,6 +724,7 @@ jobs:
     steps:
       - name: Checkout repository (actions only)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github/actions

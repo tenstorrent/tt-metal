@@ -67,8 +67,8 @@ ALWI void process_grid_point_nearest(
             const uint32_t coordinate_pair_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
             const uint16_t h_coord_raw = grid_ptr[coordinate_pair_offset + 1];  // y coordinate
             const uint16_t w_coord_raw = grid_ptr[coordinate_pair_offset + 0];  // x coordinate
-            h_coord_rel = bfloat16_to_float(h_coord_raw);
-            w_coord_rel = bfloat16_to_float(w_coord_raw);
+            h_coord_rel = bf16_to_fp32(h_coord_raw);
+            w_coord_rel = bf16_to_fp32(w_coord_raw);
         }
 
         // Transform to image coordinates using the same formula as prepare_grid.cpp
@@ -161,7 +161,6 @@ void kernel_main() {
     uint32_t input_addr = 0;
     uint32_t global_grid_stick_start = 0;
     uint32_t grid_addr = 0;
-    uint32_t num_pages = 0;
     uint32_t start_page_id = 0;
     if constexpr (is_sharded) {
         // Runtime arguments - same as sharded reader
@@ -170,7 +169,6 @@ void kernel_main() {
     } else {
         input_addr = get_arg_val<uint32_t>(0);
         grid_addr = get_arg_val<uint32_t>(1);
-        num_pages = get_arg_val<uint32_t>(2);
         start_page_id = get_arg_val<uint32_t>(3);
         global_grid_stick_start = start_page_id;
     }

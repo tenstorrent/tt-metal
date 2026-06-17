@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Reduction ALIAS ttnn_op_experimental_reduction)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_reduction TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_reduction TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reduction)
 
 set_target_properties(

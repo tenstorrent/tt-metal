@@ -48,18 +48,18 @@ from pathlib import Path
 
 import pytest
 
+from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_METAL_HOME
+
 
 # ---------------------------------------------------------------------------
 # Common paths / constants
 # ---------------------------------------------------------------------------
 
-TT_METAL_HOME = Path(os.environ.get("TT_METAL_HOME", Path.cwd()))
-PROFILER_BIN_DIR = TT_METAL_HOME / "build" / "tools" / "profiler" / "bin"
-CAPTURE_TOOL = PROFILER_BIN_DIR / "capture-release"
-CSVEXPORT_TOOL = PROFILER_BIN_DIR / "csvexport-release"
+CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
+CSVEXPORT_TOOL = PROFILER_BIN_DIR / "tracy-csvexport"
 
 # Root artifact dir; each test writes into a named sub-directory.
-ARTIFACTS_ROOT = TT_METAL_HOME / "generated" / "profiler" / "realtime_profiler_tests"
+ARTIFACTS_ROOT = PROFILER_ARTIFACTS_DIR / "realtime_profiler_tests"
 
 # External workload scripts that are re-executed in a subprocess under Tracy
 # capture for the correlation / sync tests.  They are kept as standalone
@@ -105,7 +105,7 @@ def _run_under_tracy(
     timeout_s: int = 600,
 ):
     """
-    Launch `capture-release` in the background, run `workload_script` under
+    Launch `tracy-capture` in the background, run `workload_script` under
     it in a subprocess with stdout streamed to ``log_path`` (avoids the OS
     pipe buffer filling up and deadlocking the child), and return
     (workload_returncode, workload_stdout_text).
@@ -120,7 +120,7 @@ def _run_under_tracy(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(2)  # let capture-release start listening
+    time.sleep(2)  # let tracy-capture start listening
 
     env = dict(os.environ)
     env["TRACY_PORT"] = port
@@ -228,7 +228,7 @@ def test_callback(tmp_path):
     print(f"\nCollected {len(snapshot)} real-time profiler records")
     for i, rec in enumerate(snapshot[:5]):
         delta = rec["end_timestamp"] - rec["start_timestamp"]
-        print(f"  [{i}] program={rec['program_id']} chip={rec['chip_id']} ticks={delta}")
+        print(f"  [{i}] program={rec['runtime_id']} chip={rec['chip_id']} ticks={delta}")
     if len(snapshot) > 5:
         print(f"  ... and {len(snapshot) - 5} more")
 
@@ -236,6 +236,12 @@ def test_callback(tmp_path):
     for rec in snapshot:
         assert rec["end_timestamp"] >= rec["start_timestamp"], "end_timestamp < start_timestamp"
         assert rec["frequency_ghz"] > 0, "frequency_ghz must be positive"
+        assert isinstance(rec["kernel_sources"], list), "kernel_sources must be list-like"
+        assert all(
+            isinstance(source, str) and source for source in rec["kernel_sources"]
+        ), "kernel_sources entries must be non-empty strings"
+
+    assert any(rec["kernel_sources"] for rec in snapshot), "Expected at least one record with kernel_sources"
 
     out_file = tmp_path / "rt_records.json"
     _save_artifacts("test_callback", records=out_file)
@@ -255,26 +261,37 @@ def test_no_short_zones(tmp_path):
     short = []
     valid = 0
     for idx, r in enumerate(snapshot):
-        if r["program_id"] == 0 or r["frequency_ghz"] <= 0:
+        if r["runtime_id"] == 0 or r["frequency_ghz"] <= 0:
             continue
         valid += 1
         dur_us = (r["end_timestamp"] - r["start_timestamp"]) / r["frequency_ghz"] / 1000.0
         if dur_us < SHORT_ZONE_THRESHOLD_US:
-            short.append((idx, r["program_id"], dur_us))
+            short.append((idx, r["runtime_id"], dur_us))
 
     print(
-        f"\nRT records: total={len(snapshot)}, valid(pid!=0)={valid}, short(<{SHORT_ZONE_THRESHOLD_US}us)={len(short)}"
+        f"\nRT records: total={len(snapshot)}, valid(runtime_id!=0)={valid}, "
+        f"short(<{SHORT_ZONE_THRESHOLD_US}us)={len(short)}"
     )
-    for idx, pid, dur in short[:20]:
+    for idx, runtime_id, dur in short[:20]:
         r = snapshot[idx]
-        print(f"  SHORT [{idx}] pid={pid} dur_us={dur:.3f} start={r['start_timestamp']} end={r['end_timestamp']}")
+        print(
+            f"  SHORT [{idx}] runtime_id={runtime_id} dur_us={dur:.3f} "
+            f"start={r['start_timestamp']} end={r['end_timestamp']}"
+        )
 
     _save_artifacts("test_no_short_zones", records=tmp_path / "rt_records.json")
 
-    assert valid > 0, "No valid real-time profiler records (pid != 0) collected"
+    assert valid > 0, "No valid real-time profiler records (runtime_id != 0) collected"
     assert not short, (
         f"{len(short)}/{valid} real-time profiler records had duration "
         f"< {SHORT_ZONE_THRESHOLD_US}µs (first: {short[:5]})"
+    )
+
+    with_sources = sum(1 for r in snapshot if r["runtime_id"] != 0 and r["kernel_sources"])
+    assert with_sources == valid, (
+        f"{with_sources}/{valid} valid records resolved kernel_sources. Trace-replayed records resolve "
+        f"sources only if their runtime_id is tied to program_id during trace capture; ensure TieRuntimeIdToProgramId "
+        f"and RecordKernelSourceMap are called in create_trace_node (dispatch.cpp)."
     )
 
 
@@ -398,20 +415,20 @@ def _cross_reference_impl(
 
     rt_by_id = defaultdict(list)
     for rec in rt_snapshot:
-        pid = rec["program_id"]
+        runtime_id = rec["runtime_id"]
         freq = rec["frequency_ghz"]
-        if pid == 0 or freq <= 0:
+        if runtime_id == 0 or freq <= 0:
             continue
         dur_ns = (rec["end_timestamp"] - rec["start_timestamp"]) / freq
         if dur_ns <= 0:
             continue
-        rt_by_id[pid].append(dur_ns)
+        rt_by_id[runtime_id].append(dur_ns)
 
     assert rt_by_id, "No valid real-time profiler records"
 
     # Choose better matching strategy.
-    raw_matches = sum(1 for pid in rt_by_id if pid in dev_by_raw)
-    decoded_matches = sum(1 for pid in rt_by_id if pid in dev_by_decoded)
+    raw_matches = sum(1 for runtime_id in rt_by_id if runtime_id in dev_by_raw)
+    decoded_matches = sum(1 for runtime_id in rt_by_id if runtime_id in dev_by_decoded)
     if raw_matches >= decoded_matches:
         dev_durations, match_strategy = dev_by_raw, "raw"
     else:
@@ -422,10 +439,10 @@ def _cross_reference_impl(
     within = 0
     skipped_short = 0
     details = []
-    for pid, rt_durs in sorted(rt_by_id.items()):
-        if pid not in dev_durations:
+    for runtime_id, rt_durs in sorted(rt_by_id.items()):
+        if runtime_id not in dev_durations:
             continue
-        dev_durs = dev_durations[pid]
+        dev_durs = dev_durations[runtime_id]
         for i in range(min(len(rt_durs), len(dev_durs))):
             rt_ns = rt_durs[i]
             dev_ns = dev_durs[i]
@@ -440,7 +457,7 @@ def _cross_reference_impl(
                     within += 1
             details.append(
                 {
-                    "program_id": pid,
+                    "runtime_id": runtime_id,
                     "instance": i,
                     "rt_duration_ns": round(rt_ns, 1),
                     "dev_duration_ns": round(dev_ns, 1),
@@ -453,9 +470,9 @@ def _cross_reference_impl(
     diagnostics = {
         "match_strategy": match_strategy,
         "rt_record_count": len(rt_snapshot),
-        "rt_unique_program_ids": len(rt_by_id),
-        "dev_unique_program_ids_raw": len(dev_by_raw),
-        "dev_unique_program_ids_decoded": len(dev_by_decoded),
+        "rt_unique_runtime_ids": len(rt_by_id),
+        "dev_unique_runtime_ids_raw": len(dev_by_raw),
+        "dev_unique_runtime_ids_decoded": len(dev_by_decoded),
         "matched_pairs": matched,
         "skipped_short": skipped_short,
         "within_tolerance": within,
@@ -470,8 +487,8 @@ def _cross_reference_impl(
     print(f"\n=== {test_name} ===")
     print(f"  Match strategy:          {match_strategy}")
     print(f"  RT records:              {len(rt_snapshot)}")
-    print(f"  RT unique program IDs:   {len(rt_by_id)}")
-    print(f"  Dev unique program IDs:  {len(dev_by_raw)} (raw) / {len(dev_by_decoded)} (decoded)")
+    print(f"  RT unique runtime IDs:   {len(rt_by_id)}")
+    print(f"  Dev unique runtime IDs:  {len(dev_by_raw)} (raw) / {len(dev_by_decoded)} (decoded)")
     print(f"  Matched (>={MIN_DEVICE_KERNEL_DURATION_NS}ns): {matched} (skipped {skipped_short} short)")
     print(f"  Within {RELATIVE_TOLERANCE*100:.0f}% tolerance:  {within}/{matched}")
     print(f"  Diagnostics:             {out_file}")
@@ -479,7 +496,7 @@ def _cross_reference_impl(
     _save_artifacts(test_name, **{"cross_reference.json": out_file, "workload_output.log": workload_log})
 
     assert matched > 0, (
-        f"No program IDs matched between real-time profiler and device profiler; "
+        f"No runtime IDs matched between real-time profiler and device profiler; "
         f"RT IDs sample: {sorted(rt_by_id)[:10]}, Dev raw: {sorted(dev_by_raw)[:10]}, "
         f"Dev decoded: {sorted(dev_by_decoded)[:10]}"
     )
@@ -553,7 +570,7 @@ def test_host_device_correlation(tmp_path):
     """
     Run the correlation workload under Tracy capture. Verify every host
     ``EnqueueProgram op_id=X`` Tracy message has a matching device-side
-    real-time profiler record for ``program_id=X`` with identical
+    real-time profiler record for ``runtime_id=X`` with identical
     multiplicity.
     """
     assert CAPTURE_TOOL.exists(), f"Tracy capture tool not found: {CAPTURE_TOOL}"
@@ -589,23 +606,23 @@ def test_host_device_correlation(tmp_path):
     assert len(host_op_ids) > 0, "No EnqueueProgram TracyMessages found"
     assert len(device_records) > 0, "No device records collected"
 
-    device_program_ids = [r["program_id"] for r in device_records]
+    device_runtime_ids = [r["runtime_id"] for r in device_records]
     host_set = set(host_op_ids)
-    dev_set = set(device_program_ids)
+    dev_set = set(device_runtime_ids)
     host_counts = Counter(host_op_ids)
-    dev_counts = Counter(device_program_ids)
+    dev_counts = Counter(device_runtime_ids)
 
     print(f"\n  Host op_ids: {len(host_op_ids)} total, range {min(host_op_ids)}-{max(host_op_ids)}")
-    print(f"  Device PIDs: {len(device_program_ids)} total, {len(dev_set)} unique")
-    print(f"  First 15 device PIDs: {device_program_ids[:15]}")
-    print(f"  Last 15 device PIDs:  {device_program_ids[-15:]}")
+    print(f"  Device runtime IDs: {len(device_runtime_ids)} total, {len(dev_set)} unique")
+    print(f"  First 15 device runtime IDs: {device_runtime_ids[:15]}")
+    print(f"  Last 15 device runtime IDs:  {device_runtime_ids[-15:]}")
 
     missing_on_device = sorted(host_set - dev_set)
     # The very last dispatched program may be missing because dispatch_s's
     # TERMINATE iteration consumes the final FIFO entry before the profiler
     # core can push the record. Allow exactly one missing ID if it's the last.
     if len(missing_on_device) == 1 and missing_on_device[0] == max(host_op_ids):
-        print(f"  NOTE: last program_id {missing_on_device[0]} missing (TERMINATE edge case)")
+        print(f"  NOTE: last runtime_id {missing_on_device[0]} missing (TERMINATE edge case)")
     else:
         assert not missing_on_device, (
             f"{len(missing_on_device)} host op_id(s) not found in device records: "
@@ -614,18 +631,20 @@ def test_host_device_correlation(tmp_path):
 
     infra_only = sorted(dev_set - host_set)
     if infra_only:
-        print(f"  INFO: {len(infra_only)} device-only program_id(s) (infrastructure): {infra_only}")
+        print(f"  INFO: {len(infra_only)} device-only runtime_id(s) (infrastructure): {infra_only}")
 
     matched_ids = host_set & dev_set
     mismatched = [
-        (pid, host_counts[pid], dev_counts[pid]) for pid in sorted(matched_ids) if host_counts[pid] != dev_counts[pid]
+        (runtime_id, host_counts[runtime_id], dev_counts[runtime_id])
+        for runtime_id in sorted(matched_ids)
+        if host_counts[runtime_id] != dev_counts[runtime_id]
     ]
     assert not mismatched, (
-        f"Multiplicity mismatch for {len(mismatched)} program_id(s): "
-        f"{[(pid, f'host={h}, device={d}') for (pid, h, d) in mismatched[:10]]}"
+        f"Multiplicity mismatch for {len(mismatched)} runtime_id(s): "
+        f"{[(runtime_id, f'host={h}, device={d}') for (runtime_id, h, d) in mismatched[:10]]}"
     )
 
-    matched_host_count = sum(host_counts[pid] for pid in matched_ids)
+    matched_host_count = sum(host_counts[runtime_id] for runtime_id in matched_ids)
     allowed_missing = 1 if len(missing_on_device) == 1 and missing_on_device[0] == max(host_op_ids) else 0
     assert (
         matched_host_count >= len(host_op_ids) - allowed_missing
@@ -636,13 +655,13 @@ def test_host_device_correlation(tmp_path):
     # stream-register clearing before dispatch_s records the first start.
     startup_race_threshold = 100_000
     for rec in device_records:
-        if rec["program_id"] in matched_ids:
+        if rec["runtime_id"] in matched_ids:
             delta = int(rec["end_timestamp"]) - int(rec["start_timestamp"])
             assert delta >= -startup_race_threshold, (
-                f"Invalid timestamps for program_id={rec['program_id']}: "
+                f"Invalid timestamps for runtime_id={rec['runtime_id']}: "
                 f"end={rec['end_timestamp']} < start={rec['start_timestamp']} (delta={delta})"
             )
-        assert rec["frequency_ghz"] > 0, f"Invalid frequency for program_id={rec['program_id']}"
+        assert rec["frequency_ghz"] > 0, f"Invalid frequency for runtime_id={rec['runtime_id']}"
 
     print(f"\n  Matched user programs: {len(matched_ids)}")
     print(f"  Host TracyMessages:    {len(host_op_ids)}")
@@ -764,7 +783,7 @@ def test_sync_accuracy(tmp_path):
     assert host_msgs, "No host SYNC_CHECK/FINISH_SYNC messages in trace"
     assert device_zones, (
         "No device SYNC_CHECK GPU zones found. If csvexport was built without the "
-        "GPU-zone fix the zones won't be emitted — rebuild csvexport-release."
+        "GPU-zone fix the zones won't be emitted — rebuild tracy-csvexport."
     )
 
     pairs = _pair_sync(host_msgs, device_zones)

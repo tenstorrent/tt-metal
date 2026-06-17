@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "tensor_shape.h"
 
 inline std::uint32_t get_output_id(std::uint32_t output) { return (output); }
 
@@ -21,4 +22,12 @@ inline const std::uint32_t get_output_face_r_dim(const std::uint32_t output_id) 
 
 inline const std::uint32_t get_output_narrow_tile(const std::uint32_t output_id) {
     return static_cast<std::uint32_t>(pack_narrow_tile[output_id]);
+}
+
+inline ckernel::TensorShape get_output_tensor_shape(const std::uint32_t output_id) {
+    return ckernel::TensorShape{
+        pack_tile_face_r_dim[output_id],
+        ckernel::MAX_FACE_C_DIM,
+        pack_num_faces_r_dim[output_id],
+        pack_num_faces_c_dim[output_id]};
 }

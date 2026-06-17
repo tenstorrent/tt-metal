@@ -58,7 +58,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::compute::tilize {
 
-enum UntilizeType : uint8_t { UNPACK = 0, PACK = 1, DST = 2 };
+enum UntilizeType : uint8_t { PACK = 1, DST = 2 };
 
 enum TilizeType : uint8_t {
     UNPACK_A = 0,
@@ -107,8 +107,13 @@ static void validate_result(
     const std::vector<uint32_t>& src0_vec,
     const std::vector<uint32_t>& src1_vec,
     const std::vector<uint32_t>& result_vec) {
-    bool is_8bit_int =
-        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
+    // For 8-bit integers (Int8/UInt8) hardware keeps integers as-is in dest/CB even with fp32_dest_acc_en.
+    // For 8-bit floats (Fp8_e4m3, Lf8) the L1 CB stays at 8-bit — the packer gasket converts
+    // Float32 DEST → 8-bit at output. Converting the golden to Float32 in either case would mismatch
+    // actual hardware behavior.
+    bool is_8bit_format =
+        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8 ||
+        test_config.output_fmt == tt::DataFormat::Fp8_e4m3 || test_config.output_fmt == tt::DataFormat::Lf8;
 
     vector<uint32_t> golden;
     ::unit_tests::compute::GoldenConfig config = {
@@ -141,10 +146,7 @@ static void validate_result(
         },
         test_config.golden_function);
 
-    // Golden model: skip Float32 conversion for integer formats.
-    // When fp32_dest_acc_en is true with integer formats, hardware keeps integers as-is in dest/CB.
-    // Converting integers to Float32 in golden model would cause mismatches with actual hardware behavior.
-    if (test_config.fp32_dest_acc_en && !is_8bit_int) {
+    if (test_config.fp32_dest_acc_en && !is_8bit_format) {
         vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
         // Increasing the size since from BFP16 two times, since storing is in FP32
         golden.resize(golden.size() * 2);
@@ -183,13 +185,13 @@ static void validate_result(
 }
 
 // Metal 2.0 single-core helper covering all migrated tilize/untilize kernels:
-//   - UntilizeType::UNPACK / PACK / DST (compute kernels: unpack_untilize / pack_untilize / dst_untilize)
+//   - UntilizeType::PACK / DST (compute kernels: pack_untilize / dst_untilize)
 //   - TilizeType::UNPACK_A (compute kernel: tilize.cpp, optionally with FAST_TILIZE)
 void run_single_core_tilize_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     auto* dev = mesh_device->get_devices()[0];
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     const uint32_t num_tiles = test_config.num_tiles_r * test_config.num_tiles_c;
     const uint32_t input_dram_buffer_size = test_config.input_single_tile_size * num_tiles;
@@ -211,31 +213,39 @@ void run_single_core_tilize_program(
     const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
     const uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    // For 8bit integer formats, output CB format must remain as-is even with fp32_dest_acc_en.
+    // For 8-bit integer and 8-bit float formats, output CB format must remain as-is even with fp32_dest_acc_en.
     // Integer data packed from dest to L1 CB should not be reinterpreted as Float32, otherwise we get garbage.
-    const bool is_8bit_int =
-        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
+    // For Fp8_e4m3/Lf8 the packer gasket converts Float32 DEST → Fp8 L1 internally; the CB must be sized and
+    // typed as Fp8, not Float32, so the gasket path is preserved.
+    const bool is_8bit_format =
+        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8 ||
+        test_config.output_fmt == tt::DataFormat::Fp8_e4m3 || test_config.output_fmt == tt::DataFormat::Lf8;
     const tt::DataFormat output_buf_format =
-        (test_config.fp32_dest_acc_en && !is_8bit_int) ? tt::DataFormat::Float32 : test_config.output_fmt;
+        (test_config.fp32_dest_acc_en && !is_8bit_format) ? tt::DataFormat::Float32 : test_config.output_fmt;
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
-    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+    experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = test_config.input_single_tile_size,
         .num_entries = num_tiles,
         .data_format_metadata = test_config.input_fmt,
     };
-    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+    experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = test_config.output_single_tile_size,
         .num_entries = num_tiles,
         .data_format_metadata = output_buf_format,
     };
+    if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST) {
+        // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
+        output_dfb_spec.unpack_face_geometry_metadata =
+            tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+    }
 
     // Reader kernel: untilize types stream native tiles from DRAM (`reader_unary_2_0`);
     // UNPACK_A tilize uses the push-N variant (`reader_unary_push_n_2_0`) so the reader
@@ -247,58 +257,46 @@ void run_single_core_tilize_program(
         is_unpack_a_tilize ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp"
                            : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp";
 
-    experimental::metal2_host_api::KernelSpec::RuntimeArgSchema reader_schema;
+    experimental::KernelSpec::RuntimeArgSchema reader_schema;
     if (is_unpack_a_tilize) {
-        reader_schema.named_runtime_args = {
+        reader_schema.runtime_arg_names = {
             "src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"};
     } else {
-        reader_schema.named_runtime_args = {"src_addr", "bank_id", "num_tiles"};
+        reader_schema.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"};
     }
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{reader_kernel_path},
+        .source = reader_kernel_path,
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema = reader_schema,
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .runtime_arg_schema = reader_schema,
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     std::string compute_kernel;
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings = {
+    experimental::KernelSpec::CompileTimeArgs compute_cta_bindings = {
         {"per_core_block_cnt", test_config.num_tiles_r},
         {"per_core_block_tile_cnt", test_config.num_tiles_c},
     };
@@ -309,64 +307,60 @@ void run_single_core_tilize_program(
             return std::tolower(c);
         });
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/" + untilize_type + "_untilize.cpp";
-        if (test_config.untilize_type == UntilizeType::DST) {
-            compute_cta_bindings.push_back({"num_faces", test_config.num_faces_per_tile});
-            compute_cta_bindings.push_back({"num_rows_per_face", test_config.face_r_dim});
-        }
     } else if (is_unpack_a_tilize) {
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
     } else {
         log_fatal(tt::LogTest, "run_single_core_tilize_program: unsupported config (UNPACK_A_B uses dedicated helper)");
     }
 
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     if (test_config.fast_tilize) {
-        compute_defines.emplace_back("FAST_TILIZE", "1");
+        compute_defines.emplace("FAST_TILIZE", "1");
     }
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{compute_kernel},
+        .source = compute_kernel,
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = INPUT_DFB,
-                 .local_accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = compute_cta_bindings,
-        .config_spec =
-            experimental::metal2_host_api::ComputeConfiguration{
+        .compile_time_args = compute_cta_bindings,
+        .hw_config =
+            experimental::ComputeHardwareConfig{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "tilize_untilize",
+    experimental::ProgramSpec spec{
+        .name = "tilize_untilize",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -379,36 +373,31 @@ void run_single_core_tilize_program(
                                          : test_config.src0_data;
     tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
+    experimental::ProgramRunArgs params;
     if (is_unpack_a_tilize) {
-        params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", dram_buffer_src0_addr},
-                       {"src_dram_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"ublock_size_tiles", test_config.num_tiles_c},
-                       {"reader_only", 0u}}}},
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src_addr", dram_buffer_src0_addr},
+                   {"src_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", test_config.num_tiles_c},
+                   {"reader_only", 0u}}}},
         });
     } else {
-        params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args = {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node, {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
         });
     }
-    params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-        .kernel_spec_name = WRITER,
-        .named_runtime_args =
-            {{.node = node, .args = {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = WRITER,
+        .runtime_arg_values = {{node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
     });
-    params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-        .kernel_spec_name = COMPUTE,
-    });
-    experimental::metal2_host_api::SetProgramRunParameters(program_, params);
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
+    experimental::SetProgramRunArgs(program_, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
@@ -574,7 +563,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
                 tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles_total, /*rand_max_float=*/20, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
-                .fp32_dest_acc_en = false,
+                .fp32_dest_acc_en = true,  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
                 .input_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
                 .output_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
                 .num_tiles_r = num_tile[0],
@@ -677,30 +666,6 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
     }
 }
 
-/**************************************
-Following tests are for Unpack Untilize
-***************************************/
-
-TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackUntilize) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
 /******************************
 Following tests are for Quasar
 *******************************/
@@ -718,7 +683,7 @@ static void run_quasar_tilize_untilize_test(
 
     IDevice* dev = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     bool is_8bit_integer = (data_format == tt::DataFormat::Int8 || data_format == tt::DataFormat::UInt8);
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
@@ -757,67 +722,53 @@ static void run_quasar_tilize_untilize_test(
         output_data_format = tt::DataFormat::Float32;
     }
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
-    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+    experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = data_format,
     };
-    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+    experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = output_data_format,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
     std::string compute_kernel;
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings;
+    experimental::KernelSpec::CompileTimeArgs compute_cta_bindings;
     switch (mode) {
         case QuasarTestMode::TILIZE:
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
@@ -835,57 +786,53 @@ static void run_quasar_tilize_untilize_test(
             break;
         case QuasarTestMode::UNTILIZE_DST: {
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize.cpp";
-            uint32_t num_faces = 4;
-            uint32_t face_r_dim = 16;
             compute_cta_bindings = {
                 {"per_core_block_cnt", num_tiles_r},
                 {"per_core_block_tile_cnt", num_tiles_c},
-                {"num_faces", num_faces},
-                {"num_rows_per_face", face_r_dim},
             };
             break;
         }
     }
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{compute_kernel},
+        .source = compute_kernel,
         .num_threads = 1,
         .dfb_bindings =
             {{
                  .dfb_spec_name = INPUT_DFB,
-                 .local_accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = compute_cta_bindings,
-        .config_spec =
-            experimental::metal2_host_api::ComputeConfiguration{
+        .compile_time_args = compute_cta_bindings,
+        .hw_config =
+            experimental::ComputeHardwareConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en,
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "quasar_tilize_untilize",
+    experimental::ProgramSpec spec{
+        .name = "quasar_tilize_untilize",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -919,33 +866,29 @@ static void run_quasar_tilize_untilize_test(
     const uint32_t src_tile_stride_bytes = src_dram_buffer_size / num_tiles;
     const uint32_t dst_tile_stride_bytes = dst_dram_buffer_size / num_tiles;
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", dram_buffer_src_addr},
-                       {"src_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"dram_page_stride", src_tile_stride_bytes}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src_addr", dram_buffer_src_addr},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", src_tile_stride_bytes}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = WRITER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", dram_buffer_dst_addr},
-                       {"dst_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"dram_page_stride", dst_tile_stride_bytes}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values =
+                {{node,
+                  {{"dst_addr", dram_buffer_dst_addr},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", dst_tile_stride_bytes}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
+    experimental::SetProgramRunArgs(program_run, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
@@ -1159,7 +1102,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
                 tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_t, /*rand_max_float=*/20, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
-                .fp32_dest_acc_en = false,
+                .fp32_dest_acc_en = true,  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
                 .input_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
                 .output_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
                 .num_tiles_r = num_tile[0],

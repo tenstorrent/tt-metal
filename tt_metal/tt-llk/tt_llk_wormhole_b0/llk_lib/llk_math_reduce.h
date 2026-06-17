@@ -23,39 +23,70 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop();
 
+/**
+ * @brief Transpose the pooled row result through SrcB so a row-reduction lands as a column in the destination register.
+ *
+ * The FP32-accumulation path transposes the hi16 and lo16 halves separately (MOVD2B/TRNSPSRCB/MOVB2D) to avoid
+ * precision loss; otherwise it casts int32 dest datums to int8 (when integer FPU is enabled) before the SrcB transpose.
+ *
+ * @tparam enforce_fp32_accumulation: Transpose in two 16-bit halves to preserve FP32 accumulation.
+ * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
+ */
 template <bool enforce_fp32_accumulation, bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+        // Transpose 32-bit data in dest by splitting into hi16 and lo16.
+        // TRNSPSRCB only operates on SrcB rows 16-31, so data goes through SRC_ROW16_OFFSET.
+        // SrcA_val=Tf32 addresses hi16 (DEST_NORM), SrcA_val=Float32 addresses lo16 (DEST_32B_LOW).
+        // Writing hi16 via MOVB2D(Tf32) clobbers lo16, so we cache lo16 in SrcA first.
 
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // Enable SrcA format override to control MOVB2D hi16/lo16 addressing, and disable the Src
+        // zero-substitution flag (via the math state tracker) to prevent mantissa flushing during
+        // the MOV operations.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+        math::_configure_mov_ops_zero_flag_state_();
+
+        // Step 1: Read lo16 from dest into SrcB rows 16-31 and transpose.
+        // DEST_32B_LOW reads the lo16 half of 32-bit dest.
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         // note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
         // move row D2B again for cases of reducing across multiple tiles
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        // Step 2: Cache the transposed lo16 data from SrcB rows 16-31 into SrcA rows 0-15.
+        // This preserves lo16 before hi16 MOVB2D(Tf32) clobbers it in dest.
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+
+        // Step 3: Read hi16 from dest into SrcB rows 16-31 and transpose.
+        // DEST_NORM reads the hi16 half of 32-bit dest.
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move hi16 bits B2D
+        // Step 4: Write transposed hi16 back to dest. SrcA_val=Tf32 makes MOVB2D target
+        // the hi16 (DEST_NORM) address space. This clobbers lo16 and that's why we cached it.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // move lo16 bits D2B
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
-        TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // Step 5: Write cached lo16 from SrcA back to dest. SrcA_val=Float32 makes MOVA2D
+        // target the lo16 (DEST_32B_LOW) address space, restoring the mantissa bits.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float32));
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
 
-        // move lo16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        // Restore: disable SrcA format override and return the Src zero-substitution flag to the
+        // operand-driven baseline for the currently-configured formats.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
+        math::_configure_default_zero_flag_state_(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt);
     }
     else
     {
@@ -104,6 +135,16 @@ inline void reduce_row_perform_transpose()
     }
 }
 
+/**
+ * @brief Pool one face into the destination register, dispatching to the right pool instruction for the op type.
+ *
+ * MAX uses GMPOOL; SUM/AVG use GAPOOL directly (LoFi) or the preconfigured MOP followed by a DVALID clear (high fidelity).
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
+ * @tparam clear_mode: Source-clear mode applied after pooling (p_setrwc::CLR_* value).
+ * @tparam index: Destination-register offset (the GMPOOL/GAPOOL dst field) the pooled result is written to.
+ */
 template <PoolType type, bool high_fidelity, std::uint32_t clear_mode, std::uint32_t index = 0>
 inline void reduce_pool_op()
 {
@@ -126,6 +167,23 @@ inline void reduce_pool_op()
     }
 }
 
+/**
+ * @brief Perform a reduction on the math thread, pooling faces into the destination register.
+ *
+ * For REDUCE_ROW the per-row pooled result is transposed back into dest; REDUCE_COL pools down rows of faces;
+ * REDUCE_SCALAR pools all faces then transposes the partial result into a single column for a final pool.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
+ * @tparam enforce_fp32_accumulation: Force FP32 accumulation through the transpose (requires is_fp32_dest_acc_en).
+ * @param dst_index: Tile index into the destination register.
+ * @param tensor_shape: Tensor shape describing tile dimensions.
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this function, and
+ *       @ref _llk_math_reduce_uninit_ after it to restore modified state.
+ */
 template <
     PoolType type,
     ReduceDim dim,
@@ -243,6 +301,12 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
 }
 
+/**
+ * @brief Program the address-mod slots for a reduce: no-op/fidelity-clear, single-row, 8-row, and (high fidelity) fidelity-step.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ */
 template <PoolType type, MathFidelity math_fidelity>
 inline void reduce_configure_addrmod()
 {
@@ -271,6 +335,12 @@ inline void reduce_configure_addrmod()
     }
 }
 
+/**
+ * @brief Build the high-fidelity reduce MOP: a multi-phase GAPOOL sequence (one inner-loop iteration per fidelity phase).
+ *
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam math_fidelity: Math fidelity for controlling precision; sets the inner-loop length, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ */
 template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop()
 {
@@ -291,6 +361,16 @@ inline void reduce_configure_mop()
     }
 }
 
+/**
+ * @brief Configure the math (FPU) thread for a reduce operation: programs address mods and, for high fidelity, the pool MOP.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam enforce_fp32_accumulation: Force FP32 accumulation (requires is_fp32_dest_acc_en).
+ * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_init_()
 {
@@ -305,24 +385,24 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        // MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
-        // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief Uninitialize after a reduce operation.
+ *
+ * Currently a no-op: the FP32 transpose path in @ref reduce_row_perform_transpose saves and restores
+ * every register it touches (SrcA format override, zero-flag), so there is no init/execute-time state
+ * left to undo here.
+ *
+ * @tparam enforce_fp32_accumulation: Must match the value used at init.
+ * @param srca_data_format: Unused; retained for API symmetry with the matching init/uninit signature.
+ * @note Reverses @ref _llk_math_reduce_init_.
+ */
 template <bool enforce_fp32_accumulation = false>
-inline void _llk_math_reduce_uninit_(const std::uint32_t srca_data_format)
+inline void _llk_math_reduce_uninit_([[maybe_unused]] const std::uint32_t srca_data_format)
 {
-    if constexpr (enforce_fp32_accumulation)
-    {
-        // Clear bit 11 (restore from workaround for budabackend#1372)
-        // Uses helper from llk_math_common.h which includes tensix_sync()
-        _llk_math_dbg_feature_enable_();
-        // Restore SrcA format (init changes it to Float32 for MOVB2D/D2B Hi/Lo16 workaround on WH)
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
-    }
 }

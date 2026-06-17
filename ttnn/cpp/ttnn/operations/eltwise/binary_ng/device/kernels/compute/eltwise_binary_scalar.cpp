@@ -13,7 +13,7 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
-    // DPRINT << "num_tiles_per_cycle: " << num_tiles_per_cycle << "\n";
+    // DPRINT("num_tiles_per_cycle: {}\n", num_tiles_per_cycle);
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
@@ -23,7 +23,7 @@ void kernel_main() {
 
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))

@@ -23,6 +23,31 @@ constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
 constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(2);
 constexpr bool use_dispatch_table_skip = get_compile_time_arg_val(3) != 0;
 
+// Like read_tile_value but reads a uint16 element (zero-extended to uint32_t).
+// Indices arrive from DRAM as uint16 and stay uint16 in the CB; this avoids
+// an in-place uint16→int32 expansion in the writer kernel and removes an
+// architecture-dependent slot-size constraint on max top-k.
+ALWI uint32_t read_tile_value_uint16(uint32_t cb_id, uint32_t tile_index, uint32_t element_offset) {
+#ifndef ARCH_QUASAR
+    uint32_t value = 0;
+    UNPACK({
+        uint32_t operand_id = get_operand_id(cb_id);
+        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
+        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+        uint32_t byte_address = (base_address + offset_address) << 4;
+        value = (uint32_t)reinterpret_cast<volatile uint16_t*>(byte_address)[element_offset];
+        mailbox_write(ckernel::ThreadId::MathThreadId, value);
+        mailbox_write(ckernel::ThreadId::PackThreadId, value);
+    })
+    MATH(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    return value;
+#else
+    ASSERT(false && "read_tile_value_uint16 is not implemented for ARCH_QUASAR");
+    return 0;
+#endif
+}
+
 void kernel_main() {
     constexpr uint32_t TOKENS_PER_CHUNK = 32;
     uint32_t token_start_idx = get_arg_val<uint32_t>(0);
@@ -62,7 +87,7 @@ void kernel_main() {
                 bool skip_expert = false;
                 bool must_zero_init = false;
                 if constexpr (use_dispatch_table_skip) {
-                    uint32_t expert_id = read_tile_value(cb_indices, i, expert_idx);
+                    uint32_t expert_id = read_tile_value_uint16(cb_indices, i, expert_idx);
                     // Check dispatch table: -1 (0xFFFFFFFF) means non-local
                     uint32_t chip_id = read_tile_value(cb_dispatch_table, 0, expert_id);
                     bool is_local = (chip_id != 0xFFFFFFFF);

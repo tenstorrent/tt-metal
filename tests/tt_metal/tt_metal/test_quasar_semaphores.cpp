@@ -29,7 +29,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     auto mesh_device = devices_[0];
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -48,112 +48,111 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     }
     tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_src_addr, initial_data);
 
-    constexpr const char* DM_READER = "dm_reader";
-    constexpr const char* DM_TRANSFORM = "dm_transform";
-    constexpr const char* DM_WRITER = "dm_writer";
+    const experimental::KernelSpecName DM_READER{"dm_reader"};
+    const experimental::KernelSpecName DM_TRANSFORM{"dm_transform"};
+    const experimental::KernelSpecName DM_WRITER{"dm_writer"};
 
-    experimental::metal2_host_api::SemaphoreSpec sem0_spec{
-        .unique_id = "sem0",
+    experimental::SemaphoreSpec sem0_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem0"},
         .target_nodes = node,
     };
-    experimental::metal2_host_api::SemaphoreSpec sem1_spec{
-        .unique_id = "sem1",
+    experimental::SemaphoreSpec sem1_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem1"},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::KernelSpec dm_reader_spec{
+    experimental::KernelSpec dm_reader_spec{
         .unique_id = DM_READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
         .num_threads = 1,
-        .semaphore_bindings = {{.semaphore_spec_name = "sem0", .accessor_name = "sem"}},
-        .runtime_arguments_schema =
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0"}, .accessor_name = "sem"}},
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_transform_spec{
+    experimental::KernelSpec dm_transform_spec{
         .unique_id = DM_TRANSFORM,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}, {"INCOMING_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = "sem0", .accessor_name = "sem_in"},
-                {.semaphore_spec_name = "sem1", .accessor_name = "sem_out"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0"}, .accessor_name = "sem_in"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"}, .accessor_name = "sem_out"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_elements", num_elements},
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_writer_spec{
+    experimental::KernelSpec dm_writer_spec{
         .unique_id = DM_WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
-        .semaphore_bindings = {{.semaphore_spec_name = "sem1", .accessor_name = "sem"}},
-        .runtime_arguments_schema =
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"}, .accessor_name = "sem"}},
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
         .kernels = {DM_READER, DM_TRANSFORM, DM_WRITER},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "multi_semaphore_pipeline",
+    experimental::ProgramSpec spec{
+        .name = "multi_semaphore_pipeline",
         .kernels = {dm_reader_spec, dm_transform_spec, dm_writer_spec},
         .semaphores = {sem0_spec, sem1_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        {.kernel_spec_name = DM_READER,
-         .named_runtime_args =
-             {{.node = node,
-               .args =
-                   {{"dram_addr", dram_src_addr},
-                    {"l1_addr", buf_a_addr},
-                    {"num_elements", num_elements},
-                    {"dram_bank_id", 0u}}}}},
-        {.kernel_spec_name = DM_TRANSFORM},
-        {.kernel_spec_name = DM_WRITER,
-         .named_runtime_args =
-             {{.node = node,
-               .args =
-                   {{"dram_addr", dram_dst_addr},
-                    {"l1_addr", buf_b_addr},
-                    {"num_elements", num_elements},
-                    {"dram_bank_id", 0u}}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"dram_addr", dram_src_addr},
+                   {"l1_addr", buf_a_addr},
+                   {"num_elements", num_elements},
+                   {"dram_bank_id", 0u}}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_WRITER,
+            .runtime_arg_values =
+                {{node,
+                  {{"dram_addr", dram_dst_addr},
+                   {"l1_addr", buf_b_addr},
+                   {"num_elements", num_elements},
+                   {"dram_bank_id", 0u}}}}},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -177,8 +176,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     auto mesh_device = devices_[0];
 
-    const experimental::metal2_host_api::NodeCoord node_0{0, 0};
-    const experimental::metal2_host_api::NodeCoord node_1{1, 0};
+    const experimental::NodeCoord node_0{0, 0};
+    const experimental::NodeCoord node_1{1, 0};
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
@@ -199,186 +198,183 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(node_1);
 
-    experimental::metal2_host_api::SemaphoreSpec sem_core_0_spec{
-        .unique_id = "sem_core_0",
+    experimental::SemaphoreSpec sem_core_0_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem_core_0"},
         .target_nodes = node_0,
     };
-    experimental::metal2_host_api::SemaphoreSpec sem_cross_spec{
-        .unique_id = "sem_cross",
-        .target_nodes = experimental::metal2_host_api::NodeRange{node_0, node_1},
+    experimental::SemaphoreSpec sem_cross_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem_cross"},
+        .target_nodes = experimental::NodeRange{node_0, node_1},
     };
-    experimental::metal2_host_api::SemaphoreSpec sem0_core_1_spec{
-        .unique_id = "sem0_core_1",
+    experimental::SemaphoreSpec sem0_core_1_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem0_core_1"},
         .target_nodes = node_1,
     };
-    experimental::metal2_host_api::SemaphoreSpec sem1_core_1_spec{
-        .unique_id = "sem1_core_1",
+    experimental::SemaphoreSpec sem1_core_1_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem1_core_1"},
         .target_nodes = node_1,
     };
 
-    constexpr const char* DM_TRANSFORM_0 = "dm_transform_0";
-    constexpr const char* DM_WRITER_0 = "dm_writer_0";
-    constexpr const char* DM_READER_1 = "dm_reader_1";
-    constexpr const char* DM_TRANSFORM_1 = "dm_transform_1";
-    constexpr const char* DM_WRITER_1 = "dm_writer_1";
+    const experimental::KernelSpecName DM_TRANSFORM_0{"dm_transform_0"};
+    const experimental::KernelSpecName DM_WRITER_0{"dm_writer_0"};
+    const experimental::KernelSpecName DM_READER_1{"dm_reader_1"};
+    const experimental::KernelSpecName DM_TRANSFORM_1{"dm_transform_1"};
+    const experimental::KernelSpecName DM_WRITER_1{"dm_writer_1"};
 
-    experimental::metal2_host_api::KernelSpec dm_transform_0_spec{
+    experimental::KernelSpec dm_transform_0_spec{
         .unique_id = DM_TRANSFORM_0,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}}},
-        .semaphore_bindings = {{.semaphore_spec_name = "sem_core_0", .accessor_name = "sem_out"}},
-        .compile_time_arg_bindings =
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem_out"}},
+        .compile_time_args =
             {
                 {"num_elements", num_elements},
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_writer_0_spec{
+    experimental::KernelSpec dm_writer_0_spec{
         .unique_id = DM_WRITER_0,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"INCREMENT_REMOTE_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = "sem_core_0", .accessor_name = "sem"},
-                {.semaphore_spec_name = "sem_cross", .accessor_name = "remote_sem"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
             },
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args =
+                .runtime_arg_names =
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_reader_1_spec{
+    experimental::KernelSpec dm_reader_1_spec{
         .unique_id = DM_READER_1,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"WAIT_FOR_REMOTE_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = "sem0_core_1", .accessor_name = "sem"},
-                {.semaphore_spec_name = "sem_cross", .accessor_name = "remote_sem"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
             },
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_transform_1_spec{
+    experimental::KernelSpec dm_transform_1_spec{
         .unique_id = DM_TRANSFORM_1,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"INCOMING_SEM", "1"}, {"OUTGOING_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = "sem0_core_1", .accessor_name = "sem_in"},
-                {.semaphore_spec_name = "sem1_core_1", .accessor_name = "sem_out"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem_in"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem_out"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_elements", num_elements},
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::KernelSpec dm_writer_1_spec{
+    experimental::KernelSpec dm_writer_1_spec{
         .unique_id = DM_WRITER_1,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
-        .semaphore_bindings = {{.semaphore_spec_name = "sem1_core_1", .accessor_name = "sem"}},
-        .runtime_arguments_schema =
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem"}},
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu_core_0{
-        .unique_id = "wu_core_0",
+    experimental::WorkUnitSpec wu_core_0{
+        .name = "wu_core_0",
         .kernels = {DM_TRANSFORM_0, DM_WRITER_0},
         .target_nodes = node_0,
     };
-    experimental::metal2_host_api::WorkUnitSpec wu_core_1{
-        .unique_id = "wu_core_1",
+    experimental::WorkUnitSpec wu_core_1{
+        .name = "wu_core_1",
         .kernels = {DM_READER_1, DM_TRANSFORM_1, DM_WRITER_1},
         .target_nodes = node_1,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "multi_cluster_multi_semaphore_pipeline",
+    experimental::ProgramSpec spec{
+        .name = "multi_cluster_multi_semaphore_pipeline",
         .kernels = {dm_transform_0_spec, dm_writer_0_spec, dm_reader_1_spec, dm_transform_1_spec, dm_writer_1_spec},
         .semaphores = {sem_core_0_spec, sem_cross_spec, sem0_core_1_spec, sem1_core_1_spec},
         .work_units = {wu_core_0, wu_core_1},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        {.kernel_spec_name = DM_TRANSFORM_0},
-        {.kernel_spec_name = DM_TRANSFORM_1},
-        {.kernel_spec_name = DM_WRITER_0,
-         .named_runtime_args =
-             {{.node = node_0,
-               .args =
-                   {{"dram_addr", dram_mid_addr},
-                    {"l1_addr", buf_b_addr},
-                    {"num_elements", num_elements},
-                    {"dram_bank_id", 0u},
-                    {"remote_noc_x", static_cast<uint32_t>(core_1_virtual.x)},
-                    {"remote_noc_y", static_cast<uint32_t>(core_1_virtual.y)}}}}},
-        {.kernel_spec_name = DM_READER_1,
-         .named_runtime_args =
-             {{.node = node_1,
-               .args =
-                   {{"dram_addr", dram_mid_addr},
-                    {"l1_addr", buf_a_addr},
-                    {"num_elements", num_elements},
-                    {"dram_bank_id", 0u}}}}},
-        {.kernel_spec_name = DM_WRITER_1,
-         .named_runtime_args =
-             {{.node = node_1,
-               .args =
-                   {{"dram_addr", dram_dst_addr},
-                    {"l1_addr", buf_b_addr},
-                    {"num_elements", num_elements},
-                    {"dram_bank_id", 0u}}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_0},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_1},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_WRITER_0,
+            .runtime_arg_values =
+                {{node_0,
+                  {{"dram_addr", dram_mid_addr},
+                   {"l1_addr", buf_b_addr},
+                   {"num_elements", num_elements},
+                   {"dram_bank_id", 0u},
+                   {"remote_noc_x", static_cast<uint32_t>(core_1_virtual.x)},
+                   {"remote_noc_y", static_cast<uint32_t>(core_1_virtual.y)}}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_READER_1,
+            .runtime_arg_values =
+                {{node_1,
+                  {{"dram_addr", dram_mid_addr},
+                   {"l1_addr", buf_a_addr},
+                   {"num_elements", num_elements},
+                   {"dram_bank_id", 0u}}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_WRITER_1,
+            .runtime_arg_values =
+                {{node_1,
+                  {{"dram_addr", dram_dst_addr},
+                   {"l1_addr", buf_b_addr},
+                   {"num_elements", num_elements},
+                   {"dram_bank_id", 0u}}}}},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t arg_index = 0;
@@ -29,6 +31,10 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<1>();
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
+    Noc noc;
+    CircularBuffer cb_dst(cb_id_dst);
+    const uint32_t dst_tile_bytes = cb_dst.get_tile_size();
+
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_written = 0;
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
@@ -36,11 +42,10 @@ void kernel_main() {
             for (uint32_t th = start_th; th < Ht && num_tiles_written < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_written < num_tiles; ++tw, ++num_tiles_written) {
                     // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
-                    cb_wait_front(cb_id_dst, onetile);
-                    uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                    noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_id_dst, onetile);
+                    cb_dst.wait_front(onetile);
+                    noc.async_write(cb_dst, dst, dst_tile_bytes, {}, {.page_id = start_tile_id + num_tiles_written});
+                    noc.async_write_barrier();
+                    cb_dst.pop_front(onetile);
                 }
             }
         }

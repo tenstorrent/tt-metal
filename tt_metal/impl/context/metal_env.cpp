@@ -130,12 +130,22 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
     }
 
-    const bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(*this->rtoptions_));
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
 
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
+
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch() &&
+        this->cluster_->get_target_device_type() == tt::TargetDevice::Simulator) {
+        log_info(
+            tt::LogMetal,
+            "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
+        this->rtoptions_->set_dram_backed_cq(true);
+    }
+
+    // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
+    // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
+    const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
     this->hal_ = std::make_unique<Hal>(
         platform_arch,
         is_base_routing_fw_enabled,
@@ -271,6 +281,11 @@ bool MetalEnvImpl::set_fabric_config(
             this->fabric_config_);
         system_mesh_.reset();
         this->initialize_control_plane_impl();
+    }
+
+    // Active tt-fabric: refresh routing tables (control plane rebuild is not enough).
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        this->initialize_fabric_config();
     }
 
     return true;

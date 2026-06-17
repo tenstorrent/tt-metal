@@ -212,12 +212,18 @@ const std::vector<std::string> field_names_pack_config_wormhole = {
     "l1_dest_addr",
     "uncompress",
     "add_l1_dest_addr_offset",
-    "reserved_0",
+    "addr_cnt_context",
     "out_data_format",
     "in_data_format",
-    "reserved_1",
+    "dis_shared_exp_assembler",
+    "force_pack_per_max_xy_plane",
+    "enable_out_fifo",
+    "sub_l1_tile_header_size",
     "src_if_sel",
-    "pack_per_xy_plane",
+    "all_pack_disable_zero_compress",
+    "all_pack_disable_zero_compress_ovrd",
+    "add_tile_header_size",
+    "reserved_1",
     "l1_src_addr",
     "downsample_mask",
     "downsample_shift_count",
@@ -226,8 +232,10 @@ const std::vector<std::string> field_names_pack_config_wormhole = {
     "pack_l1_acc_disable_pack_zero_flag",
     "reserved_2",
     "exp_threshold"};
-const std::vector<uint32_t> field_values_pack_config_wormhole = {
-    12, 24, 16, 0, 1, 0, 5, 5, 0, 1, 0, 8, 12, 4, 0, 1, 2, 0, 12};
+// REG8 banks (REG_ID 2/4) differ above src_if_sel, so keep all_pack_disable_zero_compress <= 1
+// and ovrd/add_tile_header_size at 0 for readback to match across all 4 banks.
+const std::vector<uint32_t> field_values_pack_config_wormhole = {12, 24, 16, 0, 1, 2,  5, 5, 1, 1, 1, 1, 1,
+                                                                 1,  0,  0,  0, 8, 12, 4, 0, 1, 2, 0, 12};
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
 struct ConfigRegPrintTestConfig {

@@ -6,9 +6,12 @@
 Protocol (must match tt_metal/hw/inc/api/debug/device_print.h
 and tt_metal/hw/inc/hostdev/device_print_common.h):
 
-    DEVICE_PRINT_BUFFER_BASE = TestConfig.DEVICE_PRINT_BUFFER_BASE (layout:
-    - struct Aux { uint32 wpos; uint32 rpos; uint8 risc_state[5]; uint32 lock; }
-    - uint8 data[DPRINT_BUFFER_SIZE * PROCESSOR_COUNT - sizeof(struct Aux)]
+    One or more buffers starting at TestConfig.DEVICE_PRINT_BUFFER_BASE (a single
+    buffer on WH/BH, a TRISC buffer followed by a DM buffer on Quasar; see
+    TestConfig.device_print_buffers()). Each buffer:
+    - struct Aux { uint32 wpos; uint32 rpos; uint8 risc_state[N]; uint32 lock; }
+      where N is that buffer's processor_count
+    - uint8 data[buffer_size - sizeof(struct Aux)]
 
     Each record:
     - [4-byte DevicePrintHeader]
@@ -27,7 +30,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.format_config import (
+    BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
+    QUASAR_DATA_FORMAT_ENUM_VALUES,
+    WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+    DataFormat,
+)
 from helpers.logger import logger
+from helpers.utils import TILE_BG_RESULT, format_tile_row
 from ttexalens.tt_exalens_lib import parse_elf, read_from_device, write_words_to_device
 
 # hostdev/device_print_structures.h: DevicePrintStringInfo is four uint32_t
@@ -132,11 +143,13 @@ class _Placeholder:
     so high-rate prints don't re-run the regex / re-compute offsets.
 
     `kind` determines how the value is rendered:
-      - "enum":    resolve through DWARF (uses enum_name, is_flag, use_full_name, cleaned_spec)
-      - "string":  dereference into .device_print_strings (uses spec)
-      - "plain":   apply spec directly to the unpacked value
-      - "custom":  call formatter, then apply spec as string padding
-      - "unknown": emit error_msg, no unpack
+      - "enum":        resolve through DWARF (uses enum_name, is_flag, use_full_name, cleaned_spec)
+      - "string":      dereference into .device_print_strings (uses spec)
+      - "plain":       apply spec directly to the unpacked value
+      - "custom":      call formatter, then apply spec as string padding
+      - "typed_array": dp_typed_array_t: variable size, [hdr | N*u32], decoded per DataFormat
+      - "tile_slice":  TileSliceHostDev: 16-byte header + data, decoded per DataFormat
+      - "unknown":     emit error_msg, no unpack
     Other fields are unused when not relevant for the kind.
     """
 
@@ -162,16 +175,21 @@ class _RenderPlan:
     Iteration mode: append literals[i], render placeholders[i]
     from args_blob, repeat; finally append literals[-1].
 
-    Literals are pre-cooked (fmtlib uses double braces
+    Literals are pre-unescaped (fmtlib uses double braces
     for escaping: swap {{ for {, and }} for })
     so `_render` doesn't redo that on every record.
 
-    When there are no placeholders, literals = [cooked_fmt] and
+    When there are no placeholders, literals = [unescaped_fmt] and
     `placeholders` is empty.
     """
 
     literals: list[str] = field(default_factory=list)
     placeholders: list[_Placeholder] = field(default_factory=list)
+
+
+def _unescape_fmtlib_braces(literal: str) -> str:
+    """Undo fmtlib brace-escaping ({{ -> {, }} -> }) for a format-string literal."""
+    return literal.replace("{{", "{").replace("}}", "}")
 
 
 def _build_render_plan(
@@ -181,7 +199,7 @@ def _build_render_plan(
 
     placeholders = list(PLACEHOLDER_RE.finditer(fmt))
     if not placeholders:
-        return _RenderPlan(literals=[fmt.replace("{{", "{").replace("}}", "}")])
+        return _RenderPlan(literals=[_unescape_fmtlib_braces(fmt)])
 
     # Determine type per reordered-slot index, then compute offsets in
     # ascending slot order; matches size-descending packing on device.
@@ -190,12 +208,37 @@ def _build_render_plan(
         ridx = int(m.group(1))
         type_for_ridx.setdefault(ridx, m.group(2))
 
+    def _base(tok: str) -> str:
+        return tok[3] if tok.startswith("/") else tok
+
+    # Variable-size args (dp_typed_array_t 'A', TileSlice 't') have a size known
+    # only at decode time, so we can't compute byte offsets for anything packed
+    # after them. The C++ call sites always emit such an arg as the lone
+    # placeholder; if that ever stops being true we'd silently decode the
+    # trailing args from a bogus (-1) offset. Flag the whole record instead.
+    if (
+        any(_base(tok) in ("A", "t") for tok in type_for_ridx.values())
+        and len(type_for_ridx) > 1
+    ):
+        err = _Placeholder(
+            kind="unknown",
+            error_msg="<unsupported: variable-size arg ('A'/'t') must be the only placeholder>",
+        )
+        literals = []
+        last_end = 0
+        for m in placeholders:
+            literals.append(_unescape_fmtlib_braces(fmt[last_end : m.start()]))
+            last_end = m.end()
+        literals.append(_unescape_fmtlib_braces(fmt[last_end:]))
+        return _RenderPlan(literals=literals, placeholders=[err] * len(placeholders))
+
+    # The guard above guarantees a variable-size arg ('A'/'t') is the sole
+    # placeholder, so it lands at offset 0 and `cur` is never read past it
+    # (type_table has no 'A'/'t' entry, so the fall-through bump is inert).
     offsets: dict[int, int] = {}
     cur = 0
     for ridx in sorted(type_for_ridx):
-        type_token = type_for_ridx[ridx]
-        base_char = type_token[3] if type_token.startswith("/") else type_token
-        entry = type_table.get(base_char)
+        entry = type_table.get(_base(type_for_ridx[ridx]))
         offsets[ridx] = cur
         cur += entry[1] if entry else 4
 
@@ -203,14 +246,18 @@ def _build_render_plan(
     compiled: list[_Placeholder] = []
     last_end = 0
     for m in placeholders:
-        literals.append(fmt[last_end : m.start()].replace("{{", "{").replace("}}", "}"))
+        literals.append(_unescape_fmtlib_braces(fmt[last_end : m.start()]))
         ridx = int(m.group(1))
         type_token = m.group(2)
-        base_char = type_token[3] if type_token.startswith("/") else type_token
+        base_char = _base(type_token)
         entry = type_table.get(base_char)
         spec = m.group("spec") or ""
 
-        if entry is None:
+        if base_char == "A":
+            compiled.append(_Placeholder(kind="typed_array", offset=offsets[ridx]))
+        elif base_char == "t":
+            compiled.append(_Placeholder(kind="tile_slice", offset=offsets[ridx]))
+        elif entry is None:
             compiled.append(
                 _Placeholder(kind="unknown", error_msg=f"<unknown type '{type_token}'>")
             )
@@ -268,7 +315,7 @@ def _build_render_plan(
                 )
         last_end = m.end()
 
-    literals.append(fmt[last_end:].replace("{{", "{").replace("}}", "}"))
+    literals.append(_unescape_fmtlib_braces(fmt[last_end:]))
     return _RenderPlan(literals=literals, placeholders=compiled)
 
 
@@ -300,13 +347,19 @@ class ElfStrings:
             self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
                 elf.elf.elfclass
             ]
-            for s in elf.sections:
-                if s.name == ".device_print_strings":
-                    self._strings_addr = s.address
-                    self._strings_data = bytes(s.data)
-                elif s.name == ".device_print_strings_info":
-                    self._info_addr = s.address
-                    self._info_data = bytes(s.data)
+            sections = (
+                elf.sections
+                if isinstance(elf.sections, dict)
+                else {s.name: s for s in elf.sections}
+            )
+            strings = sections.get(".device_print_strings")
+            if strings is not None:
+                self._strings_addr = strings.address
+                self._strings_data = bytes(strings.data)
+            info = sections.get(".device_print_strings_info")
+            if info is not None:
+                self._info_addr = info.address
+                self._info_data = bytes(info.data)
         except Exception:
             # has_device_print will be false.
             logger.exception(
@@ -421,39 +474,270 @@ class ElfStrings:
         return self._strings_data[offset:end].decode("utf-8", errors="replace")
 
 
-def _decode_wpos_rpos(buf: bytes) -> tuple[int, int]:
-    wpos, rpos = struct.unpack_from("<II", buf, 0)
-    return wpos, rpos
+# DataFormat enum values from tt_metal/hw/inc/internal/tt-{1,2}xx/*/tensix_types.h.
+# These differ per arch (e.g. UInt8 is 30 on WH/BH but 17 on Quasar), and the
+# device stamps its arch's value into array/tile headers. Formats absent on
+# the current arch simply resolve to None.
+_ARCH_DATA_FORMAT_ENUM = {
+    ChipArchitecture.WORMHOLE: WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+    ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
+    ChipArchitecture.QUASAR: QUASAR_DATA_FORMAT_ENUM_VALUES,
+}[get_chip_architecture()]
+
+_DF_FLOAT32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Float32)
+_DF_FLOAT16 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Float16)
+_DF_TF32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Tf32)
+_DF_FLOAT16_B = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Float16_b)
+_DF_BFP8_B = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Bfp8_b)
+_DF_BFP4_B = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Bfp4_b)
+_DF_INT32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Int32)
+_DF_UINT16 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.UInt16)
+_DF_INT8 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Int8)
+_DF_UINT32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.UInt32)
+_DF_UINT8 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.UInt8)
 
 
-def _strip_stall(wpos: int) -> int:
-    return wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG
+def _bitcast_f32(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+def _make_float(exp_bits: int, mant_bits: int, data: int) -> float:
+    """Reconstruct a float from a bit pattern in [sign][mantissa][exponent] order.
+    Mirrors dprint_parser.cpp:make_float."""
+    sign = (data >> (exp_bits + mant_bits)) & 0x1
+    exp_mask = (1 << exp_bits) - 1
+    exp_bias = (1 << (exp_bits - 1)) - 1
+    exp_val = (data & exp_mask) - exp_bias
+    mantissa_val = (data & (((1 << mant_bits) - 1) << exp_bits)) >> exp_bits
+    # Zero exponent and zero mantissa is zero.
+    if (data & exp_mask) == 0 and mantissa_val == 0:
+        return -0.0 if sign else 0.0
+    result = (1.0 + mantissa_val / (1 << mant_bits)) * (2.0**exp_val)
+    return -result if sign else result
+
+
+# Decode recipes: (struct format char, possible widening to fp32).
+# Shared across dp_typed_array_t and TileSlice. Tf32 and bf16 have
+# no native struct type, they unpack as uint and get widened.
+_F32, _I32, _U32 = ("f", None), ("i", None), ("I", None)
+_TF32 = ("I", lambda v: _bitcast_f32((v & 0x7FFFF) << 13))
+_F16 = ("e", None)
+_BF16 = ("H", lambda v: _bitcast_f32(v << 16))
+_U16, _I8, _U8 = ("H", None), ("b", None), ("B", None)
+
+# Map format into decode recipe for tile slice
+# and the non-aliased typed array formats.
+_WIRE: dict[int, tuple[str, Any]] = {
+    _DF_FLOAT32: _F32,
+    _DF_INT32: _I32,
+    _DF_UINT32: _U32,
+    _DF_TF32: _TF32,
+    _DF_FLOAT16: _F16,
+    _DF_FLOAT16_B: _BF16,
+    _DF_UINT16: _U16,
+    _DF_INT8: _I8,
+    _DF_UINT8: _U8,
+}
+
+# Bytes per element in a typed array by DataFormat.
+_TA_ELT_BYTES: dict[int, int] = {
+    _DF_FLOAT32: 4,
+    _DF_INT32: 4,
+    _DF_UINT32: 4,
+    _DF_UINT16: 2,
+    _DF_INT8: 1,
+    _DF_UINT8: 1,
+    _DF_FLOAT16: 2,
+    _DF_FLOAT16_B: 2,
+}
+
+
+def _decode_typed_array(data: bytes, n: int, df: int, dest_make_float: bool) -> list:
+    """Decode n elements of DataFormat `df` from the front of a DEST dump.
+
+    16-bit floats arrive in _make_float [sign][mantissa][exponent] order if DEST
+    is read directly (on WH), or standard IEEE if read through 0xFFBD8000 (BH)."""
+    if df == _DF_FLOAT32:
+        return list(struct.unpack_from(f"<{n}f", data))
+    if df == _DF_INT32:
+        return list(struct.unpack_from(f"<{n}i", data))
+    if df == _DF_UINT32:
+        return list(struct.unpack_from(f"<{n}I", data))
+    if df == _DF_UINT16:
+        return list(struct.unpack_from(f"<{n}H", data))
+    if df == _DF_INT8:
+        return list(struct.unpack_from(f"<{n}b", data))
+    if df == _DF_UINT8:
+        return list(struct.unpack_from(f"<{n}B", data))
+    # Float16 / Float16_b.
+    if dest_make_float:
+        exp, mant = (5, 10) if df == _DF_FLOAT16 else (8, 7)
+        return [_make_float(exp, mant, v) for v in struct.unpack_from(f"<{n}H", data)]
+    if df == _DF_FLOAT16:
+        return list(struct.unpack_from(f"<{n}e", data))  # IEEE half
+    return [_bitcast_f32(v << 16) for v in struct.unpack_from(f"<{n}H", data)]  # bf16
+
+
+# Packing format for Bfp_b in TileSlice: (shared_exp byte + sign|mantissa byte).
+# Mantissa width selects the variant.
+_TILE_SLICE_BFP_BITS: dict[int, int] = {_DF_BFP8_B: 7, _DF_BFP4_B: 3}
+
+
+def _unpack(data: bytes, n: int, recipe: tuple[str, Any]) -> list:
+    """Decode n elements from the start of `data` per a (char, post) recipe."""
+    struct_char, post = recipe
+    values = struct.unpack_from(f"<{n}{struct_char}", data)
+    return [post(v) for v in values] if post else list(values)
+
+
+def _bfp_pair_decode(data: bytes, n: int, mantissa_bits: int) -> list[float]:
+    """TileSlice Bfp_b: contiguous (shared_exp, sign|mantissa) byte pairs.
+    Mirrors tt_metal/impl/data_format/blockfloat_common.cpp:convert_bfp_to_u32."""
+    mant_mask = (1 << mantissa_bits) - 1
+    leading_bit = 1 << (mantissa_bits - 1)
+    final_shift = 23 - mantissa_bits
+    out: list[float] = []
+    for i in range(n):
+        shared_exp = data[i * 2]
+        val = data[i * 2 + 1]
+        sign = val >> mantissa_bits
+        man = val & mant_mask
+        if man == 0:
+            out.append(-0.0 if sign else 0.0)
+            continue
+        shift_cnt = 0
+        while not (man & leading_bit):
+            man <<= 1
+            shift_cnt += 1
+        man = (man << 1) & mant_mask
+        exp = max(0, shared_exp - shift_cnt)
+        out.append(_bitcast_f32((sign << 31) | (exp << 23) | (man << final_shift)))
+    return out
+
+
+def _render_typed_array(args_blob: bytes, offset: int, dest_make_float: bool) -> str:
+    """Render a dp_typed_array_t record (a DEST register dump) as one row of
+    colored cells. DEST float byte order is arch-dependent, see _decode_typed_array.
+
+    Cell formatting follows helpers.utils.format_tile_row."""
+    # (len << 16) | type header word prefixes a dp_typed_array_t.
+    header = struct.unpack_from("<I", args_blob, offset)[0]
+    length, fmt_code = header >> 16, header & 0xFFFF
+    elt_bytes = _TA_ELT_BYTES.get(fmt_code)
+    if elt_bytes is None:
+        return f"<typed array: unsupported DataFormat={fmt_code}, len={length}>"
+    # `length` is a count of u32 words; element count is byte_len // elt_bytes.
+    byte_len = length * 4
+    data = args_blob[offset + 4 : offset + 4 + byte_len]
+    values = _decode_typed_array(data, byte_len // elt_bytes, fmt_code, dest_make_float)
+    # Leading newline lifts the row off the '[RISC|file:line]' marker so the
+    # array reads as its own block.
+    return "\n" + format_tile_row(values, TILE_BG_RESULT) + " "
+
+
+# TileSliceHostDev<MAX_BYTES> header layout (dprint_common.h:117):
+# cb_ptr(u32) | slice_range(6×u8) | cb_id(u8) | data_format(u8) |
+# data_count(u8) | endl_rows(u8) | return_code(u8) | pad(u8).
+# pad carries MAX_BYTES so the host can size the trailing data[] section.
+_TILE_SLICE_HEADER_STRUCT = struct.Struct("<I12B")
+_DPRINT_OK = 2
+_RETURN_CODE_MSGS = {4: "BAD TILE POINTER", 5: "unsupported data format"}
+
+
+def _render_tile_slice(args_blob: bytes, offset: int) -> str:
+    """Render a TileSliceHostDev<MAX_BYTES> record.
+
+    Full slice: row-prefixed colored cells, one row per output line.
+    Truncated slice: whatever fit, flat (no row prefixes, since the last row
+    may be ragged), followed by the truncation marker."""
+    (
+        _cb_ptr,
+        h0,
+        h1,
+        hs,
+        w0,
+        w1,
+        ws,
+        _cb_id,
+        data_format,
+        data_count,
+        endl_rows,
+        return_code,
+        max_bytes,
+    ) = _TILE_SLICE_HEADER_STRUCT.unpack_from(args_blob, offset)
+
+    if return_code != _DPRINT_OK:
+        return f"<TileSlice: {_RETURN_CODE_MSGS.get(return_code, f'return_code={return_code}')}>"
+    if data_format not in _TILE_SLICE_BFP_BITS and data_format not in _WIRE:
+        return f"<TileSlice: unsupported DataFormat={data_format}>"
+
+    data_start = offset + _TILE_SLICE_HEADER_STRUCT.size
+    data = args_blob[data_start : data_start + max_bytes]
+
+    rows = max(0, (h1 - h0 + hs - 1) // hs)
+    cols = max(0, (w1 - w0 + ws - 1) // ws)
+    fit = min(rows * cols, data_count)
+    if data_format in _TILE_SLICE_BFP_BITS:
+        values = _bfp_pair_decode(data, fit, _TILE_SLICE_BFP_BITS[data_format])
+    else:
+        values = _unpack(data, fit, _WIRE[data_format])
+
+    trailer = "\n" if endl_rows else ""
+
+    if fit == rows * cols:
+        sep = "\n" if endl_rows else " "
+        # Lead with a newline so it reads as a block.
+        body = "\n" + sep.join(
+            format_tile_row(
+                values[r * cols : (r + 1) * cols],
+                TILE_BG_RESULT,
+                row_idx=r + 1,
+            )
+            for r in range(rows)
+        )
+        return body + trailer
+
+    # Truncated, just render whatever we have.
+    body = format_tile_row(values, TILE_BG_RESULT) + "\n"
+    body += f"<TileSlice truncated (max is {data_count}, try bumping the tile slice template param)>"
+    return body + trailer
+
+
+@dataclass(slots=True)
+class _BufferRegion:
+    """One on-device print buffer: its base, Aux header size, and data ring size."""
+
+    base: int
+    aux_size: int
+    data_size: int
 
 
 class DevicePrintParser:
-    """Reads the on-device DEVICE_PRINT ring buffer and renders records as text.
+    """Reads the on-device DEVICE_PRINT ring buffer(s) and renders records as text.
 
     Construct with a {risc_id: elf_path} mapping (risc_id matches the value written
     into DevicePrintHeader.risc_id by the kernel, and PROCESSOR_INDEX passed by the
-    build to dprint.h). Call poll(location) during the run and final_drain(location)
-    after to pull and decode all pending records.
+    build to dprint.h) and the list of buffer regions to drain. Call poll(location)
+    during the run and final_drain(location) after to pull and decode all records.
     """
 
     def __init__(
         self,
         elf_paths: dict[int, str | Path],
-        buffer_base: int,
-        total_buffer_size: int,
-        processor_count: int,
+        buffers: list[
+            tuple[int, int, int]
+        ],  # (base_address, total_size, processor_count)
+        dest_make_float: bool = True,
     ):
-        self.buffer_base = buffer_base
-        self.total_buffer_size = total_buffer_size
-        self.aux_size = aux_size_for(processor_count)
-        self.data_size = total_buffer_size - self.aux_size
+        self._regions = [
+            _BufferRegion(base, aux_size_for(count), total_size - aux_size_for(count))
+            for base, total_size, count in buffers
+        ]
         self.elfs: dict[int, ElfStrings] = {}
         for risc_id, p in elf_paths.items():
             self.elfs[risc_id] = ElfStrings(str(p))
         self._risc_names: dict[int, str] = _risc_names_tensix()
+        self._dest_make_float = dest_make_float
 
     def _walk_records(self, data_slice: bytes) -> list[str]:
         """Parse all complete records in data_slice,
@@ -516,9 +800,22 @@ class DevicePrintParser:
     # so we bound the poll loop; 64 is reasonable.
     _MAX_STALL_RESETS_PER_POLL: int = 64
 
+    def _read_wpos_rpos(self, location: str, region: _BufferRegion) -> tuple[int, int]:
+        """Read a region's Aux struct and decode its (wpos, rpos) ring pointers."""
+        aux_raw = read_from_device(location, region.base, num_bytes=region.aux_size)
+        wpos, rpos = struct.unpack_from("<II", aux_raw, 0)
+        return wpos, rpos
+
     def poll(self, location: str = "0,0") -> list[str]:
-        """Incremental drain: read new data since last poll, advance device rpos.
-        Return immediately if there is no new data.
+        """Incremental drain across every buffer region; return immediately per region
+        with no new data. On Quasar this drains both the TRISC and DM buffers."""
+        out: list[str] = []
+        for region in self._regions:
+            out.extend(self._drain_region(location, region))
+        return out
+
+    def _drain_region(self, location: str, region: _BufferRegion) -> list[str]:
+        """Read new data since last poll for one region, advancing its device rpos.
         See dprint_server.cpp:read_core_data.
 
         Kernel is the sole writer of wpos, host is the sole writer of rpos.
@@ -527,8 +824,7 @@ class DevicePrintParser:
         """
         out: list[str] = []
 
-        aux_raw = read_from_device(location, self.buffer_base, num_bytes=self.aux_size)
-        wpos, rpos = _decode_wpos_rpos(aux_raw)
+        wpos, rpos = self._read_wpos_rpos(location, region)
 
         # Nothing to do: device has no new data.
         if wpos == rpos:
@@ -536,16 +832,16 @@ class DevicePrintParser:
 
         for _ in range(self._MAX_STALL_RESETS_PER_POLL):
             stall = bool(wpos & DEVICE_PRINT_WRITE_STALL_FLAG)
-            wpos = _strip_stall(wpos)
+            wpos = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG
 
             if rpos > wpos:
                 # Kernel wrapped wpos back to 0; drain the tail then fall through to head.
-                tail_size = self.data_size - rpos
+                tail_size = region.data_size - rpos
                 if tail_size > 0:
                     tail = bytes(
                         read_from_device(
                             location,
-                            self.buffer_base + self.aux_size + rpos,
+                            region.base + region.aux_size + rpos,
                             num_bytes=tail_size,
                         )
                     )
@@ -556,14 +852,14 @@ class DevicePrintParser:
                 chunk = bytes(
                     read_from_device(
                         location,
-                        self.buffer_base + self.aux_size + rpos,
+                        region.base + region.aux_size + rpos,
                         num_bytes=wpos - rpos,
                     )
                 )
                 out.extend(self._walk_records(chunk))
                 rpos = wpos
 
-            write_words_to_device(location, self.buffer_base + 4, [rpos])
+            write_words_to_device(location, region.base + 4, [rpos])
 
             if not stall:
                 return out
@@ -571,13 +867,10 @@ class DevicePrintParser:
             # Kernel was stalled when we entered this iteration. Re-read
             # and loop: either it has cleared the stall and produced more
             # data, or it hasn't yet observed our rpos write and we retry.
-            aux_raw = read_from_device(
-                location, self.buffer_base, num_bytes=self.aux_size
-            )
-            wpos, rpos = _decode_wpos_rpos(aux_raw)
+            wpos, rpos = self._read_wpos_rpos(location, region)
 
         raise RuntimeError(
-            f"DevicePrintParser.poll(): stall flag still set after "
+            f"DevicePrintParser._drain_region(): stall flag still set after "
             f"{self._MAX_STALL_RESETS_PER_POLL} iterations, kernel likely hung."
         )
 
@@ -602,6 +895,16 @@ class DevicePrintParser:
 
             if ph.kind == "unknown":
                 parts.append(ph.error_msg)
+                continue
+
+            if ph.kind == "typed_array":
+                parts.append(
+                    _render_typed_array(args_blob, ph.offset, self._dest_make_float)
+                )
+                continue
+
+            if ph.kind == "tile_slice":
+                parts.append(_render_tile_slice(args_blob, ph.offset))
                 continue
 
             if ph.offset + ph.size > blob_len:
@@ -653,6 +956,7 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
 
     configuration.prepare() must have been called before this so the ELFs exist.
     """
+    from helpers.chip_architecture import ChipArchitecture  # Local: circular import
     from helpers.test_config import TestConfig  # Local to avoid circular import
 
     if TestConfig.PROCESSOR_COUNT == 0:
@@ -672,7 +976,8 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
     }
     return DevicePrintParser(
         elf_paths,
-        TestConfig.DEVICE_PRINT_BUFFER_BASE,
-        TestConfig.DEVICE_PRINT_BUFFER_SIZE,
-        TestConfig.PROCESSOR_COUNT,
+        TestConfig.device_print_buffers(),
+        # Blackhole reads DEST via the 0xFFBD8000 aperture (standard-IEEE floats);
+        # every other arch reads it directly (floats in _make_float order).
+        dest_make_float=TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE,
     )

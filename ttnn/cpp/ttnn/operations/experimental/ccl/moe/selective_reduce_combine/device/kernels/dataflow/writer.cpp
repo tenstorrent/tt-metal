@@ -113,6 +113,7 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
+    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
     constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
     constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
@@ -289,7 +290,7 @@ void kernel_main() {
 
             if (dest_device_idx == linearized_mesh_coord) {
                 const uint64_t output_noc_addr =
-                    get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes, /*noc=*/1);
+                    output_addrgen.get_noc_addr(output_page_idx, dest_token_segment_offset_bytes, /*noc=*/1);
                 noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes, /*noc=*/1);
                 noc_async_writes_flushed(/*noc=*/1);
             } else {
@@ -326,17 +327,23 @@ void kernel_main() {
         auto termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
-        noc_semaphore_wait(termination_sync_semaphore_ptr, num_data_parallel_cores - 1);
+        noc_semaphore_wait(termination_sync_semaphore_ptr, num_workers_per_link - 1);
         noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
 
-        fabric_multicast_bidirectional_atomic_inc_ring_1d<
+        // Topology is a CT arg from the host (already auto-downgraded via ttnn::ccl::get_usable_topology
+        // at the op API boundary in moe_compute_device_operation.cpp). For Linear topology, the helper
+        // derives per-device positive/negative ranges from linearized_mesh_coord so endpoints elide the
+        // absent-direction send via `if constexpr` — required to avoid UB on LINE endpoints.
+        fabric_multicast_bidirectional_atomic_inc_1d<
             linearized_mesh_coord,
+            topology,
             mesh_rows,
             mesh_cols,
             replicate_axis,
-            true>(fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
+            /*DoubleAntipodalAtomicInc=*/(topology == tt::tt_fabric::Topology::Ring)>(
+            fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
@@ -349,7 +356,13 @@ void kernel_main() {
             fabric_mux_termination_signal_address,
             num_mux_workers_per_link>(directions, fabric_connections, true, rt_arg_count);
 
-        noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
+        // Ring + DoubleAntipodalAtomicInc=true: each device receives `replicate_group_devices` inc's
+        //   (the antipodal device is incremented from both directions, summing to N senders).
+        // Linear: each device receives `replicate_group_devices - 1` inc's (no antipodal doubling;
+        //   each sender on the line sends to exactly N-1 other devices).
+        constexpr uint32_t expected_dispatch_device_inc =
+            (topology == tt::tt_fabric::Topology::Linear) ? (replicate_group_devices - 1) : replicate_group_devices;
+        noc_semaphore_wait(semaphore_ptr, expected_dispatch_device_inc);
         noc_semaphore_set(semaphore_ptr, 0);
     } else {
         // get sync core semaphore noc address

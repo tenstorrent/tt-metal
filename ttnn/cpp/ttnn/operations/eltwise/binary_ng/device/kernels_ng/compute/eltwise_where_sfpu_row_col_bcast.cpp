@@ -53,6 +53,7 @@ ALWI void process_tile(
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(CB_OTHER, cb_llk_post);
 
         tile_regs_acquire();
@@ -67,9 +68,7 @@ ALWI void process_tile(
         exp_cb_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(CB_OTHER);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
-#endif
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
         exp_cb_llk_post.wait_front(num_tiles_per_cycle);

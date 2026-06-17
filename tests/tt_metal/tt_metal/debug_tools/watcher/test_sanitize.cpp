@@ -59,6 +59,8 @@ enum watcher_features_t {
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
     SanitizeNOCMulticastInvalidRange,
+    SanitizeNOCWriteWithStateBadCoord,
+    SanitizeNOCInlineWriteFromState,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -185,7 +187,7 @@ void RunTestOnCore(
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel = 0;
     int noc = 0;
-    constexpr const char* DRAM_COPY_KERNEL_NAME = "dram_copy";
+    const experimental::KernelSpecName DRAM_COPY_KERNEL_NAME{"dram_copy"};
     if (is_eth_core) {
         // ETH cores: invoke the original (legacy) kernel via the legacy host API.
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
@@ -199,8 +201,8 @@ void RunTestOnCore(
         // TENSIX kernel is launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
         // On Quasar, user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
         // On WH/BH, BRISC or NCRISC (selected by use_ncrisc) runs the kernel.
-        experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings cta_bindings;
-        experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines;
+        experimental::KernelSpec::CompileTimeArgs cta_bindings;
+        experimental::KernelSpec::CompilerOptions::Defines defines;
         if (is_quasar && multi_dm_race) {
             constexpr uint32_t num_dms = 6;
             constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
@@ -229,25 +231,23 @@ void RunTestOnCore(
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
-        experimental::metal2_host_api::DataMovementConfiguration dm_cfg{
-            .gen1_data_movement_config =
-                experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                    .processor = gen1_processor, .noc = gen1_noc},
-            .gen2_data_movement_config =
-                experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        experimental::DataMovementHardwareConfig dm_cfg{
+            .gen1_config =
+                experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_processor, .noc = gen1_noc},
+            .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
         };
-        uint8_t num_threads = is_quasar ? 6 : 1;
+        uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
         }
-        experimental::metal2_host_api::KernelSpec dm_spec{
+        experimental::KernelSpec dm_spec{
             .unique_id = DRAM_COPY_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_metal2},
+            .source = kernel_metal2,
             .num_threads = num_threads,
             .compiler_options = {.defines = defines},
-            .compile_time_arg_bindings = cta_bindings,
-            .runtime_arguments_schema =
-                {.named_runtime_args =
+            .compile_time_args = cta_bindings,
+            .runtime_arg_schema =
+                {.runtime_arg_names =
                      {"local_buffer_addr",
                       "buffer_src_addr",
                       "src_noc_x",
@@ -263,20 +263,22 @@ void RunTestOnCore(
                       "eth_dest_overflow_addr",
                       "use_multicast_semaphore_inc",
                       "mcast_dst_end_x",
-                      "mcast_dst_end_y"}},
-            .config_spec = dm_cfg,
+                      "mcast_dst_end_y",
+                      "use_write_with_state",
+                      "use_inline_dw_write_from_state"}},
+            .hw_config = dm_cfg,
         };
-        experimental::metal2_host_api::WorkUnitSpec wu{
-            .unique_id = "main",
+        experimental::WorkUnitSpec wu{
+            .name = "main",
             .kernels = {DRAM_COPY_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeCoord{core},
+            .target_nodes = experimental::NodeCoord{core},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "watcher_sanitize",
+        experimental::ProgramSpec spec{
+            .name = "watcher_sanitize",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         if (is_quasar) {
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
@@ -299,6 +301,8 @@ void RunTestOnCore(
     bool use_multicast_semaphore_inc = false;
     uint32_t mcast_dst_end_x = 0;
     uint32_t mcast_dst_end_y = 0;
+    bool use_write_with_state = false;
+    bool use_inline_dw_write_from_state = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -354,6 +358,26 @@ void RunTestOnCore(
             }
             break;
         }
+        case SanitizeNOCWriteWithStateBadCoord:
+            // Stateful write to a non-existent core. The destination coordinate lives in NOC_RET_ADDR; a
+            // sanitizer that mistakenly read NOC_TARG_ADDR would instead see the sender's own (valid) coordinate
+            // and fail to flag the bad target. The zero destination offset keeps the failure deterministic
+            // either way (it never silently succeeds), and the small size forces the one-packet write path.
+            output_buf_noc_xy.x = 26;
+            output_buf_noc_xy.y = 18;
+            output_buffer_addr = 0;
+            buffer_size = 32;
+            use_write_with_state = true;
+            break;
+        case SanitizeNOCInlineWriteFromState:
+            // Bad destination coordinate, but keep the (nonzero) destination offset: this exercises
+            // DEBUG_SANITIZE_NOC_ADDR_FROM_STATE the way cq_noc_inline_dw_write_with_state does, and the
+            // reported offset discriminates the low-bits bug (the fixed sanitizer reports the real offset,
+            // whereas dropping NOC_TARG_ADDR_LO would report offset 0).
+            output_buf_noc_xy.x = 26;
+            output_buf_noc_xy.y = 18;
+            use_inline_dw_write_from_state = true;
+            break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -376,36 +400,39 @@ void RunTestOnCore(
         eth_dest_overflow_addr_words,
         use_multicast_semaphore_inc,
         mcast_dst_end_x,
-        mcast_dst_end_y};
+        mcast_dst_end_y,
+        use_write_with_state,
+        use_inline_dw_write_from_state};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
-        experimental::metal2_host_api::ProgramRunParams params;
-        params.kernel_run_params = {{
-            .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
-            .named_runtime_args =
-                {{.node = experimental::metal2_host_api::NodeCoord{core},
-                  .args =
-                      {{"local_buffer_addr", buffer_addr},
-                       {"buffer_src_addr", input_buffer_addr},
-                       {"src_noc_x", input_buf_noc_xy.x},
-                       {"src_noc_y", input_buf_noc_xy.y},
-                       {"buffer_dst_addr", output_buffer_addr},
-                       {"dst_noc_x", output_buf_noc_xy.x},
-                       {"dst_noc_y", output_buf_noc_xy.y},
-                       {"buffer_size", buffer_size},
-                       {"use_inline_dw_write", use_inline_dw_write},
-                       {"bad_linked_transaction", bad_linked_transaction},
-                       {"l1_overflow_addr", l1_overflow_addr},
-                       {"eth_src_overflow_addr", eth_src_overflow_addr_words},
-                       {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
-                       {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
-                       {"mcast_dst_end_x", mcast_dst_end_x},
-                       {"mcast_dst_end_y", mcast_dst_end_y}}}},
+        experimental::ProgramRunArgs params;
+        params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DRAM_COPY_KERNEL_NAME,
+            .runtime_arg_values =
+                {{experimental::NodeCoord{core},
+                  {{"local_buffer_addr", buffer_addr},
+                   {"buffer_src_addr", input_buffer_addr},
+                   {"src_noc_x", input_buf_noc_xy.x},
+                   {"src_noc_y", input_buf_noc_xy.y},
+                   {"buffer_dst_addr", output_buffer_addr},
+                   {"dst_noc_x", output_buf_noc_xy.x},
+                   {"dst_noc_y", output_buf_noc_xy.y},
+                   {"buffer_size", buffer_size},
+                   {"use_inline_dw_write", use_inline_dw_write},
+                   {"bad_linked_transaction", bad_linked_transaction},
+                   {"l1_overflow_addr", l1_overflow_addr},
+                   {"eth_src_overflow_addr", eth_src_overflow_addr_words},
+                   {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
+                   {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
+                   {"mcast_dst_end_x", mcast_dst_end_x},
+                   {"mcast_dst_end_y", mcast_dst_end_y},
+                   {"use_write_with_state", use_write_with_state},
+                   {"use_inline_dw_write_from_state", use_inline_dw_write_from_state}}}},
         }};
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 
@@ -439,6 +466,9 @@ void RunTestOnCore(
     }
     // Note: for multi_dm_race, expected string is built but not used - verification uses regex instead
     switch (feature) {
+        // Stateful write to a bad coordinate reports the same "did not map to any known core" error as a plain
+        // bad-coordinate write; the destination coordinate is reconstructed from NOC_RET_ADDR state registers.
+        case SanitizeNOCWriteWithStateBadCoord:
         case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
@@ -602,10 +632,35 @@ void RunTestOnCore(
                 virtual_core.y,
                 (eth_dest_overflow_addr_words << 4));
         } break;
+        case SanitizeNOCInlineWriteFromState:
+            // Inline dw write sanitized straight from the command-buffer state (DEBUG_SANITIZE_NOC_ADDR_FROM_STATE
+            // uses read semantics with l1_addr 0). The destination coordinate is invalid; [addr=...] is the
+            // reconstructed destination offset, which must be the real offset rather than 0.
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 4 "
+                "bytes to local L1[{:#08x}] from Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
+                "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                noc,
+                0,  // l1_addr is 0 for address-only (FROM_STATE) sanitization
+                output_buf_noc_xy.str(),
+                output_buffer_addr);
+            break;
         case SanitizeNOCMulticastInvalidRange: {
+            // The watcher device reader formats multicast coords using CoreCoord::str() +
+            // "-" + CoreCoord::str(), which (since UMD bump) produces "X1-Y1-X2-Y2".
+            // Build the expected string the same way to stay format-agnostic.
+            CoreCoord mcast_start_coord = output_buf_noc_xy;
+            CoreCoord mcast_end_coord = {mcast_dst_end_x, mcast_dst_end_y};
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
-                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "
+                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords {}-{} "
                 "DRAM[addr=0x{:08x}] (multicast invalid range).",
                 device->id(),
                 core_name,
@@ -616,10 +671,8 @@ void RunTestOnCore(
                 risc_name,
                 noc,
                 0,  // l1_addr is 0 for address-only sanitization
-                output_buf_noc_xy.x,
-                output_buf_noc_xy.y,
-                mcast_dst_end_x,
-                mcast_dst_end_y,
+                mcast_start_coord.str(),
+                mcast_end_coord.str(),
                 output_buffer_addr);
         } break;
         default:
@@ -870,6 +923,33 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSemaphoreInc) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMulticastInvalidRange);
+        },
+        this->devices_[0]);
+}
+
+// Regression test for the stateful-write NOC sanitizer: a write issued via set_async_write_state +
+// async_write_with_state must be sanitized against the destination coordinate held in NOC_RET_ADDR. A
+// sanitizer that reads NOC_TARG_ADDR instead would see the sender's own (valid) coordinate and report the
+// wrong error (or none), so this test fails unless the destination is reconstructed from NOC_RET_ADDR.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCWriteWithState) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCWriteWithStateBadCoord);
+        },
+        this->devices_[0]);
+}
+
+// Regression test for the inline-dw-write NOC sanitizer, exercised the way cq_noc_inline_dw_write_with_state
+// does: the destination is programmed into the WR_REG command buffer and then sanitized via
+// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE. That macro had dropped NOC_TARG_ADDR_LO (the destination offset), so it
+// reconstructed offset 0; this test programs a nonzero offset and checks the reported [addr=...] is the real
+// offset, not 0.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteFromState) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteFromState);
         },
         this->devices_[0]);
 }
