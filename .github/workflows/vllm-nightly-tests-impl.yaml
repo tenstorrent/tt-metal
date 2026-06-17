@@ -424,6 +424,58 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: Print Tenstorrent TLB debug paths
+        continue-on-error: true
+        run: |
+          set +e
+
+          dump_path() {
+            local path="$1"
+
+            echo "::group::${path}"
+            if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+              echo "Path does not exist: ${path}"
+              echo "::endgroup::"
+              return 0
+            fi
+
+            echo "Metadata for ${path}:"
+            stat "$path" 2>&1 || true
+
+            echo
+            echo "Directory listing for ${path}:"
+            ls -la "$path" 2>&1 || true
+
+            if [ -d "$path" ]; then
+              echo
+              echo "Recursive entries under ${path}:"
+              find "$path" -maxdepth 5 -print 2>&1 || true
+
+              echo
+              echo "Readable file contents under ${path}:"
+              while IFS= read -r entry; do
+                if [ -f "$entry" ] || [ -L "$entry" ]; then
+                  echo "----- ${entry} -----"
+                  stat "$entry" 2>&1 || true
+                  cat "$entry" 2>&1 || true
+                  echo
+                fi
+              done < <(find "$path" -maxdepth 5 \( -type f -o -type l \) -print 2>/dev/null || true)
+            else
+              echo
+              echo "Contents of ${path}:"
+              cat "$path" 2>&1 || true
+            fi
+
+            echo "::endgroup::"
+          }
+
+          for path in \
+            /sys/kernel/debug/tenstorrent/16/mappings \
+            /proc/driver/tenstorrent/16/pids
+          do
+            dump_path "$path"
+          done
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
