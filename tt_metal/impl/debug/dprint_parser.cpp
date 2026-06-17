@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -886,8 +887,7 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                 fmt::format_to(std::back_inserter(buffer.buffer), "0x{:x}", ptr_val);
                 break;
             }
-            case 'c': [[fallthrough]];
-            case 'C': {
+            case 'c': {
                 const auto& info = std::get<TopCallstackInfo>(buffer.argument_values[placeholder.arg_id]);
                 format_top_callstack(buffer.buffer, info);
                 break;
@@ -971,23 +971,18 @@ DevicePrintParser::ArgumentValue DevicePrintParserImpl<PointerSize>::read_argume
             return arr;
         }
         case 'c': {
-            TopCallstackInfo info;
-            const uint64_t pc = read_value_from_payload<uint32_t>(payload_bytes, offset);
-            const uint64_t ra = read_value_from_payload<uint32_t>(payload_bytes, offset);
+            // The device encodes pc/ra/skip_frames as its own pointer width (pointer_t, selected from
+            // the ELF). It marks an unknown pc/ra with the all-ones sentinel for that width, so on a
+            // 32-bit device that sentinel is UINT32_MAX; widen it to the 64-bit sentinel that
+            // TopCallstackInfo uses. On a 64-bit device pointer_t == uint64_t and this is a no-op.
+            constexpr pointer_t sentinel = std::numeric_limits<pointer_t>::max();
+            const pointer_t pc = read_value_from_payload<pointer_t>(payload_bytes, offset);
+            const pointer_t ra = read_value_from_payload<pointer_t>(payload_bytes, offset);
 
-            // Arch is LP32, expand the 32bit sentinel into 64bit sentinel for TopCallstackInfo
-            info.pc = pc != UINT32_MAX ? pc : UINT64_MAX;
-            info.ra = ra != UINT32_MAX ? ra : UINT64_MAX;
-            info.skip_frames = read_value_from_payload<uint32_t>(payload_bytes, offset);
-            return info;
-        }
-        case 'C': {
             TopCallstackInfo info;
-
-            // Arch is LP64, keep everything as is
-            info.pc = read_value_from_payload<uint64_t>(payload_bytes, offset);
-            info.ra = read_value_from_payload<uint64_t>(payload_bytes, offset);
-            info.skip_frames = read_value_from_payload<uint64_t>(payload_bytes, offset);
+            info.pc = pc != sentinel ? pc : std::numeric_limits<uint64_t>::max();
+            info.ra = ra != sentinel ? ra : std::numeric_limits<uint64_t>::max();
+            info.skip_frames = read_value_from_payload<pointer_t>(payload_bytes, offset);
             return info;
         }
         case 's':  // string pointer (resolved from ELF section if possible, else hex)
@@ -1068,8 +1063,8 @@ auto DevicePrintParserImpl<PointerSize>::resolve_top_callstack(const TopCallstac
 
     const std::vector<ttexalens::native_elf::ElfFile> elfs = {elf_file};
 
-    // The device leaves the UINTMAX sentinel when PC/RA wasn't captured
-    const auto is_invalid_address = [](uint64_t addr) { return addr == UINT64_MAX; };
+    // The device leaves the UINT64 MAX sentinel when PC/RA wasn't captured
+    const auto is_invalid_address = [](uint64_t addr) { return addr == std::numeric_limits<uint64_t>::max(); };
 
     // Unwinding past kernel boundary is currently unsupported
     // Stop if you reach a known terminal frame
