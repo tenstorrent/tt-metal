@@ -567,7 +567,10 @@ jobs:
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 
-          python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
+          # setsid makes the launcher the session leader so cleanup can signal
+          # the whole process group; vLLM still forks EngineCore/Worker children
+          # that may need recursive cleanup afterward.
+          setsid python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
           echo $! > ${FILE_SERVER_PID}
@@ -782,21 +785,81 @@ jobs:
       - name: 🧹 Cleanup server process
         if: always()
         run: |
-          if [ -f "${FILE_SERVER_PID}" ]; then
-            pid=$(cat "${FILE_SERVER_PID}")
-            if kill -0 "$pid" 2>/dev/null; then
-              kill "$pid"
-              echo "✅ Server process with PID $pid terminated."
-              rm -f "${FILE_SERVER_PID}"
-            else
-              echo "❌ Server process already down!"
-              echo "Check out the server log in a step below."
-              exit 1
+          kill_process_tree() {
+            local pid="$1" sig="$2" child
+            for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+              kill_process_tree "$child" "$sig"
+            done
+            kill "-$sig" "$pid" 2>/dev/null || true
+          }
+
+          terminate_vllm_server() {
+            local pid=""
+
+            if [ -f "${FILE_SERVER_PID}" ]; then
+              read -r pid < "${FILE_SERVER_PID}" || pid=""
             fi
-          else
-            echo "❌ PID file not found. Server may not have started correctly."
+            if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+              pid=""
+            fi
+
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+              echo "Stopping vLLM server tree (launcher pid=$pid)..."
+
+              # Launcher runs under setsid, so -$pid targets its process group.
+              kill -TERM "-${pid}" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+              sleep 5
+
+              if kill -0 "$pid" 2>/dev/null; then
+                kill_process_tree "$pid" TERM
+                sleep 2
+              fi
+
+              if kill -0 "$pid" 2>/dev/null; then
+                kill -KILL "-${pid}" 2>/dev/null || true
+                kill_process_tree "$pid" KILL
+              fi
+            elif [ -n "$pid" ]; then
+              echo "Server launcher (pid=$pid) already exited; cleaning up child processes."
+            else
+              echo "PID file not found; cleaning up by process name."
+            fi
+
+            rm -f "${FILE_SERVER_PID}"
+
+            # Safety net for vLLM subprocesses that outlive the launcher
+            # (EngineCore, Worker, APIServer, etc.).
+            local pattern
+            for pattern in \
+              "server_example_tt.py" \
+              "vllm.entrypoints.openai.api_server" \
+              "VLLM::"
+            do
+              if pgrep -u "$(id -un)" -f "$pattern" >/dev/null 2>&1; then
+                echo "Sending SIGTERM to remaining processes matching: $pattern"
+                pkill -TERM -u "$(id -un)" -f "$pattern" 2>/dev/null || true
+              fi
+            done
+            sleep 2
+            for pattern in \
+              "server_example_tt.py" \
+              "vllm.entrypoints.openai.api_server" \
+              "VLLM::"
+            do
+              pkill -KILL -u "$(id -un)" -f "$pattern" 2>/dev/null || true
+            done
+          }
+
+          terminate_vllm_server
+
+          remaining=$(pgrep -u "$(id -un)" -f 'server_example_tt.py|vllm.entrypoints.openai.api_server|VLLM::' 2>/dev/null | wc -l)
+          if [ "$remaining" -gt 0 ]; then
+            echo "$remaining vLLM-related process(es) still running after cleanup:"
+            pgrep -a -u "$(id -un)" -f 'server_example_tt.py|vllm.entrypoints.openai.api_server|VLLM::' || true
             exit 1
           fi
+
+          echo "vLLM server cleanup complete."
 
       - name: Show server log
         if: always()
