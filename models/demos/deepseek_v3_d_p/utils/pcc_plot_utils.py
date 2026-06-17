@@ -348,7 +348,7 @@ def write_pcc_summary(result: dict, threshold: float = 0.99, output_dir: str = N
         result: Dict with 'pcc' tuple and metadata.
         threshold: PCC threshold for pass/fail.
         output_dir: Directory for summary files.
-                    Defaults to PCC_SUMMARY_DIR env var or /tmp/pcc_summaries.
+                    Defaults to PCC_SUMMARY_DIR env var or /tmp/pcc_summaries_{user}.
 
     Returns:
         Path to the written file.

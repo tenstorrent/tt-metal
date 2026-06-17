@@ -11,6 +11,7 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,8 +59,12 @@ class PrefillBlockThresholds:
     kvpe_pe: float = 0.999
 
 
+SEQ_LEN_5K = 5 * 1024
+
 DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
+# Relaxed thresholds for 5k (5120-token) prefill.
+DSV3_THRESHOLDS_5K = PrefillBlockThresholds(dense=0.989, moe_gate_host=0.989, moe_gate_device=0.988)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
 DETERMINISM_PCC_THRESHOLD = 1.0
@@ -94,6 +99,10 @@ def run_model(
     if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
+    # Skip the balanced 5k (5120-token) prefill cases everywhere — disabled for now.
+    if is_balanced and isl_total == SEQ_LEN_5K:
+        pytest.skip("Skipping balanced 5k (5120-token) prefill")
+
     # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
     # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
     # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and
@@ -125,7 +134,11 @@ def run_model(
 
     # --- Cache setup ---
     is_dense = layer_idx < config.first_k_dense_replace
-    cache_dir = Path(f"/tmp/{variant.name}_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
+    # Namespace by user to avoid cross-user permission collisions on the shared /tmp dir.
+    user = os.getenv("USER", "shared")
+    cache_dir = Path(
+        f"/tmp/{user}_{variant.name}_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl"
+    )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     init_checker(cache_dir)
@@ -409,8 +422,9 @@ def run_model(
         ("random", False, 1024, 8),
         ("prompt_25k", False, 25 * 1024, 8),
         ("abc_1k", True, 1024, 8),
+        ("abc_1k", True, SEQ_LEN_5K, 8),
     ],
-    ids=["smoke-random", "perf-prompt_25k", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-prompt_25k", "pcc-abc_1k", "pcc-abc_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -502,6 +516,8 @@ def test_ds_prefill_block(
     determinism_check,
     num_iterations,
 ):
+    # Relaxed thresholds for 5k (5120-token) prefill.
+    thresholds = DSV3_THRESHOLDS_5K if isl_total == SEQ_LEN_5K else DSV3_THRESHOLDS
     run_model(
         variant,
         config_only,
@@ -521,7 +537,7 @@ def test_ds_prefill_block(
         is_ci_v2_env,
         determinism_check=determinism_check,
         num_iterations=num_iterations,
-        thresholds=DSV3_THRESHOLDS,
+        thresholds=thresholds,
     )
 
 

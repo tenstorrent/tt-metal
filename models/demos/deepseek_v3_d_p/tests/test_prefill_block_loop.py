@@ -70,7 +70,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
         "layer8",
     ],
 )
-@pytest.mark.parametrize("isl_total", [1024, 6400, 25 * 1024], ids=["isl_1k", "isl_6k4", "isl_25k"])
+@pytest.mark.parametrize("isl_total", [1024, 5 * 1024, 6400, 25 * 1024], ids=["isl_1k", "isl_5k", "isl_6k4", "isl_25k"])
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -138,6 +138,9 @@ def test_prefill_block_loop(
 ):
     # Perf runs (skip_reference=True) measure once; PCC/divergence runs loop for 30 iters
     num_iters = 1 if skip_reference else 30
+    # This test is always balanced (is_balanced=True); skip the 5k (5120-token) case everywhere — disabled for now.
+    if isl_total == 5 * 1024:
+        pytest.skip("Skipping balanced 5k (5120-token) prefill")
     # --- Validate fixtures ---
     if hf_config is None:
         pytest.skip("HF config not available")
