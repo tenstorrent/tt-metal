@@ -5,28 +5,28 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t num_input_rows = get_arg_val<uint32_t>(0);
-    const uint32_t input_width_bytes = get_arg_val<uint32_t>(1);
-    const uint32_t input_block_size = get_arg_val<uint32_t>(2);
-    const uint32_t num_padded_tiles_per_batch = get_arg_val<uint32_t>(3);
-    const uint32_t num_padded_rows = get_arg_val<uint32_t>(4);
-    const uint32_t num_batches = get_arg_val<uint32_t>(5);
-    const uint32_t packed_pad_value = get_arg_val<uint32_t>(6);
-
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t pad_cb = get_compile_time_arg_val(2);
+    const uint32_t num_input_rows = get_arg(args::num_input_rows);
+    const uint32_t input_width_bytes = get_arg(args::input_width_bytes);
+    const uint32_t input_block_size = get_arg(args::input_block_size);
+    const uint32_t num_padded_tiles_per_batch = get_arg(args::num_padded_tiles_per_batch);
+    const uint32_t num_padded_rows = get_arg(args::num_padded_rows);
+    const uint32_t num_batches = get_arg(args::num_batches);
+    const uint32_t packed_pad_value = get_arg(args::packed_pad_value);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_pad(pad_cb);
+    // src_shard: sharded input borrowed onto the input buffer (legacy c_1).
+    // in:        tilize input stream produced for compute (legacy c_0).
+    // pad:       reader-local scratch holding one padding row (legacy c_2).
+    DataflowBuffer cb_in0(dfb::src_shard);
+    DataflowBuffer cb_in1(dfb::in);
+    DataflowBuffer cb_pad(dfb::pad);
 
     cb_in0.reserve_back(num_input_rows);
     cb_in1.reserve_back(num_padded_tiles_per_batch);

@@ -6,9 +6,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 // This function is templated to choose the pointer data-type based on 'val' size
 // to avoid unaligned addresses and out-of-bounds access.
@@ -60,29 +62,37 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
-    constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(0);
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(2);
-    constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(3);
-    constexpr uint32_t page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(6);
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    // Compile-time args (named in the Metal 2.0 KernelSpec). The legacy positional CT slot for
+    // aligned_page_size was unused by this kernel and is dropped in the port.
+    constexpr uint32_t tile_row_shift_bits = get_arg(args::tile_row_shift_bits);
+    constexpr uint32_t unpadded_X_size = get_arg(args::unpadded_X_size);
+    constexpr uint32_t elem_size = get_arg(args::elem_size);
+    constexpr uint32_t num_pages_in_row = get_arg(args::num_pages_in_row);
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_arg(args::size_of_valid_data_in_last_page_in_row);
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
-    const uint32_t pad_value = get_arg_val<uint32_t>(2);
-    const uint32_t start_page_id = get_arg_val<uint32_t>(3);
-    const uint32_t n_block_reps = get_arg_val<uint32_t>(4);
+    // Fixed (per-core) runtime args. The input base address is carried by the TensorAccessor
+    // binding, so the legacy src_addr runtime arg is gone.
+    const uint32_t padded_X_size = get_arg(args::padded_X_size);
+    const uint32_t pad_value = get_arg(args::pad_value);
+    const uint32_t start_page_id = get_arg(args::start_page_id);
+
+    // n_block_reps is the number of BlockReps this core processes. The per-block descriptors
+    // themselves are a VARIABLE-LENGTH stream that differs core-to-core, so they cannot be named
+    // RTAs (which require a fixed schema shared by every node). They are passed instead as
+    // positional "varargs" (KernelAdvancedOptions::num_runtime_varargs on the host), read below via
+    // get_vararg(). The host sizes num_runtime_varargs to the MAX stream length across all cores and
+    // zero-pads shorter cores; n_block_reps bounds the loop so the trailing pad is never read.
+    const uint32_t n_block_reps = get_arg(args::n_block_reps);
 
     const uint32_t num_tiles_per_row =
         padded_X_size >> tile_row_shift_bits;  // means / 64, assuming bfloat16, there are 64 bytes per tile row
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(ta::input);
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::in);
 
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
@@ -131,7 +141,11 @@ void kernel_main() {
     };
 
     uint32_t page_id = start_page_id;
-    uint32_t rt_arg_idx = 5;
+    // vararg_idx walks the run-length-encoded BlockRep stream. Each group is 5 words:
+    // {n_data, n_mixed, n_pads, times, repeat_count}. Unlike the legacy kernel (where the stream
+    // started at named-arg slot 5), get_vararg() is 0-based: get_vararg(0) is the first stream word
+    // regardless of how many named args precede it (the offset is baked in at codegen time).
+    uint32_t vararg_idx = 0;
     uint32_t count = 1;
     constexpr int32_t n_mixed_idx = 1;
     constexpr int32_t n_pad_idx = 2;
@@ -141,15 +155,13 @@ void kernel_main() {
 
     for (uint32_t block_rep_idx = 0; block_rep_idx < n_block_reps; ++block_rep_idx) {
         const uint32_t repeat_count =
-            get_arg_val<uint32_t>(rt_arg_idx + repeat_ct_idx);  // number of times the same block representation is used
-        const uint32_t n_data = get_arg_val<uint32_t>(rt_arg_idx);  // number of full tile-rows
-        const uint32_t n_mixed =
-            get_arg_val<uint32_t>(rt_arg_idx + n_mixed_idx);  // number of rows in a partially filled tile-row
-        const uint32_t n_pads = get_arg_val<uint32_t>(rt_arg_idx + n_pad_idx);  // number of padding tile-rows
-        const uint32_t times =
-            get_arg_val<uint32_t>(rt_arg_idx + times_idx);  // number of times the pattern of tile-rows repeats
+            get_vararg(vararg_idx + repeat_ct_idx);      // number of times the same block representation is used
+        const uint32_t n_data = get_vararg(vararg_idx);  // number of full tile-rows
+        const uint32_t n_mixed = get_vararg(vararg_idx + n_mixed_idx);  // rows in a partially filled tile-row
+        const uint32_t n_pads = get_vararg(vararg_idx + n_pad_idx);     // number of padding tile-rows
+        const uint32_t times = get_vararg(vararg_idx + times_idx);      // times the pattern of tile-rows repeats
         if (count == repeat_count) {
-            rt_arg_idx = rt_arg_idx + num_rt_idx;
+            vararg_idx = vararg_idx + num_rt_idx;
             count = 1;
         } else {
             count++;

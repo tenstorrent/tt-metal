@@ -5,34 +5,31 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // run-time args
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_input_blocks_to_process = get_arg_val<uint32_t>(1);
-    const uint32_t height_wise_input_block_start_index = get_arg_val<uint32_t>(2);
-    const uint32_t num_unpadded_cols_per_input_block = get_arg_val<uint32_t>(3);
-    const uint32_t width_wise_output_block_start_index = get_arg_val<uint32_t>(4);
-    const uint32_t num_cols_already_processed_in_first_output_block = get_arg_val<uint32_t>(5);
+    const uint32_t num_input_blocks_to_process = get_arg(args::num_input_blocks_to_process);
+    const uint32_t height_wise_input_block_start_index = get_arg(args::height_wise_input_block_start_index);
+    const uint32_t num_unpadded_cols_per_input_block = get_arg(args::num_unpadded_cols_per_input_block);
+    const uint32_t width_wise_output_block_start_index = get_arg(args::width_wise_output_block_start_index);
+    const uint32_t num_cols_already_processed_in_first_output_block =
+        get_arg(args::num_cols_already_processed_in_first_output_block);
 
-    // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
-    constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(4);
-    constexpr uint32_t output_element_size = get_compile_time_arg_val(5);
-    constexpr uint32_t num_cols_per_input_block = get_compile_time_arg_val(6);
-    constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(7);
+    constexpr uint32_t tile_height = get_arg(args::tile_height);
+    constexpr uint32_t num_tiles_per_input_block = get_arg(args::num_tiles_per_input_block);
+    constexpr uint32_t num_output_blocks_across_width = get_arg(args::num_output_blocks_across_width);
+    constexpr uint32_t output_element_size = get_arg(args::output_element_size);
+    constexpr uint32_t num_cols_per_input_block = get_arg(args::num_cols_per_input_block);
+    constexpr uint32_t num_cols_per_output_block = get_arg(args::num_cols_per_output_block);
 
-    constexpr auto dst_args = TensorAccessorArgs<8>();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(ta::output);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer cb_out(dfb::out);
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
         cb_out.wait_front(num_tiles_per_input_block);

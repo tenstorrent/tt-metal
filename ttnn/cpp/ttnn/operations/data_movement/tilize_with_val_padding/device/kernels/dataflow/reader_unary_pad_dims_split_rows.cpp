@@ -5,34 +5,30 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t bytes_per_tile_row = get_arg(args::bytes_per_tile_row);
 
     // Constexpr
-    constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_unpadded_W = get_arg_val<uint32_t>(1);
-    const uint32_t padded_W_diff_blocks = get_arg_val<uint32_t>(2);
-    const uint32_t num_unpadded_Z = get_arg_val<uint32_t>(3);
-    const uint32_t padded_Z_diff_blocks = get_arg_val<uint32_t>(4);
-    const uint32_t num_unpadded_Y = get_arg_val<uint32_t>(5);
-    const uint32_t padded_Y_diff_blocks = get_arg_val<uint32_t>(6);
-    const uint32_t num_leftover_Y = get_arg_val<uint32_t>(7);
-    const uint32_t num_unpadded_X = get_arg_val<uint32_t>(8);
-    const uint32_t padded_X_size = get_arg_val<uint32_t>(9);
-    const uint32_t pad_value = get_arg_val<uint32_t>(10);
-    const uint32_t num_blocks_w_input = get_arg_val<uint32_t>(11);
-    const uint32_t num_blocks_w_output = get_arg_val<uint32_t>(12);
-    const uint32_t num_blocks_w_diff = get_arg_val<uint32_t>(13);
-    const uint32_t block_row_size = get_arg_val<uint32_t>(14);
-    const uint32_t block_row_leftover_size = get_arg_val<uint32_t>(15);
+    const uint32_t num_unpadded_W = get_arg(args::num_unpadded_W);
+    const uint32_t padded_W_diff_blocks = get_arg(args::padded_W_diff_blocks);
+    const uint32_t num_unpadded_Z = get_arg(args::num_unpadded_Z);
+    const uint32_t padded_Z_diff_blocks = get_arg(args::padded_Z_diff_blocks);
+    const uint32_t num_unpadded_Y = get_arg(args::num_unpadded_Y);
+    const uint32_t padded_Y_diff_blocks = get_arg(args::padded_Y_diff_blocks);
+    const uint32_t num_leftover_Y = get_arg(args::num_leftover_Y);
+    const uint32_t pad_value = get_arg(args::pad_value);
+    const uint32_t num_blocks_w_input = get_arg(args::num_blocks_w_input);
+    const uint32_t num_blocks_w_diff = get_arg(args::num_blocks_w_diff);
+    const uint32_t block_row_size = get_arg(args::block_row_size);
+    const uint32_t block_row_leftover_size = get_arg(args::block_row_leftover_size);
 
     // TODO(agrebenisan): This isn't good... here we are assuming
     // that the stick size dictates tiles c, but stick size
@@ -41,10 +37,10 @@ void kernel_main() {
     const uint32_t num_tiles_block_c =
         block_row_size / bytes_per_tile_row;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(ta::input);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::in);
 
     uint32_t stick_id = 0;
 

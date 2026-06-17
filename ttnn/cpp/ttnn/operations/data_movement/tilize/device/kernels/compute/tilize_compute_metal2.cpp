@@ -1,32 +1,36 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+// Metal 2.0 fork of ttnn/cpp/ttnn/kernel/compute/tilize.cpp.
+// Forked (not modified in place) because the legacy source is shared by tilize_with_val_padding
+// (and is a shared kernel-pool source outside the op directory). See METAL2_PORT_REPORT.md.
 
 #include <cstdint>
 
 #include "api/compute/tilize.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-// #include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "experimental/kernel_args.h"
 
+// #include "api/debug/dprint.h"
+
 void kernel_main() {
-    constexpr uint32_t block_size_col = get_arg(args::block_size_col);
-    constexpr uint32_t block_size_row = get_arg(args::block_size_row);
-    constexpr uint32_t third_dim = get_arg(args::third_dim);
+    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
+    // Use lossless tilize for fp32 inputs to preserve exact values (fast tilize truncates fp32 → tf32)
     constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<dfb::in>()
                                    ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
                                    : compute_kernel_lib::tilize_config::Fp32Mode::Fast;
 
     compute_kernel_lib::tilize<
-        block_size_row,
+        per_core_block_tile_cnt,
         dfb::in,
         dfb::out,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-        fp32_mode>(block_size_col * third_dim);
+        fp32_mode>(per_core_block_cnt);
 }

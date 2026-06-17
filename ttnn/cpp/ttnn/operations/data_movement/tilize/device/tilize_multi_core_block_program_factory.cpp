@@ -11,73 +11,37 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include <algorithm>
+#include <vector>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-namespace {
+using namespace tt::tt_metal::experimental;
 
-// Helper: append a paired (input, output) CBDescriptor for a given core range.
-void push_cb_pair(
-    ProgramDescriptor& desc,
-    const CoreRangeSet& core_ranges,
-    uint32_t input_single_tile_size,
-    uint32_t output_single_tile_size,
-    uint32_t num_tiles,
-    tt::DataFormat input_cb_data_format,
-    tt::DataFormat output_cb_data_format,
-    uint32_t dram_alignment) {
-    // c_1 is a per-row staging buffer used by the reader when the DRAM source row and the
-    // L1 destination have different alignment offsets: the reader rounds the source address
-    // down to a dram_alignment boundary, issues one noc_async_read of (row_bytes + dram_alignment)
-    // into this buffer, then copies the correctly-offset slice into c_0.
-    //   row_bytes  = TILE_WIDTH * elt_size * num_tiles  (one row of a sub-block)
-    //              = input_single_tile_size / TILE_HEIGHT * num_tiles
-    //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
-    //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
-    //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
-    uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
-    uint32_t temp_cb_size = input_row_bytes * num_tiles + 2 * dram_alignment;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = temp_cb_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = input_cb_data_format,
-            .page_size = temp_cb_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_tiles * input_single_tile_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_tiles * output_single_tile_size,
-        .core_ranges = core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-    });
-}
-
-}  // namespace
-
-ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::create_program_artifacts(
     const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
+
+    const auto& input_tensor = a.mesh_tensor();
+    const auto& output_tensor = output.mesh_tensor();
+
+    // Metal 2.0 named resource handles.
+    const DFBSpecName SRC_DFB{"src"};      // legacy c_0: tilize input stream
+    const DFBSpecName STAGE_DFB{"stage"};  // legacy c_1: reader-local alignment staging scratch
+    const DFBSpecName OUT_DFB{"out"};      // legacy c_16: tilized output stream
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+    const KernelSpecName READER_KERNEL{"reader"};
+    const KernelSpecName WRITER_KERNEL{"writer"};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -126,62 +90,52 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
 
-    uint32_t row_size_bytes = a.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
+    uint32_t row_size_bytes = a.padded_shape()[-1] * a.element_size();
 
-    Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
-    ProgramDescriptor desc;
-
-    if (!core_range.empty()) {
-        push_cb_pair(
-            desc,
-            core_range,
-            input_single_tile_size,
-            output_single_tile_size,
-            single_sub_block_size,
-            input_cb_data_format,
-            output_cb_data_format,
-            dram_alignment);
-    }
-    if (has_cliff_col && has_cliff_row) {
-        push_cb_pair(
-            desc,
-            cliff_col_row_core_range,
-            input_single_tile_size,
-            output_single_tile_size,
-            single_block_size_cliff_row,
-            input_cb_data_format,
-            output_cb_data_format,
-            dram_alignment);
-    }
+    // ------------------------------------------------------------------------
+    // DataflowBuffers. The legacy factory sized c_0/c_1/c_16 per core group (single_sub_block_size
+    // for full/cliff_col cores, single_block_size_cliff_row for cliff_row cores). A DFBSpec carries a
+    // single program-scope size, so we size each DFB to the max block across active groups (still
+    // bounded by cb_block_size_limit, hence within L1). Per-core push/wait counts come from the
+    // per-node runtime args and the per-group compute CTAs, so correctness is unaffected.
+    // ------------------------------------------------------------------------
+    uint32_t max_block_tiles = single_sub_block_size;
     if (has_cliff_row) {
-        push_cb_pair(
-            desc,
-            cliff_row_core_range,
-            input_single_tile_size,
-            output_single_tile_size,
-            single_block_size_cliff_row,
-            input_cb_data_format,
-            output_cb_data_format,
-            dram_alignment);
+        max_block_tiles = std::max(max_block_tiles, single_block_size_cliff_row);
     }
-    if (has_cliff_col) {
-        push_cb_pair(
-            desc,
-            cliff_col_core_range,
-            input_single_tile_size,
-            output_single_tile_size,
-            single_sub_block_size,
-            input_cb_data_format,
-            output_cb_data_format,
-            dram_alignment);
-    }
+    uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
+    uint32_t temp_cb_size = input_row_bytes * max_block_tiles + 2 * dram_alignment;
 
-    // reader
+    DataflowBufferSpec stage_dfb_spec{
+        .unique_id = STAGE_DFB,
+        .entry_size = temp_cb_size,
+        .num_entries = 1,
+        .data_format_metadata = input_cb_data_format,
+    };
+    DataflowBufferSpec src_dfb_spec{
+        .unique_id = SRC_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = max_block_tiles,
+        .data_format_metadata = input_cb_data_format,
+    };
+    DataflowBufferSpec out_dfb_spec{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = max_block_tiles,
+        .data_format_metadata = output_cb_data_format,
+    };
+
+    TensorParameter input_param{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT_TENSOR, .spec = output_tensor.tensor_spec()};
+
+    // ------------------------------------------------------------------------
+    // Reader / writer (uniform CTAs across all cores; per-core values are runtime args).
+    // ------------------------------------------------------------------------
     uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / TILE_HW;
 
     auto log_shape = output.logical_shape();
@@ -193,82 +147,127 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     }
 
     uint32_t tile_height = output.tensor_spec().tile().get_height();
-
     uint32_t total_num_rows = a.logical_shape()[-2];
-
     if (output.padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
         total_num_rows = output.padded_shape()[-2];
     }
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        total_num_rows, third_dim, tile_height, a.element_size(), row_size_bytes, dram_alignment};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    KernelSpec reader_spec{
+        .unique_id = READER_KERNEL,
+        .source =
+            std::filesystem::path{
+                "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
+                "reader_unary_pad_multicore_both_dims.cpp"},
+        .dfb_bindings = {ProducerOf(SRC_DFB, "in"), ProducerOf(STAGE_DFB, "stage"), ConsumerOf(STAGE_DFB, "stage")},
+        .tensor_bindings = {{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"}},
+        .compile_time_args =
+            {{"total_num_rows", total_num_rows},
+             {"third_dim", third_dim},
+             {"tile_height", tile_height},
+             {"element_size", a.element_size()},
+             {"unpadded_X_size", row_size_bytes},
+             {"dram_alignment", dram_alignment}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"pad_value",
+                  "width_size",
+                  "start_row_id",
+                  "start_column_id",
+                  "single_block_size_row_arg",
+                  "single_block_size_col_arg",
+                  "sub_block_width_size",
+                  "single_sub_block_size_row_arg"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
-        "reader_unary_pad_multicore_both_dims.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    KernelSpec writer_spec{
+        .unique_id = WRITER_KERNEL,
+        .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                        "writer_unary_interleaved_start_id_wh.cpp"},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "out")},
+        .tensor_bindings = {{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
+        .compile_time_args =
+            {{"num_tiles_per_2d", num_tiles_2d},
+             {"third_dim", third_dim},
+             {"total_tiles_per_row", total_tiles_per_row}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+    };
 
-    // writer
-    std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16, num_tiles_2d, third_dim, total_tiles_per_row};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // compute
+    // ------------------------------------------------------------------------
+    // Compute: one KernelSpec per core group (different per-group CTAs), each in its own WorkUnit.
+    // ------------------------------------------------------------------------
     uint32_t single_sub_block_wh = single_block_size * single_block_size / single_sub_block_size;
     uint32_t single_sub_block_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sub_block_size;
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_llk_acc) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    ComputeHardwareConfig::UnpackToDestModes unpack_to_dest_modes;
+    if (fp32_llk_acc && input_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_modes.insert({SRC_DFB, UnpackToDestMode::UnpackToDestFp32});
     }
 
-    const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp";
-
-    auto make_compute_kernel = [&](const CoreRangeSet& cores, std::vector<uint32_t> compile_args) {
-        KernelDescriptor cd;
-        cd.kernel_source = compute_kernel_path;
-        cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        cd.core_ranges = cores;
-        cd.compile_time_args = std::move(compile_args);
-        cd.config = ComputeConfigDescriptor{
-            .fp32_dest_acc_en = fp32_llk_acc,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
+    auto make_compute = [&](const KernelSpecName& id, uint32_t block_size_col, uint32_t block_size_row) {
+        return KernelSpec{
+            .unique_id = id,
+            .source =
+                std::filesystem::path{
+                    "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp"},
+            .dfb_bindings = {ConsumerOf(SRC_DFB, "in"), ProducerOf(OUT_DFB, "out")},
+            .compile_time_args =
+                {{"block_size_col", block_size_col}, {"block_size_row", block_size_row}, {"third_dim", third_dim}},
+            .hw_config =
+                ComputeHardwareConfig{
+                    .fp32_dest_acc_en = fp32_llk_acc,
+                    .unpack_to_dest_mode = unpack_to_dest_modes,
+                },
         };
-        return cd;
     };
 
-    std::vector<KernelDescriptor> compute_kernels;
-    if (!core_range.empty()) {
-        compute_kernels.push_back(
-            make_compute_kernel(core_range, {single_sub_block_wh, single_sub_block_size, third_dim}));
+    const KernelSpecName COMPUTE_FULL{"compute_full"};
+    const KernelSpecName COMPUTE_CLIFF_COL_ROW{"compute_cliff_col_row"};
+    const KernelSpecName COMPUTE_CLIFF_ROW{"compute_cliff_row"};
+    const KernelSpecName COMPUTE_CLIFF_COL{"compute_cliff_col"};
+
+    std::vector<KernelSpec> kernels = {reader_spec, writer_spec};
+    std::vector<WorkUnitSpec> work_units;
+    if (!core_range.ranges().empty()) {
+        kernels.push_back(make_compute(COMPUTE_FULL, single_sub_block_wh, single_sub_block_size));
+        work_units.push_back(WorkUnitSpec{
+            .name = "tilize_block_full",
+            .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_FULL},
+            .target_nodes = core_range});
     }
     if (has_cliff_col && has_cliff_row) {
-        compute_kernels.push_back(make_compute_kernel(
-            cliff_col_row_core_range, {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}));
+        kernels.push_back(
+            make_compute(COMPUTE_CLIFF_COL_ROW, single_block_size_cliff_col, single_block_size_cliff_row));
+        work_units.push_back(WorkUnitSpec{
+            .name = "tilize_block_cliff_col_row",
+            .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_CLIFF_COL_ROW},
+            .target_nodes = cliff_col_row_core_range});
     }
     if (has_cliff_row) {
-        compute_kernels.push_back(
-            make_compute_kernel(cliff_row_core_range, {single_block_size, single_block_size_cliff_row, third_dim}));
+        kernels.push_back(make_compute(COMPUTE_CLIFF_ROW, single_block_size, single_block_size_cliff_row));
+        work_units.push_back(WorkUnitSpec{
+            .name = "tilize_block_cliff_row",
+            .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_CLIFF_ROW},
+            .target_nodes = cliff_row_core_range});
     }
     if (has_cliff_col) {
-        compute_kernels.push_back(make_compute_kernel(
-            cliff_col_core_range, {single_sub_block_cliff_col_wh, single_sub_block_size, third_dim}));
+        kernels.push_back(make_compute(COMPUTE_CLIFF_COL, single_sub_block_cliff_col_wh, single_sub_block_size));
+        work_units.push_back(WorkUnitSpec{
+            .name = "tilize_block_cliff_col",
+            .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_CLIFF_COL},
+            .target_nodes = cliff_col_core_range});
     }
 
-    // RUNTIME ARGS
+    // ------------------------------------------------------------------------
+    // Per-core runtime args (reproduces the legacy 2D block walk exactly).
+    // ------------------------------------------------------------------------
+    KernelRunArgs reader_run{.kernel = READER_KERNEL};
+    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
+    reader_run.runtime_arg_values.reserve(ncores);
+    writer_run.runtime_arg_values.reserve(ncores);
+
     const auto& cores = corerange_to_cores(available_grid);
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
@@ -288,40 +287,37 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size_cliff_col;
             single_sub_block_size_row_arg = single_block_size_cliff_row;
-
         } else if (has_cliff_row && i != 0 && ((i + 1) % (full_cores_per_row + 1)) == 0) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size;
             single_sub_block_size_row_arg = single_block_size_cliff_row;
-
         } else if (i < total_row_cores * full_cores_per_col) {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size;
             single_sub_block_size_row_arg = single_sub_block_size;
-
         } else {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 
-        // reader runtime args — Buffer* slot auto-registers as a BufferBinding so the
-        // framework patches addresses on cache hits.
-        reader_desc.emplace_runtime_args(
-            core,
-            {src0_buffer,
-             std::uint32_t{0},
-             TILE_WIDTH * a.element_size() * single_block_size_row_arg,
-             start_row_id,
-             start_column_id,
-             single_block_size_row_arg,
-             single_block_size_col_arg,
-             TILE_WIDTH * a.element_size() * single_sub_block_size_row_arg,
-             single_sub_block_size_row_arg});
+        const NodeCoord node = core;
+        reader_run.runtime_arg_values.push_back(
+            {node,
+             {{"pad_value", 0u},
+              {"width_size", TILE_WIDTH * a.element_size() * single_block_size_row_arg},
+              {"start_row_id", start_row_id},
+              {"start_column_id", start_column_id},
+              {"single_block_size_row_arg", single_block_size_row_arg},
+              {"single_block_size_col_arg", single_block_size_col_arg},
+              {"sub_block_width_size", TILE_WIDTH * a.element_size() * single_sub_block_size_row_arg},
+              {"single_sub_block_size_row_arg", single_sub_block_size_row_arg}}});
 
-        // writer runtime args
-        writer_desc.emplace_runtime_args(
-            core, {dst_buffer, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
+        writer_run.runtime_arg_values.push_back(
+            {node,
+             {{"start_id", tile_start_id},
+              {"single_block_size_row_arg", single_block_size_row_arg},
+              {"single_block_size_col_arg", single_block_size_col_arg}}});
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * a.element_size());
         start_column_id = end_column_id % row_size_bytes;
@@ -337,12 +333,21 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    for (auto& cd : compute_kernels) {
-        desc.kernels.push_back(std::move(cd));
-    }
+    ProgramSpec spec{
+        .name = "tilize_multi_core_block",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = {src_dfb_spec, stage_dfb_spec, out_dfb_spec},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = std::move(work_units),
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run)};
+    run_args.tensor_args = {
+        {INPUT_TENSOR, TensorArgument{std::cref(input_tensor)}},
+        {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensor)}}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
+
 }  // namespace ttnn::prim

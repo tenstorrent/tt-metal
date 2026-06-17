@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
 struct TilizeSingleCoreProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value);
 };
 }  // namespace ttnn::prim

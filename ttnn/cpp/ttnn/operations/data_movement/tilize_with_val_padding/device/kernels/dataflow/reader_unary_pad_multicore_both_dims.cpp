@@ -6,10 +6,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 using tt::data_movement::common::tt_memmove;
@@ -72,26 +74,21 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-
-    constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);
-    constexpr uint32_t third_dim = get_compile_time_arg_val(1);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(2);
-    constexpr uint32_t element_size = get_compile_time_arg_val(3);
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(4);
-    constexpr uint32_t dram_alignment = get_compile_time_arg_val(5);
+    constexpr uint32_t total_num_rows = get_arg(args::total_num_rows);
+    constexpr uint32_t third_dim = get_arg(args::third_dim);
+    constexpr uint32_t tile_height = get_arg(args::tile_height);
+    constexpr uint32_t element_size = get_arg(args::element_size);
+    constexpr uint32_t unpadded_X_size = get_arg(args::unpadded_X_size);
+    constexpr uint32_t dram_alignment = get_arg(args::dram_alignment);
     constexpr uint64_t dram_align_mask = ~static_cast<uint64_t>(dram_alignment - 1);
     constexpr uint64_t dram_align_offset = static_cast<uint64_t>(dram_alignment - 1);
-    constexpr auto src_args = TensorAccessorArgs<6>();
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t pad_value = get_arg_val<uint32_t>(1);
+    const uint32_t pad_value = get_arg(args::pad_value);
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(ta::input);
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in0(dfb::in);
+    DataflowBuffer cb_in1(dfb::stage);
 
     cb_in1.reserve_back(1);
     uint32_t temp_addr_raw = cb_in1.get_write_ptr();
@@ -174,16 +171,16 @@ void kernel_main() {
         cb_in0.push_back(single_block_size * has_rows);
     };
 
-    const uint32_t width_size = get_arg_val<uint32_t>(2);
+    const uint32_t width_size = get_arg(args::width_size);
 
     uint32_t size_2d = 0;
     for (uint32_t dim3 = 0; dim3 < third_dim; dim3++) {
-        uint32_t start_row_id = get_arg_val<uint32_t>(3);
-        uint32_t start_column_id = get_arg_val<uint32_t>(4);
-        uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(5);
-        uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(6);
-        uint32_t sub_block_width_size = get_arg_val<uint32_t>(7);
-        uint32_t single_sub_block_size_row_arg = get_arg_val<uint32_t>(8);
+        uint32_t start_row_id = get_arg(args::start_row_id);
+        uint32_t start_column_id = get_arg(args::start_column_id);
+        uint32_t single_block_size_row_arg = get_arg(args::single_block_size_row_arg);
+        uint32_t single_block_size_col_arg = get_arg(args::single_block_size_col_arg);
+        uint32_t sub_block_width_size = get_arg(args::sub_block_width_size);
+        uint32_t single_sub_block_size_row_arg = get_arg(args::single_sub_block_size_row_arg);
 
         for (uint32_t b = 0; b < single_block_size_col_arg; b++) {
             uint32_t this_block_num_rows = tile_height;
