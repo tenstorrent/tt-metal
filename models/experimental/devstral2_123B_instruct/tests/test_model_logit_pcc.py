@@ -2,12 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full-model teacher-forced logit PCC vs HuggingFace ``AutoModelForCausalLM``.
+"""Full-model logit PCC vs HuggingFace ``AutoModelForCausalLM``.
 
-After chunked prefill at each sweep point, compares last-prefill logits and
-``DECODE_GENERATION_LENGTH`` (10) teacher-forced decode logits with PCC ≥ 0.99,
-following the tt-transformers ``test_model.py`` pattern (HF + TT in the loop, same
-ground-truth tokens each step).
+After chunked prefill (golden corpus tokens), compares last-prefill logits and
+``DECODE_GENERATION_LENGTH`` (10) decode logits with PCC ≥ 0.99. Decode follows
+tt-transformers ``test_model.py``: **HF greedy** (temperature=0 argmax) picks the
+next input token for both HF and TT after each logits comparison.
+
+Prefill lengths follow the decoder-layer PCC sweep (powers of two 32 … 262144).
+The TT model is built once per mesh; tiled weights load from the shared on-disk cache
+at ``seq_{DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN}`` (default **262144**) when present, otherwise
+HF shards are downloaded and the cache is written. Runtime ``model_max_seq_len`` is fixed
+for the whole sweep (covers worst-case prefill + eval). HF and TT prefill run in **128-token
+chunks** with incremental ``DynamicCache`` on HF (O(chunk) host memory).
+HF reference inference uses **CPU + disk offload** when no CUDA GPU is present.
+Logit PCC compares **raw logits** (full vocab); token-matching tests use golden corpus refs.
 
 Prefill lengths follow the decoder-layer PCC sweep (powers of two 32 … 262144).
 The TT model is built once per mesh; tiled weights load from the shared on-disk cache
