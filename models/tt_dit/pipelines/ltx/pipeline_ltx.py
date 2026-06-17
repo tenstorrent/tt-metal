@@ -1790,18 +1790,20 @@ class LTXPipeline:
     def _decode_audio_impl(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio"
 
+        # The audio submesh overlaps the parent's chips and shares cq 0, so nothing on the child —
+        # not its CCL, nor even building its global semaphores (which enqueue on cq 0) — must run
+        # while the parent's prior cq-0 fabric work (video DiT / VAE decode / a previous audio
+        # decode) is still in flight, or the child deadlocks on the shared devices. A plain
+        # synchronize_device only drains the cqs this mesh enqueued on; quiesce_devices is the
+        # purpose-built barrier between overlapping-submesh phases — it recursively waits on every
+        # derived submesh, resets launch-message state, and clears each cq's in_use flag. Quiesce
+        # before building the submesh so the child opens onto genuinely idle shared devices.
+        if self._audio_submesh_shape is not None:
+            ttnn.quiesce_devices(self.mesh_device)
+
         # Build the audio submesh + decoder shells now (no-op after the first call, and on the
         # full mesh). Deferred to here so the video DiT has already run with clean CCL runtime args.
         self._ensure_audio_submesh()
-
-        # The audio submesh overlaps the parent's chips and shares cq 0. The worker->EDM fabric
-        # connection is a single un-arbitrated slot per physical (chip, eth_channel): if the child's
-        # CCL opens it while the parent's prior cq-0 fabric work (video DiT / VAE decode / a previous
-        # audio decode) is still in flight, the child's flow-control semaphore is never satisfied and
-        # its CCL deadlocks. Quiescing the parent to idle first releases every parent connection slot
-        # so the child opens cleanly. (Routing audio onto cq 1 instead of quiescing deadlocks outright.)
-        if self._owned_audio_submesh is not None:
-            ttnn.synchronize_device(self.mesh_device)
 
         _dump = os.environ.get("LTX_DUMP_AUDIO_LATENT")
         if _dump and float(audio_latent.abs().max()) > 0:  # skip the all-zero warmup latent

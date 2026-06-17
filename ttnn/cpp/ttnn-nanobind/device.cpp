@@ -146,6 +146,22 @@ void ttnn_device(nb::module_& mod) {
         does not throw when a parent/child mesh shares the same physical cq. Call when the mesh is done
         with work on these cqs (device synchronized, no in-flight ops).
     )doc");
+
+    // A plain synchronize_device only drains the cqs this mesh enqueued on; it does not barrier the
+    // submeshes derived from this mesh that share the same physical devices. quiesce_devices is the
+    // purpose-built barrier between phases that use overlapping submeshes: it recursively waits on
+    // every derived submesh, resets the launch-message state, and clears each cq's in_use flag, so
+    // it is safe to enqueue work on a sibling/child submesh that overlaps a previously-active one.
+    mod.def(
+        "quiesce_devices",
+        [](ttnn::MeshDevice* device) { device->quiesce_devices(); },
+        nb::arg("device"),
+        R"doc(
+        Block until all in-flight work on this mesh and every submesh derived from it has completed,
+        reset launch-message state, and clear each cq's in_use flag. Use as the barrier between phases
+        that run overlapping submeshes on the same physical devices (the default sub-device manager
+        must be active).
+    )doc");
 }
 
 }  // namespace
