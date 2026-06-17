@@ -28,6 +28,21 @@ export TT_METAL_MOCK_CLUSTER_DESC_PATH="$TT_METAL_DIR/tt_metal/third_party/umd/t
 export TT_METAL_EMULE_MODE=1
 export TT_METAL_SLOW_DISPATCH_MODE=1
 
+# CRITICAL: every EXPECT_DEATH test abort()s, and the emulated process maps GB-scale
+# L1+DRAM, so each abort would dump a ~1.4 GB core. On this host core_pattern pipes to
+# apport, which IGNORES `ulimit -c 0` (RLIMIT_CORE) — verified — and would still fill the
+# host root fs (presents as a progressive slowdown / hang). The reliable fix is to make
+# the process (and its forked death-test children) non-dumpable via PR_SET_DUMPABLE=0,
+# which the kernel honors regardless of core_pattern. We inject it with an LD_PRELOAD
+# constructor (survives the binary's exec). DO NOT REMOVE.
+ulimit -c 0
+_ND="${TMPDIR:-/tmp}/emule_nodump.so"
+if [[ ! -f "$_ND" ]]; then
+    printf '#include <sys/prctl.h>\n__attribute__((constructor)) static void f(void){prctl(PR_SET_DUMPABLE,0,0,0,0);}\n' \
+        | cc -shared -fPIC -xc - -o "$_ND" 2>/dev/null || echo "warn: could not build nodump preload; cores may be dumped" >&2
+fi
+[[ -f "$_ND" ]] && export LD_PRELOAD="$_ND${LD_PRELOAD:+:$LD_PRELOAD}"
+
 # One family glob per sanitizer test file. Keep in sync with the per-file "To run"
 # headers and run_regression_wormhole.sh Tier 3a.
 FILTER="MeshDeviceFixture.Host_UAF_*"          # Use-After-Free        (test_tensor_bad_acess.cpp)

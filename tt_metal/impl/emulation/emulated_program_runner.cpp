@@ -1704,27 +1704,41 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
                 (*core_map)[key] = core;
             }
         }
-        // Add DRAM cores (UMD SoC descriptor coords)
+        // Add DRAM cores. Post-uplift (umd "SWEmuleChip: back DRAM by physical
+        // channel via LOGICAL coords"), get_core() is WORKER-ONLY — it lazily
+        // mints a worker core for ANY coord, so passing a DRAM coord yields a
+        // bogus CoreRole::WORKER core. That breaks __emule_noc_addr_is_dram
+        // (role() != DRAM) and aliases DRAM reads into a 2 MB-masked worker slot
+        // in __emule_resolve_noc_addr. DRAM is now backed per physical channel by
+        // get_dram_channel_backing(channel); every NOC endpoint of a channel must
+        // alias onto that single CoreRole::DRAM core so host writes and kernel NOC
+        // reads land in the same memory.
+        //
+        // get_dram_cores() groups cores by channel (outer index == LOGICAL DRAM
+        // channel), matching the "loop index (runner)" resolution the umd backing
+        // API documents.
         auto& umd_soc = sw_emu->get_soc_descriptor();
-        for (auto& dc_vec : umd_soc.get_dram_cores()) {
-            for (auto& dc : dc_vec) {
-                auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
+        auto dram_cores_by_channel = umd_soc.get_dram_cores();
+        for (uint32_t channel = 0; channel < dram_cores_by_channel.size(); channel++) {
+            auto* backing = sw_emu->get_dram_channel_backing(channel);
+            for (auto& dc : dram_cores_by_channel[channel]) {
                 uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
-                (*core_map)[key] = core;
+                (*core_map)[key] = backing;
             }
         }
-        // Add DRAM cores (metal_SocDescriptor preferred worker coords)
-        // Register BOTH NOC0 and NOC1 preferred coords — on Wormhole they
-        // differ per channel (e.g. ch0 NOC0=[2,2], NOC1=[1,1]); both must
-        // be in the core_map so __emule_resolve_noc_addr can route either.
+        // Also register metal_SocDescriptor's preferred worker coords. Register
+        // BOTH NOC0 and NOC1 preferred coords — on Wormhole they differ per
+        // channel (e.g. ch0 NOC0=[2,2], NOC1=[1,1]); both must be in the core_map
+        // so __emule_resolve_noc_addr can route either onto the same channel
+        // backing. The dram-view index is the physical channel (1:1 on WH/BH).
         {
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
             for (uint32_t ch = 0; ch < msoc.get_num_dram_views() && ch < MAX_NUM_BANKS; ch++) {
+                auto* backing = sw_emu->get_dram_channel_backing(ch);
                 for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
                     auto dc = msoc.get_preferred_worker_core_for_dram_view(ch, noc);
-                    auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
                     uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
-                    (*core_map)[key] = core;
+                    (*core_map)[key] = backing;
                 }
             }
         }
