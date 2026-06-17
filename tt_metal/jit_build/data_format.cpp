@@ -136,7 +136,10 @@ std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_
 }
 
 DataFormat get_single_unpack_dst_format(
-    const DataFormat src_format, const DataFormat /*pack_format*/, const DataFormat unpack_conditional_dst_format) {
+    const DataFormat src_format,
+    const DataFormat /*pack_format*/,
+    const DataFormat unpack_conditional_dst_format,
+    const bool enable_2x_src_format) {
     // NOTE: DataFormat::UInt8 is intentionally not remapped to Int8 here. The unpacker's 4-bit
     // OutDataFormat register field has no UInt8 encoding; the LLK applies masked_data_format()
     // at the register-write site so UInt8 (=30) lands as INT8 (=14) in the bitfield. We preserve
@@ -153,7 +156,11 @@ DataFormat get_single_unpack_dst_format(
     }
 
     if (is_mx_format(src_format)) {
-        dst_format = DataFormat::Float16_b;  // Fixed unpack_dst format for mx formats.
+        if (enable_2x_src_format && src_format == DataFormat::MxFp4) {
+            dst_format = DataFormat::MxFp4_2x_B;
+        } else {
+            dst_format = DataFormat::Float16_b;  // Default: MX formats unpack-expand to Float16_b in src regs.
+        }
     }
 
     return dst_format;
@@ -173,7 +180,8 @@ std::vector<DataFormat> get_unpack_dst_formats(
     DataFormat unpack_conditional_dst_format,
     bool /*fp32_dest_acc_en*/,
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
-    bool int_fpu_en) {
+    bool int_fpu_en,
+    bool enable_2x_src_format) {
     if (!unpack_to_dest_mode.empty()) {
         TT_FATAL(
             // Allow size >= buf_formats.size() to support host-side allocations sized for
@@ -201,11 +209,11 @@ std::vector<DataFormat> get_unpack_dst_formats(
         } else {
             if (src_format == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
                 unpack_to_dest_mode[i] != tt::tt_metal::UnpackToDestMode::Default) {
-                unpack_dst_format.push_back(
-                    get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
+                unpack_dst_format.push_back(get_single_unpack_dst_format(
+                    src_format, DataFormat::Invalid, DataFormat::Float32, enable_2x_src_format));
             } else {
-                unpack_dst_format.push_back(
-                    get_single_unpack_dst_format(src_format, DataFormat::Invalid, unpack_conditional_dst_format));
+                unpack_dst_format.push_back(get_single_unpack_dst_format(
+                    src_format, DataFormat::Invalid, unpack_conditional_dst_format, enable_2x_src_format));
             }
         }
     }
