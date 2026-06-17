@@ -71,17 +71,35 @@ def test_profile_ccl_vector():
 
     test_module = importlib.import_module("sweeps." + module_name)
 
-    # Obtain the device the same way the runner does: from the module's fixture.
-    # For all_gather (and the other CCL ops) this yields None and the op opens
-    # its own mesh inside run() via device_context.
-    fixture = test_module.mesh_device_fixture()
-    device, _ = next(fixture)
-    try:
-        status, message, *_ = run_single(test_module, vector, device, _ProfileConfig())
-    finally:
+    # Retry transient kernel-ELF build races (tt_elffile.cpp:405 / "failed to
+    # generate binaries"). Under tracy the FABRIC_2D mesh open no longer
+    # deadlocks (unlike the in-process device profiler) — it raises this on a
+    # cold-cache concurrent build of the profiler-instrumented eth kernels. The
+    # build completes by the retry, so a warm-cache re-attempt opens cleanly.
+    # Mirrors sweeps_runner's _is_elf_load_error retry on the op path.
+    _ELF_RETRY = ("tt_elffile.cpp", "failed to generate binaries")
+    max_attempts = 3
+    last_err = None
+    for attempt in range(max_attempts):
+        # Obtain the device the same way the runner does: from the module's
+        # fixture. For all_gather (and the other CCL ops) this yields None and
+        # the op opens its own mesh inside run() via device_context.
+        fixture = test_module.mesh_device_fixture()
+        device, _ = next(fixture)
         try:
-            next(fixture)  # run fixture teardown (close device if it opened one)
-        except StopIteration:
-            pass
+            status, message, *_ = run_single(test_module, vector, device, _ProfileConfig())
+            last_err = None
+            break
+        except Exception as e:  # noqa: BLE001 - retry only the transient build race
+            last_err = e
+            if attempt < max_attempts - 1 and any(s in str(e).lower() for s in _ELF_RETRY):
+                continue
+            raise
+        finally:
+            try:
+                next(fixture)  # run fixture teardown (close device if it opened one)
+            except StopIteration:
+                pass
 
+    assert last_err is None, f"vector {input_hash} errored while profiling: {last_err}"
     assert status, f"vector {input_hash} failed while profiling: {message}"
