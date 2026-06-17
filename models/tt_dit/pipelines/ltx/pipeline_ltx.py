@@ -296,13 +296,15 @@ class LTXPipeline:
         self._owned_audio_submesh = None
         self._audio_submesh_shape: tuple[int, int] | None = None
         self._audio_submesh_num_links = ccl_manager.num_links
-        # The submesh decodes audio on a different HW command queue than cq 0 (which the parent
-        # mesh used for the video DiT/VAE). A child submesh shares the parent's HW CQs, so sharing
-        # cq 0 makes the audio CCL deadlock against the parent's live cq-0 work and makes the
-        # cq-0-in-use close guard (mesh_device.cpp) throw on either close order. Issuing audio on
-        # cq 1 keeps the parent on cq 0 exclusively and the child on cq 1 exclusively, so the
-        # per-cq guard passes and there is no cross-cq contention. Requires the mesh to be opened
-        # with num_command_queues=2. Full-mesh audio stays on cq 0 (audio_cq_id None = no override).
+        # Audio decodes on a 1xC overlapping child submesh while the parent (4x8) used cq 0 for the
+        # video DiT/VAE. Video is fully synchronized to idle before decode_audio, so there is no live
+        # cq-0 work to contend with: an overlapping child running CCL on cq 0 after the quiesced
+        # parent completes cleanly (the per-op EDM connection close releases the shared router slot
+        # for the next op). Routing audio onto cq 1 instead deadlocks the child's CCL — its workers
+        # spin forever waiting on a fabric flow-control semaphore (NSMW) on the shared chips. So the
+        # child shares cq 0 with the parent. The only cost is the cq-0-in-use close guard
+        # (mesh_device.cpp): the submesh is reclaimed at parent close, after the decode + mp4 save.
+        # LTX_AUDIO_CQ overrides for experiments. Full-mesh audio stays on cq 0 (audio_cq_id None).
         self._audio_cq_id: int | None = None
         _audio_submesh = os.environ.get("LTX_AUDIO_SUBMESH")
         if _audio_submesh:
@@ -310,7 +312,7 @@ class LTXPipeline:
             full = tuple(mesh_device.shape)
             if r <= full[0] and c <= full[1] and (r, c) != full:
                 self._audio_submesh_shape = (r, c)
-                self._audio_cq_id = int(os.environ.get("LTX_AUDIO_CQ", "1"))
+                self._audio_cq_id = int(os.environ.get("LTX_AUDIO_CQ", "0"))
                 logger.info(
                     f"Audio decode will route onto {r}x{c} submesh of {full[0]}x{full[1]} "
                     f"on cq {self._audio_cq_id} (lazy)"
