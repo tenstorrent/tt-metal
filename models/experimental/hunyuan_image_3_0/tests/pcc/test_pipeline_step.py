@@ -53,6 +53,10 @@ _WEIGHT_DTYPE = ttnn.bfloat8_b if os.environ.get("HY_WEIGHT_DTYPE", "bf16") == "
 if _WEIGHT_DTYPE == ttnn.bfloat8_b:
     PCC_THR = 0.90  # observe the bf8 cost; gate loosely
 
+# Layer-wise mixed precision: HY_BF16_LAYERS="0,1,2,3,28,29,30,31" keeps those
+# layers' experts in bf16 (the rest bf8), trading DRAM headroom for accuracy.
+_BF16_LAYERS = {int(s) for s in os.environ.get("HY_BF16_LAYERS", "").split(",") if s.strip() != ""}
+
 
 def _pcc(a, b):
     a = a.float().flatten()
@@ -201,6 +205,7 @@ def _run(device):
         layer_loader=layer_loader,
         apply_final_norm=False,
         weight_dtype=_WEIGHT_DTYPE,
+        bf16_layers=_BF16_LAYERS,
     )
 
     step = HunyuanTtDenoiseStep(
