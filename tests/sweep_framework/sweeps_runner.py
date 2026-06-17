@@ -927,6 +927,20 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         result["host"] = get_hostname()
         result["user"] = get_username()
 
+        # PROTOTYPE (opt-in): collect device perf for multi-device CCL vectors via
+        # the tracy subprocess instead of the in-process profiler (which deadlocks
+        # on FABRIC_2D — that path stays gated off in main()). The correctness run
+        # above already happened profiler-free; this adds a separate profiled pass.
+        if (
+            config.measure_device_perf
+            and _is_multidevice_ccl_module(module_name)
+            and result.get("status") == TestStatus.PASS
+            and os.environ.get("TTNN_SWEEP_CCL_SUBPROCESS_PERF", "").strip().lower() in ("1", "true", "yes")
+        ):
+            ccl_perf = _collect_ccl_device_perf_via_tracy(module_name, input_hash, suite_name)
+            if ccl_perf is not None:
+                result["device_perf"] = ccl_perf
+
         suite_pbar.update()
         results.append(result)
 
@@ -1263,6 +1277,58 @@ def disable_watcher():
     logger.info("Disabling Watcher")
     os.environ.pop("TT_METAL_WATCHER", None)
     os.environ.pop("TT_METAL_WATCHER_APPEND", None)
+
+
+def _collect_ccl_device_perf_via_tracy(module_name, input_hash, suite_name):
+    """PROTOTYPE: profile one multi-device CCL vector via the tracy subprocess.
+
+    The in-process device profiler deadlocks building profiler-instrumented
+    eth/dispatch kernels at FABRIC_2D mesh open (see _is_multidevice_ccl_module).
+    Instead, mirror how every CCL/model device-perf test in the repo profiles:
+    run the vector under ``python -m tracy`` (which sets TT_METAL_DEVICE_PROFILER
+    from process start — clean init) via tools/perf's run_device_profiler, then
+    harvest the device-kernel duration from the profiler CSV. The inner pytest
+    (tests/sweep_framework/perf/profile_ccl_vector.py) runs the vector with
+    in-process perf OFF, so there is no nested per-op ReadDeviceProfiler.
+
+    Best-effort: returns a device-perf dict, or None on any failure (never
+    raises into the sweep). Opt-in via TTNN_SWEEP_CCL_SUBPROCESS_PERF=1.
+    """
+    try:
+        from tracy.process_model_log import post_process_ops_log, run_device_profiler
+    except Exception as e:
+        logger.warning(f"tracy not importable; skipping CCL subprocess device-perf: {e}")
+        return None
+
+    subdir = f"sweep_ccl_perf_{input_hash[:12]}"
+    # Inherited by the tracy subprocess; the inner pytest reads them. The
+    # TTNN_VECTORS_EXPORT_DIR / TTNN_DISPATCH_AXIS partition env (set by the
+    # two-pass driver) is already in os.environ and is inherited too.
+    prof_env = {
+        "SWEEP_PROF_MODULE": module_name,
+        "SWEEP_PROF_HASH": input_hash,
+        "SWEEP_PROF_SUITE": suite_name or "model_traced",
+    }
+    saved = {k: os.environ.get(k) for k in prof_env}
+    os.environ.update(prof_env)
+    command = "pytest tests/sweep_framework/perf/profile_ccl_vector.py::test_profile_ccl_vector"
+    try:
+        run_device_profiler(command, subdir)
+        cols = ["DEVICE KERNEL DURATION [ns]"]
+        # has_signposts=False + op_name="" -> aggregate device-kernel duration over
+        # the run. A future refinement can filter by the CCL op code or add
+        # signposts to the inner pytest for a tighter measurement.
+        result = post_process_ops_log(subdir, cols, op_name="", has_signposts=False)
+        return {"device_kernel_duration_ns": result.get(cols[0])}
+    except Exception as e:
+        logger.warning(f"CCL subprocess device-perf failed for input_hash='{input_hash}': {e}")
+        return None
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def _is_multidevice_ccl_module(module_name):
