@@ -5,8 +5,11 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Compile-time constants
@@ -31,6 +34,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
+    Noc noc;
     CircularBuffer cb_in(cb_id_in);
 
     // Precompute bytes-per-block along X
@@ -150,18 +154,13 @@ void kernel_main() {
                 dest_linear_idx += dest_multi_idx[x_dim_in_dest] * dest_strides[x_dim_in_dest];
             }
 
-            // Compute the NoC address for the output
-            uint64_t dst_noc_addr = s0.get_noc_addr(dest_linear_idx, x_offset);
-
-            // Compute the L1 address from which to write (offset by W-block pages)
             uint32_t l1_addr = transposed_buffer_read_addr + (w - w_start) * output_cb_page_size;
-
-            // Perform an asynchronous write of the X-block to the destination
-            noc_async_write(l1_addr, dst_noc_addr, x_read_size_bytes);
+            tt::data_movement::common::noc_async_write_sharded(
+                noc, l1_addr, s0, dest_linear_idx, x_offset, x_read_size_bytes);
         }
 
         // Wait until all writes are completed before proceeding to the next block
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // Pop the block from the input circular buffer, as we're done writing it
         cb_in.pop_front(w_block_size);

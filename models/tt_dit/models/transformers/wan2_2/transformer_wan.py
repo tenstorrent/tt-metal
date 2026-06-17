@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 import torch
+from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
 from loguru import logger
 
@@ -24,6 +25,7 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import cache
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
@@ -596,7 +598,7 @@ class WanTransformer3DModel(Module):
         return spatial_out
 
     def inner_step(
-        self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep, gather_output=False
+        self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep, gather_output=True
     ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
@@ -661,7 +663,8 @@ class WanTransformer3DModel(Module):
         trans_mat: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance_scale: float,
-        gather_output: bool = False,
+        *,
+        gather_output: bool = True,
     ) -> ttnn.Tensor:
         cond = self.inner_step(
             spatial_1BNI,
@@ -690,3 +693,77 @@ class WanTransformer3DModel(Module):
         combined = ttnn.lerp(uncond, cond, guidance_scale)
 
         return combined
+
+
+class WanCheckpoint:
+    """A Wan transformer-subfolder checkpoint: fetches weights and builds loaded transformers."""
+
+    def __init__(self, name: str, subfolder: str) -> None:
+        self._name = name
+        self._subfolder = subfolder
+        torch_transformer = TorchWanTransformer3DModel.from_pretrained(
+            name,
+            subfolder=subfolder,
+            trust_remote_code=True,
+        )
+        torch_transformer.eval()
+        self._config = torch_transformer.config
+        self._state_dict = torch_transformer.state_dict()
+
+    @property
+    def subfolder(self) -> str:
+        return self._subfolder
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        return dict(self._state_dict)
+
+    def build(
+        self,
+        *,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+        model_type: str,
+    ) -> WanTransformer3DModel:
+        """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
+
+        Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+        """
+        c = self._config
+        return WanTransformer3DModel(
+            patch_size=c.patch_size,
+            num_heads=c.num_attention_heads,
+            dim=c.num_attention_heads * c.attention_head_dim,
+            in_channels=c.in_channels,
+            out_channels=c.out_channels,
+            text_dim=c.text_dim,
+            freq_dim=c.freq_dim,
+            ffn_dim=c.ffn_dim,
+            cross_attn_norm=c.cross_attn_norm,
+            eps=c.eps,
+            rope_max_seq_len=c.rope_max_seq_len,
+            mesh_device=ccl_manager.mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            model_type=model_type,
+        )
+
+    def load(
+        self,
+        model: WanTransformer3DModel,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+    ) -> None:
+        """Load (or reload) weights for a previously-built transformer."""
+        cache.load_model(
+            tt_model=model,
+            get_torch_state_dict=lambda: self._state_dict,
+            model_name=os.path.basename(self._name),
+            subfolder=self._subfolder,
+            parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+            is_fsdp=is_fsdp,
+        )

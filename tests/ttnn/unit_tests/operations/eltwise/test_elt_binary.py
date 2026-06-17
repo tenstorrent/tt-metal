@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 pytestmark = pytest.mark.use_module_device
@@ -146,3 +146,36 @@ def test_arithmetic_operators(device):
     h_torch = ttnn.to_torch(h)
     expected_scalar_div_tensor = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
     assert torch.equal(h_torch, expected_scalar_div_tensor), "Scalar / tensor result incorrect"
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "broadcast_shape",
+    [
+        (1, 1, 1, 64),  # ROW broadcast
+        (1, 1, 32, 1),  # COL broadcast
+        (1, 1, 1, 1),  # SCALAR broadcast
+    ],
+    ids=["row_bcast", "col_bcast", "scalar_bcast"],
+)
+def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
+    """Regression test for #44823: fused RELU silently dropped on subtile-broadcast paths.
+
+    The PACK_RELU optimization sets ZERO_RELU once at kernel start, but subtile-broadcast
+    kernels clear it via pack_reconfig_data_format mid-iteration. The fix falls through to
+    the SFPU activation path for broadcast cases.
+    """
+    torch.manual_seed(0)
+    a_shape = (1, 1, 32, 64)
+    torch_a = torch.randn(a_shape).to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32)
+    torch_b = torch.randn(broadcast_shape).to(torch_a.dtype)
+
+    golden = torch.relu(torch_a + torch_b)
+
+    tt_a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+
+    tt_out = ttnn.add(tt_a, tt_b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+    result = ttnn.to_torch(tt_out)
+
+    assert_with_ulp(golden, result, 1)

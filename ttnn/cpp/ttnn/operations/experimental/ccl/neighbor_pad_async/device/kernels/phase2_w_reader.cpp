@@ -16,6 +16,7 @@
 // This overlaps ~(h_in/h_out) of the W exchange with the H exchange.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 
@@ -32,18 +33,9 @@ constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
 constexpr auto src_args = TensorAccessorArgs<ct_after_dst>();
 
 template <uint32_t stick_size_bytes>
-inline void zeroPad(uint32_t cb_id) {
-    constexpr uint32_t num_full_reads = stick_size_bytes / MEM_ZEROS_SIZE;
-    constexpr uint32_t partial_read_size = stick_size_bytes % MEM_ZEROS_SIZE;
-    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t cb_write_addr = get_write_ptr(cb_id);
-    for (uint32_t i = 0; i < num_full_reads; ++i) {
-        noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
-        cb_write_addr += MEM_ZEROS_SIZE;
-    }
-    if (partial_read_size > 0) {
-        noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
-    }
+inline void zeroPad(const Noc& noc, const CircularBuffer& cb) {
+    noc.async_write_zeros(cb, stick_size_bytes);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
@@ -78,6 +70,9 @@ void kernel_main() {
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
+    Noc noc;
+    CircularBuffer cb(cb_output_id);
+
     // =========================================================================
     // Phase 1: interior rows from INPUT DRAM (no barrier wait)
     // =========================================================================
@@ -100,8 +95,7 @@ void kernel_main() {
             if (is_first_chip) {
                 cb_reserve_back(cb_output_id, 1);
                 if (is_t_front || h_masked || is_padding_zeros) {
-                    zeroPad<stick_size>(cb_output_id);
-                    noc_async_read_barrier();
+                    zeroPad<stick_size>(noc, cb);
                 } else {
                     // direction=0: replicate leftmost input col; direction=1: rightmost
                     uint32_t input_col = direction ? (num_interior_sticks - 1) : 0;
@@ -120,8 +114,7 @@ void kernel_main() {
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                     cb_reserve_back(cb_output_id, 1);
                     if (is_t_front || h_masked) {
-                        zeroPad<stick_size>(cb_output_id);
-                        noc_async_read_barrier();
+                        zeroPad<stick_size>(noc, cb);
                     } else {
                         // direction=0: send rightmost boundary cols (W_in - pad_id)
                         // direction=1: send leftmost boundary cols (padding - pad_id)
@@ -160,8 +153,7 @@ void kernel_main() {
             if (is_first_chip) {
                 cb_reserve_back(cb_output_id, 1);
                 if (is_t_front || is_padding_zeros) {
-                    zeroPad<stick_size>(cb_output_id);
-                    noc_async_read_barrier();
+                    zeroPad<stick_size>(noc, cb);
                 } else {
                     // direction=0: leftmost interior col; direction=1: rightmost
                     uint32_t col = direction ? (pad2_left + num_interior_sticks - 1) : pad2_left;
@@ -177,8 +169,7 @@ void kernel_main() {
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                     cb_reserve_back(cb_output_id, 1);
                     if (is_t_front) {
-                        zeroPad<stick_size>(cb_output_id);
-                        noc_async_read_barrier();
+                        zeroPad<stick_size>(noc, cb);
                     } else {
                         uint32_t col = direction ? (pad2_left + (padding - pad_id))
                                                  : (pad2_left + num_interior_sticks - pad_id);
@@ -199,8 +190,7 @@ void kernel_main() {
             if (is_first_chip) {
                 cb_reserve_back(cb_output_id, 1);
                 if (is_t_front || is_padding_zeros) {
-                    zeroPad<stick_size>(cb_output_id);
-                    noc_async_read_barrier();
+                    zeroPad<stick_size>(noc, cb);
                 } else {
                     uint32_t col = direction ? (pad2_left + num_interior_sticks - 1) : pad2_left;
                     uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
@@ -215,8 +205,7 @@ void kernel_main() {
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                     cb_reserve_back(cb_output_id, 1);
                     if (is_t_front) {
-                        zeroPad<stick_size>(cb_output_id);
-                        noc_async_read_barrier();
+                        zeroPad<stick_size>(noc, cb);
                     } else {
                         uint32_t col = direction ? (pad2_left + (padding - pad_id))
                                                  : (pad2_left + num_interior_sticks - pad_id);

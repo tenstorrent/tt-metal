@@ -63,6 +63,12 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     send_recv_async/recv_async/recv_async.cpp
     send_recv_async/recv_async/device/recv_async_op_device_operation.cpp
     send_recv_async/recv_async/device/recv_async_op_program_factory.cpp
+    send_recv_async/recv_async_h2d/recv_async_h2d.cpp
+    send_recv_async/recv_async_h2d/device/recv_async_h2d_op_device_operation.cpp
+    send_recv_async/recv_async_h2d/device/recv_async_h2d_op_program_factory.cpp
+    send_recv_async/send_async_d2h/send_async_d2h.cpp
+    send_recv_async/send_async_d2h/device/send_async_d2h_op_device_operation.cpp
+    send_recv_async/send_async_d2h/device/send_async_d2h_op_program_factory.cpp
     neighbor_pad_async/neighbor_pad_async.cpp
     neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
     neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
@@ -82,6 +88,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
     all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
     moe_compute/moe_compute.cpp
+    moe_compute/moe_compute_utils.cpp
     moe_compute/device/moe_compute_device_operation.cpp
     moe_compute/device/moe_compute_program_factory.cpp
     moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp

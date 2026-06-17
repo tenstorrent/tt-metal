@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_div_int32_floor.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
@@ -21,13 +21,13 @@ constexpr float TWO_POW_31 = 2147483648.0f;
 // Returns: unsigned remainder r
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
     // Get absolute values for unsigned remainder computation
-    sfpi::vInt a = sfpi::abs(a_signed);
-    sfpi::vInt b = sfpi::abs(b_signed);
+    sfpi::vMag a = sfpi::abs(a_signed);
+    sfpi::vMag b = sfpi::abs(b_signed);
 
     // Convert to float for reciprocal computation
     // Handle 2^31 edge case where sign-magnitude conversion yields negative
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, sfpi::RoundMode::NearestEven);
-    sfpi::vFloat b_f = sfpi::int32_to_float(b, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
+    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
     v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
     v_endif;
     v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
@@ -51,25 +51,18 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vInt r = a - qb;
 
     // Compute correction for approximation error: correction = |r| / b
-    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), sfpi::RoundMode::NearestEven);
-    sfpi::vInt correction = sfpi::float_to_uint16(r_f * inv_b_f, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(r_f * inv_b_f, sfpi::RoundMode::Nearest);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
     sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
-    sfpi::vInt b_hi = b >> 23;
-    b_hi = sfpi::fractional_mul(correction, b_hi);
+    sfpi::vInt b_hi = sfpi::fractional_mul(correction, b >> 23);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
-    // Extract sign mask of r
-    // r_sign = 0 if r >= 0, -1 if r < 0
-    sfpi::vInt r_sign = r >> 31;
-
-    // Apply correction with sign of r
-    // If r < 0  -> r += tmp
-    // Else      -> r -= tmp
-    sfpi::vInt signed_tmp = (tmp ^ r_sign) - r_sign;
-    r -= signed_tmp;
+    v_if(r < 0) { tmp = -tmp; }
+    v_endif;
+    r -= tmp;
 
     // Final adjustment to ensure r is in [0, b)
     v_if(r < 0 && (r - 1) < 0) { r += b; }
@@ -117,7 +110,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     sfpi::vFloat b = in1;
 
     // Compute a/b = a * (1/b)
-    sfpi::vFloat div_result = a * _sfpu_reciprocal_<2>(b);
+    sfpi::vFloat div_result = a * sfpu_reciprocal_iter<2>(b);
 
     // Compute floor(a/b)
     sfpi::vFloat floor_div = _floor_body_(div_result);
@@ -128,8 +121,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // Sign correction: remainder must match the sign of b (or be zero).
     // XOR of the float bit-patterns detects sign mismatch via the MSB,
     // avoiding a compound conditional with four comparisons and an OR.
-    v_if(result != sfpi::vFloat(0.0f)) {
-        sfpi::vInt signs = sfpi::reinterpret<sfpi::vUInt>(result) ^ sfpi::reinterpret<sfpi::vUInt>(b);
+    v_if(result != 0.0f) {
+        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
         v_and(signs < 0);
         result += b;
     }
@@ -154,7 +147,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
     }
 
     return result;

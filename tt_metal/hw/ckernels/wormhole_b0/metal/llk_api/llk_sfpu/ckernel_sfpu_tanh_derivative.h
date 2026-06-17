@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
 using namespace sfpi;
@@ -153,7 +153,7 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 // Uses the same mathematical approach as the GELU backward kernel:
 // - Sollya-fitted minimax polynomial for the core region
 // - Inline Cody-Waite exp with direct exponent bit manipulation for the tail
-// No external function calls (_sfpu_exp_f32_accurate_, _sfpu_reciprocal_).
+// No external function calls (_sfpu_exp_f32_accurate_, sfpu_reciprocal_iter).
 //
 // Two regions (exploiting even symmetry via a = |x|):
 //   |x| < CORE_REGION_LIMIT:  Degree-10 polynomial in t = (2/9)·a² - 1 (~12 MAD ops)
@@ -207,7 +207,7 @@ inline void calculate_tanh_derivative_sech2() {
 
         // Explicit RNE rounding for BF16 output — SFPSTORE truncates toward zero by default.
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = result;

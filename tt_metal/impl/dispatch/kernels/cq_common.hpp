@@ -7,7 +7,9 @@
 #include "core_config.h"
 #include "internal/risc_attribs.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "cq_helpers.hpp"
+#include "telemetry.hpp"
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
@@ -41,6 +43,25 @@ FORCE_INLINE T round_up_pow2(T v, uint32_t pow2_size) {
 FORCE_INLINE
 uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
 
+// Copy a datatype that can be divisible by uint32_t to L1 memory
+template <typename T>
+FORCE_INLINE volatile tt_l1_ptr T* write_to_l1(uint32_t dst_addr, const T& src_object) {
+    static_assert(sizeof(T) % sizeof(uint32_t) == 0);
+    auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+
+    // Casting to uint8_t* instead of uint32_t* to avoid undefined behavior
+    const auto* src = reinterpret_cast<const uint8_t*>(&src_object);
+    for (uint32_t i = 0; i < sizeof(T) / sizeof(uint32_t); ++i) {
+        uint32_t word = 0;
+        auto* word_bytes = reinterpret_cast<uint8_t*>(&word);
+        for (uint32_t byte = 0; byte < sizeof(uint32_t); ++byte) {
+            word_bytes[byte] = src[i * sizeof(uint32_t) + byte];
+        }
+        dst[i] = word;
+    }
+    return reinterpret_cast<volatile tt_l1_ptr T*>(dst_addr);
+}
+
 FORCE_INLINE
 uint32_t wrap_ge(uint32_t a, uint32_t b) {
     // Careful below: have to take the signed diff for 2s complement to handle the wrap
@@ -57,6 +78,32 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     // to 2^31 away
     int32_t diff = a - b;
     return diff > 0;
+}
+
+// On Quasar, accesses to L1 semaphores must bypass the L1 D$ via the uncached alias so that
+// updates from other RISCs/cores are visible. No-op on BH/WH.
+constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    return addr + MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
+// Inverse of l1_uncached_addr: maps an uncached-alias address back to its cached form.
+// Identity on non-Quasar. Used to store the host-visible (cached-form) prefetch_q_rd_ptr value.
+constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    ASSERT(addr >= MEM_L1_UNCACHED_BASE);
+    return addr - MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
+template <typename T>
+FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
+    return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
@@ -248,7 +295,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 template <uint32_t sem_id>
 FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(sem_id)));
 
     // Downstream component sets the MSB as a terminate bit
     // Mask that off to avoid a race between the sem count and terminate
@@ -273,7 +320,7 @@ class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
@@ -294,7 +341,7 @@ public:
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
@@ -349,8 +396,12 @@ public:
             }
         }
 #endif
+#ifdef ARCH_QUASAR
+        Semaphore<fd_core_type>(downstream_sem_id).up(n);
+#else
         noc_semaphore_inc(
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+#endif
     }
 
     uint32_t additional_count{0};
@@ -383,7 +434,7 @@ class CBReader {
 public:
     FORCE_INLINE void wait_all_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         uint32_t to_wait_for = upstream_count_;
 
@@ -423,12 +474,15 @@ protected:
 
     // Acquire pages from upstream. Updates the cb_fence and returns the number of pages acquired. May block waiting for
     // credits from upstream if we already acquired all the pages previously.
+    template <typename T = NoTelemetryBlockGuard>
     FORCE_INLINE uint32_t acquire_pages() {
+        static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
+            T block_guard;
             uint32_t heartbeat = 0;
             do {
                 invalidate_l1_cache();
@@ -480,13 +534,16 @@ public:
         this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
     }
 
-    // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
+    // Returns how much data is available. Will block until data is available. Tracks via blocked
+    // counter addresses if check_blocking is true.May release old pages before cmd_ptr to
     // writer. Updates cmd_ptr on wrap-around.
     // noc_increment_nonposted_writes_issued() must be called before calling this function.
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
+    template <typename T = NoTelemetryBlockGuard>
     FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr) {
+        static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {
@@ -495,7 +552,7 @@ public:
                 }
                 move_rd_to_next_block_and_release_pages();
             }
-            this->acquire_pages();
+            this->template acquire_pages<T>();
         }
         return this->available_bytes(cmd_ptr);
     }

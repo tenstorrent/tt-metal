@@ -37,11 +37,11 @@ inline void _llk_pack_rows_configure_addrmod_()
 /**
  * @brief Configures the MOP template for packing rows.
  *
- * @param num_rows Number of rows to pack from the destination register
- *
-The MOP uses a single outer loop with num_rows inner iterations:
+ * The MOP uses a single outer loop with num_rows inner iterations:
  * - Each inner iteration packs one row (16 datums) using ADDR_MOD_0 (Y += 1)
  * - The last outer loop iteration uses ADDR_MOD_1 with Last=1 to reset Y to 0 after num_rows rows
+ *
+ * @param num_rows: Number of rows to pack from the destination register.
  */
 inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
 {
@@ -90,8 +90,6 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
 /**
  * @brief Initializes the pack rows operation.
  *
- * @param num_rows Total number of rows to pack from the destination register to L1
- *
  * This function prepares the packer hardware to pack a specified number of rows of
  * row-major data from the destination register to L1 memory. Each row contains 16 datums.
  *
@@ -101,6 +99,9 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
  * 3. Sets up hardware counters:
  *    - X counter: Controls how many datums to pack per row
  *    - Z/W counters: Reset to zero
+ *
+ * @param num_rows: Total number of rows to pack from the destination register to L1.
+ * @note Pair with @ref _llk_pack_rows_uninit_ after the matching @ref _llk_pack_rows_ execute calls.
  */
 inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 {
@@ -129,14 +130,16 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 /**
  * @brief Packs the specified number of rows from a destination register tile to L1 memory.
  *
- * @param tile_index Index of the tile in the destination register to read from
- * @param address L1 memory address where the packed rows will be written
- *
  * This function performs the actual row packing operation:
  * 1. Sets the W counter to the tile_index to select which dest tile to read from
  * 2. Programs the packer destination address in L1 where data will be written
  * 3. Executes the MOP template
  * 4. Reset Z counters after pack operation
+ *
+ * @param tile_index: Index of the tile in the destination register to read from.
+ * @param address: L1 memory address where the packed rows will be written.
+ * @note Call @ref _llk_pack_rows_init_ to program the row count and counters before this function, and
+ *       @ref _llk_pack_rows_uninit_ once all row-pack calls are complete.
  */
 inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t address)
 {
@@ -154,9 +157,10 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
 /**
  * @brief Restore packer addrmods and counters to a safe default state.
  *
+ * Resets the packer X counter to its default full-face value, undoing @ref _llk_pack_rows_init_.
+ *
+ * @note Pairs with @ref _llk_pack_rows_init_.
  */
 inline void _llk_pack_rows_uninit_()
 {
-    // Restore X counter to default
-    TTI_SETADCXX(p_setadc::PAC, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }

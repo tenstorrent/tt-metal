@@ -11,10 +11,20 @@
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_target_device.hpp"
 
+#include <tt_stl/assert.hpp>
+
 #include <mutex>
 #include <functional>
 
 namespace tt::tt_metal::distributed {
+
+// Identifies one L1 location on one device of the mesh: (mesh coord, virtual
+// core, device address). Used by per-core enqueue APIs.
+struct DeviceMemoryAddress {
+    MeshCoordinate device_coord;
+    CoreCoord virtual_core_coord;
+    DeviceAddr address{};
+};
 
 class MeshCommandQueueBase : public MeshCommandQueue {
 protected:
@@ -40,7 +50,10 @@ protected:
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
-    virtual void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) = 0;
+    virtual void submit_memcpy_request(
+        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        bool blocking,
+        std::vector<MemoryPin> memory_pins = {}) = 0;
     // Must be called with lock_api_function_() held.
     virtual void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual MeshEvent enqueue_record_event_to_host_nolock(
@@ -59,7 +72,8 @@ private:
     void enqueue_read_shards_nolock(
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        bool blocking);
+        bool blocking,
+        std::vector<MemoryPin> memory_pins = {});
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
         MeshBuffer& mesh_buffer,
@@ -121,6 +135,20 @@ public:
 
     // Returns true if the CQ is in use (has had commands enqueued).
     virtual bool in_use() { return false; }
+
+    // Write `value` (a uint32 counter) to one L1 address on each of `targets`,
+    // ordered after prior worker programs / buffer writes on this queue. Each
+    // target's `address` is the full device destination. Must be called with the
+    // MeshDevice api lock already held — unlike the other queue APIs this does NOT
+    // re-lock, so the caller can keep the lock across the surrounding sequence (the
+    // DRAM-core prefetcher's WaitForCq needs the counter bump and the WAIT_CQ enqueue
+    // to be atomic). Fast/slow dispatch perform the write; the dummy (inactive-rank)
+    // queue is a no-op.
+    virtual void enqueue_write_dram_core_counter(
+        tt::stl::Span<const DeviceMemoryAddress> targets,
+        uint32_t value,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -126,6 +126,14 @@ _FUSED_MM_RS_CONFIGS = {
 
 
 def is_shape_fused_mm_rs_supported(tensor) -> bool:
+    # #46181: the async fused matmul+reduce_scatter (minimal_matmul_strided_reduce_scatter_async)
+    # RACES on Blackhole at M_tiles=32 (S=1024): the reduce-scatter half reads MM output blocks
+    # before they are fully written (semaphore/overlap sync bug) -> non-deterministic garbage
+    # (absmax ~1e13). It is validated/used on Wormhole (e.g. WH-GLX), so gate the fused path off on
+    # Blackhole only and fall back to the correct non-fused matmul+allreduce path there. Remove this
+    # gate once the fused-op sync is fixed for Blackhole.
+    if "blackhole" in ttnn.get_arch_name():
+        return False
     m_tiles = (tensor.shape[-2] + 31) // 32
     return m_tiles in _FUSED_MM_RS_CONFIGS
 
@@ -259,7 +267,9 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """
     if mesh_config.tp > 1:
         tensor_allreduced = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
-        tensor.deallocate(True)
+        # ``mesh_config.allreduce`` now frees its input internally between
+        # reduce_scatter and all_gather to keep peak DRAM within bounds for
+        # long-context prefill; don't deallocate again here.
         tensor = tensor_allreduced
 
         # Remove padding added in weights.py for tile-aligned CCL operations.

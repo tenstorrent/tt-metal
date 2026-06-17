@@ -33,12 +33,6 @@ struct MeshCoreDataReadDescriptor;
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
-struct DeviceMemoryAddress {
-    MeshCoordinate device_coord;
-    CoreCoord virtual_core_coord;
-    DeviceAddr address{};
-};
-
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     // This class can now access private members of FDMeshCommandQueue
@@ -196,7 +190,10 @@ protected:
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+    void submit_memcpy_request(
+        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        bool blocking,
+        std::vector<MemoryPin> memory_pins = {}) override;
     void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
@@ -234,6 +231,11 @@ public:
         uint32_t size_bytes,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void enqueue_write_dram_core_counter(
+        tt::stl::Span<const DeviceMemoryAddress> targets,
+        uint32_t value,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},

@@ -72,62 +72,30 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
     TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
     TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
 
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        // FP32 destination mode, need to move high and low 16 bits to SrcB and transpose separately
+    // The following instructions are going to transpose the whole tile.
 
-        // The following instructions are repeated for F0&F1 reduced and F2&F3 reduced
-        // Move high 16 bits from DEST row 0 to SrcB rows 16 - 31 and transpose
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        TTI_TRNSPSRCB;
+    // Move row 0 from DEST to SrcB with offset of 16 rows and transpose
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+    TTI_TRNSPSRCB;
+    // Move row 0 from SrcB to DEST in 4-row chunks
+    // ADDR_MOD_2 increments CR_D and Dest counter val by 4, so that's why DEST location is '0', not '0, 4, 8, 12'.
+    TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+    TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+    TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+    // ADDR_MOD_3 increments CR_D and Dest counter val by 20, to point to F2.
+    TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 0);
 
-        // Move high 16 bits back to Dest
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+    // Move row 32 (F2R0) from DEST to SrcB with offset of 16 rows and transpose
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+    TTI_TRNSPSRCB;
+    // Move row 32 from SrcB to DEST in 4-row chunks
+    TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+    TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+    TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+    TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // Move low 16 bits to SrcB rows 16 - 31 and transpose
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        TTI_TRNSPSRCB;
-
-        // Move low 16 bits from SrcB rows 16 - 31 to DEST rows 0, 4, 8, 12
-        // ADDR_MOD_2 increments CR_D and Dest counter val by 4, so that's why DEST location is '0', not '0, 4, 8, 12'.
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        // ADDR_MOD_3 increments CR_D and Dest counter val by 20, to point to F2.
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 0);
-        // Clear B valid bits at the end and all address counters
-        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
-    }
-    else
-    {
-        // The following instructions are going to transpose the whole tile, unlike the FP32 mode.
-
-        // Move row 0 from DEST to SrcB with offset of 16 rows and transpose
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        TTI_TRNSPSRCB;
-        // Move row 0 from SrcB to DEST in 4-row chunks
-        // ADDR_MOD_2 increments CR_D and Dest counter val by 4, so that's why DEST location is '0', not '0, 4, 8, 12'.
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
-        // ADDR_MOD_3 increments CR_D and Dest counter val by 20, to point to F2.
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 0);
-
-        // Move row 32 (F2R0) from DEST to SrcB with offset of 16 rows and transpose
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        TTI_TRNSPSRCB;
-        // Move row 32 from SrcB to DEST in 4-row chunks
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-
-        // Clear B valid bits at the end and all address counters
-        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
-    }
+    // Clear B valid bits at the end and all address counters
+    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
 
     const std::uint32_t outer_loop = block_ct_dim;
     const std::uint32_t inner_loop = 4;
@@ -184,11 +152,6 @@ inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim)
 {
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        _llk_math_dbg_feature_disable_();
-    }
-
     reduce_max_row_configure_addrmod_reinit_runtime();
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
@@ -198,9 +161,9 @@ inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_
     _llk_math_reduce_block_max_row_mop_config_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
 }
 
+template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_uninit_runtime_()
 {
-    // No state to restore - all states are transient or default
 }
 
 /**
@@ -223,25 +186,23 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
+    // Run the MOP, performing a column reduce across all 4 faces
+    ckernel::ckernel_template::run();
+
     if constexpr (is_fp32_dest_acc_en)
     {
-        // Run the MOP, performing a column reduce across all 4 faces
-        ckernel::ckernel_template::run();
-        // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        // Replay the 12 instructions to transpose the reduced F0&F1 results
-        lltt::replay(2, 12);
-        // Replay the 13 instructions to transpose the reduced F2&F3 results
-        // 13th instruction clears B valid bit to release SrcB bank and clears all address counters
-        lltt::replay(2, 13);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
     }
-    else
+
+    // Replay the 13 instructions to transpose the reduced results
+    lltt::replay(2, 13);
+
+    if constexpr (is_fp32_dest_acc_en)
     {
-        // Run the MOP, performing a column reduce across all 4 faces
-        ckernel::ckernel_template::run();
-        // Replay the 13 instructions to transpose the reduced results
-        lltt::replay(2, 13);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
 }
 

@@ -1,0 +1,19 @@
+# gpt_oss
+mesh_shape: [8, 4]
+cluster_axis: 0
+batch_per_device: 32
+hidden_size: 2880
+select_experts_k: 4
+num_routed_experts: 128
+num_shared_experts: 0
+has_bias: true
+
+compute:
+  intermediate_size: 2880
+  activation_type: SWIGLU
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential

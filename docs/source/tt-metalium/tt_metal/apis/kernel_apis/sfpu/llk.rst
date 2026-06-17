@@ -178,10 +178,10 @@ However note that ``v_if`` and alike works via predication. In other words, both
 .. code-block:: c++
 
     v_if (a < b) {
-        DEVICE_PRINT("a < b\n");
+        DPRINT("a < b\n");
     } v_else {
         dst_reg[0] = b;
-        DEVICE_PRINT("a >= b\n");
+        DPRINT("a >= b\n");
     }
     v_endif;
 
@@ -355,15 +355,19 @@ Returns the count of leading (left-most) zeros of ''v'' ignoring the sign bit.
 .. code-block:: c++
 
     template<typename ToType, typename FromType>
-    ToType convert (FromType in, RoundMode rounding = RoundMode::Stochastic)
+    ToType convert (FromType in, RoundMode rounding = RoundMode::NearestStochastic)
     template<typename ToType, typename FromType>
-    ToType convert (FromType in, unsigned descale, RoundMode rounding = RoundMode::Stochastic)
+    ToType convert (FromType in, unsigned descale, RoundMode rounding = RoundMode::NearestStochastic)
 
-Returns the rounded value performing round-to-even when ''rounding''
-is ''RoundMode::NearestEven'', stochastic rounding when ''rounding'' is
-''RoundMode::Stochastic'', and round-to-zero when it is
-''RoundMode::Zero'' (not available on WormHole).  Not all
-conversions are supported, and a compilation error will occur if not available.
+Not all conversions are supported, and a compilation error will occur
+if not available.  The following rounding modes are available:
+
+  * ``NearestEven`` - round to nearest, ties to even mantissa (Quasar)
+  * ``NearestAway`` - round to nearest, ties away from zero (Wormhole, Blackhole)
+  * ``NearestStochastic`` - round to nearest, ties randomly up or down
+  * ``Stochastic`` - deprecated alias for ``NearestStochastic``
+  * ``Zero`` - round towards zero (Blackhole and Quasar)
+  * ``Nearest`` - ``NearestEven``, if available, else ``NearestAway``
 
 Immediate Floating Point Values
 -------------------------------

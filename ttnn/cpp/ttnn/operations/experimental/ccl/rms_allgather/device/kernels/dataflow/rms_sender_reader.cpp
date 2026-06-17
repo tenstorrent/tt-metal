@@ -24,6 +24,11 @@ void kernel_main() {
     constexpr uint32_t post_reduce_sender_semaphore_id = get_compile_time_arg_val(13);
     constexpr uint32_t cb_stats_reduced = get_compile_time_arg_val(14);  // [E[x], E[x^2]] local to sender
     constexpr uint32_t cb_ex_global = get_compile_time_arg_val(15);      // [E[x], E[X^2]] global to all cores
+    // num_mcast_dests = num_x * num_y, the cell count of the multicast bounding
+    // box. For non-rectangular shard grids this differs from num_blocks (the
+    // worker count). The NoC ack counter must be credited against the
+    // rectangle size or noc_async_write_barrier() will wait forever.
+    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(16);
 
     uint32_t post_reduce_sender_semaphore_addr = get_semaphore(post_reduce_sender_semaphore_id);
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
@@ -81,7 +86,10 @@ void kernel_main() {
             *reduce_sender_semaphore_addr_ptr = VALID;
             noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks - 1);
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-            noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
+            // num_dests counts the multicast bounding-box cells excluding self,
+            // not the worker count.
+            noc_semaphore_set_multicast(
+                reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_mcast_dests - 1);
         }
 
         // read data from other cores - first stage reduce
@@ -130,8 +138,10 @@ void kernel_main() {
     const auto& global_semaphore_set = [&]() __attribute__((always_inline)) {
         *post_reduce_sender_semaphore_addr_ptr = VALID;
 
+        // num_dests counts the multicast bounding-box cells (loopback includes
+        // self), not the worker count.
         noc_semaphore_set_multicast_loopback_src(
-            post_reduce_sender_semaphore_addr, post_reduce_sender_semaphore_noc_addr, num_blocks, false);
+            post_reduce_sender_semaphore_addr, post_reduce_sender_semaphore_noc_addr, num_mcast_dests, false);
         noc_async_write_barrier();
     };
 
@@ -139,11 +149,13 @@ void kernel_main() {
                                                 __attribute__((always_inline)) {
                                                     uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
                                                     uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
+                                                    // num_dests counts the multicast bounding-box cells
+                                                    // (loopback includes self), not the worker count.
                                                     noc_async_write_multicast_loopback_src(
                                                         l1_read_addr_ex,
                                                         multicast_data_noc | l1_read_addr_ex_global,
                                                         single_tile_size_bytes,
-                                                        num_blocks,
+                                                        num_mcast_dests,
                                                         false);
                                                     noc_async_write_barrier();
                                                 };

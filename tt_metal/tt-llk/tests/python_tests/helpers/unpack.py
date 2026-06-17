@@ -93,130 +93,125 @@ def unpack_uint8(packed_list):
     return np.frombuffer(bytes(packed_list), dtype=np.uint8).tolist()
 
 
-def bfp8_to_float_block(exponent, bfp8_mantissas, unpacked_bfp8):
-    bfloat16_values = []
-    exponent = exponent - 127
+# ============================================================================
+# BFP (Block Floating-Point) Unpacking
+#
+# BFP8_b / BFP4_b / BFP2_b share the same structure: 16-element blocks with a
+# shared 8-bit exponent and per-element sign-magnitude datums. They differ only
+# in datum width (8/4/2 bits → 7/3/1 magnitude bits) and how datums are packed
+# into bytes. The helpers below capture that shared structure; see the matching
+# pack-side helpers in pack.py (float_to_bfp{8,4,2}_block / pack_bfp{8,4,2}_b).
+# ============================================================================
 
-    for mantissa in bfp8_mantissas:
-        if (exponent, mantissa) in unpacked_bfp8:
-            bfloat16_values.append(unpacked_bfp8[(exponent, mantissa)])
+
+def _expand_bfp_datums(packed_mantissas, bits_per_datum):
+    """Expand packed mantissa bytes into one uint8 per datum (LSB datum first).
+
+    For 8-bit datums each byte is a datum. For narrower datums a byte holds
+    multiple datums, lowest-order bits first (matching the hardware packing in
+    pack_bfp4_b / pack_bfp2_b).
+    """
+    packed = np.frombuffer(bytes(packed_mantissas), dtype=np.uint8)
+    if bits_per_datum == 8:
+        return packed
+    datums_per_byte = 8 // bits_per_datum
+    mask = (1 << bits_per_datum) - 1
+    datums = np.empty(len(packed) * datums_per_byte, dtype=np.uint8)
+    for k in range(datums_per_byte):
+        datums[k::datums_per_byte] = (packed >> (bits_per_datum * k)) & mask
+    return datums
+
+
+def _bfp_to_float_block(exponent, datums, magnitude_bits, cache):
+    """Decode one 16-element BFP block to a list of float values.
+
+    Each datum is sign-magnitude with ``magnitude_bits`` magnitude bits and the
+    sign in the next bit up. The dequantized magnitude is
+    ``mag * 2^(exp - 127 - (magnitude_bits - 1))`` so that the format's leading
+    magnitude bit carries weight ``2^(exp - 127)``. A zero magnitude yields a
+    signed zero (the sign is preserved via the signed product), matching the
+    hardware unpacker / blockfloat_common.cpp reference.
+    """
+    exp_adj = exponent - 127
+    scale = 2.0 ** (exp_adj - (magnitude_bits - 1))
+    sign_mask = 1 << magnitude_bits
+    mag_mask = sign_mask - 1
+
+    values = []
+    for datum in datums:
+        key = (exp_adj, int(datum))
+        cached = cache.get(key)
+        if cached is not None:
+            values.append(cached)
             continue
+        sign = -1.0 if datum & sign_mask else 1.0
+        value = sign * (datum & mag_mask) * scale
+        values.append(value)
+        cache[key] = value
+    return values
 
-        sign_mantissa = str(format(mantissa, "08b"))
-        sign = int(sign_mantissa[0], 2)
-        mantissa_value = sign_mantissa[1:]
 
-        fract_value = 0.0
-        for i in range(len(mantissa_value)):
-            if mantissa_value[i] == "1":
-                fract_value += 1 / (2 ** (i))
+def _unpack_bfp_b(bfp_block, magnitude_bits, sfpu=False, num_faces=4, face_r_dim=16):
+    """Unpack a BFP8_b / BFP4_b / BFP2_b tile to a bfloat16 tensor.
 
-        # ISA spec: sign=1, mag=0 → -Inf (BF16 0xff80); sign=0, mag=0 → +0
-        if fract_value == 0.0:
-            value = -float("inf") if sign == 1 else 0.0
-        else:
-            value = ((-1.0) ** sign) * (2**exponent) * fract_value
+    ``magnitude_bits`` selects the format: 7 (BFP8), 3 (BFP4), or 1 (BFP2).
+    Hardware stores at least MIN_BFP_EXPONENTS exponents (zero-padded), so the
+    mantissa section always starts at that aligned offset.
+    """
+    bits_per_datum = magnitude_bits + 1
+    actual_exponents = face_r_dim * num_faces
+    exponents_in_packed = max(actual_exponents, MIN_BFP_EXPONENTS)
 
-        bfloat16_values.append(value)
-        unpacked_bfp8[(exponent, mantissa)] = value
+    if not sfpu:
+        exponents = bfp_block[:actual_exponents]
+        packed_mantissas = bfp_block[exponents_in_packed:]
+    else:
+        # SFPU layout: 16 exponents followed by 16 blocks of 16 datums.
+        exponents = bfp_block[:16]
+        sfpu_mantissa_bytes = 16 * 16 * bits_per_datum // 8
+        packed_mantissas = bfp_block[16 : 16 + sfpu_mantissa_bytes]
 
-    return bfloat16_values
+    datums = _expand_bfp_datums(packed_mantissas, bits_per_datum)
+
+    cache = {}
+    bfloat16_values = []
+    for i, exponent in enumerate(exponents):
+        block_datums = datums[i * 16 : (i + 1) * 16]
+        bfloat16_values.extend(
+            _bfp_to_float_block(exponent, block_datums, magnitude_bits, cache)
+        )
+
+    return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
 
 
 def unpack_bfp8_b(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):
-    # Each BFP8 block is 16 elements with 1 shared exponent
-    # Elements per face = face_r_dim * 16, so blocks per face = face_r_dim
-    actual_exponents = face_r_dim * num_faces
-
-    # Hardware requires minimum exponents for both unpacker and packer
-    exponents_in_packed = max(actual_exponents, MIN_BFP_EXPONENTS)
-
-    if not sfpu:
-        # Read all exponents (including any padding)
-        all_exponents = bfp8_block[:exponents_in_packed]
-        mantissas = bfp8_block[exponents_in_packed:]
-        # Only use the actual exponents (not padding)
-        exponents = all_exponents[:actual_exponents]
-    else:
-        exponents = bfp8_block[:16]
-        mantissas = bfp8_block[16:272]
-
-    unpacked_bfp8 = {}
-
-    bfloat16_values = []
-    for i in range(len(exponents)):
-        exponent = exponents[i]
-        bfp8_mantissas = mantissas[i * 16 : (i + 1) * 16]
-        block_bfloat16_values = bfp8_to_float_block(
-            exponent, bytes(bfp8_mantissas), unpacked_bfp8
-        )
-        bfloat16_values.extend(block_bfloat16_values)
-
-    return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
-
-
-def bfp4_to_float_block(exponent, bfp4_mantissas, unpacked_bfp4):
-    bfloat16_values = []
-    exp_adj = exponent - 127
-    scale = 2.0 ** (exp_adj - 2)
-
-    for mantissa in bfp4_mantissas:
-        mag = mantissa & 0x7
-        if mag == 0:
-            # ISA spec: sign=1, mag=0 → -Inf (BF16 0xff80); sign=0, mag=0 → +0
-            if mantissa & 0x8:
-                value = -float("inf")
-            else:
-                value = 0.0
-            bfloat16_values.append(value)
-            unpacked_bfp4[(exp_adj, mantissa)] = value
-            continue
-
-        key = (exp_adj, mantissa)
-        cached = unpacked_bfp4.get(key)
-        if cached is not None:
-            bfloat16_values.append(cached)
-            continue
-
-        sign = -1.0 if mantissa & 0x8 else 1.0
-        value = sign * mag * scale
-        bfloat16_values.append(value)
-        unpacked_bfp4[key] = value
-
-    return bfloat16_values
+    return _unpack_bfp_b(
+        bfp8_block,
+        magnitude_bits=7,
+        sfpu=sfpu,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+    )
 
 
 def unpack_bfp4_b(bfp4_block, sfpu=False, num_faces=4, face_r_dim=16):
-    actual_exponents = face_r_dim * num_faces
-    exponents_in_packed = max(actual_exponents, MIN_BFP_EXPONENTS)
+    return _unpack_bfp_b(
+        bfp4_block,
+        magnitude_bits=3,
+        sfpu=sfpu,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+    )
 
-    if not sfpu:
-        exponents = bfp4_block[:actual_exponents]
-        packed_mantissas = bfp4_block[exponents_in_packed:]
-    else:
-        exponents = bfp4_block[:16]
-        packed_mantissas = bfp4_block[16 : 16 + actual_exponents * 8]
 
-    # Expand packed bytes into 4-bit datums using NumPy vectorized ops
-    # Hardware BFP4_b convention: low nibble = first element, high nibble = second
-    packed = np.frombuffer(packed_mantissas, dtype=np.uint8)
-    low_nibbles = packed & 0x0F
-    high_nibbles = (packed >> 4) & 0x0F
-    mantissas = np.empty(len(packed) * 2, dtype=np.uint8)
-    mantissas[0::2] = low_nibbles
-    mantissas[1::2] = high_nibbles
-
-    unpacked_bfp4 = {}
-
-    bfloat16_values = []
-    for i, exponent in enumerate(exponents):
-        block_mantissas = mantissas[i * 16 : (i + 1) * 16]
-        block_bfloat16_values = bfp4_to_float_block(
-            exponent, block_mantissas, unpacked_bfp4
-        )
-        bfloat16_values.extend(block_bfloat16_values)
-
-    return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
+def unpack_bfp2_b(bfp2_block, sfpu=False, num_faces=4, face_r_dim=16):
+    return _unpack_bfp_b(
+        bfp2_block,
+        magnitude_bits=1,
+        sfpu=sfpu,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+    )
 
 
 # ============================================================================
@@ -463,6 +458,159 @@ def unpack_mxfp4(
     return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
 
 
+def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
+    """
+    Shared unpack core for MxInt formats. Given E8M0 scale bytes and a
+    (num_blocks, 32) int8 array of per-element values, return the decoded
+    bfloat16 tensor. `elem_scale_divisor` is the format's implicit scale
+    denominator (64 for MxInt8's 2^-6, 4 for MxInt4's 2^-2, 1 for MxInt2's
+    2^0). NaN scale (0xFF) zeros the block, matching MxFp unpack behavior.
+    """
+    scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
+    scale_factors = np.where(
+        scales_array == 255, 0.0, np.exp2(scales_array.astype(np.float32) - 127.0)
+    )
+    decoded = int_blocks.astype(np.float32) * (
+        scale_factors[:, np.newaxis] / elem_scale_divisor
+    )
+    return torch.tensor(decoded.flatten(), dtype=torch.bfloat16)
+
+
+def unpack_mxint8(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Unpack MxInt8 format (signed S1.6 with E8M0 block scale) to bfloat16 tensor.
+
+    Layout: [scales padded to 16B][signed-int8 elements padded to 16B], one E8M0
+    scale per 32-element block. Decoded value = (int8 / 64) × 2^(scale_e8m0 − 127).
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint8")
+
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
+    scale_section_len = _align16(num_scales)
+
+    if len(packed_bytes) < scale_section_len + num_elements:
+        raise ValueError(
+            "Invalid packed_bytes length for MxInt8: got "
+            f"{len(packed_bytes)} bytes, expected at least "
+            f"{scale_section_len + num_elements} bytes."
+        )
+
+    scales_e8m0 = packed_bytes[:num_scales]
+    elements_bytes = packed_bytes[scale_section_len : scale_section_len + num_elements]
+    int8_blocks = np.frombuffer(bytes(elements_bytes), dtype=np.int8).reshape(
+        num_scales, MX_FORMAT_BLOCK_SIZE
+    )
+    return _mxint_decode_blocks(scales_e8m0, int8_blocks, elem_scale_divisor=64.0)
+
+
+def unpack_mxint4(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Unpack MxInt4 format (signed S1.2 with E8M0 block scale) to bfloat16 tensor.
+
+    Layout: [scales padded to 16B][packed nibbles padded to 16B], one E8M0
+    scale per 32-element block, 2 elements per byte (low nibble = even index).
+    Decoded value = (int4 / 4) × 2^(scale_e8m0 − 127).
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint4")
+
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
+    scale_section_len = _align16(num_scales)
+    element_bytes_len = num_elements // 2  # 2 elements per byte
+
+    if len(packed_bytes) < scale_section_len + element_bytes_len:
+        raise ValueError(
+            "Invalid packed_bytes length for MxInt4: got "
+            f"{len(packed_bytes)} bytes, expected at least "
+            f"{scale_section_len + element_bytes_len} bytes."
+        )
+
+    scales_e8m0 = packed_bytes[:num_scales]
+    elements_bytes = packed_bytes[
+        scale_section_len : scale_section_len + element_bytes_len
+    ]
+
+    # Unpack 2 nibbles per byte: low = even index, high = odd index.
+    packed_u8 = np.frombuffer(bytes(elements_bytes), dtype=np.uint8)
+    nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)
+    nibbles_u8[0::2] = packed_u8 & 0x0F
+    nibbles_u8[1::2] = packed_u8 >> 4
+    # Sign-extend each 4-bit value to int8: nibbles ≥ 8 are negative in 2's comp.
+    int4_as_int8 = np.where(
+        nibbles_u8 >= 8,
+        nibbles_u8.astype(np.int16) - 16,
+        nibbles_u8.astype(np.int16),
+    ).astype(np.int8)
+    int4_blocks = int4_as_int8.reshape(num_scales, MX_FORMAT_BLOCK_SIZE)
+    return _mxint_decode_blocks(scales_e8m0, int4_blocks, elem_scale_divisor=4.0)
+
+
+def unpack_mxint2(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Unpack MxInt2 format (signed S1.0 with E8M0 block scale) to bfloat16 tensor.
+
+    Layout: [scales padded to 16B][packed crumbs padded to 16B], one E8M0
+    scale per 32-element block, 4 elements per byte (crumb layout: bits[1:0]
+    = even-most index, then [3:2], [5:4], [7:6]). Decoded value = int2 × 2^(scale_e8m0 − 127).
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint2")
+
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
+    scale_section_len = _align16(num_scales)
+    element_bytes_len = num_elements // 4  # 4 elements per byte
+
+    if len(packed_bytes) < scale_section_len + element_bytes_len:
+        raise ValueError(
+            "Invalid packed_bytes length for MxInt2: got "
+            f"{len(packed_bytes)} bytes, expected at least "
+            f"{scale_section_len + element_bytes_len} bytes."
+        )
+
+    scales_e8m0 = packed_bytes[:num_scales]
+    elements_bytes = packed_bytes[
+        scale_section_len : scale_section_len + element_bytes_len
+    ]
+
+    # Unpack 4 crumbs per byte: bits[1:0], [3:2], [5:4], [7:6].
+    packed_u8 = np.frombuffer(bytes(elements_bytes), dtype=np.uint8)
+    crumbs_u8 = np.empty(packed_u8.size * 4, dtype=np.uint8)
+    crumbs_u8[0::4] = packed_u8 & 0x03
+    crumbs_u8[1::4] = (packed_u8 >> 2) & 0x03
+    crumbs_u8[2::4] = (packed_u8 >> 4) & 0x03
+    crumbs_u8[3::4] = (packed_u8 >> 6) & 0x03
+    # Sign-extend each 2-bit value to int8: crumbs ≥ 2 are negative in 2's comp.
+    int2_as_int8 = np.where(
+        crumbs_u8 >= 2,
+        crumbs_u8.astype(np.int16) - 4,
+        crumbs_u8.astype(np.int16),
+    ).astype(np.int8)
+    int2_blocks = int2_as_int8.reshape(num_scales, MX_FORMAT_BLOCK_SIZE)
+    return _mxint_decode_blocks(scales_e8m0, int2_blocks, elem_scale_divisor=1.0)
+
+
 _UNPACKERS = {
     DataFormat.Float16: unpack_fp16,
     DataFormat.Float16_b: unpack_bfp16,
@@ -515,12 +663,20 @@ def unpack_res_tiles(
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp8_b
     elif output_format == DataFormat.Bfp4_b:
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp4_b
+    elif output_format == DataFormat.Bfp2_b:
+        unpack_func = unpack_bfp16 if sfpu else unpack_bfp2_b
     elif output_format == DataFormat.MxFp8R:
         unpack_func = unpack_mxfp8r
     elif output_format == DataFormat.MxFp8P:
         unpack_func = unpack_mxfp8p
     elif output_format == DataFormat.MxFp4:
         unpack_func = unpack_mxfp4
+    elif output_format == DataFormat.MxInt8:
+        unpack_func = unpack_mxint8
+    elif output_format == DataFormat.MxInt4:
+        unpack_func = unpack_mxint4
+    elif output_format == DataFormat.MxInt2:
+        unpack_func = unpack_mxint2
     else:
         unpack_func = _UNPACKERS[output_format]
 
@@ -532,11 +688,18 @@ def unpack_res_tiles(
         end_idx = start_idx + elements_per_tile_needed
         tile_data = packed_list[start_idx:end_idx]
 
-        if unpack_func in (unpack_bfp8_b, unpack_bfp4_b):
+        if unpack_func in (unpack_bfp8_b, unpack_bfp4_b, unpack_bfp2_b):
             unpacked_tile = unpack_func(
                 tile_data, sfpu=sfpu, num_faces=num_faces, face_r_dim=face_r_dim
             )
-        elif unpack_func in [unpack_mxfp8r, unpack_mxfp8p, unpack_mxfp4]:
+        elif unpack_func in [
+            unpack_mxfp8r,
+            unpack_mxfp8p,
+            unpack_mxfp4,
+            unpack_mxint8,
+            unpack_mxint4,
+            unpack_mxint2,
+        ]:
             unpacked_tile = unpack_func(
                 tile_data,
                 num_faces=num_faces,

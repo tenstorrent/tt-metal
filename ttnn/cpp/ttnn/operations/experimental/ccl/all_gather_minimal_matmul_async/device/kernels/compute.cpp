@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
@@ -23,13 +22,15 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
+            tile_regs_acquire();
             copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
+            tile_regs_release();
             tile_id++;
         }
         cb_push_back(out_cb, N_block_tiles);
@@ -54,13 +55,15 @@ void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
+            tile_regs_acquire();
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
+            tile_regs_release();
             tile_id++;
         }
         cb_push_back(out_cb, N_block_tiles);
@@ -107,7 +110,6 @@ void add_bias_and_addcmul_block(
             add_tiles_bcast<BroadcastType::ROW>(intermediate_cb, bias_cb, tile_id, n, DST_ID);
 
             tile_regs_commit();
-
             tile_regs_wait();
             pack_tile(DST_ID, intermediate_cb);
             tile_regs_release();
@@ -252,7 +254,6 @@ void add_bias_and_addcmul_block(
             add_tiles(intermediate_cb, ternary_a_cb, tile_id, n, DST_ID);
 
             tile_regs_commit();
-
             tile_regs_wait();
             pack_tile(DST_ID, out_cb);
             tile_regs_release();
@@ -303,7 +304,6 @@ void matmul_blocks(
                 in1_index += full_N_block_tiles;
             }
             tile_regs_commit();
-
             tile_regs_wait();
             uint32_t write_dst_index = 0;
             for (uint32_t h = 0; h < subblock_h; h++) {
@@ -417,13 +417,18 @@ void kernel_main() {
 
                 if (k_block == K_num_blocks - 1) {
                     /**
-                     * On next iteration we might get reuse on in0
-                     *
+                     * On next iteration we might get reuse on in0.
+                     * Only valid for Ring: k_forward toggles each n_block_iter so the last
+                     * actual_k_block of n=X equals the first of n=X+1. Linear keeps k_forward
+                     * fixed, so reusing would feed the previous iter's last K-block (=
+                     * K_num_blocks-1) when the new iter wants K-block 0. Force fresh read.
                      */
+#ifndef IS_LINEAR
                     if (n_block_iter < N_blocks_per_core - 1) {
                         // going to stride on N, so reuse in0
                         reuse_in0_block = true;
                     }
+#endif
                 }
                 if (!reuse_in0_block) {
                     cb_pop_front(in0_cb, in0_block_num_tiles);

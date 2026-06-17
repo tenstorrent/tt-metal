@@ -9,18 +9,14 @@ import pytest
 import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
-    add_shared_expert_weights,
-    get_shared_experts_per_device,
     get_weight_core_shard_maps,
     get_weight_mem_configs,
-    map_shared_experts,
     prepare_w0_w1_tensor_for_moe_compute,
     prepare_w2_tensor_for_moe_compute,
 )
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from tests.nightly.tg.ccl.moe.test_all_to_all_dispatch_metadata_6U import get_shared_expert_to_device_map
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -387,34 +383,6 @@ def gen_combine_golden(
     return torch_combine_ref_tensor, valid_mask
 
 
-def _add_shared_experts_to_combine_golden(
-    batch,
-    torch_combine_golden,
-    torch_combine_valid_mask,
-    torch_dispatch_input_tensor,
-    shared_id_to_w0,
-    shared_id_to_w1,
-    shared_id_to_w2,
-):
-    combine_output_shape = torch_combine_golden.shape
-
-    shared_expert_contrib_shape = [len(shared_id_to_w0)] + list(combine_output_shape)[1:]
-    shared_expert_contribs = torch.zeros(shared_expert_contrib_shape, dtype=torch_combine_golden.dtype)
-    shared_valid_mask = torch.zeros(len(shared_id_to_w0), torch_combine_valid_mask.shape[1], dtype=torch.bool)
-
-    for e, (w0, w1, w2) in enumerate(zip(shared_id_to_w0.values(), shared_id_to_w1.values(), shared_id_to_w2.values())):
-        for b in range(batch):
-            token = torch_dispatch_input_tensor[b, :, :, :]
-            contrib = gen_matmul_golden(token, w0, w1, w2)
-            shared_expert_contribs[e, b, :] = contrib[0, 0, 0, :]
-            shared_valid_mask[e, b] = True
-
-    return (
-        torch.cat([torch_combine_golden, shared_expert_contribs], dim=0),
-        torch.cat([torch_combine_valid_mask, shared_valid_mask], dim=0),
-    )
-
-
 def verify_combine(
     iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden, torch_combine_valid_mask
 ):
@@ -499,29 +467,15 @@ def gen_output_golden(
     return output_reference
 
 
-def _add_shared_experts_to_output_golden(
-    batch,
-    torch_output_golden,
-    torch_dispatch_input_tensor,
-    shared_id_to_w0,
-    shared_id_to_w1,
-    shared_id_to_w2,
-    torch_shared_expert_scores,
+def verify_output(
+    iteration,
+    mesh_device,
+    mesh_shape,
+    tt_output_tensor,
+    output_reference_tensor,
+    pcc_threshold=0.988,
+    atol_threshold=450,
 ):
-    for e, (w0, w1, w2) in enumerate(zip(shared_id_to_w0.values(), shared_id_to_w1.values(), shared_id_to_w2.values())):
-        for b in range(batch):
-            token = torch_dispatch_input_tensor[b, :, :, :]
-            contrib = gen_matmul_golden(token, w0, w1, w2)
-
-            torch_output_golden[b, :, :, :] += torch_shared_expert_scores[b, 0, 0, e] * contrib[0]
-
-    return torch_output_golden
-
-
-def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor):
-    PCC_THRESHOLD = 0.988
-    ATOL_THRESHOLD = 450
-
     # bring to host
     # [1, 1, tokens_per_devices, hidden_size // num_replicated_devices] (per device) -> [1, 1, batch, hidden_size] (global on host)
     tt_output_tensor = ttnn.to_torch(
@@ -535,49 +489,24 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     tt_output_tensor = tt_output_tensor.reshape(tt_output_tensor.shape[-2], 1, 1, tt_output_tensor.shape[-1])
 
     # check pcc
-    pcc_passed, pcc_output = comp_pcc(tt_output_tensor, output_reference_tensor, pcc=PCC_THRESHOLD)
+    pcc_passed, pcc_output = comp_pcc(tt_output_tensor, output_reference_tensor, pcc=pcc_threshold)
     logger.info(f"Final Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - PCC: {pcc_output}")
 
     # check allclose
     allclose_passed, allclose_output = comp_allclose(
-        output_reference_tensor, tt_output_tensor, atol=ATOL_THRESHOLD, rtol=0
+        output_reference_tensor, tt_output_tensor, atol=atol_threshold, rtol=0
     )
     logger.info(f"Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
     if not allclose_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
-        mask = (tt_output_tensor - output_reference_tensor).abs() > ATOL_THRESHOLD
+        mask = (tt_output_tensor - output_reference_tensor).abs() > atol_threshold
         logger.warning(
             f"Elements out of bounds: {tt_output_tensor[mask]} ref: {output_reference_tensor[mask]} idx: {mask.nonzero(as_tuple=True)}"
         )
 
     return pcc_passed and allclose_passed
-
-
-def _expert_list_to_tensor(expert_list: list[torch.Tensor]) -> torch.Tensor:
-    """Convert list of expert tensors to a single concatenated tensor.
-
-    Args:
-        expert_list: List of tensors, each of shape (layers, 1, ...)
-
-    Returns:
-        Single tensor of shape (layers, num_experts, ...)
-    """
-    return torch.cat(expert_list, dim=1)
-
-
-def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
-    """Convert concatenated expert tensor back to list of individual expert tensors.
-
-    Args:
-        expert_tensor: Tensor of shape (layers, num_experts, ...)
-
-    Returns:
-        List of tensors, each of shape (layers, 1, ...)
-    """
-    num_experts = expert_tensor.shape[1]
-    return [expert_tensor[:, i : i + 1, ...] for i in range(num_experts)]
 
 
 @pytest.mark.requires_device(["QUAD"])
@@ -619,7 +548,6 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
     ids=["fabric_1D_ring"],
     indirect=True,
 )
-@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "alternate_shared"])
 @torch.no_grad()
 def test_optimized_moe_decode_block(
     mesh_shape,
@@ -640,7 +568,6 @@ def test_optimized_moe_decode_block(
     combine_token_parallel_core_dim,
     enable_trace,
     num_iterations,
-    shared_expert_mode,
 ):
     ############################################
     # initial setup
@@ -658,22 +585,6 @@ def test_optimized_moe_decode_block(
 
     routed_experts = routed_experts_per_device * num_devices
     routed_experts_per_cluster = routed_experts // num_replicated_devices
-
-    shared_expert_ids_to_devices = get_shared_expert_to_device_map(routed_experts, num_devices, shared_expert_mode)
-    if shared_expert_ids_to_devices is not None:
-        total_experts_per_device = (
-            routed_experts_per_device + get_shared_experts_per_device(shared_expert_ids_to_devices, num_devices)[0]
-        )
-        total_experts = total_experts_per_device * num_devices
-        total_experts_per_cluster = total_experts_per_device * num_dispatch_devices
-        num_shared_experts = len(shared_expert_ids_to_devices)
-        effective_experts_k = select_experts_k + num_shared_experts
-    else:
-        total_experts_per_device = routed_experts_per_device
-        total_experts = routed_experts
-        total_experts_per_cluster = routed_experts_per_cluster
-        effective_experts_k = select_experts_k
-        num_shared_experts = 0
 
     if cluster_axis == 1:
         shard_dims = (None, shard_dim)
@@ -704,7 +615,7 @@ def test_optimized_moe_decode_block(
     ############################################
     # create constant input tensors
     ############################################
-    logger.info(f"Begin creating constant input tensors. {total_experts=} {total_experts_per_device=}")
+    logger.info(f"Begin creating constant input tensors. {routed_experts=} {routed_experts_per_device=}")
 
     expert_mapping_dtype = ttnn.uint16
     torch_expert_mapping = create_torch_expert_mapping_tensor(
@@ -716,14 +627,6 @@ def test_optimized_moe_decode_block(
         routed_experts_per_device,
         expert_mapping_dtype,
     )
-
-    shared_expert_score = 1 / 2.5
-    if shared_expert_ids_to_devices is not None:
-        torch_expert_mapping = map_shared_experts(
-            torch_expert_mapping, shared_expert_ids_to_devices, mesh_shape, cluster_axis
-        )
-        # the inverse of the routed scaling factor
-        torch_shared_expert_scores = torch.full([batch, 1, seq, num_shared_experts], shared_expert_score)
 
     tt_expert_mapping = ttnn.from_torch(
         torch_expert_mapping,
@@ -741,50 +644,6 @@ def test_optimized_moe_decode_block(
     torch_w1_tensors = create_torch_w1_tensors(num_layers, routed_experts, hidden_size, matmul_N)
     torch_w2_tensors = create_torch_w2_tensors(num_layers, routed_experts, matmul_N, hidden_size)
 
-    if shared_expert_ids_to_devices is not None:
-        logger.info("Creating and adding shared expert weights")
-        shared_id_to_w0 = {
-            sid: create_torch_w0_tensors(num_layers, 1, hidden_size, matmul_N)[0]
-            for sid in shared_expert_ids_to_devices
-        }
-        shared_id_to_w1 = {
-            sid: create_torch_w1_tensors(num_layers, 1, hidden_size, matmul_N)[0]
-            for sid in shared_expert_ids_to_devices
-        }
-        shared_id_to_w2 = {
-            sid: create_torch_w2_tensors(num_layers, 1, matmul_N, hidden_size)[0]
-            for sid in shared_expert_ids_to_devices
-        }
-
-        # Convert lists to tensors for add_shared_expert_weights
-        routed_w0_tensor = _expert_list_to_tensor(torch_w0_tensors)
-        routed_w1_tensor = _expert_list_to_tensor(torch_w1_tensors)
-        routed_w2_tensor = _expert_list_to_tensor(torch_w2_tensors)
-
-        # Add shared expert weights
-        # note the API of this function is consistent with usage in the model but requires a couple of helpers in this
-        # test setup
-        combined_w0_tensor, combined_w1_tensor, combined_w2_tensor = add_shared_expert_weights(
-            routed_w0_tensor,
-            routed_w1_tensor,
-            routed_w2_tensor,
-            shared_id_to_w0,
-            shared_id_to_w1,
-            shared_id_to_w2,
-            shared_expert_ids_to_devices,
-            num_devices,
-        )
-
-        # Convert back to lists for compatibility with the rest of the test
-        torch_total_w0_tensors = _expert_tensor_to_list(combined_w0_tensor)
-        torch_total_w1_tensors = _expert_tensor_to_list(combined_w1_tensor)
-        torch_total_w2_tensors = _expert_tensor_to_list(combined_w2_tensor)
-        logger.info("Done adding shared expert weights")
-    else:
-        torch_total_w0_tensors = torch_w0_tensors
-        torch_total_w1_tensors = torch_w1_tensors
-        torch_total_w2_tensors = torch_w2_tensors
-
     w0_w1_shard_map, w2_shard_map, compute_matmul_dram_core_range_set = get_weight_core_shard_maps(
         mesh_device, hidden_size, matmul_N
     )
@@ -794,23 +653,23 @@ def test_optimized_moe_decode_block(
     # Finally, order merged weights in accordance to linearized_mesh_coord ordering
     torch_w0_w1_reordered_tensors = [None] * num_devices
     torch_w2_reordered_tensors = [None] * num_devices
-    for e in range(0, total_experts, total_experts_per_device):
+    for e in range(0, routed_experts, routed_experts_per_device):
         # [L, 1, H, N] -> [L, E/D, H, N]
-        torch_w0 = torch.cat([torch_total_w0_tensors[e + i] for i in range(total_experts_per_device)], dim=1)
+        torch_w0 = torch.cat([torch_w0_tensors[e + i] for i in range(routed_experts_per_device)], dim=1)
         # [L, 1, H, N] -> [L, E/D, H, N]
-        torch_w1 = torch.cat([torch_total_w1_tensors[e + i] for i in range(total_experts_per_device)], dim=1)
+        torch_w1 = torch.cat([torch_w1_tensors[e + i] for i in range(routed_experts_per_device)], dim=1)
         # [L, 1, N, H] -> [L, E/D, N, H]
-        torch_w2 = torch.cat([torch_total_w2_tensors[e + i] for i in range(total_experts_per_device)], dim=1)
+        torch_w2 = torch.cat([torch_w2_tensors[e + i] for i in range(routed_experts_per_device)], dim=1)
 
         torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, total_experts_per_device, hidden_size, matmul_N, w0_w1_shard_map
+            torch_w0, torch_w1, num_layers, routed_experts_per_device, hidden_size, matmul_N, w0_w1_shard_map
         )
         torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, total_experts_per_device, matmul_N, hidden_size, w2_shard_map, w0_w1_shard_map
+            torch_w2, num_layers, routed_experts_per_device, matmul_N, hidden_size, w2_shard_map, w0_w1_shard_map
         )
 
         linearized_mesh_coord = get_linearized_mesh_coord(
-            num_replicated_devices, cluster_axis, e, total_experts_per_cluster, total_experts_per_device
+            num_replicated_devices, cluster_axis, e, routed_experts_per_cluster, routed_experts_per_device
         )
         torch_w0_w1_reordered_tensors[linearized_mesh_coord] = torch_w0_w1_reordered
         torch_w2_reordered_tensors[linearized_mesh_coord] = torch_w2_reordered
@@ -824,7 +683,7 @@ def test_optimized_moe_decode_block(
     # ------------------------------------------------------------------------
     w0_w1_mem_config, w2_mem_config, _, _ = get_weight_mem_configs(
         num_layers,
-        total_experts_per_device,
+        routed_experts_per_device,
         hidden_size,
         matmul_N,
         w0_w1_shard_map,
@@ -903,7 +762,6 @@ def test_optimized_moe_decode_block(
         dispatch_input_expert_indices_dtype = ttnn.uint16
 
         torch_dispatch_input_tensor = create_torch_dispatch_input_tensor(batch, seq, hidden_size, dispatch_input_dtype)
-        # inputs to dispatch are based on routed experts only, outputs from dispatch add shared experts
         torch_dispatch_input_expert_indices_tensor = create_torch_dispatch_input_expert_indices_tensor(
             scheme,
             num_devices,
@@ -971,17 +829,6 @@ def test_optimized_moe_decode_block(
             hidden_size,
             select_experts_k,
         )
-        # append shared experts if necessary
-        if shared_expert_ids_to_devices is not None:
-            torch_combine_golden, torch_combine_valid_mask = _add_shared_experts_to_combine_golden(
-                batch,
-                torch_combine_golden,
-                torch_combine_valid_mask,
-                torch_dispatch_input_tensor,
-                shared_id_to_w0,
-                shared_id_to_w1,
-                shared_id_to_w2,
-            )
 
         torch_combine_goldens.append(torch_combine_golden)
         torch_combine_valid_masks.append(torch_combine_valid_mask)
@@ -997,17 +844,6 @@ def test_optimized_moe_decode_block(
             hidden_size,
             select_experts_k,
         )
-        # add shared expert contribs, shape is the same.
-        if shared_expert_ids_to_devices is not None:
-            torch_output_golden = _add_shared_experts_to_output_golden(
-                batch,
-                torch_output_golden,
-                torch_dispatch_input_tensor,
-                shared_id_to_w0,
-                shared_id_to_w1,
-                shared_id_to_w2,
-                torch_shared_expert_scores,
-            )
         torch_output_goldens.append(torch_output_golden)
 
     logger.info(f"Done creating dynamic input tensors and goldens")
@@ -1032,7 +868,7 @@ def test_optimized_moe_decode_block(
     # same shard spec for indices and scores
     dispatch_output_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(compute_tilize_drain_core, compute_tilize_drain_core)}),
-        [total_tokens, effective_experts_k],
+        [total_tokens, select_experts_k],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
@@ -1043,7 +879,7 @@ def test_optimized_moe_decode_block(
         dispatch_output_shard_spec,
     )
     dispatch_output_expert_indices_dtype = ttnn.uint16
-    dispatch_output_expert_indices_shape = [num_dispatch_devices, total_tokens, effective_experts_k]
+    dispatch_output_expert_indices_shape = [num_dispatch_devices, total_tokens, select_experts_k]
     tt_preallocated_dispatch_output_expert_indices = ttnn.from_torch(
         torch.zeros(
             dispatch_output_expert_indices_shape, dtype=tt_to_torch_dtype(dispatch_output_expert_indices_dtype)
@@ -1062,7 +898,7 @@ def test_optimized_moe_decode_block(
         dispatch_output_shard_spec,
     )
     dispatch_output_expert_scores_dtype = ttnn.bfloat16
-    dispatch_output_expert_scores_shape = [num_dispatch_devices, total_tokens, effective_experts_k]
+    dispatch_output_expert_scores_shape = [num_dispatch_devices, total_tokens, select_experts_k]
     tt_preallocated_dispatch_output_expert_scores = ttnn.from_torch(
         torch.zeros(dispatch_output_expert_scores_shape, dtype=tt_to_torch_dtype(dispatch_output_expert_scores_dtype)),
         device=mesh_device,
@@ -1084,7 +920,7 @@ def test_optimized_moe_decode_block(
     tt_preallocated_combine_outputs = [
         ttnn.from_torch(
             torch.zeros(
-                [effective_experts_k, tokens_per_device, hidden_size],
+                [select_experts_k, tokens_per_device, hidden_size],
                 dtype=tt_to_torch_dtype(dispatch_output_sparse_buffer_dtype),
             ),
             device=mesh_device,
@@ -1108,7 +944,7 @@ def test_optimized_moe_decode_block(
             shard_shape=[32, 1024],
             grid=ttnn.CoreRangeSet(
                 {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, effective_experts_k - 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, select_experts_k - 1)),
                 }
             ),
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1174,11 +1010,11 @@ def test_optimized_moe_decode_block(
         # create persistent output tensor for combine
         # runtime since it needs to be a zeroed out tensor (for each layer)
         # allocated before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
-        # [effective_experts_k (includes shared experts), tokens_per_device, hidden_size] per device
+        # [select_experts_k, tokens_per_device, hidden_size] per device
 
         #         # TODO (AM) REMOVE ME ONCE TESTED ON QUAD
         #         tt_preallocated_combine_output = ttnn.moreh_full(
-        #             shape=[effective_experts_k, tokens_per_device, hidden_size],
+        #             shape=[select_experts_k, tokens_per_device, hidden_size],
         #             fill_value=0,
         #             device=mesh_device,
         #             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1195,7 +1031,6 @@ def test_optimized_moe_decode_block(
             tt_dispatch_input_expert_indices_tensor,
             tt_dispatch_input_expert_scores_tensor,
             tt_expert_mapping,
-            shared_expert_ids=list(shared_expert_ids_to_devices) if shared_expert_ids_to_devices else None,
             cluster_axis=cluster_axis,
             num_links=4,
             drain_sync_tilizer_core=None,
@@ -1267,8 +1102,6 @@ def test_optimized_moe_decode_block(
             split_size=int(tt_tilized_compute_output.shape[-1] // num_replicated_devices),
             output_memory_config=fast_reduce_output_memory_config,
             scores_tensor=topk_experts_weights,
-            num_shared_experts=num_shared_experts,
-            shared_expert_scale=shared_expert_score,
         )
 
         ttnn.deallocate(tt_dispatch_input_expert_indices_tensor)

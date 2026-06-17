@@ -78,7 +78,10 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_
             !operation_attributes.optional_intermediate_mem_config.has_value()) {
             auto intermediate_shard_spec = intermediate_mem_config.shard_spec().value();
             intermediate_shard_spec.shape[0] *= 2;
-            adjusted_intermediate_mem_config = intermediate_mem_config.with_shard_spec(intermediate_shard_spec);
+            adjusted_intermediate_mem_config = tt::tt_metal::MemoryConfig(
+                intermediate_mem_config.memory_layout(),
+                intermediate_mem_config.buffer_type(),
+                intermediate_shard_spec);
         } else {
             adjusted_intermediate_mem_config = intermediate_mem_config;
         }
@@ -117,6 +120,34 @@ std::vector<Tensor> ReduceScatterMinimalAsyncDeviceOperation::create_output_tens
                                      : create_device_tensor(tensor_specs[1], input_tensor.device());
 
     return {intermediate_buffer, output_buffer};
+}
+
+std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalAsyncDeviceOperation::compute_output_topologies(
+    const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
+    // reduce_scatter produces (intermediate, output). The output is sharded along `dim`
+    // across `cluster_axis`; the intermediate is an internal workspace whose topology is
+    // best left matching the input so that downstream introspection is not misleading.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+
+    auto shard_placement =
+        tt::tt_metal::distributed::MeshMapperConfig::Shard{static_cast<int>(operation_attributes.dim)};
+
+    if (operation_attributes.cluster_axis.has_value()) {
+        const auto axis = operation_attributes.cluster_axis.value();
+        if (axis < output_placements.size()) {
+            output_placements[axis] = shard_placement;
+        }
+    } else {
+        for (auto& placement : output_placements) {
+            placement = shard_placement;
+        }
+    }
+
+    auto output_topology = tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
+
+    return {input_topology, std::move(output_topology)};
 }
 
 ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(

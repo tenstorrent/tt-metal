@@ -28,11 +28,13 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb.wait_front(onepage);
 #ifdef CN_RM
-        noc.async_write(cb, s, write_size, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
+        // Restored native sharded multi-page split (see common.hpp helper).
+        // RM-only: see reader kernel for rationale; TILE-layout below uses original API.
+        const uint32_t cb_read_ptr = cb.get_read_ptr();
+        tt::data_movement::common::noc_async_write_sharded(noc, cb_read_ptr, s, i, 0, write_size);
 #else
         noc.async_write(cb, s, page_size, {.offset_bytes = 0}, {.page_id = i});
 #endif
-
         noc.async_write_barrier();
         cb.pop_front(onepage);
     }

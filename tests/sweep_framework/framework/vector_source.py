@@ -9,7 +9,7 @@ import pathlib
 import re
 from abc import ABC, abstractmethod
 
-from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
+from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix, strip_mesh_suffix
 from .matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     SUPPORTED_VECTOR_GROUPING_MODES,
@@ -202,11 +202,17 @@ class VectorExportSource(VectorSource):
 
     @staticmethod
     def _get_grouping_kind(module_name: str) -> str | None:
-        """Classify a manifest module name by shared suffix parsing rules."""
+        """Classify a manifest module name by shared suffix parsing rules.
+        When both hw and mesh suffixes are present (e.g. .hw_..._1c.mesh_4x8),
+        return 'hw' since that is the primary grouping mode. The mesh suffix
+        is a sub-grouping within the hw group.
+        """
+        # Check hw first: strip_mesh_suffix removes .mesh_NxM so parse_hardware_suffix
+        # can find the .hw_ pattern that was hidden behind the mesh suffix.
+        if parse_hardware_suffix(strip_mesh_suffix(module_name)) is not None:
+            return "hw"
         if parse_mesh_suffix(module_name) is not None:
             return "mesh"
-        if parse_hardware_suffix(module_name) is not None:
-            return "hw"
         return None
 
     def _manifest_entry_matches_module(
@@ -527,7 +533,11 @@ class VectorExportSource(VectorSource):
                 "but no owned mesh shapes were configured for that lane."
             )
 
-        hardware_rules = capability_profile.get("hardware_rules", ())
+        # capability_profile is None when no TEST_GROUP_NAME is set and none can be
+        # inferred from the machine (common for local single-/sub-mesh runs); guard
+        # so vector loading degrades to "no hardware rules" instead of crashing with
+        # AttributeError on None.
+        hardware_rules = (capability_profile or {}).get("hardware_rules", ())
         if filter_policy["enforce_hardware_capability"] and not hardware_rules:
             logger.warning(
                 f"Manifest grouping mode is 'hw' for module '{module_name}', but no hardware capability profile "

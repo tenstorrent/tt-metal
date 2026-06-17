@@ -41,7 +41,7 @@ void kernel_main() {
 
     // Override MATH init to enable acc_to_dest=1 (hardware accumulate mode)
     // This makes each mul_tiles_bcast_cols call do: dst0 += act * score  (MAC)
-    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         compute_input_cb_id_0, compute_input_cb_id_1, 1 /*acc_to_dest*/)));
 
     reconfig_data_format(compute_input_cb_id_0, compute_input_cb_id_1);
