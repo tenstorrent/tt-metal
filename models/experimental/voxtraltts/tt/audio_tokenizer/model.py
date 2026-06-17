@@ -451,6 +451,7 @@ class VoxtralTTAudioTokenizer:
             mask,
             self.mesh_device,
             dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self._attn_mask_cache[key] = mask_tt
@@ -467,6 +468,7 @@ class VoxtralTTAudioTokenizer:
             mask,
             self.mesh_device,
             dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

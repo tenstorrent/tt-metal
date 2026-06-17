@@ -21,7 +21,7 @@ from models.experimental.voxtraltts.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC,
 )
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
-from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch, voxtral_to_torch_replicated
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 from models.tt_transformers.tt.common import Mode
 
@@ -114,6 +114,7 @@ def _linear_weight_ttnn(w_out_in: torch.Tensor, device, dtype) -> ttnn.Tensor:
         w_out_in.transpose(-2, -1).contiguous(),
         device,
         dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -210,16 +211,16 @@ class VoxtralTTAcousticModel:
         _sem_mask = torch.zeros(1, 1, _sem_size, dtype=torch.float32)
         _sem_mask[0, 0, self._empty_audio_token_id] = float("-inf")
         _sem_mask[0, 0, self._tail_mask_start :] = float("-inf")
-        self._sem_mask_tt = ttnn.from_torch(
+        self._sem_mask_tt = voxtral_from_torch(
             _sem_mask,
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._semantic_dram_mem_config,
         )
-        self._end_audio_token_id_tt = ttnn.from_torch(
+        self._end_audio_token_id_tt = voxtral_from_torch(
             torch.tensor([[[self._end_audio_token_id]]], dtype=torch.int32),
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
@@ -411,6 +412,12 @@ class VoxtralTTAcousticModel:
             weight_cache_path=weight_cache_path,
         )
 
+    def _tilize_for_matmul(self, tensor: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
+        if tensor.layout == ttnn.TILE_LAYOUT:
+            return tensor, False
+        tiled = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=self._matmul_act_mem_config)
+        return tiled, True
+
     def predict_velocity_tt(
         self,
         x_t_tt: ttnn.Tensor,
@@ -422,6 +429,10 @@ class VoxtralTTAcousticModel:
         """FM velocity ``[B, …, n_acoustic]`` from device-resident inputs (projections + transformer trunk)."""
         bsz = int(x_t_tt.shape[0])
         lin_mem = self._matmul_act_mem_config
+
+        x_t_tt, owned_x = self._tilize_for_matmul(x_t_tt)
+        t_emb_tt, owned_t = self._tilize_for_matmul(t_emb_tt)
+        llm_hidden_tt, owned_l = self._tilize_for_matmul(llm_hidden_tt)
 
         s0 = ttnn.linear(
             x_t_tt,
@@ -449,6 +460,8 @@ class VoxtralTTAcousticModel:
             program_config=self._proj_prg_config,
         )
         if not borrow_llm:
+            ttnn.deallocate(llm_hidden_tt)
+        elif owned_l:
             ttnn.deallocate(llm_hidden_tt)
 
         def _as_token_3d(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -596,9 +609,9 @@ class VoxtralTTAcousticModel:
         host = self.fm_noise_host_torch(bsz, seed)
         if scale != 1.0:
             host = host * float(scale)
-        return ttnn.from_torch(
+        return voxtral_from_torch(
             host,
-            device=self.mesh_device,
+            self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
@@ -656,7 +669,13 @@ class VoxtralTTAcousticModel:
 
     def fm_decode_codes_tt(self, llm_hidden_tt: ttnn.Tensor, noise_tt: ttnn.Tensor, cfg_scalar: float) -> ttnn.Tensor:
         """Public alias for the traceable Euler-FM core (semantic + end-audio handling stay outside)."""
-        return self._fm_decode_codes_tt(llm_hidden_tt, noise_tt, cfg_scalar)
+        llm_tile = self._llm_hidden_tile_bf16(llm_hidden_tt)
+        owned_tile = llm_tile is not llm_hidden_tt
+        try:
+            return self._fm_decode_codes_tt(llm_tile, noise_tt, cfg_scalar)
+        finally:
+            if owned_tile and llm_tile.is_allocated():
+                ttnn.deallocate(llm_tile)
 
     def codes_from_fm(self, llm_hidden_tt: ttnn.Tensor, acoustic_tt: ttnn.Tensor) -> ttnn.Tensor:
         """Finalize discrete codes from a (possibly trace-produced) acoustic tensor: semantic argmax,
@@ -684,7 +703,7 @@ class VoxtralTTAcousticModel:
 
         is_end = ttnn.eq(semantic_code_tt, self._end_audio_token_id_tt)
 
-        if ttnn.to_torch(is_end).reshape(-1).bool().any():
+        if voxtral_to_torch_replicated(is_end).reshape(-1).bool().any():
             sem_i32 = ttnn.typecast(semantic_code_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ac_i32 = ttnn.typecast(acoustic_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(semantic_code_tt)
@@ -840,6 +859,16 @@ class VoxtralTTAcousticModel:
         for t_val, dt_val in zip(self._euler_t_vals, self._euler_dt_vals):
             te = self._time_embedding_tt(t_val, bsz)
             x_in = self._sampled_tt_for_velocity(sampled_tt)
+            if x_in.layout != ttnn.TILE_LAYOUT:
+                x_tiled = ttnn.to_layout(x_in, ttnn.TILE_LAYOUT, memory_config=self._matmul_act_mem_config)
+                if x_tiled is not x_in and x_in.is_allocated():
+                    ttnn.deallocate(x_in)
+                x_in = x_tiled
+            if te.layout != ttnn.TILE_LAYOUT:
+                te_tiled = ttnn.to_layout(te, ttnn.TILE_LAYOUT, memory_config=self._matmul_act_mem_config)
+                if te_tiled is not te and te.is_allocated():
+                    ttnn.deallocate(te)
+                te = te_tiled
             x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=self._matmul_act_mem_config)
             if x_in is not sampled_tt and x_in.is_allocated():
                 ttnn.deallocate(x_in)

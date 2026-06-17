@@ -47,6 +47,12 @@ def voxtral_parse_mesh_shape(env_value: str) -> tuple[int, int]:
     return int(parts[0]), int(parts[1])
 
 
+def voxtral_requested_compute_mesh_shape() -> tuple[int, int]:
+    """Parse ``VOXTRAL_COMPUTE_MESH_SHAPE`` without probing PCIe (safe before device open)."""
+    raw = os.getenv("VOXTRAL_COMPUTE_MESH_SHAPE", "1,1").strip()
+    return voxtral_parse_mesh_shape(raw)
+
+
 def voxtral_compute_mesh_shape() -> ttnn.MeshShape:
     """Compute mesh shape from ``VOXTRAL_COMPUTE_MESH_SHAPE`` (default ``1,1``).
 
@@ -112,6 +118,17 @@ class VoxtralRuntimeMesh:
         return [ttnn.GetPCIeDeviceID(self.physical_device_id)]
 
 
+def voxtral_default_fabric_config():
+    """Fabric mode for multi-device Voxtral compute (CCL all-gather / reduce-scatter)."""
+    cluster = ttnn.cluster.get_cluster_type()
+    if cluster in (
+        ttnn.cluster.ClusterType.P150_X4,
+        ttnn.cluster.ClusterType.P150_X8,
+    ):
+        return ttnn.FabricConfig.FABRIC_1D_RING
+    return ttnn.FabricConfig.FABRIC_1D
+
+
 def prepare_voxtral_open_mesh_kwargs(device_params: dict | None) -> tuple[dict, dict]:
     """Host-aware ``open_mesh_device`` kwargs plus fabric settings for teardown.
 
@@ -161,9 +178,13 @@ def open_voxtral_runtime_mesh(
     from conftest import set_fabric
 
     physical_device_id = voxtral_resolve_physical_device_id(device_id)
-    open_kwargs, fabric = prepare_voxtral_open_mesh_kwargs(device_params)
-    previous_default = ttnn.GetDefaultDevice()
+    params = dict(device_params or {})
+    requested_compute = voxtral_requested_compute_mesh_shape()
+    if int(requested_compute[0]) * int(requested_compute[1]) > 1 and params.get("fabric_config") is None:
+        params["fabric_config"] = voxtral_default_fabric_config()
     host_shape = voxtral_host_mesh_shape()
+    open_kwargs, fabric = prepare_voxtral_open_mesh_kwargs(params)
+    previous_default = ttnn.GetDefaultDevice()
 
     if host_shape is not None:
         set_fabric(

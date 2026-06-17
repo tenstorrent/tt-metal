@@ -49,7 +49,9 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
+import requests
 import torch
+from bs4 import BeautifulSoup
 from loguru import logger
 from scipy.io import wavfile
 
@@ -104,6 +106,8 @@ class DataArgs:
     default_voice: str = "casual_female"
     warmup_iters: int = 1
     inline_texts: list[str] | None = None
+    text_file: str | None = None
+    text_url: str | None = None
     voice: str | None = None
 
 
@@ -133,6 +137,18 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         action="append",
         default=None,
         help="Inline text prompt (text mode). Quotes are optional; repeat --text for multiple prompts. Bypasses --prompts JSON.",
+    )
+    p.add_argument(
+        "--text-file",
+        type=str,
+        default=None,
+        help="Read input text from a .txt/.md/.html file (one prompt item). Mutually exclusive with --text / --text-url.",
+    )
+    p.add_argument(
+        "--text-url",
+        type=str,
+        default=None,
+        help="Fetch article/page text from a URL (HTML parsed; plain text fallback). Mutually exclusive with --text / --text-file.",
     )
     p.add_argument("--output-dir", type=str, default=DataArgs.output_dir)
     p.add_argument("--mode", type=str, choices=("text", "codes", "latents"), default="text")
@@ -187,8 +203,15 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     )
     ns = p.parse_args(argv)
     inline_texts = [" ".join(parts).strip() for parts in ns.text] if ns.text else None
+    text_sources = sum(x is not None for x in (inline_texts, ns.text_file, ns.text_url))
+    if text_sources > 1:
+        p.error("Use only one of --text, --text-file, or --text-url.")
     if inline_texts and ns.mode != "text":
         p.error("--text is only valid with --mode text")
+    if ns.text_file and ns.mode != "text":
+        p.error("--text-file is only valid with --mode text")
+    if ns.text_url and ns.mode != "text":
+        p.error("--text-url is only valid with --mode text")
     if inline_texts and any(not text for text in inline_texts):
         p.error("--text requires a non-empty prompt")
     if ns.no_decode_trace:
@@ -213,6 +236,8 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
             default_voice=ns.default_voice,
             warmup_iters=ns.warmup_iters,
             inline_texts=inline_texts,
+            text_file=ns.text_file,
+            text_url=ns.text_url,
             voice=ns.voice,
         ),
     )
@@ -300,20 +325,80 @@ def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
 
 
 # ---------------------------------------------------------------------------
-# C. JSON prompt loading
+# C. Prompt loading (JSON, text files, URLs)
 # ---------------------------------------------------------------------------
 
 
+def _normalize_input_text(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _clean_scraped_line(line: str) -> str:
+    line = line.strip()
+    for pattern, repl in [
+        (r"^\s*#+\s*", "", line),
+        (r"^\s*-\s+", "", line),
+        (r"^\s*\*\s+", "", line),
+        (r"^\s*\d+\.\s+", "", line),
+        (r"\*\*(.+?)\*\*", r"\1", line),
+        (r"__(.+?)__", r"\1", line),
+        (r"`(.+?)`", r"\1", line),
+        (r"\[(.+?)\]\(.+?\)", r"\1", line),
+    ]:
+        line = re.sub(pattern, repl, line)
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def _extract_text_from_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
+        tag.decompose()
+    root = soup.find("article") or soup.find("main") or soup.body or soup
+    blocks: list[str] = []
+    for element in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "blockquote"]):
+        text = _clean_scraped_line(element.get_text(" ", strip=True))
+        if text:
+            blocks.append(text)
+    if blocks:
+        return "\n\n".join(blocks)
+    return _clean_scraped_line(root.get_text("\n", strip=True))
+
+
+def _extract_text_from_url(url: str, timeout: int = 20) -> str:
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; VoxtralTTSBot/1.0)"}
+    response = requests.get(url, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "").lower()
+    if "text/html" in content_type or response.text.lstrip().startswith("<"):
+        return _extract_text_from_html(response.text)
+    return _clean_scraped_line(response.text)
+
+
+def _extract_text_from_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    raw = path.read_text(encoding="utf-8")
+    if suffix in {".html", ".htm"}:
+        return _extract_text_from_html(raw)
+    if suffix in {".txt", ".md", ".markdown"}:
+        return _normalize_input_text(raw)
+    raise ValueError(f"Unsupported text file type: {path.suffix} (use .txt, .md, or .html)")
+
+
+def _prompt_item_from_text(text: str, default_voice: str, *, source: str | None = None) -> dict[str, Any]:
+    text = _normalize_input_text(text)
+    if not text:
+        raise ValueError("Input text is empty after normalization.")
+    item: dict[str, Any] = {"id": 0, "text": text, "voice": default_voice}
+    if source:
+        item["source"] = source
+    return item
+
+
 def load_prompt_items(path: str, default_voice: str) -> list[dict[str, Any]]:
-    # Plain-text support: entire .txt file is treated as ONE prompt item.
-    # All lines are joined with a space so paragraphs flow into a single string.
-    if str(path).endswith(".txt"):
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        text = " ".join(line.strip() for line in content.splitlines() if line.strip())
-        if not text:
-            raise ValueError(f"No text found in {path}")
-        return [{"id": 0, "text": text, "voice": default_voice}]
+    prompt_path = Path(path)
+    if prompt_path.suffix.lower() in {".txt", ".md", ".markdown", ".html", ".htm"}:
+        return [_prompt_item_from_text(_extract_text_from_path(prompt_path), default_voice, source=str(prompt_path))]
 
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
@@ -372,10 +457,12 @@ def _short_chunking_enabled() -> bool:
 
 def _min_speech_tokens(text: str) -> int:
     n_words = len(text.split())
+    estimate = _estimate_acoustic_frames(n_words)
     if _short_chunking_enabled():
-        return max(64, _estimate_acoustic_frames(n_words))
-    # Trace path: original demo floor (~8 tok/word, min 4096 for long single-pass runs).
-    return max(4096, n_words * _TOKENS_PER_WORD_ESTIMATE)
+        return max(64, estimate)
+    # Trace path: headroom for END_AUDIO without forcing 4096 frames on short prompts
+    # (4096 undecoded frames decode as noise when END_AUDIO is never hit).
+    return max(256, estimate * 4)
 
 
 def _prompt_seq_len(text: str, voice: str, model_name_or_path: str) -> int:
@@ -520,6 +607,18 @@ def _needs_chunking(text: str, text_max_seq_len: int) -> bool:
     if _short_chunking_enabled():
         return _estimate_acoustic_frames(n_words) > _CHUNK_MAX_ACOUSTIC_FRAMES
     return False
+
+
+def _leading_garbage_code_frames(shifted_codes_t37: torch.Tensor | None) -> int:
+    """Skip initial frames whose semantic column looks like uint32 readback garbage."""
+    if shifted_codes_t37 is None or shifted_codes_t37.numel() == 0:
+        return 0
+    sem = shifted_codes_t37[:, 0].detach().long().cpu()
+    max_valid = 20_000
+    for i, v in enumerate(sem):
+        if int(v) <= max_valid:
+            return int(i)
+    return 0
 
 
 def _find_degeneracy_cut_frame(shifted_codes_t37: torch.Tensor) -> int | None:
@@ -875,13 +974,28 @@ def run_text_mode(
 
     t0 = perf_counter()
     out = pipe.forward_device_resident(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
-    wav = out.waveform
+    n_frames = int(out.codes_b37t.shape[2])
+    wav = out.waveform.reshape(-1)
+    lead_frames = _leading_garbage_code_frames(out.shifted_codes_t37 if out.shifted_codes_t37.numel() > 0 else None)
+    if lead_frames > 0:
+        logger.warning(f"[tt_generate] trimming {lead_frames} leading garbage code frame(s) from waveform")
+        wav = wav[lead_frames * pipe._downsample_factor :]
+        n_frames = max(0, n_frames - lead_frames)
+    wav = _prepare_chunk_waveform(
+        wav,
+        sample_rate,
+        is_first=True,
+        hit_end_audio=out.hit_end_audio,
+        n_acoustic_frames=n_frames,
+        downsample_factor=pipe._downsample_factor,
+        shifted_codes_t37=out.shifted_codes_t37 if out.shifted_codes_t37.numel() > 0 else None,
+    )
+    wav = wav.reshape(1, 1, -1)
     t1 = perf_counter()
     total_s = t1 - t0
 
     n_samples = int(wav.numel())
     audio_s = n_samples / sample_rate if sample_rate > 0 else None
-    n_frames = int(out.codes_b37t.shape[2])
     _log_perf(
         "tt_generate",
         total_s=total_s,
@@ -959,7 +1073,9 @@ def run_latents_mode(
     ttnn.deallocate(lt)
     wav_tt = pipe.audio_tokenizer.pretransform_decode_tt(mel)
     ttnn.deallocate(mel)
-    wav = ttnn.to_torch(wav_tt).float()
+    from models.experimental.voxtraltts.utils.mesh import voxtral_to_torch_replicated
+
+    wav = voxtral_to_torch_replicated(wav_tt).float()
     ttnn.deallocate(wav_tt)
     t1 = perf_counter()
     T = int(latent.shape[2])
@@ -980,29 +1096,75 @@ def run_demo(args: DemoArgs) -> None:
 
     if args.data.inline_texts:
         voice = args.data.voice or args.data.default_voice
-        items = [{"id": i, "text": t} for i, t in enumerate(args.data.inline_texts)]
+        items = [{"id": i, "text": t, "voice": voice} for i, t in enumerate(args.data.inline_texts)]
+    elif args.data.text_file:
+        path = Path(args.data.text_file)
+        if not path.is_file():
+            raise FileNotFoundError(f"Text file not found: {path}")
+        items = [_prompt_item_from_text(_extract_text_from_path(path), args.data.default_voice, source=str(path))]
+    elif args.data.text_url:
+        logger.info(f"[demo] Fetching input text from URL: {args.data.text_url}")
+        items = [
+            _prompt_item_from_text(
+                _extract_text_from_url(args.data.text_url),
+                args.data.default_voice,
+                source=args.data.text_url,
+            )
+        ]
     else:
         items = load_prompt_items(args.data.prompts_file, args.data.default_voice)
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Default 2CQ overlap on. Production decode always trace-replays (see voxtral_tts).
-    os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
-    os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
+    # Trace defaults: OFF on 1×1 BH (clean audio), ON on 1×4 TP. Override with env vars.
+    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+
+    if voxtral_requested_compute_mesh_shape() == (1, 1):
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "0")
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "0")
+    else:
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
     from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, decode_trace_enabled
+    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+
+    requested_compute = voxtral_requested_compute_mesh_shape()
+    if requested_compute != (1, 1):
+        logger.warning(
+            "[demo] VOXTRAL_COMPUTE_MESH_SHAPE=%s enables tensor-parallel text on the full host mesh; "
+            "1×1 compute remains the default for single-rank production.",
+            requested_compute,
+        )
 
     logger.info(
-        f"[demo] trace replay=always, 2CQ={'on' if decode_trace_2cq_enabled() else 'off'}, "
+        f"[demo] trace replay={'on' if decode_trace_enabled() else 'off'}, "
+        f"2CQ={'on' if decode_trace_2cq_enabled() else 'off'}, "
         f"chunking={'short (non-trace)' if not decode_trace_enabled() else 'trace default'}"
     )
 
-    runtime = _open_device()
+    try:
+        runtime = _open_device()
+    except RuntimeError as exc:
+        msg = str(exc).lower()
+        if "pcie" in msg or "noc" in msg or "reset" in msg:
+            raise RuntimeError(
+                "Tenstorrent device is hung or unavailable (PCIe/NOC error). "
+                "Reset all cards and retry, e.g. `tt-smi -r`, then rerun with "
+                "VOXTRAL_COMPUTE_MESH_SHAPE=1,1."
+            ) from exc
+        raise
     pipe: VoxtralTTSPipeline | None = None
     try:
         logger.info(f"Loading VoxtralTTSPipeline from {args.model.model_name_or_path!r} …")
         t0 = perf_counter()
         pipe = _load_pipeline(runtime.compute_device, args)
         logger.info(f"Pipeline ready in {(perf_counter() - t0) * 1000:.1f} ms")
+        if runtime.compute_mesh_shape != (1, 1):
+            logger.warning(
+                "[demo] compute mesh {} (host {}). Use 1,1 for stable production.",
+                runtime.compute_mesh_shape,
+                runtime.host_mesh_shape,
+            )
 
         for w in range(args.data.warmup_iters + 1):
             is_warmup = w < args.data.warmup_iters
