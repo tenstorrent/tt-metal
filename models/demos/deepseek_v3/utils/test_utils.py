@@ -16,7 +16,12 @@ from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.common.utility_functions import comp_pcc, hf_cache_to_legacy, hf_dynamic_cache_from_legacy
+from models.common.utility_functions import (
+    comp_pcc,
+    hf_cache_layer_kv,
+    hf_cache_to_legacy,
+    hf_dynamic_cache_from_legacy,
+)
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -250,7 +255,9 @@ def torch_cache_from_transformers(cache: DynamicCache) -> tuple[torch.Tensor, ..
 
 
 def torch_cache_from_transformers_single_layer(cache: DynamicCache, layer_idx: int) -> torch.Tensor:
-    return cache[layer_idx][0]
+    # transformers 5.x Cache dropped __getitem__ (no cache[i][0]); hf_cache_layer_kv
+    # returns (key, value) version-tolerantly. [0] selects the key tensor.
+    return hf_cache_layer_kv(cache, layer_idx)[0]
 
 
 def transformers_cache_single_layer_from_torch(torch_cache: torch.Tensor, layer_idx: int) -> DynamicCache:

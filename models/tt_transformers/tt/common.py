@@ -351,16 +351,25 @@ def preprocess_inputs_prefill(
 def _chat_template_ids(encoded):
     """Normalize apply_chat_template(tokenize=True) output to a flat List[int].
 
-    transformers <5 returned a plain List[int]; transformers 5.x can return a
-    `tokenizers.Encoding` (exposes ``.ids``) or a `BatchEncoding`/dict (exposes
-    ``input_ids``), neither of which ``torch.tensor`` can consume directly.
+    transformers <5 returned a plain List[int]; transformers 5.x defaults
+    apply_chat_template to ``return_dict=True`` and returns a ``BatchEncoding``
+    (a ``UserDict`` — NOT a ``dict`` subclass, so ``isinstance(x, dict)`` is
+    False), or a `tokenizers.Encoding` (exposes ``.ids``). Iterating a
+    ``BatchEncoding``/``UserDict`` yields its *keys* ("input_ids", ...), so we
+    must extract ``input_ids`` via mapping membership rather than ``isinstance``.
     """
-    if isinstance(encoded, dict):  # BatchEncoding / dict
+    # dict / BatchEncoding / UserDict — use mapping membership, since BatchEncoding
+    # is a UserDict and fails isinstance(x, dict).
+    if hasattr(encoded, "keys") and "input_ids" in encoded:
         encoded = encoded["input_ids"]
     if hasattr(encoded, "ids"):  # tokenizers.Encoding
         return list(encoded.ids)
     if hasattr(encoded, "tolist"):  # torch tensor / np array
-        return encoded.tolist()
+        encoded = encoded.tolist()
+    # apply_chat_template(return_dict=True) on a single conversation can nest the
+    # ids in a 1-element batch dim ([[ids]]); unwrap it.
+    if isinstance(encoded, (list, tuple)) and len(encoded) == 1 and isinstance(encoded[0], (list, tuple)):
+        encoded = encoded[0]
     return list(encoded)  # already a List[int]
 
 
