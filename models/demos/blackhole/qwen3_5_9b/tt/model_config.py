@@ -259,19 +259,9 @@ class Qwen35ModelArgs(ModelArgs):
         normalizes that to the internal key scheme. This OVERRIDES the base meta-key
         (wq/wk/wv) loader — the 9B uses its own scheme.
         """
-        from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import (
-            is_fp8_checkpoint,
-            load_qwen35_state_dict_fp8,
-            remap_qwen35_state_dict,
-        )
-
-        # Block-wise FP8 checkpoints (e.g. Qwen3.5-27B-FP8) cannot go through
-        # AutoModelForCausalLM here; dequant + remap to the TP key scheme that
-        # the multi-device weight loaders consume.
-        if is_fp8_checkpoint(self.CKPT_DIR):
-            return load_qwen35_state_dict_fp8(self.CKPT_DIR)
-
         from transformers import AutoModelForCausalLM
+
+        from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, dtype="auto", trust_remote_code=True)
         state_dict = remap_qwen35_state_dict(model.state_dict())
