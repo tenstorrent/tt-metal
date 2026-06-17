@@ -429,6 +429,15 @@ jobs:
         run: |
           set +e
 
+          run_group() {
+            local name="$1"
+            shift
+
+            echo "::group::${name}"
+            "$@" 2>&1 || true
+            echo "::endgroup::"
+          }
+
           dump_path() {
             local path="$1"
 
@@ -470,12 +479,101 @@ jobs:
             echo "::endgroup::"
           }
 
+          dump_tenstorrent_process_details() {
+            echo "::group::Tenstorrent driver pids"
+
+            local pids
+            pids="$(
+              {
+                find /proc/driver/tenstorrent -path '*/pids' -type f -exec cat {} \; 2>/dev/null
+                find /sys/kernel/debug/tenstorrent -path '*/pids' -type f -exec cat {} \; 2>/dev/null
+              } | tr -cs '0-9' '\n' | sort -n | uniq
+            )"
+
+            if [ -z "$pids" ]; then
+              echo "No Tenstorrent driver pids found."
+              echo "::endgroup::"
+              return 0
+            fi
+
+            echo "PIDs reported by Tenstorrent driver:"
+            printf '%s\n' "$pids"
+
+            echo
+            echo "Process details:"
+            while IFS= read -r pid; do
+              [ -n "$pid" ] || continue
+              echo "----- PID ${pid} -----"
+              ps -p "$pid" -o pid,ppid,user,stat,etime,etimes,cmd 2>&1 || true
+              if [ -r "/proc/${pid}/status" ]; then
+                echo
+                echo "/proc/${pid}/status:"
+                sed -n '1,80p' "/proc/${pid}/status" 2>&1 || true
+              fi
+              if [ -r "/proc/${pid}/limits" ]; then
+                echo
+                echo "/proc/${pid}/limits:"
+                cat "/proc/${pid}/limits" 2>&1 || true
+              fi
+              echo
+            done <<< "$pids"
+
+            echo "::endgroup::"
+          }
+
+          dump_device_users() {
+            echo "::group::Processes using Tenstorrent device nodes"
+
+            local found_device=0
+            for dev in /dev/tenstorrent*; do
+              [ -e "$dev" ] || continue
+              found_device=1
+              echo "----- ${dev} -----"
+              ls -la "$dev" 2>&1 || true
+              if command -v fuser >/dev/null 2>&1; then
+                echo
+                echo "fuser -v ${dev}:"
+                fuser -v "$dev" 2>&1 || true
+              else
+                echo "fuser is not installed."
+              fi
+              if command -v lsof >/dev/null 2>&1; then
+                echo
+                echo "lsof ${dev}:"
+                lsof "$dev" 2>&1 || true
+              else
+                echo "lsof is not installed."
+              fi
+              echo
+            done
+
+            if [ "$found_device" -eq 0 ]; then
+              echo "No /dev/tenstorrent* device nodes found."
+            fi
+
+            echo "::endgroup::"
+          }
+
           for path in \
+            /sys/kernel/debug/tenstorrent \
             /sys/kernel/debug/tenstorrent/16/mappings \
+            /proc/driver/tenstorrent \
             /proc/driver/tenstorrent/16/pids
           do
             dump_path "$path"
           done
+
+          dump_tenstorrent_process_details
+          dump_device_users
+
+          run_group "Tenstorrent-related processes" \
+            bash -c "ps -eo pid,ppid,user,stat,etime,etimes,cmd --sort=pid | awk 'tolower(\$0) ~ /tenstorrent|tt-metal|tt_metal|ttnn|vllm|python|uvicorn|ray|pytest|tracy/ { print }'"
+          run_group "Memory and hugepage state" \
+            bash -c "free -h; echo; cat /proc/meminfo; echo; df -h /dev/hugepages-1G /dev/shm /tmp 2>&1 || true; echo; mount | awk 'tolower(\$0) ~ /huge|shm|tenstorrent|debugfs/ { print }'"
+          run_group "PCI Tenstorrent devices" \
+            bash -c "lspci -D 2>/dev/null | awk 'tolower(\$0) ~ /tenstorrent|1e52/ { print }' || true; echo; find /sys/bus/pci/drivers/tenstorrent -maxdepth 2 -print 2>&1 || true"
+          run_group "Kernel and driver state" \
+            bash -c "uname -a; echo; id; echo; lsmod 2>/dev/null | awk 'tolower(\$0) ~ /tenstorrent|tt/ { print }' || true; echo; dmesg -T 2>&1 | tail -n 200 || true"
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
