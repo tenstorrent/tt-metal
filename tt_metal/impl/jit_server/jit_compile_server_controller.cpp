@@ -5,12 +5,12 @@
 #include "impl/jit_server/jit_compile_server_controller.hpp"
 
 #include <capnp/rpc-twoparty.h>
+#include <kj/async.h>
 #include <kj/async-io.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <chrono>
+#include <memory>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 
 namespace tt::tt_metal::jit_server {
@@ -61,6 +61,13 @@ void JitCompileServerController::stop() {
     }
 
     should_stop_ = true;
+    // Wake the blocking event loop via the cross-thread shutdown fulfiller so wait() returns.
+    {
+        std::lock_guard lock(shutdown_mutex_);
+        if (shutdown_signal_) {
+            shutdown_signal_();
+        }
+    }
     if (server_thread_.joinable()) {
         server_thread_.join();
     }
@@ -81,22 +88,32 @@ void JitCompileServerController::run_server() {
         capnp::TwoPartyServer server(::kj::Own<JitCompileService>(&jit_compile_service_, ::kj::NullDisposer::instance));
         auto listen_promise = server.listen(*listener);
 
+        // Idiomatic blocking event loop: block in epoll via wait(), woken by both socket I/O
+        // (new connections, request reads, response writes) AND cross-thread compile-completion
+        // fulfillments. This replaces the former non-blocking poll()-spin + 1ms sleep, which was
+        // the single pump for all connection I/O and every cross-thread fulfill(); under high
+        // concurrency that fragile single-pump could fail to deliver a response, wedging the
+        // client forever. Shutdown is a cross-thread promise fulfilled by stop().
+        auto shutdown_paf = kj::newPromiseAndCrossThreadFulfiller<void>();
+        auto shutdown_fulfiller =
+            std::make_shared<kj::Own<kj::CrossThreadPromiseFulfiller<void>>>(kj::mv(shutdown_paf.fulfiller));
+        {
+            std::lock_guard lock(shutdown_mutex_);
+            shutdown_signal_ = [shutdown_fulfiller]() { (*shutdown_fulfiller)->fulfill(); };
+        }
+
         {
             std::lock_guard lock(server_start_mutex_);
             server_start_finished_ = true;
         }
         server_start_cv_.notify_one();
 
-        auto last_events = std::chrono::high_resolution_clock::now();
-        while (!should_stop_) {
-            auto count = wait_scope.poll();
-            listen_promise.poll(wait_scope);
+        // Returns when stop() fulfills the shutdown promise, or if the listener fails.
+        listen_promise.exclusiveJoin(kj::mv(shutdown_paf.promise)).wait(wait_scope);
 
-            if (count > 0) {
-                last_events = std::chrono::high_resolution_clock::now();
-            } else if (std::chrono::high_resolution_clock::now() - last_events > std::chrono::milliseconds(10)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
+        {
+            std::lock_guard lock(shutdown_mutex_);
+            shutdown_signal_ = nullptr;
         }
     } catch (const kj::Exception& e) {
         server_start_error_message_ = e.getDescription().cStr();

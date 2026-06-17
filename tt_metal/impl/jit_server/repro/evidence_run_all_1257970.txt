@@ -1,0 +1,4 @@
+### Evidence extract from run_all_1257970.log
+UP_FRONT_COLLECT: 1680 ops stashed across 2100 bodies -> 1392 unique programs (swallowed 420, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=3850 fallback=0
+REPRO: warm-pass exit=137 after 620s (124/137 => WEDGE)

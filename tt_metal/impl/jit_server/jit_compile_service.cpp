@@ -288,6 +288,14 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
             } catch (const std::exception& e) {
                 response.success = false;
                 response.error_message = e.what();
+            } catch (const kj::Exception& e) {
+                // kj::Exception is NOT std::exception-derived; without this it would escape the
+                // pool lambda, the fulfiller below would never run, and the client would hang.
+                response.success = false;
+                response.error_message = std::string("kj exception during compile: ") + e.getDescription().cStr();
+            } catch (...) {
+                response.success = false;
+                response.error_message = "unknown exception during compile";
             }
 
             if (!was_dedup_owner) {

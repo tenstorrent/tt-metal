@@ -1,0 +1,9 @@
+### Evidence extract from verify_run3_1315434.log (post-fix run #3, both fixes)
+UP_FRONT_COLLECT: 1680 ops stashed across 2100 bodies -> 1392 unique programs (swallowed 420, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=3850 fallback=0
+2026-06-17 17:12:26.614 | warning  |    BuildKernels | Remote JIT compile unavailable (Remote JIT compile transport failure: timeout_msg = remote JIT compile response timed out after 120s); falling back to local compile for program 3099. (program.cpp:2288)
+2026-06-17 17:13:16.646 | warning  |    BuildKernels | Remote JIT compile unavailable (Remote JIT compile transport failure: timeout_msg = remote JIT compile response timed out after 120s); falling back to local compile for program 137. (program.cpp:2288)
+2026-06-17 17:13:20.154 | warning  |    BuildKernels | Remote JIT compile unavailable (Remote JIT compile transport failure: timeout_msg = remote JIT compile response timed out after 120s); falling back to local compile for program 1227. (program.cpp:2288)
+2026-06-17 17:14:36.666 | warning  |    BuildKernels | Remote JIT compile unavailable (Remote JIT compile transport failure: timeout_msg = remote JIT compile response timed out after 120s); falling back to local compile for program 1517. (program.cpp:2288)
+UP_FRONT_COLLECT: compiled 1392 programs in 259.3s (workers=128, errors=0) -> on-disk JIT cache warm
+========== 420 failed, 1680 passed, 2941 skipped in 318.93s (0:05:18) ==========
