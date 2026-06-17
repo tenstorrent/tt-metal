@@ -806,11 +806,8 @@ class LTXTransformerModel(Module):
         solver can step the latent without leaving the device (the traced WAN pattern)."""
         # Video modulation (6 or 9 params depending on cross_attention_adaln).
         adaln_coeff = 9 if self.cross_attention_adaln else 6
-        # I2V compact path: the per-token timestep takes only two distinct values (pinned frame-0
-        # tokens vs. everything else at sigma), supplied as a (1,1,2,1) pair plus a {0,1} per-token
-        # pin mask. Evaluate AdaLN on just those two timesteps and blend per token. This avoids
-        # materializing the dense (1,1,N,coeff*D) modulation and its tile-padded (1,N,coeff,D)
-        # reshape (coeff=9 pads up to a 32-row tile, a multi-GB allocation at full resolution).
+        # I2V compact path: per-token timestep has 2 values (pinned frame-0 vs. sigma), passed as a
+        # (1,1,2,1) pair + {0,1} pin mask. Blend per token to avoid the dense (1,1,N,coeff*D) modulation.
         compact_i2v = self.image_conditioning and video_ts_pair is not None and video_pin_mask is not None
         if compact_i2v:
             N = video_pin_mask.shape[2]
@@ -958,8 +955,7 @@ class LTXTransformerModel(Module):
 
         v_inner_local = video_emb_ts.shape[-1]
         if self.image_conditioning:
-            # Per-token: video_emb_ts is (1,1,N,D). Split the (shift, scale) table on its param
-            # axis and broadcast-add onto the per-token embedding so norm_out modulates per token.
+            # Per-token (video_emb_ts is (1,1,N,D)): split the (shift, scale) table, broadcast-add per token.
             v_emb_1B1D = video_emb_ts
             if self.parallel_config.tensor_parallel.factor > 1:
                 v_emb_1B1D = ttnn.mesh_partition(
@@ -977,13 +973,8 @@ class LTXTransformerModel(Module):
             shifted_v = self.scale_shift_table.data + v_emb_1B1D
             v_shift_out, v_scale_out_p1 = ttnn.chunk(shifted_v, 2, dim=2)
         if self.image_conditioning:
-            # Per-token modulation: the fused dit_layernorm gamma/beta must be a single
-            # per-channel vector (height == 1 tile), so it cannot carry per-token scale/shift.
-            # Apply a plain layernorm, then modulate manually: shift + normed * scale_p1
-            # (+1 baked into the scale slot at load — same math/convention as the fused op
-            # and the per-block AdaLN addcmul path). Compute in fp32 to match the T2V branch
-            # (which upcasts weight*normed+bias internally via dtype=float32); addcmul needs
-            # all three operands at the same dtype, so the shift/scale are upcast too.
+            # Per-token: fused norm_out gamma/beta can't carry per-token scale/shift, so plain
+            # layernorm then manual shift + normed * scale_p1, in fp32 to match the T2V branch.
             video_1BND = self.norm_out(video_1BND, dtype=ttnn.float32)
             v_shift_out = ttnn.typecast(v_shift_out, ttnn.float32)
             v_scale_out_p1 = ttnn.typecast(v_scale_out_p1, ttnn.float32)
