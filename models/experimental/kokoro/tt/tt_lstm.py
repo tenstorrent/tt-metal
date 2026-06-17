@@ -171,20 +171,34 @@ def _lstm_step(
     *,
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    fold_bias: bool = False,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     # ``gates_x`` (= x_t @ W_x^T + b, shape [B, 4H]) is precomputed for the whole sequence
     # by the caller (one batched matmul with the bias folded into its epilogue, see
     # tt_bilstm_nlc) — it doesn't depend on the recurrent state. Only the recurrent
     # ``h @ W_h^T`` is per-step, and the gate sum is then a single add.
-    gates_h = ttnn.linear(
-        h,
-        params.w_h,
-        bias=None,
-        memory_config=memory_config,
-        compute_kernel_config=compute_kernel_config,
-    )
-    gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
-    ttnn.deallocate(gates_h)
+    if fold_bias:
+        # Fold gates_x into the recurrent matmul bias epilogue: gates = h@W_h + gates_x in one
+        # fp32 epilogue add — drops one BinaryNg/step AND is closer to the torch fp32 reference
+        # (one rounding vs the separate bf16 matmul + bf16 add). Valid only for B==1 (gates_x
+        # [1,4H] is the matmul bias row).
+        gates = ttnn.linear(
+            h,
+            params.w_h,
+            bias=gates_x,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    else:
+        gates_h = ttnn.linear(
+            h,
+            params.w_h,
+            bias=None,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
+        ttnn.deallocate(gates_h)
 
     gs = tuple(int(s) for s in gates.shape)
     if len(gs) > 2:
@@ -231,6 +245,7 @@ def _lstm_step_fused(
     *,
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    fold_bias: bool = False,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """One fused BiLSTM step advancing both directions at once.
 
@@ -240,15 +255,26 @@ def _lstm_step_fused(
     weight from :func:`build_fused_recurrent_weight`. Identical cell math to :func:`_lstm_step`,
     just run once over ``2H``-wide tensors instead of twice over ``H``-wide ones.
     """
-    gates_h = ttnn.linear(
-        h,
-        w_h_block,
-        bias=None,
-        memory_config=memory_config,
-        compute_kernel_config=compute_kernel_config,
-    )
-    gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
-    ttnn.deallocate(gates_h)
+    if fold_bias:
+        # Fold gates_x into the recurrent matmul bias epilogue (one fp32 epilogue add): drops one
+        # BinaryNg/step and is closer to the torch fp32 reference. B==1 only (see _lstm_step).
+        gates = ttnn.linear(
+            h,
+            w_h_block,
+            bias=gates_x,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    else:
+        gates_h = ttnn.linear(
+            h,
+            w_h_block,
+            bias=None,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
+        ttnn.deallocate(gates_h)
 
     H2 = 2 * H
     sig = ttnn.sigmoid(gates, memory_config=memory_config)
@@ -306,6 +332,7 @@ def tt_bilstm_nlc(
     sequence_lengths: Optional[Sequence[int]] = None,
     fp32_state: bool = False,
     w_h_block: Optional[ttnn.Tensor] = None,
+    fold_gates_bias: bool = False,
 ) -> ttnn.Tensor:
     """
     1-layer BiLSTM over sequence for NLC ``[B, L, in]``.
@@ -315,6 +342,12 @@ def tt_bilstm_nlc(
 
     When ``fp32_state`` is True, hidden/cell states are accumulated in fp32 to avoid
     Hz-level drift in long F0/N decoder chains (shared BiLSTM in ``F0Ntrain``).
+
+    ``fold_gates_bias`` folds the per-step ``gates_x`` into the recurrent matmul bias epilogue
+    (one fp32 add instead of a separate BinaryNg/step). It alters the gate-sum rounding, so it is
+    **opt-in and enabled ONLY on the ASR TextEncoder LSTM** — the duration/F0 BiLSTMs reject any
+    numeric change (flipped durations / amplified F0, see the LSTM-gate-matmul notes). Applied only
+    when ``B == 1`` (gates_x is one bias row) and ``not fp32_state`` (keeps dtypes aligned).
 
     ``w_h_block`` (from :func:`build_fused_recurrent_weight`) enables the **direction-fused**
     loop: a single step advances both passes at once over ``[B, 2H]`` state, halving the
@@ -336,6 +369,12 @@ def tt_bilstm_nlc(
         fp32_state=fp32_state,
         fallback=memory_config,
     )
+    # Bias-fold the per-step gate add into the recurrent matmul (opt-in, TextEncoder only): drops
+    # one BinaryNg/step. Guards: B==1 (gates_x is one bias row), bf16 state (matmul+bias epilogue
+    # dtype-consistent), and **DRAM step state** — the matmul-with-bias TT_FATALs when in0/out are
+    # L1 (matmul_utilities.cpp), which is why this is unsafe for the L1-state prosody LSTMs (H<=64)
+    # and fine for the TextEncoder (H=256 -> step_mc falls back to DRAM).
+    do_fold = fold_gates_bias and B == 1 and not fp32_state and step_mc.buffer_type == ttnn.BufferType.DRAM
 
     # Input gate projections (``x @ W_x^T``) don't depend on the recurrent state, so compute
     # them for the WHOLE sequence in one batched matmul per direction (bit-identical: matmul
@@ -449,7 +488,14 @@ def tt_bilstm_nlc(
         for t in range(L):
             gxt = _gates_comb_at(t)
             hc, cc = _lstm_step_fused(
-                gxt, hc, cc, w_h_block, H, compute_kernel_config=compute_kernel_config, memory_config=step_mc
+                gxt,
+                hc,
+                cc,
+                w_h_block,
+                H,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=step_mc,
+                fold_bias=do_fold,
             )
             # hc = [h_f@pos t | h_r@pos L-1-t]: forward output for position t and reverse output for
             # position L-1-t. Stash the whole [B,2H] state and split in bulk after the loop (avoids
@@ -490,6 +536,7 @@ def tt_bilstm_nlc(
             fwd,
             compute_kernel_config=compute_kernel_config,
             memory_config=step_mc,
+            fold_bias=do_fold,
         )
         # Forward padding is a *suffix* (t >= length): once a row is padded it never returns to a
         # valid position, and batch rows don't mix (per-row recurrence). So a padded row's evolving
@@ -516,6 +563,7 @@ def tt_bilstm_nlc(
             rev,
             compute_kernel_config=compute_kernel_config,
             memory_config=step_mc,
+            fold_bias=do_fold,
         )
         if valid_all is not None and t >= min_len:
             # Reverse hits the suffix padding *first*, so the recurrent state is still 0 across the

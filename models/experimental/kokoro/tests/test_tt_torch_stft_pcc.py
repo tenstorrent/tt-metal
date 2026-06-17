@@ -105,6 +105,45 @@ def test_tt_torch_stft_inverse_matches(device):
     assert pcc > 0.99, f"PCC too low: {pcc}"
 
 
+def test_tt_torch_stft_inverse_conv_transpose_matches(device):
+    """``inverse`` via the conv_transpose2d OLA path (large F, dense matrix skipped).
+
+    For input lengths above ~10.7k samples the dense iSTFT matrix would exceed
+    ``_ISTFT_MATRIX_BYTES_LIMIT`` and is not materialised, so ``inverse`` routes through
+    ``_inverse_conv_transpose`` instead of the two dense matmuls.  This is the only direct
+    coverage of the ``(magnitude, phase) -> conv_transpose OLA`` path; the dense-matrix path is
+    covered by ``test_tt_torch_stft_inverse_matches`` at L=100.
+    """
+    torch.manual_seed(1)
+    B, L = 1, 25000
+    ref = _make_ref()
+    params = preprocess_tt_torch_stft(
+        filter_length=_N_FFT, hop_length=_HOP, win_length=_WIN, input_length=L, device=device
+    )
+    assert params.istft_real is None, "expected dense matrix skipped -> conv_transpose path"
+    tt_mod = TTTorchSTFT(device, params)
+
+    x = torch.randn(B, L)
+    with torch.no_grad():
+        mag_ref, phase_ref = ref.transform(x)
+        y_ref = ref.inverse(mag_ref, phase_ref)  # [B, 1, L]
+
+    mag_tt = ttnn.from_torch(mag_ref, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    phase_tt = ttnn.from_torch(phase_ref, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = tt_mod.inverse(mag_tt, phase_tt)
+    y_h = _to_torch(y_tt)
+    while y_h.dim() > y_ref.dim():
+        y_h = y_h.squeeze(0)
+    ttnn.deallocate(y_tt)
+    ttnn.deallocate(mag_tt)
+    ttnn.deallocate(phase_tt)
+
+    assert y_h.shape == y_ref.shape, (y_h.shape, y_ref.shape)
+    _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
+    print(f"TTTorchSTFT.inverse (conv_transpose, L={L}) PCC: {pcc:.6f}")
+    assert pcc > 0.99, f"PCC too low: {pcc}"
+
+
 def test_tt_torch_stft_forward_round_trip(device):
     """Full ``forward`` (transform → inverse) reconstructs the input on TT."""
     torch.manual_seed(2)
