@@ -60,7 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--checkpoint-prefix",
         dest="checkpoint_prefix",
         type=str,
-        default="nano_gpt",
+        default="model",
         help="Prefix for checkpoint filenames",
     )
     g.add_argument("--resume", type=str, default="", help="Specific checkpoint to resume from (default: auto-detect)")
@@ -135,7 +135,7 @@ def _apply_backcompat(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         dirpart = os.path.dirname(args.model_save_path) or "."
-        basepart = os.path.basename(args.model_save_path) or "nano_gpt"
+        basepart = os.path.basename(args.model_save_path) or "model"
         args.checkpoint_dir = dirpart
         args.checkpoint_prefix = basepart
 
