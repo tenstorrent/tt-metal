@@ -59,6 +59,10 @@ def test_parent_then_child_cq0(mesh_device):
     audio_ccl = CCLManager(audio, num_links=2, topology=ttnn.Topology.Linear)
     ttnn.synchronize_device(parent)
     _run_ag(audio_ccl, audio, "child 1x4 cq0 after parent")
+
+    # Both meshes hold cq 0 in_use; clear it so the per-cq close guard does not throw at teardown.
+    ttnn.reset_cq_in_use(audio)
+    ttnn.reset_cq_in_use(mesh)
     print("[REPRO] PASS: parent-then-child both cq0 completed", flush=True)
 
 
@@ -81,6 +85,10 @@ def test_child_cq0_repeated(mesh_device):
 
     for i in range(4):
         _run_ag(audio_ccl, audio, f"child 1x4 cq0 iter {i}")
+
+    # Both meshes hold cq 0 in_use; clear it so the per-cq close guard does not throw at teardown.
+    ttnn.reset_cq_in_use(audio)
+    ttnn.reset_cq_in_use(mesh)
     print("[REPRO] PASS: repeated child cq0 all_gather completed", flush=True)
 
 
@@ -110,3 +118,40 @@ def test_parent_then_child_cq1(mesh_device):
     ttnn.reset_cq_in_use(audio)
     ttnn.reset_cq_in_use(mesh)
     print("[REPRO] PASS: parent cq0 + child cq1 + parent cq0 completed", flush=True)
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
+def test_heavy_parent_then_child_multiop_cq0(mesh_device):
+    """H5: HEAVY parent CCL volume (cq0), quiesce, then child runs a MULTI-OP CCL chain (cq0).
+
+    The light-parent overlap (H2/H4: one parent all_gather, then child) passes; the full E2E
+    (video DiT ring-attention + VAE decode, then the child vocoder CCL) hangs even with the
+    parent quiesced. This probes whether the VOLUME of prior parent CCL — not the act of
+    overlapping — is what leaves the shared-chip EDM/erisc router state that a host synchronize
+    does not reset, so the child can no longer re-handshake through it. The parent runs many ring
+    all_gathers (approximating the video pipeline's CCL load); after a quiesce the child runs a
+    multi-op chain on cq0 (approximating the vocoder resblocks' repeated all_gather). If this
+    hangs where H2/H4 passed, the accumulated-shared-chip-router-state hypothesis is confirmed.
+    """
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(4, 8))
+    ccl = CCLManager(mesh, num_links=2, topology=ttnn.Topology.Ring)
+
+    HEAVY_REPS = 64
+    for i in range(HEAVY_REPS):
+        _run_ag(ccl, mesh, f"parent 4x8 cq0 heavy {i}")
+    print(f"[REPRO] parent heavy CCL volume done ({HEAVY_REPS} all_gathers)", flush=True)
+
+    audio = mesh.create_submesh(ttnn.MeshShape(1, 4))
+    audio_ccl = CCLManager(audio, num_links=2, topology=ttnn.Topology.Linear)
+    ttnn.synchronize_device(parent)
+
+    # Multi-op child chain on the shared chips (vocoder-like): each op opens/closes its own
+    # worker->EDM connection on chips the heavy parent just drove.
+    CHILD_OPS = 8
+    for i in range(CHILD_OPS):
+        _run_ag(audio_ccl, audio, f"child 1x4 cq0 multiop {i}")
+
+    ttnn.reset_cq_in_use(audio)
+    ttnn.reset_cq_in_use(mesh)
+    print("[REPRO] PASS: heavy parent + child multi-op cq0 completed", flush=True)
