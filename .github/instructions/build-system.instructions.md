@@ -1,6 +1,6 @@
 ---
 description: 'PR review for CMake build system — dependency management, sources.cmake correctness, cross-target compatibility, and include export hygiene'
-applyTo: '**/CMakeLists.txt,cmake/**,**/sources.cmake,build_metal.sh'
+applyTo: '**/CMakeLists.txt,cmake/**,**/sources.cmake,build_metal.sh,CMakePresets.json'
 excludeAgent: "cloud-agent"
 ---
 
@@ -8,7 +8,7 @@ excludeAgent: "cloud-agent"
 
 ## 🔴 CRITICAL
 
-- **New external dependency**: adding a dependency via `find_package()`, `CPMAddPackage()`, or a new git submodule in `third_party/` requires explicit infra team review. Flag unconditionally — each mechanism has different packaging, caching, and reproducibility implications.
+- **New external dependency**: adding a dependency via `find_package()`, `CPMAddPackage()`, `FetchContent_Declare`, or a new git submodule in `third_party/` requires explicit infra team review. Flag unconditionally — each mechanism has different packaging, caching, and reproducibility implications.
 - **`sources.cmake` changes** (`tt_metal/sources.cmake`, `tt_metal/impl/sources.cmake`): these are high-risk. A duplicate symbol or missing file silently produces linker errors or ODR violations. Verify every added file is not already listed elsewhere.
 - **`INTERFACE_LINK_LIBRARIES` leakage**: a library target that publicly links a heavyweight dependency forces that dependency on every downstream consumer. Prefer `PRIVATE` linking unless the dependency appears in public headers.
 - **Toolchain breakage**: any change must not break the Blackhole, Wormhole, or Quasar cross-compilation targets. Flag changes that use host-specific paths or flags without appropriate guards.
@@ -22,7 +22,7 @@ excludeAgent: "cloud-agent"
 ## 🟢 SUGGESTION
 
 - Use `target_sources()` with `PRIVATE` rather than appending to a list variable when adding files to a target.
-- **Prefer generator expressions** (`$<...>`) over `if(CMAKE_BUILD_TYPE ...)` for config-specific flags, include paths, or link libraries. `if()` checks only evaluate at configure time and break with multi-config generators (Xcode, Ninja Multi-Config). Generator expressions evaluate at build time and are correct in all configurations. Flag `if(CMAKE_BUILD_TYPE STREQUAL ...)` guarding `target_compile_options` or `target_link_libraries` — these should use `$<$<CONFIG:Release>:...>` instead.
+- **Prefer generator expressions** (`$<...>`) over `if(CMAKE_BUILD_TYPE ...)` for config-specific flags, include paths, or link libraries. `if()` checks only evaluate at configure time and are incorrect with multi-config generators (Xcode, Ninja Multi-Config). Generator expressions evaluate at build time and are correct in all configurations. Flag `if(CMAKE_BUILD_TYPE STREQUAL ...)` guarding `target_compile_options` or `target_link_libraries` in targets that are expected to support multi-config generators — these should use `$<$<CONFIG:Release>:...>` instead. Single-config builds (plain Ninja, Makefiles) can use `if(CMAKE_BUILD_TYPE ...)` safely.
 - **Avoid globally disabling compiler warnings** (e.g., `add_compile_options(-Wno-...)` or `set(CMAKE_CXX_FLAGS ...)`). Prefer `target_compile_options(target PRIVATE -Wno-...)` scoped to the specific target that needs it. Global suppressions hide issues in unrelated code.
 
 ## Target & Linkage Conventions
@@ -42,10 +42,10 @@ add_library(TTNN::Ops::Reduction ALIAS ttnn_op_reduction)
 ## Source List vs. Build Infrastructure
 
 File additions/removals are separated from build architecture:
-- **`sources.cmake`** — owned by module teams. Adding or removing source files goes here.
-- **`CMakeLists.txt`** — owned by infra. Contains target definitions, link dependencies, compile options, and install rules.
+- **`sources.cmake`** — adding or removing source files goes here.
+- **`CMakeLists.txt`** — contains target definitions, link dependencies, compile options, and install rules.
 
-Flag any PR that mixes both concerns. A developer adding a new `.cpp` file should only touch `sources.cmake`, not the `CMakeLists.txt` build structure.
+Flag any PR that mixes both concerns. A developer adding a new `.cpp` file should only need to touch `sources.cmake`, not the `CMakeLists.txt` build structure.
 
 ## Firmware Build Boundary
 
@@ -127,12 +127,15 @@ Flag any new op target that adds kernel source files without a `FILE_SET kernels
 
 ## Review Checklist
 
-- [ ] No new dependencies (`find_package`, `CPMAddPackage`, submodule) without infra review
+- [ ] No new dependencies (`find_package`, `CPMAddPackage`, `FetchContent`, submodule) without infra review
 - [ ] `sources.cmake` additions checked for duplicates
 - [ ] New target links use `PRIVATE` unless header exposure requires `PUBLIC`
 - [ ] Cross-toolchain compatibility preserved (WH, BH, QSR)
 - [ ] Namespaced targets used for all `target_link_libraries` calls
 - [ ] No `CMAKE_BINARY_DIR` — use `PROJECT_BINARY_DIR` instead
 - [ ] No host-only flags or libraries in firmware targets (`tt_metal/hw/`)
-- [ ] New targets reuse PCH where applicable
+- [ ] New targets reuse PCH where applicable (`TT::CommonPCH`)
+- [ ] New library targets call `TT_ENABLE_UNITY_BUILD(target)`
+- [ ] New op targets with kernel sources define `FILE_SET kernels` + `install()` rule
 - [ ] CPM package names match upstream `find_package()` names
+- [ ] New `option()` in `project_options.cmake` has a matching flag in `build_metal.sh`
