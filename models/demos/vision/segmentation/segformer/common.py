@@ -51,10 +51,17 @@ def load_torch_model(reference_model, target_prefix, module="semantic_sub", mode
         module_state_dict = {k: v for k, v in state_dict.items() if (target_prefix in k)}
     new_state_dict = {}
     keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in module_state_dict.items()]
-
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
+    # Prefer mapping by name: transformers 5.x reordered the HF Segformer state_dict,
+    # which breaks the positional zip below (it assumes the checkpoint's order matches
+    # the reference's). The reference uses HF-identical parameter names, so a name-based
+    # map is order-independent. Fall back to positional for checkpoints whose keys differ
+    # (e.g. the raw .pth used in CI).
+    if set(keys).issubset(module_state_dict.keys()):
+        new_state_dict = {name: module_state_dict[name] for name in keys}
+    else:
+        values = [parameter for name, parameter in module_state_dict.items()]
+        for i in range(len(keys)):
+            new_state_dict[keys[i]] = values[i]
 
     reference_model.load_state_dict(new_state_dict)
     reference_model.eval()
