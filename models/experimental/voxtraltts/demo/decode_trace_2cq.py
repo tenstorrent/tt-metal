@@ -65,13 +65,9 @@ def decode_trace_enabled() -> bool:
 
 
 def decode_trace_2cq_enabled() -> bool:
-    """True when 2CQ staging is on (requires trace). Default ON — the demo and the e2e perf test both
-    run trace+2CQ by default (matches the repo's traced-decode convention). CQ1 stages the next step's
-    (embed, pos, rot_idxs) while CQ0 replays the decode trace; a per-step ``synchronize_device`` in the
-    decode loop keeps the event schedule from queueing unbounded (without it, 2CQ stalls ~1s/step).
-    NOTE: the Voxtral H2D staging is tiny, so 2CQ ≈ 1CQ on this loop (often marginally slower than 1CQ
-    due to the per-step sync) — set VOXTRAL_DECODE_TRACE_2CQ=0 for the single-CQ baseline."""
-    return decode_trace_enabled() and _env_flag_enabled("VOXTRAL_DECODE_TRACE_2CQ", default="1")
+    """True when 2CQ input staging is on. Independent of ``VOXTRAL_DECODE_TRACE`` — production
+    decode always trace-replays; this flag only toggles CQ1 overlap vs single-CQ staging."""
+    return _env_flag_enabled("VOXTRAL_DECODE_TRACE_2CQ", default="1")
 
 
 def num_command_queues_for_decode() -> int:
