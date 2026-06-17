@@ -187,7 +187,9 @@ class ModelArgs(TTModelArgs):
             return model_overrides[model_name][device_name] * 1024
         return super().get_max_prefill_chunk_size()
 
-    def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_qkv_program_config(
+        self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None, batched: bool = False
+    ):
         """Smaller MinimalMatmul blocks for traced long prefill (default 8³ overflows static CB vs L1)."""
         if self._enable_program_trace and mode == Mode.PREFILL and seq_len > 128:
             return ttnn.MinimalMatmulConfig(
@@ -196,7 +198,7 @@ class ModelArgs(TTModelArgs):
                 N_block_size=4,
                 compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
             )
-        return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
+        return super().get_attn_qkv_program_config(mode, seq_len, prefetcher, batched=batched)
 
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
         force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False)
