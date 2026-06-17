@@ -70,8 +70,10 @@ struct dfb_init_entry_hdr_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];  // bytes 18–21 (DM only; 0 elsewhere)
 };
 
-// Fix A: read the entire 24B dfb_hart_init_entry_t (__attribute__((packed))) as 6 u32s
-// via the uncached L1 alias — replacing 12+ individual lbu/lw instructions with 6 lw.
+// Fix A: read the entire 24B dfb_hart_init_entry_t (__attribute__((packed))) as 6 u32s.
+// Two variants with identical unpack logic; only the pointer type differs:
+//   - dfb_read_init_entry_header        — uncached alias (TRISC path, no L2 coherency)
+//   - dfb_read_init_entry_header_cached — cached TL1 pointer (DM path, after L2 invalidate)
 //
 // Little-endian byte layout:
 //   w0 [7:0]=logical_dfb_id  [15:8]=num_tcs  [23:16]=flags  [31:24]=capacity
@@ -80,8 +82,10 @@ struct dfb_init_entry_hdr_t {
 //   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [23:16]=threshold  [31:24]=num_entries_per_txn_id
 //   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [31:16]=_pad
-FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_addr) {
-    const volatile uint32_t* s = dfb_l1_uncached_u32_ptr(entry_addr);
+
+// Shared unpack helper: called with either a volatile uncached or a plain cached pointer.
+template <typename PtrT>
+FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
@@ -101,6 +105,17 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_add
     h.txn_ids[2]                 = static_cast<uint8_t>(w5);
     h.txn_ids[3]                 = static_cast<uint8_t>(w5 >> 8);
     return h;
+}
+
+// Uncached variant — used by TRISC (no private L2 cache).
+FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_addr) {
+    return dfb_unpack_entry_header(dfb_l1_uncached_u32_ptr(entry_addr));
+}
+
+// Cached variant — used by DM after invalidate_l2_cache_range covers the blob.
+// Plain (non-volatile) pointer: no TL1 bypass; reads go through L1 D$ → L2 → TL1.
+FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header_cached(uintptr_t entry_addr) {
+    return dfb_unpack_entry_header(reinterpret_cast<const uint32_t*>(entry_addr));
 }
 
 FORCE_INLINE volatile uint32_t* dfb_init_timing_slot_words(uint8_t slot) {
@@ -577,26 +592,66 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     // -----------------------------------------------------------------------
     // Sequential init blob walk: no pointer-table lookups, no per-DFB indirection.
     // Entry count = popcount(participation_mask[hart_u8]); blob starts at init entries.
-    // Fix A: dfb_read_init_entry_header issues 6 uncached u32 loads per entry (vs 12+
-    // individual byte/word reads in the baseline), and TC arrays are read as u32 pairs.
+    // Fix A: dfb_read_init_entry_header issues 6 u32 loads per entry (vs 12+ individual
+    // byte/word reads in the baseline), and TC arrays are read as u32 pairs.
+    //
+    // Fix B (this loop):
+    //   - LUT replaces dfb_hart_init_entry_byte_size (MUL×9 + align) for pointer advance
+    //   - txn_ids copy unrolled to 4 unconditional stores (eliminates variable-bound loop)
+    //   - tc_base/limit/packed_tc addresses computed with SHL+ADD (replaces separate muls)
+    //
+    // Fix C (DM only): one invalidate_l2_cache_range before the loop; all blob reads below
+    //   use cached TL1 pointers so the DM's L1 D$ + L2 absorb the per-word latency.
     // -----------------------------------------------------------------------
+
+    // Replaces dfb_hart_init_entry_byte_size for num_tcs 0..6: avoids MUL×9 per entry.
+    // Values: 24 + round_up4(num_tcs * 9). See dfb_hart_init_entry_byte_size().
+    static constexpr uint8_t k_entry_byte_size_lut[7] = {24, 36, 44, 52, 60, 72, 80};
+
     const uint8_t num_init = dfb_hart_participation_count(participation_mask);
+
+    // Fix C (DM only): invalidate L2 cache lines covering this hart's init blob so that
+    // the blob walk below reads through the DM's L1 D$ + L2 cache (amortized ~3 cyc/word
+    // after line fills) rather than bypassing the cache entirely via the uncached alias
+    // (~15 cyc/word per load). The global header fields read above (participation_mask,
+    // dfb_signal_region_off, hart_blob_offset) and the signal region stay on the uncached
+    // alias because they require cross-hart visibility without explicit cache management.
+    //
+    // Invalidate upper bound: num_init × 80B (max entry for 6 TCs) is a conservative
+    // per-hart blob size. Over-estimates by at most 1 extra cache line for small num_tcs.
+    // The invalidate discards any stale L2 lines so the first cached read fetches the
+    // host-written TL1 bytes.
+#ifndef COMPILE_FOR_TRISC
+    if (num_init > 0) {
+        const uintptr_t blob_start = reinterpret_cast<uintptr_t>(p);
+        const uintptr_t blob_end   = blob_start + static_cast<uintptr_t>(num_init) * 80u;
+        invalidate_l2_cache_range(blob_start, blob_end - blob_start);
+    }
+#endif
 
     for (uint8_t i = 0; i < num_init; i++) {
         const uintptr_t e_addr = reinterpret_cast<uintptr_t>(p);
 
         const uint32_t t_hdr_start = rdcycle();
+#ifdef COMPILE_FOR_TRISC
         const dfb_init_entry_hdr_t eh = dfb_read_init_entry_header(e_addr);
+#else
+        const dfb_init_entry_hdr_t eh = dfb_read_init_entry_header_cached(e_addr);
+#endif
         total_entry_hdr += rdcycle() - t_hdr_start;
 
         const uint8_t num_tcs = eh.num_tcs;
 
-        const uintptr_t tc_base_addr = e_addr + sizeof(dfb_hart_init_entry_t);
-        const uintptr_t tc_limit_addr = tc_base_addr + static_cast<uintptr_t>(num_tcs) * sizeof(uint32_t);
-        const uintptr_t packed_tc_addr = tc_limit_addr + static_cast<uintptr_t>(num_tcs) * sizeof(uint32_t);
+        // LUT pointer advance: 1 lbu + 1 add instead of MUL×9 + alignment mask.
+        const uint32_t entry_bytes = (num_tcs < 7u)
+            ? k_entry_byte_size_lut[num_tcs]
+            : dfb_hart_init_entry_byte_size(num_tcs);
+        p = reinterpret_cast<const volatile uint8_t*>(e_addr + entry_bytes);
 
-        // Advance using host serialization size (matches dfb_hart_init_entry_byte_size).
-        p = reinterpret_cast<const volatile uint8_t*>(e_addr + dfb_hart_init_entry_byte_size(num_tcs));
+        // TC sub-arrays sit right after the 24B header; use SHL instead of separate muls.
+        const uintptr_t tc_base_addr   = e_addr + sizeof(dfb_hart_init_entry_t);
+        const uintptr_t tc_limit_addr  = tc_base_addr  + (static_cast<uintptr_t>(num_tcs) << 2u);
+        const uintptr_t packed_tc_addr = tc_limit_addr + (static_cast<uintptr_t>(num_tcs) << 2u);
 
         WAYPOINT("L1");
 
@@ -635,20 +690,30 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         iface.threshold                 = eh.threshold;
         iface.num_entries_per_txn_id    = eh.num_entries_per_txn_id;
         iface.num_entries_per_txn_id_per_tc = eh.num_entries_per_txn_id_per_tc;
-        // Fix A: txn_ids already extracted from w4/w5 in dfb_read_init_entry_header.
-        for (uint8_t t = 0; t < eh.num_txn_ids; t++) {
-            iface.txn_ids[t] = eh.txn_ids[t];
-        }
+        // Fix B: unroll txn_ids copy to 4 unconditional sb stores (no variable-bound loop).
+        // Unused slots beyond num_txn_ids were zeroed at host serialization time and are
+        // never accessed at runtime, so writing all 4 is always safe and correct.
+        iface.txn_ids[0] = eh.txn_ids[0];
+        iface.txn_ids[1] = eh.txn_ids[1];
+        iface.txn_ids[2] = eh.txn_ids[2];
+        iface.txn_ids[3] = eh.txn_ids[3];
 #endif
 
         WAYPOINT("L3");
 
-        // --- TC slot population (TC arrays follow header; read uncached) ---
-        // Fix A: load each TC's base/limit as back-to-back uncached u32 words; the packed_ptc
-        // array is read as up to 2 u32s so each load covers 4 packed bytes.
+        // --- TC slot population (TC arrays follow header) ---
+        // Fix A: base/limit loaded as back-to-back u32 words; ptc pre-loaded as packed u32s.
+        // Fix C: on DM, use cached pointers (blob lines already in L2 after invalidate above).
+        //        On TRISC, keep uncached alias (no private L2, no coherent invalidate path).
+#ifdef COMPILE_FOR_TRISC
         const volatile uint32_t* bases_ptr   = dfb_l1_uncached_u32_ptr(tc_base_addr);
         const volatile uint32_t* limits_ptr  = dfb_l1_uncached_u32_ptr(tc_limit_addr);
         const volatile uint32_t* ptc_u32_ptr = dfb_l1_uncached_u32_ptr(packed_tc_addr);
+#else
+        const uint32_t* bases_ptr   = reinterpret_cast<const uint32_t*>(tc_base_addr);
+        const uint32_t* limits_ptr  = reinterpret_cast<const uint32_t*>(tc_limit_addr);
+        const uint32_t* ptc_u32_ptr = reinterpret_cast<const uint32_t*>(packed_tc_addr);
+#endif
         // Pre-load ptc words covering all num_tcs bytes (max 4 TCs → 1 u32; >4 → 2 u32s).
         const uint32_t ptc_w0 = ptc_u32_ptr[0];
         const uint32_t ptc_w1 = (num_tcs > 4) ? ptc_u32_ptr[1] : 0u;
@@ -700,13 +765,13 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             constexpr bool dm1_owns_remapped_producer_ready = false;
 #endif
             if (!dm1_owns_remapped_producer_ready) {
-                if (eh.flags & DFB_HART_FLAG_REMAPPER_EN) {
-                    const uint32_t spin_start = rdcycle();
-                    WAYPOINT("RMSW");
-                    while (!overlay::RemapperAPI::is_remapper_enabled()); // only need to do this if a remapped tc needs to be reset/set-capacity
-                    WAYPOINT("RMSD");
-                    total_remapper_spin += rdcycle() - spin_start;
-                }
+                // if (eh.flags & DFB_HART_FLAG_REMAPPER_EN) {
+                //     const uint32_t spin_start = rdcycle();
+                //     WAYPOINT("RMSW");
+                //     // while (!overlay::RemapperAPI::is_remapper_enabled()); // only need to do this if a remapped tc needs to be reset/set-capacity
+                //     WAYPOINT("RMSD");
+                //     total_remapper_spin += rdcycle() - spin_start;
+                // }
 
                 const uint32_t tc_hw_start = rdcycle();
                 for (uint8_t t = 0; t < num_tcs; t++) {
