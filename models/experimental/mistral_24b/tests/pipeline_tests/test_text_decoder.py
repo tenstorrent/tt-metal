@@ -60,7 +60,7 @@ def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
 )
 @pytest.mark.parametrize(
     "generation_length",
-    (10,),
+    (32,),
 )
 @pytest.mark.parametrize(
     "max_seq_len",

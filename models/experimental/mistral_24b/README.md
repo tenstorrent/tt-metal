@@ -1,90 +1,145 @@
-# Mistral-24B (Vision + Text) on TT
+# Mistral-Small-3.1-24B (Vision + Text) on TT
 
-Mistral-24B is a multimodal model that takes text prompts and optional images, then generates text responses token-by-token. On TT, the pipeline first converts images into visual features (vision tower + patch merger + multimodal projector), fuses those features with text embeddings during prefill, and then runs autoregressive decode to generate output tokens.
+Mistral-Small-3.1-24B-Instruct-2503 is a multimodal model that accepts text prompts and optional images and generates text responses token-by-token. It is a 24B-parameter instruction-tuned model built on the Mistral architecture with an integrated Pixtral vision encoder.
 
-The model is validated on **Blackhole QuietBox-2** (`P150x4` / shape `(1, 4)`).
+HuggingFace model card: [mistralai/Mistral-Small-3.1-24B-Instruct-2503](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)
 
-## Performance measurements
+---
 
-Measured on **Blackhole QuietBox-2 (BH QB-2)** with mesh device `P150x4` (logical shape `(1, 4)`).
+## Supported Device
 
-End-to-end demo metrics:
+| Hardware | Mesh Shape | Config |
+|---|---|---|
+| Blackhole QuietBox-2 (BH QB-2) | `P150x4` — logical `(1, 4)` |
 
+> The full end-to-end pipeline and all performance numbers are measured on BH QB-2.
 
-| Metric                                | Without trace | With trace |
-| ------------------------------------- | ------------- | ---------- |
-| **prefill_tokens**                    | 522           | 522        |
-| **inference_prefill** (s)             | 2.82139       | 3.29152    |
-| **prefill_t/s** (tokens/s)            | 185.015       | 148.59     |
-| **TTFT** (prefill to first token, ms) | 2821.39       | 3291.52    |
-| **inference_decode** (s)              | 27.0651       | 13.9218    |
-| **decode_t/s/u** (per-user)           | 17.4025       | 33.63     |
-| **decode_t/s** (aggregate, batch=1)   | 17.4025       | 33.63     |
-| **num_decode_tokens**                 | 471           | 471        |
-| **Full demo runtime** (s)             | 29.9914       | 17.4228    |
+---
 
+---
 
-## ISL (context window) sweep
+## File Structure
 
-Sweeps the input sequence length / context window through the end-to-end vision-text
-pipeline (image prefill via the vision tower + autoregressive decode). The text prompt is
-sourced from the *Tale of Two Cities* corpus (the same long-context input the tt_transformers
-prefill tests use) and sliced so the input length scales with the swept context window; the
-image is always included. Output length is fixed at **200** tokens per sweep point.
-
-```bash
-pytest models/experimental/mistral_24b/tests/pipeline_tests/test_isl_sweep.py
+```
+models/experimental/mistral_24b/
+├── README.md
+├── tt/
+│   ├── model.py                        # E2E pipeline implementation
+│   ├── generator.py                    # MistralGenerator — prefill/decode orchestration
+│   ├── rmsnorm.py                      # TT RMSNorm
+│   ├── vision_attention.py             # Vision Attention block
+│   ├── vision_conv2d.py                # Patch embedding conv2d
+│   ├── vision_mlp.py                   # Vision MLP block
+│   ├── vision_mmp.py                   # Multimodal projector (vision → text dim)
+│   ├── vision_pixtral_image_block.py   # Single Pixtral image transformer block
+│   ├── vision_pixtral_transformer.py   # Full Pixtral vision transformer
+│   ├── vision_rope.py                  # Vision RoPE block
+│   └── pipeline/
+│       ├── mistral_vision_tower.py     # Vision tower module
+│       └── vision_model.py             # TtMistralVisionTransformer
+└── tests/
+    ├── pipeline_tests/
+    │   ├── test_end2end.py                     # End-to-end vision-text demo
+    │   ├── test_isl_sweep.py                   # Context-window sweep (4k–128k)
+    │   ├── test_text_decoder.py                # Decode hidden-states PCC (32 steps)
+    │   ├── test_text_decoder_decode_logits.py  # Decode logits PCC — 32 steps vs HF reference
+    │   ├── test_vision_model.py                # Vision model PCC
+    │   └── test_vision_tower.py                # Vision tower PCC
+    └── (unit tests)
+        ├── test_conv2d.py                      # Vision module unit tests
+        ├── test_patch_rot_emb.py
+        ├── test_pixtral_transformer.py
+        ├── test_vision_attention.py
+        ├── test_vision_mlp.py
+        └── test_vision_rms.py
 ```
 
-Each sweep point logs throughput under `=== Performance metrics ===`. After all points
-complete, the test logs an `ISL sweep decode throughput summary` table.
+---
 
-Measured on **Blackhole QuietBox-2 (BH QB-2)** with mesh device `P150x4` (`bfloat8_b`,
-accuracy decoder precision, paged attention, `block_size=32`). The paged KV-cache block pool
-is scaled per sweep point to hold the full context plus decode headroom (e.g. 4103 blocks × 32
-= **131296 positions** at ISL 128k).
-
-
-| Config     | Batch | ISL (max_seq_len) | prefill tokens | decode_t/s/u (tok/s) | decode_t/s (tok/s) |
-| ---------- | ----- | ----------------- | -------------- | -------------------- | ------------------ |
-| b1_isl4k   | 1     | 4k (4096)         | 3106           | 33.29                | 33.29              |
-| b1_isl8k   | 1     | 8k (8192)         | 7202           | 32.66                | 32.66              |
-| b1_isl16k  | 1     | 16k (16384)       | 15394          | 31.44                | 31.44              |
-| b1_isl32k  | 1     | 32k (32768)       | 31778          | 29.18                | 29.18              |
-| b1_isl64k  | 1     | 64k (65536)       | 64546          | 25.52                | 25.52              |
-| b1_isl128k | 1     | 128k (131072)     | 130082         | 20.41                | 20.41              |
-
-
-Decode throughput decreases with ISL (33.29 → 20.41 tok/s/u from 4k → 128k) as the
-KV-attention cost grows with context length. For batch 1, `decode_t/s/u` and `decode_t/s` are
-equal.
-
-Notes:
-
-- ISL **> 32k** requires scaling `page_max_num_blocks` above the default 1024 (the test does
-  this automatically per sweep point).
-
-## Prerequisite
+## Installation
 
 ```bash
+# 1. Clone tt-metal with submodules
+git clone --recurse-submodules https://github.com/tenstorrent/tt-metal.git
+cd tt-metal
+
+# 2. Install TT-Metalium / TT-NN
+# Follow: https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md
+
+# 3. Set model environment variable
 export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+
+# 4. Set mesh device (for BH QB-2)
+export MESH_DEVICE=P150x4
 ```
 
-## End-to-end demo test
+---
+
+## Tests
+
+### Demo — End-to-End Vision-Text Pipeline
+
+Runs a full prefill (image + text) followed by autoregressive decode. Validates that the pipeline produces tokens; logs TTFT and throughput.
 
 ```bash
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_end2end.py
 ```
 
-## Pipeline tests
+---
+
+### Accuracy — Decode Logits PCC (32 generation steps)
+
+After a 128-token real-text prefill, compares per-step decode logits (full model: transformer layers + norm + lm_head) against HuggingFace reference for **32 consecutive generation steps**.
 
 ```bash
-pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_model.py
-pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_tower.py
+pytest models/experimental/mistral_24b/tests/pipeline_tests/test_text_decoder_decode_logits.py
+```
+
+---
+
+### Accuracy — Text Decoder Hidden-States PCC
+
+Compares all 40 decoder layer hidden-state outputs (before norm + lm_head) against HF using synthetic random activations for 32 decode steps. PCC threshold: **≥ 0.98**.
+
+```bash
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_text_decoder.py
 ```
 
-## Vision unit tests
+---
+
+### Accuracy — Vision Model PCC
+
+Validates the on-device Pixtral vision transformer output against HF reference.
+
+```bash
+pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_model.py
+```
+
+---
+
+### Accuracy — Vision Tower PCC
+
+Validates the full vision tower (Conv2D patch embed + Pixtral transformer + MMP projection) against HF reference.
+
+```bash
+pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_tower.py
+```
+
+---
+
+### Performance — ISL Sweep (4k–128k context window)
+
+Sweeps input sequence length through the full vision-text pipeline. Text prompt is sourced from the *Tale of Two Cities* corpus; one image is always included. Output is fixed at **200 tokens** per sweep point.
+
+```bash
+pytest models/experimental/mistral_24b/tests/pipeline_tests/test_isl_sweep.py
+```
+
+---
+
+### Unit Tests — Vision Submodules
+
+Individual op-level PCC tests for vision submodules:
 
 ```bash
 pytest models/experimental/mistral_24b/tests/test_conv2d.py
@@ -94,3 +149,84 @@ pytest models/experimental/mistral_24b/tests/test_vision_mlp.py
 pytest models/experimental/mistral_24b/tests/test_vision_attention.py
 pytest models/experimental/mistral_24b/tests/test_pixtral_transformer.py
 ```
+
+---
+
+## Performance
+
+Measured on **Blackhole QuietBox-2 (BH QB-2)** with mesh device `P150x4` (logical shape `(1, 4)`).
+
+### End-to-End Demo
+
+| Metric | Without trace | With trace |
+|---|---|---|
+| **prefill_tokens** | 522 | 522 |
+| **inference_prefill** (s) | 2.82139 | 3.29152 |
+| **prefill_t/s** (tokens/s) | 185.015 | 148.59 |
+| **TTFT** (prefill to first token, ms) | 2821.39 | 3291.52 |
+| **inference_decode** (s) | 27.0651 | 13.9218 |
+| **decode_t/s/u** (per-user) | 17.4025 | 33.63 |
+| **decode_t/s** (aggregate, batch=1) | 17.4025 | 33.63 |
+| **num_decode_tokens** | 471 | 471 |
+| **Full demo runtime** (s) | 29.9914 | 17.4228 |
+
+### ISL (Context Window) Sweep
+| Config | Batch | ISL (max_seq_len) | Prefill tokens | decode_t/s/u (tok/s) | decode_t/s (tok/s) |
+|---|---|---|---|---|---|
+| b1_isl4k | 1 | 4k (4096) | 3106 | 33.29 | 33.29 |
+| b1_isl8k | 1 | 8k (8192) | 7202 | 32.66 | 32.66 |
+| b1_isl16k | 1 | 16k (16384) | 15394 | 31.44 | 31.44 |
+| b1_isl32k | 1 | 32k (32768) | 31778 | 29.18 | 29.18 |
+| b1_isl64k | 1 | 64k (65536) | 64546 | 25.52 | 25.52 |
+| b1_isl128k | 1 | 128k (131072) | 130082 | 20.41 | 20.41 |
+
+---
+
+## Decode Logits PCC — 32 Generation Steps
+
+Results from `test_text_decoder_decode_logits.py`. Prefill: 128 tokens from *Tale of Two Cities*. Prefill PCC threshold: ≥ 0.99. Per-step decode PCC threshold: ≥ 0.91.
+
+> Values below are placeholders — update after running the test.
+
+| Step | Position | PCC | Pass? |
+|---:|---:|---:|:---:|
+| 0 | 128 | — | — |
+| 1 | 129 | — | — |
+| 2 | 130 | — | — |
+| 3 | 131 | — | — |
+| 4 | 132 | — | — |
+| 5 | 133 | — | — |
+| 6 | 134 | — | — |
+| 7 | 135 | — | — |
+| 8 | 136 | — | — |
+| 9 | 137 | — | — |
+| 10 | 138 | — | — |
+| 11 | 139 | — | — |
+| 12 | 140 | — | — |
+| 13 | 141 | — | — |
+| 14 | 142 | — | — |
+| 15 | 143 | — | — |
+| 16 | 144 | — | — |
+| 17 | 145 | — | — |
+| 18 | 146 | — | — |
+| 19 | 147 | — | — |
+| 20 | 148 | — | — |
+| 21 | 149 | — | — |
+| 22 | 150 | — | — |
+| 23 | 151 | — | — |
+| 24 | 152 | — | — |
+| 25 | 153 | — | — |
+| 26 | 154 | — | — |
+| 27 | 155 | — | — |
+| 28 | 156 | — | — |
+| 29 | 157 | — | — |
+| 30 | 158 | — | — |
+| 31 | 159 | — | — |
+| **Prefill last-token** | **127** | **—** | **—** |
+
+---
+
+## Torch Fallbacks
+
+The following operation run on host CPU (PyTorch) rather than on-device (TTNN):
+`torch.nn.Unfold` — Patch extraction in `tt/vision_conv2d.py`

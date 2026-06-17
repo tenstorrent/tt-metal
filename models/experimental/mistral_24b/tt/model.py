@@ -107,33 +107,89 @@ class MistralTransformer(Transformer):
         pixel_values = processed_inputs["pixel_values"]
         image_sizes = processed_inputs["image_sizes"]
         image_token_index = getattr(self.args, "image_token_index", 10)
-
-        vision_output = vision_model(pixel_values, image_sizes)
-        vision_output_torch = ttnn.to_torch(vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1))[
-            :, : vision_output.shape[-1]
-        ]
-
-        tokens_embd_torch = ttnn.to_torch(tokens_embd, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1))
         assert text_input_ids is not None, "text_input_ids must be provided for multimodal fusion"
-        input_ids = torch.nn.functional.pad(
-            text_input_ids, (0, tokens_embd_torch.shape[1] - text_input_ids.shape[1]), "constant", 0
+
+        # Run vision tower — result is replicated on all devices: [num_image_tokens, H_full]
+        vision_output = vision_model(pixel_values, image_sizes)
+
+        # Pull vision features to host for re-sharding (small tensor: num_image_tokens × H_full).
+        # vision_output is replicated, so ConcatMeshToTensor(dim=-1) gives [num_tokens, H_full*n].
+        # Slice back to [num_tokens, H_full] (vision_output.shape[-1] is the per-device = full H
+        # since the tensor is replicated, not sharded).
+        vision_features = ttnn.to_torch(
+            vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1)
+        )[:, : vision_output.shape[-1]]  # [num_image_tokens, H_full]
+        num_image_tokens, H_full = vision_features.shape
+
+        # tokens_embd global shape: [1, S_padded, H_full], sharded along H via ShardTensor2dMesh.
+        # S_padded is the tile-aligned sequence length (may differ from text_input_ids.shape[1]).
+        S_padded = tokens_embd.shape[-2]  # tile-aligned S from TTNN logical shape
+        H_full_embd = tokens_embd.shape[-1]  # H_full from TTNN logical shape (global)
+
+        # --- Compute scatter indices on CPU (data-dependent; cannot run on device) ---
+        # torch.nn.functional.pad is NOT needed here: ttnn.scatter uses explicit row indices
+        # so we locate image tokens directly in the unpadded sequence.  Padded positions
+        # (S..S_padded-1) are filled with 0 ≠ image_token_index, so they never match.
+        mask_indices = torch.where(
+            text_input_ids.view(-1) == image_token_index
+        )[0]  # [num_image_tokens] — absolute positions in the S_padded dimension
+        assert len(mask_indices) == num_image_tokens, (
+            f"Image-token count mismatch: input_ids has {len(mask_indices)} [IMG] tokens, "
+            f"vision output has {num_image_tokens} feature vectors."
         )
 
-        special_image_mask = (input_ids == image_token_index).unsqueeze(-1)
-        special_image_mask = special_image_mask.expand_as(tokens_embd_torch)
-        image_features = vision_output_torch.to(tokens_embd_torch.device, tokens_embd_torch.dtype)
-        tokens_embd_torch = tokens_embd_torch.masked_scatter(special_image_mask, image_features)
+        # Build scatter index: [num_image_tokens, H_full_embd].
+        # Row i holds the target sequence position for the i-th image token;
+        # it is broadcast across the H dimension so every hidden unit of token i
+        # lands at the correct row after scatter.
+        mask_indices_tt = ttnn.from_torch(
+            mask_indices.view(-1, 1).expand(num_image_tokens, H_full_embd).contiguous(),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
-        target_device = None if return_host else self.mesh_device
-        tokens_embd = ttnn.from_torch(
-            tokens_embd_torch,
+        # Shard vision features along H to match the tokens_embd per-device layout.
+        # vision_features: [num_image_tokens, H_full] on host
+        # → each device gets [num_image_tokens, H_full/n_devices] (ShardTensor2dMesh dim 1)
+        vision_tt = ttnn.from_torch(
+            vision_features,
             dtype=ttnn.bfloat16,
-            device=target_device,
             layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
+                self.mesh_device, dims=(None, 1), mesh_shape=list(self.mesh_device.shape)
             ),
         )
+
+        # --- ttnn.scatter replaces the to_torch → masked_scatter → from_torch round-trip ---
+        # tokens_embd [1, S_padded, H_full] is kept on device throughout; no large CPU transfer.
+        # Reshape to 2D for dim-0 scatter, scatter vision features at image-token positions,
+        # then restore the original shape.
+        tokens_embd = ttnn.reshape(tokens_embd, (S_padded, H_full_embd))
+        tokens_embd = ttnn.scatter(tokens_embd, 0, mask_indices_tt, vision_tt)
+        tokens_embd = ttnn.reshape(tokens_embd, (1, S_padded, H_full_embd))
+
+        ttnn.deallocate(mask_indices_tt)
+        ttnn.deallocate(vision_tt)
+
+        if return_host:
+            # Trace mode: fused embeddings must be a host tensor for fixed-shape trace capture.
+            tokens_embd_torch = ttnn.to_torch(
+                tokens_embd, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )  # [1, S_padded, H_full]
+            tokens_embd = ttnn.from_torch(
+                tokens_embd_torch[..., :H_full],
+                dtype=ttnn.bfloat16,
+                device=None,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
+                ),
+            )
+
         return ttnn.unsqueeze_to_4D(tokens_embd)
 
     def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
