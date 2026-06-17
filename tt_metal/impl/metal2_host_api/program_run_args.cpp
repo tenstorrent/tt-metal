@@ -554,6 +554,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         // has either named RTAs or vararg RTAs. (Validation has already confirmed coverage.)
         const std::set<CoreCoord>& kernel_nodes = kernel->logical_cores();
         const bool kernel_has_named_rtas = !schema->runtime_arg_names.empty();
+        const size_t num_named_rtas = schema->runtime_arg_names.size();
         for (const auto& node : kernel_nodes) {
             auto named_it = named_rtas_by_node.find(node);
             auto vararg_it = varargs_by_node.find(node);
@@ -562,30 +563,74 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             if (!kernel_has_named_rtas && !has_varargs) {
                 continue;  // Nothing to set on this node.
             }
+            const size_t num_varargs = has_varargs ? vararg_it->second->size() : 0;
 
-            std::vector<uint32_t> combined;
-            combined.reserve(schema->runtime_arg_names.size() + (has_varargs ? vararg_it->second->size() : 0));
-            if (kernel_has_named_rtas) {
-                TT_FATAL(
-                    has_named,
-                    "Internal error: validation passed but named RTAs missing for kernel '{}' node {}.",
-                    kernel_name,
-                    node.str());
-                for (const auto& name : schema->runtime_arg_names) {
-                    auto v_it = named_it->second->find(name);
-                    TT_FATAL(
-                        v_it != named_it->second->end(),
-                        "Internal error: named RTA '{}' missing for kernel '{}' node {}.",
-                        name,
-                        kernel_name,
-                        node.str());
-                    combined.push_back(v_it->second);
+            // Serialize this node's RTAs into a slot-addressable destination buffer:
+            //   [named_rta_0 ... named_rta_{N-1}, vararg_0 ... vararg_{M-1}]
+            // Named RTAs are *scattered* to their declaration slot via the schema's
+            // name->slot index — one hash lookup per supplied arg, O(N) per node. This replaces
+            // the previous "for each of the N schema names, linear-find it in the node's N-entry
+            // user Table" loop, which was O(N²) in string comparisons per node (Table::find is a
+            // linear std::ranges::find), and matches how the partial UpdateProgramRunArgs path
+            // already serializes named args (see its runtime_arg_name_to_slot use). Measured
+            // perf-neutral at realistic-and-up arg counts (≤128 named RTAs) on a quiet node — the
+            // quadratic only bites at pathological N — so this is a worst-case/consistency fix, not
+            // a throughput win. Varargs are positional and follow the named section unchanged.
+            auto scatter_node_rtas = [&](uint32_t* dst) {
+                if (kernel_has_named_rtas && has_named) {
+                    const auto& slot_of = schema->runtime_arg_name_to_slot;
+                    for (const auto& [name, value] : *named_it->second) {
+                        const auto s = slot_of.find(name);
+                        TT_FATAL(
+                            s != slot_of.end(),
+                            "Internal error: named RTA '{}' not in schema for kernel '{}' node {}.",
+                            name,
+                            kernel_name,
+                            node.str());
+                        dst[s->second] = value;
+                    }
                 }
+                if (has_varargs) {
+                    uint32_t* vdst = dst + num_named_rtas;
+                    for (const uint32_t v : *vararg_it->second) {
+                        *vdst++ = v;
+                    }
+                }
+            };
+
+            // Fast path: on a subsequent SetProgramRunArgs call the kernel's per-node RTA buffer
+            // already exists (sized and allocated by a prior call). Scatter straight into it via the
+            // in-place legacy path — the same one UpdateProgramRunArgs uses — skipping both the
+            // per-node temp `combined` vector (a heap allocation) and the redundant copy that
+            // set_runtime_args would do on top of it. The first call (buffer absent) must still go
+            // through set_runtime_args, which allocates the buffer, accounts for the watcher count
+            // word, runs the hardware runtime-args-size validation, and registers the node in
+            // core_with_runtime_args_.
+            //
+            // The "does the buffer exist yet" test is folded into the RuntimeArgsData access the
+            // fast path needs anyway: core_to_runtime_args_data_ is default-constructed with a null
+            // data pointer (kernel.cpp), and set_runtime_args is what first points it at storage, so
+            // data() == nullptr is exactly "not yet allocated" — no separate set membership lookup.
+            // The arg count is schema-fixed, so it is stable across calls; assert that rather than
+            // trusting it, since a direct write past the buffer is silent. (Scatter assigns by slot,
+            // so the buffer must be pre-sized; on the fast path it already is, and the first-call
+            // temp is value-initialized to the exact width below.)
+            RuntimeArgsData& rta = kernel->runtime_args_data(node);
+            if (rta.data() != nullptr) {
+                TT_FATAL(
+                    rta.size() == num_named_rtas + num_varargs,
+                    "Internal error: kernel '{}' node {} RTA count changed from {} to {} between "
+                    "SetProgramRunArgs calls; the buffer was sized on the first call and cannot grow.",
+                    kernel_name,
+                    node.str(),
+                    rta.size(),
+                    num_named_rtas + num_varargs);
+                scatter_node_rtas(rta.data());
+            } else {
+                std::vector<uint32_t> combined(num_named_rtas + num_varargs, 0u);
+                scatter_node_rtas(combined.data());
+                kernel->set_runtime_args(node, combined);
             }
-            if (has_varargs) {
-                combined.insert(combined.end(), vararg_it->second->begin(), vararg_it->second->end());
-            }
-            kernel->set_runtime_args(node, combined);
         }
 
         // Assemble the kernel's per-enqueue CRTA buffer in three structurally-separate sections:
