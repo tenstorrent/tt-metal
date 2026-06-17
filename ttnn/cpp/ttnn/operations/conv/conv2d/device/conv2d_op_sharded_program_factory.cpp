@@ -689,6 +689,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const bool conv_trm_caller_owns = std::getenv("TT_CONV_TRM_CALLER_OWNS") != nullptr;
     if (conv_trm_caller_owns) {
         conv_tile_pack_row_major = true;
+        log_info(
+            tt::LogOp,
+            "conv2d CALLER_OWNS geom: per_core_M(act_block_h_ntiles)={} per_core_N(weight_block_w_ntiles)={} "
+            "out_subblock={}x{} in0_num_subblocks={} in1_num_subblocks={} packer_l1_acc={}",
+            act_block_h_ntiles,
+            weight_block_w_ntiles,
+            out_subblock_h_ntiles,
+            out_subblock_w_ntiles,
+            act_block_h_ntiles / out_subblock_h_ntiles,
+            weight_block_w_ntiles / out_subblock_w_ntiles,
+            packer_l1_acc_en);
     }
     {
         const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
