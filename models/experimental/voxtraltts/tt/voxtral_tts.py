@@ -507,13 +507,11 @@ class VoxtralTTSPipeline:
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
         prompt_token_ids: list[int] = request["prompt_token_ids"]
         S_prompt = len(prompt_token_ids)
-        # Build production prompt embeddings on TT as [S,1,1,dim].
-        # CPU embeddings are only materialized for explicit debug capture.
+        # CPU prompt embeddings for staged prefill (same source regardless of VOXTRAL_DECODE_TRACE).
         inputs_embeds_cpu, inputs_embeds_tt = self._build_voice_injected_embeds_tt(
             prompt_token_ids,
             voice,
-            return_cpu_debug=debug is not None
-            or os.environ.get("VOXTRAL_DECODE_TRACE", "0").strip().lower() not in ("0", "false", "no"),
+            return_cpu_debug=debug is None,
         )
         if debug is not None:
             debug.set("embeds.prompt", inputs_embeds_cpu)
@@ -536,12 +534,9 @@ class VoxtralTTSPipeline:
         )
         acoustic_noise_scale = _env_float("VOXTRAL_ACOUSTIC_NOISE_SCALE", 1.0)
 
-        # Optional traced decode (opt-in via VOXTRAL_DECODE_TRACE): capture the 26-layer text-decode
-        # step (+ on-device rope gather) ONCE and replay it via execute_trace, removing the per-op
-        # host-dispatch gaps that dominate RTF. The SAME text trace is reused for BOTH prefill (a
-        # per-token decode over the voice-padded prompt) AND the AR decode loop. The acoustic FM Euler
-        # core gets its own trace. 2CQ (VOXTRAL_DECODE_TRACE_2CQ) overlaps input staging with replay.
-        # Debug path reads per-step hiddens to host, so trace is disabled when return_debug is set.
+        # Production uses staged trace replay (execute_trace). Direct per-op forward diverges
+        # numerically on TT → hiss/clarity loss. VOXTRAL_DECODE_TRACE=0 only disables 2CQ overlap.
+        # Debug (return_debug) keeps the legacy prefill_from_embeds + forward path for host traces.
         from models.experimental.voxtraltts.demo.decode_trace_2cq import (
             AcousticFMBuffers,
             TracedAcousticFM,
@@ -549,19 +544,18 @@ class VoxtralTTSPipeline:
             VoxtralDecodeBuffers,
             VoxtralDecodeTrace2CQ,
             decode_trace_2cq_enabled,
-            decode_trace_enabled,
             signal_decode_step_done,
             stage_acoustic_inputs,
             stage_decode_inputs,
         )
 
-        _use_trace = decode_trace_enabled() and debug is None
+        _staged_decode = debug is None
         _trace = _bufs = _dec2cq = None
         _ac_trace = _ac_bufs = None
         _captured = _ac_captured = False
         _cluster_shape = self.text.inner.args.cluster_shape
         _dim = int(self.text.inner.args.dim)
-        if _use_trace:
+        if _staged_decode:
             _bufs = VoxtralDecodeBuffers.create(
                 self.mesh_device,
                 _dim,
@@ -582,10 +576,9 @@ class VoxtralTTSPipeline:
             _ac_trace = TracedAcousticFM(self.acoustic, _ac_bufs, cfg_scalar, self.mesh_device)
 
         # ── Prefill ──────────────────────────────────────────────────────────────────────────
-        # Traced: prefill is itself a per-token DECODE loop over the prompt, so it REUSES the text
-        # trace (capture on prompt token 0, replay for the rest) — building the KV cache at positions
-        # 0..S-1. Untraced: the standard prefill_from_embeds path.
-        if _use_trace:
+        # Staged: per-token DECODE loop over the prompt (capture on token 0, replay thereafter).
+        # Debug: standard prefill_from_embeds path.
+        if _staged_decode:
             inputs_embeds_host = inputs_embeds_cpu.reshape(S_prompt, _dim)
             last_hidden_tt = None
             for i in range(S_prompt):
@@ -622,7 +615,7 @@ class VoxtralTTSPipeline:
                 ttnn.synchronize_device(self.mesh_device)
                 _t0 = time.perf_counter()
             _noise_seed = acoustic_fm_noise_seed(seed, step_idx)
-            if _use_trace:
+            if _staged_decode:
                 # Traced acoustic FM core (the 78%/step bottleneck). Stage hidden+noise into the
                 # persistent buffers, replay the Euler-FM trace, then finalize codes (semantic argmax +
                 # end-audio mask + concat) outside the trace. ``out_dev`` is persistent → consumed by
@@ -637,6 +630,7 @@ class VoxtralTTSPipeline:
                     acoustic_tt = _ac_trace.out_dev
                 else:
                     acoustic_tt = _ac_trace.execute(blocking=False)
+                ttnn.synchronize_device(self.mesh_device)
                 # Copy the FM trace output out of the (persistent, trace-region) buffer BEFORE the
                 # finalize runs — codes_from_fm's semantic matmul allocates, and with an active trace
                 # that would clobber the trace output (TT_THROW "Tensor is not allocated" at concat).
@@ -687,7 +681,7 @@ class VoxtralTTSPipeline:
                     ttnn.deallocate(next_mm_embed_tt)
                 break
 
-            if _use_trace:
+            if _staged_decode:
                 # Stage (embed, pos, rot_idxs) into the persistent buffers (CQ1 when 2CQ on), then
                 # compile+capture on the first step and replay thereafter. ``hidden_dev`` is a
                 # persistent buffer the next iteration's acoustic copy consumes before the next replay.
