@@ -213,12 +213,19 @@ def _all_gather_rmsnorm_tensor(
         persistent_output_buffer=None,
         dim=3,
         multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-        num_links=1,
+        num_links=tt_ccl.get_num_links(),
         topology=default_topology(cfg.mesh_device),
         memory_config=memory_config,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=24,
-        num_workers_per_link=4,
+        # CCL tuning: match the house default (CCL_CHUNKS_PER_SYNC / CCL_NUM_WORKERS_PER_LINK in
+        # tt_ccl.py = 10 / 2) used by every shared module (Attention1D/MLP1D/RMSNorm1D) and the
+        # same-architecture llama3_8b reference (32 heads / 8 KV), which reaches T3K parity. The
+        # original port shipped a divergent 24 / 4 here. These two per-layer rmsnorm all-gathers run
+        # 64x/decode step, so on the T3K 8-device ring their per-op cost dominates -- the suspected
+        # root of the ~17% T3K decode gap vs TTTv1 (N150/N300 at parity; short/no ring). Aligning to
+        # the validated house default is correctness-neutral (all-gather result is identical).
+        chunks_per_sync=10,
+        num_workers_per_link=2,
         num_buffers_per_channel=2,
     )
 
@@ -797,8 +804,11 @@ class Mistral7B(LightweightModule):
                 memory_config=logits.memory_config(),
                 topology=default_topology(self.mesh_device),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=24,
-                num_workers_per_link=4,
+                # House-default CCL tuning (10 / 2), matching llama3_8b. Only used in host
+                # sampling mode (full-vocab gather); the original 24 / 4 is the suspected reason
+                # T3K host mode was the worst TTTv2 mode. See _all_gather_rmsnorm_tensor for rationale.
+                chunks_per_sync=10,
+                num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
         return ttnn.untilize(logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
