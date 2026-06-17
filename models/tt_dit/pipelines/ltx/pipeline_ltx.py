@@ -1794,6 +1794,15 @@ class LTXPipeline:
         # full mesh). Deferred to here so the video DiT has already run with clean CCL runtime args.
         self._ensure_audio_submesh()
 
+        # The audio submesh overlaps the parent's chips and shares cq 0. The worker->EDM fabric
+        # connection is a single un-arbitrated slot per physical (chip, eth_channel): if the child's
+        # CCL opens it while the parent's prior cq-0 fabric work (video DiT / VAE decode / a previous
+        # audio decode) is still in flight, the child's flow-control semaphore is never satisfied and
+        # its CCL deadlocks. Quiescing the parent to idle first releases every parent connection slot
+        # so the child opens cleanly. (Routing audio onto cq 1 instead of quiescing deadlocks outright.)
+        if self._owned_audio_submesh is not None:
+            ttnn.synchronize_device(self.mesh_device)
+
         _dump = os.environ.get("LTX_DUMP_AUDIO_LATENT")
         if _dump and float(audio_latent.abs().max()) > 0:  # skip the all-zero warmup latent
             torch.save(audio_latent.cpu(), _dump)
