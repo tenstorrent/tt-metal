@@ -59,17 +59,20 @@ TEST_F(DeallocateTest, SharedTensorDeallocateForce) {
 }
 
 TEST_F(DeallocateTest, DeallocatedTensorHasDevice) {
+    // We should think about eventually making all these `.device()` return null on deallocated tensor
+
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     tensor.deallocate(/*force = */ true);
     EXPECT_FALSE(tensor.is_allocated());
 
     EXPECT_NE(tensor.device(), nullptr) << "Deallocated tensor should have valid device";
 
+    // Here the device field is copied over, we might want to clean this up eventually.
     Tensor tensor2 = tensor;
     EXPECT_NE(tensor2.device(), nullptr) << "Copy of deallocated tensor should have valid device";
 
     Tensor tensor3(tensor.device_storage());
-    EXPECT_NE(tensor3.device(), nullptr) << "Tensor constructed from deallocated storage should have valid device";
+    EXPECT_EQ(tensor3.device(), nullptr) << "Tensor constructed from deallocated storage should not have valid device";
 }
 
 TEST_F(DeallocateTest, DeallocatedTensorDoesNOTHaveMeshTensor) {
