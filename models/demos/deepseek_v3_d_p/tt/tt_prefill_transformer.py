@@ -49,6 +49,9 @@ class TtPrefillTransformer(LightweightModule):
         num_layers: int,
         experts_per_chip: int = 8,
         first_k_dense: int = 3,
+        first_layer_idx: int = 0,
+        is_first_rank: bool = True,
+        is_last_rank: bool = True,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -58,9 +61,16 @@ class TtPrefillTransformer(LightweightModule):
 
         Args:
             cache_path: Path to TTNN weight cache directory
-            num_layers: Number of transformer layers
+            num_layers: Number of transformer layers built by this instance
             experts_per_chip: Number of routed experts per chip (default: 8)
             first_k_dense: Number of initial dense (non-MoE) layers (default: 3)
+            first_layer_idx: Global index of this instance's first layer. Non-zero
+                for a pipeline-parallel rank owning a layer slice; block cache keys
+                are global, so dense/MoE selection must use the global index.
+            is_first_rank / is_last_rank: a pipeline-parallel rank builds the
+                embedding only on the first rank and the final norm + LM head only
+                on the last, so check only the weights it actually loads. Both True
+                for single-rank.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -72,23 +82,23 @@ class TtPrefillTransformer(LightweightModule):
         # Initialize fast cache checker for this directory
         init_checker(cache_path)
 
-        # Embedding
-        if not TtParallelEmbedding.check_cache_complete(cache_path):
+        # Embedding (first rank only)
+        if is_first_rank and not TtParallelEmbedding.check_cache_complete(cache_path):
             return False
 
-        # Per-layer blocks
-        for layer_idx in range(num_layers):
+        # Per-layer blocks — cache keys are global, so index globally.
+        for local_idx in range(num_layers):
+            layer_idx = first_layer_idx + local_idx
             is_dense = layer_idx < first_k_dense
             if not TtPrefillBlock.check_cache_complete(cache_path, layer_idx, is_dense, experts_per_chip):
                 return False
 
-        # Final norm
-        if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
-            return False
-
-        # LM head
-        if not TtLMHead.check_cache_complete(cache_path):
-            return False
+        # Final norm + LM head (last rank only)
+        if is_last_rank:
+            if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
+                return False
+            if not TtLMHead.check_cache_complete(cache_path):
+                return False
 
         logger.info(f"TTNN cache complete at {cache_path} ({num_layers} layers)")
         return True
@@ -118,12 +128,20 @@ class TtPrefillTransformer(LightweightModule):
         is_chunked: bool = False,
         slot_num: int = 1,
         max_seq_len: Optional[int] = None,
+        first_layer_idx: int = 0,
+        is_first_rank: bool = True,
+        is_last_rank: bool = True,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
         self.is_chunked = is_chunked
+        # Pipeline-parallel slicing. A rank owns layers [first_layer_idx, first_layer_idx+num_layers)
+        # and builds the embedding only on the first rank and the norm + LM head only on the last.
+        # All three default so a single-rank instance builds the whole model unchanged.
+        self.is_first_rank = is_first_rank
+        self.is_last_rank = is_last_rank
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -133,29 +151,39 @@ class TtPrefillTransformer(LightweightModule):
 
         logger.info(f"Building TtPrefillTransformer with {num_layers} layers, seq_len={seq_len}")
 
-        # --- Embedding ---
-        self.embed = TtParallelEmbedding(
-            mesh_device=mesh_device,
-            vocab_size=config.vocab_size,
-            emb_dim=config.hidden_size,
-            torch_weight=state_dict.get("embed_weight"),  # None if cache exists
-            sp_axis=sp_axis,
-            tp_axis=tp_axis,
-            weight_cache_path=weight_cache_path,
+        # --- Embedding (first rank only) ---
+        self.embed = (
+            TtParallelEmbedding(
+                mesh_device=mesh_device,
+                vocab_size=config.vocab_size,
+                emb_dim=config.hidden_size,
+                torch_weight=state_dict.get("embed_weight"),  # None if cache exists
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                weight_cache_path=weight_cache_path,
+            )
+            if is_first_rank
+            else None
         )
 
         # --- Transformer layers ---
+        # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
+        # cache_layer_idx in forward is the LOCAL slot. layer_num is this instance's slice
+        # length so the block's flat KV slot (cache_user_id * layer_num + cache_layer_idx)
+        # matches the per-rank cache sized to num_layers.
         self.layers = []
-        for i in range(num_layers):
-            logger.info(f"Building layer {i}/{num_layers}...")
-            # Get layer weights or empty dict if loading from cache
-            layer_state = state_dict["layers"][i] if state_dict.get("layers") else {}
+        for local_idx in range(num_layers):
+            layer_idx = first_layer_idx + local_idx
+            logger.info(f"Building layer {local_idx}/{num_layers} (global idx {layer_idx})...")
+            # Get layer weights or empty dict if loading from cache. state_dict, when
+            # provided, holds this instance's slice (local indexing).
+            layer_state = state_dict["layers"][local_idx] if state_dict.get("layers") else {}
             layer = TtPrefillBlock(
                 mesh_device=mesh_device,
                 config=config,
                 model_cfg=model_cfg,
                 state_dict=layer_state,
-                layer_idx=i,
+                layer_idx=layer_idx,
                 seq_len=seq_len,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 num_links=num_links,
@@ -176,17 +204,21 @@ class TtPrefillTransformer(LightweightModule):
             )
             self.layers.append(layer)
 
-        # --- Final norm ---
-        self.norm = TtDistributedRmsNorm(
-            mesh_device=mesh_device,
-            emb_dim=config.hidden_size,
-            torch_weight=state_dict.get("norm_weight"),  # None if cache exists
-            epsilon=config.rms_norm_eps,
-            cluster_axis=tp_axis,
-            num_links=num_links,
-            topology=topology,
-            weight_cache_path=weight_cache_path,
-            cache_name_prefix="norm",
+        # --- Final norm (last rank only) ---
+        self.norm = (
+            TtDistributedRmsNorm(
+                mesh_device=mesh_device,
+                emb_dim=config.hidden_size,
+                torch_weight=state_dict.get("norm_weight"),  # None if cache exists
+                epsilon=config.rms_norm_eps,
+                cluster_axis=tp_axis,
+                num_links=num_links,
+                topology=topology,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix="norm",
+            )
+            if is_last_rank
+            else None
         )
 
         # --- RoPE (computed once, reused across all layers) ---
@@ -204,17 +236,21 @@ class TtPrefillTransformer(LightweightModule):
             else None
         )
 
-        # --- LM Head ---
-        self.lm_head = TtLMHead(
-            mesh_device=mesh_device,
-            emb_dim=config.hidden_size,
-            vocab_size=config.vocab_size,
-            torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
-            num_links=num_links,
-            topology=topology,
-            is_balanced=is_balanced,
-            weight_cache_path=weight_cache_path,
-            is_column_parallel=lm_head_is_column_parallel,
+        # --- LM Head (last rank only) ---
+        self.lm_head = (
+            TtLMHead(
+                mesh_device=mesh_device,
+                emb_dim=config.hidden_size,
+                vocab_size=config.vocab_size,
+                torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
+                num_links=num_links,
+                topology=topology,
+                is_balanced=is_balanced,
+                weight_cache_path=weight_cache_path,
+                is_column_parallel=lm_head_is_column_parallel,
+            )
+            if is_last_rank
+            else None
         )
 
         self.is_balanced = is_balanced
@@ -246,10 +282,16 @@ class TtPrefillTransformer(LightweightModule):
         cache_user_id: int = 0,
     ):
         """
-        Forward pass: embed -> [block x N] -> norm -> lm_head.
+        Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
+
+        Pipeline-parallel ranks run a slice of this: the embedding runs only on the
+        first rank and the norm/LM-head/sample tail only on the last, so the input
+        and output are dual-mode (see Args/Returns).
 
         Args:
-            token_ids: [1, 1, seq_len_per_chip] uint32, SP-sharded
+            token_ids: on the first rank, [1, 1, seq_len_per_chip] uint32 SP-sharded
+                token IDs to embed; on a non-first rank, the [1, 1, seq_per_chip,
+                emb_dim/tp] hidden-state activation handed over from the previous rank.
             kvpe_cache: externally created KVPE cache [num_layers, 1, seq_len_local, head_dim];
                         each layer writes to its own slot via cache_layer_idx
             return_intermediates: if True, sync + snapshot to host after each stage
@@ -263,7 +305,11 @@ class TtPrefillTransformer(LightweightModule):
                 + zero padding. When None, no migration or zeroing.
 
         Returns:
-            Tuple of (first_token_id, first_token_prob, intermediates_dict or None)
+            On a non-last rank: the hidden-state activation tensor to hand to the next
+            rank (no token — the tail did not run).
+
+            On the last rank (and single-rank): a tuple of
+            (first_token_id, first_token_prob, intermediates_dict or None)
             - first_token_id: sampled token ID (for first temperature if list provided)
             - first_token_prob: probability of sampled token (for first temperature if list provided)
             - intermediates: dict with keys like "embed", "layer_0", "norm", "lm_head", "first_token"
@@ -281,12 +327,16 @@ class TtPrefillTransformer(LightweightModule):
             rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
         intermediates = {} if return_intermediates else None
 
-        h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
-        h = ttnn.unsqueeze_to_4D(h)  # [1, 1, seq_per_chip, emb_dim/tp]
-
-        if return_intermediates:
-            ttnn.synchronize_device(self.mesh_device)
-            intermediates["embed"] = self._to_host(h)
+        if self.is_first_rank:
+            h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
+            h = ttnn.unsqueeze_to_4D(h)  # [1, 1, seq_per_chip, emb_dim/tp]
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates["embed"] = self._to_host(h)
+        else:
+            # token_ids carries the upstream rank's hidden-state activation, already
+            # [1, 1, seq_per_chip, emb_dim/tp]. No embedding on this rank.
+            h = token_ids
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
@@ -307,6 +357,12 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
+
+        # Non-last pipeline ranks stop here: the layer slice's output activation is
+        # handed to the next rank, which continues from this hidden state. The norm /
+        # LM-head / sample tail (and its weights) live only on the last rank.
+        if not self.is_last_rank:
+            return h
 
         h = self.norm(h)
 
