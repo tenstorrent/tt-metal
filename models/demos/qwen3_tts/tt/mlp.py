@@ -95,9 +95,36 @@ class MLP(LightweightModule):
                 mesh_mapper=_mesh_mapper,
             )
 
-        # Original (DRAM_INTERLEAVED) weights — used by prefill path.
-        self.gate_proj = _build_proj_weight(f"{layer_prefix}.mlp.gate_proj.weight", "gate_proj")
-        self.up_proj = _build_proj_weight(f"{layer_prefix}.mlp.up_proj.weight", "up_proj")
+        # Fused gate+up DRAM-interleaved weight [1,1,K,2N] — used by prefill path.
+        # One matmul instead of two; slice to split after. Decode uses separate
+        # DRAM-sharded weights (see below) where splitting a sharded output costs more
+        # than the saved dispatch.
+        import torch as _torch
+
+        _gate_w = state_dict[f"{layer_prefix}.mlp.gate_proj.weight"]  # [N, K]
+        _up_w = state_dict[f"{layer_prefix}.mlp.up_proj.weight"]  # [N, K]
+        _gate_up_w = _torch.cat([_gate_w, _up_w], dim=0)  # [2N, K]
+        _gate_up_host = _gate_up_w.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+        _gu_cache = get_cache_name("gate_up_proj")
+        if _gu_cache is not None:
+            self.gate_up_proj = ttnn.as_tensor(
+                _gate_up_host,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                cache_file_name=_gu_cache,
+                mesh_mapper=_mesh_mapper,
+            )
+        else:
+            self.gate_up_proj = ttnn.from_torch(
+                _gate_up_host,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                mesh_mapper=_mesh_mapper,
+            )
         self.down_proj = _build_proj_weight(f"{layer_prefix}.mlp.down_proj.weight", "down_proj")
 
         # Decode-only DRAM-sharded weights + program/memory configs (M=1 tile).
@@ -195,7 +222,7 @@ class MLP(LightweightModule):
         self.short_seq_limit = 32
         _fp32 = self.compute_kernel_config.fp32_dest_acc_en
         self._decode_gate_up_progcfg = make_linear_1d_program_config(
-            m=1, k=hidden_size, n=intermediate_size, grid_x=grid.x, grid_y=grid.y, fp32_dest_acc_en=_fp32
+            m=1, k=hidden_size, n=2 * intermediate_size, grid_x=grid.x, grid_y=grid.y, fp32_dest_acc_en=_fp32
         )
         self._decode_down_progcfg = make_linear_1d_program_config(
             m=1, k=intermediate_size, n=hidden_size, grid_x=grid.x, grid_y=grid.y, fp32_dest_acc_en=_fp32
@@ -203,7 +230,7 @@ class MLP(LightweightModule):
         self._short_seq_gate_up_progcfg = make_linear_1d_program_config(
             m=self.short_seq_limit,
             k=hidden_size,
-            n=intermediate_size,
+            n=2 * intermediate_size,
             grid_x=grid.x,
             grid_y=grid.y,
             fp32_dest_acc_en=_fp32,
@@ -310,21 +337,25 @@ class MLP(LightweightModule):
             mode == "prefill" and seq_len == 128 and getattr(self, "_prefill128_down_progcfg", None) is not None
         )
 
-        # Prefill path: standard 1D-mcast matmul.
-        gate_out = ttnn.linear(
+        # Prefill path: fused gate+up matmul → slice → SiLU·mul.
+        gate_up_out = ttnn.linear(
             x,
-            self.gate_proj,
+            self.gate_up_proj,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=mem_cfg,
             program_config=gate_up_progcfg,
         )
-        up_out = ttnn.linear(
-            x,
-            self.up_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            memory_config=mem_cfg,
-            program_config=gate_up_progcfg,
+        s = gate_up_out.shape
+        gate_out = ttnn.slice(
+            gate_up_out, [0, 0, 0, 0], [s[0], s[1], s[2], self.intermediate_size], memory_config=mem_cfg
         )
+        up_out = ttnn.slice(
+            gate_up_out,
+            [0, 0, 0, self.intermediate_size],
+            [s[0], s[1], s[2], 2 * self.intermediate_size],
+            memory_config=mem_cfg,
+        )
+        ttnn.deallocate(gate_up_out)
         hidden = ttnn.mul(
             gate_out,
             up_out,

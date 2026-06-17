@@ -23,9 +23,9 @@ import pytest
 # Prefill ms varies a lot run-to-run with trace-cache state and bucket warmth
 # (observed 15-25 ms swing on otherwise-identical runs), so we only enforce an
 # upper bound — catches regressions, ignores favorable variance.
-EXPECTED_STEADY_MS_PER_FRAME = 59.2
+EXPECTED_STEADY_MS_PER_FRAME = 43.3
 STEADY_MARGIN = 0.05
-PREFILL_MS_UPPER_BOUND = 30.0
+PREFILL_MS_UPPER_BOUND = 20.0
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 REF_AUDIO = str(REPO_ROOT / "models" / "demos" / "qwen3_tts" / "demo" / "jim_reference.wav")
