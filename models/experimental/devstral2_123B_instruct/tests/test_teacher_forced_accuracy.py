@@ -52,11 +52,12 @@ from models.experimental.devstral2_123B_instruct.reference.hf_reference_loader i
     resolve_hf_input_device,
 )
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
+    devstral2_e2e_sweep_model_max_seq_len,
     devstral2_weight_cache_seq_len,
     model_prefill_weight_keys,
+    prepare_e2e_tt_model_budget,
     require_hf_weights,
     require_text_config,
-    resolve_devstral2_weight_cache_path,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
@@ -103,6 +104,9 @@ _SWEEP_TIMEOUT_MARGIN = 1.25
 
 _MIN_TOP1_ACC = float(os.environ.get("DEVSTRAL2_MIN_TOP1_ACC", "0.96"))
 _MIN_TOP5_ACC = float(os.environ.get("DEVSTRAL2_MIN_TOP5_ACC", "0.99"))
+
+# Reuse one TT model build per mesh for sanity/sweep runs in the same pytest process.
+_teacher_forced_model_cache: dict[tuple[int, int], tuple] = {}
 
 
 def _sweep_output_dir() -> Path:
@@ -341,27 +345,28 @@ def _mesh_device_param():
 
 
 def _test_seq_len(prefill_len: int, eval_tokens: int, kv_block_size: int) -> int:
+    """Logical tokens exercised at one sweep point (for logging only)."""
     need = prefill_len + eval_tokens + 1
     return max(_round_up(need, kv_block_size), kv_block_size)
 
 
-def _runtime_max_seq_len(test_seq_len: int, kv_block_size: int) -> int:
-    cache_seq = devstral2_weight_cache_seq_len()
-    return max(_round_up(test_seq_len, kv_block_size), cache_seq)
+def _e2e_sweep_model_max_seq_len() -> int:
+    """Fixed KV/RoPE + weight-cache budget for every teacher-forced sweep point."""
+    return devstral2_e2e_sweep_model_max_seq_len()
 
 
-def _build_model(mesh_device, num_layers: int | None, max_seq_len: int):
+def _build_model(mesh_device, num_layers: int | None):
     text_cfg = require_text_config()
     full_layers = int(text_cfg.num_hidden_layers)
     n_layers = num_layers or full_layers
     assert 0 < n_layers <= full_layers, f"requested {n_layers} layers, model has {full_layers}"
 
-    weight_cache_path = resolve_devstral2_weight_cache_path(mesh_device, text_cfg, n_layers)
+    model_max_seq_len, weight_cache_path = prepare_e2e_tt_model_budget(mesh_device, text_cfg)
 
     args = Devstral2Args.from_hf_config(
         text_cfg,
         mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=max_seq_len,
+        max_seq_len=model_max_seq_len,
         max_batch_size=1,
     )
 
@@ -387,6 +392,17 @@ def _build_model(mesh_device, num_layers: int | None, max_seq_len: int):
         weight_cache_path=weight_cache_path,
     )
     return model, args, weight_cache_path
+
+
+def _get_or_build_model(mesh_device, num_layers: int | None):
+    """Return cached TT model for this mesh (one build per pytest process)."""
+    mesh_key = (tuple(mesh_device.shape), num_layers if num_layers is not None else "all")
+    if mesh_key not in _teacher_forced_model_cache:
+        logger.info(f"Building teacher-forced TT model once for mesh={mesh_key}")
+        _teacher_forced_model_cache[mesh_key] = _build_model(mesh_device, num_layers)
+    else:
+        logger.info(f"Reusing in-process teacher-forced TT model for mesh={mesh_key}")
+    return _teacher_forced_model_cache[mesh_key]
 
 
 def _argmax_from_prefill_logits(
@@ -504,15 +520,17 @@ def _dump_sweep_result(result: dict) -> Path:
     return path
 
 
-def _dump_sweep_summary(run_id: str, results: list[dict]) -> Path:
+def _dump_sweep_summary(run_id: str, results: list[dict], *, prefill_lengths: list[int]) -> Path:
     summary_path = _sweep_output_dir() / "results" / f"sweep_summary_{run_id}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "run_id": run_id,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "sweep_prefill_lengths": SWEEP_PREFILL_LENGTHS,
+        "sweep_prefill_lengths": prefill_lengths,
         "teacher_eval_tokens": TEACHER_EVAL_TOKENS,
-        "sweep_timeout_seconds": _sweep_timeout_seconds(),
+        "model_max_seq_len": _e2e_sweep_model_max_seq_len(),
+        "weight_cache_seq_len": devstral2_weight_cache_seq_len(),
+        "sweep_timeout_seconds": _sweep_timeout_seconds(prefill_lengths),
         "thresholds": {"top1_min": _MIN_TOP1_ACC, "top5_min": _MIN_TOP5_ACC},
         "num_points": len(results),
         "num_passed": sum(1 for r in results if r.get("passed")),
@@ -541,7 +559,7 @@ def _run_sweep_point(
 
     kv_block_size = Devstral2Args.kv_block_size
     test_seq_len = _test_seq_len(prefill_len, eval_tokens, kv_block_size)
-    max_seq_len = _runtime_max_seq_len(test_seq_len, kv_block_size)
+    model_max_seq_len = _e2e_sweep_model_max_seq_len()
 
     reference_file = _ensure_reference_file(
         reference_file,
@@ -558,7 +576,7 @@ def _run_sweep_point(
 
     logger.info(
         f"Sweep prefill={prefill_len}: eval={eval_tokens}, total={total_length}, "
-        f"test_seq_len={test_seq_len}, max_seq_len={max_seq_len}, reference={reference_file}"
+        f"test_seq_len={test_seq_len}, model_max_seq_len={model_max_seq_len}, reference={reference_file}"
     )
 
     top1, top5, n_tokens = _run_teacher_forced_accuracy(model, args, mesh_device, token_acc)
@@ -572,7 +590,7 @@ def _run_sweep_point(
         "eval_tokens": eval_tokens,
         "total_length": total_length,
         "test_seq_len": test_seq_len,
-        "max_seq_len": max_seq_len,
+        "model_max_seq_len": model_max_seq_len,
         "top1_accuracy": top1,
         "top5_accuracy": top5,
         "num_eval_tokens": n_tokens,
@@ -639,16 +657,13 @@ def _run_teacher_forced_accuracy_sweep(mesh_device, prefill_lengths: list[int]) 
     num_layers = int(raw_layers) if raw_layers else None
 
     kv_block_size = Devstral2Args.kv_block_size
-    worst_prefill = max(prefill_lengths)
-    worst_eval = _eval_tokens_for_prefill(worst_prefill)
-    global_test_seq_len = _test_seq_len(worst_prefill, worst_eval, kv_block_size)
-    global_max_seq_len = _runtime_max_seq_len(global_test_seq_len, kv_block_size)
+    model_max_seq_len = _e2e_sweep_model_max_seq_len()
     logger.info(
-        f"Building model once for sweep: worst_prefill={worst_prefill}, "
-        f"global_test_seq_len={global_test_seq_len}, global_max_seq_len={global_max_seq_len}"
+        f"Teacher-forced sweep: points={prefill_lengths}, model_max_seq_len={model_max_seq_len}, "
+        f"eval_tokens={TEACHER_EVAL_TOKENS}"
     )
 
-    model, args, weight_cache_path = _build_model(mesh_device, num_layers, global_max_seq_len)
+    model, args, weight_cache_path = _get_or_build_model(mesh_device, num_layers)
     logger.info(f"TT weight cache (reuse): {weight_cache_path}")
 
     tokenizer = AutoTokenizer.from_pretrained(DEVSTRAL2_LARGE_REPO_ID, trust_remote_code=True)
@@ -674,10 +689,10 @@ def _run_teacher_forced_accuracy_sweep(mesh_device, prefill_lengths: list[int]) 
             )
             failures.append(msg)
             if fail_fast:
-                _dump_sweep_summary(run_id, results)
+                _dump_sweep_summary(run_id, results, prefill_lengths=prefill_lengths)
                 pytest.fail(msg)
 
-    summary_path = _dump_sweep_summary(run_id, results)
+    summary_path = _dump_sweep_summary(run_id, results, prefill_lengths=prefill_lengths)
     logger.info(f"Sweep complete: {len(results)} points, {len(failures)} failed, summary={summary_path}")
 
     if failures:

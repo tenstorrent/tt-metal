@@ -19,7 +19,9 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3MLP
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
-    DEVSTRAL2_TEST_MAX_SEQ_LEN,
+    devstral2_test_model_args,
+    devstral2_tt_weight_cache_dir,
+    log_tt_weight_cache_status,
     require_mlp_weights,
     require_text_config,
     replicated_tt_to_torch,
@@ -29,7 +31,6 @@ from models.experimental.devstral2_123B_instruct.tt.mem_config import (
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
-    Devstral2Args,
 )
 from models.experimental.devstral2_123B_instruct.tt.tt_ministralmlp import TtMLP
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -65,13 +66,11 @@ def test_mlp_pcc_real_weights(mesh_device, seq_len):
     ref.up_proj.weight.data.copy_(state_dict[f"model.layers.{layer}.mlp.up_proj.weight"])
     ref.down_proj.weight.data.copy_(state_dict[f"model.layers.{layer}.mlp.down_proj.weight"])
 
-    args = Devstral2Args.from_hf_config(
-        text_cfg,
-        mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, seq_len),
-    )
+    args = devstral2_test_model_args(text_cfg, mesh_device)
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(text_cfg.num_hidden_layers))
     tt_ccl = TT_CCL(mesh_device)
-    tt_mlp = TtMLP(args, mesh_device, state_dict, layer_idx=layer, tt_ccl=tt_ccl)
+    tt_mlp = TtMLP(args, mesh_device, state_dict, layer_idx=layer, tt_ccl=tt_ccl, weight_cache_path=weight_cache_path)
 
     x = torch.randn(1, 1, seq_len, text_cfg.hidden_size, dtype=torch.bfloat16)
     ws_mem = get_prefill_width_sharded_activation_mem_config(seq_len, text_cfg.hidden_size)

@@ -20,14 +20,15 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3RMSNorm
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
-    DEVSTRAL2_TEST_MAX_SEQ_LEN,
+    devstral2_test_model_args,
+    devstral2_tt_weight_cache_dir,
+    log_tt_weight_cache_status,
     require_hf_weights,
     require_text_config,
     replicated_tt_to_torch,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
-    Devstral2Args,
 )
 from models.experimental.devstral2_123B_instruct.tt.mem_config import get_decode_width_sharded_activation_mem_config
 from models.experimental.devstral2_123B_instruct.tt.tt_ministralrmsnorm import TtRMSNorm
@@ -59,12 +60,10 @@ def test_rmsnorm_pcc_real_weights(mesh_device, seq_len):
     state_dict = require_hf_weights([weight_key])
     ref = Ministral3RMSNorm(text_cfg.hidden_size, eps=text_cfg.rms_norm_eps).to(torch.bfloat16).eval()
     ref.weight.data.copy_(state_dict[weight_key])
-    args = Devstral2Args.from_hf_config(
-        text_cfg,
-        mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, seq_len),
-    )
-    tt_norm = TtRMSNorm(args, mesh_device, state_dict, weight_key)
+    args = devstral2_test_model_args(text_cfg, mesh_device)
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(text_cfg.num_hidden_layers))
+    tt_norm = TtRMSNorm(args, mesh_device, state_dict, weight_key, weight_cache_path=weight_cache_path)
 
     x = torch.randn(1, 1, seq_len, text_cfg.hidden_size, dtype=torch.bfloat16)
     tt_x = ttnn.from_torch(
@@ -100,12 +99,10 @@ def test_rmsnorm_pcc_prefill_width_sharded(mesh_device, seq_len):
     state_dict = require_hf_weights([weight_key])
     ref = Ministral3RMSNorm(text_cfg.hidden_size, eps=text_cfg.rms_norm_eps).to(torch.bfloat16).eval()
     ref.weight.data.copy_(state_dict[weight_key])
-    args = Devstral2Args.from_hf_config(
-        text_cfg,
-        mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, seq_len),
-    )
-    tt_norm = TtRMSNorm(args, mesh_device, state_dict, weight_key)
+    args = devstral2_test_model_args(text_cfg, mesh_device)
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(text_cfg.num_hidden_layers))
+    tt_norm = TtRMSNorm(args, mesh_device, state_dict, weight_key, weight_cache_path=weight_cache_path)
 
     x = torch.randn(1, 1, seq_len, text_cfg.hidden_size, dtype=torch.bfloat16)
     tt_x = ttnn.from_torch(
@@ -139,8 +136,10 @@ def test_rmsnorm_pcc_decode_width_sharded(mesh_device):
     state_dict = require_hf_weights([weight_key])
     ref = Ministral3RMSNorm(text_cfg.hidden_size, eps=text_cfg.rms_norm_eps).to(torch.bfloat16).eval()
     ref.weight.data.copy_(state_dict[weight_key])
-    args = Devstral2Args.from_hf_config(text_cfg, mesh_shape=tuple(mesh_device.shape))
-    tt_norm = TtRMSNorm(args, mesh_device, state_dict, weight_key)
+    args = devstral2_test_model_args(text_cfg, mesh_device)
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(text_cfg.num_hidden_layers))
+    tt_norm = TtRMSNorm(args, mesh_device, state_dict, weight_key, weight_cache_path=weight_cache_path)
 
     m = ttnn.TILE_SIZE
     x = torch.randn(1, 1, m, text_cfg.hidden_size, dtype=torch.bfloat16)

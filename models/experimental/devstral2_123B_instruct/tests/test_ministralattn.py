@@ -22,14 +22,15 @@ from transformers.models.ministral3.modeling_ministral3 import (
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
-    DEVSTRAL2_TEST_MAX_SEQ_LEN,
+    devstral2_test_model_args,
+    devstral2_tt_weight_cache_dir,
+    log_tt_weight_cache_status,
     require_attention_weights,
     require_text_config,
     replicated_tt_to_torch,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
-    Devstral2Args,
 )
 from models.experimental.devstral2_123B_instruct.tt.tt_ministral_rotary_emb import TtRotaryEmbedding
 from models.experimental.devstral2_123B_instruct.tt.tt_ministralattn import TtAttention
@@ -69,14 +70,25 @@ def test_attention_prefill_pcc_real_weights(mesh_device, seq_len):
 
     ref_rope = Ministral3RotaryEmbedding(text_cfg).eval()
 
-    args = Devstral2Args.from_hf_config(
-        text_cfg,
-        mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, seq_len),
-    )
+    args = devstral2_test_model_args(text_cfg, mesh_device)
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(text_cfg.num_hidden_layers))
     tt_ccl = TT_CCL(mesh_device)
-    rope = TtRotaryEmbedding(args, mesh_device, max_position_embeddings=args.max_seq_len)
-    tt_attn = TtAttention(args, mesh_device, state_dict, layer_idx=layer, tt_ccl=tt_ccl, rotary_emb=rope)
+    rope = TtRotaryEmbedding(
+        args,
+        mesh_device,
+        max_position_embeddings=args.max_seq_len,
+        weight_cache_path=weight_cache_path,
+    )
+    tt_attn = TtAttention(
+        args,
+        mesh_device,
+        state_dict,
+        layer_idx=layer,
+        tt_ccl=tt_ccl,
+        rotary_emb=rope,
+        weight_cache_path=weight_cache_path,
+    )
 
     x = torch.randn(1, seq_len, text_cfg.hidden_size, dtype=torch.bfloat16)
     positions = torch.arange(seq_len).unsqueeze(0)

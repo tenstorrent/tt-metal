@@ -23,7 +23,6 @@ from models.experimental.devstral2_123B_instruct.demo.text_demo import (
     _input_ids_host,
     _input_ids_to_tt,
     _logits_to_torch,
-    _round_up,
 )
 from models.experimental.devstral2_123B_instruct.reference.hf_reference_loader import (
     DEVSTRAL2_MODEL_ID,
@@ -34,8 +33,10 @@ from models.experimental.devstral2_123B_instruct.reference.hf_reference_loader i
     resolve_hf_input_device,
 )
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
-    devstral2_weight_cache_seq_len,
-    resolve_devstral2_weight_cache_path,
+    devstral2_e2e_sweep_model_max_seq_len,
+    model_prefill_weight_keys,
+    prepare_e2e_tt_model_budget,
+    log_hf_hub_weights_status,
 )
 from models.experimental.devstral2_123B_instruct.tests.decoder_pcc_common import (
     PREFILL_SANITY_SEQ_LENGTHS,
@@ -51,6 +52,9 @@ _SWEEP_TIMEOUT_MARGIN = 1.25
 
 _TESTS_DIR = Path(__file__).resolve().parent
 _TALE_OF_TWO_CITIES = _TESTS_DIR.parents[2] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2"
+
+# Reuse one HF + TT build per mesh for sanity/sweep runs in the same pytest process.
+_logit_pcc_models_cache: dict[tuple[int, int], tuple] = {}
 
 
 def mesh_device_param() -> tuple[int, int]:
@@ -93,14 +97,9 @@ def sweep_timeout_seconds(prefill_lengths: list[int]) -> int:
     return int(budget * _SWEEP_TIMEOUT_MARGIN)
 
 
-def _test_seq_len(prefill_len: int) -> int:
-    need = prefill_len + DECODE_GENERATION_LENGTH + 1
-    return max(_round_up(need, Devstral2Args.kv_block_size), Devstral2Args.kv_block_size)
-
-
-def runtime_max_seq_len(test_seq_len: int) -> int:
-    cache_seq = devstral2_weight_cache_seq_len()
-    return max(_round_up(test_seq_len, Devstral2Args.kv_block_size), cache_seq)
+def e2e_sweep_model_max_seq_len() -> int:
+    """Fixed KV/RoPE + weight-cache budget shared by logit-PCC and teacher-forced sweeps."""
+    return devstral2_e2e_sweep_model_max_seq_len()
 
 
 def _skip_hf_load_failure(exc: BaseException) -> None:
@@ -142,24 +141,31 @@ def build_token_sequence(tokenizer, total_length: int) -> list[int]:
     return tokens[:total_length]
 
 
-def build_logit_pcc_models(mesh_device, *, max_seq_len: int):
+def build_logit_pcc_models(mesh_device, *, max_seq_len: int | None = None):
     """Load HF causal LM and build ``TtMinistral3ForCausalLM`` from extracted bf16 weights."""
     try:
         text_cfg = load_devstral2_text_config()
+    except Exception as exc:
+        _skip_hf_load_failure(exc)
+
+    num_layers = int(text_cfg.num_hidden_layers)
+    budget_seq_len, weight_cache_path = prepare_e2e_tt_model_budget(mesh_device, text_cfg)
+    model_max_seq_len = max_seq_len if max_seq_len is not None else budget_seq_len
+
+    log_hf_hub_weights_status(model_prefill_weight_keys(num_layers))
+    try:
         causal_lm = load_devstral2_causal_lm()
     except Exception as exc:
         _skip_hf_load_failure(exc)
 
     prepare_causal_lm_for_pcc(causal_lm)
     hf_device = resolve_hf_input_device(causal_lm)
-    num_layers = int(text_cfg.num_hidden_layers)
     state_dict = extract_causal_lm_bf16_state_dict(causal_lm, num_layers)
-    weight_cache_path = resolve_devstral2_weight_cache_path(mesh_device, text_cfg, num_layers)
 
     args = Devstral2Args.from_hf_config(
         text_cfg,
         mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=max_seq_len,
+        max_seq_len=model_max_seq_len,
         max_batch_size=1,
     )
     tt_ccl = TT_CCL(mesh_device)
@@ -172,10 +178,21 @@ def build_logit_pcc_models(mesh_device, *, max_seq_len: int):
         weight_cache_path=weight_cache_path,
     )
     logger.info(
-        f"Logit PCC models ready: layers={num_layers}, max_seq_len={max_seq_len}, "
+        f"Logit PCC models ready: layers={num_layers}, model_max_seq_len={model_max_seq_len}, "
         f"hf_input_device={hf_device}, weight_cache_path={weight_cache_path}"
     )
     return causal_lm, tt_model, args, text_cfg, weight_cache_path
+
+
+def get_or_build_logit_pcc_models(mesh_device):
+    """Return cached HF + TT models for this mesh (one build per pytest process)."""
+    mesh_key = tuple(mesh_device.shape)
+    if mesh_key not in _logit_pcc_models_cache:
+        logger.info(f"Building logit PCC models once for mesh={mesh_key}")
+        _logit_pcc_models_cache[mesh_key] = build_logit_pcc_models(mesh_device)
+    else:
+        logger.info(f"Reusing in-process logit PCC model for mesh={mesh_key}")
+    return _logit_pcc_models_cache[mesh_key]
 
 
 def _logits_row_for_pcc(logits: torch.Tensor) -> torch.Tensor:
@@ -388,18 +405,13 @@ def run_logit_pcc_at_prefill_len(
 @torch.no_grad()
 def run_logit_pcc_sweep(mesh_device, prefill_lengths: list[int]) -> None:
     """Run teacher-forced logit PCC for each prefill length (one HF + TT model build)."""
-    worst_prefill = max(prefill_lengths)
-    global_test_seq_len = _test_seq_len(worst_prefill)
-    global_max_seq_len = runtime_max_seq_len(global_test_seq_len)
+    model_max_seq_len = e2e_sweep_model_max_seq_len()
     logger.info(
-        f"Logit PCC sweep: points={prefill_lengths}, worst_prefill={worst_prefill}, "
-        f"global_max_seq_len={global_max_seq_len}, decode_steps={DECODE_GENERATION_LENGTH}"
+        f"Logit PCC sweep: points={prefill_lengths}, model_max_seq_len={model_max_seq_len}, "
+        f"decode_steps={DECODE_GENERATION_LENGTH}"
     )
 
-    causal_lm, tt_model, args, _text_cfg, weight_cache_path = build_logit_pcc_models(
-        mesh_device,
-        max_seq_len=global_max_seq_len,
-    )
+    causal_lm, tt_model, args, _text_cfg, weight_cache_path = get_or_build_logit_pcc_models(mesh_device)
     logger.info(f"Reusing TT weight cache: {weight_cache_path}")
 
     tokenizer = AutoTokenizer.from_pretrained(DEVSTRAL2_MODEL_ID, trust_remote_code=True)
@@ -429,6 +441,8 @@ __all__ = [
     "PREFILL_SWEEP_SEQ_LENGTHS",
     "build_logit_pcc_models",
     "device_params",
+    "e2e_sweep_model_max_seq_len",
+    "get_or_build_logit_pcc_models",
     "mesh_device_param",
     "run_logit_pcc_at_prefill_len",
     "run_logit_pcc_sweep",
