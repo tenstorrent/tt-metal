@@ -26,6 +26,7 @@
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
+#include "tt_metal/test_utils/mx_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -183,25 +184,9 @@ static vector<uint32_t> run_mxint_typecast(
 }
 
 // --- Format-aware pack / unpack dispatch ---
-
-static vector<uint32_t> pack_mxint(tt::DataFormat fmt, tt::stl::Span<const float> floats, bool row_major_input) {
-    switch (fmt) {
-        case tt::DataFormat::MxInt8: return pack_as_mxint8_tiles(floats, row_major_input);
-        case tt::DataFormat::MxInt4: return pack_as_mxint4_tiles(floats, row_major_input);
-        case tt::DataFormat::MxInt2: return pack_as_mxint2_tiles(floats, row_major_input);
-        default: TT_THROW("Unsupported MxInt DataFormat: {}", static_cast<int>(fmt));
-    }
-}
-
-static vector<float> mxint_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
-    auto span = tt::stl::make_const_span(packed);
-    switch (fmt) {
-        case tt::DataFormat::MxInt8: return unpack_mxint8_tiles_into_float_vec(span, /*row_major_output=*/false);
-        case tt::DataFormat::MxInt4: return unpack_mxint4_tiles_into_float_vec(span, /*row_major_output=*/false);
-        case tt::DataFormat::MxInt2: return unpack_mxint2_tiles_into_float_vec(span, /*row_major_output=*/false);
-        default: TT_THROW("Unsupported MxInt DataFormat: {}", static_cast<int>(fmt));
-    }
-}
+// Shared across all MX typecast tests; lives in tt_metal/test_utils/mx_utils.hpp.
+using tt::test_utils::mx_to_floats;
+using tt::test_utils::pack_as_mx_tiles;
 
 // Generate random MxInt source tiles: U(0, rand_max) + offset floats packed
 // into the format. Follows the MXFP4/MXFP8 typecast convention.
@@ -224,7 +209,7 @@ static vector<uint32_t> create_random_vector_of_mxint(
         v = dist(rng) + offset;
     }
 
-    vector<uint32_t> packed = pack_mxint(fmt, tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
+    vector<uint32_t> packed = pack_as_mx_tiles(fmt, tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
         "MxInt packed size {} bytes does not match expected {} bytes",
@@ -261,9 +246,9 @@ static void run_widening_or_identity_test(
     auto result_vec =
         run_mxint_typecast(mesh_device, input_fmt, output_fmt, src_vec, kDefaultNumTiles, fp32_dest_acc_en);
 
-    auto src_floats = mxint_to_floats(input_fmt, src_vec);
-    auto dst_floats = (output_fmt == tt::DataFormat::Float16_b) ? bf16_to_floats(result_vec)
-                                                                : mxint_to_floats(output_fmt, result_vec);
+    auto src_floats = mx_to_floats(input_fmt, src_vec);
+    auto dst_floats =
+        (output_fmt == tt::DataFormat::Float16_b) ? bf16_to_floats(result_vec) : mx_to_floats(output_fmt, result_vec);
 
     EXPECT_TRUE(is_close_vectors<float>(
         src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f); }));
@@ -287,10 +272,10 @@ static void run_narrowing_test(
         mesh_device, tt::DataFormat::Float16_b, output_fmt, src_vec, kDefaultNumTiles, fp32_dest_acc_en);
 
     auto src_floats = bf16_to_floats(src_vec);  // storage (tile-major) order
-    auto ref_packed = pack_mxint(output_fmt, tt::stl::make_const_span(src_floats), /*row_major_input=*/false);
+    auto ref_packed = pack_as_mx_tiles(output_fmt, tt::stl::make_const_span(src_floats), /*row_major_input=*/false);
 
-    auto ref_floats = mxint_to_floats(output_fmt, ref_packed);
-    auto hw_floats = mxint_to_floats(output_fmt, result_vec);
+    auto ref_floats = mx_to_floats(output_fmt, ref_packed);
+    auto hw_floats = mx_to_floats(output_fmt, result_vec);
 
     EXPECT_TRUE(is_close_vectors<float>(
         ref_floats, hw_floats, [atol](float a, float b) { return is_close(a, b, /*rtol=*/0.0f, atol); }));
