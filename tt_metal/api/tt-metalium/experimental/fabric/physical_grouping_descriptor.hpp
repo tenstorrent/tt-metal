@@ -65,8 +65,13 @@ struct GroupingInfo {
     std::vector<GroupingItemInfo> items;
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
 
-    // Row-major ASIC grid shape for flattened mesh variants (e.g. [32, 4]). Empty for non-mesh groupings.
-    std::vector<int32_t> asic_grid_dims;
+    // How PGD instances (sub-groupings) tile in row-major order, from row_major_mesh { dims: [...] }.
+    // Empty for all_to_all/custom/no connection. Used when joining sub-meshes during flattening.
+    std::vector<int32_t> instance_tile_layout_dims;
+
+    // Row-major [rows, cols] of all ASIC nodes after flattening (e.g. [32, 4] for a 128-ASIC mesh).
+    // Empty until flattening completes. Used for MGD topology matching and torus variant rebuild.
+    std::vector<int32_t> flattened_node_grid_dims;
 
     // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
     // Empty graph if no connection type is specified.

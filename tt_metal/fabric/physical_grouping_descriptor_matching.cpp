@@ -911,15 +911,17 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
                 // Same ASIC count but different grid factorization (e.g. MGD 1×32 vs PGD 4×8): still allow the
                 // topology solve unless the MGD declares a full 2D grid (both dims > 1).
-                if (node_diff == 0 && !required_grid_dims.empty() && grouping_info.asic_grid_dims.size() >= 2 &&
-                    normalized_dims(grouping_info.asic_grid_dims) != required_grid_dims && !mgd_is_1xN_strip) {
+                if (node_diff == 0 && !required_grid_dims.empty() &&
+                    grouping_info.flattened_node_grid_dims.size() >= 2 &&
+                    normalized_dims(grouping_info.flattened_node_grid_dims) != required_grid_dims &&
+                    !mgd_is_1xN_strip) {
                     log_debug(
                         tt::LogFabric,
-                        "Skipping {} for {}: ASIC grid dims [{},{}] do not match MGD device topology",
+                        "Skipping {} for {}: flattened node grid dims [{},{}] do not match MGD device topology",
                         name,
                         mgd_grouping_info.name,
-                        grouping_info.asic_grid_dims[0],
-                        grouping_info.asic_grid_dims[1]);
+                        grouping_info.flattened_node_grid_dims[0],
+                        grouping_info.flattened_node_grid_dims[1]);
                     continue;
                 }
 

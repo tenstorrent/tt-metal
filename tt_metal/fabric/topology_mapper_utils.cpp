@@ -1399,18 +1399,10 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     }
 
     // Process each ASIC in the flat adjacency graph
-    // Diagnostics (debug only): an inter-mesh edge is silently dropped when the neighbor ASIC is not part of any
-    // placed grouping. For cross-host fabric seams this means the remote galaxy's ASIC was not placed (or its
-    // unique-id did not match), which would make the physical mesh-level graph too sparse to embed the MGD.
-    std::size_t edges_src_not_in_mesh = 0;
-    std::size_t edges_dst_not_in_mesh = 0;
-    std::size_t intra_mesh_edges = 0;
-    std::size_t inter_mesh_edges = 0;
     for (const auto& src_asic_id : flat_adjacency_graph.get_nodes()) {
         auto src_mesh_id_it = asic_id_to_mesh_id.find(src_asic_id);
         if (src_mesh_id_it == asic_id_to_mesh_id.end()) {
             // ASIC not in any mesh assignment, skip it
-            edges_src_not_in_mesh += flat_adjacency_graph.get_neighbors(src_asic_id).size();
             continue;
         }
         MeshId src_mesh_id = src_mesh_id_it->second;
@@ -1421,7 +1413,6 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
             auto dst_mesh_id_it = asic_id_to_mesh_id.find(dst_asic_id);
             if (dst_mesh_id_it == asic_id_to_mesh_id.end()) {
                 // Neighbor not in any mesh assignment, skip it
-                ++edges_dst_not_in_mesh;
                 continue;
             }
             MeshId dst_mesh_id = dst_mesh_id_it->second;
@@ -1429,7 +1420,6 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
             if (src_mesh_id == dst_mesh_id) {
                 // Intra-mesh connection: add to mesh adjacency map
                 mesh_adjacency_maps[src_mesh_id][src_asic_id].push_back(dst_asic_id);
-                ++intra_mesh_edges;
             } else {
                 // Intermesh connection: add to exit node graph and mesh-level graph
                 // Create PhysicalExitNode objects with mesh_id populated
@@ -1437,44 +1427,8 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
                 PhysicalExitNode dst_exit_node{dst_mesh_id, dst_asic_id};
                 exit_node_adjacency_maps[src_mesh_id][src_exit_node].push_back(dst_exit_node);
                 mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
-                ++inter_mesh_edges;
             }
         }
-    }
-
-    // Collapse diagnostic (debug only): how many ASIC-level edges back each distinct mesh-level pair. A high
-    // multiplicity means many parallel ASIC links concentrate between the same two meshes (so they reduce to a
-    // single mesh-level edge and do NOT raise mesh degree). This is the key signal for why the physical
-    // mesh-level graph can be far sparser than the raw ASIC connectivity suggests.
-    {
-        std::map<std::pair<uint32_t, uint32_t>, std::size_t> pair_multiplicity;
-        for (const auto& [src_mesh_id, dsts] : mesh_level_adjacency_map) {
-            for (const auto& dst_mesh_id : dsts) {
-                auto a = static_cast<uint32_t>(*src_mesh_id);
-                auto b = static_cast<uint32_t>(*dst_mesh_id);
-                pair_multiplicity[{std::min(a, b), std::max(a, b)}]++;
-            }
-        }
-        std::map<std::size_t, std::size_t> mult_hist;  // (#ASIC edges backing a mesh-pair) -> count of mesh-pairs
-        for (const auto& [_, m] : pair_multiplicity) {
-            mult_hist[m / 2]++;  // /2: directed edges counted from both endpoints
-        }
-        std::string mult_str;
-        for (const auto& [m, c] : mult_hist) {
-            mult_str += fmt::format("{}:{} ", m, c);
-        }
-        log_debug(
-            tt::LogFabric,
-            "build_hierarchical_from_flat_graph: {} mesh(es); directed edges: {} intra-mesh, {} inter-mesh; DROPPED {} "
-            "(neighbor ASIC not in any placement) + {} (source ASIC not placed); {} distinct mesh-pairs; "
-            "ASIC-edges-per-mesh-pair histogram {{{}}}",
-            mesh_groupings.size(),
-            intra_mesh_edges,
-            inter_mesh_edges,
-            edges_dst_not_in_mesh,
-            edges_src_not_in_mesh,
-            pair_multiplicity.size(),
-            mult_str);
     }
 
     // Build PhysicalMultiMeshGraph
