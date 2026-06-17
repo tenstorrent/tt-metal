@@ -290,7 +290,9 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
 
     config = transformers.ViTConfig.from_pretrained(model_name)
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    model = load_torch_model(model_location_generator, embedding=True).vit.encoder.layer[0]
+    vit = load_torch_model(model_location_generator, embedding=True).vit
+    # transformers 5.x removed ViTEncoder; the layers moved to ViTModel.layers.
+    model = (vit.encoder.layer if hasattr(vit, "encoder") else vit.layers)[0]
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_output, *_ = model(torch_hidden_states)
@@ -337,13 +339,20 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
 def test_vit_encoder(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    model = load_torch_model(model_location_generator, embedding=True)
-    config = model.config
-    model = model.vit.encoder
-    model = model.to(torch.float32)
+    full_model = load_torch_model(model_location_generator, embedding=True)
+    config = full_model.config
+    vit = full_model.vit
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output = model(torch_hidden_states).last_hidden_state
+    if hasattr(vit, "encoder"):  # transformers <5: ViTEncoder is a callable module
+        model = vit.encoder.to(torch.float32)
+        torch_output = model(torch_hidden_states).last_hidden_state
+    else:  # transformers >=5: ViTEncoder removed; run the ViTLayer stack (ViTModel.layers) directly
+        model = vit.layers.to(torch.float32)
+        hidden = torch_hidden_states
+        for layer in model:
+            hidden = layer(hidden)[0]
+        torch_output = hidden
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,

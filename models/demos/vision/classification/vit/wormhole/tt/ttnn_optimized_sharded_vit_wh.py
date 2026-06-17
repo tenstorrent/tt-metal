@@ -457,7 +457,10 @@ def vit_encoder(
     )
     ttnn.deallocate(embeddings)
 
-    for index, encoder_parameters in enumerate(parameters.layer):
+    # transformers 5.x removed ViTEncoder (ViTModel.encoder.layer -> ViTModel.layers),
+    # so the preprocessed params are the layer list directly (no `.layer` sub-key).
+    encoder_layers = parameters.layer if hasattr(parameters, "layer") else parameters
+    for index, encoder_parameters in enumerate(encoder_layers):
         encoder_output = vit_layer(
             config,
             encoder_input,
@@ -480,7 +483,7 @@ def vit(
     hidden_states = vit_encoder(
         config,
         embeddings_output,
-        parameters=parameters.vit.encoder,
+        parameters=parameters.vit.encoder if hasattr(parameters.vit, "encoder") else parameters.vit.layers,
     )
 
     # Final LayerNorm
