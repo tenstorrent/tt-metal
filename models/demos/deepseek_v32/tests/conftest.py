@@ -3,21 +3,6 @@
 
 import pytest
 
-# --- transformers compat shim (contained to the v32 test conftest; no v3 source edit) ---
-# We run transformers 5.12.1, which moved `no_init_weights` from
-# `transformers.modeling_utils` to `transformers.initialization`. The vendored v3 model
-# utils still `from transformers.modeling_utils import no_init_weights`; inject it back so
-# the v3 conftest import chain below succeeds. Remove if transformers is pinned < the move.
-import transformers.modeling_utils as _tf_modeling_utils
-
-if not hasattr(_tf_modeling_utils, "no_init_weights"):
-    try:
-        from transformers.initialization import no_init_weights as _no_init_weights
-    except Exception:  # pragma: no cover - very new/old transformers
-        from transformers import no_init_weights as _no_init_weights
-    _tf_modeling_utils.no_init_weights = _no_init_weights
-# --- end shim ---
-
 # Reuse all v3 fixtures/hooks (variant, weights, model download, collection rules).
 import models.demos.deepseek_v3_d_p.tests.conftest as _v3_conftest
 from models.demos.deepseek_v3_d_p.tests.conftest import *  # noqa: F401,F403
