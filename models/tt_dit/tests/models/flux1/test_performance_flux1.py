@@ -51,7 +51,7 @@ PERF_TEST_DEVICE_PARAMS = [
     {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         "l1_small_size": 32768,
-        "trace_region_size": 31000000,
+        "trace_region_size": 51000000,
         "require_exact_physical_num_devices": True,
     }
 ]
