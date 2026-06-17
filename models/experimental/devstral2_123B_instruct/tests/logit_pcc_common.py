@@ -54,6 +54,8 @@ from models.tt_transformers.tt.ccl import TT_CCL
 PCC_REQUIRED = 0.99
 DECODE_GENERATION_LENGTH = 10
 _SWEEP_TIMEOUT_MARGIN = 1.25
+# Default pytest cap for the full 32 … 262144 logit-PCC sweep (override via env).
+LOGIT_PCC_FULL_SWEEP_TIMEOUT_SEC = int(os.environ.get("DEVSTRAL2_LOGIT_PCC_SWEEP_TIMEOUT_SEC", str(12 * 3600)))
 # Increment when teacher-forced ``.refpt`` layout or HF reference generation changes.
 HF_TEACHER_FORCED_REFERENCE_FORMAT_VERSION = 2
 
@@ -84,8 +86,18 @@ def device_params(l1_small_size: int) -> dict:
     }
 
 
-def sweep_timeout_seconds(prefill_lengths: list[int]) -> int:
-    """Budget HF load, chunked TT prefill, and HF-greedy decode logit PCC per point."""
+def _estimate_logit_pcc_sweep_seconds(prefill_lengths: list[int]) -> int:
+    """Estimate wall time for TT + HF CPU inference (no pytest margin).
+
+    Per sweep point:
+    - **HF prefill**: ``prefill_len`` token forwards (chunked 128, CPU/offload).
+    - **HF decode**: ``DECODE_GENERATION_LENGTH`` greedy decode forwards (one per step).
+    - **TT prefill**: ``num_chunks × tt_prefill_sec_per_chunk``.
+    - **TT decode**: ``DECODE_GENERATION_LENGTH × tt_decode_sec_per_step``.
+
+    Calibrated from BH Loudbox 2026-06-17 (HF-greedy logit PCC, weight cache warm):
+    ~10 h wall for 14 points; HF CPU is a large share at 64k+ prefill lengths.
+    """
     tt_model_setup_sec = 600
     hf_load_once_sec = 600
     hf_forward_sec_per_token = 0.072
@@ -97,11 +109,25 @@ def sweep_timeout_seconds(prefill_lengths: list[int]) -> int:
     budget = tt_model_setup_sec + hf_load_once_sec
     for prefill_len in prefill_lengths:
         num_chunks = (prefill_len + kv_block_size - 1) // kv_block_size
-        hf_tokens = prefill_len + DECODE_GENERATION_LENGTH
-        budget += int(hf_tokens * hf_forward_sec_per_token)
+        hf_prefill_tokens = prefill_len
+        hf_decode_tokens = DECODE_GENERATION_LENGTH
+        budget += int(hf_prefill_tokens * hf_forward_sec_per_token)
+        budget += int(hf_decode_tokens * hf_forward_sec_per_token)
         budget += tt_base_sec + num_chunks * tt_prefill_sec_per_chunk
         budget += int(DECODE_GENERATION_LENGTH * tt_decode_sec_per_step)
-    return int(budget * _SWEEP_TIMEOUT_MARGIN)
+    return budget
+
+
+def sweep_timeout_seconds(prefill_lengths: list[int]) -> int:
+    """Pytest timeout for a logit-PCC sweep (includes HF CPU + TT, with margin).
+
+    The full ``PREFILL_SWEEP_SEQ_LENGTHS`` sweep defaults to **12 hours** (env
+    ``DEVSTRAL2_LOGIT_PCC_SWEEP_TIMEOUT_SEC``), matching observed ~10 h wall on BH
+    Loudbox with warm TT weight cache. Shorter sweeps use the estimated budget × 1.25.
+    """
+    if prefill_lengths == PREFILL_SWEEP_SEQ_LENGTHS:
+        return LOGIT_PCC_FULL_SWEEP_TIMEOUT_SEC
+    return int(_estimate_logit_pcc_sweep_seconds(prefill_lengths) * _SWEEP_TIMEOUT_MARGIN)
 
 
 def e2e_sweep_model_max_seq_len() -> int:
@@ -544,6 +570,7 @@ def run_logit_pcc_sweep(mesh_device, prefill_lengths: list[int]) -> None:
 
 __all__ = [
     "DECODE_GENERATION_LENGTH",
+    "LOGIT_PCC_FULL_SWEEP_TIMEOUT_SEC",
     "PCC_REQUIRED",
     "PREFILL_SANITY_SEQ_LENGTHS",
     "PREFILL_SWEEP_SEQ_LENGTHS",
