@@ -46,6 +46,13 @@ IMG_SLICE = slice(IMG_START, IMG_START + N_IMG)
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "4"))
 PCC_THR = 0.99 if NUM_LAYERS <= 8 else 0.85
 
+# Backbone weight dtype — set HY_WEIGHT_DTYPE=bf8 to de-risk bf8 residency
+# (MEMORY_FIT_PLAN.md step 1). bf8 weights are the only way the 80B model fits
+# DRAM, so we need to know its accuracy cost.
+_WEIGHT_DTYPE = ttnn.bfloat8_b if os.environ.get("HY_WEIGHT_DTYPE", "bf16") == "bf8" else ttnn.bfloat16
+if _WEIGHT_DTYPE == ttnn.bfloat8_b:
+    PCC_THR = 0.90  # observe the bf8 cost; gate loosely
+
 
 def _pcc(a, b):
     a = a.float().flatten()
@@ -193,6 +200,7 @@ def _run(device):
         stream_experts=True,
         layer_loader=layer_loader,
         apply_final_norm=False,
+        weight_dtype=_WEIGHT_DTYPE,
     )
 
     step = HunyuanTtDenoiseStep(

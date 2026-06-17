@@ -50,7 +50,14 @@ def dcae_depth_to_space_bthwc(
     r2: int = 2,
     r3: int = 2,
 ) -> ttnn.Tensor:
-    """Depth-to-space on BTHWC: (B,T,H,W,r1*r2*r3*C) -> (B,T*r1,H*r2,W*r3,C)."""
+    """Depth-to-space on BTHWC: (B,T,H,W,r1*r2*r3*C) -> (B,T*r1,H*r2,W*r3,C).
+
+    NOTE (full-res OOM): at 1024² the full-res decode has multiple ~16GB
+    allocations (this op AND the tail conv3d). Per-op dtype/chunk fixes are
+    whack-a-mole (bf8 here just shifts the OOM to the next op). The real fix is
+    spatial (H/W) parallelism across the mesh — tt_dit's VaeHWParallelConfig.
+    Tracked in the README as VAE-decode memory work.
+    """
     b, t, h, w, _ = x_bthwc.shape
     x = ttnn.reshape(x_bthwc, (b, t, h, w, out_channels, r1, r2, r3))
     x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
