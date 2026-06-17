@@ -42,7 +42,7 @@ models/experimental/mistral_24b/
     │   ├── test_end2end.py                     # End-to-end vision-text demo
     │   ├── test_isl_sweep.py                   # Context-window sweep (1k–128k)
     │   ├── test_text_decoder.py                # Decode logits PCC
-    │   ├── test_text_prefill_logits.py          # Prefill last-token logits PCC
+    │   ├── test_text_prefill_logits.py         # Prefill last-token logits PCC
     │   ├── test_vision_model.py                # Vision model PCC
     │   └── test_vision_tower.py                # Vision tower PCC
     └── (unit tests)
@@ -51,7 +51,8 @@ models/experimental/mistral_24b/
         ├── test_pixtral_transformer.py
         ├── test_vision_attention.py
         ├── test_vision_mlp.py
-        └── test_vision_rms.py
+        ├── test_vision_rms.py
+        └── test_device_perf_single_layer.py    # Single-layer prefill/decode test
 ```
 
 ---
@@ -125,6 +126,18 @@ Validates the full vision tower (Conv2D patch embed + Pixtral transformer + MMP 
 
 ```bash
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_tower.py
+```
+
+---
+
+### Device profiling — Tracy CSV
+
+Same as the text prefill/decode tests with `n_layers=1`.
+
+```bash
+HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503 python -m tracy -p -r -v -m pytest models/experimental/mistral_24b/tests/pipeline_tests/test_device_perf_single_layer.py::test_single_layer_prefill -s
+
+HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503 python -m tracy -p -r -v -m pytest models/experimental/mistral_24b/tests/pipeline_tests/test_device_perf_single_layer.py::test_single_layer_decode -s
 ```
 
 ---
@@ -247,6 +260,17 @@ Results from `test_text_decoder.py` on **BH QB-2 (`P150x4`)**. Synthetic random 
 | 29 | 0.997651 |
 | 30 | 0.997734 |
 | 31 | 0.997757 |
+
+---
+
+## Vision PCC
+
+Results from vision pipeline tests on **BH QB-2 (`P150x4`)**. Random `vision_chunk_size` image input vs HuggingFace reference.
+
+| Component | Test | PCC |
+|---|---|---:|---:|
+| Vision model | `test_vision_model.py` | 0.990847 |
+| Vision tower | `test_vision_tower.py` | 0.996050 |
 
 ---
 
