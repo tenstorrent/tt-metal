@@ -92,7 +92,14 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
         - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
-      options: "--device /dev/tenstorrent --device /dev/fuse --cap-add SYS_ADMIN"
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/fuse
+        --privileged
+        --cap-add=ALL
+        --security-opt seccomp=unconfined
+        --security-opt apparmor:unconfined
+        -v /sys:/sys
     defaults:
       run:
         shell: bash
