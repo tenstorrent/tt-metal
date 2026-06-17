@@ -7,6 +7,7 @@ This goal creates the optimized-decoder state for the repo-local TTNN autoport p
 Goal completion requirements:
 - models/autoports/<model>/tt/optimized_decoder.py exists and the delivered tests exercise the optimized path, not a functional fallback.
 - The optimized decoder preserves the functional decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
+- The optimized decoder preserves the context contract from functional decoder. If optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json with the new largest feasible context and DRAM evidence.
 - Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
 - Warmed prefill and traced warmed decode latency are reported before and after optimization.
 - tt-perf-report advice-backed human-readable tables and CSV/provenance logs exist for prefill and decode. Actionable advice is tried. Rejected advice has before/after evidence or a concrete API/hardware reason.

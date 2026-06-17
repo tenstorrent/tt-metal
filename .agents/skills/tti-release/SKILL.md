@@ -320,6 +320,17 @@ Valid harness fixes are narrower: wrong autoport path, wrong tokenizer/chat temp
 
 Use `$qualitative-check` for prompt-based release checks. Release smokes, qualitative/API requests, eval harness configuration, and report interpretation must record the prompt-format decision and must not use raw-completion output from an instruct model, or invented chat prompts for a base model, as release-readiness evidence.
 
+## Context And Harness Integrity
+
+Before changing release specs, eval configs, benchmark configs, or server launch flags, compare them to the context contract. Do not make a failing model pass by lowering context. Examples of invalid fixes:
+
+- setting `max_model_len` below the context contract;
+- lowering LongBench or other long-context eval limits because the model implementation cannot handle them;
+- shortening benchmark prompt or completion lengths to avoid an L1, KV-cache, or trace bug;
+- marking a context failure as a harness issue when the request fits inside the HF-advertised context.
+
+Valid harness fixes are narrower: wrong autoport path, wrong tokenizer/chat template, host-sampling-only tests that need an explicit host-sampling compatibility mode, or requests whose prompt plus completion exceeds the true supported context.
+
 ## Failing Release Tests
 
 If the release workflow exits nonzero because `spec_tests`, `tests`, API parameter conformance, eval harness execution, or benchmark harness execution failed, use `$autofix` before declaring the TTI release stage blocked. Give `$autofix` the exact failed command, model, device, physical host, workflow log path, server log path, report/test output path, and the smallest local repro command that preserves the failure.
