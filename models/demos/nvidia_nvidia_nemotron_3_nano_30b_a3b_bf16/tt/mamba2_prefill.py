@@ -217,18 +217,26 @@ def _mamba2_ssd_chunk(
     # --- Log-decay cumsum → γ[t] = exp(Σ_{u=0}^{t} log_decay[u]) -------
     log_decay = ttnn.log(ttnn.clamp(decay_chunk, min=1e-6))  # [B, C, H]
     log_decay_cum = ttnn.cumsum(log_decay, dim=1)  # [B, C, H]
-    gamma = ttnn.exp(log_decay_cum)  # [B, C, H]
 
     # --- Build lower-triangular decay matrix L[i, s] = exp(Σ_{s+1}^{i} log_decay) ----
-    # L[i, s] = gamma[i] / gamma[s] for s <= i (causal, lower-triangular)
-    # gamma: [B, C, H] → broadcast to [B, H, C, C]
-    # Expand: [B, C, H] → [B, H, C, 1] and [B, H, 1, C]
+    # Compute directly in log space: L[i, s] = exp(log_cum[i] - log_cum[s]).
+    # Do NOT compute gamma=exp(log_cum) and divide — when cumulative decays are large
+    # and negative (A_log ≥ 1), gamma underflows to 0 in BF16, making L[i,s]=0/0=garbage
+    # for nearby (i, s) pairs including the diagonal (which should be 1).
+    log_cum_t = ttnn.permute(log_decay_cum, [0, 2, 1])  # [B, H, C]
+    log_cum_col = _rr(log_cum_t, [B, NUM_HEADS, C, 1])  # [B, H, C, 1] — log_cum[i]
+    log_cum_row = _rr(log_cum_t, [B, NUM_HEADS, 1, C])  # [B, H, 1, C] — log_cum[s]
+    # log_L[i, s] = log_cum[i] - log_cum[s]: negative for lower tri, 0 diagonal, positive for upper tri.
+    # Clamp to max=0 before exp: upper-tri positive values would overflow to +inf, and
+    # +inf * 0 (from causal_mask) = NaN. Clamping to 0 gives exp(0)=1 for upper tri, which
+    # then becomes 0 after causal masking. Lower tri / diagonal values are ≤ 0 so unaffected.
+    log_L = ttnn.clamp(ttnn.sub(log_cum_col, log_cum_row), max=0.0)  # [B, H, C, C]
+    L_raw = ttnn.exp(log_L)  # lower tri: exp(neg)=correct; diagonal: 1; upper tri: 1 → masked to 0
+
+    # Gamma needed for cross-chunk carry and state update.
+    # Underflow to 0 is CORRECT there: tiny cumulative decay → near-zero carry.
+    gamma = ttnn.exp(log_decay_cum)  # [B, C, H]
     gamma_t = ttnn.permute(gamma, [0, 2, 1])  # [B, H, C]
-    gamma_col = _rr(gamma_t, [B, NUM_HEADS, C, 1])  # [B, H, C, 1]
-    gamma_row = _rr(gamma_t, [B, NUM_HEADS, 1, C])  # [B, H, 1, C]
-    L_raw = ttnn.mul(
-        gamma_col, ttnn.reciprocal(ttnn.add(gamma_row, 1e-30))
-    )  # [B, H, C, C]  — i > s: correct; i < s: > 1 (will be masked)
 
     # Causal lower-triangular mask (ones on/below diagonal, zeros above)
     ones_cpu = torch.tril(torch.ones(C, C, dtype=torch.bfloat16))
@@ -291,10 +299,9 @@ def _mamba2_ssd_chunk(
     # delta[s] = exp(log_decay_cum[C-1] - log_decay_cum[s])
     log_decay_cum_last = ttnn.slice(log_decay_cum, [0, C - 1, 0], [B, C, NUM_HEADS])  # [B, 1, H]
     log_decay_cum_last = ttnn.permute(log_decay_cum_last, [0, 2, 1])  # [B, H, 1]
-    log_decay_cum_t = ttnn.permute(log_decay_cum, [0, 2, 1])  # [B, H, C]
     log_delta = ttnn.sub(
         _rr(log_decay_cum_last, [B, NUM_HEADS, 1]),  # [B, H, 1] — broadcast
-        log_decay_cum_t,  # [B, H, C]
+        log_cum_t,  # [B, H, C] — reuse from L computation above
     )
     delta_s = ttnn.exp(log_delta)  # [B, H, C]
 

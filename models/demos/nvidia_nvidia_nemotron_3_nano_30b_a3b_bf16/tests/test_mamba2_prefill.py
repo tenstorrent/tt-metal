@@ -8,15 +8,34 @@ Validates:
 3. State at end of prefill matches state from S sequential decodes
 4. Large-S prefill runs without error (shape smoke test)
 
-These are HOST-SIDE reference tests using the CPU reference implementation.
-Device tests are marked @pytest.mark.device.
+CPU-only tests (no device):
+  test_sequential_reference_runs
+  test_state_accumulation_consistency
+  test_dispatch_imports
+  test_prefill_module_imports
+  test_large_S_shape_smoke
+
+Device tests (require QB hardware, use mesh_device fixture):
+  test_chunked_scan_outputs_match_sequential  -- SSD chunk vs CPU sequential, S=64
+  test_causal_conv1d_reference                -- TTNN conv vs torch.conv1d, S=128
 """
 
 from __future__ import annotations
 
+import os
+import sys
+
+os.environ.setdefault("TT_METAL_HOME", "/home/ttuser/ssinghal/tt-metal")
+_root = os.environ["TT_METAL_HOME"]
+for p in (f"{_root}/ttnn", f"{_root}/tools", _root):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 import pytest
 import torch
 import torch.nn.functional as F
+
+import ttnn
 
 # ---------------------------------------------------------------------------
 # CPU reference implementation of Mamba2 recurrence
@@ -30,6 +49,18 @@ INTERMEDIATE_SIZE = NUM_HEADS * HEAD_DIM  # 4096
 CONV_DIM = INTERMEDIATE_SIZE + 2 * N_GROUPS * SSM_STATE_SIZE  # 6144
 HEADS_PER_GROUP = NUM_HEADS // N_GROUPS  # 8
 CONV_KERNEL = 4
+
+PCC_THRESHOLD_PREFILL = 0.95  # bf16 chunked SSD vs float32 sequential
+PCC_THRESHOLD_CONV = 0.99
+
+
+def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.float().flatten()
+    b = b.float().flatten()
+    a -= a.mean()
+    b -= b.mean()
+    denom = torch.sqrt((a**2).sum() * (b**2).sum())
+    return ((a * b).sum() / denom).item() if denom.item() != 0.0 else 1.0
 
 
 def _expand_groups_cpu(flat: torch.Tensor) -> torch.Tensor:
@@ -114,7 +145,7 @@ def _mamba2_sequential_cpu(
         outer_t = xdt_t @ B_t  # [B, H, D, N]
         h = dec_t * h + outer_t
         y_t = (h @ C_t).squeeze(-1)  # [B, H, D]
-        y_t = y_t + D.float() * x_4d[:, t, :, :]
+        y_t = y_t + D.float()[:, None] * x_4d[:, t, :, :]  # D[h] per head, not D[d] per head-dim
         y_steps.append(y_t.unsqueeze(1))  # [B, 1, H, D]
 
     y_full = torch.cat(y_steps, dim=1)  # [B, S, H, D]
@@ -155,7 +186,33 @@ def _random_weights(seed=42):
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Device fixture
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def mesh_device():
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import close_device_tp4, open_device_tp4
+
+    dev = open_device_tp4()
+    yield dev
+    close_device_tp4(dev)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _to_cpu(tt_tensor, mesh_device, n_rows):
+    """Bring a replicated TP=4 mesh tensor to a CPU tensor (first replica, n_rows rows)."""
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _host_rep
+
+    return _host_rep(tt_tensor, mesh_device, n_rows)
+
+
+# ---------------------------------------------------------------------------
+# CPU-only tests (no device required)
 # ---------------------------------------------------------------------------
 
 
@@ -236,16 +293,6 @@ def test_state_accumulation_consistency():
     assert state_err < 1.0, f"state mismatch: {state_err}"
 
 
-def test_chunked_scan_outputs_match_sequential():
-    """The SSD chunked algorithm from mamba2_prefill.py (CPU-only path) matches
-    the sequential reference for S = CHUNK_SIZE = 64 tokens.
-
-    This validates the SSD algorithm without requiring a device.
-    """
-
-    pytest.skip("device required for _mamba2_ssd_chunk (uses ttnn)")
-
-
 def test_dispatch_imports():
     """mamba2_layer_forward_dispatch is importable."""
     from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_layer import mamba2_layer_forward_dispatch
@@ -265,11 +312,6 @@ def test_prefill_module_imports():
     assert callable(compute_ssm_inputs)
     # get_decay_kernel returns None when ttl is not installed (CI without tt-lang)
     _ = get_decay_kernel()
-
-
-def test_causal_conv1d_reference():
-    """_causal_conv1d_prefill CPU logic: output shape + causal property."""
-    pytest.skip("device required for _causal_conv1d_prefill (uses ttnn)")
 
 
 @pytest.mark.slow
@@ -292,3 +334,115 @@ def test_large_S_shape_smoke():
     )
     assert out.shape == (B, S, 2688)
     assert not out.isnan().any()
+
+
+# ---------------------------------------------------------------------------
+# Device tests (require QB hardware via mesh_device fixture)
+# ---------------------------------------------------------------------------
+
+
+def test_chunked_scan_outputs_match_sequential(mesh_device):
+    """SSD chunked scan output matches sequential CPU reference for S=64 (one chunk).
+
+    Uses random weights at small scale (0.01×) so outputs are numerically stable.
+    PCC threshold 0.95 accounts for bf16 chunked-matmul vs float32 sequential.
+    """
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import clear_device_weight_cache
+
+    clear_device_weight_cache()  # prevent _DERIVED_CACHE stale-id hits from prior tests
+    W = _random_weights(seed=42)
+    B, S = 1, 64
+
+    x_cpu = torch.randn(B, S, 2688, dtype=torch.bfloat16)
+
+    # CPU sequential reference (float32 internally, returns bf16)
+    out_ref, _state_ref = _mamba2_sequential_cpu(
+        x_cpu,
+        W["norm_w"],
+        W["in_proj_w"],
+        W["conv_w"],
+        W["conv_b"],
+        W["dt_bias"],
+        W["A_log"],
+        W["norm_mixer_w"],
+        W["D"],
+        W["out_proj_w"],
+    )
+
+    # Upload input to device
+    x_tt = ttnn.from_torch(
+        x_cpu,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_prefill import mamba2_prefill_layer_forward
+
+    out_tt, _state_tt, _conv_state = mamba2_prefill_layer_forward(
+        mesh_device,
+        x_tt,
+        W["norm_w"],
+        W["in_proj_w"],
+        W["conv_w"],
+        W["conv_b"],
+        W["dt_bias"],
+        W["A_log"],
+        W["norm_mixer_w"],
+        W["D"],
+        W["out_proj_w"],
+    )
+
+    out_cpu = _to_cpu(out_tt, mesh_device, B)
+
+    score = pcc(out_cpu, out_ref)
+    max_err = (out_cpu.float() - out_ref.float()).abs().max().item()
+    print(f"\nMamba2 prefill (S=64, 1 chunk) vs sequential:")
+    print(f"  PCC = {score:.6f}  max_abs_err = {max_err:.4f}")
+    assert score >= PCC_THRESHOLD_PREFILL, f"PCC {score:.6f} < {PCC_THRESHOLD_PREFILL}"
+
+
+def test_causal_conv1d_reference(mesh_device):
+    """_causal_conv1d_prefill TTNN implementation matches torch.conv1d with causal zero-padding.
+
+    Uses S=128 (2× CHUNK_SIZE), CONV_DIM=6144, CONV_KERNEL=4.
+    Expected PCC > 0.99: same linear operation in bf16 vs float32.
+    """
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_prefill import _causal_conv1d_prefill
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import clear_device_weight_cache
+
+    clear_device_weight_cache()  # prevent _DERIVED_CACHE stale-id hits from prior tests
+    torch.manual_seed(13)
+    B, S = 1, 128
+    conv_w = torch.randn(CONV_DIM, 1, CONV_KERNEL, dtype=torch.bfloat16) * 0.1
+    conv_b = torch.randn(CONV_DIM, dtype=torch.bfloat16) * 0.01
+    hBC_cpu = torch.randn(B, S, CONV_DIM, dtype=torch.bfloat16)
+
+    # Reference: causal zero-padded depthwise conv1d
+    hBC_perm = hBC_cpu.permute(0, 2, 1)  # [B, CONV_DIM, S]
+    ref = F.conv1d(
+        F.pad(hBC_perm, (CONV_KERNEL - 1, 0)),
+        conv_w.squeeze(1).unsqueeze(1),
+        bias=conv_b,
+        groups=CONV_DIM,
+    ).permute(
+        0, 2, 1
+    )  # [B, S, CONV_DIM]
+
+    # Device
+    hBC_tt = ttnn.from_torch(
+        hBC_cpu,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    out_tt, _conv_state = _causal_conv1d_prefill(hBC_tt, conv_w, conv_b, mesh_device)
+    out_cpu = _to_cpu(out_tt, mesh_device, B)
+
+    score = pcc(out_cpu, ref)
+    max_err = (out_cpu.float() - ref.float()).abs().max().item()
+    print(f"\nCausal conv1d (S={S}) TTNN vs torch:")
+    print(f"  PCC = {score:.6f}  max_abs_err = {max_err:.4f}")
+    assert score >= PCC_THRESHOLD_CONV, f"PCC {score:.6f} < {PCC_THRESHOLD_CONV}"
