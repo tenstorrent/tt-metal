@@ -1892,7 +1892,7 @@ void DeviceProfiler::readDeviceMarkerData(
         timer_id,
         timestamp,
         data,
-        std::vector<uint64_t>{},
+        tracy::TTDeviceMarker::INVALID_NUM,
         op_name,
         marker_details.source_line_num,
         marker_details.source_file,
@@ -2009,7 +2009,7 @@ void DeviceProfiler::readTsData16BMarkerData(
         timer_id,
         timestamp,
         data,
-        trailer_data,
+        trailer_data[0],
         op_name,
         marker_details.source_line_num,
         marker_details.source_file,
@@ -2195,7 +2195,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 // If this is a performance counter, extract fields from data and store in marker meta_data
                 if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    const PerfCounter perf_counter(marker.data, marker.trailer_data[0]);
+                    const PerfCounter perf_counter(marker.data, marker.data_high);
                     const uint32_t counter_type_raw = perf_counter.counter_type;
                     // Skip markers with out-of-range counter_type (stale/dropped data).
                     if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
@@ -2593,7 +2593,7 @@ void DeviceProfiler::pushTracyDeviceResults(
                 orig_marker.marker_id,
                 adjusted_timestamp,
                 orig_marker.data,
-                orig_marker.trailer_data,
+                orig_marker.data_high,
                 orig_marker.op_name,
                 orig_marker.line,
                 orig_marker.file,
