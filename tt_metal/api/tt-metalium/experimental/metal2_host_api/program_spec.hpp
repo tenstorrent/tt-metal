@@ -78,7 +78,7 @@ struct ProgramSpec {
     // Kernels, DFBs (local + remote), and semaphores that make up the Program
     Group<KernelSpec> kernels;
     Group<DataflowBufferSpec> dataflow_buffers;
-    Group<RemoteDataflowBufferSpec> remote_dataflow_buffers;
+    Group<CrossNodeDataflowBufferSpec> remote_dataflow_buffers;
     Group<SemaphoreSpec> semaphores;
 
     // Tensor parameter declarations
