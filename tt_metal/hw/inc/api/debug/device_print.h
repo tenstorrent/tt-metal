@@ -34,6 +34,12 @@
 #define PROCESSOR_INDEX_DEFINED 1
 #endif
 
+#if defined(KERNEL_BUILD) && !defined(ENV_LLK_INFRA)
+#define DEVICE_PRINT_IS_KERNEL 1
+#else
+#define DEVICE_PRINT_IS_KERNEL 0
+#endif
+
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
@@ -103,7 +109,7 @@ struct dp_top_callstack_t {
         //  - leave 0xF...F untouched: it's the sentinel for an invalid/unknown address
         std::uint32_t kernel_offset = 0;
 
-#if !defined(ENV_LLK_INFRA)
+#if DEVICE_PRINT_IS_KERNEL
         const std::uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         const auto config = GET_MAILBOX_ADDRESS_DEV(launch[launch_index])->kernel_config;
         kernel_offset = config.kernel_config_base[ProgrammableCoreType::TENSIX] +
@@ -146,12 +152,6 @@ struct dp_top_callstack_t {
 #else
 #define DEVICE_PRINT_DATA0(format, ...)
 #define DEVICE_PRINT_DATA1(format, ...)
-#endif
-
-#if defined(KERNEL_BUILD) && !defined(ENV_LLK_INFRA)
-#define DEVICE_PRINT_IS_KERNEL 1
-#else
-#define DEVICE_PRINT_IS_KERNEL 0
 #endif
 
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
