@@ -10,8 +10,7 @@ excludeAgent: "cloud-agent"
 
 - **Program cache correctness**: any op using optional outputs, aliased buffers, or dynamic runtime args must correctly handle program-cache hits. Stale buffer pointers from a previous invocation will silently produce garbage. Verify `override_runtime_arguments` re-patches all non-Buffer runtime args (use `DynamicRuntimeArg` for values that change between calls).
 - **Tracing compatibility**: program factories must only create programs — no host-side tensor allocations, vector fills, or buffer operations inside `create_program`. The host should pass tensors through; any host work breaks metal tracing.
-- **Don't regress Device 2.0 API migration**: do not revert device-side kernel code back to deprecated APIs (e.g., `acquire_dst`/`release_dst` → use `tile_regs_*` equivalents). Do not reverse completed migrations.
-- **Deprecated API usage**: `dst` register calls are deprecated. Use the `tile_regs` API (`tile_regs_acquire`, `tile_regs_commit`, `tile_regs_wait`, `tile_regs_release`). See the device 2.0 migration tracker.
+- **Device 2.0 API migration**: do not revert device-side kernel code back to deprecated `dst` register calls (`acquire_dst`/`release_dst`). Use the `tile_regs` API (`tile_regs_acquire`, `tile_regs_commit`, `tile_regs_wait`, `tile_regs_release`). Do not reverse completed migrations. See the device 2.0 migration tracker.
 
 ## 🟡 IMPORTANT
 
@@ -20,7 +19,6 @@ excludeAgent: "cloud-agent"
 - **CCL ring buffer consistency**: in CCL operations, `num_buffers_per_channel` must match between host-side `EriscDatamoverBuilder` construction and device kernel compile-time args. Buffer address and semaphore address vectors must have identical sizes. `eth_buffer_size_bytes` must be recomputed if `num_edm_channels`, `num_buffers_per_channel`, or `page_size` change after initial computation.
 - **Composite op overhead**: composite ops that introduce intermediate operations (unsqueeze, reshape, transpose) must include a device-time performance measurement in the PR for representative shapes. Break out per-op overhead to show the composition isn't slower than alternatives (e.g., matmul path).
 - **Input validation**: ops must validate dtype, layout, storage type, device affinity, and shape constraints before launching kernels. Don't rely on kernel-level crashes for validation. Use `TT_FATAL` with clear messages.
-- **`override_runtime_arguments` completeness**: if an op has runtime args that change between invocations (buffer addresses, dynamic shapes, scalar params), `override_runtime_arguments` must update ALL of them. A missing update means the cached program runs with stale values.
 - **Init calls placement**: `_init` calls in compute kernels must be at the top of the kernel, not scattered in the middle of compute loops. Misplaced inits cause subtle data format corruption.
 - **Experimental includes isolation**: experimental or internal headers must not be included in common/shared headers. Include them directly in the kernel file that needs them.
 - **No framework references in API docs**: do not reference PyTorch, TensorFlow, or other framework semantics in TTNN API documentation or nanobind docstrings. Document TTNN behavior independently.
