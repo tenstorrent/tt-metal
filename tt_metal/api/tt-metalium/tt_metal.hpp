@@ -356,6 +356,13 @@ bool WriteToDeviceL1(
 
 bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval);
 
+// Host-zero the fabric connection lock/sync region (lock + initialized flag + WorkerToFabricEdmSender)
+// on one worker core. The region lives at a fixed per-chip L1 address and is reused across calls with
+// no submesh/cq awareness, so an overlapping child submesh reuses a parent's stale connection and
+// deadlocks; zeroing it forces the next worker fabric op to open a fresh connection. Caller must ensure
+// the core is idle (no in-flight CCL/fabric traffic) before resetting.
+void ResetFabricConnectionLock(IDevice* device, const CoreCoord& logical_core);
+
 // clang-format off
 /**
  * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.

@@ -8,6 +8,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
+#include <span>
+#include <vector>
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
@@ -280,6 +282,15 @@ bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t a
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     MetalContext::instance().get_cluster().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
+}
+
+void ResetFabricConnectionLock(IDevice* device, const CoreCoord& logical_core) {
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t address = static_cast<uint32_t>(
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::FABRIC_CONNECTION_LOCK));
+    const uint32_t size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::FABRIC_CONNECTION_LOCK);
+    const std::vector<uint8_t> zeros(size, 0);
+    WriteToDeviceL1(device, logical_core, address, std::span<const uint8_t>(zeros.data(), zeros.size()));
 }
 
 bool ReadFromDeviceL1(

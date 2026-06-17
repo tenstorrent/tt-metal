@@ -101,6 +101,30 @@ void ttnn_device(nb::module_& mod) {
         R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
+
+    // The worker fabric connection (spinlock + initialized flag + WorkerToFabricEdmSender) lives at a
+    // single fixed per-physical-chip L1 address, reused across calls and unaware of submesh/cq. When an
+    // overlapping child submesh runs CCL on a chip the parent already opened fabric on, the worker reuses
+    // the parent's stale connection (wrong routing) -> deadlock. Host-zeroing the region on every worker
+    // core forces the next fabric op to open a fresh connection. Run only when the chips are idle.
+    mod.def(
+        "reset_fabric_connection_lock",
+        [](ttnn::MeshDevice* device) {
+            for (auto* dev : device->get_devices()) {
+                const CoreCoord grid = dev->compute_with_storage_grid_size();
+                for (uint32_t y = 0; y < grid.y; ++y) {
+                    for (uint32_t x = 0; x < grid.x; ++x) {
+                        tt::tt_metal::ResetFabricConnectionLock(dev, CoreCoord(x, y));
+                    }
+                }
+            }
+        },
+        nb::arg("device"),
+        R"doc(
+        Host-zero the per-chip fabric connection lock/sync region on every worker core of every chip in
+        the mesh. Forces the next worker fabric op to open a fresh connection. Call only when the chips
+        are idle (device synchronized, no in-flight CCL).
+    )doc");
 }
 
 }  // namespace
