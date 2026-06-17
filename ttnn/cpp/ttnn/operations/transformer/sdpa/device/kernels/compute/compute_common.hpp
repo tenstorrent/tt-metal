@@ -640,7 +640,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 }
 
 #ifdef TRISC_MATH
-template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C>
+template <VectorMode vector_mode = VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fused_max_sub_exp_add_tile, idst, vector_mode, scale_bf16);
@@ -685,7 +685,7 @@ void correction_block(
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
         copy_tile(cb_worker_sum, i, dst_reg_4);
-        MATH((fused_max_sub_exp_add_tile<EXP_APPROX_MODE, vector_mode>(0, scale_bf16)));
+        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst_reg_0, cb_exp_max_diff);
