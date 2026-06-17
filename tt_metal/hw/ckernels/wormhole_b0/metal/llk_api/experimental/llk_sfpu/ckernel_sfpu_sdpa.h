@@ -20,7 +20,8 @@ constexpr auto sdpa_bits = [](float x) constexpr { return __builtin_bit_cast(std
 constexpr auto sdpa_lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) & 0xFFFFu); };
 constexpr auto sdpa_hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) >> 16); };
 
-constexpr auto sdpa_addr_mod_x = ADDR_MOD_3;
+constexpr auto sdpa_addr_mod_x_instr = ADDR_MOD_3;
+constexpr auto sdpa_addr_mod_x_config = ADDR_MOD_7;
 
 ALWI void sdpa_insert_sfpnop() { TTI_SFPNOP; }
 
@@ -74,7 +75,7 @@ inline void calculate_exponential_polynomial() {
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(sdpa_addr_mod_x);
+        .set(sdpa_addr_mod_x_config);
 
     constexpr float LN2_RECIP = 1.44269504088896340736f;
     constexpr float M_LN2 = -0.69314718055994530942f;
@@ -127,7 +128,7 @@ inline void calculate_exponential_polynomial() {
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr InstrModLoadStore input_type =
             IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
-        TTI_SFPLOAD(p_sfpu::LREG2, input_type, sdpa_addr_mod_x, 0);
+        TTI_SFPLOAD(p_sfpu::LREG2, input_type, sdpa_addr_mod_x_instr, 0);
 
         if constexpr (SCALE_EN) {
             TTI_SFPLOADI(p_sfpu::LREG0, 0, SCALE_BF16);
@@ -196,7 +197,7 @@ inline void calculate_exponential_polynomial() {
         if constexpr (!IS_FP32_DEST_ACC_EN) {
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
-        TTI_SFPSTORE(p_sfpu::LREG2, input_type, sdpa_addr_mod_x, 0);
+        TTI_SFPSTORE(p_sfpu::LREG2, input_type, sdpa_addr_mod_x_instr, 0);
         TTI_INCRWC(0, 4, 0, 0);
     }
 }
