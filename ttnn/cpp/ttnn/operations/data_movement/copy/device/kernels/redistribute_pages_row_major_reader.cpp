@@ -106,6 +106,7 @@ void kernel_main() {
                 uint32_t l1_output_subblock_write_addr =
                     cb_in1.get_write_ptr();  // write the output subblock to the output cb
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
+                    noc,
                     l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset,
                     input_l1_write_addr + l1_input_subblock_read_addr_offset,
                     bytes_to_write_to_output_subblock);
@@ -159,6 +160,7 @@ void kernel_main() {
                 uint32_t l1_output_subblock_write_addr =
                     cb_in1.get_write_ptr();  // Write the output subblock to the output cb
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
+                    noc,
                     l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset,
                     input_l1_write_addr + l1_input_subblock_read_addr_offset,
                     bytes_to_write_to_output_subblock);

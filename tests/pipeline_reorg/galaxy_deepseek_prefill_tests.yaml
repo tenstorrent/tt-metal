@@ -43,7 +43,7 @@
   cmd: |
     export MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge and cpu and 8x4 and line and not multiuser" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 8x4 and fabric2d" -vvv --tb=short
   test_type: mla_chunked
   test_group: module
   skus:

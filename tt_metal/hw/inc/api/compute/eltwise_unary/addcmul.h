@@ -39,16 +39,16 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void addcmul_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst, uint32_t value) {
-    MATH((SFPU_TERNARY_CALL_MODE(
+    MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_addcmul,
         (APPROX, DST_ACCUM_MODE, data_format, 8 /* ITERATIONS */),
-        RC,
         idst0,
         idst1,
         idst2,
         odst,
+        VectorMode::RC,
         value)));
 }
 

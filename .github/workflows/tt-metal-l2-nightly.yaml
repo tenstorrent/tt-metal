@@ -20,18 +20,8 @@ on:
         required: false
         type: boolean
         default: false
-      run_fd_unit_tests:
-        description: "Run Fast Dispatch Unit Tests"
-        required: false
-        type: boolean
-        default: false
-      run_sd_unit_tests:
-        description: "Run Slow Dispatch Unit Tests"
-        required: false
-        type: boolean
-        default: false
-      run_metal_iommu_tests:
-        description: "Run Metal IOMMU Unit Tests"
+      run_llk_unit_tests:
+        description: "Run LLK Unit Tests (slow dispatch)"
         required: false
         type: boolean
         default: false
@@ -349,29 +339,23 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  # SD LLK Unit Tests — runs the full LLK gtest binary in slow dispatch as a comprehensive
-  # nightly regression. The PR gate covers two narrower slices (FD path via
-  # llk-fd-unit-tests-* and a Quasar+SD-only slice via llk-sd-unit-tests-*); this job is the
-  # superset that re-validates everything in SD on every supported runner class.
-  llk-sd-unit-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
+  # LLK SD Unit Tests — runs the full LLK gtest binary in slow dispatch as a
+  # comprehensive nightly regression on every supported SKU. SKU set and per-
+  # entry filters live in tests/pipeline_reorg/llk_unit_tests.yaml (entries
+  # tagged l2_only: true). Merge-gate covers the FD path separately.
+  llk-unit-tests:
+    needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
+      (github.event_name == 'schedule' || inputs.run_llk_unit_tests) &&
+      needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-sd-fd-tests) }}
-    uses: ./.github/workflows/llk-unit-tests.yaml
+    uses: ./.github/workflows/llk-unit-tests-impl.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      dispatch-mode: sd
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
+      l2-only: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      gtest-filter: "-MeshDeviceFixture.Top32RmDevPipelineCompletes"  # disabled — deterministic compile failure, tracking issue #45483
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
