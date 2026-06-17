@@ -72,6 +72,38 @@
   team: models
   model-name: devstral-2-123b
 
+# ─── voxtral-mini-3b ─────────────────────────────────────────────────────────
+
+- name: voxtral-mini-3b component + e2e PCC (P150x4)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Voxtral-Mini-3B-2507
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Voxtral-Mini-3B-2507
+    export MESH_DEVICE=P150x4
+    pytest --timeout 1800 models/tt_transformers/tt/multimodal/voxtral/test_voxtral_audio_encoder.py models/tt_transformers/tt/multimodal/voxtral/test_voxtral_projector.py models/tt_transformers/tt/multimodal/voxtral/test_voxtral_audio_features.py models/tt_transformers/tt/multimodal/voxtral/test_voxtral_e2e.py
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this model
+  team: models
+  model-name: voxtral-mini-3b
+
+- name: voxtral-mini-3b text-decoder full-depth logit PCC (P150x4)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Voxtral-Mini-3B-2507
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Voxtral-Mini-3B-2507
+    export MESH_DEVICE=P150x4
+    pytest --timeout 1200 "models/tt_transformers/tests/test_model.py::test_model_inference" -k "full and accuracy"
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this model
+  team: models
+  model-name: voxtral-mini-3b
+
 # ─── Mochi ──────────────────────────────────────────────────────────────────
 
 - name: Mochi pipeline performance

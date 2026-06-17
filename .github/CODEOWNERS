@@ -442,6 +442,8 @@ models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @
 models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
 models/tt_transformers/tt/generator*.py @gwangTT @cglagovichTT @yieldthought @mtairum @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
 models/tt_transformers/model_params/Devstral-2-123B-Instruct @moritztng @tenstorrent/codeowner-bypass
+models/tt_transformers/tt/multimodal/voxtral @moritztng @tenstorrent/codeowner-bypass
+models/tt_transformers/model_params/Voxtral-Mini-3B-2507 @moritztng @tenstorrent/codeowner-bypass
 models/demos/qwen25_vl @gwangTT @ssanjayTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen3_vl @ssanjayTT @gwangTT @tenstorrent/codeowner-bypass
 models/demos/falcon7b_common @gwangTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
