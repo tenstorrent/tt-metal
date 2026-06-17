@@ -28,6 +28,8 @@ If they do not, use `$full-model` first. During vLLM integration you may make sm
 
 Before writing adapter code, load the datatype-sweep selection and confirm the generator constructs that exact policy: weight groups, activation/residual dtype, CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions. Serving uses the selected full-model policy. Serving a reduced-speed model does not satisfy completion.
 
+Load `models/autoports/<model>/doc/context_contract.json` and serve the recorded supported context. The default target is the HF-advertised context. Do not lower `--max-model-len`, model config context, benchmark context, or API context to work around a model bug. A smaller value is valid only when the context contract records device-DRAM evidence that it is the largest feasible context.
+
 ## vLLM Adapter
 
 `tt/generator_vllm.py` should delegate to the existing generator's low-level methods. Keep adapter-only code limited to vLLM interface translation.
@@ -110,13 +112,15 @@ python -m models.common.readiness_check.run_vllm_server \
 
 The runner enforces on-device sampling (`sample_on_device_mode: all` in the TT plugin config). The full-model stage must already provide traced token-out split sampling. If it does not, return to `$full-model`; this stage should only adapt that contract to vLLM.
 
+If shared tests require host-side sampling, expose it as an explicit compatibility mode and label metrics from that mode separately. The optimized serving path still uses on-device traced sampling and `sample_on_device_mode=all`.
+
 ## No Tracy Or Perf-Report In vLLM Stages
 
 Do not collect Tracy, `tt-perf-report`, or `TT_METAL_DEVICE_PROFILER` metrics from vLLM integration or optimized-vLLM serving runs. Do not set profiler env vars for the live server, do not run `python -m tracy` around `run_vllm_server`, do not run a serving-adapter profile just to produce a profiler table, and do not call `ttnn.ReadDeviceProfiler(mesh)` as part of vLLM-stage closure.
 
-The vLLM stages have repeatedly wedged T3K machines during profiler/device-health closure. The useful vLLM evidence is the serving-path evidence produced by `run_vllm_server`: sampling results, qualitative outputs, degenerate-output checks, server logs, and benchmark JSON with TTFT, ITL, aggregate output throughput, and mean per-user decode t/s/u. Use existing full-model or reduced non-serving profiles from earlier stages for device-op/root-cause context. If those profiles are missing, record that limitation; do not recreate them inside the vLLM stage.
+The vLLM stages have repeatedly wedged T3K machines during profiler/device-health closure. The useful vLLM evidence is the serving-path evidence produced by `run_vllm_server`: sampling results, qualitative outputs, degenerate-output checks, server logs, and benchmark JSON with TTFT, ITL, aggregate output throughput, and mean per-user decode t/s/u. Use existing full-model or reduced non-serving profiles from earlier stages for device-op/root-cause context. If those profiles are missing, record that evidence gap; do not recreate them inside the vLLM stage.
 
-For optimized-vLLM, optimize with same-harness serving before/after metrics and contract checks: async split, nonblocking trace replay, stale input coverage, on-device sampling, no host greedy argmax, no full-logits readback, and no unnecessary page-table/token/current-position refresh. A vLLM stage is not incomplete merely because it lacks Tracy, `tt-perf-report`, or live-serving device-profiler artifacts.
+For optimized-vLLM, optimize with same-harness serving before/after metrics and contract checks: async split, nonblocking trace replay, stale input coverage, on-device sampling, no host greedy argmax, no full-logits readback, and no unnecessary page-table/token/current-position refresh. Do not require Tracy, `tt-perf-report`, or live-serving device-profiler artifacts for vLLM-stage completion.
 
 Check stages:
 
@@ -130,11 +134,11 @@ Keep teacher-forcing and serving performance separate. A readiness/PERF teacher-
 
 `--max-num-seqs` is passed to both server launch and sampling pytest (`--tt-max-num-seqs`).
 
-For final vLLM-integration evidence, use `--sampling-profile full`. Use `--sampling-profile smoke` for faster inner-loop iteration. For batch-1 MoE bring-up loops, `--sampling-profile smoke` is acceptable as the final sampling gate and `full` may be skipped entirely because it is very slow in that regime.
+For final vLLM-integration evidence, use `--sampling-profile full`. Use `--sampling-profile smoke` only for faster inner-loop iteration. For batch-1 MoE bring-up loops where the full profile is impractical, record the final status as `smoke-gated`; do not present it as equivalent to the full sampling gate unless the project owner explicitly accepts that coverage.
 
 When determinism tests fail in vLLM, validate that logits output by the model for a given prompt are reproducible across runs and batch positions. Check both standalone model and running through vllm.
 
-Reproducibility-only sampling failures are out of scope when they are the only failures. Typical names include `test_top1_is_greedy`, `test_topk`, `test_uniform_seed_deterministic`, `test_specific_seed_reproducible`, `test_same_seeds_reproduce_across_batches`, `test_*_mixed_batch`, and `test_mixed_params_batch`. Correctness failures, missing logprobs, crashes, gibberish output, or wrong logprob values remain in scope.
+Classify reproducibility-only sampling failures separately when they are the only failures. Typical names include `test_top1_is_greedy`, `test_topk`, `test_uniform_seed_deterministic`, `test_specific_seed_reproducible`, `test_same_seeds_reproduce_across_batches`, `test_*_mixed_batch`, and `test_mixed_params_batch`. They do not block serving correctness only when correctness, logprobs, crash-free serving, and qualitative output all pass. Correctness failures, missing logprobs, crashes, gibberish output, or wrong logprob values remain blockers.
 
 If vLLM crashes mid-run, kill leftover `EngineCore` or `vllm.entrypoints` processes before retrying; they can hold chip locks after `tt-smi -r`.
 
@@ -170,6 +174,7 @@ Done means all of these are true and recorded:
 - Adapter class, low-level generator methods it delegates to, and KV-cache ownership contract.
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.
+- Served max context, matching `doc/context_contract.json`, with any DRAM-only reduction evidence.
 - Capability flags with evidence: no unproven `supports_async_decode=True`, explicit `tt_async_decode_allows_overlap` value with proof if true, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
 - Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh, and stale-token/current-position smoke coverage.
 - Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.

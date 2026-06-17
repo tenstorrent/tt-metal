@@ -10,6 +10,7 @@ Goal completion requirements:
 - The vLLM path uses the selected precision config, including weight groups, activation/CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions.
 - The model is registered in vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py::register_tt_models().
 - vLLM serving mode preserves correct KV-cache ownership: vLLM allocates the serving cache and the adapter passes that cache through the generator/model path without hidden standalone-cache assumptions.
+- The served `max_model_len` matches doc/context_contract.json. Do not lower `max_model_len` below the HF-advertised context unless the context contract records device-DRAM evidence for the largest feasible smaller value.
 - run_vllm_server succeeds with the final sampling profile defined by $vllm-integration.
 - Sampling tests, qualitative outputs, and serving benchmark artifacts exist under readiness_vllm/.
 - `supports_async_decode=True`, decode trace is enabled, and stale-token/current-position/page-table tests pass through the adapter. Full-model split sampling is already present.
@@ -21,6 +22,7 @@ Goal completion requirements:
 - models/autoports/<model>/doc/vllm_integration/README.md and work_log.md record commands, serving status, qualitative verdict, benchmark metrics, limitations, and exact artifacts.
 - model serves through the shared vLLM path with evidence.
 - Prefill TTFT and decode t/s/u for batch-1 inference are reported at the top of README.md.
+- Any host-sampling mode needed by shared tests is explicit and optional; it must not replace the on-device traced sampling path used for performance.
 - A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
 
 Do not mark this goal complete while any completion requirement is unmet.

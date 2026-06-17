@@ -13,6 +13,8 @@ The selected precision artifact must be complete enough for later stages to cons
 
 The expensive source of truth is full-model top-1/top-5 accuracy. Decoder-layer PCC and component timing are useful only for ordering candidates and debugging surprises.
 
+Datatype selection must preserve the context-length contract. KV-cache dtype can change the largest feasible context, so recompute `models/autoports/<model>/doc/context_contract.json` for the selected config. If a candidate only passes by lowering context, it fails unless device DRAM evidence proves that smaller value is the largest feasible context for that candidate.
+
 If the user does not provide an accuracy bar, use:
 
 - top-1 >= 90%;
@@ -128,5 +130,6 @@ Before finishing:
 - run a post-selection token-out no-readback performance check with the selected config and record the workload shape, trace status, TTFT, decode t/s/u, and runtime counters;
 - run qualitative generation if the dtype changes are large or top-1 is close to the threshold - if this is bad then back off more changes until it is good;
 - add a short propagation check proving `build_generator` and the vLLM adapter load the same selected weight/activation/CCL/KV policy used by the winning sweep result.
+- update the context contract for the selected KV-cache dtype and prove later construction paths use a matching max context.
 
 If no lower-precision config passes, keep the baseline and leave evidence that the sweep actually tested the likely wins.

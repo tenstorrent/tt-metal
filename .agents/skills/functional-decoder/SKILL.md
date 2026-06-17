@@ -50,9 +50,10 @@ Use `PCC >= 0.995` as the default acceptance bar for prefill and decode unless t
 - Prefill and decode on-device performance measured from warmed runs (using traced execution for decode) - these should have perf report outputs to prove it.
 - Paged KV-cache behavior, including page table and current-position handling.
 - Full advertised prefill/decode sequence length (test the longest you can fit if the reference model's maximum is too large for the device to fit)
+- `models/autoports/<model>/doc/context_contract.json` records the HF-advertised context, the current supported context, the largest context tested in prefill and decode, and any DRAM-only reduction with byte/probe evidence.
 - Determinism for repeated identical inputs tested.
 - Evidence there are no torch or host calls required within a single prefill or decode pass - everything runs and stays on device.
-- Watcher-clean run when the environment supports it, or a clear reason it was not run. Watcher should be run by setting TT_METAL_WATCHER=10, don't skip asserts or anything.
+- Watcher-clean run with `TT_METAL_WATCHER=10`. If the command cannot run in the environment, record the exact environment failure and replacement evidence; do not skip asserts or weaken the test.
 
 
 # Decoder Bringup Knowledge
@@ -108,6 +109,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 ## Prefill And Decode Shapes
 
 - Prefill commonly uses `(1, batch=1, seq_len, hidden)` style tensor shapes; decode commonly uses `(1, seq_len=1, batch, hidden)`.
+- The target sequence/context length is the full value advertised by the HF config, usually `max_position_embeddings` or the model's equivalent field. Do not create a smaller model config. Do not hide a smaller implementation behind a smaller `max_model_len`.
 - Decode tests must include the full supported context length unless measured KV-cache DRAM capacity forces a reduction. If reduced, record the attempted full-length or capacity-probe command, log, failure signature or byte calculation, and largest feasible tested context.
 - Prefill tests must include the full supported sequence length unless measured L1/DRAM capacity forces a reduction. If reduced, record the attempted full-length or capacity-probe command, log, failure signature or byte calculation, and largest feasible tested sequence.
 - Do not accept "tractability", profiling/watcher cost, runtime, or small synthetic proof scope as sequence-capacity evidence.

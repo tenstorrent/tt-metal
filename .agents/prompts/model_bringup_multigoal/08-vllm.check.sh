@@ -13,4 +13,8 @@ else
   exit 3
 fi
 python models/common/readiness_check/check_degenerate_output.py \
-  "${scope_args[@]}" --missing-artifacts critical --scope all
+  "${scope_args[@]}" --missing-artifacts critical --scope all || exit $?
+
+python .agents/scripts/check_context_contract.py \
+  --model-dir "${MODEL_DIR:-}" --hf-model "${HF_MODEL:-}" \
+  --stage vllm --require-contract
