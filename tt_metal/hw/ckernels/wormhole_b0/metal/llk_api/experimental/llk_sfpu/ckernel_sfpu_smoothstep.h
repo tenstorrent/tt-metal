@@ -10,7 +10,7 @@
 
 namespace ckernel::sfpu {
 
-inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
+inline void smoothstep_tile_face(float edge0, [[maybe_unused]] float edge1, float inv_delta) {
     constexpr size_t vectors_per_face = 8;
     for (size_t i = 0; i < vectors_per_face; i++) {
         sfpi::vFloat x = sfpi::dst_reg[i];

@@ -179,7 +179,7 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     namespace ckernel::sfpu {
 
     // Low-level function operating on a tile face
-    void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
+    void smoothstep_tile_face(float edge0, [[maybe_unused]] float edge1, float inv_delta) {
         constexpr size_t vectors_per_face = 8;
         for (size_t i = 0; i < vectors_per_face; i++) {
             sfpi::vFloat x = sfpi::dst_reg[i];
@@ -220,7 +220,7 @@ The `smoothstep` function needs two scalar parameters: ``edge0`` and ``edge1``. 
     my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta);
     // ↓
     // Use the parameters for all elements in the tile face
-    smoothstep_tile_face(float edge0, float edge1, float inv_delta);
+    smoothstep_tile_face(float edge0, [[maybe_unused]] float edge1, float inv_delta);
 
 The macro wrapper takes the low-level face function, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.
 
