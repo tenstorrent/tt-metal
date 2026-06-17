@@ -303,6 +303,7 @@ from ttnn.device import (
     close_device,
     manage_device,
     synchronize_device,
+    reset_fabric_connection_lock,
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,

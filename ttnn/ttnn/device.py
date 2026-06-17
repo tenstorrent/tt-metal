@@ -206,6 +206,7 @@ ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
+reset_fabric_connection_lock = ttnn._ttnn.device.reset_fabric_connection_lock
 
 
 @contextlib.contextmanager
