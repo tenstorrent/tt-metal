@@ -88,7 +88,11 @@ jobs:
         id: tool-tags
         run: |
           TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
-          echo "tool_tags=$TOOL_TAGS" >> "$GITHUB_OUTPUT"
+          {
+            echo "tool_tags<<EOF"
+            echo "$TOOL_TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Prepare bake overrides
         id: bake
         env:
