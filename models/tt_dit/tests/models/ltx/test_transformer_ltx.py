@@ -338,6 +338,40 @@ def _diffusers_video_model_ref(model, *, video_lat, video_prompt, sigma_val, F, 
     return out[0] if isinstance(out, (tuple, list)) else out
 
 
+def _diffusers_video_model_ref_pertoken(model, *, video_lat, video_prompt, video_ts_real, sigma_scalar, F, H, W):
+    """Per-token oracle: same as ``_diffusers_video_model_ref`` but ``timestep`` is ``(1, N)``.
+
+    The diffusers LTX2 model flattens ``timestep`` through ``time_embed`` then reshapes to
+    ``(B, N, ...)`` modulation, so a per-token timestep yields genuine per-token modulation.
+    ``sigma`` (prompt/cross modulation) stays scalar, matching the TT scalar-timestep path.
+    """
+    B, N, _ = video_lat.shape
+    gt, gh, gw, _ = _video_grid(F, H, W)
+    video_coords = torch.stack([gt, gh, gw], dim=0).float().unsqueeze(0)  # (1, 3, N)
+    a_N = 64
+    audio_lat = torch.zeros(B, a_N, AUDIO_IN_CHANNELS)
+    audio_prompt = torch.zeros(B, video_prompt.shape[1], AUDIO_CTX_DIM)
+    audio_coords = torch.arange(a_N).reshape(1, 1, a_N).float()
+    ts_pertoken = video_ts_real.reshape(1, -1) * 1000.0  # (1, N)
+    ts_scalar = torch.tensor([sigma_scalar * 1000.0])
+    with torch.no_grad():
+        out = model(
+            hidden_states=video_lat,
+            audio_hidden_states=audio_lat,
+            encoder_hidden_states=video_prompt,
+            audio_encoder_hidden_states=audio_prompt,
+            timestep=ts_pertoken,
+            audio_timestep=ts_scalar,
+            sigma=ts_scalar,
+            audio_sigma=ts_scalar,
+            video_coords=video_coords,
+            audio_coords=audio_coords,
+            isolate_modalities=True,
+            return_dict=False,
+        )
+    return out[0] if isinstance(out, (tuple, list)) else out
+
+
 def _lightricks_qk_to_interleaved(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
     """Forward per-head SPLIT→INTERLEAVED Q/K permute (same as LTXAttention._permute_qk)."""
     D = head_dim
@@ -1265,3 +1299,171 @@ def test_ltx_per_token_timestep_equivalence(
     # Same weights + uniform sigma: the per-token MLP collapses to the scalar broadcast (bf16-equal).
     assert_quality(out_scalar, out_pertoken, pcc=0.999, relative_rmse=0.02)
     logger.info("PASSED: uniform per-token timestep reproduces the scalar path")
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), [pytest.param(19, 17, 30, id="stage_1")])
+def test_ltx_per_token_timestep_nonuniform(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    reset_seeds,
+) -> None:
+    """NON-uniform per-token timestep (the real I2V case) must match the diffusers per-token oracle.
+
+    This is the case the existing equivalence test does NOT cover: frame-0 tokens at sigma=0
+    (the pinned image anchor) and every other token at a high sigma. If the per-token gate does
+    not reach the fused attn/FFN epilogues, non-frame-0 tokens get the wrong (frame-0) gate and
+    the output diverges from the oracle — the DiT-level signature of "frame 0 ok, rest collapses".
+    """
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+    frame0_tokens = H * W  # token order is f*H*W + h*W + w, so frame 0 == first H*W tokens
+    sigma_high = float(os.environ.get("LTX_TEST_SIGMA", "0.7"))
+
+    # Shared random-scaled weights (1 layer) from the diffusers 3D video model.
+    torch_model = _make_diffusers_video_model(num_layers=1)
+    torch_model.eval()
+    _scale_init_(torch_model)
+    state_dict = _convert_diffusers_video_model_to_tt(torch_model.state_dict(), num_heads=NUM_HEADS, head_dim=HEAD_DIM)
+    state_dict = {k: v.detach().clone() for k, v in state_dict.items()}
+
+    torch.manual_seed(INPUT_SEED)
+    video_lat_real = torch.randn(1, video_N_real, IN_CHANNELS, dtype=torch.float32)
+    video_lat = _pad_seq_dim(video_lat_real, video_N, dim=1)
+    video_prompt = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+
+    # Per-token timestep: frame-0 tokens pinned at sigma=0, everything else (incl. SP padding) at sigma_high.
+    video_ts_real = torch.full((video_N_real,), sigma_high, dtype=torch.float32)
+    video_ts_real[:frame0_tokens] = 0.0
+    video_timestep_torch = torch.full((video_N,), sigma_high, dtype=torch.float32)
+    video_timestep_torch[:frame0_tokens] = 0.0
+
+    # === Reference (per-token oracle) — before TT to avoid weight aliasing ===
+    ref_video = _diffusers_video_model_ref_pertoken(
+        torch_model,
+        video_lat=video_lat_real,
+        video_prompt=video_prompt,
+        video_ts_real=video_ts_real,
+        sigma_scalar=sigma_high,
+        F=F,
+        H=H,
+        W=W,
+    )
+    # Control oracle: uniform sigma_high everywhere (no anchor). If the anchor genuinely propagates
+    # to the non-frame0 tokens in ONE block, ref_video 'rest' must differ from this.
+    ref_uniform = _diffusers_video_model_ref_pertoken(
+        torch_model,
+        video_lat=video_lat_real,
+        video_prompt=video_prompt,
+        video_ts_real=torch.full((video_N_real,), sigma_high, dtype=torch.float32),
+        sigma_scalar=sigma_high,
+        F=F,
+        H=H,
+        W=W,
+    )
+    del torch_model
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    tt_video_prompt = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
+    tt_vc, tt_vs = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    model = _make_tt_model(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=False,
+        num_layers=1,
+        image_conditioning=True,
+    )
+    model.load_torch_state_dict(state_dict, strict=True)
+    out_tt = LTXTransformerModel.device_to_host(
+        model.forward(
+            video_1BNI_torch=video_lat.unsqueeze(0),
+            video_prompt_1BLP=tt_video_prompt,
+            video_rope_cos=tt_vc,
+            video_rope_sin=tt_vs,
+            video_N=video_N_real,
+            trans_mat=tt_trans_mat,
+            timestep_torch=torch.tensor([sigma_high]),
+            video_timestep_torch=video_timestep_torch,
+        )
+    ).squeeze(0)[:, :video_N_real, :]
+
+    # Reconciliation: does TT effectively IGNORE the sigma=0 anchor and behave like uniform sigma_high?
+    # (= "coherent but unconditioned video"). Compare against a TT pass with a uniform sigma_high
+    # timestep and against an oracle run at uniform sigma_high.
+    video_ts_uniform = torch.full((video_N,), sigma_high, dtype=torch.float32)
+    out_tt_uniform = LTXTransformerModel.device_to_host(
+        model.forward(
+            video_1BNI_torch=video_lat.unsqueeze(0),
+            video_prompt_1BLP=tt_video_prompt,
+            video_rope_cos=tt_vc,
+            video_rope_sin=tt_vs,
+            video_N=video_N_real,
+            trans_mat=tt_trans_mat,
+            timestep_torch=torch.tensor([sigma_high]),
+            video_timestep_torch=video_ts_uniform,
+        )
+    ).squeeze(0)[:, :video_N_real, :]
+    del model
+
+    assert out_tt.shape == ref_video.shape, f"{out_tt.shape} vs {ref_video.shape}"
+    assert torch.isfinite(out_tt).all(), "NaN/Inf in per-token output"
+
+    # Localize: frame-0 (sigma=0, pinned) region vs the rest (sigma_high). A fused-gate broadcast
+    # bug shows up as the "rest" region tracking the oracle far worse than frame 0.
+    def _pcc(a, b):
+        a32, b32 = a.float().flatten(), b.float().flatten()
+        return torch.corrcoef(torch.stack([a32, b32]))[0, 1].item()
+
+    pcc_all = _pcc(ref_video, out_tt)
+    pcc_f0 = _pcc(ref_video[:, :frame0_tokens, :], out_tt[:, :frame0_tokens, :])
+    pcc_rest = _pcc(ref_video[:, frame0_tokens:, :], out_tt[:, frame0_tokens:, :])
+    logger.info(f"NON-UNIFORM per-token (TT vs ORACLE): all={pcc_all:.5f}  frame0={pcc_f0:.5f}  rest={pcc_rest:.5f}")
+
+    # Reconciliation metrics.
+    ignore_all = _pcc(out_tt, out_tt_uniform)
+    ignore_f0 = _pcc(out_tt[:, :frame0_tokens, :], out_tt_uniform[:, :frame0_tokens, :])
+    ignore_rest = _pcc(out_tt[:, frame0_tokens:, :], out_tt_uniform[:, frame0_tokens:, :])
+    logger.info(
+        f"RECONCILE (TT-nonuniform vs TT-uniform_high): all={ignore_all:.5f} "
+        f"frame0={ignore_f0:.5f} rest={ignore_rest:.5f}  "
+        f"[~1.0 on 'rest' => TT ignores the anchor for non-frame0 tokens = coherent-but-unconditioned]"
+    )
+    uni_vs_oracle = _pcc(ref_video[:, frame0_tokens:, :], out_tt_uniform[:, frame0_tokens:, :])
+    logger.info(f"control (TT-uniform_high 'rest' vs nonuniform ORACLE 'rest'): {uni_vs_oracle:.5f}")
+    # Does the anchor propagate in the ORACLE? oracle-nonuniform 'rest' vs oracle-uniform 'rest':
+    # < 1.0 => the sigma=0 anchor DOES influence non-frame0 tokens in one block (so the 'rest' gap is real).
+    oracle_anchor_prop = _pcc(ref_video[:, frame0_tokens:, :], ref_uniform[:, frame0_tokens:, :])
+    logger.info(
+        f"ORACLE anchor propagation (nonuniform 'rest' vs uniform 'rest'): {oracle_anchor_prop:.5f} "
+        f"[<1.0 => anchor influences the rest in the oracle; TT's 0.9997 self-match => TT does NOT]"
+    )
+    # BASELINE: TT-uniform vs ORACLE-uniform at the SAME sigma_high (no conditioning involved at all).
+    # If this is low, the 'rest' gap is a high-sigma precision artifact, NOT the I2V per-token bug.
+    base_all = _pcc(ref_uniform, out_tt_uniform)
+    base_f0 = _pcc(ref_uniform[:, :frame0_tokens, :], out_tt_uniform[:, :frame0_tokens, :])
+    base_rest = _pcc(ref_uniform[:, frame0_tokens:, :], out_tt_uniform[:, frame0_tokens:, :])
+    logger.info(
+        f"BASELINE (TT-uniform vs ORACLE-uniform @ sigma_high): all={base_all:.5f} frame0={base_f0:.5f} rest={base_rest:.5f}"
+    )
+
+    assert_quality(ref_video, out_tt, pcc=0.99, relative_rmse=0.03)
+    logger.info("PASSED: non-uniform per-token timestep matches the diffusers oracle")

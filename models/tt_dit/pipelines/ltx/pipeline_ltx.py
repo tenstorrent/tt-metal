@@ -15,6 +15,8 @@ import hashlib
 import json
 import math
 import os
+import sys
+import time
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Callable
@@ -858,10 +860,84 @@ class LTXPipeline:
 
     def encode_image(self, image_BCFHW: torch.Tensor) -> torch.Tensor:
         """Encode a conditioning image/clip ``(B, 3, F, H, W)`` in [-1, 1] to a normalized
-        latent ``(B, 128, F', H', W')``. Loads the encoder (evicting coresident peers)."""
+        latent ``(B, 128, F', H', W')``. Loads the encoder (evicting coresident peers).
+
+        Diagnostic: set ``LTX_I2V_HOST_ENCODE=1`` to run the VAE image encoder on host
+        (CPU/torch via the ``ltx_core`` reference ``VideoEncoder``) instead of on device.
+        Use this to A/B whether the on-device VAE encoder is the source of I2V artifacts
+        (the host path produces the identical normalized-latent contract)."""
         assert self.vae_encoder is not None, "VAE encoder not constructed (no encoder_blocks in checkpoint?)"
+        if os.environ.get("LTX_I2V_HOST_ENCODE", "0").lower() in ("1", "true", "yes"):
+            return self._encode_image_host(image_BCFHW)
         self._prepare_vae_encoder()
         return self.vae_encoder(image_BCFHW)
+
+    def _build_host_vae_encoder(self):
+        """Lazily build + cache the torch reference VAE encoder (``ltx_core.VideoEncoder``),
+        loaded with the same checkpoint weights as the on-device encoder."""
+        cached = getattr(self, "_host_vae_encoder", None)
+        if cached is not None:
+            return cached
+        try:
+            # ltx_core is usually not pip-installed; fall back to the in-repo source tree.
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+            ltx_core_src = os.path.join(repo_root, "LTX-2", "packages", "ltx-core", "src")
+            if os.path.isdir(ltx_core_src) and ltx_core_src not in sys.path:
+                sys.path.insert(0, ltx_core_src)
+            from ltx_core.model.video_vae.enums import LogVarianceType, NormLayerType, PaddingModeType
+            from ltx_core.model.video_vae.video_vae import VideoEncoder
+        except ImportError as e:  # pragma: no cover - depends on optional reference package
+            raise RuntimeError(
+                "LTX_I2V_HOST_ENCODE=1 requires the ltx_core reference package "
+                "(expected at LTX-2/packages/ltx-core/src)."
+            ) from e
+
+        t0 = time.time()
+        enc = VideoEncoder(
+            in_channels=3,
+            out_channels=128,
+            encoder_blocks=self._vae_encoder_blocks,
+            patch_size=self._vae_patch_size,
+            norm_layer=NormLayerType.PIXEL_NORM,
+            latent_log_var=LogVarianceType.UNIFORM,
+            encoder_spatial_padding_mode=PaddingModeType.ZEROS,
+        )
+        # Mirror _vae_encoder_state_provider: vae.encoder.* -> encoder params,
+        # vae.per_channel_statistics.* -> per_channel_statistics.* (the normalize stats).
+        # Use safe_open to materialize only the ~180M-param encoder tensors (not the whole
+        # multi-billion-param checkpoint).
+        state: dict[str, torch.Tensor] = {}
+        with safe_open(self._vae_checkpoint_path, framework="pt") as f:
+            for k in f.keys():
+                if k.startswith("vae.encoder."):
+                    state[k.removeprefix("vae.encoder.")] = f.get_tensor(k)
+                elif k.startswith("vae.per_channel_statistics."):
+                    state[k.removeprefix("vae.")] = f.get_tensor(k)
+        missing, unexpected = enc.load_state_dict(state, strict=False)
+        if missing:
+            logger.warning(f"host VAE encoder missing {len(missing)} keys (first: {missing[:4]})")
+        if unexpected:
+            logger.warning(f"host VAE encoder unexpected {len(unexpected)} keys (first: {unexpected[:4]})")
+        enc.eval()
+        self._host_vae_encoder = enc
+        logger.info(
+            f"Built host (torch/CPU) VAE encoder from {os.path.basename(self._vae_checkpoint_path)} "
+            f"in {time.time() - t0:.1f}s"
+        )
+        return enc
+
+    def _encode_image_host(self, image_BCFHW: torch.Tensor) -> torch.Tensor:
+        """Host (CPU/torch) VAE image encode — diagnostic alternative to the on-device
+        encoder. Returns the same normalized latent ``(B, 128, F', H', W')`` as ``encode_image``."""
+        enc = self._build_host_vae_encoder()
+        t0 = time.time()
+        with torch.no_grad():
+            latent = enc(image_BCFHW.float())
+        logger.info(
+            f"I2V host-encode (torch/CPU): {tuple(image_BCFHW.shape)} -> {tuple(latent.shape)} "
+            f"in {time.time() - t0:.1f}s"
+        )
+        return latent
 
     @staticmethod
     def _crf_codec_roundtrip(arr, crf: int):
