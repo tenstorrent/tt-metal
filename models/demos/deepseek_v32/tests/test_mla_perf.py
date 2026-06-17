@@ -7,6 +7,8 @@ Tracy perf harness for the DeepSeek V3.2 MLA (DSA) chunked-prefill layer.
 Scenario (defaults): process one **5k-token chunk** with **50k tokens already cached**, on a
 **SP=4 × TP=2** LoudBox mesh (mesh shape (4, 2)) — the §7 worked example of the MLA layer report.
 No reference values: this just runs the real device forward and reports per-op device-kernel time.
+Multi-chip rows are device-collapsed (compute=max, collectives=avg across chips) via merge_device_rows
+so the reported time is per-step critical path, not the ~8× over-count of summing parallel device rows.
 
 Two-test pattern (mirrors tests/nightly/blackhole/sdpa):
   * test_mla_chunked_perf_impl  — the work to profile. Builds the v32 ttMLA, populates the index/KV
@@ -27,6 +29,7 @@ config (mla.py), so `config.max_seq_len = total` is enough for a 50k+ context (n
 
 import os
 
+import pandas as pd
 import pytest
 import torch
 from loguru import logger
@@ -141,16 +144,24 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
 def test_mla_chunked_perf():
     from tracy.process_model_log import run_device_profiler
 
+    # merge_device_rows: the deepseek_v3_d_p / tt_transformers convention for collapsing the device
+    # dimension of a multi-chip Tracy ops log (see models/demos/deepseek_v3_d_p/utils/perf_utils.py).
+    from models.tt_transformers.tests.test_utils import merge_device_rows
     from tests.nightly.sdpa_perf_utils import post_process_ops_log
 
     command = "pytest models/demos/deepseek_v32/tests/test_mla_perf.py::test_mla_chunked_perf_impl"
     run_device_profiler(command, SUBDIR, device_analysis_types=["device_kernel_duration"])
 
-    # Rows between signpost("start") and signpost("stop") = the measured chunk's device ops.
-    df = post_process_ops_log(SUBDIR, has_signposts=True)
     dur_col = "DEVICE KERNEL DURATION [ns]"
-    df = df[df[dur_col] != "-"].copy()
-    df[dur_col] = df[dur_col].astype(float)
+    # Rows between signpost("start") and signpost("stop") = the measured chunk's device ops, with ONE
+    # ROW PER (op call × mesh chip). On this SP=4×TP=2 mesh every op runs on all 8 chips IN PARALLEL,
+    # so the raw rows must NOT be summed — that over-counts wall-clock by ~num_devices (≈8×). Collapse
+    # the device dimension to one row per logical op call with the standard merge_device_rows rule:
+    #   * compute ops -> MAX duration across chips (the slowest chip gates the step = critical path)
+    #   * collectives -> AVG duration across chips (all chips run the same collective together)
+    df = post_process_ops_log(SUBDIR, has_signposts=True)
+    df[dur_col] = pd.to_numeric(df[dur_col], errors="coerce")
+    df = merge_device_rows(df)  # filters to tt_dnn_device rows internally
     assert len(df), "no device ops in the signposted region — was the impl skipped (wrong device count)?"
 
     total_ns = df[dur_col].sum()
@@ -170,7 +181,8 @@ def test_mla_chunked_perf():
     table = "\n".join(
         [
             f"DeepSeek V3.2 MLA chunked perf — {CHUNK_TOKENS}-tok chunk @ {CACHE_TOKENS}-tok cache, SP=4×TP=2",
-            f"total device-kernel time over the chunk: {total_ns/1e6:.3f} ms across {int(by_op['count'].sum())} op calls",
+            f"critical-path device-kernel time over the chunk (device-collapsed: compute=max, "
+            f"collectives=avg across chips): {total_ns/1e6:.3f} ms across {int(by_op['count'].sum())} op calls",
             header,
             "-" * len(header),
             *rows,
