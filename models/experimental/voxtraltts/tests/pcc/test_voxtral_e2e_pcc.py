@@ -16,7 +16,6 @@ from loguru import logger
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import audio_tokenizer_decode_reference
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
-from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
 from models.experimental.voxtraltts.tests.common import (
     VOXTRAL_STANDARD_CHAR_TEXT,
@@ -237,43 +236,28 @@ def test_ttnn_voxtral_tts_golden_codes_pcc(device, reset_seeds, request):
     gc.collect()
 
 
-# Codes are shifted by 2 special tokens: tokenizer codes = model codes - 2 (and +2 to feed back).
+# Codes are shifted by 2 special tokens: tokenizer codes = model codes - 2.
 _CODE_SHIFT = 2
-# End-to-end ref-vs-TT waveform PCC; below the tokenizer-only gate because the acoustic FM's
-# bf16-vs-CPU rounding flips a few codes. Override with VOXTRAL_ACOUSTIC_TF_PCC.
-ACOUSTIC_TF_PCC_TARGET = float(os.environ.get("VOXTRAL_ACOUSTIC_TF_PCC", "0.97"))
-
-
-def _cpu_text_decode_step(cpu: VoxtralCPUReference, *, audio_codes_b37: torch.Tensor, past_key_values):
-    """One reference text-decode step from an audio-code embedding → ``[1, dim]`` hidden."""
-    next_input = cpu._audio_codes_to_input_embeds(audio_codes_b37)
-    outputs = cpu.text_model(
-        inputs_embeds=next_input,
-        past_key_values=past_key_values,
-        use_cache=True,
-        output_hidden_states=True,
-        return_dict=True,
-    )
-    return outputs.hidden_states[-1][:, -1, :], outputs.past_key_values  # [1, dim]
+# Acoustic-model waveform PCC (ref vs TT on the same realistic hidden). Below the tokenizer gate
+# because the acoustic FM's bf16-vs-CPU rounding flips a few codes. Override with VOXTRAL_ACOUSTIC_PCC.
+ACOUSTIC_PCC_TARGET = float(os.environ.get("VOXTRAL_ACOUSTIC_PCC", "0.97"))
 
 
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [_trace_device_params()], indirect=True)
-def test_ttnn_voxtral_tts_golden_acoustic_pcc(device, reset_seeds, request):
-    """Symmetric teacher-forced PCC: ref vs TT, golden code fed to BOTH each step.
-
-    Exercises text + acoustic (the code generation), not just the tokenizer. Both models run live;
-    each step the golden code is fed to both text models (never their own output, so flips can't
-    cascade), each emits its own code. Compares ref waveform (ref codes → ref tokenizer) vs TT
-    waveform (TT codes → TT tokenizer).
+def test_ttnn_voxtral_tts_acoustic_pcc(device, reset_seeds, request):
+    """Acoustic-model PCC in isolation: feed the SAME reference text hiddens (committed golden) +
+    same noise to both the reference and TT acoustic models each step. No text model runs, so there
+    is no text-model divergence — the only difference is the acoustic implementation. Compares
+    per-step codes and the decoded waveform (both via the reference tokenizer, held constant).
     """
     name = resolve_voxtral_model_name_or_skip()
     fixture = _load_golden_fixture()
-    golden_codes = fixture["codes_b37t"]  # [1,37,T] tokenizer codes (un-shifted)
-    n_steps = int(golden_codes.shape[2])
-    assert n_steps > 0, "golden fixture has no frames"
-    golden_model_codes = golden_codes + _CODE_SHIFT  # model-space codes for text-model feedback
+    if "text_hiddens" not in fixture:
+        pytest.skip("golden fixture has no text_hiddens; regenerate with generate_voxtral_golden_codes.py")
+    text_hiddens = fixture["text_hiddens"].to(torch.bfloat16)  # [T, dim] realistic reference hiddens
+    n_steps = int(text_hiddens.shape[0])
 
     try:
         cpu = VoxtralCPUReference(model_name_or_path=name, dtype="bfloat16", device="cpu")
@@ -298,47 +282,20 @@ def test_ttnn_voxtral_tts_golden_acoustic_pcc(device, reset_seeds, request):
     request.addfinalizer(_cleanup_pipe)
 
     logger.info("=" * 70)
-    logger.info(f"SYMMETRIC TEACHER-FORCED (ref vs TT, golden fed to both for {n_steps} steps)")
+    logger.info(f"ACOUSTIC-MODEL PCC (same reference hidden to ref and TT, {n_steps} steps)")
     logger.info("=" * 70)
 
-    request_obj = compose_speech_request(_DEMO_TEXT, name, voice=_DEMO_VOICE, ref_audio=None)
-    prompt_ids = request_obj["prompt_token_ids"]
     cfg_alpha = torch.tensor(cpu._acoustic_cfg_alpha, dtype=cpu.dtype)
-
-    # Prefill both text models on the same prompt.
-    _, cpu_embeds = cpu._prompt_embeddings(prompt_ids, _DEMO_VOICE)
-    cpu_prefill = cpu.text_model(
-        inputs_embeds=cpu_embeds.unsqueeze(0), use_cache=True, output_hidden_states=True, return_dict=True
-    )
-    cpu_hidden = cpu_prefill.hidden_states[-1][:, -1, :]  # [1, dim]
-    cpu_pkv = cpu_prefill.past_key_values
-
-    tt_embeds = pipe._build_voice_injected_embeds(prompt_ids, _DEMO_VOICE)
-    tt_hidden_tt = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0)
-    tt_hidden = pipe.text.hidden_tt_to_torch(tt_hidden_tt)  # [dim]
-    ttnn.deallocate(tt_hidden_tt)
-    current_pos = len(prompt_ids)
-
-    # Teacher-forced AR loop: feed golden to both, each emits its own acoustic code.
     ref_model_codes, tt_model_codes = [], []
     for i in range(n_steps):
+        # SAME realistic hidden + SAME noise for both — only the acoustic implementation differs.
+        hidden_i = text_hiddens[i : i + 1]  # [1, dim]
         noise_seed = acoustic_fm_noise_seed(0, i)
         torch.manual_seed(noise_seed)
-        ref_code_i = cpu.acoustic_transformer(cpu_hidden.to(torch.bfloat16), cfg_alpha).long().reshape(-1)
-        tt_code_i = (
-            pipe.acoustic_codes_forward(tt_hidden.to(torch.bfloat16).reshape(1, -1), cfg_alpha, noise_seed=noise_seed)
-            .long()
-            .reshape(-1)
-        )
+        ref_code_i = cpu.acoustic_transformer(hidden_i, cfg_alpha).long().reshape(-1)
+        tt_code_i = pipe.acoustic_codes_forward(hidden_i, cfg_alpha, noise_seed=noise_seed).long().reshape(-1)
         ref_model_codes.append(ref_code_i)
         tt_model_codes.append(tt_code_i)
-
-        # Advance both text models on the golden code, not their own output.
-        golden_step = golden_model_codes[:, :, i].reshape(1, 37)
-        cpu_hidden, cpu_pkv = _cpu_text_decode_step(cpu, audio_codes_b37=golden_step, past_key_values=cpu_pkv)
-        mm_embed = pipe._audio_codes_to_mm_embed(golden_step)
-        tt_hidden = pipe.text.decode_step_from_embeds(mm_embed, current_pos)
-        current_pos += 1
     ttnn.synchronize_device(device)
 
     ref_codes_b37t = (torch.stack(ref_model_codes, dim=0).T.unsqueeze(0) - _CODE_SHIFT).clamp_min(0)  # [1,37,T]
@@ -349,19 +306,17 @@ def test_ttnn_voxtral_tts_golden_acoustic_pcc(device, reset_seeds, request):
     ac_match = int((tt_codes_b37t[:, 1:] == ref_codes_b37t[:, 1:]).sum()) / max(int(ref_codes_b37t[:, 1:].numel()), 1)
     logger.info(f"  per-step code match (TT vs ref): semantic={sem_match:.4f}  acoustic={ac_match:.4f}")
 
-    # Each model through its own tokenizer.
+    # Both through the reference tokenizer so only the acoustic model differs.
     ref_wav = audio_tokenizer_decode_reference(
         ref_codes_b37t, pipe.audio_tokenizer_sd, pipe.config.audio_tokenizer_args
     )
-    tt_wav = pipe.decode_waveform_from_codes_tt(tt_codes_b37t)
-    ttnn.synchronize_device(device)
-    assert torch.isfinite(ref_wav).all(), "reference produced non-finite waveform samples"
-    assert torch.isfinite(tt_wav).all(), "TT produced non-finite waveform samples"
+    tt_wav = audio_tokenizer_decode_reference(tt_codes_b37t, pipe.audio_tokenizer_sd, pipe.config.audio_tokenizer_args)
+    assert torch.isfinite(tt_wav).all(), "TT acoustic→tokenizer produced non-finite waveform samples"
 
     ref_flat, tt_flat = _align_1d(ref_wav, tt_wav)
-    _, wav_pcc = comp_pcc(ref_flat, tt_flat, pcc=ACOUSTIC_TF_PCC_TARGET)
-    _log_pcc("waveform (symmetric teacher-forced: ref vs TT)", float(wav_pcc), ACOUSTIC_TF_PCC_TARGET)
-    assert bool(wav_pcc >= ACOUSTIC_TF_PCC_TARGET), f"symmetric teacher-forced waveform PCC below target: {wav_pcc}"
+    _, wav_pcc = comp_pcc(ref_flat, tt_flat, pcc=ACOUSTIC_PCC_TARGET)
+    _log_pcc("waveform (acoustic model, ref vs TT)", float(wav_pcc), ACOUSTIC_PCC_TARGET)
+    assert bool(wav_pcc >= ACOUSTIC_PCC_TARGET), f"acoustic waveform PCC below target: {wav_pcc}"
 
     ttnn.synchronize_device(device)
     pipe.cleanup_all()
