@@ -932,8 +932,8 @@ def run_chunked_transformer_no_pcc(
             )
             ttnn.synchronize_device(mesh_device)
             ttnn.deallocate(tt_tokens)
-            logger.info(f"  iter {it} chunk {c}: {time.time() - chunk_start:.3f}s")
-        logger.info(f"iter {it} done ({n_chunks} chunks) in {time.time() - iter_start:.3f}s")
+            logger.info(f"  iter {it} chunk {c}: {time.time() - chunk_start:.3f} seconds")
+        logger.info(f"iter {it} done ({n_chunks} chunks) in {time.time() - iter_start:.3f} seconds")
     profiler.end("tt_forward")
 
     # Release the H2D service while the mesh + command queues + service core are still alive (its dtor
@@ -957,7 +957,7 @@ def run_chunked_transformer_no_pcc(
 # stream service (service-presence dispatch-tax study). Requires only the Kimi TTNN weight cache (set
 # TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
 @pytest.mark.parametrize("with_h2d_service", [False, True], ids=["nosvc", "h2dsvc"])
-@pytest.mark.parametrize("num_iters", [1, 10, 20], ids=["iters1", "iters10", "iters20"])
+@pytest.mark.parametrize("num_iters", [1, 2, 10, 20], ids=["iters1", "two_iters", "iters10", "iters20"])
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
