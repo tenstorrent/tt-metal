@@ -57,15 +57,40 @@ The `$skill` references inside each prompt attach the matching skill from
 validate a paged KV cache, how to read a perf report, how to debug a trace
 failure). Prompts say *what done means*; skills say *how to get there*.
 
+## Context-Length Contract
+
+The bringup target is the full context length advertised by the HuggingFace
+model config. Do not quietly reduce the model to a smaller `max_model_len`,
+serving context, eval context, or benchmark context.
+
+A smaller context is acceptable only when the target hardware cannot fit the
+full model plus KV cache in device DRAM. In that case, the model must support
+the largest context that reasonably fits, and the stage evidence must include a
+byte calculation or a failed full-context capacity probe showing the limit.
+Runtime, profiling cost, convenience, or test-harness speed are not valid
+reasons to reduce context.
+
+Each model keeps this as a handoff artifact:
+
+```text
+models/autoports/<model>/doc/context_contract.json
+```
+
+The artifact records the HF-advertised context, the current supported context,
+any DRAM limit, and the evidence behind it. Functional decoder bringup creates
+it. Multichip, full-model, optimized-full-model, datatype-sweep, vLLM, and
+release stages update or verify it because tensor parallelism, full-stack memory
+use, and KV-cache dtype can change the feasible context.
+
 Each stage leaves its evidence under `models/autoports/<model>/doc/<stage>/`:
 a `README.md` with the results, a `work_log.md` with the journey, and the
 artifacts (perf reports, accuracy logs, watcher output) that back them up.
 
 ## Verification Gates
 
-Agents grade their own homework optimistically, so the runner does not take a
-stage's word for it. After a stage's goal completes, the runner looks for a
-sibling check script (for example `05-full-model.check.sh` next to
+A stage README and work log are claims to inspect, not verification by
+themselves. After a stage's goal completes, the runner looks for a sibling
+check script (for example `05-full-model.check.sh` next to
 `05-full-model.txt`) and runs it. Check scripts are plain bash, readable by
 anyone, and exit with:
 

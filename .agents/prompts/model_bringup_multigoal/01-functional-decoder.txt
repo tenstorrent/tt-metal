@@ -8,6 +8,7 @@ Goal completion requirements:
 - models/autoports/<model>/tt/functional_decoder.py exists with a documented prefill/decode contract suitable for the target HF decoder layer or layer kinds.
 - Decode forward pass runs fully with ttnn's traced execution.
 - Tests cover every meaningful target layer kind with real target config shapes, including paged prefill, paged decode, page table handling, current-position handling, and the longest feasible sequence/context lengths.
+- models/autoports/<model>/doc/context_contract.json records the HF-advertised context length, the tested functional-decoder prefill/decode context, and any DRAM-only reduction with byte/probe evidence. Convenience, runtime, profiler cost, or small smoke shapes are not valid reasons to reduce context.
 - At least one test uses real weights and evidence shows it passes.
 - HF-vs-TTNN prefill and decode PCC meet the functional-decoder acceptance bar. The default is PCC >= 0.995 unless a model-specific issue in the agentic-research project specifies otherwise. Any different threshold needs model-specific evidence in the report.
 - Warmed prefill and traced warmed decode performance are measured and recorded, with human-readable tt-perf-report tables plus CSV/provenance logs.
