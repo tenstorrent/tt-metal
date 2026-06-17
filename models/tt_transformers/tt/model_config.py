@@ -3507,7 +3507,6 @@ class ModelArgs:
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
-            "Devstral-Small-2-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
@@ -3565,8 +3564,6 @@ class ModelArgs:
                 elif "mistral" in model_name_lower and "7b" in model_name_lower:
                     fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
                 elif "mistral" in model_name_lower and "small" in model_name_lower and "24b" in model_name_lower:
-                    fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
-                elif "devstral" in model_name_lower and "small" in model_name_lower and "24b" in model_name_lower:
                     fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
                     fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
