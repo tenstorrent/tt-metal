@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
+import inspect
 import os
 
 import pytest
@@ -161,11 +162,15 @@ def test_whisper_attention(
         )
 
         # WhisperAttention.forward returns (attn_output, attn_weights); KV is updated in-place on past_key_values.
+        # transformers 5.x renamed the cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values" if "past_key_values" in inspect.signature(model.forward).parameters else "past_key_value"
+        )
         hf_attn_out = model(
             torch_hidden_states,
             attention_mask=torch_attention_mask,
             key_value_states=torch_encoder_states,
-            past_key_value=past_key_values,
+            **{cache_kw: past_key_values},
         )
         if isinstance(hf_attn_out, tuple):
             if len(hf_attn_out) == 2:
@@ -599,7 +604,9 @@ def test_ttnn_whisper(
     input_features = input_features.repeat(batch_size, 1, 1)
     decoder_input_ids = torch.ones(batch_size, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
     attention_mask = None
-    model = WhisperModel.from_pretrained(model_name, attn_implementation="eager").eval()
+    # .float(): transformers 5.x from_pretrained honors the checkpoint's dtype (distil-large-v3 is fp16),
+    # which mismatches the float32 conv input ("Input type (float) and bias type (c10::Half)").
+    model = WhisperModel.from_pretrained(model_name, attn_implementation="eager").eval().float()
     _ensure_hf_whisper_attn_eager(model)
 
     expected_last_hidden_state = model(

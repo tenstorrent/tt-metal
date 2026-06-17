@@ -4107,22 +4107,30 @@ class HfAttentionWrapper:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
 
+        # transformers 5.x renamed the attention cache kwarg past_key_value -> past_key_values.
+        # Passing the wrong name lets it fall into **kwargs (ignored), so the cache is never
+        # populated. Pick the name present in the attention's signature.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.attention.forward).parameters
+            else "past_key_value"
+        )
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
             output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
-                past_key_value=self.past_key_value,
                 use_cache=True,
                 attention_mask=mask,
+                **{cache_kw: self.past_key_value},
             )
         else:
             output, _, self.past_key_value = self.attention(
                 x,
-                past_key_value=self.past_key_value,
                 use_cache=True,
                 position_ids=position_ids,
                 attention_mask=mask,
+                **{cache_kw: self.past_key_value},
             )
         return output
 
@@ -4143,7 +4151,7 @@ class HfAttentionWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = hf_cache_to_legacy(self.past_key_value)
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_value) if kk is not None]
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
         if self.use_hf_rope:
@@ -4166,7 +4174,7 @@ class HfAttentionWrapper:
 
     @property
     def cache_v(self):
-        [(k, v)] = hf_cache_to_legacy(self.past_key_value)
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_value) if kk is not None]
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
@@ -4191,25 +4199,31 @@ class HfDecoderWrapper:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
 
+        # transformers 5.x renamed the decoder-layer cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.decoder.forward).parameters
+            else "past_key_value"
+        )
         if self.rotary_emb_local is not None:
             position_embeddings_local = self.rotary_emb_local(x, position_ids)
             result = self.decoder.forward(
                 x,
                 position_embeddings_global=position_embeddings,
                 position_embeddings_local=position_embeddings_local,
-                past_key_value=self.past_key_values,
                 use_cache=True,
                 position_ids=position_ids,
                 attention_mask=mask,
+                **{cache_kw: self.past_key_values},
             )
         else:
             result = self.decoder.forward(
                 x,
                 position_embeddings=position_embeddings,
-                past_key_value=self.past_key_values,
                 use_cache=True,
                 position_ids=position_ids,
                 attention_mask=mask,
+                **{cache_kw: self.past_key_values},
             )
 
         output = result[0]
@@ -4231,7 +4245,7 @@ class HfDecoderWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = hf_cache_to_legacy(self.past_key_values)
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_values) if kk is not None]
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
         if self.use_hf_rope:
@@ -4254,7 +4268,7 @@ class HfDecoderWrapper:
 
     @property
     def cache_v(self):
-        [(k, v)] = hf_cache_to_legacy(self.past_key_values)
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_values) if kk is not None]
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
