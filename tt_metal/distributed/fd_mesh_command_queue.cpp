@@ -293,7 +293,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    ZoneScopedN("EnqueueProgram");
+    TTZoneScopedND("EnqueueProgram");
     auto lock = lock_api_function_();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
@@ -598,7 +598,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 }
 
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("FDMeshCommandQueue::finish_nolock");
+    TTZoneScopedND("FDMeshCommandQueue::finish_nolock");
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
@@ -629,12 +629,12 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("FDMeshCommandQueue::finish");
+    TTZoneScopedND("FDMeshCommandQueue::finish");
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
 
     {
-        ZoneScopedN("RealtimeProfilerSyncCheck");
+        TTZoneScopedND("RealtimeProfilerSyncCheck");
         mesh_device_->impl().trigger_realtime_profiler_sync_check();
     }
 

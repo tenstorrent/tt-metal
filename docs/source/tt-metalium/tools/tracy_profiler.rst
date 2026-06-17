@@ -32,6 +32,22 @@ Tracy profiling support is **enabled by default** when building Metalium. Simply
     ninja
     ninja install
 
+Debug-verbosity Tracy zones are disabled by default. To build host-side
+``TTZone*D`` zones, keep Tracy enabled and opt in explicitly:
+
+..  code-block:: bash
+
+    # Via build script
+    ./build_metal.sh --build-perf-debug
+
+    # Or via CMake flags
+    cmake . -DENABLE_TRACY=ON -DENABLE_TRACY_DEBUG=ON
+    ninja
+    ninja install
+
+The ``TTZone*D`` macros, such as ``TTZoneScopedD`` and ``TTZoneTextD``, compile
+out otherwise.
+
 GUI
 ---
 

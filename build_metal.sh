@@ -23,6 +23,7 @@ show_help() {
     echo "  -b, --build-type build_type      Set the build type. Default is Release."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
+    echo "  --build-perf-debug               Enable debug-verbosity Tracy profiling zones (disabled by default)."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
     echo "  --build-tests                    Build All Testcases."
@@ -70,6 +71,7 @@ enable_ccache="OFF"
 enable_time_trace="OFF"
 build_type="Release"
 disable_profiler="OFF"
+build_perf_debug="OFF"
 build_dir=""
 build_tests="OFF"
 build_ttnn_tests="OFF"
@@ -108,6 +110,7 @@ enable-ccache
 enable-time-trace
 build-type:
 disable-profiler
+build-perf-debug
 install-prefix:
 build-dir:
 build-tests
@@ -170,6 +173,8 @@ while true; do
             build_type="$2";shift;;
         --disable-profiler)
             disable_profiler="ON";;
+        --build-perf-debug)
+            build_perf_debug="ON";;
         --install-prefix)
             install_prefix="$2";shift;;
         --build-tests)
@@ -241,6 +246,10 @@ fi
 tracy_enabled="ON"
 if [ "$disable_profiler" = "ON" ]; then
     tracy_enabled="OFF"
+    if [ "$build_perf_debug" = "ON" ]; then
+        echo "WARNING: --build-perf-debug has no effect with --disable-profiler; debug zones stay compiled out."
+        build_perf_debug="OFF"
+    fi
 fi
 
 # Validate the build_type
@@ -289,6 +298,7 @@ echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
+echo "INFO: Tracy debug zones: $build_perf_debug"
 echo "INFO: Enable LTO: $enable_lto"
 echo "INFO: Warnings as errors: $warnings_as_errors"
 
@@ -322,6 +332,12 @@ fi
 
 if [ "$disable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=OFF")
+fi
+
+if [ "$build_perf_debug" = "ON" ]; then
+    cmake_args+=("-DENABLE_TRACY_DEBUG=ON")
+else
+    cmake_args+=("-DENABLE_TRACY_DEBUG=OFF")
 fi
 
 if [ "$export_compile_commands" = "ON" ]; then

@@ -46,6 +46,12 @@ if(ENABLE_TRACY)
             "$<$<CXX_COMPILER_ID:Clang>:-Wno-conditional-uninitialized>" # FIXME: Fix this upstream
     )
     target_link_options(TracyClient PUBLIC -rdynamic)
+
+    if(ENABLE_TRACY_DEBUG)
+        target_compile_definitions(TracyClient PUBLIC TT_TRACY_DEBUG)
+    endif()
+elseif(ENABLE_TRACY_DEBUG)
+    message(WARNING "ENABLE_TRACY_DEBUG=ON has no effect with ENABLE_TRACY=OFF; debug zones are compiled out.")
 endif()
 
 # Our current fork of tracy does not have CMake support for these subdirectories
