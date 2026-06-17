@@ -1,10 +1,17 @@
 ---
-description: 'C++20 coding standards and review rules for all C++ files in tt-metal'
-applyTo: '**/*.cpp,**/*.h,**/*.hpp,**/*.cc'
+description: 'C++20 coding standards for host-side C++ in tt-metal (not device kernels)'
+applyTo: 'tt_stl/**/*.{cpp,hpp,h,cc},tt_metal/*.{cpp,hpp,h},tt_metal/api/**/*.{cpp,hpp,h},tt_metal/common/**/*.{cpp,hpp,h},tt_metal/detail/**/*.{cpp,hpp,h},tt_metal/distributed/**/*.{cpp,hpp,h},tt_metal/fabric/**/*.{cpp,hpp,h},tt_metal/hostdevcommon/**/*.{hpp,h},tt_metal/impl/**/*.{cpp,hpp,h},tt_metal/jit_build/**/*.{cpp,hpp,h},tt_metal/llrt/**/*.{cpp,hpp,h},tt_metal/logging/**/*.{hpp,h},tt_metal/tools/**/*.{cpp,hpp,h},ttnn/cpp/**/*.{cpp,hpp,h},ttnn/core/**/*.{cpp,hpp,h},ttnn/api/**/*.{hpp,h},tt-train/sources/**/*.{cpp,hpp,h},tools/**/*.{cpp,hpp,h}'
 excludeAgent: "cloud-agent"
 ---
 
-# C++ Review Rules
+# C++ Host Code Review Rules
+
+> **Scope**: These rules apply to **host-side C++20 code only** — code that runs on
+> the CPU and compiles with the standard host toolchain.
+> They do **not** apply to device kernel sources (files under `kernels/` directories,
+> `tt_metal/kernels/`, `tt_metal/hw/ckernels/`, or `tt_metal/programming_examples/**/kernels/`).
+> Kernel code runs on Tenstorrent hardware, cannot use the STL, exceptions, or
+> dynamic allocation, and is covered by separate kernel-specific instructions.
 
 ## Review Priorities (C++ specific)
 
