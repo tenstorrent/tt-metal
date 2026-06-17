@@ -533,7 +533,7 @@ uint64_t Kernel::compute_hash() const {
     }
     // Tensor binding handles:
     //  - stored as a std::vector (user-specified order), so no sort step needed
-    //  - genfiles.cpp emits the `ta::` namespace in the same order
+    //  - genfiles.cpp emits the `tensor::` namespace in the same order
     //  - hash the size first to avoid the [a, b] vs [ab] collision noted below.
     //  - tensor_parameter_name is intentionally omitted, as it doesn't appear in
     //    the generated headers

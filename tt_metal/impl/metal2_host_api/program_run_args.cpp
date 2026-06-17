@@ -532,7 +532,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // RTA layout has two sections: named RTAs and RTA varargs.
     // CRTA layout has three sections: named CRTAs, TensorBinding addresses, and CRTA varargs.
     //
-    // TensorBinding address section is used by headergen to emit the `ta::` namespace tokens.
+    // TensorBinding address section is used by headergen to emit the `tensor::` namespace tokens.
     // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
     // offset, so kernel code indexes varargs from 0.
     for (const auto& kernel_params : params.kernel_run_args) {
