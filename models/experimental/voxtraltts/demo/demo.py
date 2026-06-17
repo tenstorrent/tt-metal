@@ -232,8 +232,7 @@ def _open_device():
         "trace_region_size": int(os.environ.get("VOXTRAL_TRACE_REGION_SIZE", str(200_000_000))),
         "num_command_queues": num_command_queues_for_decode(),
     }
-    runtime = open_voxtral_runtime_mesh(params)
-    return runtime
+    return open_voxtral_runtime_mesh(params)
 
 
 def _check_seq_len_memory(text_max_seq_len: int) -> None:

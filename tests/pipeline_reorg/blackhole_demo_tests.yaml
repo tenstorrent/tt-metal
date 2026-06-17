@@ -187,6 +187,22 @@
   team: models
   model-name: voxtral-tts
 
+- name: Voxtral TTS E2E PCC (P150)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Voxtral-4B-TTS-2603
+    export VOXTRAL_DECODE_TRACE=1
+    pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py -sv --timeout=3600
+  skus:
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U03PUAKE719
+  team: models
+  model-name: voxtral-tts
+
 - name: Voxtral TTS E2E PCC + perf (QB2 1x4 rank)
   cmd: |
     set -e

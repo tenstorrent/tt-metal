@@ -35,9 +35,31 @@ def ensure_voxtral_device_available() -> None:
 
 
 def voxtral_single_device_mesh_shape() -> ttnn.MeshShape:
-    """1×1 compute mesh — Voxtral acoustic/audio path requires a single effective device."""
+    """1×1 compute mesh — default for acoustic/audio (replicated weights on multi-device)."""
     ensure_voxtral_device_available()
     return ttnn.MeshShape(1, 1)
+
+
+def voxtral_parse_mesh_shape(env_value: str) -> tuple[int, int]:
+    parts = [p.strip() for p in env_value.split(",")]
+    if len(parts) != 2:
+        raise ValueError(f"Expected mesh shape 'rows,cols', got {env_value!r}")
+    return int(parts[0]), int(parts[1])
+
+
+def voxtral_compute_mesh_shape() -> ttnn.MeshShape:
+    """Compute mesh shape from ``VOXTRAL_COMPUTE_MESH_SHAPE`` (default ``1,1``).
+
+    On P150 (no 1×4 host mesh) this is always 1×1 regardless of the environment.
+    On BH QB2, ``1,4`` enables tensor-parallel text on the full host mesh; acoustic and
+    audio tokenizer replicate weights onto every device.
+    """
+    ensure_voxtral_device_available()
+    if voxtral_host_mesh_shape() is None:
+        return ttnn.MeshShape(1, 1)
+    raw = os.getenv("VOXTRAL_COMPUTE_MESH_SHAPE", "1,1").strip()
+    rows, cols = voxtral_parse_mesh_shape(raw)
+    return ttnn.MeshShape(rows, cols)
 
 
 def voxtral_host_mesh_shape() -> ttnn.MeshShape | None:
@@ -46,6 +68,28 @@ def voxtral_host_mesh_shape() -> ttnn.MeshShape | None:
     if ttnn.device.is_blackhole() and ttnn.get_num_devices() == 4:
         return ttnn.MeshShape(1, 4)
     return None
+
+
+def voxtral_log_runtime_mesh(runtime: "VoxtralRuntimeMesh") -> None:
+    """Log host/compute topology for demo and e2e diagnostics."""
+    host = runtime.host_mesh_shape
+    compute = runtime.compute_mesh_shape
+    if host is not None:
+        logger.info(
+            "voxtral mesh: host={} compute={} arch={} pcie_ids={}",
+            host,
+            compute,
+            ttnn.get_arch_name(),
+            runtime.physical_device_ids,
+        )
+    else:
+        logger.info(
+            "voxtral mesh: compute={} arch={} device_id={} host_devices={}",
+            compute,
+            ttnn.get_arch_name(),
+            runtime.physical_device_id,
+            ttnn.get_num_devices(),
+        )
 
 
 @dataclass
@@ -59,6 +103,7 @@ class VoxtralRuntimeMesh:
     parent_mesh: ttnn.MeshDevice | None = None
     host_mesh_shape: tuple[int, int] | None = None
     compute_mesh_shape: tuple[int, int] = (1, 1)
+    compute_uses_submesh: bool = False
 
     @property
     def physical_device_ids(self) -> list[int]:
@@ -108,10 +153,10 @@ def open_voxtral_runtime_mesh(
     """Open the Voxtral runtime device with host-aware mesh selection.
 
     * **P150 (1 card):** ``CreateDevice(0)`` — unchanged single-card path.
-    * **BH QB2 (4 cards):** ``open_mesh_device(1×4)`` for the host fabric topology, then a
-      ``1×1`` submesh for compute. The full 1×4 mesh is present on the host; Voxtral runs on
-      the 1×1 submesh so ``cluster_shape=(1,1)`` and audio quality are unchanged (running on
-      the bare 1×4 mesh would shard the text model and break acoustic decode).
+    * **BH QB2 (4 cards):** ``open_mesh_device(1×4)`` for the host fabric topology. By default a
+      ``1×1`` submesh is used for compute (audio-safe, ``cluster_shape=(1,1)``). Set
+      ``VOXTRAL_COMPUTE_MESH_SHAPE=1,4`` to run tensor-parallel text on the full 1×4 mesh;
+      acoustic and audio tokenizer replicate weights on every device.
     """
     from conftest import set_fabric
 
@@ -129,16 +174,27 @@ def open_voxtral_runtime_mesh(
             fabric["fabric_router_config"],
         )
         parent_mesh = ttnn.open_mesh_device(mesh_shape=host_shape, **open_kwargs)
-        compute_device = parent_mesh.create_submesh(voxtral_single_device_mesh_shape())
+        compute_shape = voxtral_compute_mesh_shape()
+        host_devices = int(host_shape[0]) * int(host_shape[1])
+        compute_devices = int(compute_shape[0]) * int(compute_shape[1])
+        if compute_devices > host_devices:
+            raise ValueError(
+                f"VOXTRAL_COMPUTE_MESH_SHAPE={tuple(compute_shape)} exceeds host mesh "
+                f"{tuple(host_shape)} ({host_devices} devices)"
+            )
+        if compute_devices > 1:
+            if compute_devices != host_devices:
+                raise ValueError(
+                    f"Partial multi-device compute is unsupported: host={tuple(host_shape)} "
+                    f"compute={tuple(compute_shape)}"
+                )
+            compute_device = parent_mesh
+            compute_uses_submesh = False
+        else:
+            compute_device = parent_mesh.create_submesh(voxtral_single_device_mesh_shape())
+            compute_uses_submesh = True
         ttnn.SetDefaultDevice(compute_device)
-        logger.info(
-            "voxtral runtime mesh: host={} compute={} arch={} host_devices={}",
-            tuple(parent_mesh.shape),
-            tuple(compute_device.shape),
-            ttnn.get_arch_name(),
-            parent_mesh.get_num_devices(),
-        )
-        return VoxtralRuntimeMesh(
+        runtime = VoxtralRuntimeMesh(
             compute_device=compute_device,
             fabric=fabric,
             previous_default=previous_default,
@@ -146,17 +202,14 @@ def open_voxtral_runtime_mesh(
             parent_mesh=parent_mesh,
             host_mesh_shape=tuple(parent_mesh.shape),
             compute_mesh_shape=tuple(compute_device.shape),
+            compute_uses_submesh=compute_uses_submesh,
         )
+        voxtral_log_runtime_mesh(runtime)
+        return runtime
 
     device = ttnn.CreateDevice(device_id=physical_device_id, **open_kwargs)
     ttnn.SetDefaultDevice(device)
-    logger.info(
-        "voxtral runtime device: arch={} physical_device_id={} host_devices={}",
-        ttnn.get_arch_name(),
-        physical_device_id,
-        ttnn.get_num_devices(),
-    )
-    return VoxtralRuntimeMesh(
+    runtime = VoxtralRuntimeMesh(
         compute_device=device,
         fabric=fabric,
         previous_default=previous_default,
@@ -164,7 +217,10 @@ def open_voxtral_runtime_mesh(
         parent_mesh=None,
         host_mesh_shape=None,
         compute_mesh_shape=(1, 1),
+        compute_uses_submesh=False,
     )
+    voxtral_log_runtime_mesh(runtime)
+    return runtime
 
 
 def close_voxtral_runtime_mesh(runtime: VoxtralRuntimeMesh) -> None:
@@ -175,8 +231,9 @@ def close_voxtral_runtime_mesh(runtime: VoxtralRuntimeMesh) -> None:
         ttnn.SetDefaultDevice(runtime.previous_default)
 
     if runtime.parent_mesh is not None:
-        for submesh in runtime.parent_mesh.get_submeshes():
-            ttnn.close_mesh_device(submesh)
+        if runtime.compute_uses_submesh:
+            for submesh in runtime.parent_mesh.get_submeshes():
+                ttnn.close_mesh_device(submesh)
         ttnn.close_mesh_device(runtime.parent_mesh)
         reset_fabric(runtime.fabric["fabric_config"])
     else:

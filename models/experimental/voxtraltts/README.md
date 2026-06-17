@@ -84,3 +84,27 @@ pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_opt.py -sv --ti
 ```
 
 Uses default optimizations (dense ALiBi SDPA + Tier 1 matmul; set ``VOXTRAL_AUDIO_TOKENIZER_SDPA_NATIVE_WINDOW=1`` for native SDPA perf). For Tracy capture, see `tests/perf/README.md`.
+
+## Device mesh (P150 and BH QB2 1×4)
+
+Voxtral selects the runtime device in ``open_voxtral_runtime_mesh()`` (demo and tests):
+
+| Host | Default compute | Behavior |
+|------|-----------------|----------|
+| **P150** (1 card) | 1×1 | ``CreateDevice(0)`` — unchanged single-card path |
+| **BH QB2** (4 cards) | 1×1 submesh | ``open_mesh_device(1×4)`` host fabric + ``1×1`` compute submesh (audio-safe) |
+| **BH QB2** (4 cards) | 1×4 (optional) | Set ``VOXTRAL_COMPUTE_MESH_SHAPE=1,4`` for tensor-parallel text on the full mesh; acoustic and audio tokenizer replicate weights |
+
+```bash
+# Demo on QB2 (default: 1×4 host, 1×1 compute)
+python models/experimental/voxtraltts/demo/demo.py --text "Hello" --output-dir out
+
+# QB2 with tensor-parallel text (experimental)
+export VOXTRAL_COMPUTE_MESH_SHAPE=1,4
+python models/experimental/voxtraltts/demo/demo.py --text "Hello" --output-dir out
+
+# E2E PCC (uses voxtral ``device`` fixture — P150 or QB2)
+pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py -sv --timeout=3600
+```
+
+Optional: ``VOXTRAL_DEVICE_ID`` selects the PCIe rank for single-card compute on QB2 (default ``0``).

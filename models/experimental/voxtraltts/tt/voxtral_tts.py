@@ -41,6 +41,7 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     AudioTokenizerOptimizations,
     voxtral_audio_tokenizer_default_optimizations,
 )
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch, voxtral_is_multi_device_mesh
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -1057,6 +1058,14 @@ class VoxtralTTSPipeline:
         """
         if len(llm_hidden_tt.shape) == 4:
             # AR loop decode path — must go via CPU for the 4D→3D shape change.
+            if voxtral_is_multi_device_mesh(self.mesh_device):
+                host_vec = self.text.hidden_tt_to_torch(llm_hidden_tt)  # [dim]
+                return voxtral_from_torch(
+                    host_vec.unsqueeze(0).unsqueeze(1),  # [1, 1, dim]
+                    self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             # TILE_LAYOUT pads H to 32, so to_torch returns [bsz, 1, 32, dim] not [bsz, 1, 1, dim].
             # Slice host[: , 0, 0, :] to extract the single real token row → [bsz, dim].
             work = ttnn.to_memory_config(llm_hidden_tt, ttnn.DRAM_MEMORY_CONFIG)
@@ -1065,15 +1074,23 @@ class VoxtralTTSPipeline:
             bsz = int(host.shape[0])
             dim = int(host.shape[-1])
             token_vec = host[:, 0, 0, :dim]  # [bsz, dim] — first tile row is the real data
-            return ttnn.from_torch(
+            return voxtral_from_torch(
                 token_vec.unsqueeze(1),  # [bsz, 1, dim]
-                device=self.mesh_device,
+                self.mesh_device,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Trace path — tensor is already [bsz, 1, dim]; clone in-place and ensure TILE.
+        # Trace path — tensor is already [bsz, 1, dim]; gather + replicate on multi-device meshes.
+        if voxtral_is_multi_device_mesh(self.mesh_device):
+            host_vec = self.text.hidden_tt_to_torch(llm_hidden_tt)
+            return voxtral_from_torch(
+                host_vec.unsqueeze(0).unsqueeze(1),
+                self.mesh_device,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         work = ttnn.clone(llm_hidden_tt)
         if work.layout != ttnn.TILE_LAYOUT:
             tile_hidden = ttnn.to_layout(work, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)

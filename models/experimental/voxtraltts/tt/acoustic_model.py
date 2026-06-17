@@ -21,6 +21,7 @@ from models.experimental.voxtraltts.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC,
 )
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 from models.tt_transformers.tt.common import Mode
 
@@ -109,11 +110,10 @@ def _build_acoustic_1d_mcast_configs(dim: int, hidden_dim: int, n_heads: int, n_
 
 
 def _linear_weight_ttnn(w_out_in: torch.Tensor, device, dtype) -> ttnn.Tensor:
-    return ttnn.from_torch(
+    return voxtral_from_torch(
         w_out_in.transpose(-2, -1).contiguous(),
-        device=device,
+        device,
         dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -176,28 +176,25 @@ class VoxtralTTAcousticModel:
             self._empty_audio_token_id + n_special,
             dtype=torch.int32,
         )
-        self._empty_acoustic_output_codes_tt = ttnn.from_torch(
+        self._empty_acoustic_output_codes_tt = voxtral_from_torch(
             empty_codes,
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
         )
-        self._acoustic_offset_u32_tt = ttnn.from_torch(
+        self._acoustic_offset_u32_tt = voxtral_from_torch(
             torch.tensor([[[n_special]]], dtype=torch.int32),
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
         )
 
         half = dim // 2
         inv_freq_cpu = torch.exp(-math.log(time_embedding_theta) * torch.arange(half).float() / half)
-        self._inv_freq_tt = ttnn.from_torch(
+        self._inv_freq_tt = voxtral_from_torch(
             inv_freq_cpu.reshape(1, 1, -1),
-            device=mesh_device,
+            mesh_device,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
         )
 

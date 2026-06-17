@@ -38,6 +38,7 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     AudioTokenizerOptimizations,
     voxtral_audio_tokenizer_default_optimizations,
 )
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
 
 AUDIO_TOKENIZER_ENCODER_OPTIONAL_PREFIXES = ("input_proj.", "encoder_blocks.")
 
@@ -360,9 +361,9 @@ class VoxtralTTAudioTokenizer:
                 .view(1, -1, 1)
                 .contiguous()
             )
-            self._mm_offsets_tt = ttnn.from_torch(
+            self._mm_offsets_tt = voxtral_from_torch(
                 off_cpu,
-                device=mesh_device,
+                mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -446,11 +447,10 @@ class VoxtralTTAudioTokenizer:
             seq_len,
             window,
         ).to(torch.bfloat16)
-        mask_tt = ttnn.from_torch(
+        mask_tt = voxtral_from_torch(
             mask,
-            device=self.mesh_device,
+            self.mesh_device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self._attn_mask_cache[key] = mask_tt
@@ -463,11 +463,10 @@ class VoxtralTTAudioTokenizer:
             seq_len,
             window,
         ).to(torch.bfloat16)
-        return ttnn.from_torch(
+        return voxtral_from_torch(
             mask,
-            device=self.mesh_device,
+            self.mesh_device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -930,9 +929,9 @@ class VoxtralTTAudioTokenizer:
             if t.is_allocated():
                 ttnn.deallocate(t)
         host_cat = torch.cat(host_parts, dim=2)
-        return ttnn.from_torch(
+        return voxtral_from_torch(
             host_cat,
-            device=self.mesh_device,
+            self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

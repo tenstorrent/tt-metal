@@ -183,14 +183,14 @@ def _tt_forward_synced(
     )
     llm_tt = ttnn.from_torch(
         llm_h.unsqueeze(1),
-        device=mesh_device,
+        device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     noise_tt = ttnn.from_torch(
         x_0.unsqueeze(1).contiguous(),
-        device=mesh_device,
+        device=device,
         dtype=tt_model.dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -262,21 +262,21 @@ def _tt_upload_velocity_inputs(
     mem = tt_model._matmul_act_mem_config
     tt_xt = ttnn.from_torch(
         x_t.unsqueeze(1).to(torch.bfloat16),
-        device=mesh_device,
+        device=device,
         dtype=tt_model.dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=mem,
     )
     tt_te = ttnn.from_torch(
         t_emb.unsqueeze(1).to(torch.bfloat16),
-        device=mesh_device,
+        device=device,
         dtype=tt_model.dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=mem,
     )
     tt_llm = ttnn.from_torch(
         llm_h.unsqueeze(1).to(torch.bfloat16),
-        device=mesh_device,
+        device=device,
         dtype=tt_model.dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=mem,
@@ -458,14 +458,13 @@ def _per_op_pcc_report(
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
-def test_acoustic_predict_velocity_pcc(mesh_device, reset_seeds):
+def test_acoustic_predict_velocity_pcc(device, reset_seeds):
     """TT FM velocity matches CPU reference (Pearson correlation >= 0.99)."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
-        tt_model = _load_tt(mesh_device, model_name_or_path)
+        tt_model = _load_tt(device, model_name_or_path)
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"Acoustic load failed: {exc}")
 
@@ -480,7 +479,7 @@ def test_acoustic_predict_velocity_pcc(mesh_device, reset_seeds):
     t_emb = ref.time_embedding(t_scalar).to(torch.bfloat16)
 
     reference_velocity = ref._predict_velocity(x_t, llm_h, t_emb).float()
-    tt_xt, tt_te, tt_llm = _tt_upload_velocity_inputs(tt_model, mesh_device, x_t, llm_h, t_emb)
+    tt_xt, tt_te, tt_llm = _tt_upload_velocity_inputs(tt_model, device, x_t, llm_h, t_emb)
     tt_out = tt_model.predict_velocity_tt(tt_xt, tt_te, tt_llm)
     tt_velocity = ttnn.to_torch(tt_out).float().reshape(b, -1)
     ttnn.deallocate(tt_out)
@@ -501,14 +500,13 @@ def test_acoustic_predict_velocity_pcc(mesh_device, reset_seeds):
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
-def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
+def test_acoustic_semantic_logits_pcc(device, reset_seeds):
     """TT semantic linear: global + ref-top-k + watch {855,6114,6286} vs CPU reference."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
-        tt_model = _load_tt(mesh_device, model_name_or_path)
+        tt_model = _load_tt(device, model_name_or_path)
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"Acoustic load failed: {exc}")
 
@@ -525,7 +523,7 @@ def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
 
     tt_llm = ttnn.from_torch(
         llm_h.unsqueeze(1),
-        device=mesh_device,
+        device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -572,7 +570,6 @@ def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @pytest.mark.parametrize(
     "hidden_case,cfg_value,noise_seed",
     [
@@ -582,7 +579,7 @@ def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
     ids=["random_hidden", "step0_hidden"],
 )
 @torch.no_grad()
-def test_acoustic_forward_matches_cpu_reference(mesh_device, reset_seeds, hidden_case, cfg_value, noise_seed):
+def test_acoustic_forward_matches_cpu_reference(device, reset_seeds, hidden_case, cfg_value, noise_seed):
     """Full ``forward()`` vs CPU with synced ``torch.randn`` FM noise.
 
     Semantic column: exact match.  Acoustic columns: match fraction (discrete codes, not PCC).
@@ -591,7 +588,7 @@ def test_acoustic_forward_matches_cpu_reference(mesh_device, reset_seeds, hidden
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
-        tt_model = _load_tt(mesh_device, model_name_or_path)
+        tt_model = _load_tt(device, model_name_or_path)
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"Acoustic load failed: {exc}")
 
@@ -608,7 +605,7 @@ def test_acoustic_forward_matches_cpu_reference(mesh_device, reset_seeds, hidden
             pytest.skip(f"Step-0 hidden load failed: {exc}")
 
     ref_out = _reference_forward_synced(ref, llm_h, cfg_alpha, noise_seed=noise_seed)
-    tt_out = _tt_forward_synced(tt_model, mesh_device, llm_h, cfg_alpha, noise_seed=noise_seed)
+    tt_out = _tt_forward_synced(tt_model, device, llm_h, cfg_alpha, noise_seed=noise_seed)
 
     ref_scaled, _ = _reference_decode_one_frame_continuous(ref, llm_h, cfg_alpha, noise_seed=noise_seed)
     tt_scaled, _ = _tt_decode_one_frame_continuous(tt_model, llm_h, cfg_alpha, noise_seed=noise_seed)
@@ -628,14 +625,13 @@ def test_acoustic_forward_matches_cpu_reference(mesh_device, reset_seeds, hidden
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
-def test_acoustic_decode_euler_stepwise_pcc(mesh_device, reset_seeds):
+def test_acoustic_decode_euler_stepwise_pcc(device, reset_seeds):
     """Each Euler step sampled state and final pre-round scaled values: PCC >= 0.99 vs CPU."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
-        tt_model = _load_tt(mesh_device, model_name_or_path)
+        tt_model = _load_tt(device, model_name_or_path)
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"Acoustic load failed: {exc}")
 
@@ -683,14 +679,13 @@ def test_acoustic_decode_euler_stepwise_pcc(mesh_device, reset_seeds):
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
-def test_acoustic_all_layers_attention_mlp_pcc(mesh_device, reset_seeds):
+def test_acoustic_all_layers_attention_mlp_pcc(device, reset_seeds):
     """Attention + MLP PCC for every FM layer."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
-        tt_model = _load_tt(mesh_device, model_name_or_path)
+        tt_model = _load_tt(device, model_name_or_path)
     except Exception as exc:
         pytest.skip(f"Acoustic load failed: {exc}")
 
@@ -710,7 +705,7 @@ def test_acoustic_all_layers_attention_mlp_pcc(mesh_device, reset_seeds):
 
         x_tt = ttnn.from_torch(
             x_attn.unsqueeze(1),
-            device=mesh_device,
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -733,7 +728,7 @@ def test_acoustic_all_layers_attention_mlp_pcc(mesh_device, reset_seeds):
 
         x_mlp_tt = ttnn.from_torch(
             x_mlp.unsqueeze(1),
-            device=mesh_device,
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
