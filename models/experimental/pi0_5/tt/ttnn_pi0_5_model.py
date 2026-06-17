@@ -601,7 +601,24 @@ class Pi0_5ModelTTNN:
         state: Optional[torch.Tensor] = None,
     ) -> "ttnn.Tensor":
         batch_size = lang_tokens.shape[0]
+        prefix_kv_cache, upstream_artifacts, keep_padded_expert = self._prepare_prefix(
+            images, img_masks, lang_tokens, lang_masks, batch_size
+        )
+        return self._run_denoise_loop(
+            prefix_kv_cache,
+            upstream_artifacts,
+            keep_padded_expert=keep_padded_expert,
+            batch_size=batch_size,
+            state=state,
+        )
 
+    def _prepare_prefix(self, images, img_masks, lang_tokens, lang_masks, batch_size):
+        """Embed prefix + run the VLM to produce the prefix KV cache.
+
+        Split out of sample_actions so perf tests can build the prefix once
+        and then capture/replay ONLY the denoise loop. Returns
+        (prefix_kv_cache, upstream_artifacts, keep_padded_expert).
+        """
         prefix_embs, _, _ = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
         # ttnn.embedding (called inside embed_prefix for language tokens) returns
         # ROW_MAJOR; ttnn.concat with the TILE image embeddings preserves that.
@@ -671,6 +688,26 @@ class Pi0_5ModelTTNN:
                 self._sdpa_attn_mask = self._build_sdpa_phantom_mask(prefix_embs.shape[1])
                 self._sdpa_mask_kv_len = prefix_logical_lifted
 
+        # Keep the un-filled KV cache reachable for tensor lifetime.
+        self._prefix_kv_cache_original = _prefix_kv_cache_original
+        return prefix_kv_cache, upstream_artifacts, keep_padded_expert
+
+    def _run_denoise_loop(
+        self,
+        prefix_kv_cache,
+        upstream_artifacts,
+        *,
+        keep_padded_expert: bool,
+        batch_size: int,
+        state: Optional[torch.Tensor] = None,
+    ) -> "ttnn.Tensor":
+        """Flow-matching Euler denoise loop (shared by sample_actions + perf tests).
+
+        Single source of truth for the N-step denoise: reads + advances x_t,
+        running embed_actions -> forward_expert -> project_output -> Euler step
+        each iteration. Pure single-device compute (no cross-chip D2D); the GLX
+        pipeline keeps its own multi-chip variant.
+        """
         num_steps = self.denoise_config.num_steps
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
