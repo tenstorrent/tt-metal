@@ -203,6 +203,7 @@ jobs:
         image: [release, release-models]
     needs:
       - build-artifact-release
+      - check-harbor
       - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
@@ -214,6 +215,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
       image: ${{ matrix.image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   resolve-docs-version:
     runs-on: ubuntu-latest
