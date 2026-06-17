@@ -36,6 +36,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.d2d_socket_push_op import d2d_socket_push
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     build_h2d_service,
@@ -55,6 +56,27 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime,
 H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 H2D_METADATA_SIZE_BYTES = 12
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
+
+
+# D2D socket transport (PREFILL_PP_TRANSPORT=d2d): one persistent sender/receiver pair per rank
+# boundary carries the sharded hidden state over inter-galaxy fabric, replacing the host/NFS file
+# round-trip. The activation is sharded [seq across SP rows, emb across TP cols] — the same layout the
+# embedding output uses — so the receiver backing feeds the downstream model with no reshard. The
+# per-chunk metadata (slot/start/end/is_last) rides inline as four uint32 words.
+def _d2d_worker_grid() -> ttnn.CoreRange:
+    """D2D push/sync worker grid, env-configurable as PREFILL_PP_D2D_WORKER_GRID='WxH' (default 1x1).
+    A grid sweep showed compute + handoff gap are flat from 1x1 to 4x4 (the per-chunk overhead is the
+    persistent service's fabric/NoC presence, not the push workers), so 1x1 is the cheapest footprint
+    with no penalty."""
+    spec = os.environ.get("PREFILL_PP_D2D_WORKER_GRID", "1x1").lower().split("x")
+    w, h = (int(spec[0]), int(spec[1])) if len(spec) == 2 else (int(spec[0]), int(spec[0]))
+    return ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(w - 1, h - 1))
+
+
+D2D_SYNC_WORKER_CORES = _d2d_worker_grid()
+D2D_METADATA_SIZE_BYTES = 16
+D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(2), ttnn.PlacementShard(3)])
+D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 64 * 1024))
 
 VARIANT = get_variant(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
 MODEL_CFG = VARIANT.model_config
@@ -308,7 +330,107 @@ def _socket_next(h2d_service) -> tuple:
     return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
 
 
-def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, h2d_service=None) -> None:
+def _transport_mode() -> str:
+    """Cross-rank activation transport: 'host' (file/NFS round-trip, default) or 'd2d' (device-to-device
+    socket over inter-galaxy fabric). d2d needs a connected MGD and FABRIC_2D."""
+    return os.environ.get("PREFILL_PP_TRANSPORT", "host").strip().lower()
+
+
+def _activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
+    """Global spec of the inter-rank hidden state: [1, 1, chunk_size, hidden_size] bf16 TILE DRAM,
+    sharded by D2D_MAPPER_CONFIG (seq across SP rows, emb across TP cols) to match the embedding
+    output layout the downstream model consumes."""
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+
+
+def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
+    """Stand up this rank's persistent D2D endpoints for the pipeline: an inbound receiver from rank-1
+    (every rank but the first) and an outbound sender to rank+1 (every rank but the last). Returns
+    (inbound_receiver_or_None, outbound_sender_or_None).
+
+    Setup order is inbound-then-outbound on every rank. create_sender/create_receiver rendezvous
+    point-to-point between the two boundary ranks (no world barrier), and each MeshSocket ctor blocks
+    until its peer's matching ctor. Doing inbound first chains the bring-up: rank 0's sender unblocks
+    rank 1's receiver, which frees rank 1 to build its sender for rank 2's receiver, and so on — no
+    deadlock. Both sides pass the identical worker-core grid and global spec."""
+    global_spec = _activation_global_spec(chunk_size, hidden_size)
+
+    def _common():
+        # Fresh mapper per call: create_sender/create_receiver take the mapper by std::unique_ptr and
+        # MOVE it, so a middle rank (builds BOTH a receiver and a sender) must not reuse one — the
+        # second create would get a consumed/null mapper and fail overload resolution.
+        return dict(
+            global_spec=global_spec,
+            mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
+            fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
+            sender_worker_cores=D2D_SYNC_WORKER_CORES,
+            receiver_worker_cores=D2D_SYNC_WORKER_CORES,
+            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
+            share_fabric_links=True,
+        )
+
+    inbound = None
+    if rank > 0:
+        logger.info(f"[pp rank {rank}] [d2d] creating inbound receiver from rank {rank - 1}")
+        inbound = ttnn.D2DStreamService.create_receiver(
+            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common()
+        )
+    outbound = None
+    if rank < num_ranks - 1:
+        logger.info(f"[pp rank {rank}] [d2d] creating outbound sender to rank {rank + 1}")
+        outbound = ttnn.D2DStreamService.create_sender(
+            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common()
+        )
+    logger.info(
+        f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'} "
+        f"outbound={'yes' if outbound else 'no'}, workers={D2D_SYNC_WORKER_CORES}, fifo={D2D_FIFO_SIZE_BYTES}B)"
+    )
+    return inbound, outbound
+
+
+def _d2d_recv(inbound) -> tuple:
+    """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor and
+    decode the inline metadata. The returned tensor already has the embedding-output sharding, so it
+    feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
+    import torch
+
+    t0 = time.perf_counter()
+    act, md = h2d_socket_sync(inbound, D2D_SYNC_WORKER_CORES, metadata_size_bytes=D2D_METADATA_SIZE_BYTES)
+    m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
+    meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2]), "is_last": bool(int(m[3]))}
+    logger.info(
+        f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
+        f"is_last={meta['is_last']} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
+    )
+    return act, meta
+
+
+def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
+    """Push this rank's output hidden state + metadata to the downstream rank's receiver. Coerce the
+    activation to the sender backing's memory layout first so the op's page-for-page copy lines up,
+    then free it."""
+    t0 = time.perf_counter()
+    backing = outbound.get_backing_tensor()
+    if activation.memory_config() != backing.memory_config() or activation.layout != backing.layout:
+        activation = ttnn.to_layout(activation, backing.layout)
+        activation = ttnn.to_memory_config(activation, backing.memory_config())
+    words = [meta["slot_id"], meta["actual_start"], meta["actual_end"], int(bool(meta["is_last"]))]
+    d2d_socket_push(outbound, activation, D2D_SYNC_WORKER_CORES, metadata=words)
+    ttnn.deallocate(activation)
+    logger.info(
+        f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) is_last={meta['is_last']} "
+        f"[xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms"
+    )
+
+
+def run_pipeline_loop(
+    runtime: TtPrefillRuntime, rank: int, num_ranks: int, h2d_service=None, d2d_in=None, d2d_out=None
+) -> None:
     """Decoupled per-rank loop: each rank runs its own loop, coordinated ONLY by the
     activation+metadata file handoff (atomic rename + polling recv) — no cross-rank barrier, so an
     upstream rank can race ahead of a downstream one (pipeline overlap). The first rank's input is
@@ -340,10 +462,29 @@ def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, h2d_
         + ")"
     )
 
+    # Opt-in per-chunk timing breakdown. Adds a synchronize_device after compute so the reported
+    # compute time is device-accurate (not just enqueue) — only meaningful for an isolated single-chunk
+    # measurement, where there is no pipeline overlap to distort.
+    time_chunks = os.environ.get("PREFILL_PP_TIME_CHUNKS", "0") == "1"
+
     t0 = time.perf_counter()
     c = 0
     n_done = 0
+    loop_first_compute_start = None  # epoch of this rank's first prefill; rank0's = pipeline e2e start
     while not _shutdown:
+        # (1) Reclaim my fabric links before this chunk's compute (their previous-iter D2D transfer has
+        #     drained). No-op on iter 0 and in host transport. (2) Grant the inbound receiver BEFORE the
+        #     recv so this chunk's incoming activation drains into its backing. The matching grant of the
+        #     outbound sender happens AFTER the push, mirroring test_stream_pipeline.cpp's per-host cadence.
+        t_lease = time.perf_counter()
+        if d2d_in is not None:
+            d2d_in.wait_for_fabric_links()
+        if d2d_out is not None:
+            d2d_out.wait_for_fabric_links()
+        if d2d_in is not None:
+            d2d_in.release_fabric_links()
+        ms_lease = (time.perf_counter() - t_lease) * 1000.0
+
         if cfg.is_first_rank:
             if c >= n_chunks:
                 break
@@ -359,22 +500,69 @@ def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, h2d_
                     "actual_end": kv_actual + cfg.chunk_size,  # trace drives full chunks
                     "is_last": c == n_chunks - 1,
                 }
+        elif d2d_in is not None:
+            inp, meta = _d2d_recv(d2d_in)
+            slot_id = meta["slot_id"]
         else:
             inp, meta = recv_activation(runtime, subctx, c, rank - 1)
             slot_id = meta["slot_id"]
 
+        # Absolute (epoch) start/end of this rank's compute. time.time() so the timestamps are
+        # comparable ACROSS hosts (NTP-synced) — perf_counter is process-local and would not be. The
+        # synchronize before reading t_end makes end reflect actual device completion, not just enqueue,
+        # so the cross-rank handoff gap (next rank's start - this rank's end) is the real transport cost.
+        t_start_epoch = time.time()
+        if loop_first_compute_start is None:
+            loop_first_compute_start = t_start_epoch
+        t_c = time.perf_counter()
         out = runtime.prefill(
             inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
         )
+        if time_chunks:
+            ttnn.synchronize_device(runtime.mesh_device)
+        ms_compute = (time.perf_counter() - t_c) * 1000.0
+        t_end_epoch = time.time()
+
         if not cfg.is_last_rank:
-            send_activation(runtime, out, subctx, c, rank, meta)  # out is None on the last rank
+            if d2d_out is not None:
+                _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it
+            else:
+                send_activation(runtime, out, subctx, c, rank, meta)  # out is None on the last rank
+
+        # (4) Grant the outbound sender AFTER the push so it forwards this chunk's output downstream.
+        if d2d_out is not None:
+            d2d_out.release_fabric_links()
+
+        if time_chunks:
+            logger.info(
+                f"[pp rank {rank}] PREFILL c={c} compute={ms_compute:.2f}ms "
+                f"start={t_start_epoch:.6f} end={t_end_epoch:.6f} lease_reclaim={ms_lease:.2f}ms"
+            )
 
         n_done += 1
         c += 1
         if meta["is_last"]:
             break
 
+    # The last outbound forward is async after its grant; reclaim once more so it has fully drained into
+    # the downstream receiver before this rank tears the mesh down (no teardown barrier across ranks).
+    # For an isolated single-chunk run this drain time IS the D2D fabric-transfer latency on the producer.
+    t_drain = time.perf_counter()
+    if d2d_out is not None:
+        d2d_out.wait_for_fabric_links()
+    ms_drain = (time.perf_counter() - t_drain) * 1000.0
+    if time_chunks and d2d_out is not None:
+        logger.info(f"[pp rank {rank}] final D2D drain (fabric transfer) wait = {ms_drain:.2f}ms")
     ttnn.synchronize_device(runtime.mesh_device)
+    # E2E clock: first prefill start (this rank) and last compute end (after the single post-loop
+    # synchronize above, so it is device-accurate). No per-chunk synchronize is involved, so the true
+    # wall-clock e2e = max over ranks(last_compute_end) - min over ranks(first_compute_start), with no
+    # measurement inflation. Epochs are time.time() so they compare across hosts (NTP-synced).
+    loop_last_compute_end = time.time()
+    logger.info(
+        f"[pp rank {rank}] E2E_CLOCK first_compute_start={loop_first_compute_start:.6f} "
+        f"last_compute_end={loop_last_compute_end:.6f}"
+    )
     logger.info(
         f"[pp rank {rank}] processed {n_done} chunks in "
         f"{(time.perf_counter() - t0) * 1000.0:.2f} ms (decoupled, no barrier)"
@@ -397,9 +585,48 @@ def run_pipeline_loop(runtime: TtPrefillRuntime, rank: int, num_ranks: int, h2d_
 # ---------------------------------------------------------------------------
 
 
+def _print_config() -> None:
+    """Print every env var the pipeline runner reads at startup so each rank's config is visible in
+    logs (mirrors prefill_runner._print_config). Values shown are the resolved effective values, not
+    just what was set in the environment."""
+    rows = [
+        ("PREFILL_MODEL_VARIANT", VARIANT.name),
+        ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", VARIANT.hf_model_default)),
+        ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)),
+        ("resolved weight_cache_path", str(resolve_weight_cache_path(VARIANT, GLOBAL_MESH_SHAPE))),
+        ("PREFILL_SP", str(_sp)),
+        ("PREFILL_TP", str(_tp)),
+        ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
+        ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
+        ("PREFILL_STANDALONE_NCHUNKS", str(NUM_CHUNKS)),
+        ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
+        ("PREFILL_NUM_USERS", str(NUM_USERS)),
+        ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
+        ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
+        ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "<auto: 1d if sp<=8 else 2d>")),
+        ("PREFILL_PP_TRANSPORT", _transport_mode()),
+        ("PREFILL_PP_DIR (host transport)", _act_dir()),
+        ("PREFILL_PP_RECV_RETRIES", os.environ.get("PREFILL_PP_RECV_RETRIES", "3000")),
+        ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
+        ("PREFILL_PP_H2D", os.environ.get("PREFILL_PP_H2D", "<unset; 0>")),
+        ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
+        ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default)),
+        ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<trace default>")),
+        ("PREFILL_STANDALONE_PCC", os.environ.get("PREFILL_STANDALONE_PCC", "0")),
+        ("PREFILL_STANDALONE_SLOT", os.environ.get("PREFILL_STANDALONE_SLOT", "0")),
+    ]
+    sep = "=" * 70
+    lines = [sep, "pipeline_prefill_runner configuration", sep]
+    lines += [f"  {label:<35} = {val}" for label, val in rows]
+    lines.append(sep)
+    logger.info("\n" + "\n".join(lines))
+
+
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
+
+    _print_config()
 
     # tt-run launches the MPI ranks but does not stand up the distributed context;
     # do it here before reading rank/size (idempotent across re-entry).
@@ -480,15 +707,26 @@ def main() -> None:
             f"drive it with prefill_h2d_producer.py on this host."
         )
 
-    logger.info(f"[pp rank {rank}] setup complete, entering decoupled pipeline loop")
-    run_pipeline_loop(runtime, rank, num_ranks, h2d_service=h2d_service)
+    # D2D socket transport: every rank stands up its pipeline endpoints. Like the H2D service, the
+    # create programs validate worker cores against the default sub-device, so revert compile()'s
+    # custom sub-device manager first. The post-compile barrier above guarantees all ranks reach the
+    # chained create_sender/create_receiver rendezvous together.
+    d2d_in = d2d_out = None
+    if _transport_mode() == "d2d":
+        mesh_device.clear_loaded_sub_device_manager()
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
 
-    if h2d_service is not None:
-        # Free the service while the mesh + command queues are still alive (its dtor frees a command
+    logger.info(f"[pp rank {rank}] setup complete, entering decoupled pipeline loop")
+    run_pipeline_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
+
+    if h2d_service is not None or d2d_in is not None or d2d_out is not None:
+        # Free the services while the mesh + command queues are still alive (their dtors free a command
         # queue and the service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
         import gc
 
-        del h2d_service
+        h2d_service = None
+        d2d_in = None
+        d2d_out = None
         gc.collect()
 
     # No teardown barrier: ranks finish asynchronously (an upstream rank exits once it has produced

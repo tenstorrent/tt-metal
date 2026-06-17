@@ -35,7 +35,7 @@ rank_bindings:
 
 # 2x independent 8x4 BH-galaxy mesh graph descriptor (see its VERIFY note: confirm dim_types).
 # Relative path resolves under TT_METAL_HOME.
-mesh_graph_desc_path: models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_2galaxy_mesh_graph_descriptor.textproto
+mesh_graph_desc_path: models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_2galaxy_mesh_graph_descriptor.textproto
 
 global_env:
   # Host->host activation handoff dir. Must be shared across both hosts (the runner's

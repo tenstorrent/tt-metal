@@ -34,18 +34,24 @@ def _worker_cores_in_range(core_range: ttnn.CoreRange) -> list[ttnn.CoreCoord]:
 
 
 def h2d_socket_sync(
-    service: ttnn.H2DStreamService,
+    service,
     worker_cores: ttnn.CoreRange,
     *,
     metadata_size_bytes: int = 0,
 ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Wait for the next H2D transfer to land in `service.get_backing_tensor()`,
-    copy it into a fresh device tensor, and ack the service core's consumed counter.
+    """Wait for the next transfer to land in `service.get_backing_tensor()`, copy it
+    into a fresh device tensor, and ack the service core's consumed counter.
+
+    Works for the receiver side of EITHER an `ttnn.H2DStreamService` or a
+    `ttnn.D2DStreamServiceReceiver` — both expose the same receiver getters
+    (get_backing_tensor / get_data_ready_sem_addr / get_consumed_counter_addr(coord) /
+    get_service_core(coord) / get_metadata_addr), so this op is service-agnostic. Pair the
+    D2D receiver with d2d_socket_push() on the upstream stage's sender.
 
     Args:
-        service: A persistent H2DStreamService constructed with `worker_cores` set
-            to the same CoreRange passed here. Provides the data-ready semaphore,
-            per-coord consumed counter, and per-coord service-core coordinates.
+        service: A persistent H2DStreamService or D2DStreamServiceReceiver constructed with
+            `worker_cores` set to the same CoreRange passed here. Provides the data-ready
+            semaphore, per-coord consumed counter, and per-coord service-core coordinates.
         worker_cores: Worker CoreRange — must match the `worker_cores` the service
             was constructed with. Each core runs one iteration of the
             wait → copy slice → ack protocol.
