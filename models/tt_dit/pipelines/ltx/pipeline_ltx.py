@@ -1784,8 +1784,17 @@ class LTXPipeline:
         On the audio submesh the whole decode (and the lazy submesh build) runs under the audio
         CQ so it stays off the parent's cq 0; on the full mesh this is the default CQ (no-op).
         """
-        with self._audio_cq():
-            return self._decode_audio_impl(audio_latent, num_frames, fps=fps)
+        try:
+            with self._audio_cq():
+                return self._decode_audio_impl(audio_latent, num_frames, fps=fps)
+        finally:
+            # The audio submesh shares the parent's cq 0 and leaves it flagged in_use (global-
+            # semaphore init enqueues on cq 0 even with CCL on the audio cq). Mirror the pre-decode
+            # quiesce so the parent gets an idle cq 0 back for whatever runs next — e.g. warmup's
+            # Gemma weight load, which otherwise hangs in fetch_queue_reserve_back on the child's
+            # stale cq-0 hold. Quiesce drains the live child recursively; no-op on the full mesh.
+            if self._audio_submesh_shape is not None:
+                ttnn.quiesce_devices(self.mesh_device)
 
     def _decode_audio_impl(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio"
