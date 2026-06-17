@@ -194,7 +194,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     }
 
     this->router_port_directions_to_num_routing_planes_map_.clear();
-    this->num_dispatch_reserved_planes_.clear();
+    this->router_port_directions_to_num_reserved_planes_map_.clear();
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
     auto apply_min =
@@ -308,7 +308,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     // Pre-populate the map since it gets updated concurrently
     for (const auto& [fabric_node_id, direction_counts] : this->router_port_directions_to_num_routing_planes_map_) {
         for (const auto& [direction, _] : direction_counts) {
-            this->num_dispatch_reserved_planes_[fabric_node_id][direction] = 0;
+            this->router_port_directions_to_num_reserved_planes_map_[fabric_node_id][direction] = 0;
         }
     }
 }
@@ -2031,7 +2031,7 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_dir
     return eth_chans;
 }
 
-size_t ControlPlane::get_num_unreserved_routing_planes(
+size_t ControlPlane::get_num_usable_routing_planes(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
     size_t live = 0;
     if (this->router_port_directions_to_num_routing_planes_map_.contains(fabric_node_id) &&
@@ -2039,16 +2039,33 @@ size_t ControlPlane::get_num_unreserved_routing_planes(
         live = this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
     }
     size_t reserved = 0;
-    if (this->num_dispatch_reserved_planes_.contains(fabric_node_id) &&
-        this->num_dispatch_reserved_planes_.at(fabric_node_id).contains(routing_direction)) {
-        reserved = this->num_dispatch_reserved_planes_.at(fabric_node_id).at(routing_direction);
+    if (this->router_port_directions_to_num_reserved_planes_map_.contains(fabric_node_id) &&
+        this->router_port_directions_to_num_reserved_planes_map_.at(fabric_node_id).contains(routing_direction)) {
+        reserved = this->router_port_directions_to_num_reserved_planes_map_.at(fabric_node_id).at(routing_direction);
     }
-    return live > reserved ? live - reserved : 0;
+    return live - reserved;  // no underflow risk, reserve_routing_planes() is robust enough
 }
 
-void ControlPlane::register_dispatch_reserved_planes(
+void ControlPlane::reserve_routing_planes(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved) {
-    this->num_dispatch_reserved_planes_.at(fabric_node_id).at(routing_direction) = num_reserved;
+    TT_FATAL(
+        this->router_port_directions_to_num_reserved_planes_map_.contains(fabric_node_id) &&
+            this->router_port_directions_to_num_reserved_planes_map_.at(fabric_node_id).contains(routing_direction),
+        "Cannot reserve routing planes for fabric node (mesh={}, chip={}) direction {}: plane not found",
+        fabric_node_id.mesh_id,
+        fabric_node_id.chip_id,
+        static_cast<int>(routing_direction));
+    size_t live = this->get_num_live_routing_planes(fabric_node_id, routing_direction);
+    TT_FATAL(
+        num_reserved <= live,
+        "Cannot reserve {} routing planes for fabric node (mesh={}, chip={}) direction {}: only {} live routing "
+        "planes available",
+        num_reserved,
+        fabric_node_id.mesh_id,
+        fabric_node_id.chip_id,
+        static_cast<int>(routing_direction),
+        live);
+    this->router_port_directions_to_num_reserved_planes_map_.at(fabric_node_id).at(routing_direction) = num_reserved;
 }
 
 void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const {

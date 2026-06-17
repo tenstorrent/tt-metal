@@ -144,8 +144,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         for (const auto axis : cluster_axes) {
             for (const auto direction : directions[axis]) {
                 if (applicable_to_coord(coord, axis, mesh_shape[axis], direction)) {
-                    auto planes_in_direction =
-                        tt::tt_fabric::get_num_unreserved_routing_planes(fabric_node_id, direction);
+                    auto planes_in_direction = tt::tt_fabric::get_num_usable_routing_planes(fabric_node_id, direction);
                     log_debug(
                         tt::LogOp,
                         "fabric_node_id: {}, direction: {}, planes_in_direction: {}",

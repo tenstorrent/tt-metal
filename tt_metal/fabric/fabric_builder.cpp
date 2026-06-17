@@ -68,7 +68,7 @@ void FabricBuilder::discover_channels() {
         chip_neighbors_.emplace(direction, neighbor_fabric_node_id);
         channels_by_direction_[direction] = active_eth_chans;
 
-        // Identify and cache dispatch links
+        // Identify and cache dispatch links, and reserve them in control plane
         uint32_t dispatch_link_idx = tt::tt_metal::RelayMux::get_dispatch_link_index(
             control_plane, is_galaxy_cluster, local_node_, neighbor_fabric_node_id, device_);
         size_t num_dispatch_links = 0;
@@ -78,7 +78,7 @@ void FabricBuilder::discover_channels() {
                 num_dispatch_links++;
             }
         }
-        control_plane.register_dispatch_reserved_planes(local_node_, direction, num_dispatch_links);
+        control_plane.reserve_routing_planes(local_node_, direction, num_dispatch_links);
     }
 }
 
