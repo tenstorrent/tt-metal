@@ -31,18 +31,32 @@ def generate(*, text: str, voice: str, max_tokens: int, seed: int, out_path: Pat
     cpu = VoxtralCPUReference(model_name_or_path=name, dtype="bfloat16", device="cpu")
 
     logger.info(f"Generating golden codes (voice={voice}, max_tokens={max_tokens}, seed={seed}) …")
-    _ref_wav, ref_codes = cpu.generate(
-        text=text, voice=voice, max_tokens=max_tokens, seed=seed, return_tokenizer_codes=True
+    _ref_wav, ref_codes, debug = cpu.generate(
+        text=text, voice=voice, max_tokens=max_tokens, seed=seed, return_tokenizer_codes=True, return_debug=True
     )
     codes = torch.as_tensor(ref_codes, dtype=torch.long).cpu()
     assert codes.dim() == 3 and int(codes.shape[1]) == 37, f"expected [1,37,T], got {tuple(codes.shape)}"
 
+    # Per-step text hiddens the reference fed to its acoustic model — the realistic, identical input
+    # used by the acoustic-model PCC test. Stored bf16 to keep the fixture small.
+    n = int(codes.shape[2])
+    hiddens = [debug.get(f"step.{i}.text.hidden_in") for i in range(n)]
+    assert all(h is not None for h in hiddens), "missing per-step text.hidden_in in debug trace"
+    text_hiddens = torch.stack([h.reshape(-1) for h in hiddens], dim=0).to(torch.bfloat16)  # [T, dim]
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
-        {"codes_b37t": codes, "text": text, "voice": voice, "seed": seed, "model_name": name},
+        {
+            "codes_b37t": codes,
+            "text_hiddens": text_hiddens,
+            "text": text,
+            "voice": voice,
+            "seed": seed,
+            "model_name": name,
+        },
         out_path,
     )
-    logger.info(f"Saved golden fixture → {out_path}  codes={tuple(codes.shape)}")
+    logger.info(f"Saved golden fixture → {out_path}  codes={tuple(codes.shape)}  hiddens={tuple(text_hiddens.shape)}")
 
 
 def main() -> None:
