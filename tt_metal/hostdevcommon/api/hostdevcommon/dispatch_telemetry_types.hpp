@@ -55,23 +55,33 @@ struct __attribute__((packed, aligned(8))) DispatchCoreTelemetry {
     uint32_t upstream_unblocked_count = 0;
     uint32_t program_count = 0;
 
-    // To preserve proper alignment. Can be utilized for future use without breaking backwards compatibility
+    // To preserve proper alignment. Can be utilized for future use without breaking backwards
+    // compatibility.
     uint32_t reserved_0 = 0;
 
     // dispatch_s_compute writes
     uint64_t current_timestamp = 0;
 
     // dispatch_s_compute writes
-    // Computed average time a worker core was running, updated only on sub device count change
+    // Computed average time a worker core was running, updated only on sub device count change.
     uint64_t avg_work_runtime_per_worker = 0;  //_per_worker
 
     // dispatch_s writes
     uint64_t last_work_launch_timestamp[RESERVED_SUB_DEVICE_SPACE] = {0};
 
+    // dispatch_s writes
+    // Increments by 2 for every launched workload. An odd value means last_work_launch_timestamp
+    // is in progress of being written.
+    uint32_t launched_work_sequence_counter[RESERVED_SUB_DEVICE_SPACE] = {0};
+
+    // dispatch_s writes
+    // Records value of the stream semaphore when launching a new workload.
+    uint32_t launched_work_start_stream_sem[RESERVED_SUB_DEVICE_SPACE] = {0};
+
     // dispatch_s_compute writes
-    // Cumulative current total worker runtime for each sub device.
-    // In the case of overflow, the value is compressed into avg_work_runtime_per_worker and then reset to 0
-    // Used to avoid dropping work cycles if they were preemptively averaged
+    // Cumulative current total worker runtime for each sub device. In the case of overflow, the
+    // value is compressed into avg_work_runtime_per_worker and then reset to 0. Used to avoid
+    // dropping work cycles if they were preemptively averaged.
     uint64_t current_sub_device_work_runtime[RESERVED_SUB_DEVICE_SPACE] = {0};
 
     // dispatch_s_compute writes

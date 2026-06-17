@@ -414,10 +414,15 @@ void process_go_signal_mcast_cmd() {
     }
 
     if (telemetry_enabled) {
+        static uint32_t local_launch_seq_counter = 0;
         const uint32_t stream_index = cmd->mcast.wait_stream - first_stream_used;
         auto dispatch_telemetry =
             reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
+
+        dispatch_telemetry->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
         dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_timestamp();
+        dispatch_telemetry->launched_work_start_stream_sem[stream_index] = wait_count;
+        dispatch_telemetry->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
     }
 
 #if DEVICE_PRINT_DISPATCH_ENABLED
