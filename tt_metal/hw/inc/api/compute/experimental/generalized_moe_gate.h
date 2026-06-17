@@ -8,7 +8,7 @@
 #include "api/compute/common.h"
 #include "api/compute/transpose_wh.h"
 #ifdef TRISC_MATH
-#include "llk_math_generalized_moe_gate_topk_single_face.h"
+#include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
 #include "experimental/llk_math_generalized_moe_gate_eltwise_binary_api.h"
 #include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face_api.h"
 #endif
