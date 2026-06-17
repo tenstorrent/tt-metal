@@ -10,7 +10,7 @@ Blackhole Loudbox (1×8 mesh).
 
 This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral-2-123B-Instruct-2512](https://huggingface.co/mistralai/Devstral-2-123B-Instruct-2512)** (Ministral3 text stack). PCC tests compare subgraphs and the full model against HuggingFace references (see [PCC tests](#pcc-tests)).
 
-**Maximum context length:** The HF checkpoint advertises very long context (YaRN / RoPE tables up to 256K positions). On Blackhole Loudbox (1×8), the working KV budget (`max_seq_len`) is what you can actually run. **Up to 96K tokens** has been verified end-to-end on this mesh (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len` default **262144** in `text_demo.py` and `tt_demo_agent.py`).
+**Maximum context length:** The HF checkpoint advertises very long context (YaRN / RoPE tables up to 262144 positions). On Blackhole Loudbox (1×8), the working KV budget (`max_seq_len`) is what you can actually run. **Up to 96K tokens** has been verified end-to-end on this mesh. The KV floor default is **262144** (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len` in `text_demo.py` and `tt_demo_agent.py`).
 
 **Traced prefill/decode** with **2CQ** decode staging is on by default (`DEVSTRAL2_TRACE_PREFILL=1`, `DEVSTRAL2_DECODE_TRACE_2CQ=1`). Set either to `0` to disable.
 
@@ -74,7 +74,7 @@ pytest models/experimental/devstral2_123B_instruct/tests/test_decoder_prefill.py
 pytest models/experimental/devstral2_123B_instruct/tests/test_decoder_prefill.py -k sweep -v
 ```
 
-**Host memory:** Prefill PCC runs HF and TT in **128-token chunks** with per-chunk PCC ≥ 0.99, so host RAM stays bounded on long sweep points (32K … 256K). Each seq length rebuilds the TT layer (KV starts empty) but reuses the **`seq_262144`** on-disk weight cache.
+**Host memory:** Prefill PCC runs HF and TT in **128-token chunks** with per-chunk PCC ≥ 0.99, so host RAM stays bounded on long sweep points (32K … 262144). Each seq length rebuilds the TT layer (KV starts empty) but reuses the **`seq_262144`** on-disk weight cache.
 
 ### Other PCC tests
 
@@ -90,19 +90,7 @@ pytest models/experimental/devstral2_123B_instruct/tests/test_ministralattn.py -
 
 **Full-model hidden-state PCC:** One decode step after 128-token prefill in `tests/test_ministral3_full_model.py` — **0.99 PCC** on backbone hidden states (no `lm_head`).
 
-**Full-model logit PCC (teacher-forced):** `tests/test_model_logit_pcc.py` compares **`TtMinistral3ForCausalLM`** logits against HuggingFace `AutoModelForCausalLM` (tt-transformers `test_model.py` pattern). Tale of Two Cities tokens; **128-token chunked prefill on HF and TT** with incremental `DynamicCache` on HF (O(chunk) memory per step, same as decoder prefill PCC); **10** teacher-forced decode steps per sweep point; PCC ≥ **0.99** on last-prefill logits and every decode step. Shared helpers: `tests/logit_pcc_common.py`. Reuses **`seq_262144`** weight cache.
-
-| Test | Prefill lengths | Purpose |
-|------|-----------------|--------|
-| `test_model_logit_pcc_sanity` | 32, 128 | CI gate (`-k sanity`) |
-| `test_model_logit_pcc_sweep` | 32 … 262144 (14 points) | Full sweep (`-k sweep`) |
-
-```sh
-pytest models/experimental/devstral2_123B_instruct/tests/test_model_logit_pcc.py -k sanity -v
-pytest models/experimental/devstral2_123B_instruct/tests/test_model_logit_pcc.py -k sweep -v
-```
-
-Loads the full HF checkpoint once per sweep (same path as `test_ministral3_full_model.py`); HF reference runs on **CPU with disk offload** when no CUDA GPU is present (`device_map=cpu`, `offload_folder`). Override with `DEVSTRAL2_HF_DEVICE` / `DEVSTRAL2_HF_DEVICE_MAP`. Requires sufficient host DRAM/disk offload space and `HF_TOKEN` when gated.
+See [Full-model logit PCC](#full-model-logit-pcc) for the 88-layer logit comparison test.
 
 ## Demos
 
@@ -253,19 +241,65 @@ Measured with ``pytest models/experimental/devstral2_123B_instruct/tests/perf/te
 
 
 
-## Teacher-forced accuracy sweep
+## Full-model logit PCC
+
+End-to-end **logit PCC** for the full 88-layer `TtMinistral3ForCausalLM` vs HuggingFace
+`AutoModelForCausalLM` (tt-transformers `test_model.py` pattern). Compares **raw logits**
+(full vocab) — not token IDs. After each logits check, decode advances with the **HF greedy**
+token (temperature=0 argmax) on both HF and TT.
+
+**Test file:** `tests/test_model_logit_pcc.py`
+**Shared helpers:** `tests/logit_pcc_common.py`
+
+| Test | Prefill lengths | Purpose |
+|------|-----------------|--------|
+| `test_model_logit_pcc_sanity` | 32, 128 | CI gate (`-k sanity`) |
+| `test_model_logit_pcc_sweep` | 32 … 262144 (14 points) | Full sweep (`-k sweep`) |
+
+**Per sweep point:**
+
+- Tale of Two Cities tokens (tiled when a longer stream is needed).
+- **128-token chunked prefill** on HF and TT; HF uses incremental `DynamicCache` (O(chunk) host memory).
+- PCC ≥ **0.99** on last-prefill logits and **10** decode steps (`DECODE_GENERATION_LENGTH`).
+- TT model built once per mesh; tiled weights load from the shared on-disk cache at
+  **`seq_262144`** (override with `DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN`). Runtime
+  `model_max_seq_len` is fixed for the whole sweep (worst-case prefill + decode budget).
+
+**Run:**
+
+```sh
+# CI / quick gate (32, 128)
+pytest models/experimental/devstral2_123B_instruct/tests/test_model_logit_pcc.py -k sanity -v
+
+# Full 14-point sweep
+pytest models/experimental/devstral2_123B_instruct/tests/test_model_logit_pcc.py -k sweep -v
+```
+
+**Timeout:** Sanity (2 points) ≈ **30 min** on BH Loudbox; full sweep default pytest cap **12 h**
+(override with `DEVSTRAL2_LOGIT_PCC_SWEEP_TIMEOUT_SEC`; observed ~10 h wall with warm weight cache).
+
+**HF reference:** Loads the full checkpoint once per sweep (same path as `test_ministral3_full_model.py`).
+Runs on **CPU with disk offload** when no CUDA GPU is present (`device_map=cpu`, `offload_folder`).
+Override with `DEVSTRAL2_HF_DEVICE` / `DEVSTRAL2_HF_DEVICE_MAP` / `DEVSTRAL2_HF_OFFLOAD_FOLDER`.
+Requires sufficient host DRAM/disk offload space and `HF_TOKEN` when gated.
+
+**vs token match:** Logit PCC checks numerical agreement on logits (PCC). Token match
+(`test_model_token_match.py`) checks top-1 / top-5 token accuracy over **500** teacher-forced
+eval tokens per prefill length.
+
+## Model token match (teacher-forced)
 
 End-to-end **teacher-forced** top-1 / top-5 token accuracy vs HuggingFace over a range of prefill
 context lengths. Eval uses a fixed **500 tokens** after each prefill (same as tt-transformers CI
 `max_generated_tokens=500` in `simple_text_demo.py`; that test uses a 1024-token `.refpt` with a
 512-token prefill and stops decode at 500 steps).
 
-**Test file:** `tests/test_teacher_forced_accuracy.py`
+**Test file:** `tests/test_model_token_match.py`
 
 | Test | Prefill lengths | Purpose |
 |------|-----------------|--------|
 | `test_devstral2_teacher_forced_accuracy_sanity` | 32, 64, 128 | CI gate (`-k sanity`) before full sweep is enabled |
-| `test_devstral2_teacher_forced_accuracy_sweep` | 32 … 262144 (14 points) | Full sweep (`-k sweep`); ~71 h cold on BH Loudbox |
+| `test_devstral2_teacher_forced_accuracy_sweep` | 32 … 262144 (14 points) | Full sweep (`-k sweep`) |
 
 **Default sweep:** powers of two from 32 through 262144. Tale of Two Cities is tiled when a longer stream is needed.
 
@@ -283,28 +317,49 @@ context lengths. Eval uses a fixed **500 tokens** after each prefill (same as tt
 
 ```sh
 # CI / quick gate (32, 64, 128)
-pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sanity -v
+pytest models/experimental/devstral2_123B_instruct/tests/test_model_token_match.py -k sanity -v
 
 # Full 14-point sweep
-pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sweep -v
+pytest models/experimental/devstral2_123B_instruct/tests/test_model_token_match.py -k sweep -v
 ```
 
 **CI (BH Loudbox):**
 
 | Workflow | Test | Purpose |
 |----------|------|---------|
-| ``(Blackhole) e2e tests`` → ``devstral2-123b-instruct`` | ``test_teacher_forced_accuracy.py -k sanity`` | Teacher-forced accuracy gate (prefill 32/64/128) |
+| ``(Blackhole) e2e tests`` → ``devstral2-123b-instruct`` | ``test_model_logit_pcc.py -k sanity`` | Logit PCC gate (prefill 32/128) |
+| ``(Blackhole) e2e tests`` → ``devstral2-123b-instruct`` | ``test_model_token_match.py -k sanity`` | Token match gate (prefill 32/64/128) |
 | ``(Blackhole) Demo tests`` → ``devstral2-123b-instruct`` | ``demo/text_demo.py`` | End-to-end text generation smoke |
+
+Both sanity tests run sequentially in the ``bh-lb-devstral2-123b-e2e-sanity`` e2e job (90 min timeout).
 
 Switch e2e to ``-k sweep`` when the full seq-length teacher-forced run is ready.
 Requires Devstral-2-123B weights in the MLPerf HF cache mount (`/mnt/MLPerf/huggingface` on Loudbox).
 
 **Timeout:** Each test has its own pytest timeout budgeted for its prefill list. Full sweep
-(14 points, 32 … 256K) is calibrated at ≈ **71 hours** cold on BH Loudbox; sanity (3 points) ≈ **45 min**.
+(14 points, 32 … 262144) is calibrated at ≈ **71 hours** cold on BH Loudbox; sanity (3 points) ≈ **45 min**.
 Re-runs with cached ``.refpt`` files finish much sooner.
 
 **Thresholds:** top-1 ≥ 96%, top-5 ≥ 99% (override with `DEVSTRAL2_MIN_TOP1_ACC` /
 `DEVSTRAL2_MIN_TOP5_ACC`).
+
+### Results
+
+Teacher-forced sweep on Blackhole Loudbox (1×8), run `20260617T162901Z`
+(``pytest models/experimental/devstral2_123B_instruct/tests/test_model_token_match.py -k sweep``).
+Each row evaluates **500** tokens after the given prefill length.
+
+| Prefill len | Top-1 | Top-5 | Top-1 mismatches | Pass |
+|------------:|------:|------:|-----------------:|:----:|
+| 32 | 97.80% | 100% | 11 / 500 | ✓ |
+| 64 | 98.20% | 100% | 9 / 500 | ✓ |
+| 128 | 98.80% | 100% | 6 / 500 | ✓ |
+| 256 | 99.80% | 100% | 1 / 500 | ✓ |
+| 512 | 100.00% | 100% | 0 / 500 | ✓ |
+| 1024 | 99.40% | 100% | 3 / 500 | ✓ |
+
+Longer prefill lengths (2048 … 262144) each take on the order of several hours to
+run on BH Loudbox.
 
 ## Resources
 
@@ -315,9 +370,9 @@ Re-runs with cached ``.refpt`` files finish much sooner.
 | **`tt/tt_ministral3_model.py`** | Top-level model: embed → decoder layers → RMSNorm. |
 | **`tt/tt_ministral3_decoder_layer.py`** | Decoder layer (attention + MLP + norms). |
 | **`tt/weight_loading.py`** | Host → device FP8 → bf16 weight dequant and upload (shard-by-shard, disk-cached). |
-| **`tests/`** | PCC and unit tests: decoder layer prefill/decode (`test_decoder_prefill.py`, `test_decoder.py`), per-op blocks (attention, MLP, norms, RoPE), full model hidden-state PCC (`test_ministral3_full_model.py`), teacher-forced logit PCC (`test_model_logit_pcc.py`), teacher-forced token accuracy. |
+| **`tests/`** | PCC and unit tests: decoder layer prefill/decode (`test_decoder_prefill.py`, `test_decoder.py`), per-op blocks (attention, MLP, norms, RoPE), full model hidden-state PCC (`test_ministral3_full_model.py`), teacher-forced logit PCC (`test_model_logit_pcc.py`), teacher-forced token match (`test_model_token_match.py`). |
 | **`tests/perf/`** | Performance tests: e2e throughput (`test_e2e_performant.py`), single-layer wall-clock perf (`test_perf.py`), and single-layer prefill+decode device perf (`test_device_perf_single_layer_prefill_decode.py`, `test_profile_single_layer_prefill_decode.py`). |
-| **`reference/`** | Pure PyTorch / HF reference inference script (`devstral2_123b_inference.py`). |
+| **`reference/`** | HF reference loader (`hf_reference_loader.py`) and pure PyTorch / HF inference script (`devstral2_123b_inference.py`). |
 
 ## Model and limits
 
@@ -325,7 +380,7 @@ Re-runs with cached ``.refpt`` files finish much sooner.
 |------|--------|
 | HF `max_position_embeddings` | 262,144 (model-native RoPE horizon) |
 | **`max_batch_size` (TT inference)** | **1** — single-user only; all demos, perf tests, and PCC tests use `max_batch_size=1` |
-| Practical `max_seq_len` (TT KV cache) | Sized per run: `prompt + max_new_tokens`, floored by `DEVSTRAL2_MIN_MAX_SEQ_LEN` (default **98,304**) |
+| Practical `max_seq_len` (TT KV cache) | Sized per run: `prompt + max_new_tokens`, floored by `DEVSTRAL2_MIN_MAX_SEQ_LEN` (default **262144**) |
 | Verified context on BH Loudbox (1×8) | **Up to 96K** tokens (end-to-end text generation) |
 | Full-model hidden-state PCC (88 layers) | **0.99** (`tests/test_ministral3_full_model.py`) |
 | Full-model logit PCC (teacher-forced, 88 layers) | **0.99** (`tests/test_model_logit_pcc.py`) |

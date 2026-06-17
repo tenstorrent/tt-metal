@@ -41,7 +41,7 @@ on:
           - sdpa
           - bh-sdpa-nightly-integration
           - bh-ring-sdpa-perf
-          - bh-lb-devstral2-123b-teacher-forced-sanity
+          - bh-lb-devstral2-123b-e2e-sanity
       build-type:
         required: false
         type: choice

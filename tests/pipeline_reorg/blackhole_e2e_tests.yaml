@@ -17,8 +17,8 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # --- e2e ---
-- id: bh-lb-devstral2-123b-teacher-forced-sanity
-  name: devstral2-123b teacher-forced accuracy sanity
+- id: bh-lb-devstral2-123b-e2e-sanity
+  name: devstral2-123b e2e sanity (logit PCC + token match)
   model-name: devstral2-123b-instruct
   cmd: |
     set -e
@@ -29,10 +29,11 @@
     export MESH_DEVICE=T3K
     export DEVSTRAL2_HF_LOCAL_ONLY=1
     uv pip install "git+https://github.com/huggingface/transformers"
-    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sanity -v
+    pytest models/experimental/devstral2_123B_instruct/tests/test_model_logit_pcc.py -k sanity -v
+    pytest models/experimental/devstral2_123B_instruct/tests/test_model_token_match.py -k sanity -v
   skus:
     bh_loudbox:
-      timeout: 60
+      timeout: 120
   owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng)
   team: models
 
