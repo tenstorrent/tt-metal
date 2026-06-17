@@ -1,0 +1,7 @@
+interface:
+  display_name: "Reorganize"
+  short_description: "Flatten decoder and adopt TTTv2 modules"
+  default_prompt: "Use $reorganize to scope and execute a step-by-step refactor of an optimized full model: remove decoder inheritance layering, move model pieces to existing TTTv2-style models/common/modules, add new candidate modules with tests in new_modules/modules and new_modules/tests/modules when needed, and prove no accuracy or performance regression."
+
+policy:
+  allow_implicit_invocation: true
