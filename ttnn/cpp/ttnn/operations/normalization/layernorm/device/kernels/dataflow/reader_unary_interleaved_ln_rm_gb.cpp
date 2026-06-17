@@ -47,7 +47,7 @@ void kernel_main() {
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
     constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
-    [[maybe_unused]] constexpr uint32_t W = get_compile_time_arg_val(2);
+    constexpr uint32_t W = get_compile_time_arg_val(2);
     constexpr auto src0_args = TensorAccessorArgs<3>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
