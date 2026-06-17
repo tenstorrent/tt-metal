@@ -114,26 +114,23 @@ class Qwen35Attention(LightweightModule):
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
-        # 5. update kv cache. fill_cache / paged_fill_cache each write exactly ONE batch row
-        #    (the op asserts input batch == 1), so a B>1 prefill fills users one at a time:
-        #    user b's [1,NKV,S,HD] slice lands in cache slot user_id+b. B==1 keeps the original
-        #    single-user fast path (no slicing). The paged path with B>1 is rejected below
-        #    rather than guessed at: batched paged fills need a per-row page_table mapping that
-        #    this contiguous-cache caller doesn't supply, so assert + TODO instead of a wrong fill.
+        # 5. update kv cache. Both fill_cache (contiguous) and paged_fill_cache (paged) write
+        #    one batch row per call in this scalar-batch_idx form, so a B>1 prefill fills users
+        #    one at a time — the same per-user loop gemma4's batched prefill uses
+        #    (gemma4/tt/attention/prefill.py fills valid_slots with batch_idx=slot). User b's
+        #    [1,NKV,S,HD] slice lands in slot user_id+b; for the paged cache that batch_idx also
+        #    selects user b's page_table row, so the caller must pass a page_table whose rows
+        #    cover [user_id, user_id+B). B==1 keeps the no-slice fast path. Paged vs contiguous
+        #    differ only in which fill op writes the slice — the batched SDPA below is batch-general.
         if self.kv_cache is not None:
             k_cache, v_cache = self.kv_cache  # unpack the single [k_cache, v_cache] slot
-            if page_table is not None:
-                assert B == 1, (
-                    "batched (B>1) paged prefill fill is not implemented — paged_fill_cache needs a "
-                    "per-user page_table row mapping. TODO: thread a batch_idx_tensor / per-row page "
-                    "table once a batched paged caller exists."
-                )
-                ttnn.experimental.paged_fill_cache(k_cache, k, page_table, batch_idx=user_id)
-                ttnn.experimental.paged_fill_cache(v_cache, v, page_table, batch_idx=user_id)
-            else:
-                for b in range(B):
-                    k_b = k if B == 1 else ttnn.slice(k, (b, 0, 0, 0), (b + 1, NKV, S, HD))
-                    v_b = v if B == 1 else ttnn.slice(v, (b, 0, 0, 0), (b + 1, NKV, S, HD))
+            for b in range(B):
+                k_b = k if B == 1 else ttnn.slice(k, (b, 0, 0, 0), (b + 1, NKV, S, HD))
+                v_b = v if B == 1 else ttnn.slice(v, (b, 0, 0, 0), (b + 1, NKV, S, HD))
+                if page_table is not None:
+                    ttnn.experimental.paged_fill_cache(k_cache, k_b, page_table, batch_idx=user_id + b)
+                    ttnn.experimental.paged_fill_cache(v_cache, v_b, page_table, batch_idx=user_id + b)
+                else:
                     ttnn.fill_cache(k_cache, k_b, batch_idx=user_id + b)
                     ttnn.fill_cache(v_cache, v_b, batch_idx=user_id + b)
 
