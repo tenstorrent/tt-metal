@@ -39,6 +39,7 @@ def decode_forward(
     is_kv_shared=False,
     position_idx_cache=None,
     sequential_kv_write=False,
+    rope_presliced=False,
 ):
     """
     Single-token decode attention, fully on device.
@@ -47,6 +48,11 @@ def decode_forward(
         hidden_states: [1, 1, batch, hidden_size] on device
         cos_cache: [max_seq_len, head_dim] 2D cache for embedding lookup, or [1,1,max_seq_len,head_dim] 4D
         sin_cache: same format as cos_cache
+        rope_presliced: if True, cos_cache/sin_cache are already position-gathered
+            [1, 1, batch_pad, head_dim] tensors (one row per user), shared across all
+            layers of this layer_type by the model. The per-layer ttnn.embedding slice
+            is skipped and Q+K are RoPE'd in a single fused call. (Consumed in the
+            fused-RoPE branch.)
         weights: AttentionWeights container
         kv_cache: [k_cache, v_cache] TT tensors (for shared layers, this is the source layer's cache)
         config: Gemma4AttentionConfig
@@ -84,14 +90,20 @@ def decode_forward(
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
-    use_embedding_rope = len(cos_cache.shape) == 2  # 2D cache = embedding lookup mode
+    # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
+    #   - rope_presliced: gathered once per layer_type by the model and shared across
+    #     all layers (no per-layer ttnn.embedding here).
+    #   - 2D cache: gather the position rows with ttnn.embedding right here (legacy
+    #     per-layer path, kept for the it-assistant drafter / direct callers).
+    use_embedding_rope = rope_presliced or len(cos_cache.shape) == 2
     if use_embedding_rope:
-        # Gather position-specific cos/sin via ttnn.embedding (fully on-device, trace-safe)
-        # position_idx: [1, 32] uint32 padded tensor for embedding lookup
-        cos_pos = ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT)  # [1, batch_pad, head_dim]
-        sin_pos = ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT)
-        cos_pos = ttnn.unsqueeze_to_4D(cos_pos)  # [1, 1, batch_pad, head_dim]
-        sin_pos = ttnn.unsqueeze_to_4D(sin_pos)
+        if rope_presliced:
+            cos_pos, sin_pos = cos_cache, sin_cache  # [1, 1, batch_pad, head_dim], shared
+        else:
+            # Gather position-specific cos/sin via ttnn.embedding (fully on-device, trace-safe)
+            # position_idx: [1, 32] uint32 padded tensor for embedding lookup
+            cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT))
+            sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT))
         # RoPE. batch=1 uses the fused single-position rotary_embedding (one core
         # but cheap, no slice/tilize churn). batch>1 needs per-user positions,
         # which that op can't express, so fall back to the manual elementwise

@@ -619,8 +619,26 @@ class Gemma4Model:
         # Store K/V from source layers for sharing during prefill
         shared_kv_store = {}  # source_layer_idx -> (tt_k, tt_v) kept alive on device
 
+        # Decode RoPE: slice cos/sin ONCE per layer_type and share across all layers.
+        # There are only two layer_types (sliding / global), so the position-gather
+        # (ttnn.embedding) runs twice per decode step instead of once per layer. The
+        # gathered [1, 1, batch_pad, head_dim] tensors are passed down with
+        # rope_presliced=True and freed after the layer loop. Only taken on the
+        # internal-cache decode path (rope_mats override paths keep their behavior).
+        decode_rope_presliced = {}
+        if is_decode and rope_mats is None and self.rope_caches_2d and position_idx is not None:
+            used_types = {self.hf_config.layer_types[i] for i in range(len(self.layers))}
+            for lt in used_types:
+                if lt not in self.rope_caches_2d:
+                    continue
+                cos_2d, sin_2d = self.rope_caches_2d[lt]
+                cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
+                sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
+                decode_rope_presliced[lt] = (cos_pos, sin_pos)
+
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
+            rope_presliced = False
             if rope_mats is not None:
                 if isinstance(rope_mats, dict):
                     # Dict mapping layer_type -> (cos, sin) — pre-sliced for trace decode
@@ -628,8 +646,12 @@ class Gemma4Model:
                     layer_rope = rope_mats[layer_type]
                 else:
                     layer_rope = rope_mats  # Single (cos, sin) override (backward compat / tests)
+            elif is_decode and decode_rope_presliced:
+                # Decode: use the per-layer-type cos/sin gathered once before the loop.
+                layer_rope = decode_rope_presliced[self.hf_config.layer_types[i]]
+                rope_presliced = True
             elif is_decode:
-                # Decode: return 2D caches for on-device embedding lookup
+                # Decode fallback: return 2D caches for on-device embedding lookup
                 layer_rope = self._get_rope_mats(i, for_decode=True)
             else:
                 layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len)
@@ -687,12 +709,18 @@ class Gemma4Model:
                 user_id=user_id,
                 valid_seq_len=prefill_valid_len,
                 sequential_kv_write=sequential_kv_write,
+                rope_presliced=rope_presliced,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
             if keep_kv and layer.self_attn._last_kv is not None:
                 shared_kv_store[i] = layer.self_attn._last_kv
+
+        # Free the per-layer-type decode RoPE tensors shared across the loop.
+        for cos_pos, sin_pos in decode_rope_presliced.values():
+            cos_pos.deallocate(True)
+            sin_pos.deallocate(True)
 
         # Deallocate any stored shared K/V tensors
         for kv_pair in shared_kv_store.values():
