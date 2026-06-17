@@ -3507,10 +3507,12 @@ class ModelArgs:
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+            "Devstral-Small-2-24B": "mistralai/Devstral-Small-2-24B-Instruct-2512",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
         }
+        hf_cache_dir = os.getenv("HF_HUB_CACHE") or None
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
         logger.info(f"Model name: {self.model_name}")
@@ -3522,6 +3524,7 @@ class ModelArgs:
             # If there is no Processor, it will return Tokenizer (useful for multimodal models)
             tokenizer = AutoTokenizer.from_pretrained(
                 self.TOKENIZER_PATH,
+                cache_dir=hf_cache_dir,
                 local_files_only=os.getenv("CI") == "true",
                 trust_remote_code=self.trust_remote_code_hf,
             )
@@ -3565,6 +3568,8 @@ class ModelArgs:
                     fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
                 elif "mistral" in model_name_lower and "small" in model_name_lower and "24b" in model_name_lower:
                     fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+                elif "devstral" in model_name_lower and "small" in model_name_lower and "24b" in model_name_lower:
+                    fallback_tokenizer_path = "mistralai/Devstral-Small-2-24B-Instruct-2512"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
                     fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
 
@@ -3572,7 +3577,9 @@ class ModelArgs:
                 logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                 try:
                     tokenizer = AutoTokenizer.from_pretrained(
-                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        fallback_tokenizer_path,
+                        cache_dir=hf_cache_dir,
+                        local_files_only=os.getenv("CI") == "true",
                     )
                     logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                 except Exception as fallback_e:

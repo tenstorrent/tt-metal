@@ -333,6 +333,7 @@ def main(argv: list[str] | None = None):
             args.model_id,
             trust_remote_code=True,
             fix_mistral_regex=True,
+            cache_dir=os.getenv("HF_HUB_CACHE") or None,
             local_files_only=os.getenv("CI") == "true",
         )
         tokenizer = getattr(processor, "tokenizer", processor)

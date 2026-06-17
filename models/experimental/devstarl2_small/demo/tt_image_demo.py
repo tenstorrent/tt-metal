@@ -311,6 +311,7 @@ def run_hf(
         model_id,
         trust_remote_code=True,
         fix_mistral_regex=True,
+        cache_dir=os.getenv("HF_HUB_CACHE") or None,
         local_files_only=os.getenv("CI") == "true",
     )
     model = AutoModelForImageTextToText.from_pretrained(
@@ -424,6 +425,7 @@ def run_tt(
         model_id,
         trust_remote_code=True,
         fix_mistral_regex=True,
+        cache_dir=os.getenv("HF_HUB_CACHE") or None,
         local_files_only=os.getenv("CI") == "true",
     )
     image = Image.open(image_path).convert("RGB")
@@ -582,6 +584,7 @@ def run_tt(
                 model_id,
                 trust_remote_code=True,
                 fix_mistral_regex=True,
+                cache_dir=os.getenv("HF_HUB_CACHE") or None,
                 local_files_only=os.getenv("CI") == "true",
             )
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
