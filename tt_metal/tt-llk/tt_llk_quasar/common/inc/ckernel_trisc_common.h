@@ -357,4 +357,41 @@ inline std::uint32_t find_max(std::uint32_t input1, std::uint32_t input2)
     return (input1 >= input2) ? input1 : input2;
 }
 
+/**
+ * @brief computes the square of a numerical input
+ * @note helper function used in TensorShape to return buf_desc programming
+ * since buf_desc x/y/z dim fields are limited to 8 bits need to limit output
+ *
+ * @param input: value to be squared
+ */
+inline std::uint8_t compute_square(std::uint8_t input)
+{
+    return static_cast<std::uint8_t>(input * input);
+}
+
+/**
+ * @brief Populates buffer descriptor using values from TensorShape.
+ * Currently supported buffer descriptor dimensions are:
+ * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
+ *
+ * @param tensor_shape: Tile/face dimensions and shape of input tensor
+ * @return buf_desc: Buffer descriptor struct w/ dimensions populated with values from TensorShape
+ */
+inline buffer_descriptor_u get_buf_desc_from_tensor_shape(const TensorShape& tensor_shape)
+{
+    buffer_descriptor_u buf_desc = {0};
+    buf_desc.f.x_dim             = tensor_shape.face_c_dim;
+    buf_desc.f.y_dim             = tensor_shape.face_r_dim;
+    if (tensor_shape.num_faces_r_dim == tensor_shape.num_faces_c_dim)
+    {
+        buf_desc.f.z_dim = static_cast<std::uint8_t>(tensor_shape.total_num_faces());
+    }
+    else
+    {
+        (tensor_shape.num_faces_r_dim < tensor_shape.num_faces_c_dim) ? buf_desc.f.z_dim = compute_square(tensor_shape.num_faces_r_dim)
+                                                                      : buf_desc.f.z_dim = compute_square(tensor_shape.num_faces_c_dim);
+    }
+    return buf_desc;
+}
+
 } // namespace ckernel::trisc

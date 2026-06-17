@@ -29,9 +29,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    buffer_descriptor_u bd_val = {0};
+    // buffer_descriptor_u bd_val = {0};
 
     const auto tensor_shape_A = tensor_shape_from_params(params);
+
+    buffer_descriptor_u bd_val = ckernel::trisc::get_buf_desc_from_tensor_shape(tensor_shape_A);
 
     unsigned l1_addr_16B;
     if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
@@ -45,9 +47,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     bd_val.f.l1_addr_16B = l1_addr_16B;
     bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
+    // bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
+    // bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
+    // bd_val.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
@@ -121,16 +123,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    buffer_descriptor_u bd_val = {0};
+    // buffer_descriptor_u bd_val = {0};
     tdma_descriptor_t tdma_desc;
 
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
+    buffer_descriptor_u bd_val = ckernel::trisc::get_buf_desc_from_tensor_shape(tensor_shape_A);
+
     bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
+    // bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
+    // bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
+    // bd_val.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
 
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
