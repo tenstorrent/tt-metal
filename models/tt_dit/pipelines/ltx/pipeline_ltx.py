@@ -1794,15 +1794,6 @@ class LTXPipeline:
         # full mesh). Deferred to here so the video DiT has already run with clean CCL runtime args.
         self._ensure_audio_submesh()
 
-        # The worker fabric connection is cached at a fixed per-physical-chip L1 address with no
-        # cq/submesh awareness, so the overlapping audio submesh would reuse the parent video's
-        # stale connection (built for the parent's full-mesh routing) and deadlock. Video is fully
-        # done here; sync the parent to idle, then host-zero the connection region on the submesh's
-        # chips so the first audio CCL opens a fresh connection for its own routing.
-        if self._owned_audio_submesh is not None:
-            ttnn.synchronize_device(self.mesh_device)
-            ttnn.reset_fabric_connection_lock(self._owned_audio_submesh)
-
         _dump = os.environ.get("LTX_DUMP_AUDIO_LATENT")
         if _dump and float(audio_latent.abs().max()) > 0:  # skip the all-zero warmup latent
             torch.save(audio_latent.cpu(), _dump)

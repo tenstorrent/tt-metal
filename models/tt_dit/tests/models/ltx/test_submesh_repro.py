@@ -63,6 +63,28 @@ def test_parent_then_child_cq0(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
+def test_child_cq0_repeated(mesh_device):
+    """H4: parent 4x8 ring (cq0), then the SAME 1x4 child runs all_gather REPEATEDLY (cq0).
+
+    Models repeated decode_audio calls on the overlapping submesh. The full audio-only test
+    showed decode #1 completing then decode #2 hanging; this isolates whether repeated child CCL
+    on cq0 is the cause, with and without a between-iteration parent synchronize_device.
+    """
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(4, 8))
+    ccl = CCLManager(mesh, num_links=2, topology=ttnn.Topology.Ring)
+    _run_ag(ccl, mesh, "parent 4x8 cq0")
+
+    audio = mesh.create_submesh(ttnn.MeshShape(1, 4))
+    audio_ccl = CCLManager(audio, num_links=2, topology=ttnn.Topology.Linear)
+    ttnn.synchronize_device(parent)
+
+    for i in range(4):
+        _run_ag(audio_ccl, audio, f"child 1x4 cq0 iter {i}")
+    print("[REPRO] PASS: repeated child cq0 all_gather completed", flush=True)
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
 def test_parent_then_child_cq1(mesh_device):
     """H3: parent 4x8 ring all_gather (cq0), then child 1x4 subset all_gather (cq1).
 
