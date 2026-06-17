@@ -24,7 +24,29 @@
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="prev" title="Support" href="support.html" /> 
+    <link rel="prev" title="Support" href="support.html" />
+ 
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
+    if (version && version !== 'latest') {
+        // Add noindex to keep old versions out of search results
+        var noindex = document.createElement('meta');
+        noindex.name = 'robots';
+        noindex.content = 'noindex';
+        document.head.appendChild(noindex);
+        // Add canonical pointing to latest (clean URL, no query/fragment)
+        var canonical = document.createElement('link');
+        canonical.rel = 'canonical';
+        canonical.href = (window.location.origin + window.location.pathname)
+            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        document.head.appendChild(canonical);
+    }
+})();
+</script>
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -81,6 +103,32 @@
       </nav>
 
       <div class="wy-nav-content">
+<div id="tt-version-warning" style="display:none"></div>
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
+    if (version && version !== 'latest') {
+        var latestUrl = (window.location.origin + window.location.pathname)
+            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        var banner = document.getElementById('tt-version-warning');
+        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
+        banner.textContent = 'You are viewing documentation for an older version (';
+        var versionEl = document.createElement('strong');
+        versionEl.textContent = version;
+        banner.appendChild(versionEl);
+        banner.appendChild(document.createTextNode('). '));
+        var link = document.createElement('a');
+        link.href = latestUrl;
+        link.textContent = 'Click here for the latest version.';
+        banner.appendChild(link);
+        banner.style.display = 'block';
+    }
+})();
+</script>
+
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -150,7 +198,9 @@ async function loadVersions() {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const projectCode = location.pathname.split('/')[3];
+        const pathParts = location.pathname.split('/');
+        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
+        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -168,7 +218,9 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    return window.location.pathname.split('/')[2];
+    const parts = window.location.pathname.split('/');
+    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
+    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 
