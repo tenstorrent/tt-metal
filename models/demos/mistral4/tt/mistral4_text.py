@@ -351,6 +351,9 @@ class TtMistral4MoE(LightweightModule):
     def __init__(self, mesh, sd, cfg, shard_experts=False, expert_dtype=ttnn.bfloat16):
         super().__init__()
         self.mesh = mesh
+        from models.tt_transformers.tt.ccl import get_num_links
+
+        self.n_links = get_num_links(mesh, cluster_axis=1)  # P150x8 = 2 eth links/axis; use both for CCL bandwidth
         self.E = cfg.n_routed_experts
         self.k = cfg.num_experts_per_tok
         self.interm = cfg.moe_intermediate_size
@@ -448,7 +451,7 @@ class TtMistral4MoE(LightweightModule):
                 acc,
                 cluster_axis=1,
                 mesh_device=self.mesh,
-                num_links=1,
+                num_links=self.n_links,
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
@@ -491,7 +494,9 @@ class TtMistral4MoE(LightweightModule):
         idx4 = ttnn.to_layout(ttnn.typecast(ttnn.reshape(ti, (bpd, 1, 1, self.k)), ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT)
         # dispatch (return-API): tokens routed to their experts' devices. disp [1,Btot,1,H] / meta [1,Btot,1,k]
         # per device (Btot = total tokens this device's experts serve). cluster_axis=1 spans all 8 on (1,8).
-        disp, meta = ttnn.all_to_all_dispatch(x4, idx4, self.expert_map, cluster_axis=1, num_links=1, subdevice_id=sdid)
+        disp, meta = ttnn.all_to_all_dispatch(
+            x4, idx4, self.expert_map, cluster_axis=1, num_links=self.n_links, subdevice_id=sdid
+        )
         # broadcast each device's dispatched tokens across its `per` local experts -> batched-expert matmul
         d = ttnn.repeat(disp, ttnn.Shape([self.per, 1, 1, 1]))  # [per, Btot, 1, H]
         bsz = d.shape[1]
@@ -503,7 +508,7 @@ class TtMistral4MoE(LightweightModule):
         y = ttnn.matmul(h, self.down_sh)  # [per,Btot,H]
         eo = ttnn.to_layout(ttnn.reshape(y, (self.per, bsz, 1, H)), ttnn.ROW_MAJOR_LAYOUT)
         comb = ttnn.all_to_all_combine(
-            eo, meta, self.expert_map, cluster_axis=1, num_links=1, subdevice_id=sdid
+            eo, meta, self.expert_map, cluster_axis=1, num_links=self.n_links, subdevice_id=sdid
         )  # [k, bpd, 1, H] each token's top-k selected-expert outputs
         comb = ttnn.reshape(ttnn.to_layout(comb, ttnn.TILE_LAYOUT), (self.k, bpd, H))
         w = ttnn.reshape(ttnn.permute(tw, (2, 0, 1)), (self.k, bpd, 1))  # [bpd,1,k] -> [k,bpd,1]
@@ -593,9 +598,10 @@ class TtMistral4TextModel(LightweightModule):
         # framework CCL helper — persistent global-semaphore pools (trace-safe) for the LM-head
         # all-gather; reused as-is, not modified. (The tt_all_gather *wrapper* no-ops on a 1xN mesh
         # via a `1 in shape` guard, so we call the raw op with cluster_axis=1 + these semaphores.)
-        from models.tt_transformers.tt.ccl import TT_CCL
+        from models.tt_transformers.tt.ccl import TT_CCL, get_num_links
 
         self.ccl = TT_CCL(mesh)
+        self.n_links = get_num_links(mesh, cluster_axis=1)  # P150x8 = 2 eth links/axis (LM-head all-gather)
         self.w_norm = _norm(sd["model.norm.weight"], mesh)
         # Sharded LM head: the [hidden, vocab=131072] weight is sharded along vocab across the 8
         # devices (16384/device, ~128MB vs 1.07GB replicated) and the per-device logit slices are
@@ -619,7 +625,7 @@ class TtMistral4TextModel(LightweightModule):
             dim=3,
             multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=1,
+            num_links=self.n_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,

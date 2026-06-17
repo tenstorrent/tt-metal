@@ -58,8 +58,12 @@ PCCs are ~0.999. Passes the >0.98 full-depth gate.
 
 | ISL | 128 | 1024 | 4096 | 8192 (chunked) |
 |---|---|---|---|---|
-| TTFT | 226 ms | 655 ms | 2657 ms | 7.8 s |
-| prefill tok/s | 566 | 1564 | 1541 | ~1050 (217 ms/layer) |
+| TTFT | 222 ms | 632 ms | 2587 ms | 7.8 s |
+| prefill tok/s | 576 | 1619 | 1584 | ~1050 (217 ms/layer) |
+
+CCL ops (MoE all-reduce, LM-head all-gather, sparse all-to-all) use **both** of the P150x8's ethernet
+links per axis (`num_links = get_num_links(mesh)`), which lifts prefill ~2–3.5% over the single-link
+default; B=1 decode is unchanged (its all-reduce payload is latency-bound, not bandwidth-bound).
 
 Largest full-depth ISL = **8192** (chunked prefill). 16384 runs at reduced layer counts but **OOMs at 36L**
 (the per-layer paged KV caches + 119B weights exceed DRAM) — a paged-cache memory-management follow-up.
