@@ -54,7 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         l1_addr_16B = params.buffer_B[0] / 16;
     }
 
-    buffer_descriptor_u bd_val = ckernel::trisc::get_buf_desc_from_tensor_shape(tensor_shape_A);
+    buffer_descriptor_u bd_val = ckernel::get_buf_desc_from_tensor_shape(tensor_shape_A);
 
     bd_val.f.l1_addr_16B = l1_addr_16B;
     bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
@@ -150,7 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     tdma_descriptor_t tdma_desc;
 
-    buffer_descriptor_u bd_val = ckernel::trisc::get_buf_desc_from_tensor_shape(tensor_shape_A);
+    buffer_descriptor_u bd_val = ckernel::get_buf_desc_from_tensor_shape(tensor_shape_A);
 
     bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);

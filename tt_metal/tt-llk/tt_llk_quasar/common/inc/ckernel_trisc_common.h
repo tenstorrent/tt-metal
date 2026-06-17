@@ -357,14 +357,4 @@ inline std::uint32_t find_max(std::uint32_t input1, std::uint32_t input2)
     return (input1 >= input2) ? input1 : input2;
 }
 
-/**
- * @brief computes the square of the given input
- *
- * @param input: value to be squared
- */
-inline std::uint16_t compute_square(std::uint8_t input)
-{
-    return (input * input);
-}
-
 } // namespace ckernel::trisc

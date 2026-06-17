@@ -112,8 +112,9 @@ inline buffer_descriptor_u get_buf_desc_from_tensor_shape(const TensorShape& ten
     }
     else
     {
-        buf_desc.f.z_dim = (tensor_shape.face_r_dim < tensor_shape.face_c_dim) ? static_cast<std::uint8_t>(compute_square(tensor_shape.face_r_dim))
-                                                                               : static_cast<std::uint8_t>(compute_square(tensor_shape.face_c_dim));
+        buf_desc.f.z_dim = (tensor_shape.num_faces_r_dim < tensor_shape.num_faces_c_dim)
+                               ? static_cast<std::uint8_t>(tensor_shape.num_faces_r_dim * tensor_shape.num_faces_r_dim)
+                               : static_cast<std::uint8_t>(tensor_shape.num_faces_c_dim * tensor_shape.num_faces_c_dim);
     }
     return buf_desc;
 }

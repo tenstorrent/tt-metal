@@ -31,7 +31,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
-    buffer_descriptor_u bd_val = ckernel::trisc::get_buf_desc_from_tensor_shape(tensor_shape_A);
+    buffer_descriptor_u bd_val = ckernel::get_buf_desc_from_tensor_shape(tensor_shape_A);
 
     unsigned l1_addr_16B;
     if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
-    buffer_descriptor_u bd_val = ckernel::trisc::get_buf_desc_from_tensor_shape(tensor_shape_A);
+    buffer_descriptor_u bd_val = ckernel::get_buf_desc_from_tensor_shape(tensor_shape_A);
 
     bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
