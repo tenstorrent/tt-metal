@@ -14,11 +14,11 @@ HF references use the same **128-token chunked prefill + ``DynamicCache``** path
 
 Run sanity (CI gate, short prefill lengths)::
 
-    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sanity -v
+    pytest models/experimental/devstral2_123B_instruct/tests/test_model_token_match.py -k sanity -v
 
 Run full sweep (all 14 prefill lengths, 32 … 256K)::
 
-    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sweep -v
+    pytest models/experimental/devstral2_123B_instruct/tests/test_model_token_match.py -k sweep -v
 
 Environment overrides::
 

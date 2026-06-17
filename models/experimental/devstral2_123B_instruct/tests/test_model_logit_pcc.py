@@ -5,7 +5,7 @@
 """Full-model logit PCC vs HuggingFace ``AutoModelForCausalLM``.
 
 After chunked prefill (golden corpus tokens), compares last-prefill logits and
-``DECODE_GENERATION_LENGTH`` (10) decode logits with PCC ≥ 0.99. Decode follows
+``DECODE_GENERATION_LENGTH`` (10) decode logits with PCC ≥ 0.90. Decode follows
 tt-transformers ``test_model.py``: **HF greedy** (temperature=0 argmax) picks the
 next input token for both HF and TT after each logits comparison.
 

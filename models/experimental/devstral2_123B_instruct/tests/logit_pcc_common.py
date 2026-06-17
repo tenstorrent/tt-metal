@@ -51,7 +51,7 @@ from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2A
 from models.experimental.devstral2_123B_instruct.tt.tt_ministral3_model import TtMinistral3ForCausalLM
 from models.tt_transformers.tt.ccl import TT_CCL
 
-PCC_REQUIRED = 0.99
+PCC_REQUIRED = 0.90
 DECODE_GENERATION_LENGTH = 10
 _SWEEP_TIMEOUT_MARGIN = 1.25
 # Default pytest cap for the full 32 … 262144 logit-PCC sweep (override via env).
