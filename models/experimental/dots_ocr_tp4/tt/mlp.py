@@ -94,6 +94,34 @@ def _mlp_prefill_pc(mesh_device, m: int, k: int, n: int, fp32_dest: bool):
                 fused_activation=None,
                 fuse_batch=True,
             )
+    # WH (8x8) down (K=2240, N=1536): like the QKV prefill matmul, the prime
+    # M-tiles=89 (seq 2848) collapses prefill_matmul_2d_config's largest-divisor
+    # grid.y to 1 -> per_core_M=89 -> the L1 guard trips -> None -> ttnn's auto
+    # heuristic (~382 us, the SLOW row in the profile). Pin the swept full-grid
+    # config (matmul_tests/bench_mlp_down_tp4_prefill.py, BFP8 x BFP4 -> BFP8 LoFi):
+    # per_core_M=12 (ceil 89/8), per_core_N=6 (ceil 48/8), in0_block_w=10
+    # (70 K-tiles / 10 = 7 passes), out_subblock 4x2 (dst=8) -> ~214 us with the
+    # DRAM activation in0 the prefill MLP uses (~1.7x). out_subblock_h must divide
+    # per_core_M, so derive it (seq 2816 -> per_core_M=11 -> sub_h=1).
+    if int(grid.x) == 8 and int(grid.y) == 8 and k == 2240 and n == 1536:
+        mt_d = (m + 31) // 32
+        if 81 <= mt_d <= 90:
+            per_core_m = (mt_d + 7) // 8
+            per_core_n = ((n // 32) + 7) // 8
+            sub_h = 4 if per_core_m % 4 == 0 else (2 if per_core_m % 2 == 0 else 1)
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                in0_block_w=10,
+                out_subblock_h=sub_h,
+                out_subblock_w=2,
+                out_block_h=per_core_m,
+                out_block_w=per_core_n,
+                per_core_M=per_core_m,
+                per_core_N=per_core_n,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=True,
+            )
     return prefill_matmul_2d_config(mesh_device, m, k, n, fp32_dest=fp32_dest)
 
 
