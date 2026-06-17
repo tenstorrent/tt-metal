@@ -68,6 +68,22 @@ def test_subset_submesh_standalone(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
+def test_subset_submesh_neighbor_pad_standalone(mesh_device):
+    """H8: a 1x4 strict-subset submesh NEIGHBOR_PAD (cq0), with NO parent op first.
+
+    Control for H7: if neighbor_pad works standalone but H7 (after a heavy parent) hangs, the
+    failure is the overlap-with-prior-parent-CCL, not neighbor_pad on a subset submesh per se.
+    """
+    parent = mesh_device
+    audio = parent.create_submesh(ttnn.MeshShape(1, 4))
+    audio_ccl = CCLManager(audio, num_links=2, topology=ttnn.Topology.Linear)
+    for i in range(8):
+        mode = "replicate" if i % 2 == 0 else "zeros"
+        _run_neighbor_pad(audio_ccl, audio, f"subset 1x4 standalone npad {i}", padding_mode=mode)
+    print("[REPRO] PASS: subset-submesh standalone neighbor_pad completed", flush=True)
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
 def test_parent_then_child_cq0(mesh_device):
     """H2: parent 4x8 ring all_gather (cq0), then child 1x4 subset all_gather (cq0).
 
