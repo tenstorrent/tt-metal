@@ -1002,11 +1002,19 @@ struct device_print_type<dp_top_callstack_t> {
 
     static void serialize(
         device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, dp_top_callstack_t argument) {
-        *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(device_print_buffer + offset) = argument.pc;
-        *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(device_print_buffer + offset + sizeof(uintptr_t)) =
-            argument.ra;
-        *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(device_print_buffer + offset + 2 * sizeof(uintptr_t)) =
-            argument.skip_frames;
+        // Fields are only 4-byte aligned in the buffer; on 64-bit cores an 8-byte store would be
+        // misaligned, so split it into two 32-bit stores (rocket cores fault on misaligned 8-byte stores).
+        if constexpr (sizeof(uintptr_t) == 8) {
+            store_64bit_value(device_print_buffer, offset, argument.pc);
+            store_64bit_value(device_print_buffer, offset + sizeof(uintptr_t), argument.ra);
+            store_64bit_value(device_print_buffer, offset + 2 * sizeof(uintptr_t), argument.skip_frames);
+        } else {
+            *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(device_print_buffer + offset) = argument.pc;
+            *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(device_print_buffer + offset + sizeof(uintptr_t)) =
+                argument.ra;
+            *reinterpret_cast<device_print_buffer_ptr<uintptr_t>>(
+                device_print_buffer + offset + 2 * sizeof(uintptr_t)) = argument.skip_frames;
+        }
     }
 };
 
