@@ -30,7 +30,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.attention.operations import (
 )
 from models.demos.blackhole.qwen3_5_9b.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
 from models.demos.blackhole.qwen3_5_9b.tt.attention.weights import load_attention_weights
-from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import qwen35_rms_norm
+from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import Qwen35RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
@@ -68,6 +68,9 @@ class Qwen35Attention(LightweightModule):
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.eps = args.norm_eps
+
+        self.q_norm = Qwen35RMSNorm(self.weights.w_q_norm, eps=self.eps, scale=True)
+        self.k_norm = Qwen35RMSNorm(self.weights.w_k_norm, eps=self.eps, scale=True)
 
     def set_paged_kv_cache(self, k_cache, v_cache):
         """Bind an externally-allocated paged KV cache into the single cache slot.
@@ -107,21 +110,13 @@ class Qwen35Attention(LightweightModule):
         gate = ttnn.transpose(ttnn.reshape(gate, (B, S, NH, HD)), 1, 2)
 
         # 3. apply RMS norms
-        q = qwen35_rms_norm(q, weight=weights.w_q_norm, eps=self.eps, scale=True)
-        k = qwen35_rms_norm(k, weight=weights.w_k_norm, eps=self.eps, scale=True)
+        q, k = self.q_norm(q), self.k_norm(k)
 
         # 4. apply RoPE
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
         # 5. update kv cache. Both fill_cache (contiguous) and paged_fill_cache (paged) write
-        #    one batch row per call in this scalar-batch_idx form, so a B>1 prefill fills users
-        #    one at a time — the same per-user loop gemma4's batched prefill uses
-        #    (gemma4/tt/attention/prefill.py fills valid_slots with batch_idx=slot). User b's
-        #    [1,NKV,S,HD] slice lands in slot user_id+b; for the paged cache that batch_idx also
-        #    selects user b's page_table row, so the caller must pass a page_table whose rows
-        #    cover [user_id, user_id+B). B==1 keeps the no-slice fast path. Paged vs contiguous
-        #    differ only in which fill op writes the slice — the batched SDPA below is batch-general.
         if self.kv_cache is not None:
             k_cache, v_cache = self.kv_cache  # unpack the single [k_cache, v_cache] slot
             for b in range(B):
@@ -178,8 +173,8 @@ class Qwen35Attention(LightweightModule):
         q, k, v = split_qkv_heads_decode(xqkv, NH, NKV)
         gate = ttnn.reshape(gate, (1, B, NH, HD))
         # 3. apply RMS norms
-        q = qwen35_rms_norm(q, weight=weights.w_q_norm, eps=self.eps, scale=True)
-        k = qwen35_rms_norm(k, weight=weights.w_k_norm, eps=self.eps, scale=True)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
 
         # 4. apply RoPE.
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
