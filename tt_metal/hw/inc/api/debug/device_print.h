@@ -998,8 +998,7 @@ struct device_print_type<dp_top_callstack_t> {
     static_assert(
         sizeof(uintptr_t) == sizeof(uint32_t) || sizeof(uintptr_t) == sizeof(uint64_t), "Unsupported pointer size");
 
-    static constexpr device_print_type_info value = {
-        sizeof(uintptr_t) == sizeof(uint32_t) ? 'c' : 'C', 3 * sizeof(uintptr_t)};
+    static constexpr device_print_type_info value = {'c', 3 * sizeof(uintptr_t)};
 
     static void serialize(
         device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, dp_top_callstack_t argument) {
