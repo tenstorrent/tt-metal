@@ -188,7 +188,7 @@ void kernel_main() {
             auto fabric_tensor_page_addr = tt::tt_fabric::addrgen_detail::get_noc_address(
                 output_tensor_accessor, page_id, output_page_byte_offset);
             if constexpr (enable_fabric) {
-                fabric.send(l1_read_addr, fabric_tensor_page_addr);
+                fabric.async_write(l1_read_addr, fabric_tensor_page_addr);
             }
 
             // Local write.
@@ -207,7 +207,7 @@ void kernel_main() {
 
         noc.async_writes_flushed<NocOptions::POSTED>();  // wait for local writes
         if constexpr (enable_fabric) {
-            fabric.flush();  // wait for Fabric writes
+            fabric.async_writes_flushed();  // wait for Fabric writes
         }
         cb.pop_front(1);
     }

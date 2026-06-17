@@ -247,10 +247,10 @@ void kernel_main() {
                     auto page_id = next_output_page_id();
                     auto fabric_tensor_page_addr = tt::tt_fabric::addrgen_detail::get_noc_address(
                         output_tensor_accessor, page_id, output_page_byte_offset);
-                    fabric.send(l1_read_addr, fabric_tensor_page_addr);
+                    fabric.async_write(l1_read_addr, fabric_tensor_page_addr);
                     l1_read_addr += output_page_size;
                 }
-                fabric.flush();
+                fabric.async_writes_flushed();
                 if (l1_read_addr == l1_end_addr) {
                     l1_read_addr = l1_base_addr;
                 }
@@ -276,10 +276,10 @@ void kernel_main() {
                 auto page_id = next_output_page_id();
                 auto fabric_tensor_page_addr = tt::tt_fabric::addrgen_detail::get_noc_address(
                     output_tensor_accessor, page_id, output_page_byte_offset);
-                fabric.send(l1_read_addr, fabric_tensor_page_addr);
+                fabric.async_write(l1_read_addr, fabric_tensor_page_addr);
                 l1_read_addr += output_page_size;
             }
-            fabric.flush();
+            fabric.async_writes_flushed();
             if (l1_read_addr == l1_end_addr) {
                 l1_read_addr = l1_base_addr;
             }

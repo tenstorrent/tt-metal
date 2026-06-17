@@ -91,7 +91,8 @@ public:
         // TODO static_assert(chunk_count == 0, "outstanding chunks! flush() not called correctly");
     }
 
-    void send(uint32_t l1_addr, uint64_t remote_noc_addr) {
+    // Send a single page
+    void async_write(uint32_t l1_addr, uint64_t remote_noc_addr) {
         if constexpr (use_scatter_write) {
             // Queue up multiple pages to send in a single packet.
             // Assumption: pages are contiguous in local memory (L1).
@@ -138,7 +139,7 @@ public:
     }
 
     // Call this before popping CB entry
-    void flush() {
+    void async_writes_flushed() {
         if constexpr (use_scatter_write) {
             // Send any outstanding pages. This can happen when total number of tensor pages doesn't evenly
             // divide by pages per packet.
