@@ -71,6 +71,18 @@ FORCE_INLINE void mask_last_chunk(
             *mask_write_ptr++ = 0xFF80FF80;
         }
         cb_push_back(cb_mask, 1);
+    } else {
+        // #43562/3 FIX: this core has no real partial-mask chunk. Push ONE all-ZERO (all-pass) mask tile
+        // so the compute can route its FULL chunks through the bank-deterministic MASK path (mm1 = 0 +
+        // Q@K via the coherent MOVB2D real-data DEST write) instead of the flag-only ZEROACC. All
+        // k_chunk_size positions are unmasked -> additive 0x00000000 (bf16 +0 in both halves).
+        cb_reserve_back(cb_mask, 1);
+        volatile tt_l1_ptr uint32_t* zero_mask_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_mask));
+        for (uint32_t i = 0; i < k_chunk_size / 2; i++) {
+            *zero_mask_ptr++ = 0x00000000;
+        }
+        cb_push_back(cb_mask, 1);
     }
 }
 #endif
@@ -747,6 +759,14 @@ struct FlashMLADecode {
             pack_block_contiguous_init(sdpa_output_cb);
             uint32_t num_chunks = (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
             bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % args.k_chunk_size != 0;
+            // #43562/3 FIX: on a core with NO real partial-mask chunk, the reader pushed ONE all-zero mask
+            // tile. Wait on it so every FULL chunk routes its QK matmul through the clean MASK path
+            // (mm1 = 0 + Q@K via the coherent MOVB2D write). use_zero_mask gates the per-chunk
+            // mask_chunk=true override below and the matching pop after the loop.
+            bool use_zero_mask = !mask_last_chunk;
+            if (use_zero_mask) {
+                cb_wait_front(cb_mask, 1);
+            }
             if (mask_last_chunk) {
                 cb_wait_front(cb_mask, 1);
             }
@@ -779,7 +799,9 @@ struct FlashMLADecode {
                     corr_exp_dst_offset,
                     chunk == 0,
                     !sdpa_output_is_final && last_chunk,
-                    mask_last_chunk && last_chunk);
+                    // #43562/3 FIX: route EVERY full chunk through the MASK path (all-zero mask) when this
+                    // core has no real partial mask; otherwise keep the original last-chunk mask.
+                    use_zero_mask ? true : (mask_last_chunk && last_chunk));
             }
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -823,6 +845,10 @@ struct FlashMLADecode {
 
             cb_pop_front(cb_q_in, q_chunk_tiles);
             if (mask_last_chunk) {
+                cb_pop_front(cb_mask, 1);
+            }
+            // #43562/3 FIX: release the all-zero mask tile (paired with the wait_front above).
+            if (use_zero_mask) {
                 cb_pop_front(cb_mask, 1);
             }
 #endif
