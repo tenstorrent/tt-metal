@@ -16,27 +16,33 @@ using tt::tt_fabric::common::experimental::UnicastScatterWriteUpdateMask;
 using tt::tt_fabric::common::experimental::UnicastWriteUpdateMask;
 
 // ----------------------------------------------------------------------------
-// FabricStreamSender — construction / lifecycle
+// FabricStreamSender — construction / lifecycle (delegated to the ConnT policy)
 // ----------------------------------------------------------------------------
 
-FORCE_INLINE FabricStreamSender::FabricStreamSender(size_t& conn_arg_idx, bool is_forward, uint32_t alignment) :
-    conn_(FabricConnectionManager::build_from_args<
-          FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx)),
-    alignment_(alignment),
-    is_forward_(is_forward) {}
+template <typename ConnT>
+FORCE_INLINE FabricStreamSender<ConnT>::FabricStreamSender(size_t& conn_arg_idx, bool is_forward, uint32_t alignment) :
+    conn_(conn_arg_idx, is_forward), alignment_(alignment) {}
 
-FORCE_INLINE void FabricStreamSender::open() {
-    conn_.open_finish();
-    dir_ = is_forward_ ? &conn_.get_forward_connection() : &conn_.get_backward_connection();
+template <typename ConnT>
+FORCE_INLINE FabricStreamSender<ConnT>::FabricStreamSender(ConnT conn, uint32_t alignment) :
+    conn_(conn), alignment_(alignment) {}
+
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::open() {
+    conn_.open();
 }
 
-FORCE_INLINE void FabricStreamSender::close() { conn_.close(); }
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::close() {
+    conn_.close();
+}
 
 // ----------------------------------------------------------------------------
 // FabricStreamSender — route
 // ----------------------------------------------------------------------------
 
-FORCE_INLINE void FabricStreamSender::set_route_unicast(uint32_t num_hops) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::set_route_unicast(uint32_t num_hops) {
     unicast_info_ = ccl_routing_utils::line_unicast_route_info_t{};
     // 1-D linear routing is intra-mesh and hop-distance based; dst_mesh_id is unused on
     // the LowLatencyPacketHeader path this resolves to.
@@ -44,7 +50,9 @@ FORCE_INLINE void FabricStreamSender::set_route_unicast(uint32_t num_hops) {
     unicast_info_.distance_in_hops = static_cast<uint16_t>(num_hops);
 }
 
-FORCE_INLINE void FabricStreamSender::set_route_unicast(const ccl_routing_utils::line_unicast_route_info_t& info) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::set_route_unicast(
+    const ccl_routing_utils::line_unicast_route_info_t& info) {
     unicast_info_ = info;
 }
 
@@ -52,7 +60,8 @@ FORCE_INLINE void FabricStreamSender::set_route_unicast(const ccl_routing_utils:
 // FabricStreamSender — armed unicast-write channel
 // ----------------------------------------------------------------------------
 
-FORCE_INLINE void FabricStreamSender::arm_unicast_write(uint32_t page_size_bytes) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::arm_unicast_write(uint32_t page_size_bytes) {
     if (payload_hdr_ == nullptr) {
         payload_hdr_ = PacketHeaderPool::allocate_header();
     }
@@ -67,14 +76,16 @@ FORCE_INLINE void FabricStreamSender::arm_unicast_write(uint32_t page_size_bytes
     ccl_routing_utils::fabric_set_line_unicast_route(payload_hdr_, unicast_info_);
 }
 
-FORCE_INLINE void FabricStreamSender::write(uint64_t dst_noc_addr, uint32_t src_l1_addr) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::write(uint64_t dst_noc_addr, uint32_t src_l1_addr) {
     // with_state issues the armed payload size, updating only the destination address.
     linear_fabric::fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-        dir_, payload_hdr_, src_l1_addr, tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr});
+        conn_.sender(), payload_hdr_, src_l1_addr, tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr});
 }
 
+template <typename ConnT>
 template <class AddrGen>
-FORCE_INLINE void FabricStreamSender::write_page(uint32_t src_l1_addr, uint32_t page_idx, const AddrGen& dst) {
+FORCE_INLINE void FabricStreamSender<ConnT>::write_page(uint32_t src_l1_addr, uint32_t page_idx, const AddrGen& dst) {
     const uint64_t dst_noc_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst, page_idx, 0);
     write(dst_noc_addr, src_l1_addr);
 }
@@ -83,7 +94,8 @@ FORCE_INLINE void FabricStreamSender::write_page(uint32_t src_l1_addr, uint32_t 
 // FabricStreamSender — armed unicast atomic-inc channel
 // ----------------------------------------------------------------------------
 
-FORCE_INLINE void FabricStreamSender::arm_inc(uint32_t val) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::arm_inc(uint32_t val) {
     if (sem_hdr_ == nullptr) {
         sem_hdr_ = PacketHeaderPool::allocate_header();
     }
@@ -97,17 +109,20 @@ FORCE_INLINE void FabricStreamSender::arm_inc(uint32_t val) {
     ccl_routing_utils::fabric_set_line_unicast_route(sem_hdr_, unicast_info_);
 }
 
-FORCE_INLINE void FabricStreamSender::inc(uint64_t remote_sem_noc_addr) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::inc(uint64_t remote_sem_noc_addr) {
     // with_state issues the armed value, updating only the destination semaphore address.
     linear_fabric::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        dir_, sem_hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
+        conn_.sender(), sem_hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
 }
 
 // ----------------------------------------------------------------------------
 // FabricStreamSender — multicast route
 // ----------------------------------------------------------------------------
 
-FORCE_INLINE void FabricStreamSender::set_route_multicast(const ccl_routing_utils::line_multicast_route_info_t& info) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::set_route_multicast(
+    const ccl_routing_utils::line_multicast_route_info_t& info) {
     multicast_info_ = info;
 }
 
@@ -115,7 +130,8 @@ FORCE_INLINE void FabricStreamSender::set_route_multicast(const ccl_routing_util
 // FabricStreamSender — armed scatter-write channel (<=4 chunks/packet)
 // ----------------------------------------------------------------------------
 
-FORCE_INLINE void FabricStreamSender::arm_scatter_write(uint32_t chunk_size_bytes, uint32_t num_chunks) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::arm_scatter_write(uint32_t chunk_size_bytes, uint32_t num_chunks) {
     if (scatter_hdr_ == nullptr) {
         scatter_hdr_ = PacketHeaderPool::allocate_header();
     }
@@ -136,7 +152,8 @@ FORCE_INLINE void FabricStreamSender::arm_scatter_write(uint32_t chunk_size_byte
     ccl_routing_utils::fabric_set_line_unicast_route(scatter_hdr_, unicast_info_);
 }
 
-FORCE_INLINE void FabricStreamSender::write_scatter(
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::write_scatter(
     const uint64_t* dst_noc_addrs, uint32_t num_chunks, uint32_t src_l1_addr) {
     // with_state re-programs dst addrs + chunk count + payload size each call (the last
     // packet of a run can carry fewer chunks than the armed maximum).
@@ -147,7 +164,7 @@ FORCE_INLINE void FabricStreamSender::write_scatter(
     linear_fabric::fabric_unicast_noc_scatter_write_with_state<
         UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
         UnicastScatterWriteUpdateMask::PayloadSize>(
-        dir_,
+        conn_.sender(),
         scatter_hdr_,
         src_l1_addr,
         tt::tt_fabric::NocUnicastScatterCommandHeader(dst_noc_addrs, chunk_sizes, static_cast<uint8_t>(num_chunks)),
@@ -158,7 +175,8 @@ FORCE_INLINE void FabricStreamSender::write_scatter(
 // FabricStreamSender — armed multicast atomic-inc channel (N-party barrier)
 // ----------------------------------------------------------------------------
 
-FORCE_INLINE void FabricStreamSender::arm_multicast_inc(uint32_t val) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::arm_multicast_inc(uint32_t val) {
     if (sem_hdr_ == nullptr) {
         sem_hdr_ = PacketHeaderPool::allocate_header();
     }
@@ -173,16 +191,18 @@ FORCE_INLINE void FabricStreamSender::arm_multicast_inc(uint32_t val) {
     ccl_routing_utils::fabric_set_line_multicast_route(sem_hdr_, multicast_info_);
 }
 
-FORCE_INLINE void FabricStreamSender::multicast_inc(uint64_t remote_sem_noc_addr) {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::multicast_inc(uint64_t remote_sem_noc_addr) {
     linear_fabric::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        dir_, sem_hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
+        conn_.sender(), sem_hdr_, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_sem_noc_addr, 0});
 }
 
 // ----------------------------------------------------------------------------
 // FabricStreamSender — final drain
 // ----------------------------------------------------------------------------
 
-FORCE_INLINE void FabricStreamSender::drain() {
+template <typename ConnT>
+FORCE_INLINE void FabricStreamSender<ConnT>::drain() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

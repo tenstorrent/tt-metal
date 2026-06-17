@@ -197,7 +197,7 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     // Direct path: build the egress through the helper (mux path above stays raw). Consumes
     // the same fabric args (build_from_args); the open is deferred to tx.open() below.
-    FabricStreamSender tx(arg_for_fab, /*is_forward=*/direction == 0, /*alignment=*/1);
+    FabricStreamSender<> tx(arg_for_fab, /*is_forward=*/direction == 0, /*alignment=*/1);
 #endif
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;

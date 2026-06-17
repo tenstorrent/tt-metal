@@ -82,10 +82,40 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 namespace dataflow_kernel_lib::ccl {
+
+/**
+ * @brief Direct fabric-connection policy (default). Wraps one FabricConnectionManager and
+ *        binds a single forward/backward direction. FabricStreamSender's arm/send methods
+ *        are agnostic to the policy — they call conn_.sender(); a Mux policy (MuxConn<N>,
+ *        for worker-mux link sharing) slots in behind the same open()/close()/sender()
+ *        interface without touching those methods.
+ */
+class DirectConn {
+public:
+    using SenderT = tt::tt_fabric::WorkerToFabricEdmSender;
+    /// Build the connection (deferred open) from the fabric runtime-arg block; advances conn_arg_idx.
+    FORCE_INLINE DirectConn(size_t& conn_arg_idx, bool is_forward) :
+        conn_(FabricConnectionManager::build_from_args<
+              FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx)),
+        is_forward_(is_forward) {}
+    /// Finish opening + bind the forward/backward direction.
+    FORCE_INLINE void open() {
+        conn_.open_finish();
+        dir_ = is_forward_ ? &conn_.get_forward_connection() : &conn_.get_backward_connection();
+    }
+    FORCE_INLINE void close() { conn_.close(); }
+    FORCE_INLINE SenderT* sender() { return dir_; }
+
+private:
+    FabricConnectionManager conn_;
+    SenderT* dir_ = nullptr;
+    bool is_forward_ = true;
+};
 
 /**
  * @brief A single open fabric egress endpoint in one direction, exposing armed channels.
@@ -132,16 +162,24 @@ namespace dataflow_kernel_lib::ccl {
  * tx.close();
  * @endcode
  */
+template <typename ConnT = DirectConn>
 class FabricStreamSender {
 public:
     /**
-     * @brief Build the connection (deferred open) from runtime args.
+     * @brief Convenience ctor for the default DirectConn policy: build the connection
+     *        (deferred open) from runtime args. Advances conn_arg_idx past the fabric block.
      * @param conn_arg_idx  Index of the fabric arg block produced by
      *        ttnn::ccl::dataflow::append_ccl_fabric_rt_args; ADVANCED past the block.
      * @param is_forward    Send on the forward (true) or backward (false) connection.
      * @param alignment     L1 alignment used to size the on-wire payload (bytes).
      */
     FORCE_INLINE FabricStreamSender(size_t& conn_arg_idx, bool is_forward, uint32_t alignment);
+
+    /**
+     * @brief Construct from a pre-built connection policy (e.g. MuxConn<N>) + alignment.
+     *        The policy already read its own args; open()/close()/sender() route through it.
+     */
+    FORCE_INLINE FabricStreamSender(ConnT conn, uint32_t alignment);
 
     /// Finish opening the connection and bind the forward/backward direction.
     FORCE_INLINE void open();
@@ -258,14 +296,12 @@ public:
     FORCE_INLINE void drain();
 
 private:
-    FabricConnectionManager conn_;
-    tt::tt_fabric::WorkerToFabricEdmSender* dir_ = nullptr;  // bound in open()
-    volatile PACKET_HEADER_TYPE* payload_hdr_ = nullptr;     // armed by arm_unicast_write
-    volatile PACKET_HEADER_TYPE* scatter_hdr_ = nullptr;     // armed by arm_scatter_write
-    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;         // armed by arm_inc / arm_multicast_inc (shared)
+    ConnT conn_;                                          // connection policy (Direct/Mux); owns open/close/sender()
+    volatile PACKET_HEADER_TYPE* payload_hdr_ = nullptr;  // armed by arm_unicast_write
+    volatile PACKET_HEADER_TYPE* scatter_hdr_ = nullptr;  // armed by arm_scatter_write
+    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;      // armed by arm_inc / arm_multicast_inc (shared)
     uint32_t alignment_ = 0;
     uint32_t scatter_chunk_size_ = 0;  // per-chunk size armed by arm_scatter_write
-    bool is_forward_ = true;
     ccl_routing_utils::line_unicast_route_info_t unicast_info_{};
     ccl_routing_utils::line_multicast_route_info_t multicast_info_{};
 };

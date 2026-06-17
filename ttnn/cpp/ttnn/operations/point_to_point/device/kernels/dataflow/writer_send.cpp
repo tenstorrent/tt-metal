@@ -32,7 +32,7 @@ void kernel_main() {
     // begins at index 9; its leading has_forward flag also encodes the send direction.
     size_t conn_arg_idx = 9;
     const bool dst_is_forward = get_arg_val<uint32_t>(conn_arg_idx);
-    FabricStreamSender tx(conn_arg_idx, dst_is_forward, alignment);
+    FabricStreamSender<> tx(conn_arg_idx, dst_is_forward, alignment);
 
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.

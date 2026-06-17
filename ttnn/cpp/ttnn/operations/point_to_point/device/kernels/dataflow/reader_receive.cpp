@@ -29,7 +29,7 @@ void kernel_main() {
     // begins at index 9; its leading has_forward flag also encodes the route direction.
     size_t conn_arg_idx = 9;
     const bool sender_is_forward = get_arg_val<uint32_t>(conn_arg_idx);
-    FabricStreamSender ack(conn_arg_idx, sender_is_forward, alignment);
+    FabricStreamSender<> ack(conn_arg_idx, sender_is_forward, alignment);
 
     // Signal the sender we are "ready" to receive (atomic-inc over fabric), then tear down.
     ack.open();
