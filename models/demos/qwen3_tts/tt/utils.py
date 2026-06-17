@@ -209,7 +209,7 @@ def ar_decode_loop(
         code_row.append(token)
         _t_after_cp_prefill = time.perf_counter()
 
-        # CP decode traces (num_code_groups - 2 of them, double-buffered with 2cq).
+        # CP decode traces (num_code_groups - 2 of them, double-buffered).
         _decode_sp_agg = {"device_logits": 0.0, "cpu_sample": 0.0}
         _cp_decode_count = config.num_code_groups - 2
         for _trace_i, code_idx in enumerate(range(2, 2 + _cp_decode_count)):

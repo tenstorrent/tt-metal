@@ -158,7 +158,7 @@ def main():
         config=config,
         main_weights=main_weights,
     )
-    codes_1, _, _ = run_inference(ctx, model, device, inputs_embeds_tt_1, trailing_1, pad_1, config, use_2cq=True)
+    codes_1, _, _ = run_inference(ctx, model, device, inputs_embeds_tt_1, trailing_1, pad_1, config)
     print(f"[repro]   codes_1: shape={tuple(codes_1.shape)}  first5_code0={codes_1[:5, 0].tolist()}")
     pf_after = _run_prefill()
     diff_ba = (pf_before - pf_after).abs().max().item()
@@ -180,7 +180,7 @@ def main():
         config=config,
         main_weights=main_weights,
     )
-    codes_2, _, _ = run_inference(ctx, model, device, inputs_embeds_tt_2, trailing_2, pad_2, config, use_2cq=True)
+    codes_2, _, _ = run_inference(ctx, model, device, inputs_embeds_tt_2, trailing_2, pad_2, config)
     print(f"[repro]   codes_2: shape={tuple(codes_2.shape)}  first5_code0={codes_2[:5, 0].tolist()}")
 
     # Compare.

@@ -129,9 +129,7 @@ def main():
         config=config,
         main_weights=main_weights,
     )
-    codes, _, _ = run_inference(
-        ctx, model, device, inputs_embeds_tt, trailing_text_hidden, tts_pad_embed, config, use_2cq=False
-    )
+    codes, _, _ = run_inference(ctx, model, device, inputs_embeds_tt, trailing_text_hidden, tts_pad_embed, config)
     print(f"[repro] inference done, generated {0 if codes is None else len(codes)} frames.")
 
     # ── Cache hypothesis test: is the prepared-conv-weight cache stale? ──
