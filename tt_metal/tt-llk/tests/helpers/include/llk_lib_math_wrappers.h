@@ -105,9 +105,10 @@ inline void _llk_math_reconfig_remap_wrapper_(const bool remap_enable)
     _llk_math_reconfig_remap_(remap_enable);
 }
 
-inline bool _llk_math_skip_bh_tilize_workaround_wrapper_(const std::uint32_t unpack_src_format)
+inline bool _llk_math_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const std::uint32_t unpack_src_format)
 {
-    return IS_8BIT_FORMAT(unpack_src_format);
+    // FP8 inline path and non-8-bit whole-tile MOP both emit 1 SrcA SetDvalid per tile.
+    return false;
 }
 
 template <[[maybe_unused]] std::uint32_t block_ct_dim, [[maybe_unused]] bool is_fp32_dest_acc_en = false>
