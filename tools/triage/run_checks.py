@@ -211,6 +211,16 @@ def get_block_locations(
                         )
                     else:
                         block_locations[device][block_type] = _exalens_block_locations(device, block_type)
+                # Metal reports the DRAM cores it manages (TRANSLATED coords), excluding the
+                # syseng-owned NOC0 worker endpoints (which serve CMFW DRAM telemetry and run no
+                # DRISC firmware). Prefer that authoritative list over the exalens enumeration, which
+                # would include the NOC0 endpoints and dump garbage from them. TRANSLATED coords avoid
+                # the UMD-vs-metal logical-DRAM numbering mismatch.
+                dram_cores = chip_blocks_list[i].dramCores
+                if len(dram_cores) > 0:
+                    block_locations[device]["dram"] = [
+                        OnChipCoordinate(c.x, c.y, "translated", device, "dram") for c in dram_cores
+                    ]
 
     # Exalens fallback for any device Inspector didn't cover (no inspector at all, or
     # Inspector's getBlocksByType is missing this device).

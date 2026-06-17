@@ -355,6 +355,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
 
 void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
     auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
     auto chips_builder = results.initChips(device_ids.size());
@@ -385,6 +386,18 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         };
         set_coords([&blocks](size_t n) { return blocks.initActiveEth(n); }, active_eth_xy);
         set_coords([&blocks](size_t n) { return blocks.initIdleEth(n); }, idle_eth_xy);
+
+        // DRAM cores Metal manages (TRANSLATED coords), reported only when DRAM programmable cores are
+        // available. get_metal_dram_cores omits the syseng-owned NOC0 worker endpoints (CMFW DRAM
+        // telemetry), where Metal runs no DRISC firmware, so tools dump only these cores.
+        std::vector<std::pair<uint32_t, uint32_t>> dram_cores_xy;
+        if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+            for (const auto& dram_core :
+                 cluster.get_soc_desc(device_id).get_metal_dram_cores(CoordSystem::TRANSLATED)) {
+                dram_cores_xy.emplace_back(dram_core.x, dram_core.y);
+            }
+        }
+        set_coords([&chip_entry](size_t n) { return chip_entry.initDramCores(n); }, dram_cores_xy);
     }
 }
 
