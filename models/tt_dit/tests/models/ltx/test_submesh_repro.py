@@ -10,11 +10,21 @@ from models.tt_dit.utils.tensor import bf16_tensor
 
 
 def _run_ag(ccl, mesh, label):
-    """Run an all-gather on ``mesh`` and report whether it completes."""
+    """Run a barrier-semaphore all-gather on ``mesh`` and report whether it completes."""
     t = bf16_tensor(torch.randn(1, 1, 32, 256 * mesh.shape[1]), device=mesh, mesh_axis=1, shard_dim=3)
     out = ccl.all_gather(t, dim=3, mesh_axis=1, use_hyperparams=False)
     ttnn.synchronize_device(mesh)
     print(f"[REPRO] all_gather OK ({label}): {tuple(out.shape)}", flush=True)
+
+
+def _run_ag_persistent(ccl, mesh, label):
+    """Run the vocoder's exact all-gather: dim=1 over mesh_axis=1, persistent ping-pong buffer,
+    NO barrier semaphore (the persistent-buffer path passes barrier_semaphore=None). This is the
+    op the E2E hangs on; the plain barrier-sem all_gather (_run_ag) is a different code path."""
+    t = bf16_tensor(torch.randn(1, 32 * mesh.shape[1], 32, 64), device=mesh, mesh_axis=1, shard_dim=1)
+    out = ccl.all_gather_persistent_buffer(t, dim=1, mesh_axis=1)
+    ttnn.synchronize_device(mesh)
+    print(f"[REPRO] all_gather(persistent) OK ({label}): {tuple(out.shape)}", flush=True)
 
 
 _PARAMS = [
@@ -155,3 +165,34 @@ def test_heavy_parent_then_child_multiop_cq0(mesh_device):
     ttnn.reset_cq_in_use(audio)
     ttnn.reset_cq_in_use(mesh)
     print("[REPRO] PASS: heavy parent + child multi-op cq0 completed", flush=True)
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
+def test_heavy_parent_then_child_persistent_cq0(mesh_device):
+    """H6: heavy parent CCL (cq0), quiesce, then a child multi-op chain using the PERSISTENT-buffer
+    all_gather — the exact code path the vocoder uses (dim=1, mesh_axis=1, no barrier semaphore).
+
+    H5 (plain barrier-sem all_gather child) passes, so if H6 hangs the difference is the
+    persistent-buffer / no-barrier-semaphore CCL path on the overlapping child, not the overlap or
+    the parent CCL volume. This is the closest cheap repro of the failing E2E vocoder all_gather.
+    """
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(4, 8))
+    ccl = CCLManager(mesh, num_links=2, topology=ttnn.Topology.Ring)
+
+    HEAVY_REPS = 64
+    for i in range(HEAVY_REPS):
+        _run_ag(ccl, mesh, f"parent 4x8 cq0 heavy {i}")
+    print(f"[REPRO] parent heavy CCL volume done ({HEAVY_REPS} all_gathers)", flush=True)
+
+    audio = mesh.create_submesh(ttnn.MeshShape(1, 4))
+    audio_ccl = CCLManager(audio, num_links=2, topology=ttnn.Topology.Linear)
+    ttnn.synchronize_device(parent)
+
+    CHILD_OPS = 8
+    for i in range(CHILD_OPS):
+        _run_ag_persistent(audio_ccl, audio, f"child 1x4 cq0 persistent {i}")
+
+    ttnn.reset_cq_in_use(audio)
+    ttnn.reset_cq_in_use(mesh)
+    print("[REPRO] PASS: heavy parent + child persistent-buffer cq0 completed", flush=True)
