@@ -36,4 +36,5 @@
         cb_push_back(cb_post, per_core_block_size);                    \
                                                                        \
         pack_reconfig_data_format(/*old*/ cb_post, /*new*/ cb_out);    \
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));         \
     } while (0)
