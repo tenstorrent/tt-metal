@@ -54,6 +54,7 @@
 #include "tt-metalium/mesh_device.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
+#include "jit_build/depend.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
@@ -171,6 +172,35 @@ void generate_kernel_source_files(
     }
 }
 
+// Option B (client-side round-trip skip): returns true if every expected ELF for this kernel is
+// already present locally and its recorded source+header dependencies are unchanged. In that case
+// the remote round-trip (preprocess + RPC + ELF transfer) can be skipped entirely -- read_binaries()
+// picks up the cached ELF. The validating ".dephash" sidecar is written during the preprocess step
+// of a prior compile (build_kernel_descriptor), from the real-source .d the compiler emits. A kernel
+// source change moves the kernel-hash path (cold), and a header-only change invalidates the dephash;
+// both correctly force a recompile.
+bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+    int num_binaries = kernel->expected_num_binaries();
+    if (num_binaries <= 0) {
+        return false;
+    }
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const std::string elf_path = bs.get_target_out_path(kernel->get_full_kernel_name());
+        std::filesystem::path p(elf_path);
+        const std::string out_dir = p.parent_path().string() + "/";
+        const std::string elf_name = p.filename().string();
+        if (!std::filesystem::exists(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
 KernelCompileDescriptor build_kernel_descriptor(
     IDevice* device,
@@ -239,6 +269,30 @@ KernelCompileDescriptor build_kernel_descriptor(
                 desc.request.generated_files.push_back(std::move(gf));
                 // Server compiles this self-contained unit instead of the original source path.
                 target.srcs[i] = "../" + ii_name;
+                // Option B: for a single-source target, record a .dephash next to the expected ELF from
+                // the real-source .d the preprocessor just emitted (-MMD via cflags lists the kernel
+                // source + every header). A later run can then validate this cached kernel via
+                // remote_kernel_cached() and skip the round-trip entirely. The .d's filename derives
+                // from the .ii output while its internal target key is the bare obj, so we parse it and
+                // write via the explicit-deps overload using the .d's own key.
+                if (target.srcs.size() == 1) {
+                    const std::filesystem::path d_path =
+                        std::filesystem::path(client_out_dir) / std::filesystem::path(ii_name).replace_extension(".d");
+                    std::ifstream d_file(d_path);
+                    if (d_file.is_open()) {
+                        tt::jit_build::ParsedDependencies deps = tt::jit_build::parse_dependency_file(d_file);
+                        if (!deps.empty()) {
+                            const std::string& dep_key = deps.begin()->first;
+                            const std::string dephash_path = desc.expected_elf_paths[t] + ".dephash";
+                            std::ofstream hash_file(dephash_path);
+                            tt::jit_build::write_dependency_hashes(deps, client_out_dir + "/", dep_key, hash_file);
+                            hash_file.close();
+                            if (hash_file.fail()) {
+                                std::filesystem::remove(dephash_path);
+                            }
+                        }
+                    }
+                }
             }
             // The .ii has includes + defines baked in; the server must not need the tree.
             target.includes.clear();
@@ -2204,10 +2258,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                coordinator.submit(kernel_hash, [&]() {
-                    generate_kernel_source_files(device, build_options, kernel);
-                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
-                });
+                // Option B: skip the remote round-trip when the ELF is already validly cached locally.
+                if (!remote_kernel_cached(device, kernel)) {
+                    coordinator.submit(kernel_hash, [&]() {
+                        generate_kernel_source_files(device, build_options, kernel);
+                        return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                    });
+                }
+                // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
                 submitted_kernels.emplace_back(kernel, std::move(build_options));
             }
         }
