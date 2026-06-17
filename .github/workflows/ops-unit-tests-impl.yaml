@@ -1,4 +1,4 @@
-name: "[internal] tt-metal L2 tests impl"
+name: "[internal] ttnn ops unit tests impl"
 
 on:
   workflow_call:
@@ -25,7 +25,6 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Enable LLK asserts"
 
 jobs:
   load-test-matrix:
@@ -33,7 +32,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_metal_l2_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ops_unit_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -48,12 +47,11 @@ jobs:
       - name: Verify test timeouts against budget
         run: |
           set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "l2"
-      - name: Build unified test matrix based on enabled SKUs
+            "unit"
+      - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
@@ -72,7 +70,7 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-  l2-tests:
+  ops-unit-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
@@ -93,10 +91,8 @@ jobs:
         TT_MM_THROTTLE_PERF: ${{ contains(matrix.test-group.sku, 'bh_') && '0' || '5' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >-
-        --device /dev/tenstorrent
+        --device /dev/tenstorrent -v /dev/hugepages-1G:/dev/hugepages-1G -v /mnt/MLPerf:/mnt/MLPerf:ro
         ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '-e TT_GH_CI_INFRA=1' || '' }}
     defaults:
       run:
@@ -115,21 +111,10 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-          enable-kernel-ccache: true
-          # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
-          # This allows different retention policies for runtime JIT vs. C++ build artifacts
-          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
-      - name: 📊 CCache Report
-        if: ${{ !cancelled() }}
-        run: |
-          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
