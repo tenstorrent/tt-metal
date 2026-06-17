@@ -135,6 +135,8 @@ constexpr TensorShape make_tensor_shape(
  * - num_faces == 1: 1x1 face grid (face_r_dim × 16)
  * - num_faces == 2: 1x2 face grid (face_r_dim × 32)
  * - num_faces == 4: 2x2 face grid (face_r_dim*2 × 32; 32x32 when face_r_dim == 16)
+ *
+ * @pre num_faces must be one of the valid values: 1, 2, or 4.
  */
 constexpr TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
 {
@@ -238,5 +240,3 @@ constexpr const char* tensor_shape_dim_name(const std::uint8_t dim)
 #define LLK_DPRINT_TENSOR_SHAPE(fn_name, ts) ((void)0)
 
 #endif // defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
-
-#include "tensor_shape_coverage.h"

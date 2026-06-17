@@ -14,6 +14,7 @@
 #include "llk_assert.h"
 #include "llk_math_common.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 
 using namespace ckernel;
 

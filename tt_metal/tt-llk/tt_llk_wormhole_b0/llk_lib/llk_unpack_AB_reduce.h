@@ -25,6 +25,7 @@
 #include "llk_unpack_common.h"
 #include "lltt.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;

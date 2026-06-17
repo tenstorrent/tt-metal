@@ -2,15 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// AUTO-GENERATED: TensorShape coverage observed across LLK pytests.
-// Sourced from LLK_DPRINT_TENSOR_SHAPE lines emitted before validation asserts.
+// Common TensorShape coverage definitions shared by TRISC-specific coverage tables.
 //
-// Regenerate by running the BH functional pytests with --logging-level=DEBUG
+// Regenerate by running the functional pytests with --logging-level=DEBUG
 // and feeding the per-worker test_run_gw*.log files through /tmp/ts-coverage/parse.py.
 //
-// Last update : 2026-06-15T11:25:24+00:00
-// Tests run   : 26
-// Architecture: blackhole
 
 #pragma once
 
@@ -83,126 +79,6 @@ constexpr const char* tensor_shape_function_name(const TensorShapeFunctionCovera
     return "unknown";
 }
 
-inline constexpr std::array<TensorShape, 8> covered_shapes_llk_math_eltwise_binary_standard = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x1,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x1,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 8> covered_shapes_llk_math_eltwise_binary_standard_init = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x1,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x1,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 2> covered_shapes_llk_math_eltwise_binary_with_dest_reuse = {{
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 2> covered_shapes_llk_math_eltwise_binary_with_dest_reuse_init = {{
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 7> covered_shapes_llk_math_reduce = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x1,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 8> covered_shapes_llk_unpack_AB_init = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x1,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x1,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 8> covered_shapes_llk_unpack_AB_mop_config = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x1,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x1,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 7> covered_shapes_llk_unpack_AB_reduce_init = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x1,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 7> covered_shapes_llk_unpack_AB_reduce_mop_config = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x1,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 7> covered_shapes_llk_unpack_A_init = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x1,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 7> covered_shapes_llk_unpack_A_mop_config = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x1,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 8> covered_shapes_eltwise_binary_configure_mop_standard = {{
-    TENSOR_SHAPE_FR1_NF1x2,
-    TENSOR_SHAPE_FR2_NF1x2,
-    TENSOR_SHAPE_FR4_NF1x2,
-    TENSOR_SHAPE_FR8_NF1x2,
-    TENSOR_SHAPE_FR16_NF1x1,
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x1,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
-inline constexpr std::array<TensorShape, 2> covered_shapes_eltwise_binary_configure_mop_with_dest_reuse = {{
-    TENSOR_SHAPE_FR16_NF1x2,
-    TENSOR_SHAPE_FR16_NF2x2,
-}};
-
 constexpr bool tensor_shape_eq(const TensorShape& lhs, const TensorShape& rhs)
 {
     return lhs.face_r_dim == rhs.face_r_dim && lhs.face_c_dim == rhs.face_c_dim && lhs.num_faces_r_dim == rhs.num_faces_r_dim &&
@@ -218,64 +94,6 @@ constexpr bool contains_tensor_shape(const std::array<TensorShape, N>& covered_s
         {
             return true;
         }
-    }
-    return false;
-}
-
-constexpr bool is_tensor_shape_covered(const TensorShapeFunctionCoverage fn, const TensorShape& tensor_shape)
-{
-    using Function = TensorShapeFunctionCoverage;
-    if (fn == Function::_llk_math_eltwise_binary_standard_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_math_eltwise_binary_standard, tensor_shape);
-    }
-    if (fn == Function::_llk_math_eltwise_binary_standard_init_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_math_eltwise_binary_standard_init, tensor_shape);
-    }
-    if (fn == Function::_llk_math_eltwise_binary_with_dest_reuse_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_math_eltwise_binary_with_dest_reuse, tensor_shape);
-    }
-    if (fn == Function::_llk_math_eltwise_binary_with_dest_reuse_init_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_math_eltwise_binary_with_dest_reuse_init, tensor_shape);
-    }
-    if (fn == Function::_llk_math_reduce_ || fn == Function::_llk_math_reduce_init_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_math_reduce, tensor_shape);
-    }
-    if (fn == Function::_llk_unpack_AB_init_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_unpack_AB_init, tensor_shape);
-    }
-    if (fn == Function::_llk_unpack_AB_mop_config_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_unpack_AB_mop_config, tensor_shape);
-    }
-    if (fn == Function::_llk_unpack_AB_reduce_init_ || fn == Function::_llk_unpack_reduce_init_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_unpack_AB_reduce_init, tensor_shape);
-    }
-    if (fn == Function::_llk_unpack_AB_reduce_mop_config_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_unpack_AB_reduce_mop_config, tensor_shape);
-    }
-    if (fn == Function::_llk_unpack_A_init_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_unpack_A_init, tensor_shape);
-    }
-    if (fn == Function::_llk_unpack_A_mop_config_)
-    {
-        return contains_tensor_shape(covered_shapes_llk_unpack_A_mop_config, tensor_shape);
-    }
-    if (fn == Function::eltwise_binary_configure_mop_standard)
-    {
-        return contains_tensor_shape(covered_shapes_eltwise_binary_configure_mop_standard, tensor_shape);
-    }
-    if (fn == Function::eltwise_binary_configure_mop_with_dest_reuse)
-    {
-        return contains_tensor_shape(covered_shapes_eltwise_binary_configure_mop_with_dest_reuse, tensor_shape);
     }
     return false;
 }

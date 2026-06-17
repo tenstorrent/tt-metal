@@ -9,6 +9,7 @@
 #include "ckernel_trisc_common.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 using namespace ckernel;
 
 /**

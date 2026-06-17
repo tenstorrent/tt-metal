@@ -6,7 +6,6 @@
 
 #include <cstdint>
 
-#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -16,6 +15,8 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
