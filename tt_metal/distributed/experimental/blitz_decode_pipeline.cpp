@@ -251,37 +251,53 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
     // With loopback:    N hops: mesh_0→mesh_1→...→mesh_{N-1}→mesh_0
     // Without loopback: N-1 hops: mesh_0→mesh_1→...→mesh_{N-1} (no return)
     const std::size_t num_hops = initialize_loopback ? num_meshes : num_meshes - 1;
-    // Process the ring-closing (loopback) hop mesh_{N-1}->mesh_0 FIRST: greedy first-fit in ring order can
-    // otherwise let the linear hops claim the corner-mesh chips its wraparound cable needs and strand it
-    // (common when a mesh dimension uses LINE rather than RING, leaving fewer boundary cables). hops is
-    // indexed by ring position; the throwaway fill value is overwritten for every position below.
-    std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops(
-        num_hops, {tt::tt_fabric::FabricNodeId(mesh_ids[0], 0), tt::tt_fabric::FabricNodeId(mesh_ids[0], 0)});
-    for (std::size_t step = 0; step < num_hops; step++) {
-        const std::size_t i = (initialize_loopback && num_hops > 0) ? (step == 0 ? num_hops - 1 : step - 1) : step;
+    // Assign hops in this order: the ring-closing loopback hop (mesh_{N-1} -> mesh_0) FIRST, then the
+    // linear hops in ring order. Assigning the wraparound first lets it reserve a free boundary cable
+    // before the linear hops claim the corner-mesh chips it needs; pure in-ring-order greedy first-fit
+    // otherwise strands it on topologies with few boundary cables (e.g. a LINE mesh dimension).
+    std::vector<std::size_t> hop_order;
+    hop_order.reserve(num_hops);
+    if (initialize_loopback && num_hops > 0) {
+        hop_order.push_back(num_hops - 1);  // ring-closing hop first
+    }
+    for (std::size_t i = 0; i < num_hops; i++) {
+        if (!(initialize_loopback && i == num_hops - 1)) {
+            hop_order.push_back(i);  // then the linear hops in ring order
+        }
+    }
+
+    // selected_hop[i] = (exit on mesh_i, peer on mesh_{i+1}) chosen for ring position i.
+    std::vector<std::optional<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>>> selected_hop(
+        num_hops);
+    for (std::size_t i : hop_order) {
         const auto next = initialize_loopback ? (i + 1) % num_meshes : i + 1;
         auto pairs =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(mesh_ids[i], mesh_ids[next]);
         TT_FATAL(!pairs.empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
 
-        bool found = false;
         for (const auto& pair : pairs) {
             if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
                 continue;
             }
-            hops[i] = pair;
+            selected_hop[i] = pair;
             used_nodes.insert(pair.first);
             used_nodes.insert(pair.second);
-            found = true;
             break;
         }
         TT_FATAL(
-            found,
+            selected_hop[i].has_value(),
             "No non-colliding inter-mesh pair from mesh {} to mesh {} "
             "(all {} candidate pairs overlap with already-claimed nodes)",
             *mesh_ids[i],
             *mesh_ids[next],
             pairs.size());
+    }
+
+    // Flatten into ring-ordered hops[0..num_hops-1].
+    std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops;
+    hops.reserve(num_hops);
+    for (auto& hop : selected_hop) {
+        hops.push_back(*hop);
     }
 
     // Pipeline data flow (with loopback):
