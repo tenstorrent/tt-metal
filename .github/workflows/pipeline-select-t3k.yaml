@@ -25,7 +25,6 @@ on:
           - all
           - t3k_ttmetal_tests
           - t3k_ttnn_tests
-          - falcon7b
           - llama3-small
           - llama3.2-11b
           - llama3.2-11b-vision
@@ -46,7 +45,6 @@ on:
         options:
           - disabled
           - all
-          - falcon7b
           - llama3
           - llama3_vision
           - llama3_90b_vision
@@ -72,7 +70,6 @@ on:
         options:
           - disabled
           - all
-          - falcon7b
           - resnet50
           - sentence_bert
           - stable_diffusion_35_large
