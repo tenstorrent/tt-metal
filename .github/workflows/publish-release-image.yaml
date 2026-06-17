@@ -99,6 +99,8 @@ jobs:
           TOOL_TAGS: ${{ steps.tool-tags.outputs.tool_tags }}
           TAG_NAME: ${{ env.TAG_NAME }}
           WHEEL_FILENAME: ${{ env.WHEEL_FILENAME }}
+          UBUNTU_VERSION: ${{ env.UBUNTU_VERSION }}
+          PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
           HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
@@ -107,11 +109,14 @@ jobs:
           SET=""
           for tool in "${TOOLS[@]}"; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
+            [ "$tag" = "null" ] && { echo "ERROR: missing tag for tool '$tool' in compute-tool-tags output"; exit 1; }
             SET+="${TARGET}.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
           done
           SET+="${TARGET}.tags=${TAG_NAME}"$'\n'
           SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
           SET+="${TARGET}.args.WHEEL_FILENAME=${WHEEL_FILENAME}"$'\n'
+          SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
+          SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
           SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
           {
             echo "set<<EOF"
@@ -124,8 +129,6 @@ jobs:
         with:
           targets: ${{ inputs.image }}
           set-lines: ${{ steps.bake.outputs.set }}
-          ubuntu-version: ${{ steps.generate-tag-name.outputs.UBUNTU_VERSION }}
-          python-version: ${{ steps.generate-tag-name.outputs.PYTHON_VERSION }}
           harbor-prefix: ${{ inputs.harbor-prefix }}
       - name: Get image digest
         if: ${{ !inputs.dry-run }}
