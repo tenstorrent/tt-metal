@@ -28,6 +28,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <optional>
@@ -2217,14 +2218,32 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
 // consumer kernel omitted from kernel_run_args (so SetProgramRunArgs's second
 // pass and the binding-bearing-kernel rediscovery are exercised too).
 TEST_F(ProgramRunArgsTestGen1, DISABLED_FastPathBench_UpdateEntryPoints) {
-    constexpr size_t kNumNamedRTAs = 16;
-    constexpr size_t kNumNamedCRTAs = 8;
-    constexpr size_t kNumBindings = 8;
-    constexpr size_t kIters = 20000;
+    // Dimensions are env-configurable so a profiling sweep can vary ONE knob at a time and
+    // attribute per-call cost by component (no external profiler needed). Unset => the standard
+    // "fat" spec. Knobs: TT_BENCH_RTAS / TT_BENCH_CRTAS / TT_BENCH_BINDINGS / TT_BENCH_NODES /
+    // TT_BENCH_ITERS.
+    auto env_size = [](const char* name, size_t dflt) -> size_t {
+        const char* v = std::getenv(name);
+        return (v != nullptr && *v != '\0') ? static_cast<size_t>(std::stoul(v)) : dflt;
+    };
+    const size_t kNumNamedRTAs = env_size("TT_BENCH_RTAS", 16);
+    const size_t kNumNamedCRTAs = env_size("TT_BENCH_CRTAS", 8);
+    const size_t kNumBindings = env_size("TT_BENCH_BINDINGS", 8);
+    const size_t kIters = env_size("TT_BENCH_ITERS", 20000);
 
     const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
-    const NodeRange all_nodes{NodeCoord{0, 0}, NodeCoord{grid.x - 1, grid.y - 1}};
-    const size_t num_nodes = grid.x * grid.y;
+    const size_t grid_count = static_cast<size_t>(grid.x) * static_cast<size_t>(grid.y);
+    const size_t num_nodes = std::min(env_size("TT_BENCH_NODES", grid_count), grid_count);
+    // First `num_nodes` device cores in row-major order, as a set of single-core ranges, so the
+    // node count can be swept independently of the (rectangular) device grid shape.
+    std::vector<NodeCoord> nodes;
+    std::set<NodeRange> node_ranges;
+    for (size_t i = 0; i < num_nodes; ++i) {
+        const NodeCoord c{i % grid.x, i / grid.x};
+        nodes.push_back(c);
+        node_ranges.insert(NodeRange{c, c});
+    }
+    const NodeRangeSet all_nodes(node_ranges);
 
     // Start from the proven Gen1 (WH) spec: DM(RISCV_0) producer + compute consumer + DFB.
     // (The Quasar mock device cannot be created on every node; the fast-path overlay work being
@@ -2269,15 +2288,13 @@ TEST_F(ProgramRunArgsTestGen1, DISABLED_FastPathBench_UpdateEntryPoints) {
     ProgramRunArgs params;
     ProgramRunArgs::KernelRunArgs dm_args;
     dm_args.kernel = KernelSpecName{"dm_kernel"};
-    for (size_t y = 0; y < grid.y; ++y) {
-        for (size_t x = 0; x < grid.x; ++x) {
-            ProgramRunArgs::KernelRunArgs::RuntimeArgValues vals;
-            for (size_t i = 0; i < kNumNamedRTAs; ++i) {
-                vals[rta_names[i]] = static_cast<uint32_t>(i + 1);
-            }
-            dm_args.runtime_arg_values.push_back(
-                ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{NodeCoord{x, y}, std::move(vals)});
+    for (const auto& node : nodes) {
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues vals;
+        for (size_t i = 0; i < kNumNamedRTAs; ++i) {
+            vals[rta_names[i]] = static_cast<uint32_t>(i + 1);
         }
+        dm_args.runtime_arg_values.push_back(
+            ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{node, std::move(vals)});
     }
     for (size_t i = 0; i < kNumNamedCRTAs; ++i) {
         dm_args.common_runtime_arg_values[crta_names[i]] = static_cast<uint32_t>(i + 1);
