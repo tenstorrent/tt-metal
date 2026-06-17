@@ -32,6 +32,20 @@ from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
+def _chat_template_token_len(tokenizer, messages) -> int:
+    """len() of apply_chat_template(tokenize=True), tolerant of transformers 5.x.
+
+    5.x defaults apply_chat_template to return_dict=True -> a BatchEncoding (UserDict),
+    whose len() is the key count, not the token count. Extract input_ids first.
+    """
+    out = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
+    if hasattr(out, "keys") and "input_ids" in out:  # BatchEncoding / dict / UserDict
+        out = out["input_ids"]
+    if out and isinstance(out[0], (list, tuple)):  # unwrap single-batch nesting
+        out = out[0]
+    return len(out)
+
+
 def create_prompt_of_length(target_token_length: int, model_path: Path) -> str:
     """
     Create a prompt that tokenizes to approximately the target token length.
@@ -47,15 +61,11 @@ def create_prompt_of_length(target_token_length: int, model_path: Path) -> str:
         "We need to test how the model handles increasingly longer input prompts."
     )
 
-    empty_tokens = tokenizer.apply_chat_template(
-        [{"role": "user", "content": ""}], add_generation_prompt=True, tokenize=True
-    )
-    template_overhead = len(empty_tokens)
+    template_overhead = _chat_template_token_len(tokenizer, [{"role": "user", "content": ""}])
 
-    base_tokens = tokenizer.apply_chat_template(
-        [{"role": "user", "content": base_text}], add_generation_prompt=True, tokenize=True
+    tokens_per_repetition = (
+        _chat_template_token_len(tokenizer, [{"role": "user", "content": base_text}]) - template_overhead
     )
-    tokens_per_repetition = len(base_tokens) - template_overhead
 
     content_tokens_needed = target_token_length - template_overhead
     if tokens_per_repetition <= 0:
@@ -64,10 +74,7 @@ def create_prompt_of_length(target_token_length: int, model_path: Path) -> str:
 
     prompt = base_text * num_repetitions
 
-    actual_tokens = tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=True
-    )
-    actual_length = len(actual_tokens)
+    actual_length = _chat_template_token_len(tokenizer, [{"role": "user", "content": prompt}])
 
     if actual_length < target_token_length:
         words = base_text.split()
@@ -76,10 +83,7 @@ def create_prompt_of_length(target_token_length: int, model_path: Path) -> str:
         iteration = 0
         while actual_length < target_token_length and iteration < max_iterations:
             prompt += words[word_idx % len(words)] + " "
-            actual_tokens = tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=True
-            )
-            actual_length = len(actual_tokens)
+            actual_length = _chat_template_token_len(tokenizer, [{"role": "user", "content": prompt}])
             word_idx += 1
             iteration += 1
 

@@ -2537,8 +2537,10 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             # transformers 5.x may return a BatchEncoding/dict or a tokenizers.Encoding
             # from apply_chat_template(tokenize=True) instead of a plain List[int];
-            # `list(ids)` on a dict would yield its keys (['input_ids', ...]).
-            if isinstance(ids, dict):  # BatchEncoding / dict
+            # `list(ids)` on a mapping would yield its keys (['input_ids', ...]).
+            # BatchEncoding subclasses UserDict (NOT dict), so isinstance(ids, dict) is
+            # False — use mapping membership instead.
+            if hasattr(ids, "keys") and "input_ids" in ids:  # BatchEncoding / dict / UserDict
                 ids = ids["input_ids"]
             if hasattr(ids, "ids"):  # tokenizers.Encoding
                 ids = ids.ids
