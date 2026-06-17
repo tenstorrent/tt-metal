@@ -34,6 +34,23 @@ from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import Qwen35RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
+def get_sdpa_program_config(config, mesh_device):
+    if config.head_dim >= 512:
+        # Global layers: smaller grid — head_dim=512 needs more L1 per core.
+        sdpa_grid = ttnn.CoreCoord(8, 4)
+    else:
+        # Sliding layers: use the full device compute grid.
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
+
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_grid,
+        q_chunk_size=32,
+        k_chunk_size=64,
+        exp_approx_mode=False,
+    )
+
+
 class Qwen35Attention(LightweightModule):
     """Standalone TP full-attention with internal per-head KV caches (decode)."""
 
@@ -71,6 +88,7 @@ class Qwen35Attention(LightweightModule):
 
         self.q_norm = Qwen35RMSNorm(self.weights.w_q_norm, eps=self.eps, scale=True)
         self.k_norm = Qwen35RMSNorm(self.weights.w_k_norm, eps=self.eps, scale=True)
+        self.sdpa_config = get_sdpa_program_config(self.args, self.mesh_device)
 
     def set_paged_kv_cache(self, k_cache, v_cache):
         """Bind an externally-allocated paged KV cache into the single cache slot.
@@ -201,6 +219,7 @@ class Qwen35Attention(LightweightModule):
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.sdpa_config,
             )
         else:
             attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
@@ -210,6 +229,7 @@ class Qwen35Attention(LightweightModule):
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.sdpa_config,
             )
 
         gated = attn_out * ttnn.sigmoid(gate)
