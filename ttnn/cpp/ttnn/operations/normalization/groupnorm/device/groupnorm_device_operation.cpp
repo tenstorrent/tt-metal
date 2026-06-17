@@ -68,6 +68,19 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         tile_height);
 
     if (a.is_sharded()) {
+        const auto& shard_spec = a.shard_spec().value();
+        const auto bbox = shard_spec.grid.bounding_box();
+        const auto bbox_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(bbox);
+        const uint32_t bbox_num_cores = bbox_grid.x * bbox_grid.y;
+        TT_FATAL(
+            shard_spec.grid.num_cores() == bbox_num_cores,
+            "Sharded groupnorm does not support non-rectangular core grids. "
+            "The shard spec grid has {} cores but its bounding box spans {} cores ({} x {}).",
+            shard_spec.grid.num_cores(),
+            bbox_num_cores,
+            bbox_grid.x,
+            bbox_grid.y);
+
         const auto program_grid =
             std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
         ttnn::operations::normalization::detail::validate_sharded_input(
