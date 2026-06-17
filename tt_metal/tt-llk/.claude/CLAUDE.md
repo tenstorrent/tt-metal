@@ -21,7 +21,8 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | `tt_llk_blackhole/` | Blackhole — same structure as WH |
 | `tt_llk_quasar/` | Quasar — different file naming (semantic, not letter-based) |
 | `tests/python_tests/` | Python test suite |
-| `tests/sources/` | C++ test source files |
+| `tests/sources/` | C++ source files |
+| `tests/sources_tests/` | C++ source test files |
 | `tests/hw_specific/` | Architecture-specific test files |
 | `docs/` | Documentation |
 
