@@ -439,7 +439,7 @@ def test_ds_mla(
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False], ids=["max_sl"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize(
     "seq_len",
     [5 * 1024, 25 * 1024],
