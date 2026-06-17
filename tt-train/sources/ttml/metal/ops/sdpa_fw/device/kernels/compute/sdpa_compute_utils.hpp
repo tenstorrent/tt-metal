@@ -43,18 +43,7 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
 void recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
 }
-
-// First-column exp with fused scale: exp(scale * x) on column 0 only.
-// Uses _ckernel_sfpu_exp_accurate_ — the same function behind exp_tile<false, true>,
-// so accuracy is identical to the full-tile version. Stride-2 access skips column 1.
-// Combined with VectorMode::C (2 faces instead of 4), this gives 4× fewer SFPU iterations
-// compared to exp_tile<false, true>(idx, VectorMode::RC).
-template <uint16_t scale_bf16>
-void exp_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exponential_first_column, (scale_bf16), idst, VectorMode::C);
-}
-#endif
+#endif  // TRISC_MATH
 
 // Apply an attention mask to a Q@K^T score tile already sitting in DST register `register_idx`.
 //
