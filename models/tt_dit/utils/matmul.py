@@ -128,6 +128,13 @@ grid_11_10_configs = {
     (9472, 3456, 5120): (16, 3, 4, (1, 4)),
     (14400, 384, 1152): (16, 3, 8, (2, 2)),
     (14400, 384, 384): (8, 3, 4, (2, 2)),
+    # gemma text-encoder GEMMs (M=1024). Blocks divide the per-core tile counts
+    # (M splits across grid.x when M>N, else grid.y; N across the other axis);
+    # subblock_h*subblock_w stays <=4 to fit fp32 DST (matches the entries above).
+    (1024, 4096, 32): (3, 8, 1, (3, 1)),
+    (1024, 4096, 512): (3, 8, 2, (1, 2)),
+    (1024, 4096, 4096): (4, 8, 12, (1, 4)),
+    (1024, 2048, 4096): (4, 8, 12, (1, 4)),
 }
 
 
@@ -215,10 +222,12 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         if N_tiles < N_block_size:
             N_block_size = subblock_w
 
+        # The computed fallback is a valid config, not an error — only hand-tuned shapes
+        # are table-listed. Debug, not warning, so untuned shapes don't spam startup.
         signature = (M, K, N, grid_x, grid_y)
         if signature not in _warned_matmul_signatures:
-            logger.warning(
-                f"No known best blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y} core grid; using default {M_block_size}x{K_block_size}x{N_block_size}"
+            logger.debug(
+                f"No tuned blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y} core grid; using {M_block_size}x{K_block_size}x{N_block_size}"
             )
             _warned_matmul_signatures.add(signature)
     else:

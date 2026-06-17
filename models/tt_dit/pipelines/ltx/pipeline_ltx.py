@@ -52,6 +52,7 @@ from ...utils.patchifiers import (
     get_pixel_coords,
     video_get_patch_grid_bounds,
 )
+from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
@@ -822,7 +823,8 @@ class LTXPipeline:
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
 
-        results = self.gemma_encoder_pair.encode(prompts)
+        with Watchdog("gemma text-encode"):
+            results = self.gemma_encoder_pair.encode(prompts)
 
         if use_cache:
             torch.save(results, cache_path)
@@ -919,7 +921,8 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        return self.vae_decoder(latent_spatial)
+        with Watchdog("vae decode"):
+            return self.vae_decoder(latent_spatial)
 
     def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Cached ``(mean-of-means, std-of-means)`` reshaped for ``(B, C, F, H, W)``
@@ -960,7 +963,8 @@ class LTXPipeline:
         self._prepare_upsampler()
         mean, std = self._vae_per_channel_stats()
         x = video_latent.float() * std + mean
-        x = self.upsampler(x)
+        with Watchdog("latent upsample"):
+            x = self.upsampler(x)
         return (x.float() - mean) / std
 
     def _warmup_upsample(self, num_frames: int, height: int, width: int) -> None:
@@ -1859,8 +1863,9 @@ class LTXPipeline:
                 f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
             )
         else:
-            mel = self._decode_mel(audio_spatial)
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+            with Watchdog("audio decode (mel-VAE + vocoder)"):
+                mel = self._decode_mel(audio_spatial)
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
         sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
 
         # Trim to video duration.
