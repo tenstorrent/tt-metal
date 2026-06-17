@@ -905,8 +905,14 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     continue;
                 }
 
+                const bool mgd_is_1xN_strip =
+                    device_topo.has_value() && device_topo->dims.size() >= 2 &&
+                    std::any_of(device_topo->dims.begin(), device_topo->dims.end(), [](int32_t d) { return d == 1; });
+
+                // Same ASIC count but different grid factorization (e.g. MGD 1×32 vs PGD 4×8): still allow the
+                // topology solve unless the MGD declares a full 2D grid (both dims > 1).
                 if (node_diff == 0 && !required_grid_dims.empty() && grouping_info.asic_grid_dims.size() >= 2 &&
-                    normalized_dims(grouping_info.asic_grid_dims) != required_grid_dims) {
+                    normalized_dims(grouping_info.asic_grid_dims) != required_grid_dims && !mgd_is_1xN_strip) {
                     log_debug(
                         tt::LogFabric,
                         "Skipping {} for {}: ASIC grid dims [{},{}] do not match MGD device topology",
