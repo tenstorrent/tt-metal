@@ -34,19 +34,16 @@ void kernel_main() {
         if (Wt == 1) {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+                compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // Phase 1: reduce Wt-1 full tiles into cb_max (no accumulation, first call).
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_in0, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_in0, cb_max_scaler, cb_max>(
+                compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
             // Phase 2: mask the last tile and continue reducing into cb_max via Accumulate.
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_tmp,
-                cb_max_scaler,
-                cb_max,
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_max, /*iter=*/1));
@@ -98,32 +95,36 @@ void kernel_main() {
 
 #ifdef LOG
         // compute log(sum) - pop tile after reduce
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-                cb_add,
-                cb_sum_scaler,
-                cb_recipsumexps,
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t dst_idx) {
-                    log_tile_init();
-                    log_tile(dst_idx);
-                });
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_add,
+            cb_sum_scaler,
+            cb_recipsumexps,
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+            compute_kernel_lib::ReduceInputBlockShape::single(),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t dst_idx) {
+                log_tile_init();
+                log_tile(dst_idx);
+            });
 #else
         // compute 1/sum(exp(x)) - pop tile after reduce
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-                cb_add,
-                cb_sum_scaler,
-                cb_recipsumexps,
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t dst_idx) {
-                    recip_tile_init();
-                    recip_tile(dst_idx);
-                });
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_add,
+            cb_sum_scaler,
+            cb_recipsumexps,
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+            compute_kernel_lib::ReduceInputBlockShape::single(),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t dst_idx) {
+                recip_tile_init();
+                recip_tile(dst_idx);
+            });
 #endif
 
         // step 3, compute final result

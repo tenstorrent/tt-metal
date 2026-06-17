@@ -18,10 +18,15 @@ from ..layers.module import Module
 ALIGNMENT = 32
 
 
-def aligned_channels(channels):
-    ALIGN_PAD = ALIGNMENT - channels % ALIGNMENT
-    if channels % ALIGNMENT != 0:
-        channels = channels + ALIGN_PAD
+def aligned_channels(channels, unit: int = ALIGNMENT):
+    """Round ``channels`` up to a multiple of ``unit`` (default TILE_WIDTH).
+
+    Channel-TP passes ``unit = factor * TILE_WIDTH`` so each per-chip shard is
+    itself a TILE_WIDTH multiple (a 48-wide shard is illegal in TILE layout).
+    """
+    rem = channels % unit
+    if rem != 0:
+        channels = channels + (unit - rem)
     return channels
 
 
@@ -402,6 +407,47 @@ _BLOCKINGS = {
     # Stage 3 (eighth res, H_out=22, W_out=5)
     (4, 32, 384, 384, (3, 3, 3), 6, 22, 5): (128, 64, 4, 16, 2),  # res_s3
     (4, 32, 384, 32, (3, 3, 3), 6, 22, 5): (192, 32, 1, 8, 4),  # conv_out_enc
+    # ===================================================================
+    # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4), 1080p.
+    # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h2w4"
+    # ===================================================================
+    (2, 4, 128, 1024, (3, 3, 3), 21, 17, 15): (64, 256, 1, 2, 16),  # ltx_s0_conv_in — 778us
+    (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 15): (128, 64, 5, 2, 16),  # ltx_s0_res — 7956us
+    (2, 4, 1024, 4096, (3, 3, 3), 21, 17, 15): (128, 64, 5, 4, 8),  # ltx_s0_up — 22149us
+    (2, 4, 512, 512, (3, 3, 3), 39, 34, 30): (64, 256, 1, 4, 8),  # ltx_s1_res — 8966us
+    (2, 4, 512, 4096, (3, 3, 3), 39, 34, 30): (128, 64, 5, 2, 16),  # ltx_s1_up — 89486us
+    (2, 4, 512, 512, (3, 3, 3), 75, 68, 60): (64, 256, 1, 8, 4),  # ltx_s2_res — 60810us
+    (2, 4, 256, 256, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_res — 25688us
+    (2, 4, 256, 512, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_chg — 48772us
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (64, 128, 6, 4, 8),  # ltx_s4_res — 22798us
+    (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us
+    # LTX-2.3 spatial latent upsampler (x2), 2x4 BH-LB, 1080p.
+    (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv
+    (2, 4, 1024, 1024, (3, 3, 3), 21, 9, 8): (64, 32, 1, 2, 2),  # pre-upsample res
+    (2, 4, 1024, 4096, (1, 3, 3), 19, 9, 8): (64, 32, 1, 2, 2),  # ups (kT=1)
+    (2, 4, 1024, 1024, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # post-upsample res
+    (2, 4, 1024, 128, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # final_conv
+    # ===================================================================
+    # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8), 1080p.
+    # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
+    # ===================================================================
+    (4, 8, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 128, 7, 8, 4),  # ltx_s0_conv_in — 237us
+    (4, 8, 1024, 1024, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_res — 1974us
+    (4, 8, 1024, 4096, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_up — 5448us
+    (4, 8, 512, 512, (3, 3, 3), 39, 17, 15): (64, 256, 1, 4, 8),  # ltx_s1_res — 1912us
+    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15): (128, 64, 5, 4, 8),  # ltx_s1_up — 16547us
+    (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 1, 8, 4),  # ltx_s2_res — 13752us
+    (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_res — 6145us
+    (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_chg — 12013us
+    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us
+    (4, 8, 128, 48, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_out — 2914us
+    # LTX-2.3 spatial latent upsampler (x2), BH Galaxy 4x8, 1080p.
+    # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
+    (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us
+    (4, 8, 1024, 1024, (3, 3, 3), 21, 5, 4): (128, 64, 7, 2, 4),  # ups_pre_res — 791us
+    (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
+    (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
+    (4, 8, 1024, 128, (3, 3, 3), 21, 10, 8): (128, 64, 7, 8, 4),  # ups_final — 277us
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
@@ -418,6 +464,60 @@ _DEFAULT_BLOCKINGS = {
     (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
     (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
     (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+    # LTX-2.3 22B VAE decoder + latent upsampler conservative fallbacks. These
+    # channel combos all have swept exact _BLOCKINGS entries for 2x4/4x8 1080p;
+    # they remain here as the cross-mesh/cross-resolution fallback (the hardcoded
+    # full-Cin default OOMs at these widths).
+    (1024, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_up
+    (512, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s1_up
+    (256, 512, (3, 3, 3)): (256, 32, 1, 4, 4),  # s3_chg
+    (128, 128, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_res
+    (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_out
+    (1024, 4096, (1, 3, 3)): (256, 32, 1, 1, 1),  # upsampler (kT=1)
+    (1024, 128, (3, 3, 3)): (256, 32, 1, 1, 1),  # upsampler final_conv
+}
+
+
+# fp32 conv3d has 2× the L1 footprint of bf16, so it keeps its own channel-keyed
+# table, swept on BH-LB 1×8 mesh with L1 budget = 50% of 1.5 MB (safe when the
+# audio chain runs co-resident with pipeline allocations).
+# Key:   (in_channels, out_channels, kernel_size_3tuple)
+# Value: (C_in_block, C_out_block, T_out_block, H_out_block=1, W_out_block=1)
+_FP32_BLOCKINGS: dict = {
+    # --- Main vocoder (upsample_rates=[5,2,2,2,2,2], initial_channel=1536) ---
+    (128, 1536, (7, 1, 1)): (128, 32, 29, 1, 1),  # conv_pre
+    (768, 768, (11, 1, 1)): (256, 32, 2, 1, 1),  # stage 0 AMP k11
+    (768, 768, (7, 1, 1)): (192, 32, 6, 1, 1),  # stage 0 AMP k7
+    (768, 768, (3, 1, 1)): (384, 96, 6, 1, 1),  # stage 0 AMP k3
+    (384, 384, (11, 1, 1)): (128, 64, 3, 1, 1),  # stage 1 AMP k11
+    (384, 384, (7, 1, 1)): (384, 32, 3, 1, 1),  # stage 1 AMP k7
+    (384, 384, (3, 1, 1)): (384, 64, 6, 1, 1),  # stage 1 AMP k3
+    (192, 192, (11, 1, 1)): (192, 32, 3, 1, 1),  # stage 2 AMP k11
+    (192, 192, (7, 1, 1)): (192, 96, 3, 1, 1),  # stage 2 AMP k7
+    (192, 192, (3, 1, 1)): (192, 96, 21, 1, 1),  # stage 2 AMP k3
+    (96, 96, (11, 1, 1)): (96, 96, 3, 1, 1),  # stage 3 AMP k11
+    (96, 96, (7, 1, 1)): (96, 96, 4, 1, 1),  # stage 3 AMP k7
+    (96, 96, (3, 1, 1)): (32, 32, 10, 1, 1),  # stage 3 AMP k3
+    # 48 channels: aligned_channels(48)=64, max(32,48)=48 → key is (64,48,...).
+    (64, 48, (11, 1, 1)): (64, 64, 3, 1, 1),  # stage 4 AMP k11
+    (64, 48, (7, 1, 1)): (64, 64, 3, 1, 1),  # stage 4 AMP k7
+    (64, 48, (3, 1, 1)): (64, 32, 6, 1, 1),  # stage 4 AMP k3
+    # 24 channels: aligned(24)=32, max(32,24)=32 → key (32,32,...) same as BWE stage 3.
+    # --- BWE vocoder (upsample_rates=[6,5,2,2,2], initial_channel=512) ---
+    (128, 512, (7, 1, 1)): (64, 32, 7, 1, 1),  # conv_pre
+    (256, 256, (11, 1, 1)): (64, 32, 6, 1, 1),  # stage 0 AMP k11
+    (256, 256, (7, 1, 1)): (256, 32, 3, 1, 1),  # stage 0 AMP k7
+    (256, 256, (3, 1, 1)): (256, 128, 4, 1, 1),  # stage 0 AMP k3
+    (128, 128, (11, 1, 1)): (128, 64, 3, 1, 1),  # stage 1 AMP k11
+    (128, 128, (7, 1, 1)): (128, 128, 2, 1, 1),  # stage 1 AMP k7
+    (128, 128, (3, 1, 1)): (128, 128, 4, 1, 1),  # stage 1 AMP k3
+    (64, 64, (11, 1, 1)): (32, 64, 15, 1, 1),  # stage 2 AMP k11
+    (64, 64, (7, 1, 1)): (64, 64, 3, 1, 1),  # stage 2 AMP k7
+    (64, 64, (3, 1, 1)): (64, 64, 3, 1, 1),  # stage 2 AMP k3
+    (32, 32, (11, 1, 1)): (32, 32, 3, 1, 1),  # stage 3 AMP k11
+    (32, 32, (7, 1, 1)): (32, 32, 4, 1, 1),  # stage 3 AMP k7
+    (32, 32, (3, 1, 1)): (32, 32, 5, 1, 1),  # stage 3 AMP k3
+    # 16 channels: aligned(16)=32 → key (32,32,...) covered by stage 3 above.
 }
 
 
@@ -450,14 +550,21 @@ def get_conv3d_config(
     available the fallback table is used.
     """
     if weights_dtype == ttnn.float32:
+        fp32_blk = _FP32_BLOCKINGS.get((in_channels, out_channels, kernel_size))
+        if fp32_blk is not None:
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fp32_blk
+            logger.debug(f"conv3d fp32 blocking [exact] ({in_channels},{out_channels},{kernel_size}) -> {fp32_blk}")
+        else:
+            # Conservative default — unchanged from the prior hardcoded fp32 path.
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 32, 32, 1, 1, 1
         return ttnn.Conv3dConfig(
             weights_dtype=weights_dtype,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
-            T_out_block=1,
-            W_out_block=1,
-            H_out_block=1,
-            C_out_block=32,
-            C_in_block=32,
+            T_out_block=T_out_block,
+            W_out_block=W_out_block,
+            H_out_block=H_out_block,
+            C_out_block=C_out_block,
+            C_in_block=C_in_block,
             compute_with_storage_grid_size=grid_size,
         )
 

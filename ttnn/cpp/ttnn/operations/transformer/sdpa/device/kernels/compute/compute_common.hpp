@@ -243,7 +243,7 @@ void calculate_recip_first_column() {
             // }
             // v_endif;
             if constexpr (!(DST_ACCUM_MODE || APPROX)) {
-                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::Nearest);
             }
             sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
@@ -254,12 +254,12 @@ void calculate_recip_first_column() {
             sfpi::vFloat out;
 
             if constexpr (APPROX) {
-                out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+                out = ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
             } else if constexpr (DST_ACCUM_MODE) {
-                out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
+                out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
             } else {
-                out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
+                out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
+                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::Nearest);
             }
             sfpi::dst_reg[0] = out;
             sfpi::dst_reg += 2;
@@ -1107,7 +1107,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<false>();
-    // recip_tile_first_column<false>() calls the scalar _sfpu_reciprocal_ path, so initialize exactly
+    // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
     // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
     // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
@@ -1123,13 +1123,13 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
-        MATH(SFPU_CALL_MODE(
+        MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binop_with_scalar,
             (APPROX, ADD_UNARY, 8 /* ITERATIONS */),
-            C,
             0 /*dst_index*/,
+            VectorMode::C,
             0x3F800000 /*scalar*/));
         // recip_tile<false>(0, (int)VectorMode::C);
         MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
@@ -1516,7 +1516,7 @@ void apply_causal_mask_lightweight(
 }
 
 /**
- * Context for lightweight mask application in ring joint SDPA.
+ * Context for lightweight mask application.
  * All mask tiles reside in a single CB. This struct stores the pre-resolved mask metadata used when
  * lightweight masking is enabled; enablement itself is controlled by the `lightweight_mask_enabled`
  * template parameter(s), not by default-constructing this context.
@@ -1525,6 +1525,10 @@ struct LightweightMaskContext {
     bool is_causal = false;                  // Causal masking active for this context instance
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
+    uint32_t primary_diag_tile_idx = 0;      // Causal diagonal, or sliding-window trailing-primary tile
+    uint32_t sliding_leading_prev_tile_idx = 0;   // Index of previous sliding-window leading tile
+    uint32_t sliding_leading_tile_idx = 0;        // Index of current sliding-window leading tile in the mask CB
+    uint32_t sliding_trailing_next_tile_idx = 0;  // Index of next sliding-window trailing tile
     uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
     uint32_t local_n_padded_tiles = 0;       // Fully padded K tile columns for local_n chunk
     uint32_t joint_n_padded_tiles = 0;       // Fully padded K tile columns for joint_l chunk

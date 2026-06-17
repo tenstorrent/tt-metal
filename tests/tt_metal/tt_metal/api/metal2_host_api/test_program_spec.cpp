@@ -35,6 +35,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt_stl/reflection.hpp>
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
@@ -63,6 +64,76 @@ using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
+
+// ============================================================================
+// Reflection: ProgramSpec and its subcomponents are hashable via ttsl reflection
+// ============================================================================
+//
+// ttsl::hash (tt_stl/reflection.hpp) hashes a plain aggregate by reflecting over its fields
+// and recursing into each one. These checks pin that the whole ProgramSpec tree stays
+// hashable: if a future change adds a field ttsl::hash can't handle (or makes one of these
+// structs non-aggregate), the build breaks here rather than at some distant call site.
+//
+// This can't be a requires-expression. ttsl::hash::hash_object is an unconstrained template
+// whose "unsupported type" case is a static_assert in the function *body*, so the call is
+// always well-formed and unhashability only surfaces once the body is instantiated. hash_one
+// is never called; taking its address ODR-uses it, which forces that instantiation — and the
+// recursion through T's fields — at compile time.
+template <typename T>
+ttsl::hash::hash_t hash_one(const T& value) {
+    return ttsl::hash::hash_objects_with_default_seed(value);
+}
+template <typename T>
+inline constexpr bool hashable_v = (static_cast<void>(&hash_one<T>), true);
+
+// Top-level specs
+static_assert(hashable_v<ProgramSpec>, "ProgramSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<WorkUnitSpec>, "WorkUnitSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<KernelSpec>, "KernelSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<RemoteDataflowBufferSpec>, "RemoteDataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
+
+// KernelSpec subcomponents
+static_assert(hashable_v<KernelSpec::SourceCode>, "KernelSpec::SourceCode must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<KernelSpec::CompilerOptions>, "KernelSpec::CompilerOptions must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<KernelSpec::RuntimeArgSchema>, "KernelSpec::RuntimeArgSchema must be hashable via ttsl reflection");
+static_assert(hashable_v<DFBBinding>, "DFBBinding must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreBinding>, "SemaphoreBinding must be hashable via ttsl reflection");
+static_assert(hashable_v<TensorBinding>, "TensorBinding must be hashable via ttsl reflection");
+
+// Kernel hardware configs
+static_assert(
+    hashable_v<DataMovementHardwareConfig>, "DataMovementHardwareConfig must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<DataMovementHardwareConfig::Gen1Config>,
+    "DataMovementHardwareConfig::Gen1Config must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<DataMovementHardwareConfig::Gen2Config>,
+    "DataMovementHardwareConfig::Gen2Config must be hashable via ttsl reflection");
+static_assert(hashable_v<ComputeHardwareConfig>, "ComputeHardwareConfig must be hashable via ttsl reflection");
+
+// Per-spec advanced options
+static_assert(hashable_v<KernelAdvancedOptions>, "KernelAdvancedOptions must be hashable via ttsl reflection");
+static_assert(hashable_v<DFBAdvancedOptions>, "DFBAdvancedOptions must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreAdvancedOptions>, "SemaphoreAdvancedOptions must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<TensorParameterAdvancedOptions>, "TensorParameterAdvancedOptions must be hashable via ttsl reflection");
+
+TEST(ProgramSpecReflectionTest, IsHashable) {
+    const ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    // Deterministic: hashing the same spec twice yields the same value.
+    EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(spec), ttsl::hash::hash_objects_with_default_seed(spec));
+
+    // Sensitive: changing a field changes the hash.
+    ProgramSpec modified = spec;
+    modified.name += "_v2";
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(spec), ttsl::hash::hash_objects_with_default_seed(modified));
+}
 
 // ============================================================================
 // Test Fixtures
@@ -218,6 +289,56 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
+TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // A producer+consumer self-loop on one DFB may use DISTINCT accessor names ('p'/'c'): it binds
+    // one PRODUCER and one CONSUMER (different roles), which is the sanctioned multi-binding form.
+    // Only a second binding of the SAME role under a different name is forbidden.
+    auto kernel = MakeMinimalDMKernel("kernel");
+    auto dfb = MakeMinimalDFB("dfb");
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
+    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // The wrong port of the legacy "one buffer, two names" CB-alias idiom: one kernel binds the
+    // same DFB twice in the SAME role (here two CONSUMER bindings) under different accessor names,
+    // yielding two accessors / DataflowBuffer objects for one FIFO. Forbidden — the right port is a
+    // kernel-side handle alias over a single binding. (A producer+consumer self-loop is a different,
+    // legitimate multi-binding and stays legal — see SelfLoopWithDistinctAccessorNamesSucceeds.)
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in_a"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in_b"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has two CONSUMER bindings to DFB 'dfb' under different accessor names")));
+}
+
 TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
     NodeCoord node{0, 0};
 
@@ -352,8 +473,8 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    // Two PRODUCER bindings on the same DFB, both KernelSpecs in the same WorkUnitSpec.
-    // Multi-binding requires non-overlapping WU membership per role; this should fail.
+    // Two PRODUCER bindings on the same DFB, both KernelSpecs in the same WorkUnitSpec (so both
+    // land on the same node). A local DFB allows only one producer instance per node, so this fails.
     producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
@@ -365,8 +486,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' has multiple PRODUCER KernelSpecs sharing WorkUnitSpec 'work_unit'")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
@@ -395,8 +515,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER KernelSpecs sharing WorkUnitSpec 'work_unit'")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 consumer instance(s)")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInDifferentWorkUnitsSucceeds) {
@@ -472,7 +591,8 @@ TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
     producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
-    // Producer covers wu_p; consumer covers wu_c. Their coverages differ — invalid.
+    // Producer covers node0; consumer covers node1. Every node ends up with only one role —
+    // the per-node census rejects it (each node hosting the DFB needs both a producer and consumer).
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{
@@ -482,7 +602,39 @@ TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("do not cover the same WorkUnitSpec(s)")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is malformed at node")));
+}
+
+// The canonical 2D-matmul placement: one compute consumer spanning the whole grid, with a
+// separate specialized DM producer per node group. The producer role has several KernelSpecs (one
+// per group's WorkUnitSpec); the single consumer joins every group's WorkUnitSpec. Each node ends
+// up with exactly one producer and one consumer instance, so the per-node census accepts it.
+TEST_F(ProgramSpecTestQuasar, LocalDFBAllGridConsumerWithPerGroupProducersSucceeds) {
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto consumer = MakeMinimalComputeKernel("compute");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    std::vector<KernelSpec> kernels;
+    std::vector<WorkUnitSpec> work_units;
+    for (uint32_t i = 0; i < 4; ++i) {
+        const std::string dm_name = "dm" + std::to_string(i);
+        auto dm = MakeMinimalDMKernel(dm_name);
+        dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+        kernels.push_back(dm);
+        // One node per group: the per-group DM lives there, and the all-grid compute joins it.
+        work_units.push_back(MakeMinimalWorkUnit("wu" + std::to_string(i), NodeCoord{i, 0}, {dm_name, "compute"}));
+    }
+    kernels.push_back(consumer);
+
+    spec.kernels = std::move(kernels);
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::move(work_units);
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBMultiBindingAccessPatternMismatchFails) {
@@ -826,7 +978,8 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     const std::string& tensor_param_name = "borrowed_tensor",
     tt::tt_metal::BufferType tensor_buffer_type = tt::tt_metal::BufferType::L1,
     uint32_t dfb_entry_size = 16,
-    uint32_t dfb_num_entries = 2) {
+    uint32_t dfb_num_entries = 2,
+    bool bind_backing_to_kernel = true) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -841,8 +994,12 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tensor_buffer_type);
-    // The TensorParameter must be bound to at least one kernel (referential-integrity check).
-    BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+    // The borrowed_from reference is itself counted as a use of the TensorParameter, so binding it
+    // to a kernel is not required for referential integrity. Callers exercising the borrowed-only
+    // path pass bind_backing_to_kernel=false.
+    if (bind_backing_to_kernel) {
+        BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+    }
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -854,6 +1011,21 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
 TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBSucceeds) {
     // Positive baseline: borrowed-memory DFB whose TensorParameter is L1-resident and large enough.
     ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBBackingParameterNeedNotBeKernelBoundSucceeds) {
+    // Regression: a TensorParameter used ONLY as a borrowed-memory DFB's backing (referenced via
+    // borrowed_from, never bound by a kernel) is a legitimate use. The validator must count
+    // borrowed_from toward referential integrity rather than rejecting the parameter as "defined
+    // but not bound by any kernel". This is the common borrowed-memory-DFB case (e.g. a borrowed
+    // LUT / scratch tensor consumed only through the DFB).
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor",
+        tt::tt_metal::BufferType::L1,
+        /*dfb_entry_size=*/16,
+        /*dfb_num_entries=*/2,
+        /*bind_backing_to_kernel=*/false);
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
@@ -990,6 +1162,19 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelTemporarilyUnsupportedFails) {
+    // TEMPORARY restriction: a TensorAccessor cannot yet be constructed in a compute kernel, so
+    // binding a tensor to one is rejected up front in ValidateProgramSpec with an apologetic message.
+    // Delete this test when compute-path tensor bindings are supported (the guard goes with it).
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("t")};
+    BindTensorParameterToKernel(spec.kernels[1], "t", "t_acc");  // kernels[1] == compute_kernel
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("compute kernel with a tensor binding")));
 }
 
 TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
@@ -1143,19 +1328,20 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithExplicitDefaultUnpackToDestModeSucce
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeFails) {
-    // UnpackToDestFp32 is FP32-only; setting it on a non-FP32 DFB is rejected.
-    ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b
+TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
+    // UnpackToDestFp32 on a non-Float32 DFB is INERT: the LLK ignores the mode where the data
+    // isn't FP32. The validator tolerates it (rejecting it would force porters to dtype-gate
+    // legacy unpack_to_dest_mode vectors that set UnpackToDestFp32 unconditionally). With
+    // fp32_dest_acc_en=true the entry is coherent, so the spec validates.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b (non-FP32)
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            config.fp32_dest_acc_en = true;
             config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("specifies UnpackToDestFp32, but the DFB data format is not Float32")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
@@ -1222,8 +1408,9 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingFails) {
-    // UnpackToDestFp32 on a producer-only binding is meaningless (producers don't unpack).
+TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
+    // UnpackToDestFp32 on a producer-only binding is INERT (producers don't unpack), so the
+    // validator tolerates it rather than rejecting. With fp32_dest_acc_en=true it is coherent.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1247,10 +1434,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingFails) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "consumer_dm"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("does not have a CONSUMER endpoint on this DFB")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
@@ -1502,9 +1686,9 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitWithMultipleComputeKernelsFails) {
             ::testing::HasSubstr("WorkUnitSpec 'work_unit' has more than one compute kernel")));
 }
 
-TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatchFails) {
-    // A local DFB requires its producer and consumer kernels to share IDENTICAL
-    // WorkUnitSpec membership.
+TEST_F(ProgramSpecTestQuasar, LocalDFBConsumerOnNodeWithoutProducerFails) {
+    // A local DFB requires every node it lives on to host both a producer and a consumer. Here the
+    // consumer covers an extra node where no producer runs, so the per-node census rejects it.
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
 
@@ -1520,7 +1704,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    // Producer is on work_unit_0 only; consumer is on both work_units — membership doesn't match.
+    // Producer covers node0 only; consumer covers node0 and node1 — node1 has a consumer but no producer.
     spec.work_units = std::vector<WorkUnitSpec>{
         MakeMinimalWorkUnit("work_unit_0", node0, {"producer", "consumer"}),
         MakeMinimalWorkUnit("work_unit_1", node1, {"consumer"}),
@@ -1528,7 +1712,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("do not cover the same WorkUnitSpec(s)")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("This node has a consumer but no producer")));
 }
 
 // ----------------------------------------------------------------------------
@@ -3094,7 +3278,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
         TensorParameter tp{
             .unique_id = TensorParamName{"input_tensor"},
             .spec = tt::tt_metal::TensorSpec(std::move(shape), std::move(tensor_layout)),
-            .relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true},
+            .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true},
         };
         spec.tensor_parameters = {tp};
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -3120,7 +3304,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedKernelHashStableAcrossShap
     auto make_spec = [](const tt::tt_metal::Shape& shape, bool dynamic) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         auto tp = MakeShardedTensorParameter("input_tensor", shape, {32, 32}, /*num_cores=*/2);
-        tp.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = dynamic};
+        tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic};
         spec.tensor_parameters = {tp};
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
         return spec;
@@ -3154,7 +3338,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedBindingTracksShapeCRTASlot
     // directly to be robust against BDS-internal flattening conventions.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto tp = MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, 2);
-    tp.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -3176,7 +3360,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedBindingHasNoRuntimeFie
     // demotion, so num_runtime_field_crta_words should remain zero.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto tp = MakeMinimalTensorParameter("input_tensor");
-    tp.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -3215,7 +3399,7 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     auto plain_tp = MakeMinimalTensorParameter("plain_tensor");
     auto dyn_tp =
         MakeShardedTensorParameter("dyn_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
-    dyn_tp.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    dyn_tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {plain_tp, dyn_tp};
     BindTensorParameterToKernel(spec.kernels[0], "plain_tensor", "plain_ta");
     BindTensorParameterToKernel(spec.kernels[0], "dyn_tensor", "dyn_ta");

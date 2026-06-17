@@ -46,7 +46,8 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     }
 
     if (mem_config) {
-        output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
+        output_tensor_spec = TensorSpec(
+            output_tensor_spec.logical_shape(), output_tensor_spec.tensor_layout().with_memory_config(*mem_config));
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());
@@ -132,8 +133,10 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     auto output_tensor_spec = ghost_input_tensor.tensor_spec();
     if (mem_config) {
         TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
-        auto output_mem_config = mem_config->with_shard_spec(shard_spec);
-        output_tensor_spec = output_tensor_spec.with_memory_config(output_mem_config);
+        auto output_mem_config = MemoryConfig(mem_config->memory_layout(), mem_config->buffer_type(), shard_spec);
+        output_tensor_spec = TensorSpec(
+            output_tensor_spec.logical_shape(),
+            output_tensor_spec.tensor_layout().with_memory_config(output_mem_config));
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());

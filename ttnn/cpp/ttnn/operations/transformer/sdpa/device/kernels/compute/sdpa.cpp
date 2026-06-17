@@ -112,24 +112,36 @@ void kernel_main() {
         // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
         cb_wait_front(cb_identity_scale_in, 1);
 
-        // Lightweight-mask context: writer pre-generates [neginf(0), causal_diag?, k_partial?] tiles
-        // permanently fronted. Causal uses neginf + diag (2 tiles). Non-causal partial-tile K
-        // uses neginf + partial (2 tiles); the per-row stamp masks the partial col + trailing neginf.
+        // Lightweight-mask context: writer pre-generates either [neginf, causal_diag, partial?]
+        // or, for sliding, [neginf, trailing_primary, leading_prev, leading_current, trailing_next, partial?].
+        // primary_diag_tile_idx is the per-layout tile used for the row-local diagonal stamp.
         LightweightMaskContext lw_mask;
-        if constexpr (is_causal) {
-            lw_mask.is_causal = true;
-            lw_mask.neginf_tile_idx = 0;
-            lw_mask.causal_diag_tile_idx = 1;
-            cb_wait_front(cb_mask_in, 2);
-        } else if constexpr (k_partial_col > 0) {
+        uint32_t lw_mask_tile_count = 1;
+        lw_mask.neginf_tile_idx = 0;
+        lw_mask.is_causal = is_causal;
+        if constexpr (sliding_window_size > 0) {
+            lw_mask.primary_diag_tile_idx = 1;
+            lw_mask.sliding_leading_prev_tile_idx = 2;
+            lw_mask.sliding_leading_tile_idx = 3;
+            lw_mask.sliding_trailing_next_tile_idx = 4;
+            lw_mask_tile_count = 5;
+        } else if constexpr (is_causal) {
+            lw_mask.causal_diag_tile_idx = lw_mask_tile_count++;
+            lw_mask.primary_diag_tile_idx = lw_mask.causal_diag_tile_idx;
+        }
+        if constexpr (k_partial_col > 0) {
             lw_mask.global_n_partial_col = k_partial_col;
-            lw_mask.global_n_partial_tile_idx = 1;  // [neginf(0), partial(1)]
+            lw_mask.global_n_partial_tile_idx = lw_mask_tile_count++;
             // global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk
             constexpr uint32_t last_chunk_first_tile =
                 (valid_Skt > Sk_chunk_t) ? ((valid_Skt - 1) / Sk_chunk_t) * Sk_chunk_t : 0u;
             constexpr uint32_t valid_tiles_in_last_chunk = valid_Skt - last_chunk_first_tile;
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk;
-            cb_wait_front(cb_mask_in, 2);
+        }
+        // A user-provided dense mask is streamed per-chunk by the reader and consumed inside the
+        // inner loop — it does not use the writer-generated lightweight palette, so skip this wait.
+        if constexpr ((is_causal || sliding_window_size > 0 || k_partial_col > 0) && !use_provided_mask) {
+            cb_wait_front(cb_mask_in, lw_mask_tile_count);
         }
 
         // Global Q scheduling: sdpa_standard_v2 walks the per-core flat range over
@@ -158,7 +170,11 @@ void kernel_main() {
             cb_recip_scratch,
             cb_out,  // normalized output goes directly to output CB
             cb_mask_in,
-            is_causal>(
+            sliding_window_size,
+            is_causal,
+            use_attention_sink,
+            cb_attention_sink,
+            use_provided_mask>(
             global_q_count,
             k_num_chunks,
             cb_out_im_A,
@@ -181,6 +197,7 @@ void kernel_main() {
             lw_mask.is_causal = true;
             lw_mask.neginf_tile_idx = 0;
             lw_mask.causal_diag_tile_idx = 1;
+            lw_mask.primary_diag_tile_idx = lw_mask.causal_diag_tile_idx;
             cb_wait_front(cb_mask_in, 2);
         }
 

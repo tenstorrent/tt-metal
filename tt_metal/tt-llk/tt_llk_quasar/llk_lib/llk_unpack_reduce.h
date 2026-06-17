@@ -12,16 +12,16 @@
 using namespace ckernel;
 
 /**
- * @brief MOP configuration for unpack reduce operations
- * @details Sets up MOP for unpacking for reduce operations, which unpacks
- * tile for SrcA, and a single face for SrcB
- * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
- * buf_desc_id_0 will be used for UNPACKER0 -> SRCA
- * buf_desc_id_1 will be used for UNPACKER1 -> SRCB
+ * @brief Builds the MOP for unpack reduce operations.
+ *
+ * Unpacks a full tile for SrcA and a single face for SrcB. buf_desc_id_0 feeds UNPACKER0 -> SRCA,
+ * buf_desc_id_1 feeds UNPACKER1 -> SRCB.
+ *
+ * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
- * @param num_tiles: number of tiles to unpack at a time for SrcA, SrcB will only have first face unpacked
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
+ * @param num_tiles: Number of tiles to unpack at a time for SrcA; SrcB will only have its first face unpacked.
  */
 template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_mop_config_(
@@ -48,16 +48,19 @@ inline void _llk_unpack_reduce_mop_config_(
 }
 
 /**
- * @brief MOP configuration for unpack reduce operations
- * @details Sets up MOP for unpacking for reduce operations, which unpacks
- * tile for SrcA, and a single face for SrcB
- * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
- * buf_desc_id_0 will be used for UNPACKER0 -> SRCA
- * buf_desc_id_1 will be used for UNPACKER1 -> SRCB
+ * @brief Initializes the unpacker for reduce operations.
+ *
+ * Validates the tensor shape, programs the SrcA transpose for REDUCE_ROW, then programs the MOP for
+ * unpacking a full tile for SrcA and a single face for SrcB. buf_desc_id_0 feeds UNPACKER0 -> SRCA,
+ * buf_desc_id_1 feeds UNPACKER1 -> SRCB.
+ *
+ * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
- * @param num_tiles: number of tiles to unpack at a time for SrcA, SrcB will only have first face unpacked
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
+ * @param num_tiles: Number of tiles to unpack at a time for SrcA; SrcB will only have its first face unpacked.
+ * @note On the math thread, pair with @ref _llk_math_reduce_init_ (T1); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
+ * @note @ref _llk_unpack_reduce_ is the matching execute call on this thread.
  */
 template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_init_(
@@ -69,10 +72,11 @@ inline void _llk_unpack_reduce_init_(
 }
 
 /**
- * @brief Unpacks for reduce kernels
- * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer
- * start_l1_tile_idx_0 -> UNPACKER0 -> SRCA
- * start_l1_tile_idx_1 -> UNPACKER1 -> SRCB
+ * @brief Unpacks operands for reduce kernels into SrcA and SrcB.
+ *
+ * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
+ *        start_l1_tile_idx_0 -> UNPACKER0 -> SRCA, start_l1_tile_idx_1 -> UNPACKER1 -> SRCB.
+ * @note Call @ref _llk_unpack_reduce_init_ with matching template args before this function.
  */
 inline void _llk_unpack_reduce_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {

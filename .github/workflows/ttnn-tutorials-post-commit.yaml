@@ -132,5 +132,10 @@ jobs:
           cd /work  # Go back to root for test_tutorials.py
           python3 -m pytest tests/ttnn/notebook_tests/test_tutorials.py -v
 
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

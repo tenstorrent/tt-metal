@@ -8,6 +8,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +32,8 @@
 using namespace tt::tt_metal;
 
 namespace {
+
+namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
 
 // Host-side summary of which ring-loop iterations do useful SDPA work. Bits are indexed by ring_iter,
 // not ring_id; kernels still advance their sync/ring-id sequence on every iter before checking the mask.
@@ -67,6 +70,8 @@ struct RingJointRuntimePlan {
     uint32_t logical_nt = 0;
     KVPadQMapping kv_pad_q_mapping;
     RingWorkPlan ring_work_plan;
+    bool kernel_chunked = false;
+    bool kernel_is_causal = false;
 };
 
 struct RingJointRuntimeDerivation {
@@ -79,7 +84,7 @@ struct RingJointRuntimeDerivation {
     uint32_t k_chunk_tile_count = 0;
     uint32_t num_joint_k_chunks = 0;
     uint32_t joint_seq_len = 0;
-    bool is_chunked = false;
+    bool kernel_chunked = false;
     bool kv_pad_rotation_enabled = false;
     bool kernel_is_causal = false;
 };
@@ -109,6 +114,11 @@ struct RingWritePlan {
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
+
+// The helper appends 4 kernels after the 3 SDPA kernels above, in order: reader_forward (3),
+// writer_forward (4), reader_backward (5), writer_backward (6) (helper desc.kernels.push_back order).
+constexpr uint32_t kAllGatherReaderForwardKernelIndex = 3;
+constexpr uint32_t kAllGatherReaderBackwardKernelIndex = 5;
 
 // Compute runtime args 0/1 are global_q_start/global_q_end (see ring_joint_sdpa.cpp kernel_main).
 // A core with global_q_start == global_q_end got no Q chunks at emplace time and is idle.
@@ -194,7 +204,7 @@ RingWorkPlan build_ring_work_plan_impl(
                 continue;
             }
             if (kv_global_tile_for_host_ring_plan(
-                    derivation.is_chunked,
+                    derivation.kernel_chunked,
                     ring_id,
                     local_tile_start,
                     derivation.q_chunk_group_tile_count,
@@ -208,7 +218,7 @@ RingWorkPlan build_ring_work_plan_impl(
         // Non-pad chunked prefill historically keeps every spatial ring iter active; KV-pad rotation
         // tightens this to valid chunks so empty pad slabs can be skipped.
         const bool has_kv_work =
-            (derivation.is_chunked && !derivation.kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
+            (derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
         const bool ring_iter_does_work =
             (has_kv_work || joint_contributes) &&
             !(derivation.kernel_is_causal && ring_write_plan.device_index < ring_id && !is_balanced);
@@ -336,9 +346,11 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.k_chunk_tile_count = k_chunk_size / tt::constants::TILE_HEIGHT;
     derivation.num_joint_k_chunks = tt::div_up(L, k_chunk_size);
     derivation.joint_seq_len = L;
-    derivation.is_chunked = tensor_args.is_chunked();
+    // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
+    // non-chunked path.
+    derivation.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
     derivation.kv_pad_rotation_enabled = args.has_kv_pad_rotation();
-    derivation.kernel_is_causal = args.is_causal && !derivation.is_chunked;
+    derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
     TT_FATAL(
         derivation.ring_size <= std::numeric_limits<uint32_t>::digits,
@@ -369,6 +381,8 @@ RingJointRuntimePlan build_runtime_plan(
     }
 
     plan.ring_work_plan = build_ring_work_plan(ring_write_plan, derivation, args.is_balanced);
+    plan.kernel_chunked = derivation.kernel_chunked;
+    plan.kernel_is_causal = derivation.kernel_is_causal;
     return plan;
 }
 
@@ -451,6 +465,40 @@ void apply_ring_joint_scalar_runtime_args(
     const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
     const uint32_t kv_cache_batch_idx = args.kv_cache_batch_idx.value_or(0);
 
+    // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
+    // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
+    // reader. Mirrors the helper's create-time arithmetic so miss and hit paths agree.
+    if (patch_indexed_kv_cache) {
+        const Tensor& input_k = tensor_args.input_k;
+        const bool v_shares_k = tensor_args.has_latent_v();
+        const uint32_t num_ag_inputs = v_shares_k ? 1u : (tensor_args.input_v.has_value() ? 2u : 1u);
+        const std::array<const Tensor*, 2> ag_inputs = {
+            &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
+        const auto patch_all_gather_reader = [&](uint32_t kernel_id) {
+            auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
+            for (auto& col_args : grid_args) {
+                for (auto& core_args : col_args) {
+                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
+                        const auto& shape = ag_inputs[in]->padded_shape();
+                        const uint32_t num_heads = shape[1];
+                        const uint32_t Ht = shape[2] / tt::constants::TILE_WIDTH;
+                        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
+                        const uint32_t input_batch_base =
+                            ag_rt::input_batch_base_pages(kv_cache_batch_idx, num_heads, Ht, Wt);
+                        const uint32_t idx = ag_rt::kReaderRuntimeArgHeaderCount +
+                                             in * ag_rt::kTensorDescriptorFieldCount +
+                                             ag_rt::kInputBatchBaseFieldOffset;
+                        if (core_args.size() > idx) {  // skip cores that don't run this kernel
+                            write_runtime_arg(core_args, idx, input_batch_base, "all_gather_reader.input_batch_base");
+                        }
+                    }
+                }
+            }
+        };
+        patch_all_gather_reader(kAllGatherReaderForwardKernelIndex);
+        patch_all_gather_reader(kAllGatherReaderBackwardKernelIndex);
+    }
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
 
@@ -523,14 +571,20 @@ void apply_ring_joint_scalar_runtime_args(
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
+namespace {
+
+// Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
+// create_workload_descriptor() can loop coords and reuse this body verbatim. The
+// op-specific name suffix avoids Unity-build collisions with the sibling ring
+// sdpa factories that share the same helper signature.
+tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
-        "RingJointSDPAProgramFactory::create_descriptor requires mesh_dispatch_coordinate");
+        "build_ring_joint_sdpa_program_descriptor requires mesh_dispatch_coordinate");
     const auto& coord = mesh_dispatch_coordinate.value();
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
@@ -700,12 +754,13 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // group size below is that Q-sized region across all devices.
     // diagonal-tile CB slot is shared with is_causal — needed whenever either is on.
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
-    const bool is_chunked = tensor_args.is_chunked();
-    const bool diag_tile_enabled = args.is_causal || is_chunked;
-    // Kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics. Chunked
-    // prefill is mathematically causal (args.is_causal=True) but uses absolute-coords stamps every
-    // ring iter, so the chunked path supersedes the legacy path — mask the flag off here.
-    const bool kernel_is_causal = args.is_causal && !is_chunked;
+    // kernel_chunked drives the chunked-prefill math in the kernels and the host ring-work planner.
+    // Cross runs the non-causal full-prefill path on chunked-shaped tensors, so it is excluded; the
+    // kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics (chunked
+    // prefill supersedes it via absolute-coords stamps). Both are derived once in build_runtime_plan.
+    const bool kernel_chunked = runtime_plan.kernel_chunked;
+    const bool kernel_is_causal = runtime_plan.kernel_is_causal;
+    const bool diag_tile_enabled = args.is_causal || kernel_chunked;
 
     // Lightweight mask: needed when any K/joint dimension has padding, or when causal/chunked
     // masking is active.
@@ -1040,7 +1095,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         // Reader slot 24: chunked_enabled. Writer/compute use their corresponding slot for use_streaming_compute.
-        static_cast<uint32_t>(is_chunked),
+        static_cast<uint32_t>(kernel_chunked),
         num_active_cores,
         q_chunk_group_tile_count,
         static_cast<uint32_t>(indexed_kv_cache),
@@ -1156,7 +1211,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         static_cast<std::uint32_t>(writer_out_row_group_h),
-        static_cast<uint32_t>(is_chunked),
+        static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
         compile_time_active_ring_iter_mask,
         compile_time_last_active_ring_iter,
@@ -1207,7 +1262,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        static_cast<uint32_t>(is_chunked),
+        static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
         static_cast<uint32_t>(kv_pad_rotation_enabled),
         compile_time_kv_pad_q_mapping.q_pre_wrap_start_tile,
@@ -2105,10 +2160,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         all_gather_input_tensors.push_back(input_tensor_v);
         all_gather_output_tensors.push_back(gathered_input_tensor_v);
     }
-    // Append the all-gather portion to `desc`. The helper assigns sequential
-    // semaphore IDs starting at `desc.semaphores.size()` (current count) and
-    // returns kernel indices into `desc.kernels`. Runtime args are auto-patched
-    // by the descriptor framework on cache hits, so no override path is needed.
+    // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; the
+    // indexed-mode input_batch_base scalar is re-patched in apply_ring_joint_scalar_runtime_args.
+    // The trailing kv_cache_batch_idx makes the gather collect only that cache slot (std::nullopt =>
+    // full batch).
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         desc,
         all_gather_input_tensors,
@@ -2125,9 +2180,33 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.all_gather_operation_attributes.sub_device_id,
         all_gather_fused_op_signaler,
         args.ccl_core_grid_offset,
-        args.all_gather_operation_attributes.core_allocation_strategy);
+        args.all_gather_operation_attributes.core_allocation_strategy,
+        args.kv_cache_batch_idx);
 
     return desc;
+}
+
+}  // namespace
+
+// Ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
+// device_index / forward_coord / backward_coord (used by the all-gather portion) all
+// depend on the mesh coordinate, so descriptors cannot be shared across coords. Returning
+// a WorkloadDescriptor (rather than a per-coord ProgramDescriptor) keeps the framework on
+// its no-rebuild cache-hit fast path; the dynamic scalar runtime args (indexed kv-cache /
+// kv-pad rotation) are still re-applied every dispatch by override_runtime_arguments below.
+tt::tt_metal::WorkloadDescriptor RingJointSDPAProgramFactory::create_workload_descriptor(
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc = build_ring_joint_sdpa_program_descriptor(args, tensor_args, output_tensors, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
 }
 
 RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorkloadFactory::create_mesh_workload(

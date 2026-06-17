@@ -770,6 +770,20 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
     return *command_queue;
 }
 
+MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(std::optional<uint8_t> cq_id) const {
+    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+
+    // If the mesh device has no local devices, return the dummy mesh command queue.
+    if (this->get_view().get_devices().empty()) {
+        return *mesh_command_queues_[0];
+    }
+
+    TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
+    const auto& command_queue = mesh_command_queues_[id];
+    TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
+    return *command_queue;
+}
+
 DeviceIds MeshDeviceImpl::get_device_ids() const {
     DeviceIds device_ids;
     for (auto* device : this->get_devices()) {
@@ -1243,6 +1257,11 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
 
+    // Drop any DRAM-core prefetcher requests captured under this trace so they don't outlive it.
+    if (dram_core_prefetcher_) {
+        dram_core_prefetcher_->release_trace(trace_id);
+    }
+
     tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
     // Only enable allocations once all captured traces are released
@@ -1332,6 +1351,12 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
         *trace_id,
         this->mesh_id_,
         *(active_sub_device_manager->id()));
+    // Re-send any DRAM-core prefetcher requests captured during this trace's capture, before
+    // dispatching the trace so the host worker can begin filling the GCB as the consuming
+    // program is dispatched. No-op (and no manager created) when the prefetcher is unused.
+    if (dram_core_prefetcher_) {
+        dram_core_prefetcher_->replay_trace(trace_id);
+    }
     mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
 }
 
@@ -1453,11 +1478,11 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
 
 DramCorePrefetcherManager& MeshDeviceImpl::dram_core_prefetcher(MeshDevice* mesh_device) {
     if (!dram_core_prefetcher_) {
-        dram_core_prefetcher_ = std::make_unique<DramCorePrefetcherManager>(mesh_device);
+        dram_core_prefetcher_ =
+            std::make_unique<DramCorePrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
     }
     return *dram_core_prefetcher_;
 }
-
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
     const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
@@ -1485,6 +1510,37 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const 
         "No unused DRAM subchannel found for bank_id={}; all {} subchannels are reserved as worker/eth endpoints",
         bank_id,
         num_subchannels);
+}
+
+std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_id) const {
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+
+    // Sender 0: the free non-endpoint subchannel.
+    const CoreCoord free_core = pick_unused_dram_logical_core(bank_id);
+
+    // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
+    // matching the endpoint's physical (TRANSLATED) coord against this bank's
+    // subchannels (mirrors the loop in pick_unused_dram_logical_core).
+    const CoreCoord noc1_endpoint_phys =
+        soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/static_cast<uint8_t>(1));
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+        const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+        if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
+            const CoreCoord noc1_core =
+                soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+            TT_FATAL(
+                noc1_core != free_core,
+                "DRAM bank {}: NOC1-endpoint subchannel collides with the free subchannel ({}, {})",
+                bank_id,
+                free_core.x,
+                free_core.y);
+            return {free_core, noc1_core};
+        }
+    }
+    TT_THROW("Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={}", bank_id);
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }

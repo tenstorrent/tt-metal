@@ -177,6 +177,4 @@ class UnpackerA(Unpacker):
         block: BlockData,
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-
-        return f"_llk_unpack_A_uninit_<{broadcast_type}>({face_r_dim});\n"
+        return f"_llk_unpack_A_uninit_<{broadcast_type}>();\n"

@@ -23,10 +23,11 @@ inline void _calculate_square_sfp_rows_()
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
-inline void _calculate_square_(const int iterations)
+template <int ITERATIONS = SFPU_ITERATIONS>
+inline void _calculate_square_()
 {
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         _calculate_square_sfp_rows_<false>();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)

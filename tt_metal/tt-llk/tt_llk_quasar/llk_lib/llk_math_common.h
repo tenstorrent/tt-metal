@@ -15,19 +15,14 @@ using namespace ckernel::math;
 static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
 
 /**
- * @brief Sets up ALU formats for math destination register
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
- * from SrcA reg format
- * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32
- * otherwise default behaviour is Float16/Float16_b depending on input
- * format exponent width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32
- * otherwise default behaviour is Float16/Float16_b depending on input
- * format exponent width
- * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
- * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
- * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @brief Sets up ALU formats for math destination register.
+ *
+ * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
+ * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
+ * width
+ * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent width
+ * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format, values = DataFormat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format, values = DataFormat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
 inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
@@ -80,15 +75,12 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
 }
 
 /**
- * @brief Sets up ALU formats for math destination register, specifically for upk to dest
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
- * from SrcA reg format
- * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32
- * otherwise default behaviour is Float16/Float16_b depending on input
- * format exponent width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32
- * otherwise default behaviour is Float16/Float16_b depending on input
- * format exponent width
+ * @brief Sets up ALU formats for math destination register, specifically for upk to dest.
+ *
+ * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
+ * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
+ * width
+ * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent width
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
 inline void _llk_math_upk_to_dest_hw_configure_()
@@ -253,9 +245,11 @@ inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_f
 }
 
 /**
- * @brief Sets the dest dvalid for a FPU/SFPU
+ * @brief Sets the dest dvalid for a FPU/SFPU.
+ *
  * @tparam SET_DEST_DVALID: which client to set data valid for, values = <p_cleardvalid::FPU/SFPU>
- **/
+ * @tparam DST: Destination synchronization mode, values = <SyncFull/SyncHalf>
+ */
 template <std::uint8_t SET_DEST_DVALID, DstSync DST>
 inline void _llk_math_set_dvalid_()
 {
@@ -271,11 +265,17 @@ inline void _llk_math_set_dvalid_()
     }
 }
 
+// All the following functions are added to enable Math <-> Pack synchronization
+// on destination register due to dest dvalid issue.
+// The following functions should be removed once the above issue is resolved.
+
 /**
- * All the following functions are added to enable Math <-> Pack synchronization
- * on destination register due to dest dvalid issue.
+ * @brief Initialize the math/pack synchronization semaphore and reset the destination section base.
  *
- * The following functions should be removed once the above issue is resolved
+ * Waits for outstanding packs to drain before claiming the destination register, then seeds the
+ * MATH_PACK semaphore (one count for SyncFull, two for SyncHalf double-buffering).
+ *
+ * @tparam DST: Destination synchronization mode, values = <SyncFull/SyncHalf>
  */
 template <DstSync DST>
 inline void _llk_math_pack_sync_init_()
@@ -294,11 +294,22 @@ inline void _llk_math_pack_sync_init_()
     TTI_SEMINIT(num_sem, 0, 0, p_stall::SEMAPHORE_1);
 }
 
+/**
+ * @brief Block the math thread until the destination register is available for writing.
+ *
+ * @note @ref _llk_math_pack_sync_init_ must have seeded the MATH_PACK semaphore before this function.
+ */
 inline void _llk_math_wait_for_dest_available_()
 {
     TTI_SEMWAIT(p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_MAX, 0, semaphore::t6_sem(semaphore::MATH_PACK));
 }
 
+/**
+ * @brief Signal completion of a destination section, posting the MATH_PACK semaphore and flipping banks in half-sync mode.
+ *
+ * @tparam DST: Destination synchronization mode, values = <SyncFull/SyncHalf>
+ * @tparam EN_32BIT_DEST: Set to true if the destination register is in 32-bit (Float32/Int32) mode
+ */
 template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_math_dest_section_done_()
 {

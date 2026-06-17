@@ -34,6 +34,58 @@
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
+// Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh
+// corner nodes (and the mesh is not folded). Shared by generate_rank_bindings (Phase 1) and ControlPlane
+// (Phase 2) so the galaxy pin placement is identical in both stages.
+//
+// * o o * < Corners pinned with *
+// o o o o
+// o o o o
+// * o o * < Corners pinned with *
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+    MeshId mesh_id,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    bool hard_pin_node_0,
+    bool nw_corner_only) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+
+    // Sub-galaxy slices: pin only the NW corner (node 0) to tray 1 / asic 1. This is a single-position pin
+    // (the only kind the rank-binding solver supports) that fixes orientation without over-constraining a slice.
+    if (nw_corner_only) {
+        fixed_asic_position_pinnings.emplace_back(
+            FabricNodeId{mesh_id, 0}, std::vector<AsicPosition>{AsicPosition{1, 1}});
+        return fixed_asic_position_pinnings;
+    }
+
+    // Get all 4 possible corner ASIC positions
+    std::vector<AsicPosition> corner_asic_positions;
+    corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
+    corner_asic_positions.emplace_back(AsicPosition{2, 1});  // Top right corner
+    corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
+    corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
+
+    // Generate corner fabric node IDs for this mesh
+    std::vector<FabricNodeId> corner_fabric_node_ids;
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
+
+    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
+    for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
+        // Special case: Hard pin NW corner (fabric node id 0) to asic 1 tray 1 if requested.
+        if (corner_fabric_node_id == FabricNodeId{mesh_id, 0} && hard_pin_node_0) {
+            fixed_asic_position_pinnings.emplace_back(
+                corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{1, 1}});
+            continue;
+        }
+
+        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
+    }
+
+    return fixed_asic_position_pinnings;
+}
+
 TopologyMappingResult map_mesh_to_physical(
     MeshId mesh_id,
     const LogicalAdjacencyMap& logical_adjacency,
@@ -1754,13 +1806,39 @@ void add_rank_binding_constraints(
                 }
             }
             std::vector<std::set<tt::tt_metal::AsicID>> global_groups(unset_hosts.begin(), unset_hosts.end());
-            // One physical UNSET PSD host (e.g. mock discovery with a single MPI rank) but the MGD has multiple
-            // mesh_host_ranks: we still need one "global partition" slot per same-rank target group for
-            // set_same_rank_groups_constraint (injective matching requires nt <= ng). Duplicate the sole
-            // partition; the solver assigns disjoint ASICs from that pool across groups.
-            if (global_groups.size() == 1 && target_groups.size() > global_groups.size()) {
-                const std::set<tt::tt_metal::AsicID> sole_partition = global_groups.front();
-                global_groups.assign(target_groups.size(), sole_partition);
+            // set_same_rank_groups_constraint matches same-rank target groups (ranks) to global host
+            // partitions injectively -- one DISTINCT partition slot per rank, so it needs nt <= ng. When the
+            // MGD declares more mesh_host_ranks (nt) than there are UNSET physical hosts (ng = G), replicate
+            // the G real host ASIC pools round-robin up to nt slots so each host backs ceil/floor(nt/G) slots.
+            //
+            // This only sets the per-host SLOT CAPACITY (how many ranks a host may hold) -- it does NOT place
+            // any chips itself. Example: G = 2 hosts, nt = 4 ranks
+            //
+            //   base_partitions (G real host pools) : [ H0 ][ H1 ]
+            //   replicate  slot i <- host (i % G)   :   H0    H1    H0    H1
+            //   global_groups (nt = 4 slots)        : [ H0 ][ H1 ][ H0 ][ H1 ]   (H0,H1 each back 2 slots)
+            //
+            // set_same_rank_groups_constraint then matches the nt ranks to these slots (injective on slots,
+            // NOT index-aligned), so 2 ranks land on H0 and 2 on H1. The SOLVER -- not this loop -- then
+            // carves the actual disjoint, connectivity-preserving ASIC slice per rank within its host's pool;
+            // the same-rank constraint keeps every rank inside ONE physical host (no galaxy straddling):
+            //
+            //        H0 pool                 H1 pool
+            //     [ rank0 | rank1 ]       [ rank2 | rank3 ]      (each '|' separates a disjoint chip slice)
+            //
+            //   * G = 1, N ranks  -> single galaxy split into N host-ranks (mock single-host discovery)
+            //   * G hosts, N ranks -> N/G ranks per galaxy (e.g. a dual/quad galaxy mock assembled from G
+            //     adjacent SP4 galaxy descriptors, split into the MGD's finer host grid)
+            //
+            // Round-robin keeps the per-host slot counts balanced (they differ by at most 1 when G does not
+            // divide nt), matching the balanced host grids these MGDs declare.
+            if (!global_groups.empty() && target_groups.size() > global_groups.size()) {
+                const std::vector<std::set<tt::tt_metal::AsicID>> base_partitions = global_groups;
+                global_groups.clear();
+                global_groups.reserve(target_groups.size());
+                for (size_t i = 0; i < target_groups.size(); ++i) {
+                    global_groups.push_back(base_partitions[i % base_partitions.size()]);
+                }
             }
             if (!intra_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
                 TT_THROW(
@@ -1812,10 +1890,10 @@ void add_pinning_constraints(
         for (const auto& position : positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
-                log_warning(
+                log_critical(
                     tt::LogFabric,
                     "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
-                    "{}) from MGD not found in physical topology; skipping this pin",
+                    "{}) from MGD not found in physical topology",
                     position.first.get(),
                     position.second.get(),
                     fabric_node.mesh_id.get(),
@@ -1828,6 +1906,20 @@ void add_pinning_constraints(
 
         if (!asic_ids.empty()) {
             if (!intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids)) {
+                // Pin unsatisfiable within the node's rank slice (e.g. an auto Galaxy corner pin whose
+                // ASIC is owned by another host rank under per-host slicing). If rank bindings are active,
+                // drop the pin and let the rank binding govern placement instead of failing the mapping.
+                // add_required_constraint already rolled back, so the node keeps its rank-binding domain.
+                if (!config.disable_rank_bindings) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Pinning for fabric node (mesh={}, chip={}) is incompatible with its rank binding: "
+                        "no pinned ASIC position lies in the node's host-rank partition. Dropping the pin and "
+                        "letting the rank binding determine placement.",
+                        fabric_node.mesh_id.get(),
+                        fabric_node.chip_id);
+                    continue;
+                }
                 TT_THROW(
                     "Failed to add required constraint for fabric node (mesh={}, chip={})",
                     fabric_node.mesh_id.get(),
@@ -1835,14 +1927,7 @@ void add_pinning_constraints(
             }
         }
     }
-    // TODO: Would like to communicate this to the caller so they can fail the mapping if any pinnings are skipped.
-    // https://github.com/tenstorrent/tt-metal/issues/43451
-    if (!success) {
-        log_warning(
-            tt::LogFabric,
-            "Some pinning constraints were skipped because the ASIC (tray, location) was absent from the physical "
-            "mesh; topology mapping proceeds without those pins");
-    }
+    TT_FATAL(success, "Failed to add pinning constraints");
 }
 
 // Parallel physical inter-mesh edges from one exit ASIC to a destination mesh (each edge is one link / channel).

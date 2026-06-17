@@ -99,7 +99,7 @@ void kernel_main() {
                         //     is not chunk-aligned.
                         if (col < N_down_tiles_full && row < M_tiles_full && row < count_tiles) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
-                            noc_async_write_tile(tile_idx, out_acc, l1_read);
+                            noc_async_write_page(tile_idx, out_acc, l1_read);
                         }
                         l1_read += out_tile_bytes;
                     }

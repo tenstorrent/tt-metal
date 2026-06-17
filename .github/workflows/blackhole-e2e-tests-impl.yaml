@@ -150,6 +150,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         - "${{ (matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/localdev/blackhole_demos/huggingface_data:ro') || (matrix.test-group['weights-cache-mode'] == 'local-disk' && '/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data:ro') || '/no_hf_cache' }}"
+        - "${{ (matrix.test-group['model-name'] == 'deepseek_prefill' && '/mnt/MLPerf/deepseek-prefill-cache:/mnt/MLPerf/deepseek-prefill-cache:ro') || '/no_deepseek_traces' }}"
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
@@ -174,8 +175,6 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         if: ${{ !startsWith(matrix.test-group.sku, 'bh_p100') && !startsWith(matrix.test-group.sku, 'bh_p150') }}
         timeout-minutes: 10
-        with:
-          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

@@ -33,7 +33,12 @@ def _worker_cores_in_range(core_range: ttnn.CoreRange) -> list[ttnn.CoreCoord]:
     return cores
 
 
-def h2d_socket_sync(service: ttnn.H2DStreamService, worker_cores: ttnn.CoreRange) -> ttnn.Tensor:
+def h2d_socket_sync(
+    service: ttnn.H2DStreamService,
+    worker_cores: ttnn.CoreRange,
+    *,
+    metadata_size_bytes: int = 0,
+) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
     """Wait for the next H2D transfer to land in `service.get_backing_tensor()`,
     copy it into a fresh device tensor, and ack the service core's consumed counter.
 
@@ -44,11 +49,21 @@ def h2d_socket_sync(service: ttnn.H2DStreamService, worker_cores: ttnn.CoreRange
         worker_cores: Worker CoreRange — must match the `worker_cores` the service
             was constructed with. Each core runs one iteration of the
             wait → copy slice → ack protocol.
+        metadata_size_bytes: When > 0, must match the value passed to the service
+            constructor. The kernel additionally copies the inline metadata
+            multicast by the service core (lives at `service.get_metadata_addr()`
+            in worker L1) into a fresh DRAM tensor; this function then returns
+            `(tokens_tensor, metadata_tensor)` instead of just the tokens tensor.
+            Must be a multiple of 4 bytes (we expose the metadata buffer as a
+            uint32 tensor).
 
     Returns:
-        A new ttnn.Tensor with the same per-shard spec as `service.get_backing_tensor()`,
-        populated with the latest transfer's data. Independent of the backing tensor —
-        the next `forward_to_tensor` call will not overwrite it.
+        When `metadata_size_bytes == 0`: a single ttnn.Tensor with the same
+        per-shard spec as `service.get_backing_tensor()`.
+        When `metadata_size_bytes > 0`: a tuple `(tokens_tensor, metadata_tensor)`
+        where the metadata tensor has shape `[1, 1, 1, metadata_size_bytes // 4]`
+        uint32 ROW_MAJOR DRAM, replicated across the mesh (each coord's worker
+        writes the same metadata it received from its service core multicast).
     """
     backing = service.get_backing_tensor()
     mesh_device = backing.device()
@@ -62,6 +77,22 @@ def h2d_socket_sync(service: ttnn.H2DStreamService, worker_cores: ttnn.CoreRange
         mesh_device,
         backing.memory_config(),
     )
+
+    # --- (optional) allocate metadata output ---
+    metadata_output = None
+    if metadata_size_bytes > 0:
+        assert (
+            metadata_size_bytes % 4 == 0
+        ), f"metadata_size_bytes must be a multiple of 4 (uint32-aligned), got {metadata_size_bytes}"
+        # One page per coord, sized to exactly metadata_size_bytes. The kernel
+        # does a single noc_async_write of `metadata_size_bytes` to page 0.
+        metadata_output = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 1, metadata_size_bytes // 4]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     # --- distribute pages across the worker cores in row-major order ---
     workers = _worker_cores_in_range(worker_cores)
@@ -91,9 +122,14 @@ def h2d_socket_sync(service: ttnn.H2DStreamService, worker_cores: ttnn.CoreRange
         page_size,
         num_pages,
         _SCRATCH_CB_INDEX,
+        metadata_size_bytes,  # 0 disables the metadata path in the kernel
+        service.get_metadata_addr() if metadata_size_bytes > 0 else 0,
+        metadata_output.buffer_address() if metadata_output is not None else 0,
     ]
     ct_args.extend(backing_acc_args)
     ct_args.extend(output_acc_args)
+    if metadata_output is not None:
+        ct_args.extend(get_tensor_accessor_args(metadata_output))
 
     # --- scratch CB (single slot, sized to one page) ---
     cb_descriptor = ttnn.CBDescriptor(
@@ -146,6 +182,13 @@ def h2d_socket_sync(service: ttnn.H2DStreamService, worker_cores: ttnn.CoreRange
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
-    # io_tensors order: output first (so generic_op returns it), backing second
-    # so its buffer is reachable from the kernel via the address baked into CT args.
-    return ttnn.generic_op([output, backing], mesh_program_descriptor)
+    # generic_op returns the LAST io_tensor (= the persistent service backing),
+    # whose buffer the receiver kernel overwrites on the next H2D push. Returning
+    # it would hand the caller a tensor that gets clobbered, so iter=N could see
+    # chunk N+1's tokens. Return the fresh `output` (and `metadata_output`)
+    # explicitly instead.
+    io_tensors = [output, metadata_output, backing] if metadata_output is not None else [output, backing]
+    ttnn.generic_op(io_tensors, mesh_program_descriptor)
+    if metadata_output is not None:
+        return output, metadata_output
+    return output

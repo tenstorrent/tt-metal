@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -29,31 +31,46 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
 
     constexpr float POLYNOMIAL_THRESHOLD = 0.6f;
 
-    sfpi::vFloat abs_val = sfpi::abs(val);
-
-    v_if(abs_val < POLYNOMIAL_THRESHOLD) {
-        // Small |x|: Use minimax polynomial for better accuracy
-        // Polynomial coefficients found with Sollya using the following command:
-        // fpminimax(tanh(x)/x, [|0,2,4,6,8|], [|single...|], [-0.6; -2^(-40)] + [2^(-40); 0.6], relative);
-        sfpi::vFloat x2 = val * val;
-
-        sfpi::vFloat p = PolynomialEvaluator::eval(
-            x2,
-            0.999999940395355224609375f,
-            -0.33332359790802001953125f,
-            0.13310669362545013427734375f,
-            -5.21197654306888580322265625e-2f,
-            1.5497927553951740264892578125e-2f);
-
-        result = val * p;
+    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt mantissa = sfpi::exman(val);
+    // exp==255: NaN (default) or ±Inf (mantissa==0)
+    v_if(exponent == 255) {
+        result = std::numeric_limits<float>::quiet_NaN();
+        v_if(mantissa == 0) {
+            sfpi::vFloat one = sfpi::vConst1;
+            result = sfpi::copysgn(one, val);
+        }
+        v_endif;
     }
     v_else {
-        // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
-        sfpi::vFloat two_x = 2.f * val;
-        sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
+        sfpi::vFloat abs_val = sfpi::abs(val);
 
-        // Compute 2*sigmoid(2x) - 1
-        result = 2.f * sig - sfpi::vConst1;
+        v_if(abs_val < POLYNOMIAL_THRESHOLD) {
+            // Small |x|: Use minimax polynomial for better accuracy
+            // Polynomial coefficients found with Sollya using the following command:
+            // fpminimax(tanh(x)/x, [|0,2,4,6,8|], [|single...|], [-0.6; -2^(-40)] + [2^(-40); 0.6], relative);
+            sfpi::vFloat x2 = val * val;
+
+            sfpi::vFloat p = PolynomialEvaluator::eval(
+                x2,
+                0.999999940395355224609375f,
+                -0.33332359790802001953125f,
+                0.13310669362545013427734375f,
+                -5.21197654306888580322265625e-2f,
+                1.5497927553951740264892578125e-2f);
+
+            result = val * p;
+            result = sfpi::copysgn(result, val);  // Preserve input sign on zero (tanh(-0.0) = -0.0);
+        }
+        v_else {
+            // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
+            sfpi::vFloat two_x = 2.f * val;
+            sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
+
+            // Compute 2*sigmoid(2x) - 1
+            result = 2.f * sig - sfpi::vConst1;
+        }
+        v_endif;
     }
     v_endif;
 
@@ -76,14 +93,15 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     constexpr float denominator_coefs[] = {135135.f, 62370.f, 3150.f, 28.f};
     sfpi::vFloat denominator = PolynomialEvaluator::eval(x2, 135135.f, 62370.f, 3150.f, 28.f);
 
-    sfpi::vFloat result = numerator * ckernel::sfpu::_sfpu_reciprocal_<2>(denominator);
+    sfpi::vFloat result = numerator * ckernel::sfpu::sfpu_reciprocal_iter<2>(denominator);
 
     // For larger x, the continued fraction may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
-    result = sfpi::copysgn(result, val);  // restore sign (i.e. tanh(-x) = -tanh(x))
+    // Preserve input sign, the SFPU multiply flushes negative zero to zero, but we want to preserve the sign.
+    result = sfpi::copysgn(result, val);
 
     return result;
 }
@@ -149,7 +167,7 @@ inline void calculate_tanh() {
                 result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
             } else {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
-                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
             }
 
             sfpi::dst_reg[0] = result;
