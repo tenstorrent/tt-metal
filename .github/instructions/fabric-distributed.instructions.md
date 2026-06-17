@@ -28,7 +28,7 @@ excludeAgent: "cloud-agent"
 
 - Document restrictions that should be lifted later (e.g., "shortcut paths disabled — lift when X is enabled") so the intent isn't lost.
 - When flow control is available, enable it for higher packet counts to avoid subtle data loss on congested links.
-- Golden bandwidth files should have tight margins (not 10%) for interference-free paths like neighbour exchange.
+- Golden bandwidth files should have tight margins (not 10%) for interference-free paths like neighbor exchange.
 - Comments explaining protocol expectations (e.g., "skip_src_ch_id_update implies mux mode") should be on the code, not in a separate doc that drifts.
 - Avoid spec-like prose in expectation/documentation files that becomes a conflicting second source of truth. Prefer executable assertions or tests over prose claims about behavior.
 
