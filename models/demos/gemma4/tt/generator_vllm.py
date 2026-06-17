@@ -28,6 +28,11 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args._gemma4_model_path = model_path
     model_args.can_enable_trace = lambda prefill_seq_len, num_cached_tokens=0: False
     model_args.is_llama_vision = lambda: False
+    # Gemma4's custom prefill attention is single-user only: split_qkv_heads_prefill
+    # feeds nlp_create_qkv_heads, which asserts input_shape[1] == 1. The shared
+    # generator's batched-prefill path packs batch_size>1 into that dim, so opt out
+    # (also keeps warmup from compiling the batch>1 prefill programs it can't run).
+    model_args.disable_batched_prefill = True
 
 
 class Gemma4ForCausalLM(HybridAttentionForCausalLM):

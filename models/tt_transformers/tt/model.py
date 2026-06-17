@@ -252,6 +252,37 @@ class Transformer(LightweightModule):
         )
         return self._apply_norm_and_lm_head(user_tokens)
 
+    def _all_gather_logits_full_vocab(self, tt_logits):
+        """All-gather vocab-sharded logits to full (replicated) vocab for on-device sampling.
+
+        No-op unless ``gather_logits_in_forward`` is enabled on a multi-device mesh.
+        Mirrors the decode ``on_device_logits`` gather (see ttnn_decode_forward): when
+        ``gather_logits_in_forward`` is on, the penalty/sampling buffers are sized for the
+        FULL vocab, but prefill lm_head leaves logits vocab-sharded -- so prefill
+        device-sampling would subtract mismatched vocab widths (binary_ng "Invalid subtile
+        broadcast type"). Gather here so prefill matches decode. Keep logits TILED:
+        penalties' binary_ng op requires tiled layout.
+        """
+        if not (getattr(self.args, "gather_logits_in_forward", False) and self.args.num_devices > 1):
+            return tt_logits
+        cluster_axis = 0 if self.args.is_galaxy else None
+        num_links = 2 if self.args.is_galaxy else 1
+        return ttnn.experimental.all_gather_async(
+            tt_logits,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=num_links,
+            memory_config=tt_logits.memory_config() if self.prefetcher is None else ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=cluster_axis,
+            topology=self.args.ccl_topology(),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+            subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+        )
+
     def _apply_norm_and_lm_head(self, x):
         """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
         x = self.norm(
@@ -262,6 +293,9 @@ class Transformer(LightweightModule):
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Match decode: gather to full vocab when gather_logits_in_forward is on so
+        # device-sampling penalties/sampling see full-vocab logits (no-op otherwise).
+        logits = self._all_gather_logits_full_vocab(logits)
         return logits
 
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
@@ -971,5 +1005,8 @@ class Transformer(LightweightModule):
         x = self.lm_head(x)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Match decode: gather to full vocab when gather_logits_in_forward is on so
+            # device-sampling penalties/sampling see full-vocab logits (no-op otherwise).
+            x = self._all_gather_logits_full_vocab(x)
 
         return x

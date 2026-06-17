@@ -1066,6 +1066,7 @@ class Gemma4Model:
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
+        on_device_logits=False,
         sampling_on_device=False,
         capture_sampling_trace=False,
         pli_combined=None,
@@ -1082,6 +1083,9 @@ class Gemma4Model:
             rot_mat_idxs: Unused (RoPE computed internally from current_pos).
             page_table: Optional paged attention table.
             kv_cache: Optional KV cache override.
+            on_device_logits: Shared-Generator flag. If True, return logits (padded
+                to 32 for TTSampling) so the Generator samples externally via
+                sample_decode_on_device; do NOT sample internally here.
             sampling_on_device: If True and self.sampling exists, sample on device.
             capture_sampling_trace: If True, return logits for split-trace sampling.
             pli_combined: Optional [1,1,n_layers,pli_size] device tensor of host-precomputed
@@ -1124,7 +1128,20 @@ class Gemma4Model:
             page_tables_per_layer=page_tables_per_layer,
         )
 
-        # On-device sampling
+        # Shared Generator path: return logits and let the Generator sample
+        # externally via sample_decode_on_device (mirrors the gpt-oss sibling).
+        # NOTE: minimal fix — unlike gpt-oss this does not yet advance decode
+        # positions on device (no _increment_decode_positions_device equivalent),
+        # so traced device-sampling decode loops still need that position-increment
+        # follow-up. Host sampling (on_device_logits=False) is unaffected.
+        if on_device_logits:
+            if self.sampling is not None:
+                batch_dim = logits.shape[2]
+                if batch_dim < 32:
+                    logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
+            return logits, None
+
+        # Legacy internal-sampling path (text demo / parity tests).
         if sampling_on_device and self.sampling is not None:
             if capture_sampling_trace:
                 return logits  # Split-trace: return logits for separate sampling trace

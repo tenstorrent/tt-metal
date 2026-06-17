@@ -334,7 +334,6 @@ class Model:
         get_last_token=-1,
         is_decode=True,
         user_id=0,
-        sampling_on_device=False,
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
@@ -498,8 +497,7 @@ class Model:
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
         page_tables_per_layer=None,
     ):
         if page_tables_per_layer is None:
@@ -534,20 +532,17 @@ class Model:
             page_table=page_table,
             kv_cache=kv_cache,
             is_decode=True,
-            sampling_on_device=sampling_on_device,
             page_tables_per_layer=page_tables_per_layer,
         )
 
-        if sampling_on_device and self.sampling is not None:
-            # Pad logits batch to 32 (TTSampling requirement) before split-trace or sampling
+        if on_device_logits and self.sampling is not None:
+            # Pad logits batch to 32 (TTSampling requirement)
             batch_dim = out.shape[-2]
             if batch_dim < 32:
                 out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
-                return out
-            tt_toks, tt_log_probs = self.sampling.sample(out, tt_out_tok=tokens, enable_trace=False)
-            return tt_toks, tt_log_probs
+            # Return logits only; sampling is done externally by generator.sample_decode_on_device.
+            return out
 
         return out, None
 

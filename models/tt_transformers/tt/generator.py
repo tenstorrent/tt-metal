@@ -1279,8 +1279,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     .to(torch.int64)
                 )
                 if slot_remap is not None:
-                    remap = slot_remap[i * dev_toks.shape[0] : (i + 1) * dev_toks.shape[0]]
+                    chunk = dev_toks.shape[0]
+                    remap = slot_remap[i * chunk : (i + 1) * chunk]
                     remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
+                    # slot_remap holds GLOBAL slot indices: the vLLM plugin offsets
+                    # each DP rank's local [0,B) remap by rank*B for the row-sharded
+                    # SeedManager. dev_toks/dev_pos are this rank's *local* size-B
+                    # tensors, so rebase the global indices back to [0,B) before
+                    # gathering -- otherwise rank i>=1 indexes past the end (e.g.
+                    # value 32 into a size-32 tensor).
+                    remap_t = remap_t - i * chunk
                     dev_toks = dev_toks[remap_t]
                     dev_pos = dev_pos[remap_t]
                 # The device token is authoritative only for slots whose device
