@@ -1,0 +1,12 @@
+### Evidence extract from verify_bothfix_1300139.log
+UP_FRONT_COLLECT: 1680 ops stashed across 2100 bodies -> 1392 unique programs (swallowed 420, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=3850 fallback=0
+2026-06-17 17:05:36.269 | critical |          Always | TT_THROW: preprocess-and-ship: -E failed for /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc (log: /localdev/mstaletovic/tt-metal/tt_metal/impl/jit_server/repro/cold_cache_1300142/tt-metal-cache7524789153541085974/kernels/rms_norm_compute/16908025138175630274//trisc2/trisc2__trisck.o.ii.log) (assert.hpp:104)
+2026-06-17 17:05:36.271 | critical |          Always | TT_THROW: preprocess-and-ship: -E failed for /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc (log: /localdev/mstaletovic/tt-metal/tt_metal/impl/jit_server/repro/cold_cache_1300142/tt-metal-cache7524789153541085974/kernels/rms_norm_compute/12031511022878034164//trisc2/trisc2__trisck.o.ii.log) (assert.hpp:104)
+2026-06-17 17:05:37.326 | critical |          Always | TT_THROW: /localdev/mstaletovic/tt-metal/tt_metal/impl/jit_server/repro/cold_cache_1300142/tt-metal-cache7524789153541085974/kernels/rms_norm_compute/12913905908372254581//trisc0/trisc0.elf: cannot map elf file into memory: No such file or directory (assert.hpp:104)
+2026-06-17 17:06:25.022 | warning  |    BuildKernels | Remote JIT compile unavailable (Remote JIT compile transport failure: timeout_msg = remote JIT compile response timed out after 120s); falling back to local compile for program 2707. (program.cpp:2288)
+2026-06-17 17:06:25.022 | warning  |    BuildKernels | Remote JIT compile unavailable (Remote JIT compile transport failure: timeout_msg = remote JIT compile response timed out after 120s); falling back to local compile for program 307. (program.cpp:2288)
+2026-06-17 17:06:25.022 | warning  |    BuildKernels | Remote JIT compile unavailable (Remote JIT compile transport failure: timeout_msg = remote JIT compile response timed out after 120s); falling back to local compile for program 1939. (program.cpp:2288)
+UP_FRONT_COLLECT: compiled 1392 programs in 180.0s (workers=128, errors=3) -> on-disk JIT cache warm
+========== 420 failed, 1680 passed, 2941 skipped in 235.43s (0:03:55) ==========
+REPRO: warm-pass exit=1 after 241s (124/137 => WEDGE)

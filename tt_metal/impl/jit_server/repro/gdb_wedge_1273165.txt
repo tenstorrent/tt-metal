@@ -1,0 +1,670 @@
+[New LWP 1258029]
+[New LWP 1258030]
+[New LWP 1258031]
+[New LWP 1258032]
+[New LWP 1258033]
+[New LWP 1258034]
+[New LWP 1258035]
+[New LWP 1258042]
+[New LWP 1258043]
+[New LWP 1258044]
+[New LWP 1258045]
+[New LWP 1258046]
+[New LWP 1258047]
+[New LWP 1258048]
+[New LWP 1258049]
+[New LWP 1258050]
+[New LWP 1258051]
+[New LWP 1258052]
+[New LWP 1258053]
+[New LWP 1258085]
+[New LWP 1258086]
+[New LWP 1258087]
+[New LWP 1258088]
+[New LWP 1258089]
+[New LWP 1258090]
+[New LWP 1258091]
+[New LWP 1258092]
+[New LWP 1258093]
+[New LWP 1258094]
+[New LWP 1258095]
+[New LWP 1258096]
+[New LWP 1258097]
+[New LWP 1258098]
+[New LWP 1258099]
+[New LWP 1258100]
+[New LWP 1258101]
+[New LWP 1258102]
+[New LWP 1258103]
+[New LWP 1258104]
+[New LWP 1258105]
+[New LWP 1258106]
+[New LWP 1258107]
+[New LWP 1258108]
+[New LWP 1258109]
+[New LWP 1258110]
+[New LWP 1258111]
+[New LWP 1258112]
+[New LWP 1258113]
+[New LWP 1258114]
+[New LWP 1258115]
+[New LWP 1258116]
+[New LWP 1258117]
+[New LWP 1258133]
+[New LWP 1258134]
+[New LWP 1258135]
+[New LWP 1258136]
+[New LWP 1258137]
+[New LWP 1258138]
+[New LWP 1258139]
+[New LWP 1258297]
+[New LWP 1258301]
+[New LWP 1258427]
+[New LWP 1258444]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 64 (Thread 0x7ff90949d640 (LWP 1258444) "python3"):
+#0  0x00007ffb11b8ceae in epoll_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade84e388 in kj::UnixEventPort::wait() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade83de25 in kj::EventLoop::wait() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade83e427 in kj::_::waitImpl(kj::Own<kj::_::PromiseNode, kj::_::PromiseDisposer>&&, kj::_::ExceptionOrValue&, kj::WaitScope&, kj::SourceLocation) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade15beff in kj::Promise<capnp::Response<tt::tt_metal::jit_server::rpc::JitCompile::CompileResults> >::wait(kj::WaitScope&, kj::SourceLocation) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffade14bca2 in tt::tt_metal::jit_server::JitCompileRpcSession::wait_all() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#6  0x00007ffade154be0 in tt::tt_metal::RemoteCompileCoordinator::finish() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#7  0x00007ffade1b74b8 in tt::tt_metal::detail::ProgramImpl::compile(tt::tt_metal::IDevice*, bool) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#8  0x00007ffade78a5c5 in tt::tt_metal::detail::CompileProgram(tt::tt_metal::IDevice*, tt::tt_metal::Program&, bool) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#9  0x00007ffadf2e2502 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<ttnn::up_front_compile::parallel_compile(tt::tt_metal::distributed::MeshDevice*, int, bool)::$_0> > >::_M_run() () from /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so
+#10 0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#11 0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#12 0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 63 (Thread 0x7ff916433640 (LWP 1258427) "python3"):
+#0  0x00007ffb11b8ceae in epoll_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade84e388 in kj::UnixEventPort::wait() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade83de25 in kj::EventLoop::wait() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade83e427 in kj::_::waitImpl(kj::Own<kj::_::PromiseNode, kj::_::PromiseDisposer>&&, kj::_::ExceptionOrValue&, kj::WaitScope&, kj::SourceLocation) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade15beff in kj::Promise<capnp::Response<tt::tt_metal::jit_server::rpc::JitCompile::CompileResults> >::wait(kj::WaitScope&, kj::SourceLocation) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffade14bca2 in tt::tt_metal::jit_server::JitCompileRpcSession::wait_all() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#6  0x00007ffade154be0 in tt::tt_metal::RemoteCompileCoordinator::finish() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#7  0x00007ffade1b74b8 in tt::tt_metal::detail::ProgramImpl::compile(tt::tt_metal::IDevice*, bool) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#8  0x00007ffade78a5c5 in tt::tt_metal::detail::CompileProgram(tt::tt_metal::IDevice*, tt::tt_metal::Program&, bool) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#9  0x00007ffadf2e2502 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<ttnn::up_front_compile::parallel_compile(tt::tt_metal::distributed::MeshDevice*, int, bool)::$_0> > >::_M_run() () from /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so
+#10 0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#11 0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#12 0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 62 (Thread 0x7ff9f73c9640 (LWP 1258301) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffade4577c4 in tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#5  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 61 (Thread 0x7ff9f7fff640 (LWP 1258297) "python3"):
+#0  0x00007ffb11b4c7f8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11b51677 in nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffaddfc385b in tt::tt_metal::inspector::RpcServerController::run_server() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#5  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 60 (Thread 0x7ff9e42f1640 (LWP 1258139) "python3"):
+#0  0x00007ffaf741de8e in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ffaf741b498 in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#3  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 59 (Thread 0x7ff9e4f27640 (LWP 1258138) "python3"):
+#0  0x00007ffaf741de8e in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ffaf741b498 in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#3  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 58 (Thread 0x7ff9e5b5d640 (LWP 1258137) "python3"):
+#0  0x00007ffaf741de8e in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ffaf741b498 in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#3  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 57 (Thread 0x7ff9e6793640 (LWP 1258136) "python3"):
+#0  0x00007ffaf741de8e in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ffaf741b498 in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#3  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 56 (Thread 0x7ff9e73c9640 (LWP 1258135) "python3"):
+#0  0x00007ffaf741de8e in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ffaf741b498 in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#3  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 55 (Thread 0x7ff9e7fff640 (LWP 1258134) "python3"):
+#0  0x00007ffaf741de8e in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ffaf741b498 in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#3  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 54 (Thread 0x7ff9f5383640 (LWP 1258133) "python3"):
+#0  0x00007ffaf741de8e in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ffaf741b498 in ?? () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#3  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 53 (Thread 0x7ffa823ef640 (LWP 1258117) "python3"):
+#0  0x00007ffb11b8ceae in epoll_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffadcaa4aac in ?? () from /lib/x86_64-linux-gnu/libevent_core-2.1.so.7
+#2  0x00007ffadca9f921 in event_base_loop () from /lib/x86_64-linux-gnu/libevent_core-2.1.so.7
+#3  0x00007ffadcb6c6a1 in progress_engine () from /opt/openmpi-v5.0.7-ulfm/lib/libpmix.so.2
+#4  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#5  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 52 (Thread 0x7ffa87f25640 (LWP 1258116) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 51 (Thread 0x7ffa88b5b640 (LWP 1258115) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 50 (Thread 0x7ffa89791640 (LWP 1258114) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 49 (Thread 0x7ffa8a3c7640 (LWP 1258113) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 48 (Thread 0x7ffa8affd640 (LWP 1258112) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 47 (Thread 0x7ffa8bc33640 (LWP 1258111) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 46 (Thread 0x7ffa8c869640 (LWP 1258110) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 45 (Thread 0x7ffa8d49f640 (LWP 1258109) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 44 (Thread 0x7ffa8e0d5640 (LWP 1258108) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 43 (Thread 0x7ffa8ed0b640 (LWP 1258107) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 42 (Thread 0x7ffa8f941640 (LWP 1258106) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 41 (Thread 0x7ffa90577640 (LWP 1258105) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 40 (Thread 0x7ffa911ad640 (LWP 1258104) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 39 (Thread 0x7ffa91de3640 (LWP 1258103) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 38 (Thread 0x7ffa92a19640 (LWP 1258102) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 37 (Thread 0x7ffa9364f640 (LWP 1258101) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 36 (Thread 0x7ffa94285640 (LWP 1258100) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 35 (Thread 0x7ffa94ebb640 (LWP 1258099) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 34 (Thread 0x7ffa95af1640 (LWP 1258098) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 33 (Thread 0x7ffa96727640 (LWP 1258097) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 32 (Thread 0x7ffa9735d640 (LWP 1258096) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 31 (Thread 0x7ffa97f93640 (LWP 1258095) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 30 (Thread 0x7ffa98bc9640 (LWP 1258094) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 29 (Thread 0x7ffa997ff640 (LWP 1258093) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 28 (Thread 0x7ffa9a435640 (LWP 1258092) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 27 (Thread 0x7ffa9b06b640 (LWP 1258091) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 26 (Thread 0x7ffa9bca1640 (LWP 1258090) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 25 (Thread 0x7ffa9c8d7640 (LWP 1258089) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 24 (Thread 0x7ffa9d50d640 (LWP 1258088) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 23 (Thread 0x7ffa9e143640 (LWP 1258087) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 22 (Thread 0x7ffa9ed79640 (LWP 1258086) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 21 (Thread 0x7ffa9f9af640 (LWP 1258085) "python3"):
+#0  0x00007ffb11b8590d in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffade16cdd8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ffade16cc71 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ffade1675e0 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ffade1673b4 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ffb0ef58253 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#7  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 20 (Thread 0x7ffaa6abb640 (LWP 1258053) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffabbfd126b in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-68440149.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 19 (Thread 0x7ffaa76f1640 (LWP 1258052) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffabbfd126b in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-68440149.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 18 (Thread 0x7ffaa8327640 (LWP 1258051) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffabbfd126b in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-68440149.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 17 (Thread 0x7ffaa8f5d640 (LWP 1258050) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffabbfd126b in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-68440149.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 16 (Thread 0x7ffaa9b93640 (LWP 1258049) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffabbfd126b in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-68440149.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 15 (Thread 0x7ffaaa7c9640 (LWP 1258048) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffabbfd126b in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-68440149.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 14 (Thread 0x7ffaab3ff640 (LWP 1258047) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffabbfd126b in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-68440149.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 13 (Thread 0x7ffad19ff640 (LWP 1258046) "jemalloc_bg_thd"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffacb006793 in background_thread_entry () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/pyarrow/libarrow.so.2000
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 12 (Thread 0x7ffad4eb5640 (LWP 1258045) "Tracy Symbol Wo"):
+#0  0x00007ffb11b4c7f8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11b51677 in nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffadd6c8c0c in tracy::Profiler::SymbolWorker() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtracy.so.0.10.0
+#3  0x00007ffadd6ef64d in tracy::Thread::Launch(void*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtracy.so.0.10.0
+#4  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#5  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 11 (Thread 0x7ffad5efb640 (LWP 1258044) "Tracy DXT1"):
+#0  0x00007ffb11b4c7f8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11b51677 in nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffadd6c612b in tracy::Profiler::CompressWorker() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtracy.so.0.10.0
+#3  0x00007ffadd6ef64d in tracy::Thread::Launch(void*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtracy.so.0.10.0
+#4  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#5  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 10 (Thread 0x7ffad6b31640 (LWP 1258043) "Tracy Profiler"):
+#0  0x00007ffb11b7fc4f in poll () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffadd6c1ad8 in tracy::Profiler::Worker() () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtracy.so.0.10.0
+#2  0x00007ffadd6ef64d in tracy::Thread::Launch(void*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtracy.so.0.10.0
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 9 (Thread 0x7ffad7b77640 (LWP 1258042) "Tracy Sampling"):
+#0  0x00007ffb11b4c7f8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11b51677 in nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffadd6c0b9f in tracy::SysTraceWorker(void*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtracy.so.0.10.0
+#3  0x00007ffadd6ef64d in tracy::Thread::Launch(void*) () from /localdev/mstaletovic/tt-metal/build_Release/lib/libtracy.so.0.10.0
+#4  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#5  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 8 (Thread 0x7ffafc8bb640 (LWP 1258035) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffb0be386fb in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/numpy/core/../../numpy.libs/libopenblas64_p-r0-0cf96a72.3.23.dev.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 7 (Thread 0x7ffaff4f1640 (LWP 1258034) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffb0be386fb in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/numpy/core/../../numpy.libs/libopenblas64_p-r0-0cf96a72.3.23.dev.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 6 (Thread 0x7ffb02127640 (LWP 1258033) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffb0be386fb in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/numpy/core/../../numpy.libs/libopenblas64_p-r0-0cf96a72.3.23.dev.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 5 (Thread 0x7ffb04d5d640 (LWP 1258032) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffb0be386fb in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/numpy/core/../../numpy.libs/libopenblas64_p-r0-0cf96a72.3.23.dev.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 4 (Thread 0x7ffb07993640 (LWP 1258031) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffb0be386fb in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/numpy/core/../../numpy.libs/libopenblas64_p-r0-0cf96a72.3.23.dev.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 3 (Thread 0x7ffb0a5c9640 (LWP 1258030) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffb0be386fb in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/numpy/core/../../numpy.libs/libopenblas64_p-r0-0cf96a72.3.23.dev.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 2 (Thread 0x7ffb0b1ff640 (LWP 1258029) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afaa41 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffb0be386fb in blas_thread_server () from /localdev/mstaletovic/tt-metal/python_env/lib/python3.10/site-packages/numpy/core/../../numpy.libs/libopenblas64_p-r0-0cf96a72.3.23.dev.so
+#3  0x00007ffb11afbac3 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x00007ffb11b8d8d0 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+
+Thread 1 (Thread 0x7ffb11a64740 (LWP 1257993) "python3"):
+#0  0x00007ffb11af8117 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x00007ffb11afd624 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x00007ffb0ef582c7 in std::thread::join() () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#3  0x00007ffadf2e0a6b in ttnn::up_front_compile::parallel_compile(tt::tt_metal::distributed::MeshDevice*, int, bool) () from /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so
+#4  0x00007ffae07fe6df in nanobind::detail::func_create<false, false, nanobind::detail::func_create<false, true, ttnn::graph::py_graph_module(nanobind::module_&)::$_18, std::tuple<unsigned long, unsigned long, int, double>, tt::tt_metal::distributed::MeshDevice*, int, bool, 0ul, 1ul, 2ul, nanobind::scope, nanobind::name, nanobind::arg, nanobind::arg_v, nanobind::arg_v, nanobind::call_guard<nanobind::gil_scoped_release>, char [462]>(ttnn::graph::py_graph_module(nanobind::module_&)::$_18&&, std::tuple<unsigned long, unsigned long, int, double> (*)(tt::tt_metal::distributed::MeshDevice*, int, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul>, nanobind::scope const&, nanobind::name const&, nanobind::arg const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::call_guard<nanobind::gil_scoped_release> const&, char const (&) [462])::{lambda(tt::tt_metal::distributed::MeshDevice*, int, bool)#1}, std::tuple<unsigned long, unsigned long, int, double>, tt::tt_metal::distributed::MeshDevice*, int, bool, 0ul, 1ul, 2ul, nanobind::scope, nanobind::name, nanobind::arg, nanobind::arg_v, nanobind::arg_v, nanobind::call_guard<nanobind::gil_scoped_release>, char [462]>(ttnn::graph::py_graph_module(nanobind::module_&)::$_18&&, std::tuple<unsigned long, unsigned long, int, double> (*)(tt::tt_metal::distributed::MeshDevice*, int, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul>, nanobind::scope const&, nanobind::name const&, nanobind::arg const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::call_guard<nanobind::gil_scoped_release> const&, char const (&) [462])::{lambda(void*, _object**, unsigned char*, nanobind::rv_policy, nanobind::detail::cleanup_list*)#1}::__invoke(void*, _object**, unsigned char*, nanobind::rv_policy, nanobind::detail::cleanup_list*) () from /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so
+#5  0x00007ffae0448415 in nanobind::detail::nb_func_vectorcall_complex(_object*, _object* const*, unsigned long, _object*) () from /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so
+#6  0x0000564cc47ac661 in _PyEval_EvalFrameDefault ()
+#7  0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#8  0x0000564cc47aa89c in _PyEval_EvalFrameDefault ()
+#9  0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#10 0x0000564cc47ac661 in _PyEval_EvalFrameDefault ()
+#11 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#12 0x0000564cc474eae0 in method_vectorcall ()
+#13 0x0000564cc47ac661 in _PyEval_EvalFrameDefault ()
+#14 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#15 0x0000564cc484a755 in _PyObject_Call_Prepend ()
+#16 0x0000564cc487e186 in slot_tp_call ()
+#17 0x0000564cc47d97b2 in call_function ()
+#18 0x0000564cc47a6496 in _PyEval_EvalFrameDefault ()
+#19 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#20 0x0000564cc47d95c9 in call_function ()
+#21 0x0000564cc47a6354 in _PyEval_EvalFrameDefault ()
+#22 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#23 0x0000564cc47aa89c in _PyEval_EvalFrameDefault ()
+#24 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#25 0x0000564cc47ac661 in _PyEval_EvalFrameDefault ()
+#26 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#27 0x0000564cc474eae0 in method_vectorcall ()
+#28 0x0000564cc47ac661 in _PyEval_EvalFrameDefault ()
+#29 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#30 0x0000564cc484a755 in _PyObject_Call_Prepend ()
+#31 0x0000564cc487e186 in slot_tp_call ()
+#32 0x0000564cc47d97b2 in call_function ()
+#33 0x0000564cc47a6496 in _PyEval_EvalFrameDefault ()
+#34 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#35 0x0000564cc47d95c9 in call_function ()
+#36 0x0000564cc47a6354 in _PyEval_EvalFrameDefault ()
+#37 0x0000564cc474cae2 in _PyFunction_Vectorcall ()
+#38 0x0000564cc47d95c9 in call_function ()
+#39 0x0000564cc47a6354 in _PyEval_EvalFrameDefault ()
+#40 0x0000564cc48b13a4 in _PyEval_Vector ()
+#41 0x0000564cc48e6ef3 in run_mod ()
+#42 0x0000564cc4687182 in pyrun_file ()
+#43 0x0000564cc4686cb9 in _PyRun_SimpleFileObject ()
+#44 0x0000564cc46866b5 in _PyRun_AnyFileObject ()
+#45 0x0000564cc46908f9 in pymain_run_file_obj ()
+#46 0x0000564cc4690462 in pymain_run_file ()
+#47 0x0000564cc48f280c in Py_RunMain ()
+#48 0x0000564cc461b028 in main ()
+[Inferior 1 (process 1257993) detached]

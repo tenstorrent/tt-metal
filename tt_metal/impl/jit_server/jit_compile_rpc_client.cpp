@@ -5,6 +5,10 @@
 #include "impl/jit_server/jit_compile_rpc_client.hpp"
 
 #include <capnp/ez-rpc.h>
+#include <kj/async.h>
+#include <kj/async-io.h>
+#include <kj/time.h>
+#include <kj/timer.h>
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
@@ -21,6 +25,30 @@ namespace {
 constexpr const char* kJitServerEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
 constexpr const char* kJitServerEndpointsEnv = "TT_METAL_JIT_SERVER_ENDPOINTS";
 constexpr const char* kJitServerEnableEnv = "TT_METAL_JIT_SERVER_ENABLE";
+
+// Per-response wait deadline. A remote compile must arrive within this window or the wait is
+// abandoned as a transport failure (the connection wedged / went half-open under load). Sized
+// generously so that legitimate server-side queueing under heavy concurrency never trips it —
+// it only needs to be finite so a permanently lost response can't wedge the client forever.
+// Override with TT_METAL_JIT_SERVER_TIMEOUT_S; set to 0 to disable (legacy unbounded wait).
+constexpr const char* kJitServerTimeoutEnv = "TT_METAL_JIT_SERVER_TIMEOUT_S";
+constexpr unsigned kDefaultCompileTimeoutSeconds = 240;
+
+unsigned compile_timeout_seconds() {
+    const char* value = std::getenv(kJitServerTimeoutEnv);
+    if (value == nullptr || *value == '\0') {
+        return kDefaultCompileTimeoutSeconds;
+    }
+    try {
+        const long parsed = std::stol(value);
+        if (parsed <= 0) {
+            return 0u;  // explicit opt-out: wait forever (old behavior)
+        }
+        return static_cast<unsigned>(parsed);
+    } catch (const std::exception&) {
+        return kDefaultCompileTimeoutSeconds;
+    }
+}
 
 std::string trim_ascii_whitespace(std::string_view input) {
     size_t begin = 0u;
@@ -272,10 +300,43 @@ void JitCompileRpcSession::send(const CompileRequest& request) {
 std::vector<CompileResponse> JitCompileRpcSession::wait_all() {
     std::vector<CompileResponse> responses;
     responses.reserve(impl_->promises.size());
-    for (auto& promise : impl_->promises) {
-        auto result = promise.wait(impl_->client.getWaitScope());
-        responses.push_back(read_compile_response(result.getResponse()));
+
+    const unsigned timeout_s = compile_timeout_seconds();
+    auto& wait_scope = impl_->client.getWaitScope();
+
+    try {
+        for (auto& promise : impl_->promises) {
+            if (timeout_s == 0u) {
+                // Opt-out: legacy unbounded wait.
+                auto result = promise.wait(wait_scope);
+                responses.push_back(read_compile_response(result.getResponse()));
+                continue;
+            }
+
+            // Race the RPC response against a timer. If the timer wins (the response never
+            // arrived — connection wedged / half-open), it throws and we surface a transport
+            // error so the caller can fall back to a local compile instead of hanging forever.
+            kj::Timer& timer = impl_->client.getIoProvider().getTimer();
+            kj::Promise<capnp::Response<rpc::JitCompile::CompileResults>> rpc = kj::mv(promise);
+            auto timed_out =
+                timer.afterDelay(timeout_s * kj::SECONDS)
+                    .then([]() -> capnp::Response<rpc::JitCompile::CompileResults> {
+                        // String literal only: KJ_EXCEPTION renders non-literal args as
+                        // "expr = value", so keep the seconds out of here (it's in the wrapper).
+                        kj::throwFatalException(KJ_EXCEPTION(FAILED, "remote JIT compile response timed out"));
+                    });
+            auto result = rpc.exclusiveJoin(kj::mv(timed_out)).wait(wait_scope);
+            responses.push_back(read_compile_response(result.getResponse()));
+        }
+    } catch (const kj::Exception& e) {
+        // Timeout, disconnect, or any other transport-layer failure. Drop the rest of the
+        // pipelined promises (their connection is suspect) and signal the caller to retry
+        // locally. NOT a genuine compile failure — that is reported via CompileResponse.success.
+        impl_->promises.clear();
+        throw RemoteCompileTransportError(
+            std::string("Remote JIT compile transport failure: ") + e.getDescription().cStr());
     }
+
     impl_->promises.clear();
     return responses;
 }
