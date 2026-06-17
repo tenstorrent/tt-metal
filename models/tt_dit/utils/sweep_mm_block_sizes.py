@@ -226,6 +226,13 @@ SHAPES = [
     (512, 6144, 1536, 12, 9, True, "to_out"),  # #29
     (64, 6144, 1536, 12, 9, True, "to_out"),  # #30
     # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — MMRS→AGMM (bh_4x8_sp0_tp1): ops previously run as MMRS
+    # now running as AGMM. K_global = K_shard × TP8 = 3072 × 8 = 24576.
+    # N=768 = 6144/TP8 (output sharded by TP8). use_case="to_out" (addcmul fused).
+    # -----------------------------------------------------------------------
+    (1152, 24576, 768, 12, 9, True, "to_out"),  # SNG_proj_out (xc merged, 1024 tokens)
+    (1024, 24576, 768, 12, 9, True, "to_out"),  # proj_out spatial-only (1024 tokens)
+    # -----------------------------------------------------------------------
     # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_per_device = 6144/4 = 1536,
     # SP=8 halves M and doubles N relative to TP8_SP4. Core grid 12×9 (AGMM).
     # Top-3 agmm ops by device time from matmulshapes_new.md, Section 2.

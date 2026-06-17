@@ -23,6 +23,7 @@ struct RingJointSDPAParams {
     bool is_balanced = false;
     bool is_cross = false;
     std::size_t logical_n = 0;
+    std::size_t logical_l = 0;
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
@@ -42,6 +43,7 @@ struct RingJointSDPAParams {
         bool is_balanced,
         bool is_cross,
         std::size_t logical_n,
+        std::size_t logical_l,
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
@@ -58,6 +60,7 @@ struct RingJointSDPAParams {
         is_balanced(is_balanced),
         is_cross(is_cross),
         logical_n(logical_n),
+        logical_l(logical_l),
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
@@ -77,6 +80,7 @@ struct RingJointSDPAParams {
         attrs.emplace_back("is_balanced", is_balanced);
         attrs.emplace_back("is_cross", is_cross);
         attrs.emplace_back("logical_n", logical_n);
+        attrs.emplace_back("logical_l", logical_l);
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
@@ -115,6 +119,10 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> joint_v;
     Tensor gathered_k;
     std::optional<Tensor> gathered_v;
+    // Populated on the sharded-joint path only; nullopt on the replicated path.
+    // Invariant: joint_is_sharded() <=> gathered_joint_k.has_value()
+    std::optional<Tensor> gathered_joint_k;
+    std::optional<Tensor> gathered_joint_v;
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
@@ -134,6 +142,10 @@ struct RingJointSDPAInputs {
     uint32_t v_head_dim(uint32_t latent_v_head_dim) const {
         return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[3]) : latent_v_head_dim;
     }
+
+    // True iff the joint/prompt set is sequence-sharded (L/P per device).
+    // Derived from buffer presence so the flag and the buffer cannot drift out of sync.
+    bool joint_is_sharded() const { return gathered_joint_k.has_value(); }
 };
 
 // Index constants for RingJointSDPAResult vector
