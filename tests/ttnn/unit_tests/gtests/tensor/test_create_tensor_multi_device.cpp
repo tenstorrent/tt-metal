@@ -642,9 +642,7 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
     ASSERT_EQ(host_a.tensor_spec(), service.get_per_shard_spec());
 
     service.forward_to_tensor(host_a);
-    std::cout << "Issue Barrier A" << std::endl;
     service.barrier();
-    std::cout << "Barrier A issued" << std::endl;
 
     {
         std::vector<uint32_t> expected_a(global_shape.volume());
@@ -663,9 +661,7 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
     auto host_b = build_host_tensor(/*seed=*/0x12345678u);
 
     service.forward_to_tensor(host_b);
-    std::cout << "Issue Barrier B" << std::endl;
     service.barrier();
-    std::cout << "Barrier B issued" << std::endl;
 
     {
         std::vector<uint32_t> expected_b(global_shape.volume());
@@ -676,7 +672,6 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
             EXPECT_EQ(results[i], expected_b) << "device " << i << " contents after write B";
         }
     }
-    std::cout << "Readback B completed" << std::endl;
     // `service` going out of scope exercises the dtor:
     //   barrier() -> signal_termination() -> Finish(mesh CQ).
     // If anything in that sequence deadlocks the test hangs here.
@@ -747,9 +742,7 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
     std::iota(data_a.begin(), data_a.end(), 0u);
 
     service.forward_to_tensor(as_byte_span(data_a));
-    std::cout << "Issue Barrier A (bytes path)" << std::endl;
     service.barrier();
-    std::cout << "Barrier A issued (bytes path)" << std::endl;
 
     {
         auto results = readback_per_device();
@@ -764,9 +757,7 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
     std::iota(data_b.begin(), data_b.end(), 0x12345678u);
 
     service.forward_to_tensor(as_byte_span(data_b));
-    std::cout << "Issue Barrier B (bytes path)" << std::endl;
     service.barrier();
-    std::cout << "Barrier B issued (bytes path)" << std::endl;
 
     {
         auto results = readback_per_device();
@@ -775,7 +766,6 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
             EXPECT_EQ(results[i], data_b) << "device " << i << " contents after bytes-path write B";
         }
     }
-    std::cout << "Readback B completed (bytes path)" << std::endl;
 }
 
 }  // namespace
