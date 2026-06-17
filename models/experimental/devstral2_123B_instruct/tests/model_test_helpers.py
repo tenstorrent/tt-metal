@@ -15,11 +15,13 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3Model
 
 import ttnn
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
+    devstral2_test_model_args,
+    devstral2_tt_weight_cache_dir,
     load_ministral3_model_weights,
+    log_tt_weight_cache_status,
     require_model_weights,
     require_text_config,
 )
-from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
 from models.experimental.devstral2_123B_instruct.tt.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -83,12 +85,16 @@ def setup_devstral_ministral3_partial_one_layer(mesh_device, *, max_seq_len: int
     ref = Ministral3Model(ref_cfg).to(dtype=torch.bfloat16).eval()
     load_ministral3_model_weights(ref, state_dict)
 
-    args = Devstral2Args.from_hf_config(
-        text_cfg,
-        mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=max_seq_len,
-        max_batch_size=1,
-    )
+    args = devstral2_test_model_args(text_cfg, mesh_device, max_seq_len=max_seq_len)
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(text_cfg.num_hidden_layers))
     tt_ccl = TT_CCL(mesh_device)
-    tt_model = TtMinistral3Model(args, mesh_device, state_dict, tt_ccl, num_layers=NUM_LAYERS)
+    tt_model = TtMinistral3Model(
+        args,
+        mesh_device,
+        state_dict,
+        tt_ccl,
+        num_layers=NUM_LAYERS,
+        weight_cache_path=weight_cache_path,
+    )
     return ModelTestFixtures(text_cfg=ref_cfg, ref=ref, tt_model=tt_model)

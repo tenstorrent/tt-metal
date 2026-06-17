@@ -20,17 +20,22 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import NoReturn
 
 import pytest
 import torch
+from loguru import logger
 from transformers import AutoConfig
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
 from models.experimental.devstral2_123B_instruct.tt.weight_loading import DEVSTRAL2_LARGE_REPO_ID
 
-# Fixed KV/RoPE budget for device tests so weight cache paths align (``seq_{max_seq_len}``).
+# Default on-disk cache key; prefer :func:`devstral2_test_max_seq_len` (respects env at runtime).
 DEVSTRAL2_TEST_MAX_SEQ_LEN = 262144
+
+# Longest teacher-forced eval window in E2E sweeps (logit PCC uses 10 decode steps).
+DEVSTRAL2_E2E_MAX_POST_PREFILL_TOKENS = 500
 
 
 def devstral2_weight_cache_seq_len() -> int:
@@ -38,20 +43,203 @@ def devstral2_weight_cache_seq_len() -> int:
     return int(os.getenv("DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN", "262144"))
 
 
-def resolve_devstral2_weight_cache_path(mesh_device, text_cfg: Ministral3Config, num_layers: int) -> str:
-    """Path to ``…/layers_{N}/seq_{devstral2_weight_cache_seq_len()}/`` for reusing tiled weights."""
+def devstral2_test_max_seq_len() -> int:
+    """Runtime KV/RoPE budget for unit/PCC tests; matches the shared ``seq_{N}`` cache key."""
+    return devstral2_weight_cache_seq_len()
+
+
+def devstral2_tt_weight_cache_layer_count(text_cfg: Ministral3Config) -> int:
+    """Full-model layer count for the shared cache directory (``layers_{N}``)."""
+    return int(text_cfg.num_hidden_layers)
+
+
+def devstral2_test_model_args(
+    text_cfg: Ministral3Config,
+    mesh_device=None,
+    *,
+    max_seq_len: int | None = None,
+    max_batch_size: int = 1,
+) -> "Devstral2Args":
+    """``Devstral2Args`` with default ``max_seq_len`` aligned to the shared cache key."""
+    from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
+
+    seq = max_seq_len if max_seq_len is not None else devstral2_test_max_seq_len()
+    mesh_shape = tuple(mesh_device.shape) if mesh_device is not None else (1, 8)
+    return Devstral2Args.from_hf_config(
+        text_cfg,
+        mesh_shape=mesh_shape,
+        max_seq_len=seq,
+        max_batch_size=max_batch_size,
+    )
+
+
+def devstral2_e2e_sweep_model_max_seq_len(*, max_post_prefill_tokens: int | None = None) -> int:
+    """Single KV/RoPE budget and ``seq_{N}`` weight-cache key for all E2E sweep points.
+
+    Sized for the worst prefill in the sweep (``devstral2_weight_cache_seq_len()``) plus
+    post-prefill generation (500 teacher-forced eval tokens by default). Every sweep
+    point reuses this budget so RoPE tables and tiled weights are not recompiled per
+    input length.
+    """
+    from models.experimental.devstral2_123B_instruct.demo.text_demo import _round_up
+    from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
+
+    post = DEVSTRAL2_E2E_MAX_POST_PREFILL_TOKENS if max_post_prefill_tokens is None else max_post_prefill_tokens
+    kv_block = Devstral2Args.kv_block_size
+    max_prefill = devstral2_weight_cache_seq_len()
+    need = max_prefill + post + 1
+    return _round_up(need, kv_block)
+
+
+def devstral2_tt_weight_cache_dir(mesh_device, text_cfg: Ministral3Config) -> str:
+    """Shared on-disk TT weight cache for all Devstral-2 large tests.
+
+    Always ``…/layers_{num_hidden_layers}/seq_{devstral2_weight_cache_seq_len()}/``.
+    Matmul / norm / embed tiled weights are keyed only by mesh and layer count, not
+    sweep input length. Partial-layer models still read/write layer-0 weights here.
+    """
     from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
     from models.experimental.devstral2_123B_instruct.tt.weight_loading import resolve_weight_cache_path
 
+    n_layers = devstral2_tt_weight_cache_layer_count(text_cfg)
     cache_args = Devstral2Args.from_hf_config(
         text_cfg,
         mesh_shape=tuple(mesh_device.shape),
         max_seq_len=devstral2_weight_cache_seq_len(),
         max_batch_size=1,
     )
-    path = resolve_weight_cache_path(None, cache_args, num_layers=num_layers)
+    path = resolve_weight_cache_path(None, cache_args, num_layers=n_layers)
     assert path is not None
     return path
+
+
+def resolve_devstral2_weight_cache_path(
+    mesh_device,
+    text_cfg: Ministral3Config,
+    num_layers: int | None = None,
+    *,
+    max_seq_len: int | None = None,
+) -> str:
+    """Deprecated alias for :func:`devstral2_tt_weight_cache_dir` (``num_layers`` ignored)."""
+    if num_layers is not None and num_layers != devstral2_tt_weight_cache_layer_count(text_cfg):
+        logger.warning(
+            f"resolve_devstral2_weight_cache_path(num_layers={num_layers}) ignored; "
+            f"using full model layer count {devstral2_tt_weight_cache_layer_count(text_cfg)}"
+        )
+    if max_seq_len is not None and max_seq_len != devstral2_weight_cache_seq_len():
+        logger.warning(
+            f"resolve_devstral2_weight_cache_path(max_seq_len={max_seq_len}) ignored; "
+            f"using devstral2_weight_cache_seq_len()={devstral2_weight_cache_seq_len()}"
+        )
+    return devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+
+
+def tt_weight_cache_marker_files(num_layers: int) -> list[str]:
+    """Flatbuffer filenames that indicate a populated TT weight cache."""
+    markers = ["model_embed_tokens_weight", "model_norm_weight"]
+    if num_layers > 0:
+        markers.append("model_layers_0_self_attn_q_proj_weight")
+    return markers
+
+
+def is_tt_weight_cache_populated(cache_path: str, num_layers: int) -> bool:
+    """True when representative tiled weights already exist under ``cache_path``."""
+    cache_dir = Path(cache_path)
+    if not cache_dir.is_dir():
+        return False
+    return all((cache_dir / name).is_file() for name in tt_weight_cache_marker_files(num_layers))
+
+
+def log_tt_weight_cache_status(cache_path: str, num_layers: int) -> bool:
+    """Log cache hit/miss; return whether on-disk TT weight cache is ready to reuse."""
+    if is_tt_weight_cache_populated(cache_path, num_layers):
+        logger.info(f"Reusing existing TT weight cache at {cache_path}")
+        return True
+    logger.info(
+        f"TT weight cache missing or incomplete at {cache_path} — "
+        "will upload from HF host weights and write tiled cache files"
+    )
+    return False
+
+
+def _hf_weight_shard_names(keys: list[str]) -> set[str]:
+    """Map state-dict keys to safetensor shard filenames via the Hub index."""
+    from huggingface_hub import hf_hub_download
+
+    index_path = hf_hub_download(
+        repo_id=DEVSTRAL2_LARGE_REPO_ID,
+        filename="model.safetensors.index.json",
+        local_files_only=True,
+    )
+    with open(index_path, encoding="utf-8") as f:
+        weight_map = json.load(f)["weight_map"]
+
+    fetch_keys: set[str] = set(keys)
+    for key in keys:
+        if key.endswith(".weight"):
+            scale_key = key[: -len(".weight")] + ".weight_scale_inv"
+            if scale_key in weight_map:
+                fetch_keys.add(scale_key)
+
+    shard_names: set[str] = set()
+    for key in fetch_keys:
+        if key in weight_map:
+            shard_names.add(weight_map[key])
+    return shard_names
+
+
+def hf_hub_weights_cached(keys: list[str]) -> bool:
+    """True when every safetensor shard for ``keys`` is already in the HF Hub cache."""
+    from huggingface_hub import hf_hub_download
+
+    try:
+        shard_names = _hf_weight_shard_names(keys)
+    except Exception:
+        return False
+    if not shard_names:
+        return False
+    try:
+        for shard in shard_names:
+            hf_hub_download(
+                repo_id=DEVSTRAL2_LARGE_REPO_ID,
+                filename=shard,
+                local_files_only=True,
+            )
+    except Exception:
+        return False
+    return True
+
+
+def log_hf_hub_weights_status(keys: list[str]) -> bool:
+    """Log whether HF shards are cached; return True if local Hub cache is complete."""
+    if _hf_local_files_only():
+        logger.info("DEVSTRAL2_HF_LOCAL_ONLY=1 — HF Hub download disabled")
+        return hf_hub_weights_cached(keys)
+    if hf_hub_weights_cached(keys):
+        logger.info("HF Hub weight shards already cached — loading locally")
+        return True
+    logger.info("HF Hub weight shards not cached — downloading from Hub")
+    return False
+
+
+def prepare_e2e_tt_model_budget(
+    mesh_device,
+    text_cfg: Ministral3Config,
+) -> tuple[int, str]:
+    """Return ``(model_max_seq_len, weight_cache_path)`` for E2E sweeps.
+
+    - ``weight_cache_path`` uses ``devstral2_weight_cache_seq_len()`` (default
+      ``seq_262144``) so an existing demo/CI cache is reused via ``ttnn.as_tensor``.
+    - ``model_max_seq_len`` covers worst-case prefill + post-prefill tokens for KV
+      and RoPE; only RoPE tables may be extended on first run if this exceeds the
+      cached RoPE size — matmul weights still load from the existing cache.
+    """
+    model_max_seq_len = devstral2_e2e_sweep_model_max_seq_len()
+    cache_layers = devstral2_tt_weight_cache_layer_count(text_cfg)
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, cache_layers)
+    logger.info(f"E2E TT budget: model_max_seq_len={model_max_seq_len}, " f"weight_cache_dir={weight_cache_path}")
+    return model_max_seq_len, weight_cache_path
 
 
 _FP8_DTYPES = tuple(
@@ -200,6 +388,8 @@ def load_hf_tensors_for_keys(keys: list[str]) -> dict[str, torch.Tensor]:
     """Download shards for ``keys`` and return host tensors (weights dequantized to bf16 when FP8)."""
     from huggingface_hub import hf_hub_download
     from safetensors.torch import safe_open as safetensors_safe_open
+
+    log_hf_hub_weights_status(keys)
 
     index_path = hf_hub_download(
         repo_id=DEVSTRAL2_LARGE_REPO_ID,

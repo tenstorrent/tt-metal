@@ -10,8 +10,11 @@ following the tt-transformers ``test_model.py`` pattern (HF + TT in the loop, sa
 ground-truth tokens each step).
 
 Prefill lengths follow the decoder-layer PCC sweep (powers of two 32 … 262144).
-TT uses the shared ``seq_262144`` on-disk weight cache; HF and TT prefill run in
-**128-token chunks** with incremental ``DynamicCache`` on HF (O(chunk) host memory).
+The TT model is built once per mesh; tiled weights load from the shared on-disk cache
+at ``seq_{DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN}`` (default **262144**) when present, otherwise
+HF shards are downloaded and the cache is written. Runtime ``model_max_seq_len`` is fixed
+for the whole sweep (covers worst-case prefill + eval). HF and TT prefill run in **128-token
+chunks** with incremental ``DynamicCache`` on HF (O(chunk) host memory).
 HF reference inference uses **CPU + disk offload** when no CUDA GPU is present.
 
 Run sanity (CI gate)::

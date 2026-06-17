@@ -13,7 +13,7 @@ TT weights are bf16 tensors extracted from that loaded model (not shard download
   one HF ``ref()`` forward).
 
 **Note:** The HF reference forward stays short (129 tokens for decode PCC). The TT model uses
-``DEVSTRAL2_TEST_MAX_SEQ_LEN`` (262144) for KV/RoPE, matching other Devstral PCC tests.
+``devstral2_test_max_seq_len()`` (default 262144) for KV/RoPE, matching other Devstral PCC tests.
 
 This test loads the full checkpoint through Transformers; mark accordingly and only run on
 machines with sufficient DRAM/disk offload space and a populated HF cache (or ``HF_TOKEN``).
@@ -39,13 +39,16 @@ from models.experimental.devstral2_123B_instruct.reference.hf_reference_loader i
     load_devstral2_text_config,
     prepare_ministral3_backbone_for_pcc,
 )
-from models.experimental.devstral2_123B_instruct.tests._devstral_weights import DEVSTRAL2_TEST_MAX_SEQ_LEN
+from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
+    devstral2_test_max_seq_len,
+    devstral2_tt_weight_cache_dir,
+    log_tt_weight_cache_status,
+)
 from models.experimental.devstral2_123B_instruct.tt.model_args import (
     DEVSTRAL2_LARGE_L1_SMALL_SIZE,
     Devstral2Args,
 )
 from models.experimental.devstral2_123B_instruct.tt.tt_ministral3_model import TtMinistral3Model
-from models.experimental.devstral2_123B_instruct.tt.weight_loading import resolve_weight_cache_path
 from models.tt_transformers.tt.ccl import TT_CCL
 
 PCC_REQUIRED = 0.99
@@ -126,24 +129,10 @@ def _skip_hf_load_failure(exc: BaseException) -> None:
     )
 
 
-def _weight_cache_path(mesh_device, text_cfg: Ministral3Config, num_layers: int) -> str:
-    """Path to ``…/layers_{N}/seq_{DEVSTRAL2_TEST_MAX_SEQ_LEN}/`` for on-disk TT weight caches."""
-    cache_args = Devstral2Args.from_hf_config(
-        text_cfg,
-        mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=DEVSTRAL2_TEST_MAX_SEQ_LEN,
-        max_batch_size=1,
-    )
-    path = resolve_weight_cache_path(None, cache_args, num_layers=num_layers)
-    assert path is not None
-    return path
-
-
 def _setup_full_model(
     mesh_device,
     *,
     max_seq_len: int,
-    reuse_weight_cache: bool = False,
 ) -> _FullModelFixtures:
     """Build HF reference (inference load path) and TT model from extracted bf16 weights."""
     try:
@@ -152,7 +141,8 @@ def _setup_full_model(
         _skip_hf_load_failure(exc)
 
     num_layers = text_cfg.num_hidden_layers
-    weight_cache_path = _weight_cache_path(mesh_device, text_cfg, num_layers) if reuse_weight_cache else None
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(num_layers))
     logger.info(
         f"Loading full model: {num_layers} decoder layers "
         f"(max_seq_len={max_seq_len}, weight_cache_path={weight_cache_path})"
@@ -208,12 +198,11 @@ def test_ministral3_model_pcc_devstral2_123B_instruct_full_weights_all_layers_de
     """Prefill 128 tokens (KV fill), then one decode step; PCC vs HF last position over 129 tokens."""
     prefill_seq_len = 128
     decode_pos = prefill_seq_len
-    tt_max_seq_len = max(DEVSTRAL2_TEST_MAX_SEQ_LEN, decode_pos + 1)
+    tt_max_seq_len = max(devstral2_test_max_seq_len(), decode_pos + 1)
 
     fixtures = _setup_full_model(
         mesh_device,
         max_seq_len=tt_max_seq_len,
-        reuse_weight_cache=True,
     )
     text_cfg = fixtures.text_cfg
     ref = fixtures.ref

@@ -43,7 +43,9 @@ from models.experimental.devstral2_123B_instruct.demo.decode_trace_2cq import (
 )
 from models.experimental.devstral2_123B_instruct.demo.text_demo import _mesh_device_param
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
-    DEVSTRAL2_TEST_MAX_SEQ_LEN,
+    devstral2_test_max_seq_len,
+    devstral2_tt_weight_cache_dir,
+    log_tt_weight_cache_status,
     model_prefill_weight_keys,
     require_hf_weights,
     require_text_config,
@@ -112,8 +114,21 @@ def _build_model(mesh_device, num_layers: int, max_seq_len: int):
         else:
             raise
 
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(text_cfg.num_hidden_layers))
+
     tt_ccl = TT_CCL(mesh_device)
-    return TtMinistral3ForCausalLM(args, mesh_device, state_dict, tt_ccl, num_layers=n_layers), args
+    return (
+        TtMinistral3ForCausalLM(
+            args,
+            mesh_device,
+            state_dict,
+            tt_ccl,
+            num_layers=n_layers,
+            weight_cache_path=weight_cache_path,
+        ),
+        args,
+    )
 
 
 def _run_devstral2_perf(
@@ -124,7 +139,7 @@ def _run_devstral2_perf(
     prefill_iters: int,
 ):
     padded_prompt_len = max(_round_up(prompt_len, 32), 32)
-    max_seq_len = max(_round_up(padded_prompt_len + decode_iters + 1, 32), DEVSTRAL2_TEST_MAX_SEQ_LEN)
+    max_seq_len = max(_round_up(padded_prompt_len + decode_iters + 1, 32), devstral2_test_max_seq_len())
 
     t_build = time.time()
     model, args = _build_model(mesh_device, num_layers, max_seq_len)

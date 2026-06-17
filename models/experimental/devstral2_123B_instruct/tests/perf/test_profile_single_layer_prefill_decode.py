@@ -43,7 +43,9 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.experimental.devstral2_123B_instruct.tests._devstral_weights import DEVSTRAL2_TEST_MAX_SEQ_LEN
+from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
+    devstral2_test_max_seq_len,
+)
 from models.experimental.devstral2_123B_instruct.tests.model_test_helpers import (
     current_pos_to_tt,
     input_ids_to_tt,
@@ -107,7 +109,7 @@ def test_profile_single_layer_prefill_decode(mesh_device, batch_size):
     """Prefill 128 + decode 1 on a 1-layer ``TtMinistral3Model`` (profile target for device perf)."""
     fixtures = setup_devstral_ministral3_partial_one_layer(
         mesh_device,
-        max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, DECODE_POS + 1),
+        max_seq_len=max(devstral2_test_max_seq_len(), DECODE_POS + 1),
     )
     text_cfg = fixtures.text_cfg
     tt_model = fixtures.tt_model

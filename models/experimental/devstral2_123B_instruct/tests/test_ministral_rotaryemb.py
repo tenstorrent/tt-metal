@@ -24,7 +24,7 @@ from transformers.models.ministral3.modeling_ministral3 import (
 )
 
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
-    DEVSTRAL2_TEST_MAX_SEQ_LEN,
+    devstral2_test_model_args,
     require_text_config,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
@@ -41,7 +41,7 @@ def text_cfg():
 
 @pytest.fixture(scope="module")
 def args(text_cfg):
-    return Devstral2Args.from_hf_config(text_cfg, max_seq_len=DEVSTRAL2_TEST_MAX_SEQ_LEN)
+    return devstral2_test_model_args(text_cfg)
 
 
 @pytest.mark.parametrize("max_pos", [4096])

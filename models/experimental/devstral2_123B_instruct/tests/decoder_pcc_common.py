@@ -21,12 +21,13 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
     decode_tt_to_torch,
-    devstral2_weight_cache_seq_len,
+    devstral2_test_max_seq_len,
+    devstral2_tt_weight_cache_dir,
     load_ministral3_decoder_layer_weights,
+    log_tt_weight_cache_status,
     replicated_tt_to_torch,
     require_layer_weights,
     require_text_config,
-    resolve_devstral2_weight_cache_path,
 )
 from models.experimental.devstral2_123B_instruct.tt.mem_config import pad_to_tile
 from models.experimental.devstral2_123B_instruct.tt.model_args import (
@@ -64,8 +65,8 @@ PREFILL_SANITY_SEQ_LENGTHS = [32, 128]
 
 
 def pcc_layer_max_seq_len() -> int:
-    """KV / RoPE budget and on-disk weight cache key (``seq_{N}``). Matches demo / ``text_demo.py``."""
-    return devstral2_weight_cache_seq_len()
+    """KV / RoPE budget for decoder PCC tests (matches shared on-disk cache key)."""
+    return devstral2_test_max_seq_len()
 
 
 def mesh_device_param() -> tuple[int, int]:
@@ -122,9 +123,8 @@ def _build_decoder_pcc_fixtures(
     text_cfg = require_text_config()
     state_dict = require_layer_weights(LAYER_IDX)
     layer_max_seq_len = pcc_layer_max_seq_len()
-    weight_cache_path = resolve_devstral2_weight_cache_path(
-        mesh_device, text_cfg, num_layers=int(text_cfg.num_hidden_layers)
-    )
+    weight_cache_path = devstral2_tt_weight_cache_dir(mesh_device, text_cfg)
+    log_tt_weight_cache_status(weight_cache_path, int(text_cfg.num_hidden_layers))
 
     ref = Ministral3DecoderLayer(text_cfg, layer_idx=LAYER_IDX).to(torch.bfloat16).eval()
     load_ministral3_decoder_layer_weights(ref, state_dict, LAYER_IDX)
