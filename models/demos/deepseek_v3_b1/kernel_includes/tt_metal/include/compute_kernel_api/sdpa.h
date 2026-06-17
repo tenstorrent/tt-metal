@@ -16,7 +16,7 @@
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srca_srcb_reuse_api.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sdpa_reduce_row.h"
+#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_deepseek_sdpa.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
@@ -26,7 +26,7 @@
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_sdpa_api.h"
 #endif
 #ifdef TRISC_PACK
-#include "../../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sdpa_reduce_row.h"
+#include "../../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -132,35 +132,19 @@ ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
 
 template <DataFormat format>
 ALWI void sdpa_reduce_row_init() {
-    MATH(SFPU_UNARY_INIT_FN(reduce, sfpu::init_sdpa_reduce_row, (format)));
+    MATH((llk_math_sfpu_sdpa_reduce_row_init<APPROX, DST_ACCUM_MODE, format>()));
 }
 
 template <DataFormat format, uint32_t block_width>
 ALWI void sdpa_reduce_max_row(uint src_index, uint dst_index, bool prev_max = false) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sdpa_reduce_max_row,
-        (format, block_width),
-        0 /*dst_index*/,
-        VectorMode::None,
-        src_index,
-        dst_index,
-        prev_max));
+    MATH((llk_math_sfpu_sdpa_reduce_max_row<APPROX, DST_ACCUM_MODE, format, block_width>(
+        src_index, dst_index, prev_max)));
 }
 
 template <DataFormat format, uint32_t block_width>
 ALWI void sdpa_reduce_sum_row(uint src_index, uint dst_index, bool prev_sum = false) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sdpa_reduce_sum_row,
-        (format, block_width),
-        0 /*dst_index*/,
-        VectorMode::None,
-        src_index,
-        dst_index,
-        prev_sum));
+    MATH((llk_math_sfpu_sdpa_reduce_sum_row<APPROX, DST_ACCUM_MODE, format, block_width>(
+        src_index, dst_index, prev_sum)));
 }
 
 #ifdef TRISC_PACK
@@ -246,7 +230,7 @@ inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
     sfpi::vFloat sum_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     // Init after to avoid trampling cached registers before we use them
     // TODO: Putting the prev regs in the upper regs lets us init ahead of time
-    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+    ckernel::sfpu::sfpu_reciprocal_init<false>();
     sfpi::vFloat recip_top_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_top_4);
     sfpi::vFloat recip_bottom_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_bottom_4);
 
@@ -300,16 +284,8 @@ void compute_sdpa_chunk(
     sdpa_custom_mm_block<transpose_k>(cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
 
     // Reduce Max (SFPU)
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sdpa_reduce_max_row,
-        (DataFormat::Float16_b, chunk_size),
-        0 /*dst_index*/,
-        VectorMode::None,
-        mm1_dst_offset,
-        max_dst_offset,
-        !first_chunk));
+    PACK((llk_math_sfpu_sdpa_reduce_max_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size>(
+        mm1_dst_offset, max_dst_offset, !first_chunk)));
     // Bcast Sub (FPU)
     // Wait for SFPU to finish (sem is 0)
     sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init<chunk_size>(cb_q);  // For tile shape
@@ -362,16 +338,8 @@ void compute_sdpa_chunk(
 
     // Reduce Sum (SFPU)
     PACK((ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_()));
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sdpa_reduce_sum_row,
-        (DataFormat::Float16_b, chunk_size, true /*skip_signalling*/),
-        0 /*dst_index*/,
-        VectorMode::None,
-        mm1_dst_offset,
-        sum_dst_offset,
-        !first_chunk));
+    PACK((llk_math_sfpu_sdpa_reduce_sum_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size, true>(
+        mm1_dst_offset, sum_dst_offset, !first_chunk)));
     // Signal SFPU is done for the chunk
     if (!first_chunk) {
         // Wait for FPU to signal (this doesn't block SFPU logic)

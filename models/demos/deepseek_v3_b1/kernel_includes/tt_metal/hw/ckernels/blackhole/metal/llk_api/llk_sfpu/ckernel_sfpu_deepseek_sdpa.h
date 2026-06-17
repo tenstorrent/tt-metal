@@ -55,7 +55,7 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
             sfpi::dst_reg[worker_max_base_idx] = exp_worker;
         } else {
             sfpi::vFloat curr_sum = exp_worker * worker_sum_vec + exp_prev * prev_sum_vec;
-            ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+            ckernel::sfpu::sfpu_reciprocal_init<false>();
             sfpi::vFloat recip_sum = ckernel::sfpu::sfpu_reciprocal<SDPA_EXP_APPROX_MODE>(curr_sum);
             sfpi::dst_reg[prev_max_base_idx] = exp_prev * recip_sum;
             sfpi::dst_reg[worker_max_base_idx] = exp_worker * recip_sum;

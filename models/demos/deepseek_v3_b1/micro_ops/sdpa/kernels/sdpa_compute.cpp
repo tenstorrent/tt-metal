@@ -48,7 +48,7 @@ void kernel_main() {
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
 
-    PACK(SFPU_UNARY_INIT_FN(reduce, sfpu::init_sdpa_reduce_row, (DataFormat::Float16_b)));
+    PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
     PACK(SFPU_UNARY_INIT_FN(
         exponential,
         sfpu::exp_init,
