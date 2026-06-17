@@ -17,16 +17,6 @@
 
 namespace ckernel::sfpu {
 
-/*
- * Accurate tanh for fp32 using sigmoid: tanh(x) = 2*sigmoid(2x) - 1
- * For small |x| < 0.6, uses minimax polynomial for better accuracy
- *
- * Algorithm:
- * - For |x| < 0.6: Use minimax polynomial (Sollya-optimized)
- * - For |x| >= 0.6: Use 2*sigmoid(2x) - 1
- *
- * Target accuracy: < 5 ULP for float32 (0.5 ULP for bfloat16)
- */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
@@ -37,15 +27,15 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vInt i = m;
 
     sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
-    sfpi::vFloat t, rcp, x0, x1, neg_two;
+    sfpi::vFloat t, rcp, x0, x1, tmp;
     sfpi::vInt magic_seed;
 
     a = sfpi::setsgn(x, 0);
     f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
 
     r = 1.974105835e-04f;
-    r = r * f + 1.393107930e-3f;
-    r = r * f + 8.333439939e-3f;
+    r = r * f + 1.393318176e-3f;
+    r = r * f + 8.331298828e-3f;
     r = r * f + 4.166680202e-2f;
     s = f * f;  // hide SFPMAD latency
     r = r * f + sfpi::vConstFloatPrgm2;
@@ -55,20 +45,22 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vInt e = i + 126;
     r = r * s + f;
     scale = sfpi::setexp(sfpi::vConst0, e);
-    bias1 = scale + w;
     bias0 = scale - w;
-    x1 = r * scale + bias1;
+    // nop
     x0 = r * scale + bias0;
+    // nop
+    x1 = x0 + 1.0f;
     magic_seed = 0xfef30000;
     rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
+    // nop
     t = x1 * rcp + 1.0f;
     // nop
-    a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
     rcp = rcp * t + rcp;
     // nop
-    y = a * 0.0f + 1.0f;
+    a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
     t = x1 * rcp + 1.0f;
     // nop
+    y = a * 0.0f + 1.0f;
     rcp = rcp * t + rcp;
     v_if(i < 61) {
         y = x0 * rcp;
