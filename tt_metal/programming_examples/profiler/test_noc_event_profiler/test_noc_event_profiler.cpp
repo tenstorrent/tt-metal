@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstring>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -18,8 +20,14 @@ using namespace tt::tt_metal;
  * test_device_profiler.py.
  */
 
+// TODO(#2518): replace with MetalEnv::IsSlowDispatch() once MetalContext project lands.
+static bool using_fast_dispatch() {
+    const char* v = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    return !v || !(v[0] == '1' || !strcasecmp(v, "true") || !strcasecmp(v, "yes") || !strcasecmp(v, "on"));
+}
+
 int main() {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+    if (!using_fast_dispatch()) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
 

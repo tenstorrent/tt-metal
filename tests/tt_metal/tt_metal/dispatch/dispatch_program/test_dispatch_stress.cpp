@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <fmt/base.h>
 #include <cstdint>
 #include <cstdlib>
@@ -112,7 +113,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
 }
 
 TEST(DispatchStress, TensixRunManyTimes) {
-    auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    bool slow_dispatch = tt::test_utils::is_slow_dispatch_mode_enabled();
     // Skip fast dispatch until it's supported for remote device.
     if (!slow_dispatch) {
         GTEST_SKIP();

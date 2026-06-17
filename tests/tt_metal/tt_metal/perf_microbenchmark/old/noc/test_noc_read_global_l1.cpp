@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -55,7 +56,7 @@ std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
 }
 
 int main(int argc, char** argv) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+    if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
 

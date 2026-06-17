@@ -7,7 +7,7 @@ if [ -z "${ARCH_NAME}" ]; then
   exit 1
 fi
 
-if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
+if [[ "$TT_METAL_SLOW_DISPATCH_MODE" != "1" ]] ; then
     # Watcher dump tool testing
     echo "Running watcher dump tool tests..."
 

@@ -1034,7 +1034,7 @@ template <typename FDFixture>
 class SDDispatchTestBase : public FDFixture {
 public:
     void SetUp() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->device_ = tt_metal::CreateDevice(0);

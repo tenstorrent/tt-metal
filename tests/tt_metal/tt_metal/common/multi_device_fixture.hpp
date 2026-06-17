@@ -25,8 +25,7 @@ namespace tt::tt_metal {
 class TwoMeshDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
+        if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
@@ -43,7 +42,7 @@ protected:
 class N300MeshDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+        auto slow_dispatch = tt::test_utils::is_slow_dispatch_mode_enabled();
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
@@ -63,7 +62,7 @@ protected:
 class TwoDeviceBlackholeFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+        auto slow_dispatch = tt::test_utils::is_slow_dispatch_mode_enabled();
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
@@ -114,9 +113,8 @@ protected:
     explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
 
     void SetUp() override {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         auto* emulated = getenv("TT_METAL_EMULE_MODE");
-        if (slow_dispatch && !emulated) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled() && !emulated) {
             GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }
 

@@ -75,8 +75,7 @@ public:
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
 

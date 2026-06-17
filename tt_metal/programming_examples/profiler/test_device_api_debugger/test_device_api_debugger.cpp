@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -65,11 +66,17 @@ void RunFillUpAllBuffers(const std::shared_ptr<distributed::MeshDevice>& mesh_de
     ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
+// TODO(#2518): replace with MetalEnv::IsSlowDispatch() once MetalContext project lands.
+static bool using_fast_dispatch() {
+    const char* v = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    return !v || !(v[0] == '1' || !strcasecmp(v, "true") || !strcasecmp(v, "yes") || !strcasecmp(v, "on"));
+}
+
 int main() {
     int device_id = 0;
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-    const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+    const auto USE_FAST_DISPATCH = using_fast_dispatch();
 
     if (!USE_FAST_DISPATCH) {
         fmt::print("Fast Dispatch Required\n");

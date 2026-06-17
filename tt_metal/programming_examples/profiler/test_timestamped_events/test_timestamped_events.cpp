@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -65,6 +66,12 @@ void RunFillUpAllBuffers(
     }
 }
 
+// TODO(#2518): replace with MetalEnv::IsSlowDispatch() once MetalContext project lands.
+static bool using_fast_dispatch() {
+    const char* v = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    return !v || !(v[0] == '1' || !strcasecmp(v, "true") || !strcasecmp(v, "yes") || !strcasecmp(v, "on"));
+}
+
 int main() {
     bool pass = true;
 
@@ -75,7 +82,7 @@ int main() {
         int device_id = 0;
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+        const auto USE_FAST_DISPATCH = using_fast_dispatch();
 
         constexpr int device_loop_count = 150;
 

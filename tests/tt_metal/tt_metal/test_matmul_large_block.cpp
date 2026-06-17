@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <algorithm>
 #include <functional>
 #include <random>
@@ -180,8 +181,7 @@ void create_CBs_for_fused_matmul(
 bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, bool output_rm) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(tt::test_utils::is_slow_dispatch_mode_enabled(), "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
         ////////////////////////////////////////////////////////////////////////////

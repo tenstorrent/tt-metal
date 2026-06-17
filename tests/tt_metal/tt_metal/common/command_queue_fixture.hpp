@@ -46,8 +46,7 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = false;
             return false;
@@ -125,8 +124,7 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = false;
             return false;
@@ -217,8 +215,7 @@ protected:
     inline static uint32_t shared_max_cbs_ = 0;
 
     static void SetUpTestSuite() {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
             return;
         }
         create_shared_devices();
@@ -256,8 +253,7 @@ protected:
 private:
     bool validate_dispatch_mode() {
         slow_dispatch_ = false;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             return false;
         }
@@ -329,8 +325,7 @@ protected:
 
     void SetUp() override {
         this->slow_dispatch_ = false;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
             GTEST_SKIP();

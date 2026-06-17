@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <chrono>
 #include <fmt/base.h>
 #include <cstdlib>
@@ -414,7 +415,7 @@ void get_l1_writer_core_coords_grayskull(
 }
 
 int main(int argc, char** argv) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+    if (tt::test_utils::is_slow_dispatch_mode_enabled()) {
         log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 

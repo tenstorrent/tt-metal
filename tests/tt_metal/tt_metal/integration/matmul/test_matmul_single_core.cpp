@@ -274,7 +274,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulSingleCoreSmall) {
 }
 
 TEST_F(MeshDispatchFixture, TensixMatmulSingleCore) {
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+    if (!tt::test_utils::is_slow_dispatch_mode_enabled()) {
         log_info(LogTest, "Fast dispatch buffer memory issue, skipping for now");
         GTEST_SKIP();
     }
