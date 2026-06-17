@@ -90,7 +90,7 @@ def _read_prefill_out(out, mesh_device, batch, seq, dim):
 
 
 def _read_decode_out(out, mesh_device, batch, dim):
-    """decode_forward returns [1, 1, B, dim]; same hidden-dim gather as prefill → [B, dim]."""
+    """forward_decode returns [1, 1, B, dim]; same hidden-dim gather as prefill → [B, dim]."""
     if mesh_device.get_num_devices() > 1:
         t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
     else:
@@ -228,7 +228,7 @@ def test_gdn_prefill(mesh_device, batch, setup, seq_len, reset_seeds, ensure_gc)
 @pytest.mark.parametrize("mesh_device, device_params", _MESH_PARAMS, indirect=True)
 @pytest.mark.parametrize("batch", BATCHES, ids=lambda b: f"b{b}")
 def test_gdn_decode(mesh_device, batch, setup, reset_seeds, ensure_gc):
-    """Eager decode_forward PCC vs HF across batch on (1, 1) and the (1, 4) TP mesh."""
+    """Eager forward_decode PCC vs HF across batch on (1, 1) and the (1, 4) TP mesh."""
     # 1. Build reference GDN and TT GDN
     hf_gdn, state_dict, args, hf_cache = setup
     tt_gdn = _build_tt_gdn(mesh_device, state_dict, args, batch)
@@ -252,7 +252,7 @@ def test_gdn_decode(mesh_device, batch, setup, reset_seeds, ensure_gc):
     _inject_conv_state(tt_gdn, conv_state, mesh_device, args)
     _inject_recurrent_state(tt_gdn, recurrent_state, mesh_device)
 
-    # 6. Run multiple decode steps, comparing the HF vs TT output PCC each step. This confirms decode_forward
+    # 6. Run multiple decode steps, comparing the HF vs TT output PCC each step. This confirms forward_decode
     for step in range(DECODE_STEPS):
         x = torch.randn(batch, 1, args.dim, dtype=torch.float32)
         x_tt = _tt_decode_input(x, mesh_device)
@@ -260,7 +260,7 @@ def test_gdn_decode(mesh_device, batch, setup, reset_seeds, ensure_gc):
         # Reference decode step, updates the hf_cache states every step
         ref = hf_gdn(x, cache_params=hf_cache, attention_mask=None)[:, 0]  # [B, dim]
 
-        out_tt = tt_gdn.decode_forward(x_tt)
+        out_tt = tt_gdn.forward_decode(x_tt)
         out_tt = _read_decode_out(out_tt, mesh_device, batch, args.dim)
 
         passing, pcc = comp_pcc(ref, out_tt, PCC)
@@ -311,9 +311,9 @@ def test_gdn_prefill_trace(mesh_device, batch, setup, seq_len, reset_seeds, ensu
 @pytest.mark.parametrize("mesh_device, device_params", _MESH_PARAMS, indirect=True)
 @pytest.mark.parametrize("batch", BATCHES, ids=lambda b: f"b{b}")
 def test_gdn_decode_trace(mesh_device, batch, setup, reset_seeds, ensure_gc):
-    """Same decode PCC as test_gdn_decode, but decode_forward runs as a captured ttnn trace — the path
+    """Same decode PCC as test_gdn_decode, but forward_decode runs as a captured ttnn trace — the path
     the demo replays each token to collapse the conv update, the recurrent read/write, and the
-    projections into one device dispatch. decode_forward mutates the persistent conv/recurrent buffers
+    projections into one device dispatch. forward_decode mutates the persistent conv/recurrent buffers
     in place and the trace bakes in the buffer addresses (not the contents), so after capture we
     re-inject the start state S0 into those same buffers before replay — the single replayed step then
     lines up with the HF golden."""
@@ -341,9 +341,9 @@ def test_gdn_decode_trace(mesh_device, batch, setup, reset_seeds, ensure_gc):
 
     # 6. Compile the decode kernels (trace capture cannot compile; this advances TT state — fine),
     #    then capture once. `out_tt` is the persistent buffer the trace writes into.
-    tt_gdn.decode_forward(x_tt)
+    tt_gdn.forward_decode(x_tt)
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out_tt = tt_gdn.decode_forward(x_tt)
+    out_tt = tt_gdn.forward_decode(x_tt)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
 
     # 7. Restore S0 by re-injecting into the buffers the trace reads (inject copies into the existing
