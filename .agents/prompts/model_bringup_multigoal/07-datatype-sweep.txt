@@ -12,5 +12,6 @@ Goal completion requirements:
 - models/autoports/<model>/doc/datatype_sweep/README.md and work_log.md record thresholds, selected config, rejected configs, Pareto interpretation, commands, plots, performance, accuracy, limitations, and exact artifacts.
 - The final selected config is the fastest evaluated config that satisfies the full-model top-1/top-5 gate using traced teacher-forcing decode performance. Eager or untraced decode numbers are not valid for Pareto ranking or final selection. The sweep includes likely lower-precision wins and canonical policies, with evidence for rejected configs.
 - After selecting the winning config, run the same warmed token-out no-readback benchmark used by optimized full model through the normal selected-config construction path. Record it separately from teacher-forcing as post-selection token-out TTFT/decode t/s/u. Later reports and vLLM comparisons must use this post-selection token-out number when available.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
 
 Do not mark this goal complete while any completion requirement is unmet.
