@@ -61,6 +61,8 @@
     # deepseek and kimi prefill on 2x4 mesh
     EXPECT_NUM_TESTS=2 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and not 32x4 and random and scaled_sl and check_pcc and 100k and fabric2d" -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "2x4 and random and scaled_sl and check_pcc and seq5k and fabric2d" -vvv --tb=short
+    EXPECT_NUM_TESTS=1 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and kimi and cpu and 2x4 and fabric2d'
+    EXPECT_NUM_TESTS=1 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and ds and cpu and 2x4 and fabric2d'
     # deepseek and kimi moe blocks
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device" -vvv --tb=short --timeout=1800
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "linear-8 and 5k and not 25k" -vvv --tb=short --timeout=1800
