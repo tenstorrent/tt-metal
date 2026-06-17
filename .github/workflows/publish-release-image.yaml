@@ -40,7 +40,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.image == 'release-models' && 'tt-ubuntu-2204-large-stable' || 'ubuntu-latest' }}
     outputs:
       image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
     steps:
