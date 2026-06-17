@@ -45,8 +45,8 @@ enum class SenderCoreType : uint8_t {
 // When `dual_senders_per_bank` is true, each bank is driven by two DRISC sender cores
 // (the free subchannel plus the bank's NOC1-endpoint subchannel, both on NOC0); the
 // bank's receivers are split ceil/floor across them. This is only valid for the
-// receiver-contiguous DRAM layout and must match the DramCorePrefetcherConfig flag used
-// at StartDramCorePrefetcher. Every bank must then have at least two receivers (one
+// receiver-contiguous DRAM layout and must match the TensorPrefetcherConfig flag used
+// at StartTensorPrefetcher. Every bank must then have at least two receivers (one
 // receiver cannot be split across two senders); a single-receiver bank is rejected with
 // a TT_FATAL — use `dual_senders_per_bank = false` for such topologies.
 //
@@ -75,7 +75,7 @@ DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
 // DRISC L1 base of the per-GCB "sender state block" — the RemoteSenderCBInterface
 // bytes (including the fifo_wr_ptr that persists across requests), the sender config
 // block, and the receiver NOC XY table. Pre-written by the GCB constructor on every
-// (device, sender_core). The DRAM-core prefetcher kernel loads this block into its
+// (device, sender_core). The Tensor prefetcher kernel loads this block into its
 // static cb_interface slot on each request that targets this GCB, runs the chunk loop,
 // and writes fifo_wr_ptr back so the ring offset survives multi-GCB request switching.
 // Layout: tt_metal/impl/buffers/dram_sender_state_block.hpp. Zero for worker-sender GCBs.
