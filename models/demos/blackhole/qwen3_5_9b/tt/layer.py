@@ -1,143 +1,114 @@
-# models/demos/blackhole/qwen3_5_9b/tt/layer.py
-"""Hybrid TransformerBlock for Qwen3.5-9B.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Hybrid Qwen3.5 decoder layer (ttnn port of transformers' Qwen3_5DecoderLayer).
 
-Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
-based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
+Each layer is either a full (softmax) attention layer or a Gated DeltaNet (linear
+attention) layer, chosen per index by args.is_full_attention_layer(layer_num). Both
+kinds share the identical RMSNorm + residual + SwiGLU-MLP wiring of the HF reference:
+
+    x -> input_layernorm -> token_mixer -> + x
+      -> post_attention_layernorm -> mlp -> + residual
+
+See Qwen3_5DecoderLayer in transformers.models.qwen3_5.modeling_qwen3_5 for the golden.
 """
-import os
-
-from loguru import logger
-
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.blackhole.qwen3_5_9b.tt.attention import AttentionConfig, Qwen35GatedAttention
-from models.demos.blackhole.qwen3_5_9b.tt.gdn import GDNConfig, Qwen35GatedDeltaNet
+from models.demos.blackhole.qwen3_5_9b.tt.attention import Qwen35Attention
+from models.demos.blackhole.qwen3_5_9b.tt.gdn import Qwen35GatedDeltaNet
 from models.demos.blackhole.qwen3_5_9b.tt.mlp import Qwen35MLP
 from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
-# Env-gated (QWEN35_DEBUG_HIDDEN) per-layer residual-stream probe. Logs the norm/abs-max/NaN
-# of the attention output, post-attn residual, MLP output and final hidden during DECODE for
-# the first few calls per layer (bounded cost; requires eager decode to read inside forward).
-# Comparing a coherent short run vs the degenerate 64k run by layer pinpoints where they diverge.
-_DBG_HIDDEN_COUNTS = {}
-# Env-gated (QWEN35_DBG_PREFILL_HIDDEN) per-layer LAST-POSITION hidden capture during PREFILL.
-# Overwritten per call, so after a chunk-outer run it holds the LAST chunk's last position
-# (= global position T-1), directly comparable to the single-pass oracle's position T-1.
-# Used to find the first layer where chunk-outer diverges from the oracle at long context.
-_DBG_PREFILL_LAST = {}
-# Decode twin (QWEN35_DBG_DECODE_HIDDEN): per-layer hidden of the single decode position.
-_DBG_DECODE_LAST = {}
-# Component captures (QWEN35_DBG_COMPONENT): per-layer attention / MLP output rows, keyed
-# ("prefill"|"decode", layer). Splits decode-vs-prefill drift into per-component PCC.
-_DBG_ATTN_ROW = {}
-_DBG_FF_ROW = {}
 
+class Qwen35DecoderLayer(LightweightModule):
+    """One transformer block: a full-attention OR gated-deltanet token mixer, then a SwiGLU MLP.
 
-def _capture_row(t, valid_len, mode, device, num_devices, store, layer_num):
-    key = "prefill" if mode == "prefill" else "decode"
-    if mode == "prefill":
-        r = (valid_len - 1) if valid_len else (t.shape[-2] - 1)
-        sl = ttnn.slice(t, (0, 0, r, 0), (1, 1, r + 1, t.shape[-1]))
-    else:
-        sl = t
-    comp = ttnn.ConcatMeshToTensor(device, dim=3) if num_devices > 1 else None
-    store[(key, layer_num)] = ttnn.to_torch(sl, mesh_composer=comp).float().reshape(-1)
-    if mode == "prefill":
-        ttnn.deallocate(sl)
-
-
-def _dbg_norm(t, mesh, num_devices):
-    comp = ttnn.ConcatMeshToTensor(mesh, dim=0) if num_devices > 1 else None
-    x = ttnn.to_torch(t, mesh_composer=comp).float()
-    return x.norm().item(), x.abs().max().item(), int(x.isnan().sum())
-
-
-class Qwen35DecoderLayer:
-    """Single transformer layer with hybrid attention dispatch.
-
-    Pattern: x → attention_norm → attention → residual → ff_norm → MLP → residual
-    Attention is either GatedAttention (full, with RoPE) or GatedDeltaNet (linear).
+    The only thing that varies between the two layer kinds is which token mixer the layer
+    holds; the norm/residual/MLP structure is identical, mirroring transformers'
+    Qwen3_5DecoderLayer.
     """
 
     def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None):
         self.layer_num = layer_num
-        self.device = mesh_device
         self.args = args
+        self.device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1)
         self.is_full_attention = args.is_full_attention_layer(layer_num)
 
-        prefix = f"layers.{layer_num}"
+        # Per-layer tensor cache (sharded mesh weights are written here once, then re-read on
+        # subsequent runs to skip the slow single-threaded reorder+shard of the full model).
+        cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
 
-        # Zero-centered RMSNorm (Qwen3.5): output = x_normed * (1 + weight). The
-        # framework RMSNorm applies the +1 internally via add_unit_offset=True and
-        # is mesh-aware (replicates the weight across a MeshDevice).
-        #
-        # Single device: plain RMSNorm on the full hidden state (validated path).
-        # TP (27B on a (1,4) mesh): the residual stream is fractured along the
-        # hidden dim, so each norm is wrapped in the framework DistributedNorm,
-        # which all-gathers (PREFILL: distributed rmsnorm + gather; DECODE:
-        # gather-then-norm) to hand the modules a replicated full-dim input —
-        # exactly as models/demos/qwen35_27b does via the framework decoder.
-        self.attention_norm = self._make_norm(
-            mesh_device, args, state_dict, layer_num, "input_layernorm", tensor_cache_path, tt_ccl, "attention_norm"
-        )
-        self.ffn_norm = self._make_norm(
-            mesh_device, args, state_dict, layer_num, "post_attention_layernorm", tensor_cache_path, tt_ccl, "ff_norm"
+        # Decoder norms stay on the framework RMSNorm + DistributedNorm.
+        #   * The new tt/rms_norm.py Qwen35RMSNorm is the attention's internal q/k-norm primitive
+        #     and is deliberately non-distributed (plain local RMS over the last dim).
+        #   * On tensor parallelism the residual stream is fractured along the hidden dim, so the
+        #     decoder norm must do the fractured->replicated transition (distributed stats-reduce +
+        #     all-gather) before feeding the column-parallel token mixer — exactly what
+        #     DistributedNorm provides. add_unit_offset bakes the Qwen3_5RMSNorm (1 + weight) scale.
+        self.input_layernorm = self._make_norm(state_dict, "input_layernorm", tensor_cache_path, "attention_norm")
+        self.post_attention_layernorm = self._make_norm(
+            state_dict, "post_attention_layernorm", tensor_cache_path, "ff_norm"
         )
 
-        if self.num_devices > 1:
-            # Tensor-parallel modules (sharded weights from the raw substate).
-            # Cache the sharded mesh weights to disk so re-runs skip the (slow,
-            # single-threaded) reorder+shard of the full 27B.
-            tp_cache = (tensor_cache_path / f"layers.{layer_num}" / "tp") if tensor_cache_path else None
-            if self.is_full_attention:
-                from models.demos.blackhole.qwen3_5_9b.tt.attention.tp import TPAttention, load_attention_weights_tp
-
-                tw = load_attention_weights_tp(
-                    mesh_device, substate(state_dict, f"layers.{layer_num}.self_attn"), args, cache_dir=tp_cache
-                )
-                self.attention = TPAttention(mesh_device, args, tw, tt_ccl)
-            else:
-                from models.demos.blackhole.qwen3_5_9b.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
-
-                tw = load_gdn_weights_tp(
-                    mesh_device, substate(state_dict, f"layers.{layer_num}.linear_attn"), args, cache_dir=tp_cache
-                )
-                self.attention = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
-        elif self.is_full_attention:
-            attn_state = substate(state_dict, f"layers.{layer_num}.self_attn")
-            attn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-            self.attention = Qwen35GatedAttention(mesh_device, AttentionConfig.from_args(args), attn_state, attn_cache)
+        # Token mixer: the new attention/gdn classes are themselves tensor-parallel (they take
+        # tt_ccl and reduce-scatter their output), so there is a single class per kind regardless
+        # of mesh size — the old TP-vs-single-device class fork is gone. Note the constructor arg
+        # order differs between the two (attention leads with mesh_device, gdn leads with args).
+        if self.is_full_attention:
+            # create_kv_cache=True allocates the internal contiguous cache the demo/eager decode
+            # path reads; a paged (vLLM) deployment rebinds it later via set_paged_kv_cache.
+            self.attention = Qwen35Attention(
+                mesh_device,
+                substate(state_dict, f"layers.{layer_num}.self_attn"),
+                args,
+                tt_ccl,
+                create_kv_cache=True,
+                tensor_cache_path=cache,
+            )
         else:
-            gdn_state = substate(state_dict, f"layers.{layer_num}.linear_attn")
-            gdn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-            self.attention = Qwen35GatedDeltaNet(mesh_device, GDNConfig.from_args(args), gdn_state, gdn_cache)
+            # GDN carries its own conv + recurrent state internally (no external KV cache, no RoPE).
+            self.attention = Qwen35GatedDeltaNet(
+                args,
+                substate(state_dict, f"layers.{layer_num}.linear_attn"),
+                mesh_device,
+                tt_ccl=tt_ccl,
+                tensor_cache_path=cache,
+            )
 
-        mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
-        mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-        self.feed_forward = Qwen35MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+        self.feed_forward = Qwen35MLP(
+            mesh_device,
+            substate(state_dict, f"layers.{layer_num}.mlp"),
+            args,
+            tensor_cache_path=cache,
+            tt_ccl=tt_ccl,
+        )
 
-    def _make_norm(self, mesh_device, args, state_dict, layer_num, weight_key, tensor_cache_path, tt_ccl, ag_key):
-        """Build the per-layer RMSNorm; wrap in DistributedNorm when TP>1.
+    def _make_norm(self, state_dict, weight_key, tensor_cache_path, ag_key):
+        """Build a per-layer RMSNorm, wrapped in DistributedNorm when TP>1.
 
-        On a single device this returns the same plain RMSNorm the validated 9B
-        path used. The DistributedNorm wrapper (TP>1) mirrors tt_transformers
-        decoder.py and handles the fractured->replicated transition.
+        On a single device this is the plain framework RMSNorm the validated 9B path used; the
+        DistributedNorm wrapper (TP>1) mirrors tt_transformers' decoder and handles the
+        fractured->replicated transition the non-distributed token-mixer input requires.
         """
         norm = RMSNorm(
-            device=mesh_device,
-            dim=args.dim,
+            device=self.device,
+            dim=self.args.dim,
             state_dict=state_dict,
             weight_key=weight_key,
-            state_dict_prefix=f"layers.{layer_num}.",
+            state_dict_prefix=f"layers.{self.layer_num}.",
             weight_cache_path=tensor_cache_path,
             weight_dtype=ttnn.bfloat16,
             add_unit_offset=True,
-            eps=args.norm_eps,
+            eps=self.args.norm_eps,
             **(
-                dict(is_distributed=args.is_distributed_norm, ccl_topology=args.ccl_topology(), tt_ccl=tt_ccl)
+                dict(
+                    is_distributed=self.args.is_distributed_norm,
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                )
                 if self.num_devices > 1
                 else {}
             ),
@@ -145,132 +116,73 @@ class Qwen35DecoderLayer:
         if self.num_devices > 1:
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
-            return DistributedNorm(norm, args, tt_ccl=tt_ccl, TG=args.is_galaxy, ag_config_key=ag_key)
+            return DistributedNorm(norm, self.args, tt_ccl=self.tt_ccl, TG=self.args.is_galaxy, ag_config_key=ag_key)
         return norm
 
-    def forward(
-        self,
-        x,
-        cos=None,
-        sin=None,
-        mode="decode",
-        chunk_size=128,  # = GDN long_prefill_chunk_size; the only size the chunk-seq prefill kernel supports
-        position_tensor=None,
-        page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        chunk_start_idx_tensor=None,
-        valid_len=None,
-    ):
-        _dbg = (
-            mode != "prefill"
-            and bool(os.environ.get("QWEN35_DEBUG_HIDDEN"))
-            and _DBG_HIDDEN_COUNTS.get(self.layer_num, 0) < 2
-        )
-        _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
-        if self.num_devices > 1:
-            # TP: DistributedNorm uses the framework's per-norm memory configs.
-            _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
-            _ff_norm_config = self.args.get_norm_config("ff", _norm_mode)
+    def forward_prefill(self, x, cos=None, sin=None, page_table=None, user_id=0):
+        """Prefill one stream: input_norm → token mixer → residual → post_norm → MLP → residual.
+
+        The full-attention mixer takes the RoPE cos/sin plus the KV-fill paging args:
+          * page_table=None drives the contiguous KV fill the demo/eager path reads.
+          * a non-None page_table drives the paged fill (the path vLLM uses).
+        GDN takes none of those — it has no RoPE and folds its conv/recurrent state in internally.
+        """
+        attn_norm_config, ff_norm_config = self._norm_configs(Mode.PREFILL)
+
+        attn_in = self.input_layernorm(x, mode=Mode.PREFILL, norm_config=attn_norm_config)
+        if self.is_full_attention:
+            attn_out = self.attention.forward_prefill(attn_in, cos, sin, page_table=page_table, user_id=user_id)
         else:
-            # In decode the norm output stays in L1 (as the old rms_norm_ttnn(memory_config=L1) did);
-            # in prefill the framework RMSNorm returns interleaved DRAM (matches the old None default).
-            _attn_norm_config = _ff_norm_config = (
-                {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
-            )
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+            attn_out = self.attention.forward_prefill(attn_in)  # captures GDN conv/recurrent state
+        ttnn.deallocate(attn_in)
+        h = ttnn.add(x, attn_out)  # residual; x is the caller's tensor and is left live for it
+        ttnn.deallocate(attn_out)
 
-        if self.num_devices > 1:
-            # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
-            # output is fractured along dim=3. cos/sin are in rope_tp format.
-            if self.is_full_attention:
-                if mode == "prefill":
-                    # Contract/vLLM path supplies a page_table → paged KV prefill; the
-                    # demo path (no page_table) uses the internal concat caches.
-                    if page_table is not None:
-                        attn_output = self.attention.forward_prefill_paged(
-                            attn_input,
-                            cos,
-                            sin,
-                            page_table,
-                            chunk_page_table=chunk_page_table,
-                            chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
-                            chunk_start_idx_tensor=chunk_start_idx_tensor,
-                        )
-                    else:
-                        attn_output = self.attention.forward_prefill(attn_input, cos, sin)
-                else:
-                    attn_output = self.attention.forward_decode(
-                        attn_input, position_tensor, cos, sin, page_table=page_table
-                    )
-            else:
-                # GDN carries its recurrent/conv state internally (capture_state on
-                # prefill, read on decode); it has no paged KV, so page_table is N/A.
-                if mode == "prefill":
-                    attn_output = self.attention.forward_prefill(
-                        attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
-                    )
-                else:
-                    attn_output = self.attention.forward_decode(attn_input)
-        elif self.is_full_attention:
-            attn_output = self.attention.forward(
-                attn_input,
-                cos,
-                sin,
-                position_tensor=position_tensor,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                chunk_start_idx_tensor=chunk_start_idx_tensor,
-            )
-        else:
-            deltanet_mode = "chunk" if mode == "prefill" else "recurrent"
-            attn_output = self.attention.forward(
-                attn_input, mode=deltanet_mode, chunk_size=chunk_size, valid_len=valid_len
-            )
-        ttnn.deallocate(attn_input)
-
-        h = ttnn.add(x, attn_output)
-        _a = _dbg_norm(attn_output, self.device, self.num_devices) if _dbg else None
-        if os.environ.get("QWEN35_DBG_COMPONENT"):
-            _capture_row(attn_output, valid_len, mode, self.device, self.num_devices, _DBG_ATTN_ROW, self.layer_num)
-        ttnn.deallocate(attn_output)
-
-        ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
-
-        ff_output = self.feed_forward.forward(ff_input)
-        ttnn.deallocate(ff_input)
-
-        if os.environ.get("QWEN35_DBG_COMPONENT"):
-            _capture_row(ff_output, valid_len, mode, self.device, self.num_devices, _DBG_FF_ROW, self.layer_num)
-        output = ttnn.add(h, ff_output)
-        if _dbg:
-            _hh = _dbg_norm(h, self.device, self.num_devices)
-            _f = _dbg_norm(ff_output, self.device, self.num_devices)
-            _o = _dbg_norm(output, self.device, self.num_devices)
-            kind = "FULL" if self.is_full_attention else "gdn "
-            logger.info(
-                f"[HIDDBG L{self.layer_num:2d} {kind}] "
-                f"attn|{_a[0]:8.2f} amax{_a[1]:7.2f} nan{_a[2]} || "
-                f"res|{_hh[0]:8.2f} || ff|{_f[0]:8.2f} amax{_f[1]:7.2f} nan{_f[2]} || "
-                f"out|{_o[0]:8.2f} amax{_o[1]:7.2f} nan{_o[2]}"
-            )
-            _DBG_HIDDEN_COUNTS[self.layer_num] = _DBG_HIDDEN_COUNTS.get(self.layer_num, 0) + 1
-        if mode == "prefill" and os.environ.get("QWEN35_DBG_PREFILL_HIDDEN"):
-            S = output.shape[-2]
-            # Capture the last REAL position (valid_len-1 in a padded masked bucket), not the
-            # padded row S-1, so the capture is comparable to a decode step at the same position.
-            r = (valid_len - 1) if valid_len else (S - 1)
-            last_t = ttnn.slice(output, (0, 0, r, 0), (1, 1, r + 1, output.shape[-1]))
-            comp = ttnn.ConcatMeshToTensor(self.device, dim=3) if self.num_devices > 1 else None
-            _DBG_PREFILL_LAST[self.layer_num] = ttnn.to_torch(last_t, mesh_composer=comp).float().reshape(-1)
-            ttnn.deallocate(last_t)
-        if mode != "prefill" and os.environ.get("QWEN35_DBG_DECODE_HIDDEN"):
-            # Decode twin of _DBG_PREFILL_LAST: per-layer hidden for the single decode position,
-            # directly comparable layer-by-layer to the prefill capture at the same position.
-            comp = ttnn.ConcatMeshToTensor(self.device, dim=3) if self.num_devices > 1 else None
-            _DBG_DECODE_LAST[self.layer_num] = ttnn.to_torch(output, mesh_composer=comp).float().reshape(-1)
+        ff_in = self.post_attention_layernorm(h, mode=Mode.PREFILL, norm_config=ff_norm_config)
+        ff_out = self.feed_forward.forward(ff_in)
+        ttnn.deallocate(ff_in)
+        out = ttnn.add(h, ff_out)
         ttnn.deallocate(h)
-        ttnn.deallocate(ff_output)
+        ttnn.deallocate(ff_out)
+        return out
 
-        return output
+    def forward_decode(self, x, position_tensor=None, cos=None, sin=None, page_table=None):
+        """Decode one step: same input_norm → mixer → residual → post_norm → MLP → residual block as prefill.
+
+        Only the token-mixer call differs from prefill — full attention reads its KV cache at
+        position_tensor (advancing it) under RoPE cos/sin and the optional page_table, while GDN's
+        forward_decode reads + advances its recurrent state and ignores all of those (it carries its
+        position implicitly). The norm/residual/MLP wiring around it is identical (only the norm memory
+        config changes), so it's spelled out here too rather than hidden behind a shared helper.
+        """
+        attn_norm_config, ff_norm_config = self._norm_configs(Mode.DECODE)
+
+        attn_in = self.input_layernorm(x, mode=Mode.DECODE, norm_config=attn_norm_config)
+        if self.is_full_attention:
+            attn_out = self.attention.forward_decode(attn_in, position_tensor, cos, sin, page_table=page_table)
+        else:
+            attn_out = self.attention.forward_decode(attn_in)
+        ttnn.deallocate(attn_in)
+        h = ttnn.add(x, attn_out)  # residual; x is the caller's tensor and is left live for it
+        ttnn.deallocate(attn_out)
+
+        ff_in = self.post_attention_layernorm(h, mode=Mode.DECODE, norm_config=ff_norm_config)
+        ff_out = self.feed_forward.forward(ff_in)
+        ttnn.deallocate(ff_in)
+        out = ttnn.add(h, ff_out)
+        ttnn.deallocate(h)
+        ttnn.deallocate(ff_out)
+        return out
+
+    def _norm_configs(self, norm_mode):
+        """Memory configs (attn_norm, ff_norm) for the two decoder norms, which vary by phase and mesh size.
+
+        Pulled out of forward_* because it's an orthogonal config lookup, not part of the block's data
+        flow: on TP (>1 device) DistributedNorm wants the framework's per-norm configs; on a single device
+        we keep the decode norm output in L1 (as the validated single-device path did) and let prefill fall
+        back to the framework default (interleaved DRAM).
+        """
+        if self.num_devices > 1:
+            return self.args.get_norm_config("attn", norm_mode), self.args.get_norm_config("ff", norm_mode)
+        cfg = {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if norm_mode == Mode.DECODE else None
+        return cfg, cfg
