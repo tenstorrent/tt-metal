@@ -37,8 +37,6 @@ constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-PageConfig::PageConfig(const Config& config) : config_(config) {}
-
 PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
