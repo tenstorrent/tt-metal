@@ -250,7 +250,7 @@ def vit(
         config,
         hidden_states,
         attention_mask,
-        parameters=parameters.vit.encoder,
+        parameters=parameters.vit.encoder if hasattr(parameters.vit, "encoder") else parameters.vit.layers,
     )
 
     # Final LayerNorm
