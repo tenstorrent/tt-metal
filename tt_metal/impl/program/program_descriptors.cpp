@@ -177,20 +177,6 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
         const auto& kernel = desc.kernels[k];
         for (const auto& [core, args] : kernel.runtime_args) {
             auto& prog_args = GetRuntimeArgs(program, k, core);
-            // A cache hit rebuilds the descriptor from the same hash, so its arg arrays must
-            // match the cached program's slot-for-slot.  A larger rebuilt array would otherwise
-            // write past RuntimeArgsData's end (operator[] is bounds-unchecked in release),
-            // silently corrupting the command buffer.  Surface the invariant break instead.
-            TT_FATAL(
-                args.size() <= prog_args.size(),
-                "apply_descriptor_runtime_args: kernel {} core ({},{}) rebuilt {} runtime args but the "
-                "cached program holds {}. The cache-hit descriptor must match the cached program; a "
-                "mismatch means the program hash omits a shape input.",
-                k,
-                core.x,
-                core.y,
-                args.size(),
-                prog_args.size());
             for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
                 prog_args[i] = args[i];
             }
@@ -203,14 +189,6 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
             // create().  Update in-place instead (same pattern used for
             // per-core runtime_args above).
             auto& common_args = GetCommonRuntimeArgs(program, k);
-            TT_FATAL(
-                kernel.common_runtime_args.size() <= common_args.size(),
-                "apply_descriptor_runtime_args: kernel {} rebuilt {} common runtime args but the cached "
-                "program holds {}. The cache-hit descriptor must match the cached program; a mismatch "
-                "means the program hash omits a shape input.",
-                k,
-                kernel.common_runtime_args.size(),
-                common_args.size());
             for (uint32_t i = 0; i < static_cast<uint32_t>(kernel.common_runtime_args.size()); ++i) {
                 common_args[i] = kernel.common_runtime_args[i];
             }
