@@ -15,5 +15,6 @@ Goal completion requirements:
 - RUN_NOTES.md records host/context, TTI tag/SHA, Docker image, command, key env, recovery actions, report path, pass/fail summary, and an "Autoport implementation check" naming the matched run spec/report data.
 - The copied TTI run spec or report data proves the evaluated code path is `models/autoports/<model>` and does not identify stock `models/tt_transformers`, `models/demos`, or another packaged implementation.
 - The release report is skimmed; failing accuracy, benchmark target, API conformance, or incomparable metric rows are called out. No leftover TTI tmux session or Docker container remains.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
 
 Do not mark this goal complete while any completion requirement is unmet.
