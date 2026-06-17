@@ -44,28 +44,24 @@ def is_mesh_graph_descriptor_set(expected_path):
     return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
 
 
-_MESH_PARAM_8x4 = (
-    pytest.param(
-        (8, 4),
-        (8, 4),
-        marks=pytest.mark.skipif(
-            is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-            reason="8x4 mesh breaks with 16 device MGD",
-        ),
-        id="8x4",
+_MESH_PARAM_8x4 = pytest.param(
+    (8, 4),
+    (8, 4),
+    marks=pytest.mark.skipif(
+        is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+        reason="8x4 mesh breaks with 16 device MGD",
     ),
+    id="8x4",
 )
 
-_MESH_PARAM_1x16 = (
-    pytest.param(
-        (1, 16),
-        (1, 16),
-        marks=pytest.mark.skipif(
-            not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-            reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
-        ),
-        id="1x16",
+_MESH_PARAM_1x16 = pytest.param(
+    (1, 16),
+    (1, 16),
+    marks=pytest.mark.skipif(
+        not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+        reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
     ),
+    id="1x16",
 )
 
 MESH_PARAMS = [_MESH_PARAM_8x4, _MESH_PARAM_1x16]
