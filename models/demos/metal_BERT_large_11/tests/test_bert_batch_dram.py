@@ -54,8 +54,9 @@ def run_bert_question_and_answering_inference(
             "Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."
         ]
         question = batch * ["What discipline did Winkelmann create?"]
-        bert_input = tokenizer.batch_encode_plus(
-            zip(question, context),
+        bert_input = tokenizer(
+            text=question,
+            text_pair=context,
             max_length=seq_len,
             padding="max_length",
             truncation=True,

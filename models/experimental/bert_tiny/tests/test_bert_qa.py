@@ -41,6 +41,8 @@ def test_bert_qa_inference(
     pytorch_output_model = hugging_face_reference_model
 
     question = ["What discipline did Winkelmann create?"]
+    # NOTE(transformers-5.x): tokenizer.batch_encode_plus was removed in transformers 5.x; call the
+    # tokenizer directly (text=..., text_pair=...). Experimental, not run on CI, so left as-is.
     bert_input = tokenizer.batch_encode_plus(
         zip(question, context),
         max_length=128,

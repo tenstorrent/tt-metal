@@ -73,8 +73,9 @@ def run_bert_question_and_answering_inference_squadv2(
     ]
     question = BATCH_SIZE * ["What discipline did Winkelmann create?"]
 
-    inputs = tokenizer.batch_encode_plus(
-        zip(question, context),
+    inputs = tokenizer(
+        text=question,
+        text_pair=context,
         max_length=seq_len,
         padding="max_length",
         # truncation=True,
@@ -214,8 +215,9 @@ def run_bert_question_and_answering_inference(
 
     # encode input context+question strings
     profiler.start(f"processing_input_one")
-    bert_input = tokenizer.batch_encode_plus(
-        zip(question, context),
+    bert_input = tokenizer(
+        text=question,
+        text_pair=context,
         max_length=seq_len,
         padding="max_length",
         truncation=True,

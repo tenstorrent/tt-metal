@@ -95,6 +95,8 @@ def sample_bert_input(
         context = [input_qas["context"]]
         question = [input_qas["question"]]
 
+        # NOTE(transformers-5.x): tokenizer.batch_encode_plus was removed in transformers 5.x; call the
+        # tokenizer directly (text=..., text_pair=...). Experimental, not run on CI, so left as-is.
         bert_input = tokenizer.batch_encode_plus(
             zip(question, context),
             max_length=seq_len,
