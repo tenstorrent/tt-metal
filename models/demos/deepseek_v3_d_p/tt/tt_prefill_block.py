@@ -191,6 +191,7 @@ class TtPrefillBlock(LightweightModule):
         routed_expert_weights_dtype=ttnn.bfloat4_b,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
+        use_fp8_compression: bool = False,
         weight_cache_path: Optional[Path] = None,
         is_chunked: bool = False,
         slot_num: int = 1,
@@ -281,6 +282,7 @@ class TtPrefillBlock(LightweightModule):
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
+                use_fp8_compression=use_fp8_compression,
                 weight_cache_path=weight_cache_path,
                 layer_idx=layer_idx,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
@@ -311,6 +313,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype,
         shared_expert_weights_dtype,
         dispatch_buffer_capacity_factor,
+        use_fp8_compression=False,
         weight_cache_path=None,
         layer_idx=0,
     ):
@@ -361,6 +364,7 @@ class TtPrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
             overlap_shared_expert_with_dispatch=True,
+            use_fp8_compression=use_fp8_compression,
         )
 
     def forward(

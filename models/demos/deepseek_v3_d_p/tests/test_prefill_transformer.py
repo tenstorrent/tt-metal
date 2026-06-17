@@ -156,11 +156,16 @@ def run_model(
     is_ci_v2_env,
     tokenizer,
     request,
+    use_fp8_compression=False,
 ):
     torch.manual_seed(42)
 
     if use_pretrained and not variant.supports_pretrained:
         pytest.skip(f"{variant.name}: pretrained weights not wired")
+
+    # FP8 compression is validated locally; skip the fp8 variant in CI to save time.
+    if (is_ci_env or is_ci_v2_env) and use_fp8_compression:
+        pytest.skip("Skip use_fp8_compression test in CI — runnable locally for fp8 validation")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -394,6 +399,7 @@ def run_model(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
+        use_fp8_compression=use_fp8_compression,
         weight_cache_path=effective_cache_path,
         lm_head_is_column_parallel=True,
     )
@@ -918,6 +924,7 @@ def run_model(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("use_fp8_compression", [False, True], ids=["bf16", "fp8"])
 @pytest.mark.timeout(0)
 def test_ds_prefill_transformer(
     variant,
@@ -944,6 +951,7 @@ def test_ds_prefill_transformer(
     is_ci_v2_env,
     tokenizer,
     request,
+    use_fp8_compression,
 ):
     run_model(
         variant,
@@ -970,6 +978,7 @@ def test_ds_prefill_transformer(
         is_ci_v2_env,
         tokenizer,
         request,
+        use_fp8_compression=use_fp8_compression,
     )
 
 
@@ -1036,6 +1045,7 @@ def test_ds_prefill_transformer(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("use_fp8_compression", [False, True], ids=["bf16", "fp8"])
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer(
     variant,
@@ -1062,6 +1072,7 @@ def test_kimi_prefill_transformer(
     is_ci_v2_env,
     tokenizer,
     request,
+    use_fp8_compression,
 ):
     run_model(
         variant,
@@ -1088,4 +1099,5 @@ def test_kimi_prefill_transformer(
         is_ci_v2_env,
         tokenizer,
         request,
+        use_fp8_compression=use_fp8_compression,
     )

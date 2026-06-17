@@ -33,7 +33,10 @@ void validate_tensor_specs(const Tensor& tensor, const std::string& name) {
 }  // namespace
 
 PerTokenCastBackDeviceOperation::program_factory_t PerTokenCastBackDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t&) {
+    if (attrs.masked) {
+        return MaskedPerTokenCastBackProgramFactory{};
+    }
     return PerTokenCastBackProgramFactory{};
 }
 
@@ -84,19 +87,26 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     const auto& scale_shape = input_scale.logical_shape();
     const auto rank = e4m3_shape.size();
     TT_FATAL(rank >= 2, "per_token_cast_back: input_e4m3 rank must be >= 2");
-    TT_FATAL(
-        e4m3_shape.size() == scale_shape.size(),
-        "per_token_cast_back: input_e4m3 ({}D) and input_scale ({}D) must have the same rank",
-        e4m3_shape.size(),
-        scale_shape.size());
 
-    for (size_t i = 0; i + 1 < e4m3_shape.size(); ++i) {
+    // In the plain path each e4m3 row r uses scale row r, so the two tensors must agree on rank and
+    // all leading (row) dims. In masked mode the scale is gathered by metadata token_idx and lives in
+    // the original-token space (independent of the dispatch buffer's token dim), so that coupling does
+    // not apply — only the per-128-block width relation below is enforced.
+    if (!attrs.masked) {
         TT_FATAL(
-            e4m3_shape[i] == scale_shape[i],
-            "per_token_cast_back: leading dim {} mismatch ({} vs {})",
-            i,
-            e4m3_shape[i],
-            scale_shape[i]);
+            e4m3_shape.size() == scale_shape.size(),
+            "per_token_cast_back: input_e4m3 ({}D) and input_scale ({}D) must have the same rank",
+            e4m3_shape.size(),
+            scale_shape.size());
+
+        for (size_t i = 0; i + 1 < e4m3_shape.size(); ++i) {
+            TT_FATAL(
+                e4m3_shape[i] == scale_shape[i],
+                "per_token_cast_back: leading dim {} mismatch ({} vs {})",
+                i,
+                e4m3_shape[i],
+                scale_shape[i]);
+        }
     }
 
     const uint32_t H = static_cast<uint32_t>(e4m3_shape[-1]);
@@ -123,6 +133,86 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         "per_token_cast_back: hidden dim H={} exceeds uint32_t range",
         e4m3_shape[rank - 1]);
     TT_FATAL(static_cast<uint32_t>(folded_M) > 0, "per_token_cast_back: row count M must be > 0");
+
+    if (!attrs.masked) {
+        return;
+    }
+
+    // ---- Masked decompress mode validation ----
+    TT_FATAL(
+        tensor_args.expert_token_counts.has_value() && tensor_args.expert_region_offsets.has_value() &&
+            tensor_args.metadata.has_value(),
+        "per_token_cast_back: masked mode requires expert_token_counts, expert_region_offsets, and metadata");
+    TT_FATAL(
+        attrs.experts_per_chip > 0 && attrs.dispatch_group_size > 0,
+        "per_token_cast_back: masked mode requires experts_per_chip>0 ({}) and dispatch_group_size>0 ({})",
+        attrs.experts_per_chip,
+        attrs.dispatch_group_size);
+    // The scale tensor is the dispatch group's gathered per-token scale: its token dim must split
+    // evenly into the dispatch_group_size source slices (ISL = dispatch_group_size * seq_len_per_chip).
+    const uint32_t scale_rows = static_cast<uint32_t>(scale_shape[scale_shape.size() - 2]);
+    TT_FATAL(
+        scale_rows % attrs.dispatch_group_size == 0,
+        "per_token_cast_back: input_scale token dim ({}) must be divisible by dispatch_group_size ({})",
+        scale_rows,
+        attrs.dispatch_group_size);
+
+    const auto& counts = *tensor_args.expert_token_counts;
+    const auto& offsets = *tensor_args.expert_region_offsets;
+    const auto& meta = *tensor_args.metadata;
+
+    validate_tensor_specs(counts, "per_token_cast_back: expert_token_counts");
+    validate_tensor_specs(offsets, "per_token_cast_back: expert_region_offsets");
+    validate_tensor_specs(meta, "per_token_cast_back: metadata");
+
+    TT_FATAL(
+        counts.dtype() == tt::tt_metal::DataType::INT32 || counts.dtype() == tt::tt_metal::DataType::UINT32,
+        "per_token_cast_back: expert_token_counts must be INT32 or UINT32, got {}",
+        counts.dtype());
+    TT_FATAL(
+        offsets.dtype() == tt::tt_metal::DataType::INT32 || offsets.dtype() == tt::tt_metal::DataType::UINT32,
+        "per_token_cast_back: expert_region_offsets must be INT32 or UINT32, got {}",
+        offsets.dtype());
+    TT_FATAL(
+        meta.dtype() == tt::tt_metal::DataType::INT32,
+        "per_token_cast_back: metadata must be INT32, got {}",
+        meta.dtype());
+    TT_FATAL(
+        counts.device() == input_e4m3.device() && offsets.device() == input_e4m3.device() &&
+            meta.device() == input_e4m3.device(),
+        "per_token_cast_back: masked tensors must be on the same device as input_e4m3");
+
+    TT_FATAL(
+        offsets.logical_shape() == counts.logical_shape(),
+        "per_token_cast_back: expert_region_offsets shape {} must match expert_token_counts shape {}",
+        offsets.logical_shape(),
+        counts.logical_shape());
+
+    const uint32_t num_routed_experts = static_cast<uint32_t>(counts.logical_shape()[-1]);
+    TT_FATAL(
+        num_routed_experts % attrs.experts_per_chip == 0,
+        "per_token_cast_back: num_routed_experts ({}) must be divisible by experts_per_chip ({})",
+        num_routed_experts,
+        attrs.experts_per_chip);
+    const uint32_t group_experts = attrs.experts_per_chip * attrs.dispatch_group_size;
+    TT_FATAL(
+        group_experts > 0 && num_routed_experts % group_experts == 0,
+        "per_token_cast_back: num_routed_experts ({}) must be divisible by experts_per_chip*dispatch_group_size ({})",
+        num_routed_experts,
+        group_experts);
+
+    // input_e4m3 is the dispatch buffer (1, 1, T, H); metadata is (1, 1, T, 5). T must match.
+    const auto& meta_shape = meta.logical_shape();
+    TT_FATAL(
+        meta_shape.size() == 4,
+        "per_token_cast_back: metadata must be rank-4 (1,1,T,5), got rank {}",
+        meta_shape.size());
+    TT_FATAL(meta_shape[-1] == 5, "per_token_cast_back: metadata last dim must be 5, got {}", meta_shape[-1]);
+    TT_FATAL(
+        static_cast<uint32_t>(e4m3_shape[-2]) == static_cast<uint32_t>(meta_shape[-2]),
+        "per_token_cast_back: input_e4m3 token dim ({}) must match metadata token dim ({})",
+        e4m3_shape[-2],
+        meta_shape[-2]);
 }
 
 void PerTokenCastBackDeviceOperation::validate_on_program_cache_hit(
@@ -147,13 +237,25 @@ tt::stl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto tile_shape = tensor_args.input_e4m3.tensor_spec().tile().get_tile_shape();
     const auto face_shape = tensor_args.input_e4m3.tensor_spec().tile().get_face_shape();
+    // The masked flag and its layout params select a different program-factory variant (and entirely
+    // different kernels), so they MUST be part of the hash — otherwise a cached plain-mode program
+    // could be wrongly reused for masked inputs. When masked, the routing-tensor shapes also matter.
+    const auto masked_meta_shape =
+        tensor_args.metadata.has_value() ? tensor_args.metadata->logical_shape() : ttnn::Shape{};
+    const auto masked_counts_shape =
+        tensor_args.expert_token_counts.has_value() ? tensor_args.expert_token_counts->logical_shape() : ttnn::Shape{};
     return tt::tt_metal::operation::hash_operation<PerTokenCastBackDeviceOperation>(
         attrs,
+        attrs.masked,
+        attrs.experts_per_chip,
+        attrs.dispatch_group_size,
         tensor_args.input_e4m3.dtype(),
         tensor_args.input_e4m3.memory_config(),
         tensor_args.input_scale.memory_config(),
         tensor_args.input_e4m3.logical_shape(),
         tensor_args.input_scale.logical_shape(),
+        masked_meta_shape,
+        masked_counts_shape,
         tile_shape[0],
         tile_shape[1],
         face_shape[0],
@@ -168,11 +270,26 @@ ttnn::Tensor per_token_cast_back(
     const Tensor& input_e4m3,
     const Tensor& input_scale,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& expert_token_counts,
+    const std::optional<Tensor>& expert_region_offsets,
+    const std::optional<Tensor>& metadata,
+    uint32_t experts_per_chip,
+    uint32_t dispatch_group_size) {
     using OperationType = ttnn::experimental::prim::per_token_cast_back::PerTokenCastBackDeviceOperation;
+    const bool masked = expert_token_counts.has_value();
     auto operation_attributes = OperationType::operation_attributes_t{
-        .output_dtype = output_dtype, .output_memory_config = output_memory_config};
-    auto tensor_args = OperationType::tensor_args_t{.input_e4m3 = input_e4m3, .input_scale = input_scale};
+        .output_dtype = output_dtype,
+        .output_memory_config = output_memory_config,
+        .masked = masked,
+        .experts_per_chip = experts_per_chip,
+        .dispatch_group_size = dispatch_group_size};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_e4m3 = input_e4m3,
+        .input_scale = input_scale,
+        .expert_token_counts = expert_token_counts,
+        .expert_region_offsets = expert_region_offsets,
+        .metadata = metadata};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

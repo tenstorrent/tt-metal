@@ -16,10 +16,15 @@
 //   Phase 2a: tilize fp32 RM input -> tile  (cb_in_tile)
 //   Phase 2c: cb_out_tile = cb_in_tile * bcast(scale)
 //   Phase 3 : untilize cb_out_tile -> row-major output
+//
+// num_blocks is the per-core block count. The plain path knows it on the host and passes it as a
+// runtime arg; the masked path's count depends on device-side expert token counts, so the masked
+// reader publishes it into cb_nblocks. DYNAMIC_NUM_BLOCKS (compile-time) selects the source.
 
 #include <cstdint>
 
 #include "api/compute/common.h"
+#include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
@@ -36,6 +41,9 @@ void kernel_main() {
     // Tile dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
+    // 0: num_blocks comes from runtime arg 0 (plain path). 1: read from cb_nblocks (masked path).
+    constexpr bool DYNAMIC_NUM_BLOCKS = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t cb_nblocks = get_compile_time_arg_val(9);
     constexpr uint32_t block_w = 128;                // BlockW
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
@@ -43,7 +51,15 @@ void kernel_main() {
 
     constexpr uint32_t IDST0 = 0;
 
-    uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
+    uint32_t num_blocks;
+    if constexpr (DYNAMIC_NUM_BLOCKS) {
+        // Masked path: the reader publishes the per-core block count into cb_nblocks (1 page).
+        cb_wait_front(cb_nblocks, 1);
+        num_blocks = read_tile_value(cb_nblocks, 0, 0);
+        cb_pop_front(cb_nblocks, 1);
+    } else {
+        num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
+    }
 
     compute_kernel_hw_startup(cb_input_e4m3, cb_out_fp32);
 
