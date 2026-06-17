@@ -10,6 +10,6 @@ namespace ttnn::operations::experimental {
 
 namespace nb = nanobind;
 
-void bind_dram_core_prefetcher(nb::module_& mod);
+void bind_tensor_prefetcher(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental
