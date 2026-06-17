@@ -15,11 +15,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.vision.classification.vit.common.common import load_torch_model
 from models.demos.vision.classification.vit.common.tt import ttnn_optimized_interleaved_vit
-from models.demos.vision.classification.vit.common.vit_compat import (
-    run_vit_encoder_reference,
-    vit_encoder_layer,
-    vit_encoder_module,
-)
+from models.demos.vision.classification.vit.common.vit_compat import vit_encoder_module
 from models.perf.perf_utils import prep_perf_report
 
 
