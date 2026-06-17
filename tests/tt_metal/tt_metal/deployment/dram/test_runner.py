@@ -388,7 +388,8 @@ async def main():
 
     runs_to_jsonf(logfile, runs, sort_keys=True, indent=4)
 
-    logf.close()
+    if logf:
+        logf.close()
 
 
 if __name__ == "__main__":
