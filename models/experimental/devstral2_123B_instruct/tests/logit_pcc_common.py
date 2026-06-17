@@ -63,12 +63,6 @@ _TALE_OF_TWO_CITIES = _TESTS_DIR.parents[2] / "tt_transformers" / "tests" / "tal
 # Reuse one HF + TT build per mesh for sanity/sweep runs in the same pytest process.
 _logit_pcc_models_cache: dict[tuple[int, int], tuple] = {}
 
-# Full logit-PCC sweep: omit 64 — sole failure through 8k with HF-greedy decode (decode step 4
-# at pos 68, PCC ~0.94). Prefill last logits and decode steps 0–3 pass; 128+ are clean. Partial
-# 128-token block + padded TT prefill vs unpadded HF cache; teacher-forced accuracy at 64 still
-# passes. Demo/agent round prompts to chunk boundaries (see text_demo.py).
-LOGIT_PCC_PREFILL_SWEEP_SEQ_LENGTHS = [n for n in PREFILL_SWEEP_SEQ_LENGTHS if n != 64]
-
 
 def mesh_device_param() -> tuple[int, int]:
     return {
@@ -550,7 +544,6 @@ def run_logit_pcc_sweep(mesh_device, prefill_lengths: list[int]) -> None:
 
 __all__ = [
     "DECODE_GENERATION_LENGTH",
-    "LOGIT_PCC_PREFILL_SWEEP_SEQ_LENGTHS",
     "PCC_REQUIRED",
     "PREFILL_SANITY_SEQ_LENGTHS",
     "PREFILL_SWEEP_SEQ_LENGTHS",
