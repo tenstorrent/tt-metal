@@ -47,15 +47,14 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     r = r * s + f;
     scale = sfpi::setexp(sfpi::vConst0, e);
     bias0 = scale - w;
+    a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
     x0 = r * scale + bias0;
+    y = a * 0.0f + 1.0f;
     x1 = x0 + 1.0f;
     magic_seed = 0xfef30000;
     rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
     t = x1 * rcp + 1.0f;
-    rcp = rcp * t + rcp;
-    a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
-    t = x1 * rcp + 1.0f;
-    y = a * 0.0f + 1.0f;
+    t = t * t + t;
     rcp = rcp * t + rcp;
     v_if(i < 61) {
         y = x0 * rcp;
