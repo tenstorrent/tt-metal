@@ -9,6 +9,9 @@ Cities is tiled when a longer token stream is required. Each sweep point writes 
 ``.refpt`` HF reference (generated on first run) and a JSON result under
 ``tests/teacher_forced_sweep_outputs/`` (``references/`` and ``results/`` subdirs).
 
+HF references use the same **128-token chunked prefill + ``DynamicCache``** path as logit PCC
+(``logit_pcc_common.hf_teacher_forced_top5_reference``), not stateless 1024-token windows.
+
 Run sanity (CI gate, short prefill lengths)::
 
     pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k sanity -v
@@ -49,7 +52,10 @@ from models.experimental.devstral2_123B_instruct.demo.text_demo import (
 from models.experimental.devstral2_123B_instruct.reference.hf_reference_loader import (
     DEVSTRAL2_MODEL_ID,
     load_devstral2_causal_lm,
-    resolve_hf_input_device,
+)
+from models.experimental.devstral2_123B_instruct.tests.logit_pcc_common import (
+    HF_TEACHER_FORCED_REFERENCE_FORMAT_VERSION,
+    hf_teacher_forced_top5_reference,
 )
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
     devstral2_e2e_sweep_model_max_seq_len,
@@ -248,44 +254,37 @@ def _generate_reference_file(
     *,
     total_length: int,
     prefill_len: int,
-    chunk_size: int = 1024,
 ) -> None:
-    """Tokenize (and tile) Tale of Two Cities, run HF forward, save ``reference_tokens`` + ``top5_tokens``."""
+    """Tokenize (and tile) Tale of Two Cities; HF top-5 via chunked ``DynamicCache`` prefill."""
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info(
         f"Generating teacher-forcing reference at {output_file} "
-        f"(total_length={total_length}, prefill_len={prefill_len})"
+        f"(total_length={total_length}, prefill_len={prefill_len}, "
+        f"kv_block={Devstral2Args.kv_block_size}, format_v={HF_TEACHER_FORCED_REFERENCE_FORMAT_VERSION})"
     )
     tokenizer = AutoTokenizer.from_pretrained(DEVSTRAL2_MODEL_ID, trust_remote_code=True)
     encoded_tokens = _build_token_sequence(tokenizer, total_length)
 
     model = load_devstral2_causal_lm()
     model.eval()
-    input_device = resolve_hf_input_device(model)
+
+    top5_tokens = hf_teacher_forced_top5_reference(model, encoded_tokens)
+    expected_rows = total_length - 1
+    if top5_tokens.shape[0] != expected_rows:
+        raise RuntimeError(
+            f"HF top5 reference length mismatch: got {top5_tokens.shape[0]} rows, expected {expected_rows}"
+        )
 
     encoded_tokens_tensor = torch.tensor(encoded_tokens, dtype=torch.long).unsqueeze(0)
-    all_top5_tokens: list[torch.Tensor] = []
-
-    with torch.no_grad():
-        for chunk_start in range(0, total_length - 1, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, total_length)
-            chunk_tokens = encoded_tokens_tensor[:, chunk_start:chunk_end].to(input_device)
-            chunk_next_tokens = encoded_tokens[chunk_start + 1 : chunk_end + 1]
-            actual_chunk_size = min(len(chunk_tokens[0]), len(chunk_next_tokens))
-            chunk_tokens = chunk_tokens[:, :actual_chunk_size]
-
-            logits = model(chunk_tokens).logits
-            probs = torch.softmax(logits, dim=-1)
-            _, chunk_top5_tokens = torch.topk(probs, k=5, dim=-1)
-            all_top5_tokens.append(chunk_top5_tokens.squeeze(0).cpu())
-
     data = {
         "reference_tokens": encoded_tokens_tensor[:, :total_length].clone().cpu(),
-        "top5_tokens": torch.cat(all_top5_tokens, dim=0).cpu(),
+        "top5_tokens": top5_tokens,
         "model_id": DEVSTRAL2_MODEL_ID,
         "total_length": total_length,
         "prefill_len": prefill_len,
+        "reference_format_version": HF_TEACHER_FORCED_REFERENCE_FORMAT_VERSION,
+        "kv_block_size": Devstral2Args.kv_block_size,
         "corpus_extended": total_length > len(_base_corpus_tokens(tokenizer)),
     }
     torch.save(data, output_file)
@@ -303,13 +302,19 @@ def _ensure_reference_file(
         data = torch.load(reference_file, weights_only=False)
         cached_len = int(data.get("total_length", 0))
         cached_prefill = int(data.get("prefill_len", 0))
-        if cached_len == total_length and cached_prefill == prefill_len:
+        cached_format = int(data.get("reference_format_version", 0))
+        if (
+            cached_len == total_length
+            and cached_prefill == prefill_len
+            and cached_format == HF_TEACHER_FORCED_REFERENCE_FORMAT_VERSION
+        ):
             logger.info(f"Using existing reference: {reference_file}")
             return reference_file
         logger.info(
             f"Stale reference at {reference_file} "
-            f"(cached total={cached_len}, prefill={cached_prefill}; "
-            f"want total={total_length}, prefill={prefill_len}); regenerating..."
+            f"(cached total={cached_len}, prefill={cached_prefill}, format={cached_format}; "
+            f"want total={total_length}, prefill={prefill_len}, "
+            f"format={HF_TEACHER_FORCED_REFERENCE_FORMAT_VERSION}); regenerating..."
         )
     else:
         logger.info(f"Reference not found at {reference_file}; generating from HF...")

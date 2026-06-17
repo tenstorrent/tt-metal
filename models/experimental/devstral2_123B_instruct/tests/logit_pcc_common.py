@@ -49,6 +49,8 @@ from models.tt_transformers.tt.ccl import TT_CCL
 PCC_REQUIRED = 0.99
 DECODE_GENERATION_LENGTH = 10
 _SWEEP_TIMEOUT_MARGIN = 1.25
+# Increment when teacher-forced ``.refpt`` layout or HF reference generation changes.
+HF_TEACHER_FORCED_REFERENCE_FORMAT_VERSION = 2
 
 _TESTS_DIR = Path(__file__).resolve().parent
 _TALE_OF_TWO_CITIES = _TESTS_DIR.parents[2] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2"
@@ -251,6 +253,53 @@ def hf_causal_lm_prefill_chunk(
     return out.logits
 
 
+def _top5_from_logits(logits: torch.Tensor) -> torch.Tensor:
+    """Top-5 token ids from a logits row ``[..., vocab]``; returns ``[5]`` on CPU."""
+    probs = torch.softmax(logits.float(), dim=-1)
+    _, top5 = torch.topk(probs, k=5, dim=-1)
+    return top5.reshape(-1, 5)[0].cpu()
+
+
+@torch.no_grad()
+def hf_teacher_forced_top5_reference(
+    causal_lm,
+    token_ids: list[int],
+    *,
+    kv_block_size: int | None = None,
+) -> torch.Tensor:
+    """Top-5 HF predictions at positions ``0 .. len(token_ids)-2`` (teacher-forced reference).
+
+    Uses the same incremental ``DynamicCache`` + ``kv_block_size`` chunked prefill as
+    :func:`hf_prefill_and_decode_logits` (O(chunk) host memory, correct global positions).
+    Returns ``[len(token_ids)-1, 5]`` int64 on CPU.
+    """
+    n = len(token_ids)
+    if n < 2:
+        return torch.empty(0, 5, dtype=torch.long)
+
+    block = kv_block_size if kv_block_size is not None else Devstral2Args.kv_block_size
+    input_device = resolve_hf_input_device(causal_lm)
+    cache = DynamicCache()
+    rows: list[torch.Tensor] = []
+
+    for chunk_start in range(0, n - 1, block):
+        chunk_end = min(chunk_start + block, n - 1)
+        chunk_tokens = token_ids[chunk_start:chunk_end]
+        if not chunk_tokens:
+            continue
+        logits = hf_causal_lm_prefill_chunk(
+            causal_lm,
+            chunk_tokens,
+            chunk_start=chunk_start,
+            cache=cache,
+            input_device=input_device,
+        )
+        for j in range(logits.shape[1]):
+            rows.append(_top5_from_logits(logits[:, j, :]))
+
+    return torch.stack(rows, dim=0)
+
+
 @torch.no_grad()
 def hf_prefill_and_decode_logits(
     causal_lm,
@@ -443,6 +492,8 @@ __all__ = [
     "device_params",
     "e2e_sweep_model_max_seq_len",
     "get_or_build_logit_pcc_models",
+    "hf_teacher_forced_top5_reference",
+    "HF_TEACHER_FORCED_REFERENCE_FORMAT_VERSION",
     "mesh_device_param",
     "run_logit_pcc_at_prefill_len",
     "run_logit_pcc_sweep",
