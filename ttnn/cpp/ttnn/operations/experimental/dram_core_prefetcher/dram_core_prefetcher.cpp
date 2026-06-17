@@ -21,13 +21,14 @@ void queue_dram_core_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
-    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
+    std::optional<uint8_t> cq_id) {
     std::vector<tt::tt_metal::experimental::DramCorePrefetcherInput> inputs;
     inputs.reserve(tensors.size());
     for (const auto& [tensor, block_count] : tensors) {
         inputs.push_back({tensor.mesh_tensor(), block_count});
     }
-    tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(*mesh_device, global_cb, device_subset, inputs);
+    tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(*mesh_device, global_cb, device_subset, inputs, cq_id);
 }
 
 void wait_for_cq_on_dram_core_prefetcher(
