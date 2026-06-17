@@ -105,7 +105,7 @@ struct dp_top_callstack_t {
     dp_top_callstack_t(std::uintptr_t pc, std::uintptr_t ra, std::uintptr_t skip_frames) {
         // We do a few adjustments to make host side parsing easier:
         //  - subtract the kernel offset from both PC and RA (tt-metal specific)
-        //  - rewind RA by 4 extra bytes so it points at the CALL, not the return address
+        //  - rewind RA by 1 byte so it points into the CALL, not the return address
         //  - leave 0xF...F untouched: it's the sentinel for an invalid/unknown address
         std::uint32_t kernel_offset = 0;
 
@@ -117,7 +117,7 @@ struct dp_top_callstack_t {
 #endif
 
         this->pc = pc == UINTPTR_MAX ? pc : (pc - kernel_offset);
-        this->ra = ra == UINTPTR_MAX ? ra : (ra - kernel_offset - 4);
+        this->ra = ra == UINTPTR_MAX ? ra : (ra - kernel_offset - 1);
         this->skip_frames = skip_frames;
     }
 };
