@@ -98,23 +98,16 @@ static void hart_write_bw(int h, uint64_t base_addr, unsigned px, unsigned py, u
     double ns = now_ns() - t0;
     double bytes = (double)iters * slice_bytes;
     g_mbps[h] = bytes * 1e3 / ns;
-    printf(
-        "  hart %d: %.1f MB/s (%.1f ns/flit, %lu iters x %u B)\n",
-        h,
-        bytes * 1e3 / ns,
-        ns / (bytes / 64),
-        iters,
-        slice_bytes);
+    printf("  hart %d: %.1f MB/s (%.1f ns/flit, %lu iters x %u B)\n", h, bytes * 1e3 / ns, ns / (bytes / 64), iters,
+           slice_bytes);
     fflush(stdout);
     _exit(0);
 }
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        fprintf(
-            stderr,
-            "usage: %s <tensix_x> <tensix_y> <config_l1_addr> [secs=3] [nharts=1] [pcie_x] [pcie_y]\n",
-            argv[0]);
+        fprintf(stderr, "usage: %s <tensix_x> <tensix_y> <config_l1_addr> [secs=3] [nharts=1] [pcie_x] [pcie_y]\n",
+                argv[0]);
         return 1;
     }
     unsigned tx = atoi(argv[1]), ty = atoi(argv[2]);
@@ -148,26 +141,17 @@ int main(int argc, char** argv) {
 
     uint32_t slice = fifo_sz / nharts;
     slice &= ~63u;  // flit-align
-    printf(
-        "X280->host PCIe write BW: host_data=0x%lx fifo=%u, %d hart(s), slice=%u B, %.1fs, PCIe (%u,%u)\n",
-        host_data,
-        fifo_sz,
-        nharts,
-        slice,
-        secs,
-        px,
-        py);
+    printf("X280->host PCIe write BW: host_data=0x%lx fifo=%u, %d hart(s), slice=%u B, %.1fs, PCIe (%u,%u)\n",
+           host_data, fifo_sz, nharts, slice, secs, px, py);
     if (slice < 64) {
         fprintf(stderr, "fifo too small for %d harts\n", nharts);
         return 2;
     }
     // each hart's slice must stay within one 2MB window
     if ((host_data & WINDOW_2M_MASK) + (uint64_t)(nharts - 1) * slice + slice > WINDOW_2M_SIZE) {
-        fprintf(
-            stderr,
-            "warning: slices may cross a 2MB window boundary (host_data offset 0x%lx); "
-            "use a smaller fifo or re-run (IOVA varies)\n",
-            host_data & WINDOW_2M_MASK);
+        fprintf(stderr, "warning: slices may cross a 2MB window boundary (host_data offset 0x%lx); "
+                        "use a smaller fifo or re-run (IOVA varies)\n",
+                host_data & WINDOW_2M_MASK);
     }
 
     g_mbps = mmap(0, sizeof(double) * nharts, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);

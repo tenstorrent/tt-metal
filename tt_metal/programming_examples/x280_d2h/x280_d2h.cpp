@@ -310,8 +310,8 @@ int run_serve(
             pages++;
             bytes += page_size;
             if ((pages & 0x3fff) == 0) {  // periodic stop check w/o per-page clock reads
-                if (std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - t0)
-                        .count() >= secs) {
+                if (std::chrono::duration_cast<std::chrono::duration<double>>(
+                        std::chrono::steady_clock::now() - t0).count() >= secs) {
                     break;
                 }
             }
@@ -327,15 +327,10 @@ int run_serve(
         }
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
-    double dt =
-        std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - t0).count();
+    double dt = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - t0).count();
     fmt::print(
         "[serve] drained {} pages ({} B) in {:.3f}s -> {:.1f} MB/s ({:.0f} pages/s)\n",
-        pages,
-        bytes,
-        dt,
-        bytes / 1e6 / dt,
-        pages / dt);
+        pages, bytes, dt, bytes / 1e6 / dt, pages / dt);
     return 0;
 }
 

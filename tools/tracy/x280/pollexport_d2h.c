@@ -98,14 +98,8 @@ static void* poller(void* p) {
             for (int k = 0; k < flits; k++, w += 8, dst += 8) {
                 uint64_t a0 = w[0], a1 = w[1], a2 = w[2], a3 = w[3];
                 uint64_t a4 = w[4], a5 = w[5], a6 = w[6], a7 = w[7];
-                dst[0] = a0;
-                dst[1] = a1;
-                dst[2] = a2;
-                dst[3] = a3;
-                dst[4] = a4;
-                dst[5] = a5;
-                dst[6] = a6;
-                dst[7] = a7;
+                dst[0] = a0; dst[1] = a1; dst[2] = a2; dst[3] = a3;
+                dst[4] = a4; dst[5] = a5; dst[6] = a6; dst[7] = a7;
             }
             polled += g_slot_bytes;
             if (!full) {
@@ -152,14 +146,8 @@ static void* exporter(void* arg) {
                 volatile uint64_t* d = (volatile uint64_t*)(g_dwin + ((g_host_data + write_ptr) & WINDOW_2M_MASK));
                 const uint64_t* s = (const uint64_t*)(r->buf + (size_t)r->tail * g_slot_bytes);
                 for (uint32_t b = 0; b < page; b += 64, d += 8, s += 8) {
-                    d[0] = s[0];
-                    d[1] = s[1];
-                    d[2] = s[2];
-                    d[3] = s[3];
-                    d[4] = s[4];
-                    d[5] = s[5];
-                    d[6] = s[6];
-                    d[7] = s[7];
+                    d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+                    d[4] = s[4]; d[5] = s[5]; d[6] = s[6]; d[7] = s[7];
                 }
                 volatile uint64_t fence = d[-1];  // drain posted writes before notify
                 (void)fence;
@@ -191,11 +179,10 @@ static void program_window(volatile uint32_t* cfg, int win, uint64_t noc_addr, u
 
 int main(int argc, char** argv) {
     if (argc < 7) {
-        fprintf(
-            stderr,
-            "usage: %s <l1_addr> <secs> <coordfile> <tensix_x> <tensix_y> <config_addr> "
-            "[nbytes=4096] [fifo=0x10000] [page=4096] [pcie_x=2] [pcie_y=0]\n",
-            argv[0]);
+        fprintf(stderr,
+                "usage: %s <l1_addr> <secs> <coordfile> <tensix_x> <tensix_y> <config_addr> "
+                "[nbytes=4096] [fifo=0x10000] [page=4096] [pcie_x=2] [pcie_y=0]\n",
+                argv[0]);
         return 1;
     }
     uint64_t l1_addr = strtoull(argv[1], 0, 0);
@@ -254,16 +241,9 @@ int main(int argc, char** argv) {
     // Read the D2H socket config from the sender core L1 via poller window 0.
     // Requires core 0 == sender (1,2) and l1_addr/cfg_addr in the same 2MB page.
     if (cx[0] != tx || cy[0] != ty || (l1_addr >> WINDOW_2M_SHIFT) != (cfg_addr >> WINDOW_2M_SHIFT)) {
-        fprintf(
-            stderr,
-            "FATAL: need coordfile[0]==sender (%u,%u) and l1_addr/cfg_addr same 2MB page "
-            "(got core0=(%u,%u), l1=0x%lx cfg=0x%lx)\n",
-            tx,
-            ty,
-            cx[0],
-            cy[0],
-            l1_addr,
-            cfg_addr);
+        fprintf(stderr, "FATAL: need coordfile[0]==sender (%u,%u) and l1_addr/cfg_addr same 2MB page "
+                        "(got core0=(%u,%u), l1=0x%lx cfg=0x%lx)\n",
+                tx, ty, cx[0], cy[0], l1_addr, cfg_addr);
         return 2;
     }
     volatile uint32_t* c = (volatile uint32_t*)(wins + (cfg_addr & WINDOW_2M_MASK));
@@ -273,26 +253,11 @@ int main(int argc, char** argv) {
     uint32_t cfg_is_d2h = c[W_IS_D2H];
     g_ackp = (volatile uint32_t*)(wins + ((cfg_addr + 4 * W_BACKED) & WINDOW_2M_MASK));
 
-    printf(
-        "D2H stream: polling %d/%d cores x %uB, fifo=%u page=%u, host_data=0x%lx (host fifo=%u is_d2h=%u), PCIe "
-        "(%u,%u)\n",
-        npoll,
-        ncores,
-        nbytes,
-        fifo,
-        page,
-        g_host_data,
-        cfg_fifo,
-        cfg_is_d2h,
-        px,
-        py);
+    printf("D2H stream: polling %d/%d cores x %uB, fifo=%u page=%u, host_data=0x%lx (host fifo=%u is_d2h=%u), PCIe (%u,%u)\n",
+           npoll, ncores, nbytes, fifo, page, g_host_data, cfg_fifo, cfg_is_d2h, px, py);
     if (!cfg_is_d2h || fifo != cfg_fifo) {
-        fprintf(
-            stderr,
-            "FATAL: config read failed or fifo mismatch (is_d2h=%u, host fifo=%u, arg fifo=%u)\n",
-            cfg_is_d2h,
-            cfg_fifo,
-            fifo);
+        fprintf(stderr, "FATAL: config read failed or fifo mismatch (is_d2h=%u, host fifo=%u, arg fifo=%u)\n",
+                cfg_is_d2h, cfg_fifo, fifo);
         return 2;
     }
     if (nbytes != page) {
@@ -300,16 +265,14 @@ int main(int argc, char** argv) {
     }
     // data + bytes_sent must both sit within one 2MB window from host_data's page base
     if ((g_host_data & WINDOW_2M_MASK) + fifo + 4 > WINDOW_2M_SIZE) {
-        fprintf(
-            stderr,
-            "FATAL: fifo+bytes_sent crosses a 2MB window (host_data off 0x%lx); use smaller fifo / re-run\n",
-            g_host_data & WINDOW_2M_MASK);
+        fprintf(stderr, "FATAL: fifo+bytes_sent crosses a 2MB window (host_data off 0x%lx); use smaller fifo / re-run\n",
+                g_host_data & WINDOW_2M_MASK);
         return 2;
     }
 
     // single RW window to the PCIe tile for both data and bytes_sent
-    g_dwin = mmap(
-        0, WINDOW_2M_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, WINDOW_2M_BASE + (size_t)WIN_PCIE * WINDOW_2M_SIZE);
+    g_dwin = mmap(0, WINDOW_2M_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                  WINDOW_2M_BASE + (size_t)WIN_PCIE * WINDOW_2M_SIZE);
     if (g_dwin == MAP_FAILED) {
         perror("mmap pcie win");
         return 1;
@@ -362,21 +325,11 @@ int main(int argc, char** argv) {
     double poll_mbps = polled / 1e6 / (poll_ns / 1e9);
     double exp_mbps = g_sent / 1e6 / (poll_ns / 1e9);
     printf("3-hart poll + D2H export: %.2fs\n", poll_ns / 1e9);
-    printf(
-        "  POLL  : %.1f MB/s  (%lu snapshots, %.2f us per %d-core grid-pass)\n",
-        poll_mbps,
-        snaps,
-        snaps ? poll_ns / 1e3 / snaps : 0.0,
-        npoll);
-    printf(
-        "  EXPORT: %.1f MB/s  (%lu MB pushed to host over PCIe, %lu flow-control spins)\n",
-        exp_mbps,
-        g_sent / 1000000,
-        g_stall_spins);
-    printf(
-        "  DROP  : %.1f%% (%lu of %lu poll-slots dropped, ring full)\n",
-        100.0 * dropped / (dropped + slots_total ? (dropped + slots_total) : 1),
-        dropped,
-        dropped + slots_total);
+    printf("  POLL  : %.1f MB/s  (%lu snapshots, %.2f us per %d-core grid-pass)\n",
+           poll_mbps, snaps, snaps ? poll_ns / 1e3 / snaps : 0.0, npoll);
+    printf("  EXPORT: %.1f MB/s  (%lu MB pushed to host over PCIe, %lu flow-control spins)\n",
+           exp_mbps, g_sent / 1000000, g_stall_spins);
+    printf("  DROP  : %.1f%% (%lu of %lu poll-slots dropped, ring full)\n",
+           100.0 * dropped / (dropped + slots_total ? (dropped + slots_total) : 1), dropped, dropped + slots_total);
     return 0;
 }

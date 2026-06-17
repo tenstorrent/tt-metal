@@ -92,17 +92,8 @@ int main(int argc, char** argv) {
     unsigned tenc_x = pcie_enc & 0x3f, tenc_y = (pcie_enc >> 6) & 0x3f;
     munmap((void*)w0, WINDOW_2M_SIZE);
 
-    printf(
-        "config @ (%u,%u):0x%lx -> host_data=0x%lx fifo=%u is_d2h=%u pcie_enc=0x%x (translated %u,%u)\n",
-        tx,
-        ty,
-        cfg_addr,
-        host_data,
-        fifo_sz,
-        is_d2h,
-        pcie_enc,
-        tenc_x,
-        tenc_y);
+    printf("config @ (%u,%u):0x%lx -> host_data=0x%lx fifo=%u is_d2h=%u pcie_enc=0x%x (translated %u,%u)\n",
+           tx, ty, cfg_addr, host_data, fifo_sz, is_d2h, pcie_enc, tenc_x, tenc_y);
     if (!is_d2h) {
         fprintf(stderr, "no live D2H socket; start host `hold` first\n");
         return 2;
@@ -118,7 +109,12 @@ int main(int argc, char** argv) {
         {tenc_x, tenc_y, "translated (from enc)"},
         {19, 24, "translated PCIe0 (19,24)"},
     };
-    unsigned winsels[] = {0, 1, 4, 0x10};  // 0,1 direct-IOMMU; 4=bit60 direct; 0x10 via iATU
+    // ONLY direct-IOMMU window-selects (0x00-0x0F). winsel >= 0x10 routes via the
+    // outbound iATU; a READ into an unconfigured iATU window stalls the NIU
+    // forever and wedges the hart + the X280's sshd (observed 2026-06-12 on
+    // bh-qb-05). NEVER scan winsel >= 0x10. 0,1,2 are plain IOVA variants; 4 sets
+    // bit60 (the "non-iATU direct 64-bit" path the writer uses).
+    unsigned winsels[] = {0, 1, 2, 4};
 
     printf("%-26s", "coord \\ winsel");
     for (unsigned i = 0; i < sizeof winsels / sizeof *winsels; i++) {
