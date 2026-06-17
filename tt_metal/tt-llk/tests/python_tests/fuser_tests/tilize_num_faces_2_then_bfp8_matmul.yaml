@@ -1,0 +1,72 @@
+# Regression test for tt-metal#47016 / tt-llk#1161 (Wormhole).
+# Three ops in sequence: a Datacopy warmup that seeds the descriptor z-dim from
+# the matmul's Bfp8_b operands, a num_faces=2 tilize whose uninit rewrites SrcA's
+# z-dim, then a Bfp8_b 4-face matmul reusing the warmup operands. The matmul
+# inherits the stale tilize z-dim, corrupting its BFP exponent decode.
+supported_archs: ["wormhole"]
+
+operands:
+  # BFP8 4-face matmul operands; also reused to seed the descriptor in op 1.
+  - name: "mm_A"
+    dims: [64, 64]
+    format: "Bfp8_b"
+  - name: "mm_B"
+    dims: [64, 64]
+    format: "Bfp8_b"
+  - name: "warmup_out"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "mm_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  # num_faces=2 (16x32) tilize operands that drive the uninit z-dim restore.
+  - name: "tilize_in_A"
+    dims: [64, 64]
+    tile_dimensions: [16, 32]
+    format: "Float16_b"
+  - name: "tilize_in_B"
+    dims: [64, 64]
+    tile_dimensions: [16, 32]
+    format: "Float16_b"
+  - name: "tilize_out"
+    dims: [64, 64]
+    tile_dimensions: [16, 32]
+    format: "Float16_b"
+
+operations:
+  # Op 1: seed SEC0/SEC1 z-dim = 4 via the one-time hw_configure on mm_A/mm_B.
+  - output: "warmup_out"
+    math:
+      - type: "Fpu"
+        src_a: "mm_A"
+        src_b: "mm_B"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "HiFi2"
+    packer: "Packer"
+    block_size: [32, 64]
+
+  # Op 2: tilize a num_faces=2 operand; uninit rewrites only SEC0 (SrcA) z-dim.
+  - output: "tilize_out"
+    math:
+      - type: "Fpu"
+        src_a: "tilize_in_A"
+        src_b: "tilize_in_B"
+        operation: "Datacopy"
+        unpacker: "UnpackerTilizeA"
+        math_fidelity: "HiFi2"
+    packer: "Packer"
+    block_size: [32, 64]
+
+  # Op 3: Bfp8_b matmul that inherits the stale SEC0 z-dim on SrcA.
+  - output: "mm_out"
+    math:
+      - type: "Fpu"
+        src_a: "mm_A"
+        src_b: "mm_B"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    packer: "Packer"
+    block_size: [32, 32]

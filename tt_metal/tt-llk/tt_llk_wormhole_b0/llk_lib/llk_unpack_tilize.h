@@ -532,12 +532,16 @@ inline void _llk_unpack_tilizeA_B_(
 /**
  * @brief Restore unpacker state after a tilize operation.
  *
- * Reverts the tile descriptor Z-dimension to default and rewrites the unpack config (clearing
- * tilize mode) so subsequent ops see a normal tile layout. x-start/x-end is transient and
- * reprogrammed by each operation's init (see tt-llk#1036), so it is not restored here.
+ * Rewrites the unpack config (clearing tilize mode) and the per-context tile x-dim so subsequent
+ * ops see a normal 16x16 face layout. The tile-descriptor z-dim is intentionally NOT touched here:
+ * tilize does not modify it (hw_configure leaves z-dim = the operand's num_faces), and forcing a
+ * value here corrupts a following consumer that needs a different z-dim - notably a compressed
+ * (Bfp8_b) matmul, which sizes its per-tile exponent arrays from z-dim and therefore programs its
+ * own z-dim in _llk_unpack_AB_matmul_init_ (see tt-metal#47016/#47049). x-start/x-end is transient
+ * and reprogrammed by each operation's init (see tt-llk#1036), so it is not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
- * @param num_faces: Number of faces in the tile (1, 2, or 4); restored into the tile descriptor Z-dim.
+ * @param num_faces: Number of faces in the tile (1, 2, or 4); validated for API symmetry with init.
  * @note Call @ref _llk_unpack_tilize_init_ before this function.
  */
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces)
@@ -545,12 +549,6 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Stalling SETDMAREG done by THCON until UNPACK finishes
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-
-    // Restore Z dim to the default operand state set by _llk_unpack_init_:
-    // THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1 - word 1 of the same-named register
-    // z-dim sits in upper 16 bits and is set to unpA_num_faces by _llk_unpack_init_
-    // (y-dim sits in the lower 16 bits and is left untouched by tilize, so we don't restore it)
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
 
     unpack_config_u config   = {0};
     config.f.out_data_format = unpack_dst_format;
