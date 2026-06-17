@@ -8,10 +8,10 @@
 // Replaces ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/
 // device/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads.cpp.
 //
-// Difference vs stock: stock issues `cb_wait(1) / write_tile / barrier /
-// cb_pop(1)` once per tile (96 barriers per block-of-96-tiles). This
-// kernel waits on a whole Q/K/V chunk at once, fires all the async writes,
-// then issues a single barrier per chunk (3 barriers per block).
+// Difference vs stock: stock performs a one-tile CB wait/write/barrier/pop
+// sequence for each tile (96 barriers per block-of-96-tiles). This kernel waits
+// on a whole Q/K/V chunk at once, fires all the async writes, then issues a
+// single barrier per chunk (3 barriers per block).
 //
 // Compile-time args:
 //   0: q_out_h_tiles       (= S / TILE_H, e.g. 16)
@@ -35,6 +35,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // ---- runtime args ----
@@ -69,61 +72,65 @@ void kernel_main() {
     const auto sk = TensorAccessor(k_args, k_tensor_addr);
     const auto sv = TensorAccessor(v_args, v_tensor_addr);
 
+    // Device 2.0 data-movement API (see device_api_migration_guide.md).
+    Noc noc;
+    CircularBuffer cb(cb_id);
+
     // ---- main loop ----
     for (uint32_t block = 0; block < num_blocks; block++) {
         // ---- Q chunk ----
-        cb_wait_front(cb_id, q_chunk_tiles);
+        cb.wait_front(q_chunk_tiles);
         {
-            uint32_t l1_read_addr = get_read_ptr(cb_id);
+            uint32_t l1_read_offset = 0;
             uint32_t row_base = q_out_tile_id;  // starts at this h_dim's row in head 0
             for (uint32_t c_dim = 0; c_dim < num_q_heads; c_dim++) {
                 uint32_t dst = row_base;
                 for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                    noc_async_write_tile(dst, sq, l1_read_addr);
-                    l1_read_addr += tile_size_bytes;
+                    noc.async_write(cb, sq, tile_size_bytes, {.offset_bytes = l1_read_offset}, {.page_id = dst});
+                    l1_read_offset += tile_size_bytes;
                     dst++;
                 }
                 row_base += q_out_HtWt;
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id, q_chunk_tiles);
+        noc.async_write_barrier();
+        cb.pop_front(q_chunk_tiles);
 
         // ---- K chunk (same layout, kv_num_heads × w_tiles) ----
-        cb_wait_front(cb_id, kv_chunk_tiles);
+        cb.wait_front(kv_chunk_tiles);
         {
-            uint32_t l1_read_addr = get_read_ptr(cb_id);
+            uint32_t l1_read_offset = 0;
             uint32_t row_base = k_out_tile_id;
             for (uint32_t c_dim = 0; c_dim < num_kv_heads; c_dim++) {
                 uint32_t dst = row_base;
                 for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                    noc_async_write_tile(dst, sk, l1_read_addr);
-                    l1_read_addr += tile_size_bytes;
+                    noc.async_write(cb, sk, tile_size_bytes, {.offset_bytes = l1_read_offset}, {.page_id = dst});
+                    l1_read_offset += tile_size_bytes;
                     dst++;
                 }
                 row_base += q_out_HtWt;
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id, kv_chunk_tiles);
+        noc.async_write_barrier();
+        cb.pop_front(kv_chunk_tiles);
 
         // ---- V chunk ----
-        cb_wait_front(cb_id, kv_chunk_tiles);
+        cb.wait_front(kv_chunk_tiles);
         {
-            uint32_t l1_read_addr = get_read_ptr(cb_id);
+            uint32_t l1_read_offset = 0;
             uint32_t row_base = v_out_tile_id;
             for (uint32_t c_dim = 0; c_dim < num_kv_heads; c_dim++) {
                 uint32_t dst = row_base;
                 for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
-                    noc_async_write_tile(dst, sv, l1_read_addr);
-                    l1_read_addr += tile_size_bytes;
+                    noc.async_write(cb, sv, tile_size_bytes, {.offset_bytes = l1_read_offset}, {.page_id = dst});
+                    l1_read_offset += tile_size_bytes;
                     dst++;
                 }
                 row_base += q_out_HtWt;
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id, kv_chunk_tiles);
+        noc.async_write_barrier();
+        cb.pop_front(kv_chunk_tiles);
 
         // ---- Advance to the next h_dim within this batch (mirror stock semantics) ----
         q_out_h_dim++;

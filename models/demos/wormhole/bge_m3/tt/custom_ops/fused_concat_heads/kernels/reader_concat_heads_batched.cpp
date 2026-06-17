@@ -8,9 +8,9 @@
 // Replaces ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/
 // device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads.cpp.
 //
-// Difference vs stock: stock issues `cb_reserve(1) / read_tile / barrier /
-// cb_push(1)` once per tile (num_heads * head_dim_tiles barriers per block).
-// This kernel issues a single reserve/barrier/push per Q,K,V-style block.
+// Difference vs stock: stock performs a one-tile CB reserve/read/barrier/push
+// sequence for each tile (num_heads * head_dim_tiles barriers per block). This
+// kernel issues a single reserve/barrier/push per Q,K,V-style block.
 //
 // For BGE-M3 B1/S512 each block is 16 heads * 2 head_dim_tiles = 32 tiles,
 // dropping the reader's per-block NoC sync count from 32 to 1.
