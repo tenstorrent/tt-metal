@@ -1697,56 +1697,14 @@ inline constexpr bool chain_no_reconfig_requested_v = chain_no_reconfig_requeste
 
 namespace detail {
 
-// SFINAE wrappers for the per-block lifecycle hooks — user-defined chain elements
-// (custom CbReaderTag / PackTileTag types declared in individual kernel sources)
-// may not provide wait_per_block / pop_per_block / reserve_per_block / push_per_block.
-// These no-op when the method is absent so the chain pipeline keeps working with
-// elements that don't implement the per-block (chunked) lifecycle hooks.
-
-template <class E, class = void>
-struct has_wait_per_block : std::false_type {};
-template <class E>
-struct has_wait_per_block<E, std::void_t<decltype(std::declval<const E&>().wait_per_block(0u))>>
-    : std::true_type {};
-
-template <class E, class = void>
-struct has_pop_per_block : std::false_type {};
-template <class E>
-struct has_pop_per_block<E, std::void_t<decltype(std::declval<const E&>().pop_per_block(0u))>>
-    : std::true_type {};
-
-template <class E, class = void>
-struct has_reserve_per_block : std::false_type {};
-template <class E>
-struct has_reserve_per_block<E, std::void_t<decltype(std::declval<const E&>().reserve_per_block(0u))>>
-    : std::true_type {};
-
-template <class E, class = void>
-struct has_push_per_block : std::false_type {};
-template <class E>
-struct has_push_per_block<E, std::void_t<decltype(std::declval<const E&>().push_per_block(0u))>>
-    : std::true_type {};
-
-template <class E>
-ALWI void elem_wait_per_block(const E& e, uint32_t inner_count) {
-    if constexpr (has_wait_per_block<E>::value) e.wait_per_block(inner_count);
-    else (void)e, (void)inner_count;
-}
-template <class E>
-ALWI void elem_pop_per_block(const E& e, uint32_t inner_count) {
-    if constexpr (has_pop_per_block<E>::value) e.pop_per_block(inner_count);
-    else (void)e, (void)inner_count;
-}
-template <class E>
-ALWI void elem_reserve_per_block(const E& e, uint32_t inner_count) {
-    if constexpr (has_reserve_per_block<E>::value) e.reserve_per_block(inner_count);
-    else (void)e, (void)inner_count;
-}
-template <class E>
-ALWI void elem_push_per_block(const E& e, uint32_t inner_count) {
-    if constexpr (has_push_per_block<E>::value) e.push_per_block(inner_count);
-    else (void)e, (void)inner_count;
-}
+// Per-block (chunked) lifecycle hooks — wait_per_block / pop_per_block / reserve_per_block /
+// push_per_block — are dispatched directly on the element, same as wait_per_tile / wait_upfront.
+// Every cb-reader / pack element defines them as policy-gated `if constexpr` bodies (a no-op that
+// compiles to nothing when the element's lifecycle doesn't chunk), exactly like the per_tile /
+// upfront hooks every element already defines for the policies it doesn't use. They're only ever
+// called inside the `is_cb_reader_op_v` / `is_pack_tile_op_v` branches, so only element kinds that
+// define them are instantiated. A new element kind must define them (loud compile error if not) —
+// no SFINAE no-op that would let a needed chunked wait/pop silently vanish.
 
 // init() dispatch convention — the compute-cohort init is emitted on the element
 // *instance* (`elem.init()`), exactly like `exec`, so an init can read the struct's
@@ -1983,7 +1941,7 @@ ALWI void elem_apply_compute(
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
         // InputLifecycle::Streaming wait fires per-tile (Block walks); upfront wait is idempotent.
         elem.wait_per_tile(i_flat + inner_count);
-        elem_wait_per_block(elem, inner_count);
+        elem.wait_per_block(inner_count);
         elem.wait_upfront(Ht, Wt);
         if constexpr (EmitMathInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
@@ -2005,7 +1963,7 @@ ALWI void elem_apply_compute(
             }
         }
         elem.pop_per_tile(i_flat);
-        elem_pop_per_block(elem, inner_count);
+        elem.pop_per_block(inner_count);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
         if constexpr (EmitSfpuInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
@@ -2032,13 +1990,13 @@ ALWI void elem_apply_pack(
         (void)Ht; (void)Wt;  // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
         emit_per_stage_pack_reconfig<ElemT, I, Es...>();
         elem.reserve_per_tile(i_flat);
-        elem_reserve_per_block(elem, inner_count);
+        elem.reserve_per_block(inner_count);
         for (uint32_t j = 0; j < inner_count; ++j) {
             const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
             elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
         }
         elem.push_per_tile(i_flat);
-        elem_push_per_block(elem, inner_count);
+        elem.push_per_block(inner_count);
     } else {
         (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
         (void)chain_lane_width; (void)Ht; (void)Wt;
