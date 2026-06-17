@@ -458,7 +458,7 @@ jobs:
       - name: 📀 Install vLLM
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: ${{ env.FILE_INSTALL_LOG }}
+          log-file: output/vllm_install.log
           run: |
             VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
             if [ -d vllm/plugins/vllm-tt-plugin ]; then
@@ -595,7 +595,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: ${{ env.FILE_BENCHMARK_LOG }}
+          log-file: output/vllm_benchmark.log
           run: |
             if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
               ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
@@ -639,7 +639,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
+          log-file: output/vllm_benchmark_structured_output.log
           run: |
             if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
               ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
@@ -682,7 +682,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: ${{ env.FILE_MULTIMODAL_TEST_LOG }}
+          log-file: output/vllm_multimodal_test.log
           run: |
             curl http://localhost:8000/v1/chat/completions \
               -H "Content-Type: application/json" \
@@ -729,7 +729,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: ${{ env.FILE_SAMPLING_TESTS_LOG }}
+          log-file: output/vllm_sampling_tests.log
           run: |
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
             if [ -n "$FILTER" ]; then
