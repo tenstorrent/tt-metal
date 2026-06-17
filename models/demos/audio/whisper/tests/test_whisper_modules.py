@@ -251,7 +251,10 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
     embed_dim = config.d_model
     torch_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32)
 
-    torch_output = model(torch_hidden_states, attention_mask=None, layer_head_mask=None)[0]
+    # transformers 5.x WhisperEncoderLayer.forward returns a Tensor (4.x returned a tuple);
+    # unwrap only when it's a tuple so `[0]` doesn't index a tensor dimension.
+    _enc_out = model(torch_hidden_states, attention_mask=None, layer_head_mask=None)
+    torch_output = _enc_out[0] if isinstance(_enc_out, tuple) else _enc_out
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -399,7 +402,10 @@ def test_decoder_layer(
         (batch_size, 1, decoder_sequence_size, decoder_sequence_size), -0.1, 0.1, dtype=torch.float32
     )
 
-    torch_output = model(torch_hidden_states, attention_mask, torch_encoder_hidden_states)[0]
+    # transformers 5.x WhisperDecoderLayer.forward returns a Tensor (4.x returned a tuple);
+    # unwrap only when it's a tuple so `[0]` doesn't index a tensor dimension.
+    _dec_out = model(torch_hidden_states, attention_mask, torch_encoder_hidden_states)
+    torch_output = _dec_out[0] if isinstance(_dec_out, tuple) else _dec_out
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
