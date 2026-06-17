@@ -769,43 +769,52 @@ _CHUNKED_SCENARIOS = (
     [(f"rot-{rid}", dict(iters_isl=lst)) for rid, lst in zip(ROTATED_VALID_IDS, ROTATED_VALID_LISTS)]
     # One representative case packing the most sp=8 edges: iter0 aligned partial, iter1 rotated
     # chip-aligned (offset=0) partial, iter2 rotated mid-chip straddle (offset=32) + multi-slab + full.
-    + [("maxedge", dict(iters_isl=[2560, 2592, 5120]))]
+    # NOTE: ids must not nest as substrings, else `-k <id>` can't isolate one (pytest -k is substring).
+    # Convention: "-Nu" = N users. "maxedge"/"deep" are intentional families (single- + multi-user).
+    + [("maxedge-1u", dict(iters_isl=[2560, 2592, 5120]))]
     + [
         ("production-50k+5k", dict(iters_isl=[5120] * 11)),
-        ("multiuser-U2", dict(iters_isl=[5120] * 4, num_users=2)),
+        ("fullchunk-2u", dict(iters_isl=[5120] * 4, num_users=2)),
         # Multi-user WITH padding/rotation: each user runs the full maxedge pattern in its own slot
         # (partition splits [..]*2 into one maxedge per user), exercising rotation + cross-user isolation.
-        ("maxedge-multiuser-U2", dict(iters_isl=[2560, 2592, 5120] * 2, num_users=2)),
+        ("maxedge-2u", dict(iters_isl=[2560, 2592, 5120] * 2, num_users=2)),
         ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
-        ("deep-multiuser-U2", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
+        ("deep-2u", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
     ]
 )
 
 
-# TODO(FABRIC_2D): the BH Galaxy 8x4 prefill target moved to FABRIC_2D (#45595, which fixed the MLA
-# ring all-gather writer this path uses). Add a fabric2d device_params variant (router config +
-# RELAXED_INIT + per-mesh num_links, via conftest's FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS) in a
-# follow-up, validated on BH Galaxy. This test currently covers FABRIC_1D (line + ring) only.
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
     ],
-    ids=["line", "ring"],
+    ids=["line", "ring", "fabric2d"],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["deepseek_v3", "kimi"])
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["dsv3", "kimi"])
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_params, variant):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
     and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
     DEEPSEEK_MLA_TRACE_DIR), or run with no reference ('func'). Select with e.g.
-    -k 'maxedge and trace and 8x4'. See _run_chunked_prefill.
+    -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
     Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
     KIMI_K2_6_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
