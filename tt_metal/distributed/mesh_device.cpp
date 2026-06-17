@@ -1257,6 +1257,11 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
 
+    // Drop any DRAM-core prefetcher requests captured under this trace so they don't outlive it.
+    if (dram_core_prefetcher_) {
+        dram_core_prefetcher_->release_trace(trace_id);
+    }
+
     tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
     // Only enable allocations once all captured traces are released
@@ -1346,6 +1351,12 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
         *trace_id,
         this->mesh_id_,
         *(active_sub_device_manager->id()));
+    // Re-send any DRAM-core prefetcher requests captured during this trace's capture, before
+    // dispatching the trace so the host worker can begin filling the GCB as the consuming
+    // program is dispatched. No-op (and no manager created) when the prefetcher is unused.
+    if (dram_core_prefetcher_) {
+        dram_core_prefetcher_->replay_trace(trace_id);
+    }
     mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
 }
 
