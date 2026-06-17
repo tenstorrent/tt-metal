@@ -222,6 +222,7 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
  */
 inline void _llk_pack_untilize_uninit_()
 {
+    llk::san::operation_uninit<llk::san::Operation::PackUntilize>();
 }
 
 /**
