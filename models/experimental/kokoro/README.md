@@ -75,25 +75,30 @@ PL-BERT / predictor tests use the `mesh_device` fixture in `tests/conftest.py`. 
 
 ## End-to-end quality metrics
 
-Sample-wise waveform PCC is a poor free-run gate for a TTS vocoder (a tiny phase/source drift collapses it while the speech is perceptually identical), so the pipeline is scored with three perceptual / intelligibility metrics. All three generate audio on the Blackhole device and compare against the matched torch CPU-reference `KModel` for the same text/voice/seed:
+Sample-wise waveform PCC is a poor free-run gate for a TTS vocoder (a tiny phase/source drift collapses it while the speech is perceptually identical), so the pipeline is scored with four perceptual / intelligibility metrics. All four generate audio on the Blackhole device and compare against the matched torch CPU-reference `KModel` for the same text/voice/seed:
 
 | metric | what it measures | gate | test |
 |--------|------------------|------|------|
 | **ASR WER** | intelligibility — Whisper-small transcribes the TT audio; word error rate vs the prompt | < 30% | `test_tt_kmodel_asr_wer.py` |
 | **mel PCC** | spectral parity — Pearson corr of the 80-band log-mel spectrogram vs the reference (phase-invariant) | > 0.95 | `test_tt_kmodel_mel_pcc.py` |
 | **speaker cosine (SECS)** | speaker-identity parity — cosine of WavLM x-vector embeddings vs the reference (phase- & duration-invariant) | > 0.95 | `test_tt_kmodel_speaker_cosine.py` |
+| **cFW2VD** ↓ | perceptual parity — Fréchet (Wasserstein-2) distance between the wav2vec2 feature distributions of the two utterances (lower is better, 0 = identical) | < 8.0 | `test_tt_kmodel_cfw2vd.py` |
 
 Measured on `af_heart`, text `"Hello world this is a speech synthesis test."`, seed 0, deterministic (2.95 s audio, 44 phonemes), across the full vocoder-fallback / STFT-formulation matrix:
 
-| config | disable_complex | stft fb | phase fb | ASR WER | mel PCC | SECS |
-|--------|:---:|:---:|:---:|:---:|:---:|:---:|
-| `phase_fallback` | False | off | on | 0.00% | 0.9929 | 0.9922 |
-| `stft_and_phase_fallback` (config E) | False | on | on | 0.00% | 0.9928 | 0.9892 |
-| `no_fallback` | False | off | off | 0.00% | 0.9722 | 0.9571 |
-| `dc_phase_fallback` | True | off | on | 0.00% | 0.9932 | 0.9960 |
-| `dc_no_fallback` | True | off | off | 0.00% | 0.9724 | 0.9686 |
+| config | disable_complex | stft fb | phase fb | ASR WER ↓ | mel PCC ↑ | SECS ↑ | cFW2VD ↓ |
+|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `phase_fallback` | False | off | on | 0.00% | 0.9929 | 0.9922 | 1.54 |
+| `stft_and_phase_fallback` (config E) | False | on | on | 0.00% | 0.9928 | 0.9892 | 2.06 |
+| `no_fallback` | False | off | off | 0.00% | 0.9722 | 0.9571 | 3.64 |
+| `dc_phase_fallback` | True | off | on | 0.00% | 0.9932 | 0.9960 | 0.91 |
+| `dc_no_fallback` | True | off | off | 0.00% | 0.9724 | 0.9686 | 4.84 |
 
-All 15 runs PASS every gate. WER is 0.00% for every config (Whisper transcribes the audio verbatim) — speech stays fully intelligible even on the degraded `no_fallback` path, which is why ASR WER is a far more meaningful free-run gate than waveform PCC (≈0.28 there). mel PCC and SECS are tighter, frame-/timbre-level metrics: the CPU-fallback configs sit at ~0.993 / ~0.99, while the no-fallback configs drop to ~0.972 / ~0.957 — the residual BH-BF16 harmonic-source degradation surfaces here but stays above the 0.95 floor.
+All 20 runs PASS every gate. WER is 0.00% for every config (Whisper transcribes the audio verbatim) — speech stays fully intelligible even on the degraded `no_fallback` path, which is why ASR WER is a far more meaningful free-run gate than waveform PCC (≈0.28 there). mel PCC, SECS and cFW2VD are tighter, frame-/distribution-level metrics: the CPU-fallback configs sit at ~0.993 mel / ~0.99 SECS / ~1-2 cFW2VD, while the no-fallback configs drop to ~0.972 mel / ~0.957 SECS / ~3.6-4.8 cFW2VD — the residual BH-BF16 harmonic-source degradation surfaces here but every config stays comfortably inside its gate.
+
+**What cFW2VD evaluates and whether the port is in range.** cFW2VD is the *conditional* (paired, per-utterance) Fréchet wav2vec Distance: each utterance's frame-wise wav2vec2 hidden states are modelled as a Gaussian `N(μ, Σ)`, and the metric is the Wasserstein-2 distance between the reference and generated Gaussians — i.e. how far the TT audio's self-supervised *feature distribution* drifts from the reference's. It is phase-invariant and, being conditioned on matched content, meaningful for a single utterance pair (unlike corpus-level FAD/FW2VD). Lower is better; 0 means identical feature distributions. The ported Kokoro is well in range: the production fallback configs land at **0.91–2.06**, and even the fully on-device configs stay at **3.64–4.84** — all far below the `< 8.0` gate. The ordering mirrors mel PCC / SECS (phase-fallback paths best, fully on-device worst), confirming cFW2VD tracks the same underlying harmonic-source degradation rather than adding noise.
+
+**Choosing the threshold.** cFW2VD is a distance, so a similarity-style floor (`> 0.95`) does not apply — the gate is a ceiling. The worst observed config (`dc_no_fallback`) is 4.84 and the recommended config E is 2.06. The gate is set to **8.0**: ~1.65× headroom over the worst observed config (absorbing the run-to-run variance of the per-utterance Gaussian fit) while still catching a real perceptual regression — a value of ~5+ on a fallback config would flag a genuine divergence.
 
 Run them with:
 
@@ -103,6 +108,7 @@ export PYTHONPATH=$(pwd)
 pytest -s models/experimental/kokoro/tests/test_tt_kmodel_asr_wer.py        --timeout=3600
 pytest -s models/experimental/kokoro/tests/test_tt_kmodel_mel_pcc.py        --timeout=3600
 pytest -s models/experimental/kokoro/tests/test_tt_kmodel_speaker_cosine.py --timeout=3600
+pytest -s models/experimental/kokoro/tests/test_tt_kmodel_cfw2vd.py         --timeout=3600
 
 # Single config (recommended config E only): add -k stft_and_phase_fallback
 ```
@@ -206,7 +212,7 @@ stft-on-top-of-phase increment     = +0.038   (STFT adds the final touch)
 | `rad_frac` | `(fn / sample_rate) % 1` — per-sample phase step, wrapped to `[0, 1)` |
 | PCC | correlation of the on-device tensor vs the CPU-float32 reference; `1.0` = identical |
 
-**What it proves:** `rad_frac` shows a low PCC (~0.54) end-to-end, which looks like a broken `% 1` (modulo) or `> 0` (threshold) op. Both ops are faithful — the drop is a sub-Hz disagreement in the **input** `f0_upsampled` that the discontinuous `> 0` turns into voicing-mask flips, which `rad_frac` then inherits.
+**What it proves:** `rad_frac` shows a low PCC (~0.54) end-to-end, which looks like a broken `% 1` (modulo) or `> 0` (threshold) op. Both ops are faithful — the drop is a sub-Hz disagreement in the **input** `f0_upsampled`. Note that `uv` is **not** an input to `rad_frac` (`rad_frac = (f0·harmonics / sr) % 1` depends only on `f0`); the two are *siblings* of the same `f0`. `rad_frac` is exactly `0` wherever `f0 ≤ 0` and small-positive where `f0 > 0`, so its zero/nonzero support pattern coincides with `uv`'s mask. The same `f0`-sign flips that move `uv` therefore move `rad_frac` at the **same frames** — a shared upstream cause, not `uv` feeding into `rad_frac`.
 
 **Method — three checks on the real kmodel `f0_upsampled`** (text `"Hello from Tenstorrent."`):
 
@@ -217,9 +223,9 @@ stft-on-top-of-phase increment     = +0.038   (STFT adds the final touch)
 | `f0_input` | 0.99995 | ref vs TT F0 correlate tightly (sub-Hz disagreement) |
 | `fn_harmonics` | 0.99996 | smooth op — the F0 error is not amplified |
 | `uv_mask` | **0.57** | `f0 > 0` flips near the voicing boundary (a discontinuous step) |
-| `rad_frac` | **0.54** | inherits the `uv` drop — no new cliff at the modulo |
+| `rad_frac` | **0.54** | ≈0 on unvoiced frames, so the same `f0`-sign flips that move `uv` move it too (common cause, **not** a `uv` input) — no new cliff at the modulo |
 
-**B. Shared-input** (both paths fed `f0u_ref`) — isolates the modulo: `rad_frac` PCC = **1.0000** (MAE ~1e-5). On matched input `ttnn.remainder` is bit-faithful; at Kokoro scale `fn/sr ≈ 0.008` sits far from any wrap point, so `% 1` is a near-identity.
+**B. Shared-input** (both paths fed `f0u_ref`) — isolates the modulo: `rad_frac` PCC = **1.0000** (MAE ~1e-5). On matched input `ttnn.remainder` is bit-faithful; at Kokoro scale `fn/sr ≈ 0.008` sits far from any wrap point, so `% 1` is a near-identity. This also confirms the path-faithful drop in A is **not** modulo sensitivity: feed matched `f0` and `rad_frac` is perfect, so the only thing moving it is the `f0`-sign support flipping (the same cause as `uv`).
 
 **C. Threshold torch vs device** — isolates `ttnn.gt`. Building `uv = f0 > 0` on the same `f0u_tt` both ways gives `PCC(uv_device, uv_torch) = 1.0`, and both score the **same 0.567506** against `uv_ref`:
 
