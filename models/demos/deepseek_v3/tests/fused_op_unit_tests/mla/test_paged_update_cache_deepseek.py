@@ -260,7 +260,7 @@ def test_paged_update_cache_verify_aliasing_mesh_sharded_update_idxs(mesh_device
     "device_params",
     [
         {
-            "trace_region_size": 2097152,
+            "trace_region_size": 0,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

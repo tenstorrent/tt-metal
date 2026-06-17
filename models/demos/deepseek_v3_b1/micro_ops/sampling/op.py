@@ -77,9 +77,15 @@ class SamplingOp:
         actual_k = min(k, len(scores_f32))
         topk_values, topk_positions = torch.topk(scores_f32, k=actual_k, sorted=True)
         topk_indices = indices_i64[topk_positions]
-
-        scaled = (topk_values.to(torch.bfloat16) * torch.tensor(1.0 / temperature, dtype=torch.bfloat16)).float()
-        probs = torch.softmax(scaled, dim=-1)
+        inv_temperature = torch.tensor(1.0 / temperature, dtype=torch.bfloat16)
+        scaled = (topk_values.to(torch.bfloat16)).float()
+        # Stable-softmax intermediates -- mirrors the kernel's Steps 1-5
+        # (max -> sub -> exp -> sum). Print the un-normalized exp(scaled - max)
+        # so it lines up with the kernel's exp_cb col 0 dump for direct comparison.
+        scaled_max = scaled.max(dim=-1, keepdim=True).values
+        unnorm_exp = torch.exp((scaled - scaled_max) * inv_temperature)
+        unnorm_exp_sum = unnorm_exp.sum(dim=-1)
+        probs = unnorm_exp / unnorm_exp_sum
         logger.debug(f"Raw Probabilities: {probs}")
 
         cum_probs = torch.cumsum(probs, dim=-1)
@@ -321,15 +327,24 @@ class SamplingOp:
         sum_cb = 5
         scaler_cb = 6
         softmax_exp_cb = 7
-        temp_cb = 8
+        probs_out_cb = 8
         softmax_sub_cb = 9
         rand_cb = 10
         topk_in_scores_cb = 11
         topk_in_indices_cb = 12
         topk_out_scores_cb = 13
         topk_out_indices_cb = 14
-        semaphore_id = 0
-        local_ready_semaphore_id = 1
+        mask_cb = 17
+        device = scores_tensor.device()
+        full_grid = device.compute_with_storage_grid_size()
+        sem_core_range = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))]
+        )
+        receiver_global_sem = ttnn.create_global_semaphore(device, sem_core_range, 0)
+        local_ready_global_sem = ttnn.create_global_semaphore(device, sem_core_range, 0)
+        receiver_semaphore_addr = int(ttnn.get_global_semaphore_address(receiver_global_sem))
+        local_ready_semaphore_addr = int(ttnn.get_global_semaphore_address(local_ready_global_sem))
+
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
         uint32_tile_size = 4 * 32 * 32  # 4096 bytes per uint32 32x32 tile
@@ -359,8 +374,8 @@ class SamplingOp:
             ("sampling_num_senders", num_cores),
             ("sampling_expected_remote_incs", expected_remote_incs),
             ("sampling_winner_cb", winner_cb),
-            ("sampling_receiver_semaphore_id", semaphore_id),
-            ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
+            ("sampling_receiver_semaphore_addr", receiver_semaphore_addr),
+            ("sampling_local_ready_semaphore_addr", local_ready_semaphore_addr),
             ("sampling_mesh_mode", 0),
             ("sampling_stage1_sender", 0),
             ("sampling_stage1_receiver", 0),
@@ -380,7 +395,7 @@ class SamplingOp:
             ("sampling_softmax_out_cb", softmax_out_cb),
             ("sampling_softmax_exp_cb", softmax_exp_cb),
             ("sampling_scaler_cb", scaler_cb),
-            ("sampling_temp_cb", temp_cb),
+            ("sampling_probs_out_cb", probs_out_cb),
             ("sampling_inv_temp_bf16", inv_temp_bf16),
             ("sampling_topk_in_scores_cb", topk_in_scores_cb),
             ("sampling_topk_in_indices_cb", topk_in_indices_cb),
@@ -404,6 +419,10 @@ class SamplingOp:
 
         logger.info(f"num_dests {loop_mcast_num_dests}")
 
+        sampling_enable_metadata_value = 1 if metadata_output_tensor is not None else 0
+        sampling_metadata_address_value = (
+            int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0
+        )
         trisc_named_compile_time_args = [
             ("sampling_softmax_in_cb", softmax_in_cb),
             ("sampling_softmax_out_cb", softmax_out_cb),
@@ -412,7 +431,7 @@ class SamplingOp:
             ("sampling_max_cb", max_cb),
             ("sampling_sum_cb", sum_cb),
             ("sampling_scaler_cb", scaler_cb),
-            ("sampling_temp_cb", temp_cb),
+            ("sampling_probs_out_cb", probs_out_cb),
             ("sampling_rand_cb", rand_cb),
             ("sampling_seed", seed),
             ("sampling_topk_k", k),
@@ -432,10 +451,14 @@ class SamplingOp:
             ("sampling_stage2_row_elements", 0),
             ("sampling_stage2_num_input_tiles", 0),
             ("sampling_num_internal_iterations", num_internal_iterations),
+            ("sampling_mask_cb", mask_cb),
+            ("sampling_enable_metadata", sampling_enable_metadata_value),
+            ("sampling_metadata_address", sampling_metadata_address_value),
+            ("sampling_inv_temp_bf16", inv_temp_bf16),
         ]
         brisc_named_compile_time_args = [
             ("sampling_winner_page_bytes", winner_page_bytes),
-            ("sampling_local_ready_semaphore_id", 1),
+            ("sampling_local_ready_semaphore_addr", local_ready_semaphore_addr),
             ("sampling_topk_k", k),
             ("sampling_softmax_out_cb", softmax_out_cb),
             ("sampling_rand_cb", rand_cb),
@@ -451,14 +474,15 @@ class SamplingOp:
             ),
             ("sampling_num_internal_iterations", num_internal_iterations),
             ("sampling_softmax_in_cb", softmax_in_cb),
-            ("sampling_temp_cb", temp_cb),
             ("sampling_inv_temp_bf16", inv_temp_bf16),
-            ("sampling_enable_metadata", 1 if metadata_output_tensor is not None else 0),
+            ("sampling_enable_metadata", sampling_enable_metadata_value),
             ("sampling_copy_probabilities", 1 if copy_probabilities else 0),
-            (
-                "sampling_metadata_address",
-                int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0,
-            ),
+            ("sampling_metadata_address", sampling_metadata_address_value),
+            ("sampling_copy_probabilities_to_q", 0),
+            ("sampling_p_bcast_cb", softmax_sub_cb),
+            ("sampling_rand_bcast_cb", sum_cb),
+            ("sampling_probs_out_cb", probs_out_cb),
+            ("sampling_mask_cb", mask_cb),
         ]
 
         unified_kernel = UnifiedKernelDescriptor(
@@ -577,11 +601,11 @@ class SamplingOp:
                 )
             ],
         )
-        temp_cb_descriptor = ttnn.CBDescriptor(
+        probs_out_cb_descriptor = ttnn.CBDescriptor(
             total_size=bf16_tile_size,
             core_ranges=final_core_crs,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=temp_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+                ttnn.CBFormatDescriptor(buffer_index=probs_out_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
             ],
         )
 
@@ -599,6 +623,13 @@ class SamplingOp:
             core_ranges=final_core_crs,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=rand_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+            ],
+        )
+        mask_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=mask_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
             ],
         )
 
@@ -646,22 +677,6 @@ class SamplingOp:
             )
         )
 
-        receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=semaphore_id,
-            core_ranges=all_cores,
-            initial_value=0,
-        )
-
-        full_grid = scores_tensor.device().compute_with_storage_grid_size()
-        loop_mcast_bbox_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))]
-        )
-        local_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=local_ready_semaphore_id,
-            core_ranges=loop_mcast_bbox_grid,
-            initial_value=0,
-        )
-
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -672,12 +687,13 @@ class SamplingOp:
                 sum_cb_descriptor,
                 scaler_cb_descriptor,
                 softmax_exp_cb_descriptor,
-                temp_cb_descriptor,
+                probs_out_cb_descriptor,
                 softmax_sub_cb_descriptor,
                 rand_cb_descriptor,
+                mask_cb_descriptor,
             ]
             + topk_cbs,
-            semaphores=[receiver_semaphore_descriptor, local_ready_semaphore_descriptor],
+            semaphores=[],
         )
 
         tensors = [scores_tensor, indices_tensor, output_index_tensor]
@@ -761,15 +777,23 @@ class SamplingOp:
         sum_cb = 5
         scaler_cb = 6
         softmax_exp_cb = 7
-        temp_cb = 8
+        probs_out_cb = 8
         softmax_sub_cb = 9
         rand_cb = 10
         topk_in_scores_cb = 11
         topk_in_indices_cb = 12
         topk_out_scores_cb = 13
         topk_out_indices_cb = 14
-        semaphore_id = 0
-        local_ready_semaphore_id = 1
+        mask_cb = 17
+        mesh_device = scores_tensor.device()
+        full_grid = mesh_device.compute_with_storage_grid_size()
+        sem_core_range = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))]
+        )
+        receiver_global_sem = ttnn.create_global_semaphore(mesh_device, sem_core_range, 0)
+        local_ready_global_sem = ttnn.create_global_semaphore(mesh_device, sem_core_range, 0)
+        receiver_semaphore_addr = int(ttnn.get_global_semaphore_address(receiver_global_sem))
+        local_ready_semaphore_addr = int(ttnn.get_global_semaphore_address(local_ready_global_sem))
 
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32
@@ -864,8 +888,8 @@ class SamplingOp:
                     ("sampling_num_senders", num_cores),
                     ("sampling_expected_remote_incs", expected_remote_incs),
                     ("sampling_winner_cb", winner_cb),
-                    ("sampling_receiver_semaphore_id", semaphore_id),
-                    ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
+                    ("sampling_receiver_semaphore_addr", receiver_semaphore_addr),
+                    ("sampling_local_ready_semaphore_addr", local_ready_semaphore_addr),
                     ("sampling_mesh_mode", 1),
                     ("sampling_stage1_sender", 1 if is_stage1_sender else 0),
                     ("sampling_stage1_receiver", 1 if is_stage1_receiver else 0),
@@ -884,7 +908,7 @@ class SamplingOp:
                     ("sampling_softmax_out_cb", softmax_out_cb if is_final_mesh_device else 0),
                     ("sampling_softmax_exp_cb", softmax_exp_cb if is_final_mesh_device else 0),
                     ("sampling_scaler_cb", scaler_cb if is_final_mesh_device else 0),
-                    ("sampling_temp_cb", temp_cb if is_final_mesh_device else 0),
+                    ("sampling_probs_out_cb", probs_out_cb if is_final_mesh_device else 0),
                     ("sampling_inv_temp_bf16", inv_temp_bf16),
                     ("sampling_topk_in_scores_cb", topk_in_scores_cb),
                     ("sampling_topk_in_indices_cb", topk_in_indices_cb),
@@ -905,6 +929,10 @@ class SamplingOp:
                     ("sampling_loop_num_dests", 0),
                     ("sampling_num_internal_iterations", num_internal_iterations),
                 ]
+                sampling_enable_metadata_value = 1 if metadata_output_tensor is not None else 0
+                sampling_metadata_address_value = (
+                    int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0
+                )
                 trisc_named_compile_time_args = [
                     ("sampling_softmax_in_cb", softmax_in_cb if is_final_mesh_device else 0),
                     ("sampling_softmax_out_cb", softmax_out_cb if is_final_mesh_device else 0),
@@ -913,7 +941,7 @@ class SamplingOp:
                     ("sampling_max_cb", max_cb if is_final_mesh_device else 0),
                     ("sampling_sum_cb", sum_cb if is_final_mesh_device else 0),
                     ("sampling_scaler_cb", scaler_cb if is_final_mesh_device else 0),
-                    ("sampling_temp_cb", temp_cb if is_final_mesh_device else 0),
+                    ("sampling_probs_out_cb", probs_out_cb if is_final_mesh_device else 0),
                     ("sampling_rand_cb", rand_cb if is_final_mesh_device else 0),
                     ("sampling_seed", seed),
                     ("sampling_topk_k", k),
@@ -933,13 +961,17 @@ class SamplingOp:
                     ("sampling_stage2_row_elements", stage2_num_slots * topk_min_alignment),
                     ("sampling_stage2_num_input_tiles", stage2_mesh_tiles),
                     ("sampling_num_internal_iterations", num_internal_iterations),
+                    ("sampling_mask_cb", mask_cb if is_final_mesh_device else 0),
+                    ("sampling_enable_metadata", sampling_enable_metadata_value),
+                    ("sampling_metadata_address", sampling_metadata_address_value),
+                    ("sampling_inv_temp_bf16", inv_temp_bf16),
                 ]
                 rand_output_addr = 0
                 if rand_per_device is not None and is_final_mesh_device:
                     rand_output_addr = int(rand_per_device[device_idx].buffer_address())
                 brisc_named_compile_time_args = [
                     ("sampling_winner_page_bytes", winner_page_bytes),
-                    ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
+                    ("sampling_local_ready_semaphore_addr", local_ready_semaphore_addr),
                     ("sampling_topk_k", k),
                     ("sampling_softmax_out_cb", softmax_out_cb if is_final_mesh_device else 0),
                     ("sampling_rand_cb", rand_cb if is_final_mesh_device else 0),
@@ -952,14 +984,15 @@ class SamplingOp:
                     ("sampling_rand_output_addr", rand_output_addr),
                     ("sampling_num_internal_iterations", num_internal_iterations),
                     ("sampling_softmax_in_cb", softmax_in_cb if is_final_mesh_device else 0),
-                    ("sampling_temp_cb", temp_cb if is_final_mesh_device else 0),
                     ("sampling_inv_temp_bf16", inv_temp_bf16),
-                    ("sampling_enable_metadata", 1 if metadata_output_tensor is not None else 0),
+                    ("sampling_enable_metadata", sampling_enable_metadata_value),
                     ("sampling_copy_probabilities", 1 if copy_probabilities else 0),
-                    (
-                        "sampling_metadata_address",
-                        int(metadata_output_tensor.buffer_address()) if metadata_output_tensor is not None else 0,
-                    ),
+                    ("sampling_metadata_address", sampling_metadata_address_value),
+                    ("sampling_copy_probabilities_to_q", 0),
+                    ("sampling_p_bcast_cb", softmax_sub_cb if is_final_mesh_device else 0),
+                    ("sampling_rand_bcast_cb", sum_cb if is_final_mesh_device else 0),
+                    ("sampling_probs_out_cb", probs_out_cb if is_final_mesh_device else 0),
+                    ("sampling_mask_cb", mask_cb if is_final_mesh_device else 0),
                 ]
 
                 per_core_brisc_runtime_args = []
@@ -1076,16 +1109,7 @@ class SamplingOp:
                         )
                     ],
                 )
-                receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=semaphore_id,
-                    core_ranges=all_cores,
-                    initial_value=0,
-                )
-                local_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=local_ready_semaphore_id,
-                    core_ranges=all_cores,
-                    initial_value=0,
-                )
+                # Semaphores are now global (created above)
                 cbs = [winner_cb_descriptor, topk_in_scores_cb_descriptor, topk_in_indices_cb_descriptor]
 
                 cbs.append(
@@ -1165,9 +1189,10 @@ class SamplingOp:
                         (sum_cb, ttnn.bfloat16),
                         (scaler_cb, ttnn.bfloat16),
                         (softmax_exp_cb, ttnn.bfloat16),
-                        (temp_cb, ttnn.bfloat16),
+                        (probs_out_cb, ttnn.bfloat16),
                         (softmax_sub_cb, ttnn.bfloat16),
                         (rand_cb, ttnn.bfloat16),
+                        (mask_cb, ttnn.bfloat16),
                     ]:
                         cbs.append(
                             ttnn.CBDescriptor(
@@ -1184,7 +1209,7 @@ class SamplingOp:
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
                     cbs=cbs,
-                    semaphores=[receiver_semaphore_descriptor, local_ready_semaphore_descriptor],
+                    semaphores=[],
                 )
 
                 if is_mesh_sender_core:

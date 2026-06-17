@@ -12,6 +12,16 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+/**
+ * @brief Emit the pool instruction (GMPOOL for MAX, GAPOOL for SUM/AVG) matching the reduce pool type.
+ *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
+ * @tparam CLR_SRC: Source-clear mode applied after pooling (p_gpool CLR_* value)
+ * @tparam POOL_SIZE: Pool face dimension (p_gpool DIM_* value)
+ * @tparam ADDR_MOD: Address-mod slot used by the instruction
+ * @tparam MAX_POOL_IDX_EN: Enable max-pool index output (p_gpool INDEX_* value)
+ * @tparam DST_ADDR: Destination write address
+ */
 template <PoolType POOL_TYPE, std::uint8_t CLR_SRC, std::uint8_t POOL_SIZE, std::uint8_t ADDR_MOD, std::uint8_t MAX_POOL_IDX_EN, std::uint8_t DST_ADDR>
 void tti_pool_instr_func()
 {
@@ -26,18 +36,20 @@ void tti_pool_instr_func()
 }
 
 /**
- * @brief Sets up mop config for reduce column operations
- *For reduce Col, in a 32 x 32 tile, faces layout would be the following:
- *--------------------
+ * @brief Sets up mop config for reduce column operations.
+ *
+ * For reduce Col, in a 32 x 32 tile, faces layout would be the following:
+ * --------------------
  * Face 0    | Face 1
  * --------------------
  * Face 2    | Face 3
  * --------------------
  * In order to get 1x32 row output (which means 2 output faces, 1x16 row each), then Face 0 + Face 2 are pooled together, and Face 1 and Face 3 are pooled
- *together
- * @tparam POOL_TYPE: Type of reduce pool op, values = [MAX, SUM, AVG]
- * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
- * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
+ * together.
+ *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
+ * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
+ * <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -85,18 +97,20 @@ inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
 }
 
 /**
- * @brief Sets up mop config for reduce row operations
- *For reduce row, in a 32 x 32 tile, faces layout would be the following:
- *--------------------
+ * @brief Sets up mop config for reduce row operations.
+ *
+ * For reduce row, in a 32 x 32 tile, faces layout would be the following:
+ * --------------------
  * Face 0    | Face 1
  * --------------------
  * Face 2    | Face 3
  * --------------------
- * In order to get 32x1 column output (which means 2 output faces, 16x1 col each),
- * then all faces are transposed, Face 0 + Face 1 are pooled together, and Face 2 & 3 are pooled together
- * @tparam POOL_TYPE: Type of reduce pool op, values = [MAX, SUM, AVG]
- * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
- * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
+ * In order to get 32x1 column output (which means 2 output faces, 16x1 col each), then all faces are transposed, Face 0 + Face 1 are pooled together, and
+ * Face 2 & 3 are pooled together.
+ *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
+ * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
+ * <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -201,17 +215,19 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
 }
 
 /**
- * @brief Sets up mop config for reduce scalar operations
+ * @brief Sets up mop config for reduce scalar operations.
+ *
  * For reduce scalar, in a 32 x 32 tile, faces layout would be the following:
  * --------------------
  * Face 0    | Face 1
  * --------------------
  * Face 2    | Face 3
  * --------------------
- * All 4 faces will be pooled together , result will be a single reduce datum placed in datum 0 of the tile idx
- * @tparam POOL_TYPE: Type of reduce pool op, values = [MAX, SUM, AVG]
- * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
- * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
+ * All 4 faces will be pooled together; result will be a single reduce datum placed in datum 0 of the tile idx.
+ *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
+ * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
+ * <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -289,10 +305,11 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
 }
 
 /**
- * @brief Sets up addrmods for reduce operations
- * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
- * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
- * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
+ * @brief Sets up addrmods for reduce operations.
+ *
+ * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
+ * <LoFi/HiFi2/HiFi3/HiFi4>
  */
 template <ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_addrmod_()
@@ -322,12 +339,15 @@ inline void _llk_math_reduce_addrmod_()
 }
 
 /**
- * @brief Sets up mop config for reduce operations
- * @tparam POOL_TYPE: Type of reduce pool op, values = [MAX, SUM, AVG]
- * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
- * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
- * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
+ * @brief Sets up addrmods and mop config (initialization) for reduce operations.
+ *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
+ * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
+ * <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
+ * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
@@ -353,10 +373,11 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 }
 
 /**
- * @brief Perform a reduce operation
- * @param tile_idx: Tile index into the destination register.
- * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
- * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @brief Perform a reduce operation.
+ *
+ * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
+ * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
  */
 inline void _llk_math_reduce_(const std::uint32_t tile_idx)
 {

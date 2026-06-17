@@ -95,7 +95,10 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
     if (operation_attributes.memory_config.is_sharded()) {
         if (operation_attributes.memory_config.shard_spec().has_value()) {
             auto shard_spec = operation_attributes.memory_config.shard_spec().value();
-            MemoryConfig mem_config = operation_attributes.memory_config.with_shard_spec(shard_spec);
+            MemoryConfig mem_config = MemoryConfig(
+                operation_attributes.memory_config.memory_layout(),
+                operation_attributes.memory_config.buffer_type(),
+                shard_spec);
             return TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), mem_config));

@@ -31,6 +31,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: Install dependencies
@@ -55,14 +56,22 @@ jobs:
         id: apply-test-type-filter
         run: |
           MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          if [ "${{ inputs.test-type }}" = "all" ]; then
+          # test-type is a comma-separated selection (validated upstream). An empty
+          # value or any "all" token means run the full matrix; otherwise keep entries
+          # whose test_type OR test_group matches any selected token.
+          TEST_TYPE="${{ inputs.test-type }}"
+          if [ -z "$TEST_TYPE" ] || \
+            echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg t "${{ inputs.test-type }}" '[.[] | select(.test_type == $t)]')
+            FILTERED=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
+              ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
+              | [ .[] | . as $e | select(($tokens | index($e.test_type)) or ($tokens | index($e.test_group))) ]
+            ')
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for test-type '${{ inputs.test-type }}'. Ensure the test-type is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
@@ -97,6 +106,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -122,6 +132,15 @@ jobs:
             ${{ matrix.test-group.cmd }}
           } 2>&1 | tee "$LOG_FILE"
           exit ${PIPESTATUS[0]}
+      - name: Publish PCC summary
+        if: ${{ !cancelled() }}
+        run: |
+          PCC_DIR="/tmp/pcc_summaries"
+          if [ -d "$PCC_DIR" ]; then
+            for f in "$PCC_DIR"/pcc_summary_*.md; do
+              [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
@@ -157,6 +176,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main

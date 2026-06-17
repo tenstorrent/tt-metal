@@ -437,7 +437,7 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        if chunk_start_idx is not None:
+        if chunk_start_idx is not None and int(chunk_start_idx) > 0:
             chunk_start_idx_tensor = torch.tensor([chunk_start_idx], dtype=torch.int32)
             tt_chunk_start_idx = ttnn.from_torch(
                 chunk_start_idx_tensor,
@@ -778,8 +778,7 @@ class Transformer(LightweightModule):
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
         page_tables_per_layer=None,
     ):
         """
@@ -808,17 +807,13 @@ class Transformer(LightweightModule):
             page_tables_per_layer=page_tables_per_layer,
         )
 
-        if sampling_on_device and self.sampling is not None:
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
-                return tt_logits
-            tt_toks, tt_log_probs = self.sampling.sample(
-                tt_logits,
-                tt_out_tok=x,
-                enable_trace=False,
+        if on_device_logits:
+            assert self.sampling is not None, (
+                "ttnn_decode_forward got on_device_logits=True but no on-device sampling "
+                "module exists (self.sampling is None)."
             )
-
-            return tt_toks, tt_log_probs
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            return tt_logits
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:

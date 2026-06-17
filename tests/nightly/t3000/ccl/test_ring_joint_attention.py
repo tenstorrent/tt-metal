@@ -11,6 +11,7 @@ import torch
 import ttnn
 from loguru import logger
 import pytest
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 from models.tt_dit.tests.unit.test_ring_joint_attention import (
     run_ring_joint_sdpa,
     run_ring_joint_sdpa_model_config,

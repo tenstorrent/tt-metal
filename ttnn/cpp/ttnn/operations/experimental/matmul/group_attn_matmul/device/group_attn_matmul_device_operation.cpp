@@ -184,7 +184,8 @@ GroupAttnMatmulDeviceOperation::spec_return_value_t GroupAttnMatmulDeviceOperati
             ShardOrientation shard_orientation =
                 operation_attributes.row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
             ShardSpec shard_spec = ShardSpec{all_cores, {output_shape[2], output_shape[3]}, shard_orientation};
-            output_mem_config = output_mem_config.with_shard_spec(shard_spec);
+            output_mem_config = tt::tt_metal::MemoryConfig(
+                output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
         }
         return TensorSpec(
             output_shape, TensorLayout(operation_attributes.output_dtype, PageConfig(Layout::TILE), output_mem_config));
@@ -223,10 +224,13 @@ ttsl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
         input_tensor_a.memory_config().memory_layout(),
         input_tensor_a.memory_config().buffer_type(),
         input_tensor_a.dtype(),
+        input_tensor_a.padded_shape(),  // drives CB total_size (Kt, Mt) — must be in hash since CB sizing is not
+                                        // patched on cache hit
         input_tensor_a.device()->id(),
         input_tensor_b.memory_config().memory_layout(),
         input_tensor_b.memory_config().buffer_type(),
         input_tensor_b.dtype(),
+        input_tensor_b.padded_shape(),  // drives CB total_size (KV_HEADS, Kt)
         input_tensor_b.device()->id());
 }
 

@@ -498,6 +498,70 @@ def test_conv3d_sweep_blocks(
 
 
 @pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, blocking",
+    [
+        [(1, 96, 3, 16, 16), 3, (3, 3, 3), (1, 1, 1), 1, (1, 1, 1), "zeros", (96, 32, 2, 8, 8)],
+    ],
+    ids=["c_out_3_t_leftover"],
+)
+def test_conv3d_streaming_output_t_leftover(
+    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, blocking
+):
+    """Regression test for issue #44792: streaming output with a partial T block."""
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+
+    config = create_conv3d_config(
+        T_out_block=T_out_block,
+        H_out_block=H_out_block,
+        W_out_block=W_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        # Keep sequential spatial blocks on one core so the partial T block is followed by another CB read.
+        compute_with_storage_grid_size=(1, 1),
+    )
+
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        groups=groups,
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    max_abs_diff = (tt_output - gt_output).abs().max().item()
+    logger.info(f"Conv3d streaming T-leftover: {pcc_message}, max_abs_diff={max_abs_diff:.4f}")
+    assert pcc_passed, pcc_message
+    assert max_abs_diff < 0.1, f"Expected aligned output, got max_abs_diff={max_abs_diff}"
+
+
+@pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode",
     [
         # C_in=4, kernel=3x3x3 → patch_size=3*3*3*32=864 (C_in padded to 32)

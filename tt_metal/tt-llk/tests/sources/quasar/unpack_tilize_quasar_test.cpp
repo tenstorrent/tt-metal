@@ -69,9 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_val.buf_desc_id     = buf_desc_id;
     td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
-    constexpr TileShape tile_shape      = {.num_faces = num_faces, .face_r_dim = TEST_FACE_R_DIM, .face_c_dim = TEST_FACE_C_DIM, .narrow_tile = 0};
-    constexpr std::uint32_t C_DIM_FACES = (tile_shape.narrow_tile ? 1 : 2);                    // Tile width in faces
-    constexpr std::uint32_t R_DIM_FACES = (num_faces == 2 && !tile_shape.narrow_tile) ? 1 : 2; // Tile height in faces
+    constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
 
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
     if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
@@ -84,13 +82,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
     }
 
-    std::uint32_t y_stride_external = FULL_CT_DIM * R_DIM_FACES * TEST_FACE_R_DIM;
+    std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     if constexpr (unpack_to_dest)
     {
         // Batched tilize directly into DEST using block API.
         // DST_Z_STRIDE=num_faces so each Dst_Z_Cntr_inc advances DEST by one full tile.
         // L1 and DEST counters are set once per row.
-        _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM, C_DIM_FACES, num_faces>(buf_desc_id);
+        _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
         for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
         {
             _llk_unpack_tilize_block_(y * y_stride_external, y * BLOCK_CT_DIM);
@@ -99,7 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en, C_DIM_FACES>(buf_desc_id, FULL_CT_DIM, BLOCK_CT_DIM);
+        _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(buf_desc_id, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
         for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
         {
             _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(y * y_stride_external);
@@ -178,8 +176,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
 
-    _llk_pack_init_(buf_desc_id, num_tiles_per_pack);
-    _llk_pack_(0, 0);
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+    _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

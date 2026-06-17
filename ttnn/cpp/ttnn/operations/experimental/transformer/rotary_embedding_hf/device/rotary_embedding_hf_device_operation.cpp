@@ -40,7 +40,13 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(cos.layout() == tt::tt_metal::Layout::TILE, "Cos must be tilized");
     TT_FATAL(sin.layout() == tt::tt_metal::Layout::TILE, "Sin must be tilized");
 
-    TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible by 64");
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        "Input X dim ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint must align with "
+        "a tile boundary).",
+        input_tensor.padded_shape()[-1],
+        TILE_WIDTH,
+        TILE_WIDTH * 2);
     uint32_t X = input_tensor.padded_shape()[-1];
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin shapes must match");
@@ -117,7 +123,8 @@ tt::tt_metal::TensorSpec RotaryEmbeddingHfDeviceOperation::compute_output_specs(
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.padded_shape()[-1]};
             shard_spec.orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
         }
-        auto mem_config = args.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
         return tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(

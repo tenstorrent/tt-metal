@@ -10,7 +10,12 @@ import pytest
 
 from models.demos.deepseek_v3.demo import demo as demo_module
 from models.demos.deepseek_v3.demo.make_lmeval_prompts import resolve_task_name as resolve_prompt_task_name
-from models.demos.deepseek_v3.demo.score_lmeval_outputs import extract_gpqa_choice, load_generations_by_index
+from models.demos.deepseek_v3.demo.score_lmeval_outputs import (
+    extract_aime_boxed_integer,
+    extract_gpqa_choice,
+    load_generations_by_index,
+    score_aime24,
+)
 
 
 class _FakeTokenizer:
@@ -247,6 +252,18 @@ def test_lmeval_helpers():
 
     assert extract_gpqa_choice(r"Some work \boxed{b}") == "(B)"
     assert extract_gpqa_choice("The answer is c") == "(C)"
+    assert extract_aime_boxed_integer(r"work \boxed{7}") == 7
+    assert extract_aime_boxed_integer(r"work \boxed{\textbf{321}}") == 321
+    assert score_aime24({"answer": "007"}, r"final \boxed{7}") == {
+        "exact_match": 1.0,
+        "no_boxed": 0.0,
+        "boxed_wrong": 0.0,
+    }
+    assert score_aime24({"answer": "7"}, "no final answer") == {
+        "exact_match": 0.0,
+        "no_boxed": 1.0,
+        "boxed_wrong": 0.0,
+    }
 
 
 def test_load_generations_by_index_jsonl(tmp_path):

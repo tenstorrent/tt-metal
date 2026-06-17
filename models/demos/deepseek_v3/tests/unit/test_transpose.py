@@ -68,7 +68,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_transpose(mesh_device, shape, transpose_type, pad_val, dtype, layout, mem_config, enable_trace):
     if transpose_type == "HC":

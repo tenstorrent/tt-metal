@@ -13,7 +13,7 @@
 namespace ttnn {
 
 Tensor fill_implicit_tile_padding(
-    const Tensor& input_tensor, float fill_value, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input_tensor, tt::tt_metal::PadValue fill_value, const std::optional<MemoryConfig>& memory_config) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;

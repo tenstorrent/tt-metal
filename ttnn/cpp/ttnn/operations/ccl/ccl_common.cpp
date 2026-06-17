@@ -1912,6 +1912,68 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
+// ProgramDescriptor (Contract-2) variant — mirrors the legacy Program& helper above.
+// Allocates the same five mux-side semaphores by pushing SemaphoreDescriptors into
+// desc.semaphores and recording their IDs into worker_rt_args. The arg-vector
+// layout (positions 0..16) is identical to the legacy helper so worker kernels
+// are byte-compatible across the two variants.
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& desc,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    // Allocate a worker-core-scoped semaphore by querying the next available ID
+    // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
+    auto alloc_sem = [&]() -> uint32_t {
+        auto id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
+        TT_FATAL(
+            id_opt.has_value(),
+            "No available semaphore ID for fabric mux connection on worker core (x={}, y={}, core_type=WORKER); "
+            "{} SemaphoreDescriptors already allocated on this ProgramDescriptor.",
+            worker_logical_core.x,
+            worker_logical_core.y,
+            desc.semaphores.size());
+        const uint32_t id = id_opt.value();
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = CoreRangeSet(CoreRange(worker_logical_core, worker_logical_core)),
+            .initial_value = 0});
+        return id;
+    };
+
+    worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
+    worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
+    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
+    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y 3
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address 4
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(
+        channel_type, worker_id));  // fabric_mux_connection_info_address 5
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
+        channel_type, worker_id));  // fabric_mux_connection_handshake_address 6
+    worker_rt_args.push_back(
+        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address 7
+    worker_rt_args.push_back(
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
+    worker_rt_args.push_back(termination_master_semaphore_id.value_or(alloc_sem()));  // termination_sync_address 10
+    worker_rt_args.push_back(alloc_sem());                        // local_fabric_mux_status_address 11
+    worker_rt_args.push_back(alloc_sem());                        // local_flow_control_address 12
+    worker_rt_args.push_back(alloc_sem());                        // local_teardown_address 13
+    worker_rt_args.push_back(alloc_sem());                        // local_buffer_index_address 14
+    worker_rt_args.push_back(termination_master_virtual_core.x);  // termination_master_noc_x 15
+    worker_rt_args.push_back(termination_master_virtual_core.y);  // termination_master_noc_y 16
+}
+
 namespace {  // anonymous namespace for internal helpers
 
 // Fabric bandwidth is based on raw hardware capability

@@ -418,7 +418,7 @@ def _build_lm_head_inputs(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 23740416,  # Large trace region for vocab projection
+            "trace_region_size": 0,  # Use dynamic trace-region allocation for this workload
         }
     ],
     indirect=True,
@@ -516,7 +516,7 @@ def test_ds_lm_head(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 23740416,
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

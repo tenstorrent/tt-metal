@@ -6,36 +6,19 @@
 
 #include "api/compute/transpose_wh.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#else
-#include "api/dataflow/circular_buffer.h"
-#endif
 
 void kernel_main() {
-#ifdef ARCH_QUASAR
     constexpr uint32_t NHtWt = get_arg(args::NHtWt);
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
 
 #ifndef SHORT_INIT
-    transpose_wh_init(dfb_in.get_id(), dfb_out.get_id());
+    transpose_wh_init(dfb::in, dfb::out);
 #else
-    unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
-    transpose_wh_init_short(dfb_in.get_id());
-#endif
-#else
-    uint32_t NHtWt = get_compile_time_arg_val(0);
-    CircularBuffer cb0(tt::CBIndex::c_0);
-    CircularBuffer cb16(tt::CBIndex::c_16);
-
-#ifndef SHORT_INIT
-    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
-#else
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    transpose_wh_init_short(tt::CBIndex::c_0);
-#endif
+    unary_op_init_common(dfb::in, dfb::out);
+    transpose_wh_init_short(dfb::in);
 #endif
 
     // transpose a row-major block:
@@ -43,34 +26,18 @@ void kernel_main() {
     // - uses reader_unary_transpose_wh
     // - transpose_wh each tile
     for (uint32_t n = 0; n < NHtWt; n++) {
-#ifdef ARCH_QUASAR
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
 
         tile_regs_acquire();
-        transpose_wh_tile(dfb_in.get_id(), 0, 0);
+        transpose_wh_tile(dfb::in, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, dfb_out.get_id());
+        pack_tile(0, dfb::out);
         tile_regs_release();
 
         dfb_in.pop_front(1);
         dfb_out.push_back(1);
-#else
-        cb0.wait_front(1);
-        cb16.reserve_back(1);
-
-        tile_regs_acquire();
-        transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, tt::CBIndex::c_16);
-        tile_regs_release();
-
-        cb16.push_back(1);
-        cb0.pop_front(1);
-#endif
     }
 }

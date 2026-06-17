@@ -2,12 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
-from helpers.stimuli_generator import generate_random_face
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    default_spec_for_format,
+    generate_face,
+)
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
@@ -24,8 +28,10 @@ class Operand:
     name: str
     dimensions: Tuple[int, int]
     data_format: DataFormat
-    tile_shape: TileShape = construct_tile_shape(
-        (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+    tile_shape: TileShape = field(
+        default_factory=lambda: construct_tile_shape(
+            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        )
     )
     l1_address: Optional[int] = None
     is_output: bool = False
@@ -38,6 +44,9 @@ class Operand:
     tile_count_x: Optional[int] = None
     tile_count_y: Optional[int] = None
     tile_size: Optional[int] = None
+    acc_atol: float = 0.0
+    acc_rtol: float = 0.0
+    acc_pcc: float = 1.0
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
@@ -71,14 +80,16 @@ class Operand:
         faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
+        if self.const_value is not None:
+            spec = StimuliSpec.constant(self.const_value)
+        else:
+            spec = default_spec_for_format(self.data_format)
+
         for _ in range(faces_needed):
-            face = generate_random_face(
+            face = generate_face(
+                spec=spec,
                 stimuli_format=self.data_format,
-                const_value=self.const_value,
-                const_face=self.const_value is not None,
-                sfpu=self.sfpu,
                 face_r_dim=self.tile_shape.face_r_dim,
-                negative_values=False,
             )
             faces_data.extend(face.tolist())
 

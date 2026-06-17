@@ -821,7 +821,19 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     golden_fn = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+    if ttnn_fn == "divide" and scalar == 0.0:
+        g_nonfinite = ~torch.isfinite(torch_output_tensor)
+        d_nonfinite = ~torch.isfinite(tt_output_tensor)
+        torch.testing.assert_close(
+            g_nonfinite, d_nonfinite, msg="Non-finite positions differ between golden and device"
+        )
+    else:
+        # ulp_threshold=3 for bfloat16 scalar ops; bump to 4 if CI flakes on edge shapes.
+        assert_with_ulp(
+            torch_output_tensor,
+            tt_output_tensor,
+            ulp_threshold=3,
+        )
 
 
 @pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
@@ -870,7 +882,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     golden_fn = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+    assert torch.equal(torch_output_tensor.to(torch.uint32), tt_output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -997,7 +1009,7 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
     golden_fn = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+    assert torch.equal(torch_output_tensor.to(torch.float32), tt_output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -1043,4 +1055,5 @@ def test_binary_div(
         torch_input_b, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
     )
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, dtype=output_dtype)
-    assert_with_pcc(torch_output, ttnn.to_torch(output_tensor), 0.999)
+    # bf16/fp32 divide has up to 2 ULP from the reciprocal approximation; inputs are in [1, 2).
+    assert_with_ulp(torch_output, ttnn.to_torch(output_tensor), ulp_threshold=2)

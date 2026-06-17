@@ -13,7 +13,6 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -92,8 +91,6 @@ void kernel_main() {
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
 
-    constexpr uint32_t one_tile = 1;
-
 #ifdef FUSE_BIAS
     // in3 mcast args
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -168,7 +165,18 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
+    // interleaved in1 CB pages are sized to match (see the program factory). On the plain interleaved
+    // path the NOC reads the unpadded tile of data into each padded slot and tiles are laid out /
+    // multicast at the padded stride. No-op when already aligned. The sharded / DRAM-sharded paths
+    // keep their natural (unpadded) stride.
+    constexpr uint32_t in1_aligned_tile_size_bytes =
+        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
+    constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
+#else
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
+#endif
 
     constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
@@ -181,12 +189,6 @@ void kernel_main() {
     Semaphore<> receiver_sem(get_compile_time_arg_val(11));
 #ifdef FUSE_BIAS
     CircularBuffer cb_in3(cb_id_in3);
-#endif
-#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
-#ifdef INTERMEDIATE_CB_READ
-    constexpr uint32_t in1_intermediate_cb_index = get_named_compile_time_arg_val("cb_in1_intermediate");
-    CircularBuffer cb_helper(in1_intermediate_cb_index);
-#endif
 #endif
 
 //  READER
@@ -297,11 +299,11 @@ void kernel_main() {
                             if (i == 0) {
                                 shard_base_addr += dram_tensor_start_offset;
                             }
-                            noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 dram_bank,
                                 in1_single_tile_size_bytes,
                                 {.bank_id = shard_bank_id, .addr = shard_base_addr},
-                                vc);
+                                NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
                             uint32_t l1_write_addr_in1 = cb_in1.get_write_ptr() + l1_write_addr_in1_offset;
@@ -314,14 +316,14 @@ void kernel_main() {
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
                                     noc.async_read_with_state<
-                                        Noc::VcSelection::CUSTOM,
+                                        NocOptions::CUSTOM_VC,
                                         NOC_MAX_BURST_SIZE>(
                                         dram_bank,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
                                         in1_single_tile_size_bytes,
                                         {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
                                         {},
-                                        vc);
+                                        NocOptVals{.vc = vc});
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
                                     l1_write_addr_in1_temp += in1_single_tile_size_bytes;
                                 }
@@ -372,9 +374,6 @@ void kernel_main() {
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         cb_in1.reserve_back(in1_block_num_tiles);
-#ifdef INTERMEDIATE_CB_READ
-                        cb_helper.reserve_back(one_tile);
-#endif  // INTERMEDIATE_CB_READ
                         uint32_t in1_write_offset = 0;
                         uint64_t in1_start_address =
                             cb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
@@ -385,28 +384,14 @@ void kernel_main() {
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in1_block_w; ++w) {
                                 if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-#ifndef INTERMEDIATE_CB_READ
                                     noc.async_read(
                                         s1,
                                         cb_in1,
                                         in1_single_tile_size_bytes,
                                         {.page_id = in1_tensor_tile_id},
                                         {.offset_bytes = in1_write_offset});
-#else
-                                    noc.async_read(
-                                        s1,
-                                        cb_helper,
-                                        in1_single_tile_size_bytes,
-                                        {.page_id = in1_tensor_tile_id},
-                                        {.offset_bytes = 0});
-                                    noc.async_read_barrier();
-                                    memcpy(
-                                        /*dst=*/reinterpret_cast<void*>(cb_in1.get_write_ptr() + in1_write_offset),
-                                        /*src=*/reinterpret_cast<const void*>(cb_helper.get_write_ptr()),
-                                        /*size=*/in1_single_tile_size_bytes);
-#endif  // INTERMEDIATE_CB_READ
                                 }
-                                in1_write_offset += in1_single_tile_size_bytes;
+                                in1_write_offset += in1_aligned_tile_size_bytes;
                                 in1_tensor_tile_id += in1_tensor_stride_w;
                             }
                             in1_tensor_row_start_tile_id += in1_tensor_stride_h;
@@ -463,12 +448,6 @@ void kernel_main() {
 
 #ifndef IN1_SHARDED
                         cb_in1.push_back(in1_block_num_tiles);
-#ifdef INTERMEDIATE_CB_READ
-                        // Clean up helper CB
-                        cb_helper.push_back(one_tile);
-                        cb_helper.wait_front(one_tile);
-                        cb_helper.pop_front(one_tile);
-#endif  // INTERMEDIATE_CB_READ
 #endif  // IN1_SHARDED
                     }
 #ifdef FUSE_BIAS
@@ -498,11 +477,11 @@ void kernel_main() {
                                                         bias_single_tile_size_bytes;
                             }
 
-                            noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 bias_dram_bank,
                                 bias_single_tile_size_bytes,
                                 {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
-                                vc);
+                                NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in3 = 0;
                             l1_write_addr_in3 = cb_in3.get_write_ptr() + l1_write_addr_in3_offset;
@@ -513,13 +492,13 @@ void kernel_main() {
                                 in1_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
-                                noc.async_read_with_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                                noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                     bias_dram_bank,
                                     CoreLocalMem<uint32_t>(l1_write_addr_in3),
                                     bias_single_tile_size_bytes,
                                     {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
                                     {},
-                                    vc);
+                                    NocOptVals{.vc = vc});
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
                                 l1_write_addr_in3 += bias_single_tile_size_bytes;
                                 in3_block_size_bytes += bias_single_tile_size_bytes;

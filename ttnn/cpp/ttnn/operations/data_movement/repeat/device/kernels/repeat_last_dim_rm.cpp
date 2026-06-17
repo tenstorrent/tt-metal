@@ -91,7 +91,7 @@ void kernel_main() {
         CoreLocalMem<uint32_t> dst_mem(data_location);
         // Use TensorAccessor directly to avoid address truncation
         // Template parameter preserves one-packet fast path for page-sized transfers
-        noc.async_read<Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
+        noc.async_read<NocOptions::DEFAULT, original_page_size_bytes>(
             s, dst_mem, original_page_size_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
         cur_page_size = original_page_size_bytes;
         noc.async_read_barrier();
@@ -102,7 +102,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < num_doublings; j++) {
                 // This ensures the cur_page_size will be aligned to 16B so future walk retains alignment
                 tt_memmove<false, false, false, 16 * original_page_size_bytes>(
-                    data_location + target_offset, data_location, cur_page_size);
+                    noc, data_location + target_offset, data_location, cur_page_size);
                 target_offset += cur_page_size;
                 cur_page_size *= 2;
             }
@@ -112,7 +112,7 @@ void kernel_main() {
         if ((data_location & w_offset_to_use) != (dst_noc_addr & w_offset_to_use)) {
             // Can't directly copy due to alignment
             tt_memmove<false, false, false, 16 * original_page_size_bytes>(
-                alignment_buffer + (dst_noc_addr & w_offset_to_use), data_location, cur_page_size);
+                noc, alignment_buffer + (dst_noc_addr & w_offset_to_use), data_location, cur_page_size);
             data_location = alignment_buffer + (dst_noc_addr & w_offset_to_use);
         }
 
@@ -126,10 +126,7 @@ void kernel_main() {
             CoreLocalMem<uint32_t> src_mem(data_location);
             // Use TensorAccessor directly to avoid address truncation
             // Template parameter preserves one-packet fast path for writes up to max_write_size
-            noc.async_write<
-                Noc::TxnIdMode::DISABLED,
-                Noc::ResponseMode::NON_POSTED,
-                max_write_size>(
+            noc.async_write<NocOptions::DEFAULT, max_write_size>(
                 src_mem,
                 d,
                 to_write,

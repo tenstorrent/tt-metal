@@ -55,6 +55,8 @@ public:
     virtual uint32_t get_device_frequency_mhz(const FabricNodeId& device_id) const = 0;
     virtual bool is_multi_mesh() const = 0;
     virtual std::unordered_map<MeshId, std::unordered_set<MeshId>> get_mesh_adjacency_map() const = 0;
+    // Mesh IDs that have at least one available device, in deterministic (ascending) order.
+    virtual std::vector<MeshId> get_ordered_mesh_ids() const = 0;
     virtual uint32_t get_max_connections_per_device() const = 0;
 
     // Data reading helpers
@@ -118,12 +120,18 @@ public:
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const = 0;
     virtual RoutingDirection get_forwarding_direction(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
+    // NESW only. Z is not supported by this overload because a chip can have Z-link
+    // neighbors in multiple meshes, so collapsing a direction to a single neighbor is
+    // undefined. For Z (and any case where the destination is known), use the
+    // (src, dst, direction) overload below. For direction-only enumeration of physical
+    // links, query ControlPlane::get_active_fabric_eth_channels_in_direction() directly.
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_mcast_start_node_id(
         const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual std::pair<std::unordered_map<RoutingDirection, uint32_t>, uint32_t> get_sync_hops_and_val(
         const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const = 0;
+    // Z-safe: resolves link indices for the specific (src, dst) pair.
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
     virtual std::optional<FabricNodeId> get_neighbor_node_id_or_nullopt(

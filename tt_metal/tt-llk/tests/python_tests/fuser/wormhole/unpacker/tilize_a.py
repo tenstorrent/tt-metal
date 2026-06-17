@@ -99,6 +99,4 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-
-        return f"_llk_unpack_tilize_uninit_({config.sentinel.unpack_a_dst_format}, {face_r_dim});\n\n"
+        return f"_llk_unpack_tilize_uninit_({config.sentinel.unpack_a_dst_format});\n\n"

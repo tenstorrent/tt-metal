@@ -117,7 +117,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     };
     vector<TaEntry> ta_entries;
     settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset) {
+        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
             ta_entries.push_back({name, cta_offset, addr_crta_offset});
         });
 
@@ -134,7 +134,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     //
     //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
-    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArg.
+    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArgument.
     //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
     //       added automatically by the Metal 2.0 host API machinery.
     ostringstream content;
@@ -201,16 +201,15 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const fs::path path = out_dir / "kernel_args_generated.h";
 
     // Named RTAs/CRTAs come straight from the settings as ordered vectors.
-    const vector<string>& rta_names = settings.get_named_runtime_args();
-    const vector<string>& crta_names = settings.get_named_common_runtime_args();
+    const vector<string>& rta_names = settings.get_runtime_arg_names();
+    const vector<string>& crta_names = settings.get_common_runtime_arg_names();
 
-    // TensorBinding addresses occupy a structurally-separate, position-indexed section appended
-    // immediately after the user-named CRTAs in the kernel's CRTA buffer.
-    // We need to know how many there are so the vararg helpers below skip past the binding
-    // section to land at the first user vararg.
-    uint32_t tensor_binding_count = 0;
-    settings.process_tensor_binding_handles(
-        [&tensor_binding_count](const std::string&, uint32_t, uint32_t) { ++tensor_binding_count; });
+    // The kernel's CRTA buffer is laid out as three back-to-back sections:
+    //   [ user-named CRTAs | TensorBinding section | varargs ]
+    // The boundaries are precomputed at spec-resolution time and stored on the kernel,
+    // so we read them directly here. The vararg helpers below need the vararg-section
+    // start offset to skip past sections 1 and 2.
+    const KernelCrtaLayout crta_layout = settings.get_crta_layout();
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!
@@ -267,14 +266,13 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
     // around get_arg_val / get_common_arg_val.
-    // CRTA-side note: the kernel's CRTA buffer holds [user-named CRTAs, TensorBinding
-    // address section, varargs]. The vararg base must skip past the binding section as well.
+    // CRTA-side note: the vararg section starts at crta_layout.vararg_section_offset,
+    // which already accounts for both the user-named CRTAs and the TensorBinding section.
     const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
-    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size()) + tensor_binding_count;
     content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
-            << named_crta_words << " + idx); }\n";
+            << crta_layout.vararg_section_offset << " + idx); }\n";
 
     write_file(path, content.str());
 }
@@ -408,9 +406,11 @@ void emit_unpack_data_formats(
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
     uint32_t max_cbs) {
-    // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
+    // DataFormat values fit in a byte (Invalid==255); emit as uint8_t to save 3B/entry of LDM (the
+    // .data region shares the TRISC's 2KB local memory with the stack). Matches pack_src/dst_format
+    // and the unpack tile-dim arrays, which are already uint8_t. All consumers read+promote to uint32.
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -516,9 +516,9 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
     }
 
     if (std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
-            return f == DataFormat::MxFp4;
+            return tt::is_mx_format(f);
         })) {
-        TT_FATAL(arch == tt::ARCH::QUASAR, "MxFp4 format is only supported on Quasar");
+        TT_FATAL(arch == tt::ARCH::QUASAR, "Mx formats are only supported on Quasar");
     }
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
@@ -544,13 +544,15 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         std::move(pack_dst_formats_all_cbs)};
 }
 
-// Decomposes tile dimensions into (num_faces_r_dim, num_faces_c_dim) per CB.
-// Derived directly from tile_r_dim / face_r_dim and tile_c_dim / face_c_dim.
+// Decomposes logical faces into (num_faces_r_dim, num_faces_c_dim) per CB.
+// Some kernels use a compact row geometry that does not evenly divide the
+// default tile height, so derive the row-face count from total logical faces.
 // Runs on host at JIT time so division is fine.
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dims(
     const std::vector<uint32_t>& tile_r_dim_arr,
     const std::vector<uint32_t>& tile_c_dim_arr,
-    const std::vector<uint32_t>& face_r_dim_arr) {
+    const std::vector<uint32_t>& face_r_dim_arr,
+    const std::vector<uint32_t>& num_faces_arr) {
     TT_FATAL(
         tile_r_dim_arr.size() == tile_c_dim_arr.size(),
         "tile_r_dim_arr size ({}) must match tile_c_dim_arr size ({})",
@@ -561,23 +563,46 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
         "tile_r_dim_arr size ({}) must match face_r_dim_arr size ({})",
         tile_r_dim_arr.size(),
         face_r_dim_arr.size());
+    TT_FATAL(
+        tile_r_dim_arr.size() == num_faces_arr.size(),
+        "tile_r_dim_arr size ({}) must match num_faces_arr size ({})",
+        tile_r_dim_arr.size(),
+        num_faces_arr.size());
     const size_t n = tile_r_dim_arr.size();
     std::vector<uint32_t> r_dims(n);
     std::vector<uint32_t> c_dims(n);
     for (size_t i = 0; i < n; ++i) {
         TT_FATAL(face_r_dim_arr[i] > 0, "face_r_dim must be > 0 at index {}", i);
-        TT_FATAL(
-            tile_r_dim_arr[i] % face_r_dim_arr[i] == 0,
-            "tile_r_dim ({}) must be a multiple of face_r_dim ({})",
-            tile_r_dim_arr[i],
-            face_r_dim_arr[i]);
+        TT_FATAL(num_faces_arr[i] > 0, "num_faces must be > 0 at index {}", i);
         TT_FATAL(
             tile_c_dim_arr[i] % constants::FACE_WIDTH == 0,
             "tile_c_dim ({}) must be a multiple of FACE_WIDTH ({})",
             tile_c_dim_arr[i],
             constants::FACE_WIDTH);
-        r_dims[i] = tile_r_dim_arr[i] / face_r_dim_arr[i];
-        c_dims[i] = tile_c_dim_arr[i] / constants::FACE_WIDTH;
+        const uint32_t tile_c_faces = tile_c_dim_arr[i] / constants::FACE_WIDTH;
+        TT_FATAL(tile_c_faces > 0, "tile_c_dim ({}) must include at least one face", tile_c_dim_arr[i]);
+        c_dims[i] = std::min(tile_c_faces, num_faces_arr[i]);
+        TT_FATAL(
+            num_faces_arr[i] % c_dims[i] == 0,
+            "num_faces ({}) must be divisible by num_faces_c_dim ({})",
+            num_faces_arr[i],
+            c_dims[i]);
+        r_dims[i] = num_faces_arr[i] / c_dims[i];
+        // Guard against bogus (face_r_dim, num_faces) combos: the logical face grid must fit
+        // within the tile rows. e.g. (face_r_dim=9, num_faces=8) on a 32x32 tile would produce
+        // r_dims=4 -> 36 rows, overflowing the tile and corrupting downstream face addressing.
+        TT_FATAL(
+            r_dims[i] * face_r_dim_arr[i] <= tile_r_dim_arr[i],
+            "face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile_r_dim ({}) at "
+            "index {} (num_faces={}, num_faces_c_dim={}, tile_c_dim={})",
+            r_dims[i],
+            face_r_dim_arr[i],
+            r_dims[i] * face_r_dim_arr[i],
+            tile_r_dim_arr[i],
+            i,
+            num_faces_arr[i],
+            c_dims[i],
+            tile_c_dim_arr[i]);
     }
     return {r_dims, c_dims};
 }
@@ -592,7 +617,7 @@ void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t 
     emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
-        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -607,7 +632,7 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
-        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -666,7 +691,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
     out << "#endif\n";   // if pack
     out << "#endif\n\n"; // if not math and not unpack
 

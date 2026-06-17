@@ -276,6 +276,7 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
 
 // clang-format off
 /**

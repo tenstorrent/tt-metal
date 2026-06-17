@@ -37,7 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     UNUSED const std::uint32_t unpack_a_dst_format0 = ckernel::to_underlying(DataFormat::Float16_b);
     UNUSED const std::uint32_t unpack_b_src_format0 = ckernel::to_underlying(DataFormat::Float16_b);
     UNUSED const std::uint32_t unpack_b_dst_format0 = ckernel::to_underlying(DataFormat::Float16_b);
-    _llk_unpack_hw_configure_<false, false>(unpack_a_src_format0, unpack_b_src_format0, unpack_a_dst_format0, unpack_b_dst_format0, 16, 16, 4, 4, 128, 128);
+    _llk_unpack_hw_configure_<false>(unpack_a_src_format0, unpack_b_src_format0, unpack_a_dst_format0, unpack_b_dst_format0, 16, 16, 4, 4, 128, 128);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1, 16, 16);
@@ -67,7 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_AB_reduce_block_max_row_(L1_ADDRESS(buffer_A1[batch * 1 + 0]), L1_ADDRESS(buffer_B1[batch * 1 + 0]));
         }
-        _llk_unpack_AB_reduce_block_max_row_uninit_(16, 16);
+        _llk_unpack_AB_reduce_block_max_row_uninit_();
     }
     // Operation 2: Fused Unpack
     UNUSED const Operand buffer_A2(0x1a000, 2048);
@@ -170,8 +170,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_math_wait_for_dest_available_<dest_sync2>();
-        _llk_math_eltwise_binary_<ELWSUB, BroadcastType::COL, dest_sync2, false, ckernel::MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
-            ckernel::DEFAULT_TENSOR_SHAPE, 0, false);
+        _llk_math_eltwise_binary_<
+            EltwiseBinaryType::ELWSUB,
+            BroadcastType::COL,
+            dest_sync2,
+            false,
+            ckernel::MathFidelity::LoFi,
+            EltwiseBinaryReuseDestType::NONE>(ckernel::DEFAULT_TENSOR_SHAPE, 0 /*dst_index*/, false /*clear_fp32_dst_acc*/);
         _llk_math_dest_section_done_<dest_sync2, false>();
     }
     // Operation 3: Math Setup

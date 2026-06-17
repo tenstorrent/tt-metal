@@ -17,7 +17,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 
 
 class GateComputeMode(Enum):
@@ -25,11 +25,15 @@ class GateComputeMode(Enum):
 
     The gate has two stages: matmul (x @ W_gate) and grouped_gate (topk routing).
     Each can independently run on device (TTNN) or host (torch).
-    The device grouped-gate has two variants: bf16 (default) and fp32.
+    The device gate has two precision variants: bf16 (default) and fp32.
+
+    The device gate routing rule is selected from the model config: the grouped-topk
+    op handles both cases, collapsing to a plain top-k when there is a single expert
+    group (n_expert_groups == 1, e.g. Kimi) and using grouped routing otherwise.
     """
 
-    DEVICE = "device"  # matmul device, grouped gate device (bf16)
-    DEVICE_FP32 = "device_fp32"  # matmul device, grouped gate device (fp32)
+    DEVICE = "device"  # matmul device, gate device (bf16)
+    DEVICE_FP32 = "device_fp32"  # matmul device, gate device (fp32)
     HOST_GROUPED_GATE = "host_grouped_gate"  # matmul device, grouped gate host
     HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device (bf16)
     HOST_ALL = "host_all"  # matmul host, grouped gate host
@@ -42,19 +46,35 @@ class TtMoEGateConfig:
     ccl_config: dict = field(default_factory=lambda: {"DISPATCH_AXIS": 0, "TP_AXIS": 1, "NUM_LINKS": 2})
     mm_configs: dict = field(
         default_factory=lambda: {
-            # Keyed by (sp_dim, per_device_emb_dim); forward() looks up the tuple.
-            # Missing key → TTNN auto-picks program config.
-            (4096, DeepSeekV3Config.EMB_SIZE // 4): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                in0_block_w=56,
-                out_subblock_h=2,
-                out_subblock_w=4,
-                out_block_h=2,
-                out_block_w=4,
-                per_core_M=2,
-                per_core_N=8,
-                fuse_batch=True,
-                mcast_in0=False,
+            # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
+            # per_core_N = n_routed_experts / 32 (tile width). Missing key → TTNN auto-picks.
+            (4096, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    out_block_h=2,
+                    out_block_w=4,
+                    per_core_M=2,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (4096, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    out_block_h=2,
+                    out_block_w=4,
+                    per_core_M=2,
+                    per_core_N=12,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
             ),
             "COMPUTE_CONFIG": ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -87,6 +107,20 @@ class TtMoEGateConfig:
     @property
     def num_cores(self):
         return self.core_grid.num_cores()
+
+    @classmethod
+    def from_model_cfg(cls, model_cfg: type, **overrides) -> "TtMoEGateConfig":
+        """Build from a TestVariant.model_config class. Extra kwargs override per-instance."""
+        return cls(
+            dim=model_cfg.EMB_SIZE,
+            n_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
+            n_shared_experts=model_cfg.NUM_SHARED_EXPERTS,
+            n_activated_experts=model_cfg.NUM_EXPERTS_PER_TOKEN,
+            n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
+            n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
+            route_scale=model_cfg.ROUTE_SCALE,
+            **overrides,
+        )
 
 
 class TtMoEGatePrefill(LightweightModule):
@@ -220,8 +254,6 @@ class TtMoEGatePrefill(LightweightModule):
         self,
         config,
         mesh_device,
-        dispatch_table: torch.Tensor,
-        experts_per_chip: int,
         weight: torch.Tensor = None,
         bias: torch.Tensor = None,
         fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
@@ -232,7 +264,6 @@ class TtMoEGatePrefill(LightweightModule):
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
-            experts_per_chip: Number of experts per chip (for expert region offset grouping in offset_cumsum).
         """
         self.config = config
         self.mesh_device = mesh_device
@@ -272,10 +303,6 @@ class TtMoEGatePrefill(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-        )
-
-        self.routing_setup = TtMoERoutingSetup(
-            mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"], experts_per_chip=experts_per_chip
         )
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
@@ -384,7 +411,7 @@ class TtMoEGatePrefill(LightweightModule):
         assert (
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
-        config_key = (self.config.sp_dim, per_device_dim)
+        config_key = (self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
         program_config = self.config.mm_configs.get(config_key)
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
@@ -463,7 +490,7 @@ class TtMoEGatePrefill(LightweightModule):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
         logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
@@ -477,8 +504,15 @@ class TtMoEGatePrefill(LightweightModule):
 
         # ---- Phase 2: Grouped gate ----
         signpost(header="moe_gate_grouped_gate")
+        # The device gate kernels select the routing rule from n_expert_groups: with a single expert
+        # group (n_expert_groups == 1, e.g. Kimi) the grouped-topk op collapses to a plain top-k.
+        single_group = self.config.n_expert_groups == 1
         if mode == GateComputeMode.DEVICE:
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
+            # The bf16 grouped gate (deepseek_grouped_gate) only supports the multi-group DeepSeek
+            # shape; single-group models route through moe_grouped_topk (fp32), which handles n_groups == 1.
+            ttnn_scores, ttnn_top_k_experts_indices = (
+                self._device_grouped_gate_fp32(logits) if single_group else self._device_grouped_gate(logits)
+            )
 
         elif mode == GateComputeMode.DEVICE_FP32:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(logits)
@@ -500,23 +534,8 @@ class TtMoEGatePrefill(LightweightModule):
             logits = self._host_logits_to_device(host_logits)
         signpost(header="moe_gate_grouped_gate")
 
-        # ---- Phase 3: Routing setup ----
-        signpost(header="moe_gate_calculate_dispatch_offsets")
-        ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
-
-        dispatch_offsets, total_counts_per_expert, expert_region_offsets, _ = self.routing_setup(
-            ttnn_top_k_experts_indices=ttnn_top_k_experts_indices,
-            num_routed_experts=self.config.n_routed_experts,
-            seq_len_per_chip=self.config.sp_dim,
-            num_experts_per_tok=self.config.n_activated_experts,
-        )
-        signpost(header="moe_gate_calculate_dispatch_offsets")
-
         return (
             ttnn_scores,
             ttnn_top_k_experts_indices,
             logits,
-            dispatch_offsets,
-            total_counts_per_expert,
-            expert_region_offsets,
         )

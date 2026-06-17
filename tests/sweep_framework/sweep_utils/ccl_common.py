@@ -22,26 +22,61 @@ def mesh_shape_iterator(num_devices, limit=None):
 
 
 @contextmanager
-def device_context(mesh_shape, fabric_config, device_params=None):
+def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shape=None):
+    """Open a mesh (or a submesh of the full galaxy) with the given fabric config.
+
+    full_mesh_shape: when set and != mesh_shape, open the FULL galaxy mesh first
+    (so fabric bring-up runs over the whole, healthy ethernet topology) and then
+    carve `mesh_shape` out of it via create_submesh. Opening MeshShape(submesh)
+    DIRECTLY on a galaxy fails fabric router sync on the submesh's boundary
+    ethernet links (they connect to chips outside the carved region); a submesh of
+    the already-synced full-mesh fabric works.
+    """
     device_params = device_params or {}
+    parent_device = None
     mesh_device = None
     try:
         logger.info("Setting up device")
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         ttnn.set_fabric_config(fabric_config)
-        mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(mesh_shape), **get_updated_device_params(device_params)
-        )
+        if full_mesh_shape is not None and tuple(full_mesh_shape) != tuple(mesh_shape):
+            logger.info(f"Opening full mesh {tuple(full_mesh_shape)} then carving submesh {tuple(mesh_shape)}")
+            parent_device = ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(full_mesh_shape), **get_updated_device_params(device_params)
+            )
+            mesh_device = parent_device.create_submesh(ttnn.MeshShape(mesh_shape))
+        else:
+            mesh_device = ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(mesh_shape), **get_updated_device_params(device_params)
+            )
         yield mesh_device, None
     except AssertionError as e:
         logger.error(f"Device error: {e}")
         yield None, f"Device error {e}"
     finally:
         logger.info("Tearing down device")
-        if mesh_device:
-            ttnn.close_mesh_device(mesh_device)
+        try:
+            # Closing the parent (full) mesh tears down its submeshes; only close the
+            # standalone mesh directly when no parent was opened.
+            if parent_device is not None:
+                # The carved submesh shares the parent's command queue. Closing the
+                # parent while that CQ is still flagged in-use throws
+                # "cq ID 0 is in use by child submesh" (mesh_device.cpp). quiesce_devices()
+                # drains the parent's and all submeshes' CQs and resets their in-use state
+                # (the only path that does so), so the close is clean. Guard it: a drain
+                # failure must never mask the real test result.
+                try:
+                    parent_device.quiesce_devices()
+                except Exception:
+                    logger.opt(exception=True).warning("quiesce_devices during teardown failed")
+                ttnn.close_mesh_device(parent_device)
+            elif mesh_device:
+                ttnn.close_mesh_device(mesh_device)
+        finally:
+            # Always restore fabric to DISABLED — even if open_mesh_device /
+            # create_submesh failed before a device was assigned, or close_mesh_device
+            # raised. Leaving fabric enabled would break every subsequent suite.
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-            del mesh_device
 
 
 def get_serializable_shard_specs(
