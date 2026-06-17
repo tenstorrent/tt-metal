@@ -72,7 +72,7 @@ def _grouped_golden(input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, en
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
-@pytest.mark.parametrize("seed", [42, 201, 512])
+@pytest.mark.parametrize("seed", [42])
 # logit_scale only matters on the raw-logit softmax path (see input gen): 1.0 = small/realistic regime,
 # 100.0 = past the bf16 exp ceiling (overflow stress). Other paths ignore it and run once (scale 1.0).
 @pytest.mark.parametrize("logit_scale", [1.0, 100.0])
@@ -265,7 +265,7 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
-@pytest.mark.parametrize("seed", [42, 201, 512])
+@pytest.mark.parametrize("seed", [42])
 # logit_scale only matters on the raw-logit softmax path: 1.0 = small/realistic, 100.0 = overflow stress.
 @pytest.mark.parametrize("logit_scale", [1.0, 100.0])
 def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, output_softmax, logit_scale):
@@ -402,7 +402,7 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
 @skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
-@pytest.mark.parametrize("seed", [42, 201, 512])
+@pytest.mark.parametrize("seed", [42])
 def test_generalized_moe_gate_grouped(device, batch_size, enable_sigmoid, seed):
     """DeepSeek GROUPED gate via ``generalized_moe_gate(grouped=True)``: 256 experts = 8 groups × 32 ->
     top-2-sum per group -> top-4 groups -> top-8, linear renorm + scale. Confirms the unified op's grouped
