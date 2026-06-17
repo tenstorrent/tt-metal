@@ -55,11 +55,9 @@ ALWI void gelu_tile_pack(uint32_t idst) {
 }
 
 /**
- * Init for gelu_tanh_f32_tile. See gelu_tanh_f32_tile() for semantics.
+ * Init for gelu_tanh_tile. See gelu_tanh_tile() for semantics.
  */
-ALWI void gelu_tanh_f32_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(gelu_tanh_f32, sfpu::gelu_tanh_f32_init, (DST_ACCUM_MODE)));
-}
+ALWI void gelu_tanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::gelu_tanh_init, (DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
@@ -79,9 +77,8 @@ ALWI void gelu_tanh_f32_tile_init() {
  * | tile_index       | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void gelu_tanh_f32_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh_f32, (DST_ACCUM_MODE), idst, VectorMode::RC));
+ALWI void gelu_tanh_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**

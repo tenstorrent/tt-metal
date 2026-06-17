@@ -619,8 +619,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init<false>();", fmt::format("recip_tile<false>({});", idst)};
         case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
-        case UnaryOpType::GELU_TANH:
-            return {"gelu_tanh_f32_tile_init();", fmt::format("gelu_tanh_f32_tile({});", idst)};
+        case UnaryOpType::GELU_TANH: return {"gelu_tanh_tile_init();", fmt::format("gelu_tanh_tile({});", idst)};
         case UnaryOpType::LOG: return {"log_tile_init();", fmt::format("log_tile({});", idst)};
         case UnaryOpType::LOG1P: return {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)};
         case UnaryOpType::TANH: return {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)};

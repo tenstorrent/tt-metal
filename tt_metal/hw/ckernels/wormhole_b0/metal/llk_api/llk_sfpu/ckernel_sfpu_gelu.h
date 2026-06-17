@@ -16,7 +16,7 @@
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
-#include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh_f32
+#include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -353,7 +353,7 @@ inline void calculate_gelu() {
 //   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
 //
 // Reproduces the per-op FP32 rounding of the ttnn op sequence in
-// gelu_tanh_f32(): each multiply/add is materialized to a vFloat before being
+// gelu_tanh(): each multiply/add is materialized to a vFloat before being
 // consumed, so no SFPMAD fusion changes the last-bit result. The tanh call is
 // the same _sfpu_tanh_fp32_accurate_ that ttnn.tanh dispatches to under FP32
 // accumulator, so its output is bit-identical to ttnn.tanh.
@@ -365,7 +365,7 @@ inline void calculate_gelu() {
 // =============================================================================
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_gelu_tanh_f32() {
+inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
 
@@ -403,7 +403,7 @@ inline void calculate_gelu_tanh_f32() {
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void gelu_tanh_f32_init() {
+inline void gelu_tanh_init() {
     // _sfpu_tanh_fp32_accurate_ internally calls _sfpu_sigmoid_, which needs
     // its programmable-constants init. tanh_init<false, fp32> does exactly
     // that (see ckernel_sfpu_tanh.h:178-196).
