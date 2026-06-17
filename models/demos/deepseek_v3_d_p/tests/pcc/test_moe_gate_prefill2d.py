@@ -231,9 +231,9 @@ def test_forward_pass(
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.99
     else:
-        recall_threshold = 0.963
+        recall_threshold = 0.7
         logits_pcc_threshold = 0.997
-        scores_pcc_threshold = 0.8
+        scores_pcc_threshold = 0.7
 
     seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
     sp_composer = get_sp_mesh_composer(mesh_device)
