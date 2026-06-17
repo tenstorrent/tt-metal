@@ -106,9 +106,13 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
     DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tile_size(cb_data_format);
+    // Use the tensor's ACTUAL tile geometry (not the default 32x32) so the CB page
+    // size matches the per-shard tile count (which is derived from tile_hw below).
+    // For standard 32x32 tiles this equals tile_size(df) -- backward compatible; for
+    // tiny tiles (e.g. 16x32) it avoids over-sizing the CB past the sharded L1 bank.
+    uint32_t single_tile_size = input.tensor_spec().tile().get_tile_size(cb_data_format);
     DataFormat cb_data_format_output = datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tile_size(cb_data_format_output);
+    uint32_t single_tile_size_output = output.tensor_spec().tile().get_tile_size(cb_data_format_output);
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();

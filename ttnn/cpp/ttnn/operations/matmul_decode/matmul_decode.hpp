@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
 
@@ -21,6 +22,7 @@ Tensor matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
-    std::optional<const DataType> dtype = std::nullopt);
+    std::optional<const DataType> dtype = std::nullopt,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn

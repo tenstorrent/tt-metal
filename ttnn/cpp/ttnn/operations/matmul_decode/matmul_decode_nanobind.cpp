@@ -9,6 +9,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/matmul_decode/matmul_decode.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::matmul_decode {
@@ -29,6 +30,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 factory, where B is sharded along both K and N and the K-partials are reduced
                 across cores. Defaults to False (factory chosen automatically).
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): math fidelity /
+                fp32 dest accumulation / approx-mode config for the compute kernel. Defaults to
+                None (HiFi4).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -38,7 +42,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("input_tensor_b"),
         nb::kw_only(),
         nb::arg("partial_width_sharded") = false,
-        nb::arg("dtype") = nb::none());
+        nb::arg("dtype") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::matmul_decode

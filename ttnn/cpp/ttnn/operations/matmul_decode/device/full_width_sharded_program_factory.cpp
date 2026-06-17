@@ -354,9 +354,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         inB_N_tiles_per_core,
         inA_K_tiles_per_core,
     };
+    const auto ckc = ttnn::init_device_compute_kernel_config(
+        input_tensor_a.device()->arch(),
+        operation_attributes.compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/false);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
-        .math_approx_mode = false,
+        .math_fidelity = ckc.math_fidelity,
+        .fp32_dest_acc_en = ckc.fp32_dest_acc_en,
+        .dst_full_sync_en = ckc.dst_full_sync_en,
+        .math_approx_mode = ckc.math_approx_mode,
     };
     desc.kernels.push_back(std::move(compute_kernel_desc));
 

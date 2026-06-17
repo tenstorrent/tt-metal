@@ -11,6 +11,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::matmul_decode {
@@ -36,6 +37,9 @@ struct MatmulDecodeDeviceOperation {
         // both K and N with a cross-core K-reduction). When false, the factory is chosen
         // automatically from the input layouts.
         bool partial_width_sharded = false;
+        // Optional compute-kernel config (math fidelity, fp32 dest acc, approx mode).
+        // When unset the factories default to HiFi4 (the op's original hardcoded value).
+        std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     };
 
     // Tensors passed in/out of the operation.
@@ -103,5 +107,6 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
-    std::optional<const DataType> dtype = std::nullopt);
+    std::optional<const DataType> dtype = std::nullopt,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim

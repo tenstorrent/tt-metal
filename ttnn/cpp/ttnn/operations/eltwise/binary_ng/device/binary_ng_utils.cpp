@@ -697,7 +697,11 @@ template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<Fp
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
-    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    const tt::tt_metal::ShardSpec& shard_spec,
+    const ttnn::Shape& from_shape,
+    const ttnn::Shape& to_shape,
+    uint32_t tile_h,
+    uint32_t tile_w) {
     auto ret = shard_spec;
 
     // Calculate volume of all dimensions EXCEPT the last (width)
@@ -723,8 +727,11 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     // Adjust shard shape based on full volume ratios
     TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
     TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
-    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    // Clamp each shard dim to at least ONE tile (was hardcoded 32x32). Using the actual
+    // tile geometry keeps tiny-tile (e.g. 16-row) width-sharded layouts intact instead of
+    // forcing the shard height up to 32. Standard 32x32 tiles are unchanged.
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, tile_h);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, tile_w);
     return ret;
 }
 

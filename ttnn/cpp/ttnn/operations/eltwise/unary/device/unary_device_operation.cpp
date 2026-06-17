@@ -120,7 +120,7 @@ TensorSpec UnaryDeviceOperation::compute_output_specs(
             output_shape,
             TensorLayout(
                 args.output_dtype,
-                PageConfig(output_layout),
+                PageConfig(output_layout, tensor_args.input.tensor_spec().tile()),
                 MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
@@ -129,7 +129,7 @@ TensorSpec UnaryDeviceOperation::compute_output_specs(
         output_shape,
         TensorLayout::fromPaddedShape(
             args.output_dtype,
-            PageConfig(output_layout),
+            PageConfig(output_layout, tensor_args.input.tensor_spec().tile()),
             args.memory_config,
             output_shape,
             tensor_args.input.padded_shape()));

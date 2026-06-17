@@ -423,9 +423,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
 
-    uint32_t a_single_tile_size = tt::tile_size(a_data_format);
-    uint32_t b_single_tile_size = tt::tile_size(b_data_format);
-    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
+    // Size CB pages from the tensors' ACTUAL tile geometry (not the default 32x32) so
+    // the page size matches the per-shard tile count (derived from tile_hw above). For
+    // standard 32x32 tiles this equals tt::tile_size(df) -- backward compatible; for tiny
+    // tiles (e.g. 16x32) it avoids over-sizing a sharded CB past its L1 bank.
+    uint32_t a_single_tile_size = a.tensor_spec().tile().get_tile_size(a_data_format);
+    uint32_t b_single_tile_size =
+        b.has_value() ? b->tensor_spec().tile().get_tile_size(b_data_format) : tt::tile_size(b_data_format);
+    uint32_t c_single_tile_size = c.tensor_spec().tile().get_tile_size(c_data_format);
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;

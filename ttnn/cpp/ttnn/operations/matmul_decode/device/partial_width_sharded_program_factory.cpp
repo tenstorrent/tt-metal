@@ -501,9 +501,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Kc_tiles,
         Nc_tiles,
         K_blocks);
+    const auto ckc = ttnn::init_device_compute_kernel_config(
+        input_tensor_a.device()->arch(),
+        operation_attributes.compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/false);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
-        .math_approx_mode = false,
+        .math_fidelity = ckc.math_fidelity,
+        .fp32_dest_acc_en = ckc.fp32_dest_acc_en,
+        .dst_full_sync_en = ckc.dst_full_sync_en,
+        .math_approx_mode = ckc.math_approx_mode,
     };
     compute_kernel_desc.runtime_args.reserve(b_cores.size());
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {

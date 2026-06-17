@@ -120,7 +120,11 @@ struct AllShardSpecs {
 };
 
 tt::tt_metal::ShardSpec adjust_to_shape(
-    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+    const tt::tt_metal::ShardSpec& shard_spec,
+    const ttnn::Shape& from_shape,
+    const ttnn::Shape& to_shape,
+    uint32_t tile_h = 32,
+    uint32_t tile_w = 32);
 
 struct AllShardVolumes {
     std::optional<std::uint32_t> a_shard_volume;

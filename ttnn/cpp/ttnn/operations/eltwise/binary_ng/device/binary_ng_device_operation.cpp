@@ -448,13 +448,23 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 // Adjust shard spec from input A to match output shape
                 const auto& padded_a_shape = input_tensor_a.padded_shape();
 
+                const auto a_tile = input_tensor_a.tensor_spec().tile();
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
-                    *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+                    *input_tensor_a.memory_config().shard_spec(),
+                    padded_a_shape,
+                    padded_out_shape,
+                    a_tile.get_height(),
+                    a_tile.get_width());
             } else if (tensor_b.has_value() && tensor_b->is_sharded()) {
                 // Adjust shard spec from input B to match output shape
                 const auto& padded_b_shape = tensor_b->padded_shape();
+                const auto b_tile = tensor_b->tensor_spec().tile();
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
-                    *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
+                    *tensor_b->memory_config().shard_spec(),
+                    padded_b_shape,
+                    padded_out_shape,
+                    b_tile.get_height(),
+                    b_tile.get_width());
             } else {
                 shard_spec_opt = utils::generate_shard_spec_all_cores(input_tensor_a, padded_out_shape, memory_layout);
             }
@@ -464,13 +474,17 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
             output_shape,
             TensorLayout(
                 output_dtype,
-                PageConfig(attributes.output_layout),
+                PageConfig(attributes.output_layout, input_tensor_a.tensor_spec().tile()),
                 MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
     // If not sharded, use the memory config from input a that is interleaved
     return TensorSpec(
-        output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
+        output_shape,
+        TensorLayout(
+            output_dtype,
+            PageConfig(attributes.output_layout, input_tensor_a.tensor_spec().tile()),
+            attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(

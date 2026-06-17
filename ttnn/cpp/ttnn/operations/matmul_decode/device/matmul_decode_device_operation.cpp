@@ -146,11 +146,24 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     output_shape[-1] = operation_attributes.N;
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
-    int output_num_cores = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+
+    // N-packing: the output N-slice owned by each (base) core equals that core's
+    // inputB N-width (Nc). When the caller width-shards B with Nc spanning multiple
+    // 32-tiles, the output collapses onto N/Nc cores instead of N/32 -- so a wide N
+    // (e.g. 4096 -> 128 tiles) can fit a small grid (e.g. 110 cores) in a SINGLE call
+    // rather than being split into multiple matmul_decode calls. The compute kernel
+    // already iterates Nc_tiles per core. When B is not sharded (skeleton/multicore
+    // path) fall back to one 32-wide tile per core (legacy behaviour).
+    int per_core_output_width = tt::constants::TILE_WIDTH;
+    const auto& b_mem = tensor_args.input_tensor_b.memory_config();
+    if (b_mem.is_sharded() && b_mem.shard_spec().has_value()) {
+        per_core_output_width = b_mem.shard_spec().value().shape[1];
+    }
+    int output_num_cores = tt::div_up(operation_attributes.N, per_core_output_width);
     CoreRangeSet output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
         output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
-    int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
-    std::array<uint32_t, 2> shard_shape = {operation_attributes.M, per_core_output_width};
+    std::array<uint32_t, 2> shard_shape = {
+        static_cast<uint32_t>(operation_attributes.M), static_cast<uint32_t>(per_core_output_width)};
     auto shard_spec =
         tt::tt_metal::ShardSpec(output_core_range_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
     auto memory_config = MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec);
@@ -176,7 +189,8 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded,
-    std::optional<const DataType> dtype) {
+    std::optional<const DataType> dtype,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -206,6 +220,7 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         input_tensor_a.memory_config(),
         dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
         partial_width_sharded,
+        compute_kernel_config,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
