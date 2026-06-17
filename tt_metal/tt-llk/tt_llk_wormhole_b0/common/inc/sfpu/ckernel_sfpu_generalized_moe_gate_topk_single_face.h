@@ -425,15 +425,23 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale)
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
 }
 
-// ============================================================================
-// UNGROUPED top-8
-//
-// Merges the 4 sorted-descending top-8 runs at columns {read_base, +2, +4, +6}
-// into a single top-8 and stores it (bias value + LO16 index + HI16 score) at
-// columns {store_lo, store_hi}. This is exactly the existing top8's 4-column
-// merge (stage 1 + stage 2 of _generalized_moe_gate_top8), with the initial load
-// offsets and the final store offsets parameterized. Stage 2 is base-independent.
-// ============================================================================
+/**
+ * @brief Merge 4 sorted-descending top-8 runs at DEST columns {read_base, +2, +4, +6} into a single top-8
+ *        and store it (bias value + LO16 index + HI16 score) at columns {store_lo, store_hi}.
+ *
+ * This is the existing top8's 4-column merge (stage 1 + stage 2 of _generalized_moe_gate_top8) with the
+ * initial load offsets and final store offsets parameterized; stage 2 is base-independent. SFPU (MATH).
+ *
+ * @tparam is_fp32_dest_acc_en: DEST accumulation mode; must be false — the idx|score concat relies on 16-bit
+ *         (bf16) DEST packing (LO16 index / HI16 score).
+ * @tparam read_base: DEST column base of the 4 input runs (loaded at read_base + {0,2,4,6}).
+ * @tparam store_lo: DEST column for the merged run's low half (bias/idx/score).
+ * @tparam store_hi: DEST column for the merged run's high half.
+ * @note Resets the Dst RWC counter at entry (TTI_SETRWC SET_D): a preceding FPU MOP (e.g. copy4rows) leaves
+ *       it advanced by +64/tile, which would bias the SFPLOAD offsets — so run this after any such MOP.
+ *       Reads bias(mode 0)/indices(LO16)/scores(HI16) at the read columns and writes the same convention at
+ *       the store columns; clobbers LREG0-7. @ref _gmg_merge16_to_run is the full-16 (two-run) variant.
+ */
 template <bool is_fp32_dest_acc_en, std::uint32_t read_base, std::uint32_t store_lo, std::uint32_t store_hi>
 inline void _gmg_merge4_top8()
 {
@@ -483,9 +491,20 @@ inline void _gmg_merge4_top8()
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_hi);
 }
 
-// Copy a stored top-8 run (bias + concat idx|score) from offset pair {from_lo,from_hi} to
-// {to_lo,to_hi}, matching _gmg_merge4_top8's store convention (bias mode 0; idx LO16, score HI16).
-// Used to relocate a saved run (e.g. topA parked at safe rows 8-15) into the final merge slot.
+/**
+ * @brief Copy a stored top-8 run (bias + concat idx|score) from DEST column pair {from_lo,from_hi} to
+ *        {to_lo,to_hi}, matching _gmg_merge4_top8's store convention (bias mode 0; idx LO16; score HI16).
+ *
+ * Used to relocate a saved run (e.g. topA parked at safe rows 8-15) into the final merge slot. SFPU (MATH).
+ *
+ * @tparam from_lo: source DEST column for the run's low half.
+ * @tparam from_hi: source DEST column for the run's high half.
+ * @tparam to_lo: destination DEST column for the low half.
+ * @tparam to_hi: destination DEST column for the high half.
+ * @note Resets the Dst RWC counter at entry (TTI_SETRWC SET_D): a preceding FPU MOP (e.g. copy4rows) leaves
+ *       it advanced, which would bias the SFPLOAD/SFPSTORE offsets — run this after any such MOP. Clobbers
+ *       LREG0/1/4/5.
+ */
 template <std::uint32_t from_lo, std::uint32_t from_hi, std::uint32_t to_lo, std::uint32_t to_hi>
 inline void _gmg_copy_topk_run()
 {
@@ -558,9 +577,24 @@ inline void _gmg_merge16_core()
     bitonic_top8_ph0_to_ph3<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir>();
 }
 
-// merge16 -> re-mergeable RUN at {store_lo, store_hi} (bias mode0; idx LO16; score HI16), the same
-// store convention as _gmg_merge4_top8. Used for a block's top-8 and combine-tree intermediates so a
-// later _gmg_merge16_* (reading {0,2}+{4,6}) can consume it. No normalize.
+/**
+ * @brief Full-sort the 16 candidates (two sorted-8 runs at DEST columns {0,2}+{4,6}) into the global top-8
+ *        and store it as a re-mergeable run at {store_lo, store_hi}; no normalize.
+ *
+ * Same store convention as _gmg_merge4_top8 (bias mode 0; idx LO16; score HI16). Used for a block's top-8
+ * and for combine-tree intermediates, so a later merge16 (reading {0,2}+{4,6}) can consume the run. SFPU (MATH).
+ *
+ * @tparam APPROXIMATION_MODE: fast-approx mode forwarded to the bitonic sort.
+ * @tparam is_fp32_dest_acc_en: DEST accumulation mode; must be false.
+ * @tparam store_lo: DEST column for the run's low half.
+ * @tparam store_hi: DEST column for the run's high half.
+ * @tparam idx_offset: per-block expert-id base (b*256) added to the run's indices to make them GLOBAL; 0 = none.
+ * @note Calls @ref _gmg_merge16_core, which resets the Dst RWC counter and enables SFPU index tracking, and
+ *       reads the two input runs at columns {0,2} and {4,6}; clobbers LREG0-7 (and LREG14 via the core). When
+ *       idx_offset != 0 it adds it to the idx (LO16) of the concat with a raw SFPIADD (idx + offset <= 511
+ *       never carries into the score HI16). Produces a RUN, not a normalized output — @ref
+ *       _generalized_moe_gate_finalize_ungrouped is the normalizing terminal variant.
+ */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t store_lo, std::uint32_t store_hi, std::uint32_t idx_offset = 0>
 inline void _gmg_merge16_to_run()
 {
@@ -586,6 +620,27 @@ inline void _gmg_merge16_to_run()
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_hi);
 }
 
+/**
+ * @brief Terminal ungrouped finalize: merge the two sorted-8 runs at DEST columns {0,2}+{4,6} into the
+ *        global top-8, keep the top-`topk`, normalize (softmax-over-selected or linear) and scale, then
+ *        write the normalized scores and their expert indices back to the score/index regions.
+ *
+ * For 256 experts the two runs are topA/topB; for >256 they are the last two block/subtree runs of the
+ * combine tree. SFPU (MATH). The softmax max-subtraction (bf16-overflow-safe) and the top-n masking
+ * mechanics are documented inline in the body.
+ *
+ * @tparam APPROXIMATION_MODE: fast-approx mode forwarded to the bitonic sort and exp.
+ * @tparam is_fp32_dest_acc_en: DEST accumulation mode; must be false.
+ * @tparam topk: number of experts to keep (<= 8); ranks >= topk are zeroed before normalize. 8 = full top-8.
+ * @tparam output_softmax: true = softmax over the selected top-k (exp before the mask, max-subtracted);
+ *         false = linear renormalize (score / Σ).
+ * @param eps: denominator stabilization added to the normalization sum.
+ * @param scale: routed scaling factor applied to the normalized scores.
+ * @note Calls @ref _gmg_merge16_core (which resets the Dst RWC counter and enables index tracking) and reads
+ *       the two input runs at columns {0,2} and {4,6}; resets Dst RWC again internally before the softmax /
+ *       normalize tails. Clobbers LREG0-7 (and LREG14). TERMINAL variant — it normalizes and writes the
+ *       output; @ref _gmg_merge16_to_run is the non-normalizing run-producing variant.
+ */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false>
 inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uint32_t scale)
 {

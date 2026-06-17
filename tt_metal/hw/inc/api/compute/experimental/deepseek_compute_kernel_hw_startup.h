@@ -14,6 +14,14 @@ namespace ckernel {
 constexpr uint32_t SFPU_FPU = semaphore::UNPACK_MATH_DONE;
 }
 
+/**
+ * @brief Initialize the DeepSeek compute kernel: set up the FPU<->SFPU handshake semaphores, then run the
+ *        default hardware startup. Call once at kernel start, before the compute loop.
+ * @note MATH: init the FPU_SFPU semaphore. PACK: init the SFPU_FPU (= UNPACK_MATH_DONE) semaphore. The two
+ *       gate the cross-thread FPU<->SFPU handshake the DeepSeek kernels rely on; the call then runs
+ *       compute_kernel_hw_startup(0, 0, 0). Use @ref deepseek_compute_kernel_hw_startup instead when the
+ *       kernel needs configurable fp32 dest accumulation or non-default CB indices.
+ */
 ALWI void deepseek_compute_kernel_init() {
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
