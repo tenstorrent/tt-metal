@@ -221,6 +221,27 @@ class VaeEncodeRequest(BaseModel):
     image: Dict[str, Any]  # base64 .npy payload, [B, H, W, C]
 
 
+# Video-staged models (wan22): mirror the SDXL staged contract but carry the wan
+# generation knobs. The split maps to WanRunner.denoise / WanRunner.vae_decode.
+
+
+class VideoDenoiseRequest(BaseModel):
+    """Staged wan22 denoise (Wan Sampler) request — returns latents, not frames."""
+
+    prompt: str
+    negative_prompt: Optional[str] = ""
+    num_inference_steps: Optional[int] = Field(default=None, ge=1, le=200)
+    guidance_scale: Optional[float] = Field(default=None, ge=1.0, le=20.0)
+    guidance_scale_2: Optional[float] = Field(default=None, ge=1.0, le=20.0)
+    flow_shift: Optional[float] = Field(default=None, ge=0.0, le=30.0)
+    boundary_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    seed: Optional[int] = None
+
+
+class VideoVaeDecodeRequest(BaseModel):
+    latent: Dict[str, Any]  # base64 .npy payload, [B, z_dim, F, H, W]
+
+
 # ---------------------------------------------------------------------------
 # Global server state
 # ---------------------------------------------------------------------------
@@ -542,6 +563,43 @@ async def vae_encode(request: VaeEncodeRequest):
     result = _submit_and_wait({"op": "vae_encode", "image": images})
     return TensorResponse(
         latent=ndarray_to_b64npy(result["tensor"]),
+        inference_time=result.get("inference_time", 0.0),
+        model=model_label,
+    )
+
+
+def _require_video_staged_support():
+    """Staged video ops (denoise/vae) are served only by a video model (wan22)."""
+    if model_kind != "video":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Staged video ops (denoise/vae) require a video model, not '{model_label}'.",
+        )
+
+
+@app.post("/video/denoise", response_model=TensorResponse)
+async def video_denoise(request: VideoDenoiseRequest):
+    """Staged wan22 denoise (Wan Sampler): encode + denoise loop, return latents."""
+    _require_video_staged_support()
+    req = request.dict()
+    req["op"] = "denoise"
+    # Video denoise runs the full sampling loop — allow the long video timeout.
+    result = _submit_and_wait(req, timeout_seconds=max(config.inference_timeout_seconds, 3600.0))
+    return TensorResponse(
+        latent=ndarray_to_b64npy(result["tensor"]),
+        inference_time=result.get("inference_time", 0.0),
+        model=model_label,
+    )
+
+
+@app.post("/video/vae_decode", response_model=TensorResponse)
+async def video_vae_decode(request: VideoVaeDecodeRequest):
+    """Staged wan22 VAE decode: latents [B, z_dim, F, H, W] -> frames [T, H, W, C] in [0, 1]."""
+    _require_video_staged_support()
+    latents = b64npy_to_ndarray(request.latent)
+    result = _submit_and_wait({"op": "vae_decode", "latent": latents})
+    return TensorResponse(
+        image=ndarray_to_b64npy(result["tensor"]),
         inference_time=result.get("inference_time", 0.0),
         model=model_label,
     )

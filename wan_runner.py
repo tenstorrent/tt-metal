@@ -135,6 +135,70 @@ class WanRunner:
             frames = frames[0]
         return [frames]
 
+    # -- staged ops (mirror SDXLRunner.denoise / vae_decode) ---------------
+    #
+    # The Wan pipeline already separates the two stages: __call__(output_type="latent")
+    # runs the (traced) denoise loop and returns host latents without VAE; _decode_latents
+    # runs the VAE decode independently. Both are warmed during load_model's full-pipeline
+    # warmup. Geometry (height/width/num_frames) stays fixed at construction time.
+
+    def _build_call_kwargs(self, request: dict) -> dict:
+        """Shared kwarg builder for run_inference / denoise (everything but output_type)."""
+        prompt = request["prompt"]
+        negative_prompt = request.get("negative_prompt") or None
+        num_inference_steps = request.get("num_inference_steps") or self.config.num_inference_steps
+        guidance_scale = request.get("guidance_scale") or self.config.guidance_scale
+        guidance_scale_2 = request.get("guidance_scale_2") or self.config.guidance_scale_2
+        flow_shift = request.get("flow_shift")
+        boundary_ratio = request.get("boundary_ratio")
+        seed = request.get("seed")
+
+        kwargs = dict(
+            prompts=[prompt],
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            guidance_scale_2=guidance_scale_2,
+            seed=int(seed) if seed is not None else 0,
+            traced=self.config.use_trace,
+        )
+        if negative_prompt:
+            kwargs["negative_prompts"] = [negative_prompt]
+        if flow_shift is not None:
+            kwargs["flow_shift"] = float(flow_shift)
+        if boundary_ratio is not None:
+            kwargs["boundary_ratio"] = float(boundary_ratio)
+        return kwargs
+
+    def denoise(self, request: dict) -> np.ndarray:
+        """Staged: encode prompt (umT5) + run the (traced) denoise loop on device.
+
+        Returns raw denoised latents as numpy [B, z_dim, F, H, W] (consumed by vae_decode).
+        """
+        kwargs = self._build_call_kwargs(request)
+        kwargs["output_type"] = "latent"
+        self.logger.info(
+            f"Staged denoise: prompt='{request['prompt'][:80]}', steps={kwargs['num_inference_steps']}, "
+            f"size={self.config.width}x{self.config.height}, seed={kwargs['seed']}"
+        )
+        latents = self.pipeline(**kwargs)  # torch tensor on host
+        return latents.float().cpu().numpy()
+
+    def vae_decode(self, latents_np: np.ndarray) -> np.ndarray:
+        """Staged: decode raw latents [B, z_dim, F, H, W] -> frames [T, H, W, C] in [0, 1].
+
+        Mirrors the SDXL contract (float32 image in [0, 1]); reuses the pipeline's own VAE
+        decode path so device/trace setup from warmup is shared.
+        """
+        import torch
+        from models.tt_dit.pipelines.events import null_callback
+
+        latents = torch.from_numpy(np.ascontiguousarray(latents_np)).float()
+        video = self.pipeline._decode_latents(latents, output_type="uint8", on_event=null_callback)
+        # _decode_latents("uint8") returns numpy (B, T, H, W, C) uint8. Strip batch + normalize.
+        if video.ndim == 5:
+            video = video[0]
+        return video.astype(np.float32) / 255.0
+
     def close_device(self):
         if self.pipeline is not None and hasattr(self.pipeline, "synchronize_devices"):
             self.logger.info("Synchronizing submesh devices before closure")
