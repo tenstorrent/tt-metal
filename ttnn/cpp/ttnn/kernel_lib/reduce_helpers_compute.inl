@@ -5,6 +5,7 @@
 // Implementation file for reduce_helpers_compute.hpp
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
+#include "api/compute/add_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -37,15 +38,45 @@ ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     binary_max_int32_tile(a, b, out);
 }
 
-// Copy one input tile into DST and fold into running MAX (first tile seeds dst_idx directly).
+// SFPU SUM fold (Int32 cross-tile add). add_int_tile is exact 2's-complement and wraps on
+// overflow, matching torch's Int32 sum semantics.
 template <DataFormat format>
-ALWI void sfpu_copy_and_fold_max(
+ALWI void sfpu_reduce_sum_fold_init() {
+    static_assert(format == DataFormat::Int32, "SFPU reduce SUM fold: Int32 only");
+    add_int_tile_init();
+}
+
+template <DataFormat format>
+ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
+    static_assert(format == DataFormat::Int32, "SFPU reduce SUM fold: Int32 only");
+    add_int_tile<format>(a, b, out);
+}
+
+// Pool-type dispatched cross-tile fold init (MAX -> binary_max, SUM -> add_int).
+// Used only by compute_kernel_lib::reduce(); the _neg kernels call the MAX fold directly.
+template <PoolType pool_type, DataFormat format>
+ALWI void sfpu_reduce_fold_init() {
+    if constexpr (pool_type == PoolType::SUM) {
+        sfpu_reduce_sum_fold_init<format>();
+    } else {
+        sfpu_reduce_max_fold_init<format>();
+    }
+}
+
+// Copy one input tile into DST and fold into the running accumulator (first tile seeds dst_idx
+// directly). Fold op is selected by pool_type: MAX -> running max, SUM -> running sum.
+template <PoolType pool_type, DataFormat format>
+ALWI void sfpu_copy_and_fold(
     uint32_t input_cb_id, uint32_t tile_idx, uint32_t dst_idx, uint32_t work_dst, bool is_first_tile) {
     if (is_first_tile) {
         copy_tile(input_cb_id, tile_idx, dst_idx);
     } else {
         copy_tile(input_cb_id, tile_idx, work_dst);
-        sfpu_reduce_max_fold_tile<format>(dst_idx, work_dst, dst_idx);
+        if constexpr (pool_type == PoolType::SUM) {
+            sfpu_reduce_sum_fold_tile<format>(dst_idx, work_dst, dst_idx);
+        } else {
+            sfpu_reduce_max_fold_tile<format>(dst_idx, work_dst, dst_idx);
+        }
     }
 }
 
@@ -193,7 +224,7 @@ ALWI void reload_accumulator_if_needed(
             // Use short version since packer config is still valid from initial init
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
             if constexpr (is_sfpu) {
-                detail::sfpu_reduce_max_fold_init<reduce_format>();
+                detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
             } else if constexpr (use_matmul) {
                 reduce_with_matmul_init_with_dt(input_dfb_id, scaler_dfb_id, accumulate.config.cb_accumulator);
             } else {
@@ -252,8 +283,9 @@ ALWI void reduce(
     // Static Assertions (compile-time validation)
     // =============================================================================
     static_assert(
-        reduce_type != PoolType::MAX || reduce_dim != ReduceDim::REDUCE_SCALAR || reduce_format != DataFormat::Int32,
-        "Int32 MAX REDUCE_SCALAR is not supported");
+        (reduce_type != PoolType::MAX && reduce_type != PoolType::SUM) ||
+            reduce_dim != ReduceDim::REDUCE_SCALAR || reduce_format != DataFormat::Int32,
+        "Int32 MAX/SUM REDUCE_SCALAR is not supported (host decomposes Int32 HW reduce into W-then-H)");
     static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");
@@ -302,8 +334,10 @@ ALWI void reduce(
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t num_batches = input_block_shape.batches;
 
-    constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>();
+    // is_sfpu wins over use_matmul: SUM/AVG on REDUCE_ROW would normally use matmul, but Int32 SUM
+    // has no FPU/matmul support, so it takes the SFPU path instead (matmul would force a float accumulate).
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format>();
+    constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>() && !is_sfpu;
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
@@ -462,7 +496,7 @@ ALWI void reduce(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
                     if (Wt > 1) {
-                        detail::sfpu_reduce_max_fold_init<reduce_format>();
+                        detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
 
@@ -473,14 +507,14 @@ ALWI void reduce(
                         const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
                         if constexpr (waits_per_tile(input_policy)) {
                             input_dfb.wait_front(onetile);
-                            detail::sfpu_copy_and_fold_max<reduce_format>(
+                            detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
                                 input_dfb_id, 0, dst_idx, sfpu_work_dst, is_first_tile);
                             input_dfb.pop_front(onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
-                            detail::sfpu_copy_and_fold_max<reduce_format>(
+                            detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
                                 input_dfb_id, wt, dst_idx, sfpu_work_dst, is_first_tile);
                         } else {
-                            detail::sfpu_copy_and_fold_max<reduce_format>(
+                            detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
                                 input_dfb_id, wt + index_offset, dst_idx, sfpu_work_dst, is_first_tile);
                         }
                     } else if constexpr (waits_per_tile(input_policy)) {
@@ -595,7 +629,7 @@ ALWI void reduce(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
                     if (Ht > 1) {
-                        detail::sfpu_reduce_max_fold_init<reduce_format>();
+                        detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
 
@@ -608,16 +642,16 @@ ALWI void reduce(
                             constexpr uint32_t sfpu_work_dst = chunk_size;
                             if constexpr (waits_per_tile(input_policy)) {
                                 input_dfb.wait_front(onetile);
-                                detail::sfpu_copy_and_fold_max<reduce_format>(
+                                detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
                                     input_dfb_id, 0, dst_idx, sfpu_work_dst, is_first_tile);
                                 input_dfb.pop_front(onetile);
                             } else if constexpr (waits_bulk(input_policy)) {
                                 const uint32_t tile_idx = ht * current_chunk + (i - wt);
-                                detail::sfpu_copy_and_fold_max<reduce_format>(
+                                detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
                                     input_dfb_id, tile_idx, dst_idx, sfpu_work_dst, is_first_tile);
                             } else {
                                 const uint32_t tile_idx = batch_offset + ht * stride + i;
-                                detail::sfpu_copy_and_fold_max<reduce_format>(
+                                detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
                                     input_dfb_id, tile_idx, dst_idx, sfpu_work_dst, is_first_tile);
                             }
                         } else if constexpr (waits_per_tile(input_policy)) {

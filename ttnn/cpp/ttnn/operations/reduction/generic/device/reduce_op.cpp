@@ -158,7 +158,15 @@ Tensor reduce(
     // scalar after reduction via post-multiplication. See issue #40498. The flag also
     // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
     // min through reduce_min before reaching here.
-    const bool use_post_mul = (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && (scaler != 1.0f);
+    //
+    // Int32 SUM additionally needs post-mul: it runs on the SFPU reduce path, which ignores the
+    // scaler CB entirely (like MAX). Float/bf16 SUM keep using the scaler CB on the FPU/matmul
+    // path, so they are excluded here. (Int32 post-mul is a typecast-bracketed fp32 multiply, so a
+    // non-unity scalar on Int32 SUM is lossy for |result| > 2^24 — fine for the default scaler=1.0.)
+    const bool use_post_mul =
+        (scaler != 1.0f) &&
+        (reduce_math == tt::tt_metal::ReduceOpMath::MAX ||
+         (reduce_math == tt::tt_metal::ReduceOpMath::SUM && tilized_input.dtype() == tt::tt_metal::DataType::INT32));
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
@@ -193,12 +201,12 @@ Tensor reduce(
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
     //
-    // INT32 SFPU max/min has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
+    // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
     // W-then-H. Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
-    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX and MIN (MIN via negate).
-    const bool use_two_step_hw_sfpu_reduce = (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
-                                             (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
-                                             (reduce_math == tt::tt_metal::ReduceOpMath::MAX);
+    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX/SUM and MIN (MIN via negate).
+    const bool use_two_step_hw_sfpu_reduce =
+        (reduce_dim == tt::tt_metal::ReduceOpDim::HW) && (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
+        (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
 
     if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {

@@ -176,10 +176,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    // Int32 max/min use the SFPU reduce path (GMPOOL has no Int32 support).
+    // Int32 max/min/sum use the SFPU reduce path (GMPOOL has no Int32 support).
     // The host already lowers reduce_min to math_op=MAX + negate=true (see reduce_op.cpp::reduce_min),
-    // so this single check covers both MAX and MIN.
-    const bool use_sfpu_reduce_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+    // so this check covers MAX, MIN and SUM. SUM never negates, so use_fpu_negate is unaffected.
+    const bool use_sfpu_reduce_path =
+        a.dtype() == DataType::INT32 &&
+        (operation_attributes.math_op == ReduceOpMath::MAX || operation_attributes.math_op == ReduceOpMath::SUM);
     const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_reduce_path;
 
     std::vector<uint32_t> reader_compile_time_args;

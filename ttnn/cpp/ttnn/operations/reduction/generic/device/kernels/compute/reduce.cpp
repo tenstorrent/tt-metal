@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Thin wrapper around compute_kernel_lib::reduce<>. The input data format is deduced from the input
-// CB id inside the helper, so Int32 MAX is routed to the SFPU path automatically; otherwise
+// CB id inside the helper, so Int32 MAX and SUM are routed to the SFPU path automatically; otherwise
 // FPU/GMPOOL. MIN on Int32 is dispatched separately via reduce_{h,w}_neg.
 
 #include <cstdint>

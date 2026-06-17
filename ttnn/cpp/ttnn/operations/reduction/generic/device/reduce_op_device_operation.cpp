@@ -79,16 +79,18 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(operation_attributes.output_mem_config.memory_layout()));
     } else {
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
-        // INT32 MIN/MAX is supported via the SFPU reduce path (format deduced from input CB in
-        // compute_kernel_lib::reduce and reduce_{h,w}_neg; MIN uses the dedicated reduce_{h,w}_neg kernels).
-        const bool is_int32_max_reduce =
-            tensor_args.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+        // INT32 MIN/MAX/SUM is supported via the SFPU reduce path (format deduced from input CB in
+        // compute_kernel_lib::reduce; MIN uses the dedicated reduce_{h,w}_neg kernels). MIN is lowered
+        // to MAX + negate on the host, so only MAX and SUM appear here.
+        const bool is_int32_sfpu_reduce =
+            tensor_args.dtype() == DataType::INT32 &&
+            (operation_attributes.math_op == ReduceOpMath::MAX || operation_attributes.math_op == ReduceOpMath::SUM);
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
                 tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
-                is_int32_max_reduce,
+                is_int32_sfpu_reduce,
             "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction "
-            "(INT32 is supported for MAX/MIN) - got {}.",
+            "(INT32 is supported for MAX/MIN/SUM) - got {}.",
             tensor_args.dtype());
     }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
