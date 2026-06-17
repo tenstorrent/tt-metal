@@ -35,10 +35,12 @@ The shared 576 latent + topk 2048 are why the C++ ops (`indexer_score`, `topk_la
 MLA runs absorbed/MQA-style even in prefill: `q [1,H,S,576]`, `kv [1,1,T,576]` (one shared
 latent; K = full 576, V = first 512). The only head dim in the op is the **query heads**.
 So `q_heads / tp ≥ 32` → GLM's 64 heads ⇒ **tp ≤ 2**. This caps only the TP (head) axis;
-SP (sequence) is free, so any device count works as long as tp ∈ {1,2}. Supported meshes
-(`_GLM_MESHES` in the test): **(1,2)** = 2 chips, **(2,2)** = 4, **(4,2)** = 8 (loudbox) — all
-verified green. `SEQ_LEN` must divide by sp (5120/4=1280, tile-aligned). To add more, append
-`(sp, tp)` to `_GLM_MESHES`.
+SP (sequence) is free, so any device count works as long as tp ∈ {1,2}. Meshes are
+**box-adaptive** (`mesh_utils`, filtered to tp ≤ 2 by `_glm_parametrize_mesh_device`): the box
+is auto-detected from `/dev/tenstorrent/*` and run at the EXACT device count (no sub-mesh — the
+runtime doesn't reliably support sub-meshes; see the mesh_utils note). LoudBox(8) → `sp8xtp1`,
+`sp4xtp2`; QuietBox(4) → `sp1xtp1`, `sp2xtp2`; single → `sp1xtp1`. Run with the whole box
+visible — no `TT_VISIBLE_DEVICES` juggling.
 
 ## Environment
 - **`transformers == 4.53.0`** (tt-metal's pin). 5.x removes `no_init_weights` /
@@ -75,10 +77,11 @@ python models/demos/deepseek_v32/tests/test_vs_gpu_ref_glm.py            # stand
 python models/demos/deepseek_v32/tests/test_vs_gpu_ref_glm.py --layers 0,30,60,77
 #   add --full for the MLA output/kv recompute (CPU dense forward at seq5120 is very slow — prefer device)
 
-# Phase 3 — device (Blackhole). tp=2 → 1x2=2 chips, 2x2=4, 4x2=8 (match TT_VISIBLE_DEVICES):
-TT_VISIBLE_DEVICES=0,1             pytest .../test_vs_gpu_ref_glm.py -k "device and L0 and 1x2" -s
-TT_VISIBLE_DEVICES=0,1,2,3         pytest .../test_vs_gpu_ref_glm.py -k "device and L30 and 2x2" -s
-TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 pytest .../test_vs_gpu_ref_glm.py -k "device and L30 and 4x2" -s
+# Phase 3 — device (Blackhole). Meshes box-adaptive (mesh_utils); run with the whole box visible
+# (no TT_VISIBLE_DEVICES masking). On a LoudBox(8) the meshes are sp8xtp1 + sp4xtp2 (both 8-chip):
+python -m pytest .../test_vs_gpu_ref_glm.py -k "device" --ds-kpe-layout vllm -s              # all meshes × all layers
+python -m pytest .../test_vs_gpu_ref_glm.py -k "device and sp4xtp2" --ds-kpe-layout vllm -s  # one mesh, all layers
+python -m pytest .../test_vs_gpu_ref_glm.py -k "device and L30" -s                           # one layer, all meshes
 #   only MLA output: -k "mla_output_device and L30 and 1x2"
 #   hard k_pe element-wise check: append  --ds-kpe-layout vllm  (see caveat)
 ```

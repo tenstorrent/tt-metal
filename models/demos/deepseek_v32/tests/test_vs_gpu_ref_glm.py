@@ -76,6 +76,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v32.reference_cpu.model import MLACPU, ModelArgs
 from models.demos.deepseek_v32.reference_cpu.utils import precompute_freqs_cis
 from models.demos.deepseek_v32.reference_cpu.weights import initialize_weights
+from models.demos.deepseek_v32.tests.mesh_utils import skip_if_seq_too_small_for_sp, supported_mesh_shapes
 from models.demos.deepseek_v32.tt import ops
 from models.demos.deepseek_v32.tt.mla import ttMLA
 
@@ -418,10 +419,21 @@ GLM_WEIGHT_NAME_MAP = {
     "indexer.weights_proj.weight": "indexer.weights_proj.weight",
 }
 
-# tp=2 always (64 heads / 2 = 32 = sparse_sdpa per-chip minimum); sp ∈ {1, 2, 4}.
-# (sp, tp): 1x2=2 chips, 2x2=4 chips, 4x2=8 chips (loudbox). SEQ_LEN must divide by sp (5120/4=1280, tile-aligned).
-_GLM_MESHES = [(1, 2), (2, 2), (4, 2)]
-_GLM_MESH_IDS = [f"{sp}x{tp}" for sp, tp in _GLM_MESHES]
+
+def _glm_parametrize_mesh_device():
+    """Box-adaptive meshes (mesh_utils) filtered to **tp ≤ 2** — GLM has 64 q-heads and
+    sparse_sdpa needs per-chip H = 64/tp ≥ 32, so tp ∈ {1, 2}. Per detected box:
+    LoudBox(8) → sp8xtp1, sp4xtp2; QuietBox(4) → sp1xtp1, sp2xtp2; single → sp1xtp1.
+    (Galaxy's only shape (8,4) is tp=4 → filtered out → falls back to single chip.)
+    Exact-device-count shapes avoid the unreliable sub-mesh path, so no TT_VISIBLE_DEVICES
+    juggling is needed — run with the whole box visible."""
+    shapes, ids = supported_mesh_shapes()
+    keep = [(s, i) for s, i in zip(shapes, ids) if s[1] <= 2]
+    if not keep:
+        keep = [((1, 1), "sp1xtp1")]
+    return pytest.mark.parametrize("mesh_device", [s for s, _ in keep], ids=[i for _, i in keep], indirect=True)
+
+
 _DEVICE_PARAMS = [
     {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -521,12 +533,13 @@ def _glm_device_forward(mesh_device, layer):
     return ref, out_t, kvpe_t
 
 
-@pytest.mark.parametrize("mesh_device", _GLM_MESHES, ids=_GLM_MESH_IDS, indirect=True)
+@_glm_parametrize_mesh_device()
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
 @pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
 @pytest.mark.timeout(0)
 def test_indexer_device_vs_reference(mesh_device, layer, device_params, monkeypatch):
     """Device indexer (stems + interleaved RoPE + indexer_score + top-k) vs the GLM capture."""
+    skip_if_seq_too_small_for_sp(SEQ_LEN, mesh_device)
     ref = load_reference(layer)
     mla, _ = _glm_device_mla(mesh_device, layer)
     captured = {}
@@ -547,23 +560,25 @@ def test_indexer_device_vs_reference(mesh_device, layer, device_params, monkeypa
     assert min(ov.values()) >= TOPK_OVERLAP_ROW_MIN, f"topk overlap row min {min(ov.values())} < {TOPK_OVERLAP_ROW_MIN}"
 
 
-@pytest.mark.parametrize("mesh_device", _GLM_MESHES, ids=_GLM_MESH_IDS, indirect=True)
+@_glm_parametrize_mesh_device()
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
 @pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
 @pytest.mark.timeout(0)
 def test_kv_cache_device_vs_reference(mesh_device, layer, device_params, ds_kpe_layout):
     """Device KV cache vs the GLM capture: latent PCC + k_pe (--ds-kpe-layout)."""
+    skip_if_seq_too_small_for_sp(SEQ_LEN, mesh_device)
     ref, _, kvpe = _glm_device_forward(mesh_device, layer)
     _assert_kv(ref["kv"], kvpe, tag=f"device L{layer}", kpe_layout=ds_kpe_layout)
     ttnn.synchronize_device(mesh_device)
 
 
-@pytest.mark.parametrize("mesh_device", _GLM_MESHES, ids=_GLM_MESH_IDS, indirect=True)
+@_glm_parametrize_mesh_device()
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
 @pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
 @pytest.mark.timeout(0)
 def test_mla_output_device_vs_reference(mesh_device, layer, device_params):
     """Device MLA output vs the GLM capture (banded dense<2048 / sparse>=2048 diagnostic)."""
+    skip_if_seq_too_small_for_sp(SEQ_LEN, mesh_device)
     ref, out, _ = _glm_device_forward(mesh_device, layer)
     ref_out = ref["mla_out"].reshape(1, SEQ_LEN, -1)
     out = out.reshape(1, SEQ_LEN, -1)
