@@ -36,7 +36,8 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
     sfpi::vInt i = m;
 
-    sfpi::vFloat a, r, s, f, w, y, scale, bias, c0;
+    sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
+    sfpi::vFloat t, rcp, x0, x1;
 
     a = sfpi::setsgn(x, 0);
     f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
@@ -51,37 +52,31 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
 
     sfpi::vInt e = i + 127;
     scale = sfpi::setexp(sfpi::vConst0, e);
-    bias = scale - sfpi::vConst1;
+    bias1 = scale + 1.0f;
     r = r * s + f;
 
-    // ideally the default should be 1.0 for finite (large) values, otherwise NaN should be propagated.
-    // one slightly weird idea: take a, subtract bits(inf + 1), then shift right by 31, then convert to float.
-    // alternatively, can we just subtract one (bitwise) and do fma
-    // so y = fma(0.0, bitwise(a - 1), 1.0)
     a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
     y = a * 0.0f + 1.0f;
+
     v_if(i < 61) {
-        sfpi::vFloat x0 = r * scale + bias;
-        x0 += 2.0f;
+        x1 = r * scale + bias1;
         sfpi::vInt magic_seed = 0xfef30000;  // 392e0;
 
-        // initial estimate y = -reciprocal(x)
-        y = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x0));
-        sfpi::vFloat e = x0 * y + 1.0f;
-
-        y = y * e + y;
-        e = x0 * y + 1.0f;
-        r = r * scale + bias;
-        e = e * e + e;
-        y = -y;
-        y = y * e + y;
-        y *= r;
+        // initial estimate recip = -reciprocal(x)
+        rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
+        t = x1 * rcp + 1.0f;
+        bias0 = scale - 1.0f;
+        rcp = rcp * t + rcp;
+        x0 = r * scale + bias0;
+        t = x1 * rcp + 1.0f;
+        rcp = rcp * t + rcp;
+        y = x0 * rcp;
+        t = x1 * y + x0;
+        y = t * rcp + y;
     }
     v_endif;
 
-    y = sfpi::copysgn(y, x);
-
-    return y;
+    return sfpi::copysgn(y, x);
 }
 
 template <bool is_fp32_acc_to_dest_mode>
