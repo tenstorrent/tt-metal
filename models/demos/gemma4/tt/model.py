@@ -1139,7 +1139,12 @@ class Gemma4Model:
                 batch_dim = logits.shape[2]
                 if batch_dim < 32:
                     logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
-            return logits, None
+            # Return logits only (bare tensor), matching the base tt_transformers /
+            # gpt-oss contract: on_device_logits → sampling is done externally by the
+            # Generator (sample_decode_on_device / capture_trace), which passes this
+            # value straight through as `logits`. Returning a tuple here makes the
+            # trace-capture path feed (logits, None) into TTSampling and crash.
+            return logits
 
         # Legacy internal-sampling path (text demo / parity tests).
         if sampling_on_device and self.sampling is not None:
