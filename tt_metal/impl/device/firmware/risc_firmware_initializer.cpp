@@ -611,6 +611,13 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .y);
     }
+
+    // Pad to a multiple of 4 bytes so these vectors can be multicast via noc_multicast_write without a
+    // sub-word tail. UMD's WC memcpy_to_device handles a misaligned tail with a device read-modify-write,
+    // which on a multicast window issues a broadcast read — undefined per the NoC spec. The firmware reader
+    // indexes by logical col/row only, so the trailing zero bytes are never read.
+    worker_logical_col_to_virtual_col.resize(tt::round_up(tensix_grid_size.x, 4), 0);
+    worker_logical_row_to_virtual_row.resize(tt::round_up(tensix_grid_size.y, 4), 0);
 }
 
 void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
