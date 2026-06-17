@@ -8,7 +8,7 @@ It has three parts:
 
 ```text
 .agents/
-  prompts/model_bringup_multigoal/   # the ten stage goals, one prompt file each
+  prompts/model_bringup_multigoal/   # the eleven stage goals, one prompt file each
   skills/                            # the knowledge the agent works from
   scripts/multigoal                  # the runner that chains the stages together
 ```
@@ -26,7 +26,7 @@ python .agents/scripts/multigoal \
   .agents/prompts/model_bringup_multigoal/*.txt
 ```
 
-That runs all ten stages back to back. Expect a full bringup to take several
+That runs all eleven stages back to back. Expect a full bringup to take several
 hours of unattended work. Results land in `models/autoports/<model>/`, where
 `<model>` is the HF model id lowercased with non-alphanumerics replaced by
 underscores.
@@ -46,6 +46,7 @@ stages build on each other:
 | 04 optimized-multichip-decoder | The multichip layer optimized: async collectives, fused ops |
 | 05 full-model | The whole model end to end: embeddings, layer stack, LM head, generation |
 | 06 optimized-full-model | The full model traced and optimized, with honest perf accounting |
+| 06a reorganize | A scoped step-by-step structural refactor: flattened decoder inheritance and TTTv2-style modules with parity checks |
 | 07 datatype-sweep | The fastest weight/activation/KV datatype config that still meets accuracy |
 | 08 vllm | The model serving real requests through the Tenstorrent vLLM plugin |
 | 09 optimized-vllm | The serving path optimized: async decode, trace reuse, on-device sampling |
