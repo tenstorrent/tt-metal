@@ -11,7 +11,7 @@
 //
 // Difference vs stock unary writer: stock calls `noc.async_writes_flushed()`
 // once per tile (lighter than a barrier but still serializes the per-tile
-// dispatch). We collapse the loop into a single `noc_async_write_barrier()`
+// dispatch). We collapse the loop into a single `noc.async_write_barrier()`
 // at the end and pop the CB in one go. For a 32-tile-per-block workload this
 // drops 32 per-tile flush points to one terminal barrier per block.
 //
@@ -30,6 +30,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // ---- runtime args ----
@@ -45,18 +48,22 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_id);
     const auto s_out = TensorAccessor(out_args, out_tensor_addr);
 
+    // Device 2.0 data-movement API (see device_api_migration_guide.md).
+    Noc noc;
+    CircularBuffer cb(cb_id);
+
     for (uint32_t block = 0; block < num_blocks; block++) {
-        cb_wait_front(cb_id, block_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
+        cb.wait_front(block_tiles);
+        uint32_t l1_read_offset = 0;
 
         for (uint32_t i = 0; i < block_tiles; i++) {
-            noc_async_write_tile(out_tile_id + i, s_out, l1_read_addr);
-            l1_read_addr += tile_size_bytes;
+            noc.async_write(cb, s_out, tile_size_bytes, {.offset_bytes = l1_read_offset}, {.page_id = out_tile_id + i});
+            l1_read_offset += tile_size_bytes;
         }
         out_tile_id += block_tiles;
 
         // ONE barrier per block instead of per-tile writes_flushed.
-        noc_async_write_barrier();
-        cb_pop_front(cb_id, block_tiles);
+        noc.async_write_barrier();
+        cb.pop_front(block_tiles);
     }
 }
