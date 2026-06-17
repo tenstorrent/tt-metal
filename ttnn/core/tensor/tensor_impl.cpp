@@ -431,7 +431,7 @@ HostTensor view(
 
     // TODO (#25340): Review tensor topology logic for reshape
     const auto& buffer = tensor.buffer();
-    return HostTensor(buffer, new_spec, tensor.tensor_topology());
+    return HostTensor::from_buffer(buffer, new_spec, tensor.tensor_topology());
 }
 
 // ======================================================================================

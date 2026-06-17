@@ -101,7 +101,12 @@ MeshTensor MeshTensor::allocate_on_device(
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
-    return MeshTensor(std::move(mesh_buffer), spec, topology);
+    return MeshTensor::from_buffer(std::move(*mesh_buffer), spec, topology);
+}
+
+MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology) {
+    return MeshTensor(
+        std::make_shared<distributed::MeshBuffer>(std::move(mesh_buffer)), std::move(spec), std::move(topology));
 }
 
 }  // namespace tt::tt_metal

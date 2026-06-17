@@ -34,6 +34,14 @@ HostTensor::HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topolo
         std::move(spec),
         std::move(topology))) {}
 
+HostTensor HostTensor::from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
+}
+
+HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
+}
+
 HostTensor::HostTensor(const HostTensor& other) :
     impl_(other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr) {}
 
