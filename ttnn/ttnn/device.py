@@ -206,6 +206,8 @@ ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
+reset_cq_in_use = ttnn._ttnn.device.reset_cq_in_use
+quiesce_devices = ttnn._ttnn.device.quiesce_devices
 
 
 @contextlib.contextmanager

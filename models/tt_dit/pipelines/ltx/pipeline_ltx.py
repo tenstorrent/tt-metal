@@ -11,6 +11,7 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
@@ -283,20 +284,39 @@ class LTXPipeline:
         # Fewer T-shards = fewer cross-chip causal-halo barriers (the audio vocoder's dominant
         # device-side cost): T-shard=4 on a 1x4/2x4 slice beats T-shard=8 on the full 4x8.
         # Defaults to the full mesh; LTX_AUDIO_SUBMESH=RxC slices an RxC submesh for audio.
+        #
+        # The submesh is created LAZILY (`_ensure_audio_submesh`, on the first decode_audio),
+        # not here. An overlapping child submesh's CCLManager allocates a second SubDevice +
+        # global semaphores on the cores it shares with the parent; doing that at __init__,
+        # before the video DiT runs, shifts the runtime-arg layout baked into the parent's CCL
+        # kernels and the video denoise then indexes past its runtime args. Deferring until video
+        # (DiT + VAE) is fully done keeps the parent's runtime args clean during generation.
         self.audio_mesh_device = mesh_device
         self.audio_ccl_manager = self.vae_ccl_manager
         self._owned_audio_submesh = None
+        self._audio_submesh_shape: tuple[int, int] | None = None
+        self._audio_submesh_num_links = ccl_manager.num_links
+        # Audio decodes on a 1xC overlapping child submesh while the parent (4x8) used cq 0 for the
+        # video DiT/VAE. Video is fully synchronized to idle before decode_audio, so there is no live
+        # cq-0 work to contend with: an overlapping child running CCL on cq 0 after the quiesced
+        # parent completes cleanly (the per-op EDM connection close releases the shared router slot
+        # for the next op). Routing audio onto cq 1 instead deadlocks the child's CCL — its workers
+        # spin forever waiting on a fabric flow-control semaphore (NSMW) on the shared chips. So the
+        # child shares cq 0 with the parent. The only cost is the cq-0-in-use close guard
+        # (mesh_device.cpp): the submesh is reclaimed at parent close, after the decode + mp4 save.
+        # LTX_AUDIO_CQ overrides for experiments. Full-mesh audio stays on cq 0 (audio_cq_id None).
+        self._audio_cq_id: int | None = None
         _audio_submesh = os.environ.get("LTX_AUDIO_SUBMESH")
         if _audio_submesh:
             r, c = (int(v) for v in _audio_submesh.lower().split("x"))
             full = tuple(mesh_device.shape)
             if r <= full[0] and c <= full[1] and (r, c) != full:
-                self.audio_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(r, c))
-                self._owned_audio_submesh = self.audio_mesh_device
-                self.audio_ccl_manager = CCLManager(
-                    self.audio_mesh_device, num_links=ccl_manager.num_links, topology=ttnn.Topology.Linear
+                self._audio_submesh_shape = (r, c)
+                self._audio_cq_id = int(os.environ.get("LTX_AUDIO_CQ", "0"))
+                logger.info(
+                    f"Audio decode will route onto {r}x{c} submesh of {full[0]}x{full[1]} "
+                    f"on cq {self._audio_cq_id} (lazy)"
                 )
-                logger.info(f"Audio decode routed onto {r}x{c} submesh of {full[0]}x{full[1]}")
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig(
                 height_parallel=parallel_config.tensor_parallel,
@@ -389,18 +409,53 @@ class LTXPipeline:
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
 
+    def _ensure_audio_submesh(self) -> None:
+        """Create the audio submesh + its CCLManager + decoder shells, once, on first use.
+
+        Deferred from __init__ so the video DiT runs before any overlapping child submesh
+        exists (an overlapping submesh's CCLManager allocations corrupt the parent's CCL
+        runtime args — see __init__). No-op when audio runs on the full mesh, or once built.
+        """
+        if self._audio_submesh_shape is None or self._owned_audio_submesh is not None:
+            return
+        r, c = self._audio_submesh_shape
+        self.audio_mesh_device = self.mesh_device.create_submesh(ttnn.MeshShape(r, c))
+        self._owned_audio_submesh = self.audio_mesh_device
+        self.audio_ccl_manager = CCLManager(
+            self.audio_mesh_device, num_links=self._audio_submesh_num_links, topology=ttnn.Topology.Linear
+        )
+        full = tuple(self.mesh_device.shape)
+        logger.info(f"Audio decode routed onto {r}x{c} submesh of {full[0]}x{full[1]}")
+        self._new_audio_decoder()
+
+    def _audio_cq(self):
+        """CQ context for audio ops: cq 1 on the submesh, the default cq otherwise.
+
+        Wrapping the whole decode (and the submesh+CCLManager build) routes every op the audio
+        path issues — including the queue_id-less async CCL ops, which resolve their CQ from the
+        thread-local current-CQ — onto the audio cq, keeping it off the parent's cq 0.
+        """
+        if self._audio_cq_id is None:
+            return contextlib.nullcontext()
+        return ttnn.command_queue(self._audio_cq_id)
+
     def release_audio_submesh(self) -> None:
         """Drop the pipeline's references to the audio decode submesh (LTX_AUDIO_SUBMESH).
 
-        The submesh shares the parent mesh's command queue. ttnn forbids closing a
-        cq-sharing child while the parent is alive (close hangs) and forbids closing
-        the parent while the child is alive ("cq in use by child submesh"), so the
-        submesh's lifetime is bound to the parent: it is reclaimed when the parent mesh
-        closes at process teardown. This only frees the audio device tensors. No-op when
-        audio runs on the full mesh.
+        The submesh shares the parent mesh's command queues, so its lifetime is bound to the
+        parent: it is reclaimed when the parent mesh closes at process teardown. But the per-cq
+        close guard (mesh_device.cpp) throws if a child sharing a physical cq still has it flagged
+        in_use when the parent closes -- and the child dirties cq 0 just by building its global
+        semaphores (GlobalSemaphore init writes via cq 0) even though its CCL ran on cq 1. So
+        finish + reset in_use on both the child submesh and our parent mesh here, while idle (audio
+        is done), to let the chain close cleanly (clearing the parent's flag also short-circuits the
+        guard before it walks to the physical mesh above us). Also frees the audio device tensors.
+        No-op on the full mesh.
         """
         if self._owned_audio_submesh is not None:
             ttnn.synchronize_device(self._owned_audio_submesh)
+            ttnn.reset_cq_in_use(self._owned_audio_submesh)
+            ttnn.reset_cq_in_use(self.mesh_device)
             self.tt_audio_decoder = None
             self.tt_vocoder_with_bwe = None
             self.audio_ccl_manager = self.vae_ccl_manager
@@ -630,8 +685,14 @@ class LTXPipeline:
         audio decoder shell; the transformer/VAE/upsampler are never used by
         ``decode_audio``."""
         if audio_only:
+            # No video pipeline to protect, so the submesh can be created eagerly here
+            # (_ensure_audio_submesh builds it + the shells; falls back to _new_audio_decoder
+            # on the full mesh).
             if self.checkpoint_name is not None:
-                self._new_audio_decoder()
+                if self._audio_submesh_shape is not None:
+                    self._ensure_audio_submesh()
+                else:
+                    self._new_audio_decoder()
             return
         self.transformer = self._new_transformer()
         self.transformer_states.append(
@@ -673,7 +734,10 @@ class LTXPipeline:
             self._upsampler_path = LTXPipeline._resolve_checkpoint_file(LTX_UPSAMPLER_HF_REF)
             self.upsampler = self._new_upsampler()
 
-        if self.checkpoint_name is not None:
+        # When audio is routed onto a deferred submesh, its shells are built by
+        # `_ensure_audio_submesh` on the first decode (the submesh itself must not exist yet —
+        # see __init__). On the full mesh, build the shells now as before.
+        if self.checkpoint_name is not None and self._audio_submesh_shape is None:
             self._new_audio_decoder()
 
     def _register_coresident_exclusions(self) -> None:
@@ -1716,8 +1780,30 @@ class LTXPipeline:
         through ``AudioDecoder`` (mel-VAE) then ``VocoderWithBWE`` (vocoder + BWE).
         Both take and return torch tensors, handling device upload/download internally.
         ``num_frames``/``fps`` trim the output to the clip duration.
+
+        On the audio submesh the whole decode (and the lazy submesh build) runs under the audio
+        CQ so it stays off the parent's cq 0; on the full mesh this is the default CQ (no-op).
         """
+        with self._audio_cq():
+            return self._decode_audio_impl(audio_latent, num_frames, fps=fps)
+
+    def _decode_audio_impl(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio"
+
+        # The audio submesh overlaps the parent's chips and shares cq 0, so nothing on the child —
+        # not its CCL, nor even building its global semaphores (which enqueue on cq 0) — must run
+        # while the parent's prior cq-0 fabric work (video DiT / VAE decode / a previous audio
+        # decode) is still in flight, or the child deadlocks on the shared devices. A plain
+        # synchronize_device only drains the cqs this mesh enqueued on; quiesce_devices is the
+        # purpose-built barrier between overlapping-submesh phases — it recursively waits on every
+        # derived submesh, resets launch-message state, and clears each cq's in_use flag. Quiesce
+        # before building the submesh so the child opens onto genuinely idle shared devices.
+        if self._audio_submesh_shape is not None:
+            ttnn.quiesce_devices(self.mesh_device)
+
+        # Build the audio submesh + decoder shells now (no-op after the first call, and on the
+        # full mesh). Deferred to here so the video DiT has already run with clean CCL runtime args.
+        self._ensure_audio_submesh()
 
         _dump = os.environ.get("LTX_DUMP_AUDIO_LATENT")
         if _dump and float(audio_latent.abs().max()) > 0:  # skip the all-zero warmup latent

@@ -101,6 +101,43 @@ void ttnn_device(nb::module_& mod) {
         R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
+
+    // A mesh command queue is flagged in_use by any enqueue on it; the per-cq close guard
+    // (mesh_device.cpp) then refuses to close a mesh while a parent/child mesh sharing that physical
+    // cq still has it in_use, to avoid a teardown hang. An overlapping child submesh dirties cq 0 just
+    // by building its global semaphores (GlobalSemaphore init writes via cq 0), so closing either the
+    // parent or the child throws even though the child ran its CCL on cq 1. This finishes each cq and
+    // clears its in_use flag, so the cq is genuinely idle and close is clean. Call when the mesh is
+    // done with work on these cqs (e.g. before releasing an audio submesh).
+    mod.def(
+        "reset_cq_in_use",
+        [](ttnn::MeshDevice* device) {
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+                device->mesh_command_queue(cq_id).finish_and_reset_in_use();
+            }
+        },
+        nb::arg("device"),
+        R"doc(
+        Finish every command queue on the mesh and clear its in_use flag, so the per-cq close guard
+        does not throw when a parent/child mesh shares the same physical cq. Call when the mesh is done
+        with work on these cqs (device synchronized, no in-flight ops).
+    )doc");
+
+    // A plain synchronize_device only drains the cqs this mesh enqueued on; it does not barrier the
+    // submeshes derived from this mesh that share the same physical devices. quiesce_devices is the
+    // purpose-built barrier between phases that use overlapping submeshes: it recursively waits on
+    // every derived submesh, resets the launch-message state, and clears each cq's in_use flag, so
+    // it is safe to enqueue work on a sibling/child submesh that overlaps a previously-active one.
+    mod.def(
+        "quiesce_devices",
+        [](ttnn::MeshDevice* device) { device->quiesce_devices(); },
+        nb::arg("device"),
+        R"doc(
+        Block until all in-flight work on this mesh and every submesh derived from it has completed,
+        reset launch-message state, and clear each cq's in_use flag. Use as the barrier between phases
+        that run overlapping submeshes on the same physical devices (the default sub-device manager
+        must be active).
+    )doc");
 }
 
 }  // namespace
