@@ -96,8 +96,8 @@ def _load_params(model: Model, skeleton: dict, f) -> None:
     missing = set(params) - restored  # in model, not restored → left at init (dangerous)
     unexpected = set(skeleton) - set(params)  # in checkpoint, not in model → ignored
     if missing or unexpected:
-        print(
-            f"  [warn] checkpoint restore mismatch: "
+        raise RuntimeError(
+            f"checkpoint restore mismatch: "
             f"{len(missing)} model param(s) left at init "
             f"({sorted(missing)[:3]}{'...' if len(missing) > 3 else ''}), "
             f"{len(unexpected)} checkpoint param(s) ignored"
