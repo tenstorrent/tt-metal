@@ -2535,7 +2535,19 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             ids = self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=True
             )
-            return list(ids)
+            # transformers 5.x may return a BatchEncoding/dict or a tokenizers.Encoding
+            # from apply_chat_template(tokenize=True) instead of a plain List[int];
+            # `list(ids)` on a dict would yield its keys (['input_ids', ...]).
+            if isinstance(ids, dict):  # BatchEncoding / dict
+                ids = ids["input_ids"]
+            if hasattr(ids, "ids"):  # tokenizers.Encoding
+                ids = ids.ids
+            elif hasattr(ids, "tolist"):  # tensor / ndarray
+                ids = ids.tolist()
+            ids = list(ids)
+            if len(ids) == 1 and isinstance(ids[0], (list, tuple)):  # unwrap single-batch nesting
+                ids = list(ids[0])
+            return ids
 
         # Fallback: deterministic dummy tokenization for random-weights mode
         vocab = int(getattr(self.hf_config, "vocab_size", 32768))
