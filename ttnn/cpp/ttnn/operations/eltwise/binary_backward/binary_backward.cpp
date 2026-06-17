@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
+#include <numbers>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -51,7 +52,7 @@ std::vector<Tensor> _min_or_max_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor t_scale_grad = ttnn::multiply(grad, 0.5, std::nullopt, output_mem_config);
+    Tensor t_scale_grad = ttnn::multiply(grad, 0.5f, std::nullopt, output_mem_config);
     Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
     Tensor t_sub_gtz = ttnn::gtz(t_sub, output_mem_config);
     Tensor t_sub_eqz = ttnn::eqz(t_sub, output_mem_config);
@@ -342,10 +343,13 @@ std::vector<Tensor> ldexp_bw(
     std::vector<Tensor> grad;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor tpow_o =
-        ttnn::multiply(grad_tensor, ttnn::rpow(other, 2.0, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad_tensor, ttnn::rpow(other, 2.0f, output_memory_config), std::nullopt, output_memory_config);
     grad.emplace_back(tpow_o);
     Tensor result = ttnn::multiply(
-        input_a, ttnn::multiply(tpow_o, M_LN2, std::nullopt, output_memory_config), std::nullopt, output_memory_config);
+        input_a,
+        ttnn::multiply(tpow_o, std::numbers::ln2_v<float>, std::nullopt, output_memory_config),
+        std::nullopt,
+        output_memory_config);
     grad.emplace_back(result);
     return grad;
 }
@@ -648,7 +652,7 @@ std::vector<std::optional<Tensor>> div_bw(
 
     if (rounding_mode == std::nullopt) {
         float t_inf = std::numeric_limits<float>::infinity();
-        if (scalar == 0.0) {
+        if (scalar == 0.0f) {
             float t_nan = std::nanf("");
             where(
                 ttnn::eqz(grad_tensor, output_mem_config),
