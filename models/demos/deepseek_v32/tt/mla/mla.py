@@ -415,11 +415,26 @@ class ttMLA(_ttMLAv3):
         seq_len_cache, d = t.shape[2], t.shape[3]
         chunk_local = seq_len_local  # = chunk_size_global / sp
         slabs = seq_len_cache // (sp * chunk_local)  # chunks written into the cache
-        r = ttnn.reshape(t, (sp, slabs, chunk_local, d))  # seq → [chip, slab, off]
-        perm = ttnn.permute(r, (1, 0, 2, 3))  # → [slab, chip, off] = natural order
-        flat = ttnn.reshape(perm, (1, 1, seq_len_cache, d))
-        out = ttnn.slice(flat, (0, 0, 0, 0), (1, 1, end_pos, d))
-        ttnn.deallocate(perm)
+        if sp == 1:
+            return ttnn.slice(t, (0, 0, 0, 0), (1, 1, end_pos, d))  # identity order
+        # Reorder block-cyclic [chip, slab, off] → natural [slab, chip, off]. A reshape+permute leaves
+        # the result physically NON-contiguous (a strided view): to_torch honours the strides, but the
+        # sparse_sdpa reader consumes raw physical order and silently reads garbage. Concatenating
+        # contiguous per-(slab,chip) slabs materialises a fresh contiguous tensor instead.
+        seq_local_cache = slabs * chunk_local  # rows held by one chip
+        blocks = [
+            ttnn.slice(
+                t,
+                (0, 0, c * seq_local_cache + s * chunk_local, 0),
+                (1, 1, c * seq_local_cache + (s + 1) * chunk_local, d),
+            )
+            for s in range(slabs)
+            for c in range(sp)
+        ]
+        flat = ttnn.concat(blocks, dim=2)
+        for b in blocks:
+            ttnn.deallocate(b)
+        out = flat if end_pos == seq_len_cache else ttnn.slice(flat, (0, 0, 0, 0), (1, 1, end_pos, d))
         return out
 
     def _tp_rs_ag(self, t, rs_only=False):
