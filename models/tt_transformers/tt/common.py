@@ -141,7 +141,13 @@ def rope_scaling_model_factory(
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.PHI3:
-        return RopeScalingPhi3(original_max_position_embeddings=original_max_context_len, **rope_scaling_params)
+        # transformers 5.x includes original_max_position_embeddings in the rope dict,
+        # which collides with the explicit kwarg; merge so the caller value wins and the
+        # key is only passed once.
+        phi3_params = dict(rope_scaling_params)
+        if original_max_context_len is not None:
+            phi3_params["original_max_position_embeddings"] = original_max_context_len
+        return RopeScalingPhi3(**phi3_params)
     elif rope_scaling_type in ["default", "mrope"]:
         logger.warning(
             f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
