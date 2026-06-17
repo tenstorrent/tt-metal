@@ -144,6 +144,7 @@ jobs:
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
           SUITE_NAME="${{ matrix.suite_name }}"
+          MESH_DIMS="${{ matrix.mesh_dims }}"
 
           # Set skip-on-timeout flag
           SKIP_ON_TIMEOUT_FLAG=""
@@ -196,6 +197,12 @@ jobs:
 
           if [[ -n "$SUITE_NAME" ]]; then
             CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          # Fabric-family split: restrict this job to 1D- or 2D-mesh vectors so a
+          # single process never does a live FABRIC_1D->FABRIC_2D transition.
+          if [[ -n "$MESH_DIMS" ]]; then
+            CMD+=(--mesh-dims "$MESH_DIMS")
           fi
 
           # Two-pass run: COL first, then ROW. Skip a pass when the matching

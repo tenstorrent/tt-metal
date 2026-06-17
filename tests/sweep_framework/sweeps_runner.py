@@ -8,6 +8,7 @@ import builtins
 import datetime as dt
 import importlib
 import os
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -29,6 +30,7 @@ except ImportError:
 from framework.device_fixtures import default_device
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
+from framework.constants import parse_mesh_suffix
 from framework.statuses import TestStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
@@ -60,6 +62,12 @@ class SweepsConfig:
     arch_name: str | None = None
     main_proc_verbose: bool = False
     trace_params: bool = False
+    # Restrict the run to vectors whose mesh is 1D ("1d": rows==1 or cols==1) or
+    # 2D ("2d": both >1). Used to split CCL ops (e.g. all_gather) into separate
+    # jobs per fabric family (1D -> FABRIC_1D/RING, 2D -> FABRIC_2D) so a single
+    # process never does a live FABRIC_1D->FABRIC_2D control-plane transition,
+    # whose first post-transition op hangs on T3K CI. None = run all meshes.
+    mesh_dims: str | None = None
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -85,6 +93,7 @@ def create_config_from_args(args) -> SweepsConfig:
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
         trace_params=args.trace_params,
+        mesh_dims=args.mesh_dims,
     )
 
     # Validate and set ARCH_NAME
@@ -902,6 +911,82 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     return results, invalid_vectors_count
 
 
+def _vector_mesh_dims(vector) -> str | None:
+    """Classify a raw (pre-sanitize) vector's mesh as '1d', '2d', or None.
+
+    '1d' when the mesh has a unit axis (rows==1 or cols==1) -> FABRIC_1D/RING;
+    '2d' when both axes > 1 -> FABRIC_2D. Returns None when the mesh shape can't
+    be determined (such vectors are never filtered out). Mirrors how the
+    all_gather sweep body itself derives mesh_shape (tensor_placement first).
+    """
+
+    def _dims_from_pair(r, c):
+        return "1d" if (r == 1 or c == 1) else "2d"
+
+    def _parse_two_ints(value):
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            try:
+                return int(value[0]), int(value[1])
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, str):
+            nums = re.findall(r"\d+", value)
+            if len(nums) >= 2:
+                return int(nums[0]), int(nums[1])
+        return None
+
+    # 1) Explicit tensor placement mesh_device_shape (model_traced vectors).
+    for key in ("input_a_tensor_placement", "input_tensor_tensor_placement"):
+        tp = vector.get(key)
+        if isinstance(tp, dict):
+            pair = _parse_two_ints(tp.get("mesh_device_shape"))
+            if pair:
+                return _dims_from_pair(*pair)
+    # 2) Explicit mesh_shape field (generality / lead_model vectors).
+    pair = _parse_two_ints(vector.get("mesh_shape"))
+    if pair:
+        return _dims_from_pair(*pair)
+    # 3) mesh_device descriptor.
+    md = vector.get("mesh_device")
+    if isinstance(md, dict):
+        pair = _parse_two_ints(md.get("shape") or md.get("repr", ""))
+        if pair:
+            return _dims_from_pair(*pair)
+    # 4) .mesh_RxC suffix on the stored sweep/suite name.
+    for key in ("sweep_name", "suite_name"):
+        name = vector.get(key)
+        if isinstance(name, str):
+            ms = parse_mesh_suffix(name)
+            if ms:
+                return _dims_from_pair(ms[0], ms[1])
+    return None
+
+
+def _filter_vectors_by_mesh_dims(vectors, mesh_dims):
+    """Keep only vectors matching the requested mesh dimensionality.
+
+    Vectors whose mesh can't be determined are kept (never silently dropped);
+    they are rare for CCL ops (which always carry a tensor placement).
+    """
+    if not mesh_dims:
+        return vectors
+    kept, dropped, undetermined = [], 0, 0
+    for v in vectors:
+        dims = _vector_mesh_dims(v)
+        if dims is None:
+            undetermined += 1
+            kept.append(v)
+        elif dims == mesh_dims:
+            kept.append(v)
+        else:
+            dropped += 1
+    logger.info(
+        f"mesh-dims filter '{mesh_dims}': kept {len(kept)} vector(s), dropped {dropped} "
+        f"(mesh mismatch){f', {undetermined} undetermined kept' if undetermined else ''}."
+    )
+    return kept
+
+
 def run_sweeps(
     module_names,
     config: SweepsConfig,
@@ -975,6 +1060,7 @@ def run_sweeps(
                 suite_start_time = dt.datetime.now(dt.timezone.utc)
 
                 vectors = vector_source.load_vectors(module_name, suite, config.vector_id)
+                vectors = _filter_vectors_by_mesh_dims(vectors, config.mesh_dims)
                 # Update summary counters
                 total_vectors_run += len(vectors)
                 total_tests_run += 1
@@ -1176,6 +1262,18 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--file-path", required=False, help="Read and execute test vectors from a specified file path.")
+
+    parser.add_argument(
+        "--mesh-dims",
+        required=False,
+        choices=["1d", "2d"],
+        default=None,
+        help=(
+            "Restrict the run to vectors whose mesh is 1D (rows==1 or cols==1) or 2D (both >1). "
+            "Splits CCL ops into separate jobs per fabric family so one process never does a live "
+            "FABRIC_1D->FABRIC_2D transition. Omit to run all meshes."
+        ),
+    )
 
     parser.add_argument(
         "--vector-id", required=False, help="Specify vector id with a module name to run an individual test vector."

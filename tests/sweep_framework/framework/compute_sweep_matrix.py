@@ -81,17 +81,66 @@ def _log_module_groups(header, modules, groups):
         print(f"  {label}: {len(entries)} vectors ({unique} unique modules)", file=sys.stderr)
 
 
+# CCL modules whose vectors span both 1D meshes (FABRIC_1D/RING) and 2D meshes
+# (FABRIC_2D). Running both families in one process forces a live
+# FABRIC_1D->FABRIC_2D control-plane reinit whose first post-transition op hangs
+# on T3K CI. These modules are split into two jobs (one per fabric family, via
+# the runner's --mesh-dims filter) so no single process ever transitions fabric.
+# They are already solo_modules, so each is the only module in its batch.
+FABRIC_FAMILY_SPLIT_MODULES = {
+    "model_traced.all_gather_async_model_traced",
+}
+
+# Only multi-chip lanes carry BOTH 1D and 2D meshes (and thus hit the in-process
+# FABRIC_1D->FABRIC_2D transition). Single-/dual-chip lanes (n150, n300, p150b,
+# p100a, p300a) only ever have 1D meshes, so splitting them would just create an
+# empty 2D job. Restrict the split to the 2D-capable test groups.
+FABRIC_2D_CAPABLE_TEST_GROUPS = {
+    "wormhole-t3k-sweeps",
+    "wormhole-galaxy-sweeps",
+    "lead-models-galaxy",
+}
+
+
 def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
-    """Create matrix include entries for a set of batches using a runner config."""
-    return [
-        {
-            **runner_config,
-            "module_selector": batch,
-            "batch_display": f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch,
-            "suite_name": suite_name,
-        }
-        for batch in batches
-    ]
+    """Create matrix include entries for a set of batches using a runner config.
+
+    A solo batch consisting only of a FABRIC_FAMILY_SPLIT_MODULES module, on a
+    2D-capable lane, is emitted as two entries (mesh_dims '1d' and '2d') so its
+    1D-mesh and 2D-mesh vectors run in separate jobs/processes — avoiding the
+    in-process fabric transition hang. All other batches get a single entry with
+    mesh_dims "".
+    """
+    is_2d_capable_lane = runner_config.get("test_group_name") in FABRIC_2D_CAPABLE_TEST_GROUPS
+    entries = []
+    for batch in batches:
+        modules_in_batch = [m for m in str(batch).split(",") if m]
+        is_split = (
+            is_2d_capable_lane and len(modules_in_batch) == 1 and modules_in_batch[0] in FABRIC_FAMILY_SPLIT_MODULES
+        )
+        base_display = f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch
+        if is_split:
+            for mesh_dims in ("1d", "2d"):
+                entries.append(
+                    {
+                        **runner_config,
+                        "module_selector": batch,
+                        "batch_display": f"{base_display} [{mesh_dims.upper()}]",
+                        "suite_name": suite_name,
+                        "mesh_dims": mesh_dims,
+                    }
+                )
+        else:
+            entries.append(
+                {
+                    **runner_config,
+                    "module_selector": batch,
+                    "batch_display": base_display,
+                    "suite_name": suite_name,
+                    "mesh_dims": "",
+                }
+            )
+    return entries
 
 
 def _load_generation_manifest(vectors_path):
