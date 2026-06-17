@@ -48,8 +48,6 @@ runs:
         rc=${PIPESTATUS[0]}
         rm -f "$script"
 
-        # Leading newline so the marker stays line-anchored even when the
-        # script's final output had no trailing newline (otherwise it glues onto
-        # that line and the parser's ^-anchored match misses it).
+        # Leading \n so the marker isn't glued to a newline-less final line.
         printf '\n[==tt-log-finish-line==] exit_code=%s\n' "$rc" >> "$RUN_WITH_LOG_FILE"
         exit $rc
