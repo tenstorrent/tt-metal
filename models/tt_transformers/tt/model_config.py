@@ -2658,6 +2658,7 @@ class ModelArgs:
             self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
+        self.num_local_experts = text_config.get("num_local_experts", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
 
         # Handle different MLP dimension specifications
@@ -3119,7 +3120,11 @@ class ModelArgs:
                 state_dict.pop(k)
         if getattr(self, "is_mixture_of_experts", False):
             self.moe = True
-            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
+            # transformers 5.x fused Mixtral experts into batched params (mlp.experts.*),
+            # dropping the per-expert block_sparse_moe.experts.{i} keys. Derive the count
+            # from those keys when present (<5.x), else fall back to the config value.
+            expert_indices = [int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item]
+            self.num_experts = max(expert_indices) if expert_indices else self.num_local_experts
         return state_dict
 
     # =========================================================================
