@@ -96,6 +96,11 @@ inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_d
 
 inline void _llk_math_sdpa_custom_mm_mask_dest_(
     const std::uint32_t dst_index, const std::uint32_t ct_dim, bool mask_chunk = false) {
+    // #43562/3 experiment: pure-delay NOP loop (50000) at the SRC_VLD stall site. Tests whether the
+    // shallow-position alternating PCC is a timing race (a big enough delay alone fixes it).
+    for (volatile uint32_t _noploop = 0; _noploop < 50000; _noploop++) {
+        TTI_NOP;
+    }
     // Zero Dest
     uint32_t dst_offset = dst_index + get_dest_buffer_base();
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_offset);
