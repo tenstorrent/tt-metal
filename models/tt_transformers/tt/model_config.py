@@ -3512,7 +3512,9 @@ class ModelArgs:
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
         }
-        hf_cache_dir = os.getenv("HF_HUB_CACHE") or None
+        hf_cache_dir = os.getenv("HF_TOKENIZER_CACHE") or os.getenv("HF_HUB_CACHE") or None
+        local_tokenizer_files_only = os.getenv("CI") == "true" and self.base_model_name != "Devstral-Small-2-24B"
+        hf_token = os.getenv("HF_TOKEN") or None
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
         logger.info(f"Model name: {self.model_name}")
@@ -3525,7 +3527,8 @@ class ModelArgs:
             tokenizer = AutoTokenizer.from_pretrained(
                 self.TOKENIZER_PATH,
                 cache_dir=hf_cache_dir,
-                local_files_only=os.getenv("CI") == "true",
+                local_files_only=local_tokenizer_files_only,
+                token=hf_token,
                 trust_remote_code=self.trust_remote_code_hf,
             )
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
@@ -3579,7 +3582,8 @@ class ModelArgs:
                     tokenizer = AutoTokenizer.from_pretrained(
                         fallback_tokenizer_path,
                         cache_dir=hf_cache_dir,
-                        local_files_only=os.getenv("CI") == "true",
+                        local_files_only=local_tokenizer_files_only,
+                        token=hf_token,
                     )
                     logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                 except Exception as fallback_e:

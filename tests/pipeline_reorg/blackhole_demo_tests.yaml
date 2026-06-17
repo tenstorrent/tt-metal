@@ -31,6 +31,7 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_HUB_CACHE=${HF_HOME}/hub
     export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
+    export HF_TOKENIZER_CACHE=/tmp/devstral_hf_tokenizer_cache
     export TT_CACHE_PATH=/tmp/devstral_tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
     uv pip install mistral-common
     uv pip install "git+https://github.com/huggingface/transformers"

@@ -311,8 +311,9 @@ def run_hf(
         model_id,
         trust_remote_code=True,
         fix_mistral_regex=True,
-        cache_dir=os.getenv("HF_HUB_CACHE") or None,
-        local_files_only=os.getenv("CI") == "true",
+        cache_dir=os.getenv("HF_TOKENIZER_CACHE") or os.getenv("HF_HUB_CACHE") or None,
+        local_files_only=False,
+        token=os.getenv("HF_TOKEN") or None,
     )
     model = AutoModelForImageTextToText.from_pretrained(
         model_id,
@@ -425,8 +426,9 @@ def run_tt(
         model_id,
         trust_remote_code=True,
         fix_mistral_regex=True,
-        cache_dir=os.getenv("HF_HUB_CACHE") or None,
-        local_files_only=os.getenv("CI") == "true",
+        cache_dir=os.getenv("HF_TOKENIZER_CACHE") or os.getenv("HF_HUB_CACHE") or None,
+        local_files_only=False,
+        token=os.getenv("HF_TOKEN") or None,
     )
     image = Image.open(image_path).convert("RGB")
     image = _prepare_vision_image(image, vision_max_edge, vision_square_pixels)
@@ -584,8 +586,9 @@ def run_tt(
                 model_id,
                 trust_remote_code=True,
                 fix_mistral_regex=True,
-                cache_dir=os.getenv("HF_HUB_CACHE") or None,
-                local_files_only=os.getenv("CI") == "true",
+                cache_dir=os.getenv("HF_TOKENIZER_CACHE") or os.getenv("HF_HUB_CACHE") or None,
+                local_files_only=False,
+                token=os.getenv("HF_TOKEN") or None,
             )
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         if pad_token_id is None:

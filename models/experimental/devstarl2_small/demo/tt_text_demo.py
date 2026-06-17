@@ -333,8 +333,9 @@ def main(argv: list[str] | None = None):
             args.model_id,
             trust_remote_code=True,
             fix_mistral_regex=True,
-            cache_dir=os.getenv("HF_HUB_CACHE") or None,
-            local_files_only=os.getenv("CI") == "true",
+            cache_dir=os.getenv("HF_TOKENIZER_CACHE") or os.getenv("HF_HUB_CACHE") or None,
+            local_files_only=False,
+            token=os.getenv("HF_TOKEN") or None,
         )
         tokenizer = getattr(processor, "tokenizer", processor)
         if args.messages_json is not None:
