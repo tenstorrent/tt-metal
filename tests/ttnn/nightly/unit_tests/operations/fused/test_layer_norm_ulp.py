@@ -658,8 +658,9 @@ def test_layer_norm_ulp_sharded_tile_aligned_width_split_across_cores(device, us
 
 # Fused residual add (a + b computed on-device) over a non-tile-aligned width, on the legacy
 # (non-Welford) path. The normalized input is compute-produced, so the column mask must still exclude
-# the padding columns from the statistics. num_cores_w=2 splits the width across shards (RMSNorm only;
-# LayerNorm rejects a non-tile-aligned width split across multiple cores).
+# the padding columns from the statistics. num_cores_w=2 splits the width across shards, where each
+# core's per-core column mask carries its own validity and the per-element divide lands on the logical
+# width.
 @pytest.mark.parametrize("w", [40, 72, 200])
 @pytest.mark.parametrize("distribution", ["normal", "centered_uniform"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -673,8 +674,6 @@ def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dty
     Both the input and residual tile padding are poisoned so any read of the padded columns is
     observable.
     """
-    if norm == "layernorm" and num_cores_w > 1:
-        pytest.skip("LayerNorm does not support a non-tile-aligned width split across multiple cores")
     torch.manual_seed(0)
     h = 32
     shard_w = math.ceil(w / num_cores_w / 32) * 32
