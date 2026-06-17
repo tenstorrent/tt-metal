@@ -22,6 +22,7 @@
 #include "ttnn/graph/graph_serialization.hpp"
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -209,7 +210,19 @@ Tensor pad(
     }
 
     auto output =
-        Tensor(tt::tt_metal::pad(input_tensor.host_tensor(), output_padded_shape, input_tensor_start, pad_value));
+        Tensor(tensor_impl::dispatch(input_tensor.host_tensor().dtype(), [&]<typename StorageT>() -> HostTensor {
+            if constexpr (
+                std::is_same_v<StorageT, tensor_impl::bfloat8_b> || std::is_same_v<StorageT, tensor_impl::bfloat4_b>) {
+                return tt::tt_metal::pad<float>(
+                    input_tensor.host_tensor(), output_padded_shape, input_tensor_start, pad_value);
+            } else {
+                return tt::tt_metal::pad<StorageT>(
+                    input_tensor.host_tensor(),
+                    output_padded_shape,
+                    input_tensor_start,
+                    static_cast<StorageT>(pad_value));
+            }
+        }));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -240,7 +253,16 @@ Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
 
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for pad_to_tile conversion");
-    auto output = Tensor(tt::tt_metal::pad_to_tile(input_tensor.host_tensor(), pad_value));
+    auto output =
+        Tensor(tensor_impl::dispatch(input_tensor.host_tensor().dtype(), [&]<typename StorageT>() -> HostTensor {
+            if constexpr (
+                std::is_same_v<StorageT, tensor_impl::bfloat8_b> || std::is_same_v<StorageT, tensor_impl::bfloat4_b>) {
+                return tt::tt_metal::pad_to_tile<float>(input_tensor.host_tensor(), pad_value);
+            } else {
+                return tt::tt_metal::pad_to_tile<StorageT>(
+                    input_tensor.host_tensor(), static_cast<StorageT>(pad_value));
+            }
+        }));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
