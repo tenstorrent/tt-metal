@@ -116,9 +116,9 @@ class MistralTransformer(Transformer):
         # vision_output is replicated, so ConcatMeshToTensor(dim=-1) gives [num_tokens, H_full*n].
         # Slice back to [num_tokens, H_full] (vision_output.shape[-1] is the per-device = full H
         # since the tensor is replicated, not sharded).
-        vision_features = ttnn.to_torch(
-            vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1)
-        )[:, : vision_output.shape[-1]]  # [num_image_tokens, H_full]
+        vision_features = ttnn.to_torch(vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1))[
+            :, : vision_output.shape[-1]
+        ]  # [num_image_tokens, H_full]
         num_image_tokens, H_full = vision_features.shape
 
         # tokens_embd global shape: [1, S_padded, H_full], sharded along H via ShardTensor2dMesh.
@@ -130,9 +130,9 @@ class MistralTransformer(Transformer):
         # torch.nn.functional.pad is NOT needed here: ttnn.scatter uses explicit row indices
         # so we locate image tokens directly in the unpadded sequence.  Padded positions
         # (S..S_padded-1) are filled with 0 ≠ image_token_index, so they never match.
-        mask_indices = torch.where(
-            text_input_ids.view(-1) == image_token_index
-        )[0]  # [num_image_tokens] — absolute positions in the S_padded dimension
+        mask_indices = torch.where(text_input_ids.view(-1) == image_token_index)[
+            0
+        ]  # [num_image_tokens] — absolute positions in the S_padded dimension
         assert len(mask_indices) == num_image_tokens, (
             f"Image-token count mismatch: input_ids has {len(mask_indices)} [IMG] tokens, "
             f"vision output has {num_image_tokens} feature vectors."
