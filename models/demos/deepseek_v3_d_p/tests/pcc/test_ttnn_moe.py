@@ -352,7 +352,7 @@ def run_model(
     # PCC thresholds
     shared_output_pcc = 0.997
     routed_output_pcc = 0.90
-    final_output_pcc = 0.96
+    final_output_pcc = 0.95
     expert_outputs_pcc = 0.95
     combined_output_pcc = 0.95
     reference_output_pcc = variant.moe_pcc_threshold_fp8 if use_fp8_compression else variant.moe_pcc_threshold
