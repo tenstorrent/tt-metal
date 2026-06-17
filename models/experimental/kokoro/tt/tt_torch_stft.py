@@ -28,6 +28,16 @@ Pre-computed dense matrices (device-resident, small inputs only):
 B_real / B_imag already encode synthesis windowing, OLA and COLA normalisation, so the
 runtime is two matmuls + one add.
 
+The dense iSTFT (:meth:`TTTorchSTFT.inverse`) runs entirely in bf16: the incoming
+``magnitude``/``phase`` are NOT typecast to float32 first.  The polar->rectangular conversion
+(cos/sin/multiply) and the well-conditioned dense matmul against the bf16 ``B_real``/``B_imag``
+tolerate bf16 (inverse-vs-reference PCC 0.999995, full kModel fallback PCC unchanged at ~0.874),
+unlike the forward atan2 path which amplifies near-zero-bin noise.  Dropping the two BF16=>FP32
+typecasts removes two dispatches on this op-gap-bound path (9 device ops vs 11, device time
+~23µs vs ~28µs).  A single fused matmul against the row-stacked ``[B_real; B_imag]`` was tried
+and rejected: concatenating along the K=11 (non-tile-aligned) axis forces an
+untilize->concat->tilize round-trip that costs more than the matmul + add it replaces.
+
 When the iSTFT matrix would exceed ``_ISTFT_MATRIX_BYTES_LIMIT`` bytes (default 1 GiB) the
 full matrix is not materialised.  Instead iSTFT uses ``conv_transpose2d``:
 
@@ -61,6 +71,7 @@ from typing import Optional
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -616,6 +627,37 @@ class TTTorchSTFT:
         X_real, X_imag = self._forward_stft_conv(x_bL)
         return self._magnitude_phase_from_xy(X_real, X_imag)
 
+    def _dense_istft_two_matmul(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor, B: int) -> ttnn.Tensor:
+        """Dense iSTFT via two ``[B, K*F] @ [K*F, output_length]`` matmuls summed.
+
+        ``y = X_real_flat @ istft_real + X_imag_flat @ istft_imag``.  Consumes its inputs.
+
+        (A single fused matmul against the row-stacked ``[B_real; B_imag]`` matrix was tried but is
+        slower: concatenating ``X_real``/``X_imag`` along the K=11 axis is not tile-aligned, so it
+        falls back to ROW_MAJOR and injects an untilize→concat→tilize round-trip — three extra program
+        dispatches that cost more than the matmul + add they replace.)
+        """
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        X_real_flat = ttnn.reshape(X_real, [B, p.K * p.F], memory_config=mc)
+        X_imag_flat = ttnn.reshape(X_imag, [B, p.K * p.F], memory_config=mc)
+        ttnn.deallocate(X_real)
+        ttnn.deallocate(X_imag)
+        y_real = ttnn.matmul(
+            X_real_flat, p.istft_real, memory_config=mc, compute_kernel_config=self.compute_kernel_config
+        )
+        y_imag = ttnn.matmul(
+            X_imag_flat, p.istft_imag, memory_config=mc, compute_kernel_config=self.compute_kernel_config
+        )
+        y = ttnn.add(y_real, y_imag, memory_config=mc)
+        ttnn.deallocate(y_real)
+        ttnn.deallocate(y_imag)
+        ttnn.deallocate(X_real_flat)
+        ttnn.deallocate(X_imag_flat)
+        while len(y.shape) > 2:
+            y = ttnn.squeeze(y, 0)
+        return ttnn.reshape(y, [B, 1, p.output_length], memory_config=mc)
+
     def _to_nhwc_rm(self, x_bkf: ttnn.Tensor) -> ttnn.Tensor:
         """``[B, K, F]`` (TILE) → ``[B, 1, F, K]`` ROW_MAJOR for conv_transpose2d NHWC input.
 
@@ -654,8 +696,18 @@ class TTTorchSTFT:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        # Scale DRAM height slices with the chunk frame count using the generic conv_transpose budget.
-        slice_cfg = dram_height_slice_config(n_frames)
+        # Scale DRAM height slices with the chunk frame count.  The generic budget assumes
+        # channels=1 and caps long sequences at 128 rows/slice, but this conv_transpose has only
+        # K (=11) input channels, so far more frames fit per L1 slice.  Passing the real channel
+        # count and a larger per-slice row budget (KOKORO_ISTFT_CT_ROWS_PER_SLICE) collapses the
+        # 64 slices/direction down to a handful, cutting the per-slice
+        # PaddedSlice/Halo/Move/Conv2d/SliceWrite op fan-out by the same factor.
+        rows_per_slice = int(os.getenv("KOKORO_ISTFT_CT_ROWS_PER_SLICE", "2048"))
+        slice_cfg = dram_height_slice_config(n_frames, channels=p.K, target_rows_per_slice=rows_per_slice)
+        logger.debug(
+            f"TTTorchSTFT iSTFT conv_transpose OLA: n_frames={n_frames}, K={p.K}, "
+            f"rows_per_slice={rows_per_slice} -> {slice_cfg.num_slices} slices/direction"
+        )
 
         def _run_ct(x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor) -> ttnn.Tensor:
             y, out_hw = ttnn.conv_transpose2d(
@@ -746,11 +798,10 @@ class TTTorchSTFT:
         """
         p = self.params
 
-        if magnitude.dtype != ttnn.float32:
-            magnitude = ttnn.typecast(magnitude, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if phase.dtype != ttnn.float32:
-            phase = ttnn.typecast(phase, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+        # No fp32 typecast of the inputs: cos/sin/multiply and the matmul (against a bf16 iSTFT
+        # matrix) run directly on the incoming dtype.  The polar->rect conversion and the
+        # well-conditioned dense matmul tolerate bf16 here (unlike the forward atan2 path), so the
+        # two BF16=>FP32 typecast dispatches are pure overhead on this op-gap-bound path.
         cos_phase = ttnn.cos(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         sin_phase = ttnn.sin(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         X_real = ttnn.multiply(magnitude, cos_phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -761,32 +812,11 @@ class TTTorchSTFT:
         B = int(magnitude.shape[0])
 
         if p.istft_real is not None and p.istft_imag is not None:
-            X_real_flat = ttnn.reshape(X_real, [B, p.K * p.F], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            X_imag_flat = ttnn.reshape(X_imag, [B, p.K * p.F], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(X_real)
-            ttnn.deallocate(X_imag)
-            y_real = ttnn.matmul(
-                X_real_flat,
-                p.istft_real,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config,
-            )
-            y_imag = ttnn.matmul(
-                X_imag_flat,
-                p.istft_imag,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config,
-            )
-            y = ttnn.add(y_real, y_imag, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(y_real)
-            ttnn.deallocate(y_imag)
-            ttnn.deallocate(X_real_flat)
-            ttnn.deallocate(X_imag_flat)
-            while len(y.shape) > 2:
-                y = ttnn.squeeze(y, 0)
-            return ttnn.reshape(y, [B, 1, p.output_length], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            logger.info(f"TTTorchSTFT.inverse: dense two-matmul path (K*F={p.K * p.F}, F={p.F})")
+            return self._dense_istft_two_matmul(X_real, X_imag, B)
 
         # Matrix skipped but F fits BH conv_transpose slice budget — on-device OLA.
+        logger.info(f"TTTorchSTFT.inverse: conv_transpose2d OLA path (F={p.F}, dense matrix skipped)")
         y = self._inverse_conv_transpose(X_real, X_imag)
         ttnn.deallocate(X_real)
         ttnn.deallocate(X_imag)
@@ -811,26 +841,11 @@ class TTTorchSTFT:
         B = int(X_real.shape[0])
 
         if p.istft_real is not None and p.istft_imag is not None:
-            X_real_flat = ttnn.reshape(X_real, [B, p.K * p.F], memory_config=mc)
-            X_imag_flat = ttnn.reshape(X_imag, [B, p.K * p.F], memory_config=mc)
-            ttnn.deallocate(X_real)
-            ttnn.deallocate(X_imag)
-            y_real = ttnn.matmul(
-                X_real_flat, p.istft_real, memory_config=mc, compute_kernel_config=self.compute_kernel_config
-            )
-            y_imag = ttnn.matmul(
-                X_imag_flat, p.istft_imag, memory_config=mc, compute_kernel_config=self.compute_kernel_config
-            )
-            y = ttnn.add(y_real, y_imag, memory_config=mc)
-            ttnn.deallocate(y_real)
-            ttnn.deallocate(y_imag)
-            ttnn.deallocate(X_real_flat)
-            ttnn.deallocate(X_imag_flat)
-            while len(y.shape) > 2:
-                y = ttnn.squeeze(y, 0)
-            return ttnn.reshape(y, [B, 1, p.output_length], memory_config=mc)
+            logger.info(f"TTTorchSTFT.forward: dense two-matmul iSTFT path (K*F={p.K * p.F}, F={p.F})")
+            return self._dense_istft_two_matmul(X_real, X_imag, B)
 
         # Long sequences: conv_transpose2d OLA with DRAM height slicing (fully on device).
+        logger.info(f"TTTorchSTFT.forward: conv_transpose2d OLA iSTFT path (F={p.F}, dense matrix skipped)")
         y = self._inverse_conv_transpose(X_real, X_imag)
         ttnn.deallocate(X_real)
         ttnn.deallocate(X_imag)

@@ -259,6 +259,9 @@ class TTTextEncoder:
             compute_kernel_config=self.compute_kernel_config,
             sequence_lengths=lengths_list,
             w_h_block=self.params.lstm_w_h_block,
+            # TextEncoder is the one LSTM that tolerates the gate-sum rounding change; fold the
+            # per-step gates_x add into the recurrent matmul bias (one fewer BinaryNg/step).
+            fold_gates_bias=True,
         )
 
         x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
