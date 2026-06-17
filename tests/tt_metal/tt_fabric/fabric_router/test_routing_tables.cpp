@@ -1965,6 +1965,26 @@ void validate_sp5_blitz_decode_pipeline_stages(
                         continue;
                     }
                     MeshId dst_mesh = mesh_ids[j];
+                    // Only enforce multi-peer representation for mesh pairs that are LOGICALLY
+                    // connected in the mesh graph (MGD). Physical cabling can incidentally link
+                    // logically-unconnected meshes (e.g. ring stages laid out on physically
+                    // adjacent boards); the control plane correctly does not route those, so they
+                    // must not be asserted here.
+                    {
+                        const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
+                        bool logically_connected = false;
+                        if (static_cast<std::size_t>(*src_mesh) < inter_mesh_connectivity.size()) {
+                            for (const auto& chip_connections : inter_mesh_connectivity[*src_mesh]) {
+                                if (chip_connections.contains(dst_mesh)) {
+                                    logically_connected = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!logically_connected) {
+                            continue;  // incidental physical cabling, not a logical hop
+                        }
+                    }
                     // Enumerate distinct peer ASICs in dst_mesh that are physically
                     // cabled to exit_fn per PSD.
                     std::set<tt::tt_metal::AsicID> psd_peer_asics;
@@ -2152,109 +2172,12 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
 
     ASSERT_GE(num_meshes, 2u) << "Pipeline builder requires at least 2 meshes";
 
-    auto fn_to_coord = [&](const FabricNodeId& fn) { return mesh_graph.chip_to_coordinate(fn.mesh_id, fn.chip_id); };
-
-    // --- build_pipeline_from_topology ---
-    std::set<FabricNodeId> used_nodes;
-
-    // Select one inter-mesh pair per hop, avoiding collisions.
-    // hop[i] connects mesh_ids[i] -> mesh_ids[(i+1) % N].
-    std::vector<std::pair<FabricNodeId, FabricNodeId>> hops;
-    hops.reserve(num_meshes);
-    for (std::size_t i = 0; i < num_meshes; i++) {
-        auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
-            mesh_ids[i], mesh_ids[(i + 1) % num_meshes]);
-        ASSERT_FALSE(pairs.empty()) << "No inter-mesh connection from mesh " << *mesh_ids[i] << " to mesh "
-                                    << *mesh_ids[(i + 1) % num_meshes];
-
-        bool found = false;
-        for (const auto& pair : pairs) {
-            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
-                continue;
-            }
-            hops.push_back(pair);
-            used_nodes.insert(pair.first);
-            used_nodes.insert(pair.second);
-            found = true;
-            break;
-        }
-        ASSERT_TRUE(found) << "No non-colliding inter-mesh pair from mesh " << *mesh_ids[i] << " to mesh "
-                           << *mesh_ids[(i + 1) % num_meshes] << " (all " << pairs.size()
-                           << " candidate pairs overlap with already-claimed nodes)";
-    }
-
-    // Find two unclaimed nodes on mesh_0 for stage 0 entry and loopback exit.
-    // We need a pair that has a direct intra-mesh ethernet link between them
-    // (loopback_exit -> stage_0_entry). Prefer non-Z direction links.
-    auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
-    std::vector<FabricNodeId> unclaimed_mesh_0_nodes;
-    for (const auto& coord : mesh_0_coord_range) {
-        auto chip_id = mesh_graph.coordinate_to_chip(mesh_ids[0], coord);
-        FabricNodeId fn(mesh_ids[0], chip_id);
-        if (!used_nodes.contains(fn)) {
-            unclaimed_mesh_0_nodes.push_back(fn);
-        }
-    }
-    ASSERT_GE(unclaimed_mesh_0_nodes.size(), 2u)
-        << "Need at least 2 unclaimed nodes on mesh " << *mesh_ids[0] << " for stage 0 entry and loopback exit, found "
-        << unclaimed_mesh_0_nodes.size();
-
-    std::optional<FabricNodeId> stage_0_entry_fn;
-    std::optional<FabricNodeId> loopback_exit_fn;
-    bool found_non_z_pair = false;
-
-    for (std::size_t a = 0; a < unclaimed_mesh_0_nodes.size() && !found_non_z_pair; a++) {
-        auto fn_a = unclaimed_mesh_0_nodes[a];
-        auto channels_a = control_plane.get_active_fabric_eth_channels(fn_a);
-        for (const auto& [chan_id, direction] : channels_a) {
-            auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(fn_a, chan_id);
-            if (peer_fn.mesh_id != mesh_ids[0]) {
-                continue;
-            }
-            bool peer_unclaimed = !used_nodes.contains(peer_fn) &&
-                                  std::find(unclaimed_mesh_0_nodes.begin(), unclaimed_mesh_0_nodes.end(), peer_fn) !=
-                                      unclaimed_mesh_0_nodes.end();
-            if (!peer_unclaimed) {
-                continue;
-            }
-            bool is_non_z = (direction != tt::tt_fabric::eth_chan_directions::Z);
-            if (!loopback_exit_fn.has_value() || (is_non_z && !found_non_z_pair)) {
-                loopback_exit_fn = fn_a;
-                stage_0_entry_fn = peer_fn;
-                found_non_z_pair = is_non_z;
-            }
-        }
-    }
-
-    ASSERT_TRUE(loopback_exit_fn.has_value()) << "Could not find a directly-connected unclaimed pair on mesh "
-                                              << *mesh_ids[0] << " for loopback exit -> stage 0 entry";
-
-    std::vector<Sp5BlitzPipelineStage> stages;
-    stages.reserve(num_meshes + 1);
-
-    stages.push_back(
-        {static_cast<std::size_t>(*mesh_ids[0]), fn_to_coord(*stage_0_entry_fn), fn_to_coord(hops[0].first)});
-
-    for (std::size_t i = 1; i < num_meshes; i++) {
-        stages.push_back(
-            {static_cast<std::size_t>(*mesh_ids[i]), fn_to_coord(hops[i - 1].second), fn_to_coord(hops[i].first)});
-    }
-
-    stages.push_back(
-        {static_cast<std::size_t>(*mesh_ids[0]),
-         fn_to_coord(hops[num_meshes - 1].second),
-         fn_to_coord(*loopback_exit_fn)});
-
-    validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
-
-    // Exercise the production pipeline builder (generate_blitz_decode_pipeline) on the same topology.
-    SCOPED_TRACE("generate_blitz_decode_pipeline");
     const auto generated_stages = tt::tt_metal::internal::blitz::generate_blitz_decode_pipeline(true);
-    std::vector<Sp5BlitzPipelineStage> generated_sp5;
-    generated_sp5.reserve(generated_stages.size());
+    std::vector<Sp5BlitzPipelineStage> stages;
+    stages.reserve(generated_stages.size());
     for (const auto& s : generated_stages) {
-        generated_sp5.push_back({s.stage_index, s.entry_node_coord, s.exit_node_coord});
+        stages.push_back({s.stage_index, s.entry_node_coord, s.exit_node_coord});
     }
-    validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, generated_sp5);
+    validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
 }
 }  // namespace tt::tt_fabric::fabric_router_tests

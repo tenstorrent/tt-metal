@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <filesystem>
 #include <algorithm>
 #include <map>
@@ -475,6 +476,17 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
 
 namespace {
 
+// Host rank for this MPI process as set by tt-run via TT_MESH_HOST_RANK (rank bindings YAML).
+// Mirrors ControlPlane::initialize_local_mesh_binding(): unset env defaults to host rank 0
+// (single-host / mock runs without tt-run).
+MeshHostRankId rank_binding_host_rank_for_local_process() {
+    const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
+    if (host_rank_str != nullptr) {
+        return MeshHostRankId{static_cast<unsigned int>(std::stoi(host_rank_str))};
+    }
+    return MeshHostRankId{0};
+}
+
 size_t mesh_graph_total_host_rank_count(const tt::tt_fabric::MeshGraph& mesh_graph) {
     size_t total = 0;
     for (const MeshId mesh_id : mesh_graph.get_mesh_ids()) {
@@ -500,9 +512,18 @@ void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control
     EXPECT_EQ(mpi_size, expected_mpi_ranks)
         << "MPI world size must match total MGD host rank count (sum of host_topology dims over all mesh instances)";
 
+    // Three independent inputs are cross-checked here:
+    //  - mesh_id list: tt-run rank bindings -> TT_MESH_ID -> ControlPlane::local_mesh_binding_
+    //  - expected per-host slice: MGD textproto host_topology -> MeshGraph::get_mesh_shape(mesh, host_rank)
+    //  - runtime slice: PSD/PGD discovery + topology mapping -> TopologyMapper coord ranges / chip mapping
     for (const MeshId mesh_id : control_plane.get_local_mesh_id_bindings()) {
-        const MeshHostRankId local_host_rank = control_plane.get_local_host_rank_id_binding();
-        const MeshShape expected_local_shape = mesh_graph.get_mesh_shape(mesh_id, local_host_rank);
+        const MeshHostRankId rank_binding_host_rank = rank_binding_host_rank_for_local_process();
+        const MeshHostRankId discovered_host_rank = control_plane.get_local_host_rank_id_binding();
+        EXPECT_EQ(discovered_host_rank, rank_binding_host_rank)
+            << "rank " << mpi_rank << " mesh " << *mesh_id
+            << " topology-mapper host rank must match tt-run rank binding (TT_MESH_HOST_RANK)";
+
+        const MeshShape expected_local_shape = mesh_graph.get_mesh_shape(mesh_id, rank_binding_host_rank);
         ASSERT_GT(expected_local_shape.mesh_size(), 0u)
             << "rank " << mpi_rank << " mesh " << *mesh_id << " MGD per-host slice must be non-empty";
 
@@ -511,7 +532,7 @@ void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control
             << "rank " << mpi_rank << " mesh " << *mesh_id
             << " local coord range shape must match MGD slice for "
                "mesh_host_rank "
-            << *local_host_rank;
+            << *rank_binding_host_rank;
 
         const MeshShape local_physical_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::LOCAL);
         EXPECT_EQ(local_physical_shape, expected_local_shape)

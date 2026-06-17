@@ -33,12 +33,21 @@
 #     source tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh
 #     CURRENT_GROUP=phys-grouping
 #     run_test tt-run --mock-cluster-rank-binding "${SP4_GLX_CLUSTER_DESC_MAPPING}" ...
+#     run_test uses return (not exit) on failure when sourced so your shell stays open.
 #
 # Strict mode applies only when executed (not when sourced), so sourcing does not
 # enable nounset in your interactive shell.
+_fabric_cpu_only_abort() {
+  local status=${1:-1}
+  if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    return "$status"
+  fi
+  exit "$status"
+}
+
 if [ -z "${BASH_VERSION:-}" ]; then
   echo "error: this script requires bash (not sh/dash). Run: bash $0 ..." >&2
-  exit 1
+  _fabric_cpu_only_abort 1
 fi
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   set -eo pipefail
@@ -47,6 +56,7 @@ fi
 KEEP_GOING=0
 DRY_RUN=0
 GREP_FILTER=""
+GROUP="all"
 FAILURES=()
 CURRENT_GROUP="all"
 
@@ -109,7 +119,7 @@ run_test() {
   if [[ $status -ne 0 ]]; then
     FAILURES+=("[${CURRENT_GROUP}] exit ${status}: ${cmd_str% }")
     if [[ "$KEEP_GOING" -eq 0 ]]; then
-      exit "$status"
+      _fabric_cpu_only_abort "$status"
     fi
   fi
 }
@@ -126,12 +136,12 @@ print_failure_summary() {
   for failure in "${FAILURES[@]}"; do
     printf '%s\n' "$failure" >&2
   done
-  exit 1
+  _fabric_cpu_only_abort 1
 }
 
 # When sourced, stop here: paths/vars/run_test are available; tests are not run.
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-  return 0 2>/dev/null || exit 0
+  return 0
 fi
 
 # Parse arguments
@@ -385,11 +395,9 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x8_ring_ring_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestGalaxyCornerPinnings:MultiHost.Test8x4TrayMapping"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_ring_ring_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestGalaxyCornerPinnings:MultiHost.TestSplitHost4x4TrayMapping"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_ring_ring_1x1_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestGalaxyCornerPinnings:MultiHost.TestSplitHost4x4TrayMapping"
-# Subtorus Blitz decode pipeline MGDs
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_2x4_pipeline_16stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
+# Subtorus Blitz decode pipeline MGDs (16-stage 4x2 RING+LINE)
 # Original single-pod Blitz decode MGDs on subtorus mock (16-stage 2x4 pipelines, CPU-only test descriptors)
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_single_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_2x4_pipeline_single_pod_4x2_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
 # Quad-galaxy 4x4 split-host / 8x4 full-galaxy torus pipelines (8- and 4-stage) on subtorus mock
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.TestSplitHost4x4TrayMapping"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_8x4_pipeline_4stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test8x4TrayMapping"
@@ -397,7 +405,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Quad-galaxy mixed 4x8+4x4+4x2 10-stage ring (128 ASICs) on subtorus mock
 # Currently disabled because complex heterogeneous multi-stage mesh graphs are not supported yet.
 # TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_quad_galaxy_4x8_4x4_4x2_10stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyCornerPinnings"
-# Quad-galaxy heterogeneous 4x8+4x2 10-stage ring (128 ASICs): 2x 4x8 RING+RING + 8x 4x2 RING+RING on subtorus mock.
+# Quad-galaxy heterogeneous 4x8+4x2 10-stage ring (128 ASICs): 2x 4x8 RING+RING + 8x 4x2 RING+LINE on subtorus mock.
 # Homogeneous 4x2 hops use NESW (no assign_z_direction); heterogeneous 4x8<->4x2 hops use assign_z_direction.
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x8_2x4_10stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyCornerPinnings"
 # Dual 4x16 quad-galaxy intermesh (128 ASICs): M0 1x8 hosts + M1 2x16 hosts, 4 intermesh links
@@ -413,8 +421,8 @@ fi # bh-subtorus
 ######################################
 if run_group "bh-subtorus-sc16"; then
 
-# 2x4 = 64-stage ring (8 ASICs/stage), 4x4 = 32-stage ring (16 ASICs/stage), 8x4 = 16-stage ring (32 ASICs/stage)
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_2x4_pipeline_64stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SUBTORUS_SC16_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
+# 2x4 = 64-stage ring (8 ASICs/stage, 4x2 RING+LINE), 4x4 = 32-stage ring (16 ASICs/stage), 8x4 = 16-stage ring (32 ASICs/stage)
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SUBTORUS_SC16_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_32stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SUBTORUS_SC16_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.TestSplitHost4x4TrayMapping"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_8x4_pipeline_16stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SUBTORUS_SC16_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test8x4TrayMapping"
 # Full 32x4 quad torus (16 MPI ranks, 8x2 host grid)
@@ -457,8 +465,8 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Dual 4x16 quad-galaxy intermesh (M0 1x8 + M1 2x16 hosts, 4 intermesh links)
 # NOTE: Not yet working for full cluster, this is working for if you specify a single pod, because of placemnet optimizations
 #TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/dual_4x16_blitz_test.textproto" --mock-cluster-rank-binding "${BH_110C_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyCornerPinnings"
-# Superpod Blitz decode (16 MPI ranks)
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_ring_ring_64stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${BH_110C_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
+# Superpod Blitz decode (16 MPI ranks): 64-stage 4x2 RING+LINE pipeline
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${BH_110C_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
 
 fi # bh-110c
 

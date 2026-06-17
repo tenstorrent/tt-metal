@@ -251,9 +251,14 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
     // With loopback:    N hops: mesh_0→mesh_1→...→mesh_{N-1}→mesh_0
     // Without loopback: N-1 hops: mesh_0→mesh_1→...→mesh_{N-1} (no return)
     const std::size_t num_hops = initialize_loopback ? num_meshes : num_meshes - 1;
-    std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops;
-    hops.reserve(num_hops);
-    for (std::size_t i = 0; i < num_hops; i++) {
+    // Process the ring-closing (loopback) hop mesh_{N-1}->mesh_0 FIRST: greedy first-fit in ring order can
+    // otherwise let the linear hops claim the corner-mesh chips its wraparound cable needs and strand it
+    // (common when a mesh dimension uses LINE rather than RING, leaving fewer boundary cables). hops is
+    // indexed by ring position; the throwaway fill value is overwritten for every position below.
+    std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops(
+        num_hops, {tt::tt_fabric::FabricNodeId(mesh_ids[0], 0), tt::tt_fabric::FabricNodeId(mesh_ids[0], 0)});
+    for (std::size_t step = 0; step < num_hops; step++) {
+        const std::size_t i = (initialize_loopback && num_hops > 0) ? (step == 0 ? num_hops - 1 : step - 1) : step;
         const auto next = initialize_loopback ? (i + 1) % num_meshes : i + 1;
         auto pairs =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(mesh_ids[i], mesh_ids[next]);
@@ -264,7 +269,7 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
             if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
                 continue;
             }
-            hops.push_back(pair);
+            hops[i] = pair;
             used_nodes.insert(pair.first);
             used_nodes.insert(pair.second);
             found = true;
