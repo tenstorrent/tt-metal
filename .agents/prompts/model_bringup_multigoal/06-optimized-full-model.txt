@@ -20,5 +20,6 @@ Goal completion requirements:
 - Do not run a broad full-model datatype frontier search here; $datatype-sweep owns Pareto selection.
 - Runtime fallback audit is clean for the measured path. Token-out decode is fully traced with split sampling and has no host boundary.
 - models/autoports/<model>/doc/optimized_full_model/README.md and work_log.md record commands, before/after accuracy and perf, mesh/optimization decisions, tt-perf-report conclusions, limitations, and exact artifacts.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
 
 Do not mark this goal complete while any completion requirement is unmet.
