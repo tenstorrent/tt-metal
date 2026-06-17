@@ -7,6 +7,7 @@
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
@@ -33,6 +34,14 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
         if (consumer_idx == 0) {
             preload_acked_counter(dfb, kPreloadAckedValue);
+            // Cross-kernel rendezvous (see dfb_producer_with_tc_preload_2_0.cpp): signal
+            // "consumer ready" then wait for the producer so neither side enters its data
+            // loop until both POSTED (producer) and ACKED (here) are preloaded — occupancy
+            // is then provably 0 and the first entry is not consumed prematurely.
+            Semaphore prod_ready(sem::prod_ready);
+            Semaphore cons_ready(sem::cons_ready);
+            cons_ready.set(1);
+            prod_ready.wait_min(1);
         }
 #endif
     }

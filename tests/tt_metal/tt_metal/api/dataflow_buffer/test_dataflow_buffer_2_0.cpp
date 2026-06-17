@@ -608,6 +608,11 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     const m2::KernelSpecName CONSUMER{"consumer"};
     const m2::TensorParamName IN_TENSOR{"in_tensor"};
     const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+    // Two single-writer semaphores form a producer<->consumer rendezvous so that
+    // neither DM kernel enters its data loop until BOTH the producer's posted and
+    // the consumer's acked counters have been preloaded (occupancy provably 0).
+    const m2::SemaphoreSpecName SEM_PROD_READY{"sem_prod_ready"};
+    const m2::SemaphoreSpecName SEM_CONS_READY{"sem_cons_ready"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(kEntrySize, kPushTiles, DataType::UINT32);
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
@@ -631,6 +636,9 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     producer.compile_time_args = {
         {"num_entries_per_producer", kPushTiles}, {"implicit_sync", 1u}, {"kPreloadPostedValue", kPreloadValue}};
     producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+    producer.semaphore_bindings = {
+        {.semaphore_spec_name = SEM_PROD_READY, .accessor_name = "prod_ready"},
+        {.semaphore_spec_name = SEM_CONS_READY, .accessor_name = "cons_ready"}};
 
     auto consumer =
         make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_with_tc_preload_2_0.cpp");
@@ -646,6 +654,9 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         {"implicit_sync", 1u},
         {"kPreloadAckedValue", kPreloadValue}};
     consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+    consumer.semaphore_bindings = {
+        {.semaphore_spec_name = SEM_PROD_READY, .accessor_name = "prod_ready"},
+        {.semaphore_spec_name = SEM_CONS_READY, .accessor_name = "cons_ready"}};
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
@@ -653,6 +664,11 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         .name = "d1_2_0",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb},
+        .semaphores =
+            {
+                m2::SemaphoreSpec{.unique_id = SEM_PROD_READY, .target_nodes = node},
+                m2::SemaphoreSpec{.unique_id = SEM_CONS_READY, .target_nodes = node},
+            },
         .tensor_parameters =
             {
                 {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
