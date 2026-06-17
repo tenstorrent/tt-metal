@@ -2,16 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Single-op SFPU test with result plotting.
+Table-driven single-op SFPU accuracy harness with result plotting.
 
-- test_sfpu_plot: configurable op/format/range test with 3-panel plot
+Each entry in CASES (near the bottom of this file) sweeps one SFPU op over an
+input domain on hardware and emits a multi-panel accuracy plot + stats summary
+(golden vs hardware: signed ULP error, relative error, ULP CDF, per-bin
+percentiles, monotonicity).
+
+To add a test, append a Case(...) to CASES and pick a format with
+fmt=BF16/FP16/FP32 — see the "HOW TO ADD A TEST" comment above CASES. Run a
+single op with:  pytest test_sfpu_plot_old.py -k <Op> -s
 """
 
 import os
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -28,9 +37,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
-from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, exclude_undefined
+from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -125,6 +134,36 @@ def _subtract_from_segment(
     if cursor < b:
         result.append((cursor, b))
     return result
+
+
+# Distributions whose sweep range is given by spec.low/spec.high. Others
+# (gaussian / gaussian_linspace) are defined by mean/std, so their low/high stay
+# at the 0/1 defaults — using those would falsely shade the rest as "excluded".
+_LOW_HIGH_BOUNDED = {
+    DistributionKind.UNIFORM,
+    DistributionKind.RAMP,
+    DistributionKind.SAW,
+    DistributionKind.LOG_UNIFORM,
+    DistributionKind.LOG_UNIFORM_LINSPACE,
+    DistributionKind.SEQUENTIAL,
+}
+
+
+def _allowed_intervals_for(
+    spec: StimuliSpec,
+    x: np.ndarray,
+) -> List[Tuple[float, float]]:
+    """The x-regions that are the legitimate test domain, for plot shading.
+
+    Explicit intervals win. For low/high-bounded distributions use [low, high].
+    For mean/std-defined ones (gaussian) low/high are meaningless, so use the
+    actual sampled span — otherwise everything outside [0, 1] is falsely shaded.
+    """
+    if spec.intervals:
+        return spec.intervals
+    if spec.distribution in _LOW_HIGH_BOUNDED:
+        return [(spec.low, spec.high)]
+    return [(float(x.min()), float(x.max()))]
 
 
 # ---------------------------------------------------------------------------
@@ -235,12 +274,7 @@ _MONOTONIC_OPS: Dict[MathOperation, str] = {
     MathOperation.Atanh: "increasing",
     MathOperation.Sigmoid: "increasing",
     MathOperation.Tanh: "increasing",
-    # Non-strictly increasing (plateau on x<0). Equal-neighbor allowance covers
-    # the plateau cleanly.
     MathOperation.Relu: "increasing",
-    # Decreasing within each branch. Reciprocal/Rsqrt rely on the segment-
-    # aware check NOT comparing across the discontinuity at 0 — handled by
-    # processing each entry in allowed_intervals independently.
     MathOperation.Rsqrt: "decreasing",
     MathOperation.Reciprocal: "decreasing",
 }
@@ -1210,136 +1244,117 @@ def _plot_and_print(
 
 
 # ---------------------------------------------------------------------------
-# test_sfpu_plot — random stimuli via generate_stimuli
+# Stress harness — table-driven SFPU accuracy plots
 # ---------------------------------------------------------------------------
+#
+# HOW TO ADD A TEST
+#   Append one Case(...) to the CASES list below — that is the whole workflow:
+#
+#       Case(op=MathOperation.Exp, spec=StimuliSpec.ramp(low=-10.0, high=10.0))
+#
+#   Choose the input domain with a StimuliSpec (ramp / uniform / ... — the same
+#   API the rest of the suite uses) and the numeric format with fmt=:
+#
+#       fmt=BF16   bfloat16 in/out   (default; judge accuracy in ULPs)
+#       fmt=FP16   float16  in/out
+#       fmt=FP32   float32  in/out   (auto-runs the fp32 dest-accumulator path;
+#                                     judge accuracy in abs/rel error — fp32 ULP
+#                                     is not meaningful, see the notes inside
+#                                     _plot_and_print)
+#
+#   Run one op:   pytest test_sfpu_plot_old.py -k Exp -s
+#   Run all:      pytest test_sfpu_plot_old.py -s
+#
+#   Each case writes _plot_output/sfpu_<id>.png and prints a stats summary, then
+#   asserts the hardware result matches golden.
+#   Set expect_pass=False to keep the run green while exploring a known-inaccurate op.
+#
+# Optional Case fields (advanced — sensible defaults cover the common cases):
+#   StimuliSpec(intervals=[(lo, hi), ...])  sweep disjoint bands (e.g. either
+#                                           side of a singularity)
+#   extra_undefined_ranges  override the red "undefined domain" plot shading
+#   clamp_negative          enable the kernel's negative-input clamp
+#   dest_acc / unpack_to_dest  override the format-derived accumulator defaults
+#   name                    custom test id (name of file) (defaults to "<Op>-<fmt>")
+
+BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+FP16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
+FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+
+_FMT_SHORT = {
+    DataFormat.Float16_b: "bf16",
+    DataFormat.Float16: "fp16",
+    DataFormat.Float32: "fp32",
+}
 
 
-def test_sfpu_plot():
-    mathop = MathOperation.Log
-    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-    dest_acc = DestAccumulation.Yes
+@dataclass
+class Case:
+    """One SFPU stress configuration. Add a Case to CASES to add a test."""
 
-    spec = StimuliSpec.uniform(intervals=[(-2.0, -0.5), (0.0, 0.5), (1.1, 10.0)])
-    spec = exclude_undefined(mathop, spec)
+    op: MathOperation
+    spec: StimuliSpec
+    fmt: InputOutputFormat = BF16
+    expect_pass: bool = True
+    name: Optional[str] = None
+    # Advanced overrides — defaults are derived from `fmt`.
+    dest_acc: Optional[DestAccumulation] = None
+    unpack_to_dest: Optional[bool] = None
+    clamp_negative: bool = False
+    input_dimensions: Optional[List[int]] = None
+    extra_undefined_ranges: Optional[List[Tuple[float, float]]] = None
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        spec_A=spec,
-        stimuli_format_B=formats.input_format,
-    )
-
-    # Derive the actual layout used after auto-sizing.
-    input_dimensions = [32, 32 * tile_cnt_A]
-
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
-
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(False),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
-    )
-
-    res_from_L1 = configuration.run().result
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    sort_idx = torch.argsort(src_A.to(torch.float32))
-    x = src_A.to(torch.float32)[sort_idx].numpy()
-    y_golden = golden_tensor.to(torch.float32)[sort_idx].numpy()
-    y_hw = res_tensor.to(torch.float32)[sort_idx].numpy()
-
-    allowed_intervals = spec.intervals or [(spec.low, spec.high)]
-    undefined_ranges = list(_SFPU_UNDEFINED_RANGES.get(mathop, {}).get(Operand.A, []))
-
-    _plot_and_print(
-        mathop,
-        formats.input_format,
-        x,
-        y_golden,
-        y_hw,
-        "_plot_output/sfpu_plot.png",
-        allowed_intervals=allowed_intervals,
-        undefined_ranges=undefined_ranges,
-    )
-
-    test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
-    print(f"passed_test: {test_passed}")
-    assert test_passed, "Assert against golden failed"
+    @property
+    def test_id(self) -> str:
+        if self.name:
+            return self.name
+        short = _FMT_SHORT.get(self.fmt.output_format, self.fmt.output_format.name)
+        return f"{self.op.name}-{short}"
 
 
 # ---------------------------------------------------------------------------
-# Stress test harness — runs an SFPU op with a custom spec/intervals and
-# generates the standard 4-panel plot + summary. Used by the stress tests
-# below to avoid duplicating the test_sfpu_plot() harness body.
+# CASES — add rows here. The two below are templates: copy one, tweak, done.
 # ---------------------------------------------------------------------------
+CASES = [
+    # bfloat16 demo: log over a positive (in-domain) range.
+    Case(op=MathOperation.Log, spec=StimuliSpec.ramp(low=0.5, high=10.0)),
+    # float32 demo: sqrt over [0, 100] (auto fp32 dest-accumulator path).
+    Case(op=MathOperation.Sqrt, spec=StimuliSpec.ramp(low=0.0, high=100.0), fmt=FP32),
+    # intervals demo: 1/x sampled on both sides of 0 but never on the
+    # singularity at 0 (the gap between the two bands is skipped).
+    Case(
+        op=MathOperation.Reciprocal,
+        spec=StimuliSpec.uniform(intervals=[(-10.0, -0.01), (0.01, 10.0)]),
+    ),
+    # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
+    # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-13.0, high=13.0), expect_pass=False),
+]
 
 
-def _run_sfpu_stress(
-    mathop: MathOperation,
-    spec: StimuliSpec,
-    plot_path: str,
-    *,
-    formats: Optional[InputOutputFormat] = None,
-    input_dimensions: Optional[List[int]] = None,
-    clamp_negative: bool = False,
-    dest_acc: DestAccumulation = DestAccumulation.No,
-    unpack_to_dest: bool = False,
-    extra_undefined_ranges: Optional[List[Tuple[float, float]]] = None,
-):
-    """Run a single SFPU stress configuration end-to-end and emit the plot.
+def run_case(case: Case) -> bool:
+    """Run one Case end-to-end: stimuli -> golden -> hardware -> plot + stats.
 
-    For the Float32 path, pass:
-        formats=InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        dest_acc=DestAccumulation.Yes,
-        unpack_to_dest=True
-    so the SFPU body sees a real fp32 dest accumulator (matches the path the
-    test_sfpu_sqrt_rsqrt_signed_zero.py regression uses).
+    Returns whether the hardware result matched golden (passed_test) and writes
+    _plot_output/sfpu_<id>.png. This only assembles inputs for _plot_and_print;
+    it does not alter any metric or plotting behavior.
     """
-    if formats is None:
-        formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-    if input_dimensions is None:
-        input_dimensions = [32, 32]
+    formats = case.fmt
+    is_fp32 = formats.output_format == DataFormat.Float32
+
+    # Format-derived defaults: the fp32 path needs a real fp32 dest accumulator
+    # (dest_acc=Yes + unpack_to_dest=True) so the SFPU body takes its fp32
+    # branch. Both stay overridable on the Case.
+    dest_acc = case.dest_acc
+    if dest_acc is None:
+        dest_acc = DestAccumulation.Yes if is_fp32 else DestAccumulation.No
+    unpack_to_dest = case.unpack_to_dest
+    if unpack_to_dest is None:
+        unpack_to_dest = is_fp32
+
+    input_dimensions = case.input_dimensions or [32, 32]
+    mathop = case.op
+    spec = case.spec
+    plot_path = f"_plot_output/sfpu_{case.test_id}.png"
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -1375,7 +1390,7 @@ def _run_sfpu_stress(
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
             FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(clamp_negative),
+            CLAMP_NEGATIVE(case.clamp_negative),
             MATH_OP(mathop=mathop),
         ],
         runtimes=[
@@ -1406,12 +1421,12 @@ def _run_sfpu_stress(
     y_golden = golden_tensor.to(torch.float32)[sort_idx].numpy()
     y_hw = res_tensor.to(torch.float32)[sort_idx].numpy()
 
-    allowed_intervals = spec.intervals or [(spec.low, spec.high)]
+    allowed_intervals = _allowed_intervals_for(spec, x)
     # extra_undefined_ranges, when supplied (even as an empty list), fully
-    # overrides the registry — letting callers either inject custom asymptote
-    # bands or suppress the registry's red shading entirely.
-    if extra_undefined_ranges is not None:
-        undefined_ranges = list(extra_undefined_ranges)
+    # overrides the registry — letting callers inject custom asymptote bands or
+    # suppress the registry's red shading entirely.
+    if case.extra_undefined_ranges is not None:
+        undefined_ranges = list(case.extra_undefined_ranges)
     else:
         undefined_ranges = list(
             _SFPU_UNDEFINED_RANGES.get(mathop, {}).get(Operand.A, [])
@@ -1431,10 +1446,9 @@ def _run_sfpu_stress(
     test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
     print(f"passed_test: {test_passed}")
 
-    # Bit-distance ULP measurement — reinterpret the fp32 promoted results as
+    # Bit-distance ULP measurement — reinterpret the fp32-promoted results as
     # int32 and take |golden_bits - hw_bits|; the max across finite samples is
-    # the worst-case ULP error. Useful for sanity-checking accuracy-improvement
-    # claims (e.g. PR #46024 reduced exp2 max ULP from 39 to <1).
+    # the worst-case ULP error. Useful for sanity-checking accuracy claims.
     golden_fp32 = golden_tensor.to(torch.float32).contiguous().numpy()
     hw_fp32 = res_tensor.to(torch.float32).contiguous().numpy()
     finite_mask = np.isfinite(golden_fp32) & np.isfinite(hw_fp32)
@@ -1451,276 +1465,8 @@ def _run_sfpu_stress(
     return test_passed
 
 
-# ---------------------------------------------------------------------------
-# Stress regions — tight intervals near domain singularities / asymptotes
-# ---------------------------------------------------------------------------
-
-
-def test_sfpu_plot_reciprocal_stress():
-    """
-    Stress 1/x across a tight window around 0 — including values arbitrarily
-    close to 0 — so we exercise the steepest part of the curve and let the
-    finite-mask drop any truly-undefined outputs (1/0 → inf, denormals → inf).
-      - the red "Undefined domain" sliver from registry's (-1e-6, 1e-6) is
-        still rendered for context;
-      - the printed summary reports how many outputs were non-finite.
-    """
-    spec = StimuliSpec.uniform(low=-1e-4, high=1e-4)
-    test_passed = _run_sfpu_stress(
-        MathOperation.Reciprocal,
-        spec,
-        "_plot_output/sfpu_plot_reciprocal_stress.png",
-        extra_undefined_ranges=[],  # do NOT use registry undefined ranges
-    )
-    assert test_passed, "Reciprocal stress: assert against golden failed"
-
-
-def test_sfpu_plot_atanh_stress():
-    """
-    Stress atanh(x) across the full domain including the asymptote endpoints
-    x = ±1. atanh(±1) = ±inf in the math sense, so torch's golden will produce
-    inf at those points and the finite-mask filtering inside _plot_and_print
-    drops them from error stats. The new non-finite marker overlay surfaces
-    them on the top plot, and the breakdown in the right-hand summary shows
-    how many were inf/nan and on which side. Range extended slightly past ±1
-    to guarantee we land on (and just past) the asymptote endpoints regardless
-    of bfloat16 quantization.
-
-    (Substitute for `MathOperation.Tan`, which is not exposed by this LLK —
-    only `Tanh` and `Atanh` exist. Atanh is the closest analogue with true
-    vertical asymptotes.)
-    """
-    spec = StimuliSpec.uniform(low=-1.001, high=1.001)
-    test_passed = _run_sfpu_stress(
-        MathOperation.Atanh,
-        spec,
-        "_plot_output/sfpu_plot_atanh_stress.png",
-        extra_undefined_ranges=[],  # suppress any undefined shading for atanh
-    )
-    assert test_passed, "Atanh stress: assert against golden failed"
-
-
-# ---------------------------------------------------------------------------
-# Exp stress: cross the negative-side sanitization boundary (~ -88.5)
-# ---------------------------------------------------------------------------
-#
-# The SFPU exp path uses InputClamping::ClampToNegative to saturate inputs at
-# about -88.5 (since exp(-88.5) is the smallest float32 representable around
-# the denormal boundary, and the approx exp produces incorrect outputs below).
-# This stress test deliberately samples on BOTH sides of that boundary so the
-# plot/summary can confirm the clamp behavior is in effect.
-
-
-def test_sfpu_plot_exp_boundary_stress():
-    """
-    Stress exp(x) across the SFPU's negative-side clamping threshold.
-
-    Sampling spans [-100, 0] which crosses x ≈ -88.5 — the documented
-    InputClamping::ClampToNegative boundary in the fast/approx exp path.
-    Expected behavior:
-
-      - x  > -88.5  →  exp(x) is computed normally; near-zero outputs
-                       (sub-bfloat16-eps) get rounded to 0 by quantization
-      - x ≈ -88.5  →  exp(x) ≈ 6e-39, denormal in float32, flushed to 0 in bf16
-      - x  < -88.5  →  HW saturates input at -88.5 before computing exp,
-                       so HW outputs match exp(-88.5) ≈ 6.0e-39 (i.e. 0 in bf16)
-                       while torch's golden = exp(x) for any x (also rounds to 0)
-
-    Both sides round to 0 in bfloat16 in this region, so the test should pass
-    cleanly. The plot confirms HW does not produce garbage (NaN / huge values)
-    for inputs below the threshold — that's the actual concern.
-    """
-    # Wide enough range that ~12% of samples land below -88.5.
-    spec = StimuliSpec.ramp(low=-89.0, high=-87.0)
-
-    # Manually inject the registry's exp domain note as a custom undefined
-    # band — this renders the "approx exp clamping zone" visibly on the plot,
-    # so a reviewer can see exactly where the boundary sits relative to data.
-    test_passed = _run_sfpu_stress(
-        MathOperation.Exp,
-        spec,
-        "_plot_output/sfpu_plot_exp_boundary_stress.png",
-        extra_undefined_ranges=[(-float("inf"), -88.5)],  # red shading below threshold
-    )
-    assert test_passed, "Exp boundary stress: assert against golden failed"
-
-
-# ---------------------------------------------------------------------------
-# Exp2 stress — verifies PR #46024's max-ULP claim across input domain
-# ---------------------------------------------------------------------------
-
-
-def test_sfpu_plot_exp2_full_range_stress():
-    """
-    Stress exp2(x) across the core working range [-120, 120] — away from
-    the +/-126 saturation boundaries so the ULP histogram reflects pure
-    polynomial-refinement accuracy without boundary-clamp artifacts.
-
-    PR #46024 rewrites exp2 into two specialized paths:
-      - bf16-dest: vec_min_max clamp to [0, 255] + 3-term polynomial refinement
-      - fp32-dest: range-reduction + polynomial with explicit NaN guard
-    Claim: max ULP <= 1 across the working range.
-    """
-    spec = StimuliSpec.ramp(low=-120.0, high=120.0)
-
-    test_passed = _run_sfpu_stress(
-        MathOperation.Exp2,
-        spec,
-        "_plot_output/sfpu_plot_exp2_full_range_stress.png",
-    )
-    assert test_passed, "Exp2 full-range stress: assert against golden failed"
-
-
-def test_sfpu_plot_exp2_underflow_stress():
-    """
-    Stress exp2(x) across the underflow boundary [-127, -126].
-
-    exp2(-127) is denormal in bf16 (smallest normal is 2^-126), so the
-    kernel's vec_min_max clamp at xlog2=0 should round the result cleanly
-    to 0 here. Confirms HW doesn't produce garbage just below the threshold.
-    """
-    spec = StimuliSpec.ramp(low=-127.0, high=-126.0)
-
-    test_passed = _run_sfpu_stress(
-        MathOperation.Exp2,
-        spec,
-        "_plot_output/sfpu_plot_exp2_underflow_stress.png",
-    )
-    assert test_passed, "Exp2 underflow stress: assert against golden failed"
-
-
-def test_sfpu_plot_exp2_fp32_full_range_stress():
-    """
-    Same as test_sfpu_plot_exp2_full_range_stress but on the fp32-dest path
-    (exercises _sfpu_exp2_fp32_accurate_ instead of _sfpu_exp2_bf16_).
-
-    Range narrowed to [-120, 120] so the ULP histogram reflects core
-    polynomial accuracy, away from saturation-clamp boundaries.
-    """
-    spec = StimuliSpec.ramp(low=-120.0, high=120.0)
-
-    test_passed = _run_sfpu_stress(
-        MathOperation.Exp2,
-        spec,
-        "_plot_output/sfpu_plot_exp2_fp32_full_range_stress.png",
-        formats=InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        dest_acc=DestAccumulation.Yes,
-        unpack_to_dest=True,
-    )
-    assert test_passed, "Exp2 FP32 full-range stress: assert against golden failed"
-
-
-# ---------------------------------------------------------------------------
-# Gelu stress — verifies PR #45920's accuracy claim (issue #46185)
-# ---------------------------------------------------------------------------
-#
-# PR #45920 rewrites the GELU kernel:
-#   - BF16 forward: degree-13 piecewise CDF polynomial, claim MaxULP = 0.87
-#     (was > 1.0 over significant regions before)
-#   - FP32 forward: previously non-functional (silent fallback to approx);
-#     PR adds a proper rational erf path with stuck-erff guard.
-#   - Dead code removal (POLYVAL15, calculate_gelu_chebyshev, unused wrappers).
-#
-# GELU has three regimes:
-#   x < -13   : output ~ 0       (saturation tail)
-#   -13 .. +3 : polynomial transition (the interesting region for ULP)
-#   x > +3    : output ~ x       (identity)
-
-
-def test_sfpu_plot_gelu_core_stress():
-    """
-    Stress GELU(x) across the polynomial transition zone [-5, 5] — the
-    region where the new degree-13 CDF polynomial in PR #45920 does its
-    work. ULP histogram here is the most sensitive check for the
-    accuracy claim (MaxULP = 0.87 in BF16).
-    """
-    spec = StimuliSpec.ramp(low=-5.0, high=5.0)
-
-    test_passed = _run_sfpu_stress(
-        MathOperation.Gelu,
-        spec,
-        "_plot_output/sfpu_plot_gelu_core_stress.png",
-    )
-    assert test_passed, "Gelu core stress: assert against golden failed"
-
-
-def test_sfpu_plot_gelu_full_range_stress():
-    """
-    Stress GELU(x) across the full activation range [-13, 13]. Covers:
-      - left saturation tail (x < -13 → ~0; near-edge transition behavior)
-      - polynomial midband (the new degree-13 CDF approximation)
-      - right identity tail (x > +3 → ~x)
-    Useful for catching regressions outside the central polynomial zone.
-    """
-    spec = StimuliSpec.ramp(low=-13.0, high=13.0)
-
-    test_passed = _run_sfpu_stress(
-        MathOperation.Gelu,
-        spec,
-        "_plot_output/sfpu_plot_gelu_full_range_stress.png",
-    )
-    assert test_passed, "Gelu full-range stress: assert against golden failed"
-
-
-def test_sfpu_plot_gelu_fp32_core_stress():
-    """
-    Same as test_sfpu_plot_gelu_core_stress but on the fp32-dest path,
-    which now exercises the proper rational erf approximation (was
-    non-functional pre-PR — silent fallback to approx).
-
-    Range [-5, 5] keeps focus on the polynomial transition zone where
-    the accurate erf path actually does its work.
-    """
-    spec = StimuliSpec.ramp(low=-5.0, high=5.0)
-
-    test_passed = _run_sfpu_stress(
-        MathOperation.Gelu,
-        spec,
-        "_plot_output/sfpu_plot_gelu_fp32_core_stress.png",
-        formats=InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        dest_acc=DestAccumulation.Yes,
-        unpack_to_dest=True,
-    )
-    assert test_passed, "Gelu FP32 core stress: assert against golden failed"
-
-
-def test_sfpu_plot_gelu_transition_stress():
-    """
-    Focused ramp on [-5.56, -3.0] — the saturation-transition region where
-    GELU rapidly decays from non-trivial values (~-0.0036 at x=-3) toward
-    zero (~-1.6e-7 at x=-5.56).
-
-    Top ULP offenders in the wider [-5, 5] and [-13, 13] tests all sit in
-    this band, where the new degree-13 polynomial (PR #45920) tracks the
-    exact erf-based GELU least precisely. Zooming the input range here
-    gives a much denser sample of the polynomial's transition behavior
-    (1024 points across a 2.56-wide window vs across 10-wide / 26-wide).
-    """
-    spec = StimuliSpec.ramp(low=-5.56, high=-3.0)
-
-    test_passed = _run_sfpu_stress(
-        MathOperation.Gelu,
-        spec,
-        "_plot_output/sfpu_plot_gelu_transition_stress.png",
-    )
-    assert test_passed, "Gelu transition stress: assert against golden failed"
-
-
-def test_sfpu_plot_gelu_fp32_transition_stress():
-    """
-    Same focused ramp [-5.56, -3.0] as test_sfpu_plot_gelu_transition_stress
-    but on the FP32 accurate path. Since PR #45920 fixes the previously
-    non-functional FP32 GELU, this zoom shows how much the new rational
-    erf approximation actually improved in the saturation transition.
-    """
-    spec = StimuliSpec.ramp(low=-5.56, high=-3.0)
-
-    test_passed = _run_sfpu_stress(
-        MathOperation.Gelu,
-        spec,
-        "_plot_output/sfpu_plot_gelu_fp32_transition_stress.png",
-        formats=InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        dest_acc=DestAccumulation.Yes,
-        unpack_to_dest=True,
-    )
-    assert test_passed, "Gelu FP32 transition stress: assert against golden failed"
+@pytest.mark.parametrize("case", CASES, ids=[c.test_id for c in CASES])
+def test_sfpu_stress(case: Case):
+    passed = run_case(case)
+    if case.expect_pass:
+        assert passed, f"{case.test_id}: result did not match golden"
