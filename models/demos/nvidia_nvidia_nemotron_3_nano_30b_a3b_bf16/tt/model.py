@@ -26,7 +26,7 @@ from .embedding import embedding_forward, embedding_forward_tt
 from .kv_cache import DecoderState
 from .layer_norm import layer_norm_forward
 from .lm_head import lm_head_forward, lm_head_forward_device
-from .mamba2_layer import mamba2_layer_forward
+from .mamba2_layer import mamba2_layer_forward_dispatch
 from .moe_experts import moe_experts_forward
 from .moe_gate import moe_gate_forward, moe_gate_forward_cpu
 from .shared_expert import shared_expert_forward
@@ -292,7 +292,7 @@ def _layer_stack_forward(
             conv_state = decoder_state.conv_states[m_idx] if decoder_state else None
             if debug_sync:
                 print(f"  [dbg] M li={li} m_idx={m_idx}: calling mamba2...", flush=True)
-            hidden_states, state_new, conv_state_new = mamba2_layer_forward(
+            hidden_states, state_new, conv_state_new = mamba2_layer_forward_dispatch(
                 mesh_device,
                 hidden_states,
                 norm_weight=wc[f"{p}.norm.weight"],

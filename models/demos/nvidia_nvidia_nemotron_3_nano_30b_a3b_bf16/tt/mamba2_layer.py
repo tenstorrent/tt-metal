@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Mamba2Layer — TP=4 on QB 4-chip Blackhole, S=1 decode path only.
+"""Mamba2Layer — TP=4 on QB 4-chip Blackhole, S=1 decode + S>1 prefill.
+
+Dispatch:
+  S == 1  →  mamba2_layer_forward()        (this file, trace-compatible decode)
+  S  > 1  →  mamba2_prefill_layer_forward() (mamba2_prefill.py, chunked SSD scan)
 
 SSM recurrence implemented via standard TTNN ops (softplus, exp, mul, matmul).
 nemotron3_mamba2_decode_owned hangs on 4-chip MeshDevice (investigated with
@@ -249,3 +253,61 @@ def mamba2_layer_forward(
 
     # 13. Residual
     return ttnn.add(residual, out_tt), state_new_tt, conv_state_new
+
+
+def mamba2_layer_forward_dispatch(
+    mesh_device,
+    hidden_states,  # [B, S, 2688]
+    norm_weight,
+    in_proj_weight,
+    conv1d_weight,
+    conv1d_bias,
+    dt_bias,
+    A_log,
+    norm_mixer_weight,
+    D,
+    out_proj_weight,
+    norm_eps=NORM_EPS,
+    ssm_state=None,
+    conv_state=None,
+    _dbg=False,
+):
+    """Dispatch to prefill (S>1) or decode (S==1) based on sequence length."""
+    S = hidden_states.shape[1]
+    if S == 1:
+        return mamba2_layer_forward(
+            mesh_device,
+            hidden_states,
+            norm_weight,
+            in_proj_weight,
+            conv1d_weight,
+            conv1d_bias,
+            dt_bias,
+            A_log,
+            norm_mixer_weight,
+            D,
+            out_proj_weight,
+            norm_eps,
+            ssm_state,
+            conv_state,
+            _dbg,
+        )
+    # S > 1 — chunked SSD prefill
+    from .mamba2_prefill import mamba2_prefill_layer_forward
+
+    return mamba2_prefill_layer_forward(
+        mesh_device,
+        hidden_states,
+        norm_weight,
+        in_proj_weight,
+        conv1d_weight,
+        conv1d_bias,
+        dt_bias,
+        A_log,
+        norm_mixer_weight,
+        D,
+        out_proj_weight,
+        norm_eps,
+        ssm_state,
+        conv_state,
+    )
