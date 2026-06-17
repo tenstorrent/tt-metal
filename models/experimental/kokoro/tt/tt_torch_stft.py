@@ -10,8 +10,13 @@ map, so we pre-compute it once at construction and reduce iSTFT to two matmuls +
 
 STFT forward path (conv2d)
 --------------------------
-The STFT uses strided conv2d: the windowed DFT kernels are stored as ``[K, 1, n_fft, 1]`` weight
-tensors and applied with stride ``= hop_length``.  On Blackhole hardware, all compute ops
+The STFT uses strided conv2d with stride ``= hop_length``.  The real and imaginary windowed-DFT
+kernels are channel-stacked into one ``[2K, 1, n_fft, 1]`` weight (``conv_stft_combined``) so a
+single conv yields both branches (``X_real = out[:, :K]``, ``X_imag = out[:, K:]``) — half the conv
+op fan-out and device time vs two separate convs.  Short inputs use the minimum DRAM-height slice
+count the BH conv2d reader_indices factory allows (2; a single pass is rejected) instead of the
+generic 8-slice floor, and magnitude/phase fuse to ``hypot`` + scalar ``where`` (no ``full_like``
+fills).  On Blackhole hardware, all compute ops
 internally round float32 inputs to BF16 before the MAC unit regardless of HiFi setting.  This
 limits the phase accuracy of near-zero STFT bins — bins whose true value is smaller than the
 BF16 noise floor (~signal × 1e-2) will have sign-random phase.  Trained Kokoro is designed to
@@ -41,13 +46,23 @@ untilize->concat->tilize round-trip that costs more than the matmul + add it rep
 When the iSTFT matrix would exceed ``_ISTFT_MATRIX_BYTES_LIMIT`` bytes (default 1 GiB) the
 full matrix is not materialised.  Instead iSTFT uses ``conv_transpose2d``:
 
-    y_ola = conv_transpose2d(X_real, synth_real, stride=hop)
-          + conv_transpose2d(X_imag, synth_imag, stride=hop)   # [B, L_padded, 1]
-    y = trim(y_ola) * inv_denom                                 # COLA normalisation
+    y = conv_transpose2d([X_real|X_imag], synth_combined, stride=hop, padding=(pad,0)) * inv_denom
 
-``conv_transpose2d`` is the adjoint of the forward STFT strided conv2d, so it computes the
-windowed overlap-add (OLA) exactly in a single on-device pass.  There is no CPU involvement
-in the forward path.
+One fused conv_transpose over the channel-stacked ``[X_real|X_imag]`` sums the real and imag
+branches (it sums over input channels), and ``padding=(pad,0)`` trims the reflect-pad margins at
+the global edges inside the conv — so the runtime is one conv + one COLA multiply, with no
+separate trim slice or layout round-trip.  ``conv_transpose2d`` is the adjoint of the forward
+STFT strided conv2d, so it computes the windowed overlap-add (OLA) exactly in a single on-device
+pass.  There is no CPU involvement in the forward path.
+
+The OLA conv_transpose runs in a SINGLE DRAM height-slice at every length.  A sliced conv_transpose
+over-computes catastrophically per slice (each slice re-runs a heavily-padded conv + its own
+Halo/PaddedSlice/SliceWrite), so >1 slice is 30-60x slower, never cheaper — a config sweep
+(``test_istft_ct_conv_sweep.py``) measured F=49321 at ~25ms over 13 slices vs ~0.8ms in one pass.
+The single pass fits L1 because ``act_block_h_override=32`` caps the conv's per-core activation
+circular buffer to a FIXED size independent of F; this was verified to fit the full generator's
+resident L1 up to the 510-phoneme max (F~138k).  Folding the reflect-pad trim into ``padding`` and
+collapsing the post-conv reshapes cut the standalone iSTFT device time 1957->~266µs.
 
 Long sequences (single-pass, device-only)
 ------------------------------------------
@@ -75,11 +90,20 @@ from loguru import logger
 
 import ttnn
 
-from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config, dram_height_slice_num_slices
+from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config
 
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
 # precomputing the matrices and use conv_transpose2d OLA instead.
 _ISTFT_MATRIX_BYTES_LIMIT = 1_073_741_824  # 1 GiB
+
+# iSTFT conv_transpose2d OLA: act_block_h_override caps the conv's per-core activation circular
+# buffer to a FIXED size (independent of frame count F), so a SINGLE DRAM height-slice fits L1 at
+# every Kokoro phoneme length — verified in the full generator up to the 510-phoneme max (F~138k).
+# This avoids DRAM height-slicing the OLA entirely: a sliced conv_transpose over-computes per slice
+# (each slice is a heavily-padded conv), so e.g. F=49321 costs ~25ms at 13 slices vs ~0.8ms in one
+# pass — a config sweep (test_istft_ct_conv_sweep.py) measured 30-60x.  abh=32 is the largest block
+# that keeps the single pass within the generator's resident-L1 budget across the whole F range.
+_CT_ACT_BLOCK_H = 32
 
 
 def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -95,6 +119,10 @@ class TTTorchSTFTParams:
     # STFT forward: strided conv2d kernels (k-th output channel = k-th DFT bin).
     conv_stft_real: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR
     conv_stft_imag: ttnn.Tensor  # [K, 1, n_fft, 1], ROW_MAJOR
+    # Channel-stacked [real; imag] forward kernel [2K, 1, n_fft, 1]: one strided conv2d yields
+    # both DFT branches at once (X_real = out[:, :K], X_imag = out[:, K:]), halving the forward
+    # conv op fan-out and device time vs running conv_stft_real / conv_stft_imag separately.
+    conv_stft_combined: ttnn.Tensor  # [2K, 1, n_fft, 1], ROW_MAJOR
     conv_pad_len: int  # n_fft // 2
 
     # iSTFT full matrix (None when it would exceed _ISTFT_MATRIX_BYTES_LIMIT).
@@ -324,10 +352,12 @@ def preprocess_tt_torch_stft(
     inv_denom_t = _upload(inv_denom_np.reshape(1, -1), device, dtype=ttnn.float32)  # [1, output_length]
 
     conv_real, conv_imag = _build_conv_stft_kernels(filter_length, win_length)
+    conv_combined = np.concatenate([conv_real, conv_imag], axis=0)  # [2K, 1, n_fft, 1]
 
     return TTTorchSTFTParams(
         conv_stft_real=_upload_rm(conv_real, dtype=ttnn.float32),
         conv_stft_imag=_upload_rm(conv_imag, dtype=ttnn.float32),
+        conv_stft_combined=_upload_rm(conv_combined, dtype=ttnn.float32),
         conv_pad_len=filter_length // 2,
         istft_real=istft_real_t,
         istft_imag=istft_imag_t,
@@ -404,9 +434,15 @@ class _StridedStftConv:
     def __call__(self, x_n1tc: ttnn.Tensor, batch_size: int, input_height: int) -> ttnn.Tensor:
         if self.use_torch_fallback:
             return self._torch_forward(x_n1tc, batch_size, input_height)
+        # DRAM-height slicing: large inputs (input_height > 2048) need the full row budget to
+        # stay under L1.  For the short Kokoro-side STFT (L_padded ~120) the generic helper still
+        # floors at min_slices=8, fanning a tiny conv into 8 PaddedSlice/Halo/Move/Conv2d/
+        # SliceWrite groups for no L1 reason.  num_slices=1 is rejected by the BH conv2d
+        # reader_indices program factory (worst-case page-size assert), so 2 is the floor — that
+        # alone is a 4x cut in the per-conv op fan-out.
         use_dram_slice = input_height > 2048
-        slice_cfg = dram_height_slice_config(input_height)
         if use_dram_slice:
+            slice_cfg = dram_height_slice_config(input_height)
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=ttnn.float32,
                 deallocate_activation=True,
@@ -415,9 +451,10 @@ class _StridedStftConv:
                 enable_weights_double_buffer=False,
             )
         else:
+            slice_cfg = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2)
             conv_config = self.conv_config
         x_rm = ttnn.to_layout(x_n1tc, ttnn.ROW_MAJOR_LAYOUT)
-        key = (batch_size, input_height, slice_cfg.num_slices, use_dram_slice)
+        key = (batch_size, input_height, use_dram_slice)
         if self._prep_key != key:
             self.slice_cfg = slice_cfg
             self.weight_prepared = ttnn.prepare_conv_weights(
@@ -491,9 +528,17 @@ class TTTorchSTFT:
         self.params = params
         self.eps = 1e-11
         self.phase_zero_floor = float(os.getenv("KOKORO_STFT_PHASE_ZERO_FLOOR", "1e-8"))
+        # near-zero phase test runs against |X| (hypot output) instead of mag_sq, so compare
+        # against sqrt(floor): |X| < sqrt(floor)  <=>  |X|^2 < floor.
+        self.phase_zero_mag_floor = float(np.sqrt(self.phase_zero_floor))
         self._use_torch_stft_fallback = use_torch_stft_fallback
         self._use_torch_stft_conv_fallback = use_torch_stft_conv_fallback and not use_torch_stft_fallback
         conv_fb = self._use_torch_stft_conv_fallback
+        # Production transform path uses the fused [real; imag] conv (one pass, both branches).
+        self._conv_combined = _StridedStftConv(
+            device, params.conv_stft_combined, params.hop_length, use_torch_fallback=conv_fb
+        )
+        # Separate real / imag convs retained for the per-op degradation-localization test.
         self._conv_real = _StridedStftConv(device, params.conv_stft_real, params.hop_length, use_torch_fallback=conv_fb)
         self._conv_imag = _StridedStftConv(device, params.conv_stft_imag, params.hop_length, use_torch_fallback=conv_fb)
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -568,30 +613,37 @@ class TTTorchSTFT:
         x_n1lc = ttnn.to_layout(x_n1lc_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
         ttnn.deallocate(x_n1lc_tile)
 
+        # Reflect pad via 2*pad single-row slices + concat.  (A single ``ttnn.gather`` reindex was
+        # tried and rejected: it cuts ~20 dispatches but the gather kernel costs ~117µs device time
+        # for this tiny width vs ~20µs for the slices — a net device-time regression on the traced
+        # production path, where device time, not dispatch count, is what's left.)
         x_padded = _reflect_pad_1d_dim2(x_n1lc, L_in, p.conv_pad_len)
         ttnn.deallocate(x_n1lc)
         L_padded = L_in + 2 * p.conv_pad_len
 
-        X_real = self._conv_real(x_padded, B, L_padded)
-        X_imag = self._conv_imag(x_padded, B, L_padded)
+        # One fused conv yields [B, 2K, F] = [X_real | X_imag] stacked on the channel axis; split.
+        X_comb = self._conv_combined(x_padded, B, L_padded)
         ttnn.deallocate(x_padded)
+        K, F = p.K, int(X_comb.shape[-1])
+        X_real = ttnn.slice(X_comb, [0, 0, 0], [B, K, F], [1, 1, 1], memory_config=mc)
+        X_imag = ttnn.slice(X_comb, [0, K, 0], [B, 2 * K, F], [1, 1, 1], memory_config=mc)
+        ttnn.deallocate(X_comb)
         return X_real, X_imag
 
     def _magnitude_phase_from_xy(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``sqrt(real^2+imag^2)`` and ``atan2`` on TT in fp32 (SFPU atan2 still rounds on BH)."""
+        """``hypot(real, imag)`` and ``atan2`` on TT in fp32 (SFPU atan2 still rounds on BH).
+
+        ``ttnn.hypot`` fuses ``sqrt(real^2 + imag^2)`` into one op (was multiply+multiply+add+
+        full_like(eps)+add+sqrt = 6 ops); it also drops the ``eps`` floor, matching the reference
+        ``torch.abs`` exactly.  The two phase corrections use scalar ``where`` operands instead of
+        ``full_like`` fills, removing three more dispatches on this op-gap-bound path.
+        """
         mc = ttnn.DRAM_MEMORY_CONFIG
         X_real, owns_r = _to_fp32_if_needed(X_real, mc)
         X_imag, owns_i = _to_fp32_if_needed(X_imag, mc)
-        mag_sq = ttnn.add(
-            ttnn.multiply(X_real, X_real, memory_config=mc),
-            ttnn.multiply(X_imag, X_imag, memory_config=mc),
-            memory_config=mc,
-        )
-        eps_t = ttnn.full_like(X_real, self.eps, memory_config=mc)
-        mag_sq = ttnn.add(mag_sq, eps_t, memory_config=mc)
-        ttnn.deallocate(eps_t)
-        magnitude = ttnn.sqrt(mag_sq, memory_config=mc)
+        magnitude = ttnn.hypot(X_real, X_imag, memory_config=mc)
         phase = ttnn.atan2(X_imag, X_real, memory_config=mc)
+        # DC/Nyquist bins have imag == 0 exactly; atan2(0, neg) is sign-random on BH BF16 SFPU.
         corr_mask = ttnn.logical_and(
             ttnn.eq(X_imag, 0.0, memory_config=mc),
             ttnn.lt(X_real, 0.0, memory_config=mc),
@@ -601,16 +653,12 @@ class TTTorchSTFT:
             ttnn.deallocate(X_real)
         if owns_i:
             ttnn.deallocate(X_imag)
-        pi_fill = ttnn.full_like(phase, np.pi, memory_config=mc)
-        phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=mc)
+        phase = ttnn.where(corr_mask, float(np.pi), phase, memory_config=mc)
         ttnn.deallocate(corr_mask)
-        ttnn.deallocate(pi_fill)
-        near_zero_mask = ttnn.lt(mag_sq, self.phase_zero_floor, memory_config=mc)
-        zero_phase = ttnn.full_like(phase, 0.0, memory_config=mc)
-        phase = ttnn.where(near_zero_mask, zero_phase, phase, memory_config=mc)
+        # Zero the phase of negligible-magnitude bins (|X|^2 < floor) where atan2 is meaningless.
+        near_zero_mask = ttnn.lt(magnitude, self.phase_zero_mag_floor, memory_config=mc)
+        phase = ttnn.where(near_zero_mask, 0.0, phase, memory_config=mc)
         ttnn.deallocate(near_zero_mask)
-        ttnn.deallocate(zero_phase)
-        ttnn.deallocate(mag_sq)
         return magnitude, phase
 
     def transform(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -681,14 +729,19 @@ class TTTorchSTFT:
         ttnn.deallocate(x_bfk)
         return ttnn.reshape(x_rm, [B, 1, p.F, p.K], memory_config=mc)
 
-    def _ct_ola_run(self, x_nhwc: ttnn.Tensor, n_frames: int) -> ttnn.Tensor:
-        """Fused conv_transpose2d OLA on ``n_frames`` frames → raw windowed-sum ``[B, L_local, 1]`` ROW_MAJOR.
+    def _ct_ola_run(self, x_nhwc: ttnn.Tensor, n_frames: int, pad: int) -> ttnn.Tensor:
+        """Fused conv_transpose2d OLA on ``n_frames`` frames → trimmed windowed-sum ``[B, L_out, 1]`` TILE.
 
         ``x_nhwc`` is the channel-stacked ``[B, 1, n_frames, 2K]`` (real then imag bins) and the weight
         is the stacked ``synth_combined`` ``[2K, 1, n_fft, 1]``.  Because conv_transpose2d sums over
         input channels, this single conv yields ``y_real + y_imag`` directly — no second conv, no add.
-        ``L_local = (n_frames - 1) * hop + n_fft``.  No reflect-pad trim, no COLA — the caller
-        slices/trims and applies COLA.  Consumes (deallocates) ``x_nhwc``.
+
+        The reflect-pad margins are trimmed *inside* the conv via ``padding=(pad, 0)``: conv_transpose2d
+        with padding p drops p output rows from each global edge, which is exactly the reflect-pad trim
+        ``[pad : pad + output_length]`` the caller used to do with a separate ``ttnn.slice`` + ROW_MAJOR
+        round-trip.  Folding it in removes the untilize→slice→tilize chain (~180µs) and lets the conv
+        emit directly to TILE for the COLA multiply.  ``L_out = (n_frames - 1) * hop + n_fft - 2*pad``.
+        Consumes (deallocates) ``x_nhwc``.
         """
         p = self.params
         mc = ttnn.DRAM_MEMORY_CONFIG
@@ -698,11 +751,17 @@ class TTTorchSTFT:
         # Match tt_conv_transpose1d_nlc dram-sliced path: no output_layout=TILE (avoids L1 OOM on BH).
         conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.float32)
         conv_cfg.config_tensors_in_dram = True
-        conv_cfg.deallocate_activation = True
-        try:
-            conv_cfg.enable_act_double_buffer = False
-        except Exception:
-            pass
+        # x_nhwc is DRAM-resident; free it explicitly after the conv (deallocate_activation off keeps
+        # the deallocation in one obvious place rather than implicit inside the op).
+        conv_cfg.deallocate_activation = False
+        # act_block_h_override caps the per-core activation circular buffer to 32 tile-rows, which is
+        # what lets a single DRAM slice fit L1 even when the rest of the generator is resident:
+        # without it the generator iSTFT (F=9721) CB-clashes and must fall back to >=3 tiny slices
+        # (each a heavily-padded, ~600µs conv).  It lets F~10k run in ONE slice (~107µs) inside the
+        # full generator with PCC unchanged; the conv is data-movement bound (~4% FLOP util) so the
+        # smaller act block costs little (~64µs->107µs standalone).
+        conv_cfg.act_block_h_override = _CT_ACT_BLOCK_H
+        conv_cfg.enable_act_double_buffer = False
         # HiFi4 kept: at this conv_transpose shape the op is data-movement/reader-bound, so HiFi2
         # halves MAC FLOPs but yields no device-time gain — not worth the (small) reconstruction-PCC
         # risk on the thin kModel fallback margin.
@@ -712,25 +771,14 @@ class TTTorchSTFT:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        # Scale DRAM height slices with the chunk frame count.  The generic budget assumes
-        # channels=1 and caps long sequences at 128 rows/slice, but this conv_transpose has only
-        # K (=11) input channels, so far more frames fit per L1 slice.  Passing the real channel
-        # count and a larger per-slice row budget (KOKORO_ISTFT_CT_ROWS_PER_SLICE) collapses the
-        # 64 slices/direction down to a handful, cutting the per-slice
-        # PaddedSlice/Halo/Move/Conv2d/SliceWrite op fan-out by the same factor.
-        # ``target_rows_per_slice`` is the real L1 guard: num_slices >= ceil(n_frames/rows_per_slice),
-        # so per-slice rows (hence activation footprint = rows * 2K * 2B) is bounded by it regardless
-        # of the slice count.  The generic helper also floors at min_slices=8, which only pads short
-        # sequences (production F~127k -> 64 slices is unaffected); drop that floor so this conv uses
-        # the minimum slices its row budget allows, halving the per-slice op fan-out again.
-        rows_per_slice = int(os.getenv("KOKORO_ISTFT_CT_ROWS_PER_SLICE", "2048"))
-        num_slices = dram_height_slice_num_slices(n_frames, min_slices=1, target_rows_per_slice=rows_per_slice)
-        slice_cfg = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices)
+        # Single DRAM height-slice at every length.  act_block_h_override (above) bounds the conv's
+        # L1 footprint independent of F, so one pass fits the generator's resident L1 even at the
+        # 510-phoneme max (F~138k, verified).  Slicing this conv is pure loss — each slice re-runs a
+        # heavily-padded conv, so >1 slice is 30-60x slower (config sweep), never cheaper.
+        slice_cfg = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=1)
         logger.debug(
-            f"TTTorchSTFT iSTFT fused conv_transpose OLA: n_frames={n_frames}, in_channels={in_channels}, "
-            f"rows_per_slice={rows_per_slice} -> {num_slices} slices"
+            f"TTTorchSTFT iSTFT fused conv_transpose OLA: n_frames={n_frames}, in_channels={in_channels}, 1 slice"
         )
-
         y, out_hw = ttnn.conv_transpose2d(
             input_tensor=x_nhwc,
             weight_tensor=p.synth_combined,
@@ -742,7 +790,7 @@ class TTTorchSTFT:
             input_width=1,
             kernel_size=(p.filter_length, 1),
             stride=(p.hop_length, 1),
-            padding=(0, 0),
+            padding=(pad, 0),
             output_padding=(0, 0),
             dilation=(1, 1),
             groups=1,
@@ -755,12 +803,12 @@ class TTTorchSTFT:
         )
         ttnn.deallocate(x_nhwc)
         oh, ow = int(out_hw[0]), int(out_hw[1])
-        # y is in the conv_transpose2d internal layout; reshape to [B, L_local, C_out].
-        y_sum = ttnn.reshape(y, (y.shape[0], oh * ow, y.shape[-1]), memory_config=mc)
-
-        # ROW_MAJOR so the caller can slice/concat along the sample axis at arbitrary boundaries.
-        if y_sum.layout != ttnn.ROW_MAJOR_LAYOUT:
-            y_sum = ttnn.to_layout(y_sum, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+        # y is in the conv_transpose2d internal layout; collapse straight to [B, L_out] (C_out==1,
+        # output already trimmed by padding=(pad,0)) so the caller's COLA multiply needs no further
+        # reshape — one ReshapeView instead of [B,L_out,1] then a second [B,L_out] reshape.
+        y_sum = ttnn.reshape(y, (y.shape[0], oh * ow), memory_config=mc)
+        if y_sum.layout != ttnn.TILE_LAYOUT:
+            y_sum = ttnn.to_layout(y_sum, ttnn.TILE_LAYOUT, memory_config=mc)
         return y_sum
 
     def _inverse_conv_transpose(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
@@ -768,8 +816,9 @@ class TTTorchSTFT:
 
         conv_transpose2d with synthesis kernels w[n]*iFFT[k,n] and stride=hop is the adjoint of the
         forward STFT strided conv2d: it computes the windowed OLA sum on device, streaming through
-        bounded L1 via DRAM height slicing (:meth:`_ct_ola_run`).  After the OLA the reflect-pad
-        margins are trimmed and the COLA normalisation (precomputed on device) is applied pointwise.
+        bounded L1 via DRAM height slicing (:meth:`_ct_ola_run`).  The reflect-pad margins are
+        trimmed inside the conv via ``padding=(pad, 0)`` (no separate slice / layout round-trip);
+        only the COLA normalisation (precomputed on device) is left to apply pointwise.
         """
         p = self.params
         mc = ttnn.DRAM_MEMORY_CONFIG
@@ -784,17 +833,9 @@ class TTTorchSTFT:
         x_comb = ttnn.concat([xr_nhwc, xi_nhwc], dim=3, memory_config=mc)  # [B, 1, F, 2K]
         ttnn.deallocate(xr_nhwc)
         ttnn.deallocate(xi_nhwc)
-        y_raw = self._ct_ola_run(x_comb, p.F)
-        y_trim = ttnn.slice(y_raw, [0, pad, 0], [B, pad + p.output_length, 1], [1, 1, 1], memory_config=mc)
-        ttnn.deallocate(y_raw)
-
-        # [B, output_length, 1] → [B, output_length] → COLA multiply.  Tilize BEFORE the squeeze:
-        # the 2D ROW_MAJOR reshape path allocates an L1 circular buffer scaled to the full output
-        # width and overflows BH L1 above ~131072 samples, whereas the TILE reshape is tile-local.
-        y_trim_tile = ttnn.to_layout(y_trim, ttnn.TILE_LAYOUT, memory_config=mc)
-        ttnn.deallocate(y_trim)
-        y_flat = ttnn.reshape(y_trim_tile, [B, p.output_length], memory_config=mc)
-        ttnn.deallocate(y_trim_tile)
+        # conv_transpose trims the reflect-pad margins via padding=(pad,0) and emits TILE directly:
+        # y_flat is already [B, output_length] TILE (no separate slice / untilize / tilize / reshape).
+        y_flat = self._ct_ola_run(x_comb, p.F, pad)
         y_norm = ttnn.multiply(y_flat, p.inv_denom_tt, memory_config=mc)
         ttnn.deallocate(y_flat)
         return ttnn.reshape(y_norm, [B, 1, p.output_length], memory_config=mc)
