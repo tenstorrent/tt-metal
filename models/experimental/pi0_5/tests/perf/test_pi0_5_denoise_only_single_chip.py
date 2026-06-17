@@ -201,6 +201,43 @@ def test_pi0_5_denoise_only_single_chip(device):
             state=None,
         )
 
+    # ---- EAGER mode (for Tracy device-op profiling) ----
+    # Tracy cannot attribute device ops inside a traced replay, so the
+    # profiling path runs the denoise loop EAGERLY (non-traced) wrapped in
+    # PHASE_denoise/PHASE_end signposts. Run under the tracy profiler:
+    #   EAGER=1 python_env/bin/python -m tracy -p -r -v --op-support-count 100000 \
+    #     -m pytest -svq <this file>
+    # then filter the CSV by --start-signpost PHASE_denoise --end-signpost PHASE_end.
+    # 1 warmup iter (JIT) + 1 signposted iter; no trace capture, no D2D.
+    if os.environ.get("EAGER", "").lower() in ("1", "true", "yes", "on"):
+        from tracy import signpost
+
+        print("\n🔬 EAGER device-profile mode: 1 warmup + 1 signposted denoise-only iter")
+        _set_fixed_noise(model)
+        out = _denoise()
+        ttnn.synchronize_device(device)
+        if isinstance(out, ttnn.Tensor):
+            ttnn.deallocate(out)
+
+        _set_fixed_noise(model)
+        signpost("PHASE_denoise")
+        t0 = time.perf_counter()
+        out = _denoise()
+        ttnn.synchronize_device(device)
+        signpost("PHASE_end")
+        eager_ms = (time.perf_counter() - t0) * 1000.0
+        eager_actions = ttnn.to_torch(out)[:, :ah, : cfg.action_dim].float()
+        assert torch.isfinite(eager_actions).all(), "eager denoise produced NaN/Inf"
+
+        print("\n" + "=" * 72)
+        print(f"  PI0.5 DENOISE-ONLY EAGER (SINGLE CHIP, NO D2D) — {CHECKPOINT_DIR.name}")
+        print("=" * 72)
+        print(f"   Config:            cameras={NUM_CAMERAS}, denoise_steps={NUM_DENOISE_STEPS}")
+        print(f"   Eager signposted:  {eager_ms:7.2f} ms/loop   ({eager_ms / NUM_DENOISE_STEPS:.2f} ms/step)")
+        print(f"   Signposts:         PHASE_denoise → PHASE_end")
+        print("=" * 72)
+        return
+
     # ---- Eager reference (non-traced) on fixed noise ----
     _set_fixed_noise(model)
     eager_out = _denoise()
