@@ -214,15 +214,51 @@ Analyze ops CSV with ``tt-perf-report`` using ``--start-signpost start --end-sig
 - **Steady-state tok/s/user** — ``decode_iters / decode_trace_replay_total``.
 - **End-to-end tok/s/user** — includes TTFT and decode compile/capture.
 
-## Resources
+## Repository layout
 
-| Path | Purpose |
-|------|---------|
-| **`demo/`** | `text_demo.py`, `tt_demo_agent.py`, `decode_trace_2cq.py` |
-| **`tt/`** | Ministral3 TT layers; `tt_ministral3_model.py`, `tt_ministral3_decoder_layer.py` |
-| **`tt/weight_loading.py`** | FP8 → bf16 dequant and shard upload (disk-cached) |
-| **`tests/`** | PCC, E2E logit PCC, token match, perf |
-| **`reference/`** | `hf_reference_loader.py`, `devstral2_123b_inference.py` |
+
+```
+devstral2_123B_instruct/
+├── README.md
+├── demo/
+│   ├── decode_trace_2cq.py       # 2CQ decode-trace helpers
+│   ├── on_device_sampling.py     # On-device greedy sampling
+│   ├── text_demo.py              # Text LM demo (CI)
+│   └── tt_demo_agent.py          # Interactive coding agent REPL
+├── reference/
+│   ├── devstral2_123b_inference.py
+│   └── hf_reference_loader.py    # Shared HF load path
+├── tests/
+│   ├── _devstral_weights.py      # HF download / dequant helpers
+│   ├── decoder_pcc_common.py
+│   ├── logit_pcc_common.py
+│   ├── model_test_helpers.py
+│   ├── test_decoder.py
+│   ├── test_decoder_prefill.py
+│   ├── test_ministral3_full_model.py
+│   ├── test_ministralattn.py
+│   ├── test_ministralmlp.py
+│   ├── test_ministralrmsnorm.py
+│   ├── test_ministral_rotaryemb.py
+│   ├── test_model_logit_pcc.py
+│   ├── test_model_token_match.py
+│   └── perf/
+│       ├── test_e2e_performant.py
+│       ├── test_perf.py
+│       ├── test_device_perf_single_layer_prefill_decode.py
+│       └── test_profile_single_layer_prefill_decode.py
+└── tt/
+    ├── model_args.py
+    ├── weight_loading.py         # FP8 → bf16 upload + disk cache
+    ├── tt_ministral3_model.py    # Top-level model
+    ├── tt_ministral3_decoder_layer.py
+    ├── tt_ministralattn.py
+    ├── tt_ministralmlp.py
+    ├── tt_ministralrmsnorm.py
+    ├── tt_ministral_rotary_emb.py
+    ├── ccl_helpers.py
+    └── mem_config.py
+```
 
 ## Model and limits
 
