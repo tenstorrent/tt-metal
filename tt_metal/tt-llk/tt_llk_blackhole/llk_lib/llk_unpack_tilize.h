@@ -20,48 +20,34 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 /**
- * @brief Program the unpacker MOP for a tilize operation.
+ * @brief Program the unpacker MOP for the non-8-bit tilize path (Blackhole whole-tile workaround).
  *
- * Selects between unpacking to SrcA (with a SrcB dvalid NOP) or straight to dest, and applies the
- * Blackhole tilize workaround unless skipped (8-bit formats fall back to the Wormhole path).
+ * Selects between unpacking to SrcA (with a SrcB dvalid NOP) or straight to dest. 8-bit formats
+ * use the inline 2-context path in @ref _llk_unpack_tilize_ instead (no MOP).
  *
- * @param narrow_tile: Whether the tile is narrow (single column of faces).
+ * @param narrow_tile: Whether the tile is narrow (single column of faces). Unused; asserted false.
  * @param unpack_to_dest: Unpack directly into the dest register (32-bit datums).
- * @param skip_bh_workaround: Skip the Blackhole tilize workaround (e.g. for 8-bit formats).
  */
-inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const bool unpack_to_dest = false, const bool skip_bh_workaround = false)
+inline void _llk_unpack_tilize_mop_config_([[maybe_unused]] const bool narrow_tile = false, const bool unpack_to_dest = false)
 {
+    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
+
+    // SrcB SET_DVALID + UNP_ZEROSRC: math's ELWADD branch (FP32 dest-accumulate) reads SrcB,
+    // so it must be both dvalid and zeroed. MOVA2D branch ignores it (harmless handshake).
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_to_dest =
         TT_OP_UNPACR(0, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 
-    const std::uint32_t outerloop = (!skip_bh_workaround || (skip_bh_workaround && narrow_tile)) ? 1 : 2;
-    const std::uint32_t innerloop = 1;
+    ckernel_template tmp(1 /*outerloop*/, 1 /*innerloop*/, unpack_to_dest ? unpack_srca_to_dest : unpack_srcb_set_dvalid);
 
-    // ckernel_template is non-assignable, so build and program each variant in its own scope.
-    // skip_bh_workaround (8-bit formats) uses the two-op body (zerosrc + set_dvalid), mirroring Wormhole;
-    // otherwise the single-op BH workaround body is used. Both prepend unpack_srca unless unpacking to dest.
-    if (skip_bh_workaround)
+    if (!unpack_to_dest)
     {
-        static constexpr std::uint32_t unpack_srcb_zerosrc = TT_OP_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-        ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
-        if (!unpack_to_dest)
-        {
-            tmp.set_start_op(unpack_srca);
-        }
-        tmp.program();
+        tmp.set_start_op(unpack_srca);
     }
-    else
-    {
-        ckernel_template tmp(outerloop, innerloop, unpack_to_dest ? unpack_srca_to_dest : unpack_srcb_set_dvalid);
-        if (!unpack_to_dest)
-        {
-            tmp.set_start_op(unpack_srca);
-        }
-        tmp.program();
-    }
+
+    tmp.program();
 }
 
 /**
@@ -110,6 +96,8 @@ inline void _llk_unpack_tilize_init_(
     // Set face dim
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
 
+    const bool is_8bit_format = IS_8BIT_FORMAT(unpack_src_format);
+
     // Override default settings to enable tilize mode
     unpack_config_u config   = {0};
     config.f.out_data_format = unpack_dst_format;
@@ -121,16 +109,34 @@ inline void _llk_unpack_tilize_init_(
     TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG2_Out_data_format_ADDR32);
-
-    const bool is_8bit_format = IS_8BIT_FORMAT(unpack_src_format);
-    // 8bit datums do not need the blackhole workaround therefore we fallback to regular tilize operation like for wormhole.
     if (is_8bit_format)
     {
-        TTI_WRCFG(p_gpr_unpack::FACE_DIM_1x16, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+        LLK_ASSERT(num_faces == 2 || num_faces == 4, "8-bit tilize currently supports only num_faces=2 or 4");
+        LLK_ASSERT(!narrow_tile, "8-bit tilize narrow_tile not supported");
+        LLK_ASSERT(!unpack_to_dest, "8-bit tilize unpack_to_dest not supported");
+
+        // x_dim per context = FACE_C_DIM (1x16 face read). FACE_DIM_1x16 holds
+        // FACE_C_DIM packed in both halfwords, so a 32b WRCFG programs both cntx0 and cntx1.
+        TTI_WRCFG(p_gpr_unpack::FACE_DIM_1x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+
+        // SCRATCH_SEC0_val is the increment CFGSHIFTMASK adds to Base_address between
+        // top and bottom face pairs. Only used when num_faces==4 (top pair to bottom pair).
+        // For num_faces==2 (top pair only) no CFGSHIFTMASK fires, so the preload is skipped.
+        //   bot_face_offset = shift_amount * face_r_dim       (in 16B words, jump from top to bottom faces)
+        //   -2 compensates for Z=2 L1 offset (Z * XDim * DatumSize = 2 * 16 * 1 = 32 bytes = 2 16B-words)
+        if (num_faces == 4)
+        {
+            const std::uint32_t shift_amount           = (SCALE_DATUM_SIZE(unpack_src_format, block_c_dim)) >> 4;
+            const std::uint32_t base_address_increment = shift_amount * face_r_dim - 2;
+            TT_SETDMAREG(0, LOWER_HALFWORD(base_address_increment), 0, LO_16(p_gpr_unpack::TMP0));
+            TT_SETDMAREG(0, UPPER_HALFWORD(base_address_increment), 0, HI_16(p_gpr_unpack::TMP0));
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+            TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
+        }
     }
     else
     {
-        // below is the configuration for unpack for srca
+        // Whole-tile unpacking (non-8-bit BH workaround): x_dim covers the entire tile, z_dim=1
         const std::uint32_t Tile_x_dim = face_r_dim * num_faces * FACE_C_DIM;
         const std::uint32_t Tile_z_dim = 1;
         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(Tile_x_dim | (Tile_x_dim << 16));
@@ -141,9 +147,9 @@ inline void _llk_unpack_tilize_init_(
 
         // Set x-end for Unpackers to (face_r_dim * num_faces * FACE_C_DIM - 1)
         TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0);
-    }
 
-    _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest, is_8bit_format);
+        _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest);
+    }
 }
 
 /**
@@ -166,11 +172,11 @@ inline void _llk_unpack_tilize_init_(
 inline void _llk_unpack_tilize_(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
-    std::uint32_t unpack_src_format = 0,
-    std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool narrow_tile          = false)
+    std::uint32_t unpack_src_format                 = 0,
+    std::uint32_t unpack_dst_format                 = 0,
+    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t num_faces                   = 4,
+    const bool narrow_tile                          = false)
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
 
@@ -186,58 +192,90 @@ inline void _llk_unpack_tilize_(
 
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, tile_index) << (narrow_tile ? 0 : 1);
 
-    // 8bit datums do not need the blackhole workaround therefore we fallback to regular tilize operation like for wormhole.
+    // 8-bit path: 2-context inline UNPACR sequence. AddrMode=0b00010001 advances BOTH
+    // Ch0.Z (L1 input read) and Ch1.Z (SrcA output write) so face N lands in SrcA rows
+    // 16*N..16*N+15 via the Zstride configured by configure_unpack_AB. This works
+    // because SRCA_SET_SetOvrdWithAddr is enabled by default on BH, letting OutAddr
+    // drive the row directly (SrcRow is not added). The active context selects between
+    // REG3_Base_address (cntx0) and REG3_Base_cntx1_address for both the base-address
+    // cfg write and the CFGSHIFTMASK target.
+    //   num_faces==4: 4 UNPACRs (face 3 with SetDvalid) + CFGSHIFTMASK between top and
+    //                 bottom face pairs (Ch1.Z keeps advancing across the CFGSHIFTMASK
+    //                 since it touches REG3 only).
+    //   num_faces==2: 2 UNPACRs (top pair only, face 1 with SetDvalid). No CFGSHIFTMASK.
     if (IS_8BIT_FORMAT(unpack_src_format))
     {
-        // Each iteration unpacks 2 face_r_dimx16 faces (1st 0,1 2nd 2,3 unless tile is <=16x32)
-        // For narrow tile we unpack 1 face in each iteration
-        // Offset address is in 16B words
-        // Datum count = tile_index*face_r_dim (/16 to get word count)
+        const std::uint32_t address = base_address + top_face_offset_address;
+        LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
-        const auto config_vec                 = read_unpack_config();
-        const std::uint32_t shift_amount      = config_vec[0].shift_amount;
-        std::uint32_t bot_face_offset_address = shift_amount * face_r_dim; // bytes for bottom faces
+        // Clear Z/W counters on UNP_A for both channels (Ch0 for L1 read, Ch1 for SrcA write)
+        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
 
-        // Program srcA and srcB base addresses
-        std::uint32_t num_loops = narrow_tile ? 2 : num_faces / 2;
+        // Wait for a free context (up to 2 tiles in flight)
+        wait_for_next_context(2);
 
-        volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
-
-        for (std::uint32_t n = 0; n < num_loops; n++)
+        // Write top-face base address to the active context's REG3
+        if (0 == unp_cfg_context)
         {
-            std::uint32_t address = base_address + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
-
-            // Clear z/w start counters
-            TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
-
-            // Wait for free context
-            wait_for_next_context(2);
-
-            // Validate and configure address
-            _llk_unpack_configure_single_address_(address, cfg);
-
-            // Trisc::SEMPOST for context acquire
-            semaphore_post(semaphore::UNPACK_SYNC);
-
-            // Stall unpacker until pending CFG writes from Trisc have completed
-            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-
-            // Run MOP
-            ckernel::ckernel_template::run();
-
-            // T6::SEMGET for context release
-            t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-            // Switch unpacker config context
-            switch_config_context(unp_cfg_context);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
         }
+        else
+        {
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+        }
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        // Stall unpacker until pending CFG writes from Trisc have completed
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+        if (num_faces == 4)
+        {
+            // Face 0: Ch0.Z=0, Ch1.Z=0 -> SrcA rows 0..15
+            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            // Face 1: Ch0.Z=1, Ch1.Z=1 -> SrcA rows 16..31
+            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+            // Shift the active context's Base_address by SCRATCH_SEC0_val (= bot_face_offset - 2
+            // in 16B words) so face 2/3 read correctly at Z=2/3 on the L1 side. CFGSHIFTMASK's
+            // target is an instruction immediate, so we pick the variant at compile time per context.
+            if (0 == unp_cfg_context)
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+            }
+            else
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            }
+            TTI_NOP;
+
+            // Face 2: Ch0.Z=2, Ch1.Z=2 -> SrcA rows 32..47
+            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            // Face 3: Ch0.Z=3, Ch1.Z=3 -> SrcA rows 48..63. SetDvalid flips the SrcA bank,
+            // handing the full 64-row tile to math.
+            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        }
+        else // num_faces == 2: top face pair only, no CFGSHIFTMASK
+        {
+            // Face 0: Ch0.Z=0, Ch1.Z=0 -> SrcA rows 0..15
+            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            // Face 1: Ch0.Z=1, Ch1.Z=1 -> SrcA rows 16..31. SetDvalid flips the SrcA bank.
+            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        }
+
+        // SrcB DVALID + UNP_ZEROSRC. Required so math's ELWADD branch (dest_acc=Yes,
+        // is_int_fpu_en, or dst==UInt8) sees a zero SrcB; for the MOVA2D branch it's
+        // a no-op handshake but kept uniform across formats.
+        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+
+        // T6::SEMGET for context release
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+        // Flip to the other context for the next tile
+        switch_config_context(unp_cfg_context);
     }
     else
     {
-        // Program srcA and srcB base addresses
-        // FIXME MT: This should be revisited for narrow tiles
-        // std::uint32_t num_loops = narrow_tile ? 2 : num_faces/2;
-
+        // Non-8-bit path: whole-tile unpack via BH workaround configuration (x_dim covers full tile).
         std::uint32_t address = base_address + top_face_offset_address;
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
