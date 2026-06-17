@@ -41,6 +41,7 @@ template <class Chain> struct chain_math_mop_uniform;
 template <class Chain> struct chain_sfpu_inits_uniform;
 template <class Chain> struct chain_hoist_math_mop;
 template <class Chain> struct chain_hoist_sfpu;
+template <class Chain> struct chain_hoist_pack;
 
 template <class Chain>
 inline constexpr bool chain_has_duplicate_upfront_cbs_v = chain_has_duplicate_upfront_dfbs<Chain>::value;
@@ -56,6 +57,8 @@ template <class Chain>
 inline constexpr bool chain_hoist_math_mop_v = chain_hoist_math_mop<Chain>::value;
 template <class Chain>
 inline constexpr bool chain_hoist_sfpu_v = chain_hoist_sfpu<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_hoist_pack_v = chain_hoist_pack<Chain>::value;
 
 // =============================================================================
 // Marker tag hierarchy (data direction → kind)
@@ -408,6 +411,18 @@ constexpr uint32_t dfb_for_side() {
         if constexpr (has_reconfig_pack<E>::value) return E::reconfig_pack_dfb;
         else                                       return NO_PREV_DFB;
     }
+}
+
+// True iff NO element in the pack requests any srca / srcb / pack reconfig — i.e. every element's
+// reconfig knob is None. Under SetupOwner::Caller the chain emits zero reconfig, so a non-None knob
+// is inert and lies about what the helper does; eltwise_chain uses this to forbid that, forcing the
+// caller to declare None — which honestly reflects "the chain does no reconfig, I own the format."
+template <class... Es>
+constexpr bool chain_requests_no_reconfig() {
+    return ((dfb_for_side<Side::SrcA, Es>() == NO_PREV_DFB &&
+             dfb_for_side<Side::SrcB, Es>() == NO_PREV_DFB &&
+             dfb_for_side<Side::Pack, Es>() == NO_PREV_DFB) &&
+            ...);
 }
 
 // Per-side prev-CB history, last opt-in pack CB, and heterogeneous-pack detection are
@@ -1653,6 +1668,29 @@ struct chain_hoist_sfpu<EltwiseChain<Es...>>
     : std::bool_constant<chain_hoist_math_mop_v<EltwiseChain<Es...>> &&
                          chain_sfpu_inits_uniform_v<EltwiseChain<Es...>>> {};
 
+// Pack cohort hoist: pack init + reconfig are fully boot-emitted, with NO per-stage pack
+// reconfig in the loop. True iff the chain isn't pack-hetero (homogeneous opt-in pack CBs).
+// The output-reconfig leg of "all one-time setup is boot-hoistable" (with math-MOP + SFPU).
+template <class Chain>
+struct chain_hoist_pack : std::true_type {};
+
+template <class... Es>
+struct chain_hoist_pack<EltwiseChain<Es...>>
+    : std::bool_constant<!detail::ChainTraits<Es...>::pack_hetero> {};
+
+// True iff no element requests any reconfig (all reconfig knobs None). SetupOwner::Caller requires
+// this so a set-but-inert reconfig knob (which the helper would silently ignore) is a compile error
+// instead of a lie about what runs inside the chain.
+template <class Chain>
+struct chain_no_reconfig_requested : std::true_type {};
+
+template <class... Es>
+struct chain_no_reconfig_requested<EltwiseChain<Es...>>
+    : std::bool_constant<detail::chain_requests_no_reconfig<Es...>()> {};
+
+template <class Chain>
+inline constexpr bool chain_no_reconfig_requested_v = chain_no_reconfig_requested<Chain>::value;
+
 // =============================================================================
 // 10. Chain pipeline — per-iteration emit
 // =============================================================================
@@ -2080,10 +2118,10 @@ ALWI void elem_push_per_row(const E& e) {
 
 }  // namespace detail
 
-// Shared per-tile walk used by run() and body(). `EmitMathInit`/`EmitSfpuInit` control whether
-// the per-element compute init is emitted inside the loop: run() passes `!hoist_*` (so a hoistable
-// chain emits nothing here — it was hoisted to boot — and a non-hoistable chain re-inits per tile);
-// body() passes false/false (the caller already ran hoist_init()).
+// Shared per-tile walk. `EmitMathInit`/`EmitSfpuInit` control whether the per-element compute init
+// is emitted inside the loop. eltwise_chain_impl always passes `!hoist_*`: a hoistable cohort emits
+// nothing here (it was hoisted to boot by this call under SetupOwner::Chain, or by the caller under
+// SetupOwner::Caller), and a non-hoistable cohort re-inits per tile regardless.
 template <bool EmitMathInit, bool EmitSfpuInit, class... Es>
 ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
@@ -2144,51 +2182,48 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     (detail::elem_push_at_end(elts, Ht, Wt), ...);
 }
 
-// hoist_init: emit the chain's hoistable init ONCE (pack boot init + per-element compute MOP /
-// reconfig). This is the init the chain normally re-emits at the start of every run() — exposing
-// it lets a kernel keep its own loop and lift the init out. NOT the caller's BIG hw init
-// (compute_kernel_hw_startup / unary_op_init_common), which the kernel still owns separately.
-// Requires a hoistable chain (uniform math MOP + SFPU) — else body() would drop a needed init.
-template <class... Es>
-ALWI void eltwise_chain_hoist_init_impl(Es... elts) {
-    using Chain = EltwiseChain<Es...>;
-    static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
-                  "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
-    static_assert(!chain_pack_writes_collide_v<Chain>,
-                  "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
-    static_assert(chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain>,
-                  "eltwise_chain hoist_init()/body() require a hoistable chain (uniform math MOP + "
-                  "SFPU init). Use run() for chains whose init must re-emit per tile.");
-    using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
-    detail::pack_init_for_each<Es...>(IdxSeq{});
-    detail::hoist_compute_init<true, true>(IdxSeq{}, elts...);
-}
-
-// body: the per-tile walk assuming hoist_init() already ran — emits NO init in the loop.
-template <class... Es>
-ALWI void eltwise_chain_body_impl(EltwiseShape shape, Es... elts) {
-    using Chain = EltwiseChain<Es...>;
-    static_assert(chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain>,
-                  "eltwise_chain body() requires a hoistable chain (pair with hoist_init()); use run() otherwise.");
-    chain_run_loop</*EmitMathInit=*/false, /*EmitSfpuInit=*/false>(shape, elts...);
-}
-
-// run (== prior eltwise_chain_impl): the standalone all-in-one — hoist the init, then walk. Works
-// for non-hoistable chains too (init folds into the loop per the hoist flags).
-template <class... Es>
+// eltwise_chain_impl — the walk. SetupOwner::Chain (default) emits the chain's one-time setup
+// (pack boot init + the uniform math-MOP / SFPU init + their srca/srcb reconfig) before walking.
+// SetupOwner::Caller skips ALL of it: the caller emitted the chain's whole one-time setup itself,
+// once, before its own loop, so this call is pure per-tile compute. SetupOwner is about WHO emits
+// the hoistable setup — it never changes which init is hoistable (that's deduced from uniformity).
+template <SetupOwner SO = SetupOwner::Chain, class... Es>
 ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
     static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
                   "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
     static_assert(!chain_pack_writes_collide_v<Chain>,
                   "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
+    // SetupOwner::Caller means "the caller did the chain's whole one-time setup itself, once,
+    // before the loop." That's only achievable if EVERY part of it is boot-hoistable: uniform
+    // math MOP + SFPU init (so input/srca-srcb reconfig is boot-only) AND homogeneous pack CBs
+    // (so output/pack reconfig is boot-only — no per-stage pack reconfig in the loop). Otherwise
+    // some setup must re-emit per tile, the caller can't pre-do it once, and the knob silently
+    // skips a needed init/reconfig — a footgun. Forbid it at compile time.
+    static_assert(SO == SetupOwner::Chain ||
+                      (chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain> &&
+                       chain_hoist_pack_v<Chain>),
+                  "SetupOwner::Caller requires a chain whose entire one-time setup is boot-hoistable "
+                  "(uniform math MOP + SFPU init AND homogeneous pack CBs) so that input AND output "
+                  "reconfig are boot-only and nothing self-emits per tile. This chain has setup that "
+                  "must re-emit per tile, so the caller cannot own it once — use SetupOwner::Chain.");
+    // Honesty: under SetupOwner::Caller the chain emits NO reconfig at all (the caller owns the
+    // setup), so a non-None reconfig knob on any element is inert and lies about what runs inside
+    // the helper. Forbid it — make the caller declare None, which truthfully says "the chain does
+    // no reconfig; my manual setup owns the format."
+    static_assert(SO == SetupOwner::Chain || chain_no_reconfig_requested_v<Chain>,
+                  "SetupOwner::Caller with a non-None reconfig knob: under Caller the chain emits no "
+                  "reconfig (the caller owns the setup), so the knob is inert and misleading. Set "
+                  "every element's reconfig to None — the caller's manual setup owns the format.");
     // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
     constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
-    detail::pack_init_for_each<Es...>(IdxSeq{});
-    detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
+    if constexpr (SO == SetupOwner::Chain) {
+        detail::pack_init_for_each<Es...>(IdxSeq{});
+        detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
+    }
     chain_run_loop<!hoist_math, !hoist_sfpu>(shape, elts...);
 }
 
@@ -2221,51 +2256,19 @@ ALWI auto chain_keep(E e) {
     }
 }
 
-template <class Tup, std::size_t... I>
+template <SetupOwner SO, class Tup, std::size_t... I>
 ALWI void chain_dispatch(EltwiseShape shape, Tup tup, std::index_sequence<I...>) {
-    eltwise_chain_impl(shape, std::get<I>(tup)...);
+    eltwise_chain_impl<SO>(shape, std::get<I>(tup)...);
 }
 
-template <class... Es>
+// Public entry. `SetupOwner SO` (default Chain) says who emits the chain's one-time setup:
+// Chain = this call emits it; Caller = the caller emitted it once, outside its loop (see the
+// SetupOwner enum doc). It never changes which init is hoistable. (default lives on the
+// declaration in eltwise_chain.hpp.)
+template <SetupOwner SO, class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     auto kept = std::tuple_cat(chain_keep(elts)...);
-    chain_dispatch(shape, kept, std::make_index_sequence<std::tuple_size_v<decltype(kept)>>{});
-}
-
-// ---- Chain object (make_chain) — same std::get expansion as above (no std::apply) ----
-template <class Tup, std::size_t... I>
-ALWI void chain_dispatch_hoist_init(Tup tup, std::index_sequence<I...>) {
-    eltwise_chain_hoist_init_impl(std::get<I>(tup)...);
-}
-template <class Tup, std::size_t... I>
-ALWI void chain_dispatch_body(EltwiseShape shape, Tup tup, std::index_sequence<I...>) {
-    eltwise_chain_body_impl(shape, std::get<I>(tup)...);
-}
-
-// Compile-time chain object. Name the elements once, then either:
-//   chain.hoist_init();  for (...) chain.body(shape);   // hoist the chain init out of your loop
-//   chain.run(shape);                                   // standalone == eltwise_chain(shape, elts...)
-// Holds the kept elements by value (disabled OptionalChainElements already stripped). The BIG hw
-// init (compute_kernel_hw_startup / unary_op_init_common) stays caller-owned; hoist_init() emits
-// only the chain's own per-element MOP / pack / reconfig init.
-template <class... Es>
-struct EltwiseChainRunner {
-    std::tuple<Es...> elts;
-    static constexpr auto seq() { return std::make_index_sequence<sizeof...(Es)>{}; }
-    ALWI void hoist_init() const { chain_dispatch_hoist_init(elts, seq()); }
-    ALWI void body(EltwiseShape shape) const { chain_dispatch_body(shape, elts, seq()); }
-    ALWI void run(EltwiseShape shape) const { chain_dispatch(shape, elts, seq()); }
-};
-
-template <class... KeptEs>
-ALWI auto make_chain_from_kept(std::tuple<KeptEs...> kept) {
-    return EltwiseChainRunner<KeptEs...>{kept};
-}
-
-// Build a chain object from elements, stripping disabled OptionalChainElements (like eltwise_chain).
-template <class... Es>
-ALWI auto make_chain(Es... elts) {
-    return make_chain_from_kept(std::tuple_cat(chain_keep(elts)...));
+    chain_dispatch<SO>(shape, kept, std::make_index_sequence<std::tuple_size_v<decltype(kept)>>{});
 }
 
 // =============================================================================

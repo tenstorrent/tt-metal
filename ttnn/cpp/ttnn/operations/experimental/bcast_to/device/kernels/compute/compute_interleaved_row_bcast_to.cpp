@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -26,25 +25,10 @@ void kernel_main() {
 
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    // Standard BIG init only; the chain's UnaryBcast::init supplies the per-Dim bcast MOP
-    // each call (the boot unary_bcast_init's MOP was redundant with it).
-    compute_kernel_hw_startup(cb_id_src, cb_id_dst);
-
-    // Hoist the chain init out of the per-tile loop: build the chain object once, emit its init
-    // once via chain.hoist_init(), then call chain.body(1) per tile instead of the
-    // self-initializing unary_bcast(1). Same loop; the UnaryBcast MOP + reconfig is no longer
-    // re-emitted every iteration. (compute_kernel_hw_startup is the BIG hw init, kept separate.)
-    auto chain = compute_kernel_lib::make_chain(
-        compute_kernel_lib::UnaryBcast<
-            compute_kernel_lib::BroadcastDim::Row,
-            cb_id_src,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::UnaryBcastReconfig::Input>{},
-        compute_kernel_lib::PackTile<
-            cb_id_dst,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
-    chain.hoist_init();
+    // Emit the chain's one-time setup ONCE, out of the loop — the original raw bcast init
+    // (BIG hw config + ROW bcast MOP + pack init). The per-tile chain calls below pass
+    // SetupOwner::Caller, so the chain skips that setup instead of re-emitting it each iteration.
+    unary_bcast_init<BroadcastType::ROW>(cb_id_src, cb_id_dst);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
@@ -52,7 +36,18 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
-                    chain.body(1u);
+                    // Per-tile row broadcast; setup already emitted above (SetupOwner::Caller).
+                    compute_kernel_lib::eltwise_chain<compute_kernel_lib::SetupOwner::Caller>(
+                        1u,
+                        compute_kernel_lib::UnaryBcast<
+                            compute_kernel_lib::BroadcastDim::Row,
+                            cb_id_src,
+                            compute_kernel_lib::InputLifecycle::Streaming,
+                            compute_kernel_lib::UnaryBcastReconfig::None>{},  // Caller owns setup -> no chain reconfig
+                        compute_kernel_lib::PackTile<
+                            cb_id_dst,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
+                            compute_kernel_lib::PackTileReconfig::None>{});
                     ++num_tiles_read;
                 }
             }

@@ -121,6 +121,25 @@ struct EltwiseShape {
     static constexpr EltwiseShape single() { return {1, 1, 1}; }
 };
 
+/// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
+/// `eltwise_chain`. This is about *ownership*, NOT about whether inits are hoistable: which inits
+/// are hoistable is deduced from the chain's uniformity and is never a manual choice.
+///
+///   eltwise_chain(shape, elts...);                       // default: SetupOwner::Chain
+///   // To hoist the setup out of your own loop: emit it ONCE before the loop yourself (e.g. the
+///   // original raw *_init call), then hand ownership to the caller so the chain skips it:
+///   <emit the chain's one-time setup once, before the loop>
+///   for (...) eltwise_chain<SetupOwner::Caller>(1, elts...);
+///
+/// SetupOwner::Caller is only valid when the chain's entire setup is boot-hoistable (uniform math
+/// MOP + SFPU init AND homogeneous pack CBs) — i.e. there's a single "once, before the loop" the
+/// caller can own. eltwise_chain static_asserts this; a chain that must re-emit setup per tile
+/// (so the caller can't pre-do it once) is a compile error pointing you back to SetupOwner::Chain.
+enum class SetupOwner {
+    Chain,   // this eltwise_chain call emits the one-time setup (init + reconfig)
+    Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
+};
+
 // =============================================================================
 // 1c. Taxonomy: Lifecycle as a two-axis struct
 // =============================================================================
@@ -590,7 +609,7 @@ struct RandTile;
 /// Row / Col / Scalar pick the per-iter tile index; any `is_upfront` element takes the
 /// upfront-block path; Streaming chains clamp block_size to 1. Row/Col need a non-streaming
 /// policy. Query `chain_supports_block_v` / `chain_max_block_v` for a build-time block check.
-template <class... Es>
+template <SetupOwner SO = SetupOwner::Chain, class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
 
 }  // namespace compute_kernel_lib
