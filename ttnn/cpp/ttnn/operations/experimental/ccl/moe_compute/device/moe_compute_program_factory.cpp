@@ -28,7 +28,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/ccl/common/host/moe_core_placement.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace {
