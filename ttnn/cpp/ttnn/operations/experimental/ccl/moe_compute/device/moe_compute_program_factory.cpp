@@ -114,13 +114,9 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
     const CoreRangeSet& mux_core_range_set) {
-    constexpr auto combine_cores_return_index = 8;
-
-    // Use default bh_ring_size=12 for this helper (ring size doesn't affect combine core selection)
-    const auto get_cores_return = get_cores(
-        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, 12, mux_core_range_set);
-
-    return std::get<combine_cores_return_index>(get_cores_return);
+    const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
+    return selection.combine_cores;
 }
 
 ttnn::CoreCoord get_moe_tilize_drain_core(
@@ -129,15 +125,10 @@ ttnn::CoreCoord get_moe_tilize_drain_core(
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
     const CoreRangeSet& mux_core_range_set) {
-    constexpr auto tilize_cores_return_index = 0;
-
-    // Use default bh_ring_size=12 for this helper (ring size doesn't affect tilize drain core selection)
-    const auto get_cores_return = get_cores(
-        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, 12, mux_core_range_set);
-
-    const auto& tilize_cores = std::get<tilize_cores_return_index>(get_cores_return);
-    TT_FATAL(!tilize_cores.empty(), "moe_compute tilize drain core selection returned no tilize cores");
-    return tilize_cores.at(0);
+    const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
+    TT_FATAL(!selection.tilize_cores.empty(), "moe_compute tilize drain core selection returned no tilize cores");
+    return selection.tilize_cores.at(0);
 }
 
 ttnn::CoreRange get_moe_worker_mcast_bounding_box(
@@ -146,14 +137,14 @@ ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
     const uint32_t bh_ring_size) {
-    const auto core_ret = get_cores(
+    const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device,
         combine_token_parallel_cores,
         combine_data_parallel_cores,
         hidden_size,
-        bh_ring_size,
-        CoreRangeSet{});
-    return std::get<7>(core_ret).bounding_box();
+        CoreRangeSet{},
+        bh_ring_size);
+    return selection.all_worker_cores_range_set.bounding_box();
 }
 
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
