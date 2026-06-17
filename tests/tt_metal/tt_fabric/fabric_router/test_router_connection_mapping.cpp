@@ -558,7 +558,7 @@ TEST_F(RouterConnectionMappingTest, PassThrough_2D_WithZ_AddsMeshToZOnVC1) {
             return t.type == ConnectionType::MESH_TO_Z;
         });
         ASSERT_NE(mesh_to_z_it, vc1_targets.end());
-        verify_target(*mesh_to_z_it, ConnectionType::MESH_TO_Z, /*vc=*/1, RoutingDirection::Z);
+        verify_target(*mesh_to_z_it, ConnectionType::MESH_TO_Z, /*expected_vc=*/1, RoutingDirection::Z);
 
         // VC0 path is unchanged: 3 INTRA_MESH + 1 MESH_TO_Z (on VC0).
         auto vc0_targets = mapping.get_downstream_targets(0, 0);
