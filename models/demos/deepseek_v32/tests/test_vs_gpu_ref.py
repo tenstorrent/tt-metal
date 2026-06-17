@@ -62,6 +62,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v32.reference_cpu.utils import precompute_freqs_cis
+from models.demos.deepseek_v32.tests.mesh_utils import parametrize_mesh_device
 from models.demos.deepseek_v32.tests.test_mla import assert_config_matches, build_cpu_reference
 from models.demos.deepseek_v32.tt import ops
 from models.demos.deepseek_v32.tt.mla import interleaved_to_halfsplit_perm, ttMLA
@@ -244,7 +245,7 @@ def _shard_tp(t, mesh_device):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
@@ -316,7 +317,7 @@ def _run_device_forward(config, layer, mesh_device):
     return ref, out_t, kvpe_t
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
@@ -328,7 +329,7 @@ def test_kv_cache_device_vs_reference(mesh_device, layer, device_params, variant
     ttnn.synchronize_device(mesh_device)
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])

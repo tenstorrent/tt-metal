@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v32.reference_cpu.model import MLACPU, ModelArgs
 from models.demos.deepseek_v32.reference_cpu.utils import precompute_freqs_cis
 from models.demos.deepseek_v32.reference_cpu.weights import DEFAULT_REPO, initialize_weights
+from models.demos.deepseek_v32.tests.mesh_utils import parametrize_mesh_device, skip_if_seq_too_small_for_sp
 from models.demos.deepseek_v32.tt.mla import ttMLA as ttMLAv32
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -150,8 +151,9 @@ def assert_config_matches(config, args):
         ), f"HF config.{hf_name}={getattr(config, hf_name)} != ModelArgs.{args_name}={getattr(args, args_name)}"
 
 
-# QuietBox: 1x4 pure TP (agreement 13); 2x2 SP×TP (step 5).
-@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], ids=["1x4", "2x2"], indirect=True)
+# Mesh shapes adapt to the box (mesh_utils): single chip / TP=4 / SP2×TP2 on a
+# QuietBox; SP=8 / SP4×TP2 / SP2×TP4 on a LoudBox; SP8×TP4 on Galaxy (prod).
+@parametrize_mesh_device()
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -175,6 +177,7 @@ def test_v32_mla_vs_cpu_reference(
 ):
     # NOTE: input is generated inside v3 run_mla_inference (seeded); --ds-input does
     # not apply here. Use the chunked test for file-driven input.
+    skip_if_seq_too_small_for_sp(seq_len, mesh_device)
     config = config_only
     seed = 42
     args, mla_cpu, weights, src_tag = build_cpu_reference(seq_len, seed, ds_layer, ds_checkpoint, ds_repo)
@@ -240,7 +243,7 @@ def test_v32_mla_vs_cpu_reference(
 # SAME device output. Guards run-to-run non-determinism in the DSA path (CCL
 # reductions, host fallback, topk ties). seq4k exercises the active DSA path.
 # No CPU truth needed → fast (no cold reference).
-@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], ids=["1x4", "2x2"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -257,6 +260,7 @@ def test_v32_mla_vs_cpu_reference(
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
 def test_v32_mla_determinism(mesh_device, seq_len, n_runs, device_params, variant, config_only):
+    skip_if_seq_too_small_for_sp(seq_len, mesh_device)
     config = config_only
     args, _, weights, _ = build_cpu_reference(seq_len)
     config.max_seq_len = seq_len
@@ -326,7 +330,7 @@ def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, src_
 
 
 # Chunked prefill e2e (step 4 + 5.5): chunk size is a parameter — 1k dev default (agreement 15).
-@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], ids=["1x4", "2x2"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -346,6 +350,12 @@ def test_v32_mla_chunked_vs_cpu_reference(
 ):
     from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 
+    skip_if_seq_too_small_for_sp(seq_len, mesh_device)
+    # The chunked epilogue (nlp_concat_heads over all 128 heads) needs TP head-sharding to
+    # fit L1: at TP=1 the unsharded 128-head concat overflows (~2.2 MB > 1.57 MB). The
+    # single-shot path fits the same config, so only the chunked path is gated here.
+    if mesh_device.shape[1] == 1:
+        pytest.skip("chunked MLA epilogue (nlp_concat_heads, 128 heads) exceeds L1 without TP head-sharding (TP=1)")
     config = config_only
     seed = 42
     args, mla_cpu, weights, src_tag = build_cpu_reference(seq_len, seed, ds_layer, ds_checkpoint, ds_repo)

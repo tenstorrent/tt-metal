@@ -13,6 +13,7 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
+from models.demos.deepseek_v32.tests.mesh_utils import parametrize_mesh_device_tp_only
 from models.demos.deepseek_v32.tests.test_mla import build_cpu_reference, make_hidden
 from models.demos.deepseek_v32.tt import ops
 from models.demos.deepseek_v32.tt.mla import ttMLA
@@ -30,7 +31,11 @@ def _shard(t, mesh_device):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+# TP-only: this checks chunked vs single-shot indexer selection (a chunking property,
+# independent of SP). The indexer is replicated under TP; its SP layout is covered e2e
+# in test_mla. Sweeping SP here would only re-read replicated shards through the flat
+# row layout this test assumes.
+@parametrize_mesh_device_tp_only()
 @pytest.mark.parametrize(
     "device_params",
     [

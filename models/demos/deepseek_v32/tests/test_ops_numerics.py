@@ -16,6 +16,7 @@ import ttnn
 from models.demos.deepseek_v32.reference_cpu.model import IndexerCPU, ModelArgs
 from models.demos.deepseek_v32.reference_cpu.utils import apply_rotary_emb, precompute_freqs_cis
 from models.demos.deepseek_v32.reference_cpu.weights import init_random
+from models.demos.deepseek_v32.tests.mesh_utils import parametrize_mesh_device
 from models.demos.deepseek_v32.tt import ops
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -30,7 +31,7 @@ def _dev(t, mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("seq", [128], ids=["s128"])
 def test_indexer_logits_numerics(mesh_device, seq):
     args = ModelArgs(max_batch_size=1)
@@ -63,7 +64,7 @@ def test_indexer_logits_numerics(mesh_device, seq):
     assert_with_pcc(ref_score[0].float(), got.float(), LOGITS_PCC)
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("skv,k", [(512, 64), (4096, 2048)], ids=["k64", "k2048"])
 def test_topk_indices_match(mesh_device, skv, k):
     torch.manual_seed(0)
@@ -77,7 +78,7 @@ def test_topk_indices_match(mesh_device, skv, k):
     assert overlap.min() >= 1 - max(2 / k, 0.01), f"min row overlap {overlap.min():.4f}"
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("start_pos", [0, 256], ids=["single_shot", "chunked"])
 def test_sparse_mla_numerics(mesh_device, start_pos):
     torch.manual_seed(1)
@@ -102,7 +103,9 @@ def test_sparse_mla_numerics(mesh_device, start_pos):
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 1)),
+        # SP-shard sequence (dim2, mesh axis 0) + TP-shard heads (dim1, axis 1): the
+        # production sparse_mla layout. indices stay replicated (the op partitions them).
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1)),
     )
     kvpe_dev = ttnn.from_torch(
         kvpe,  # full-T latent [1, 1, skv, 576], replicated on device (ROW_MAJOR bf16)
@@ -119,6 +122,6 @@ def test_sparse_mla_numerics(mesh_device, start_pos):
         start_pos=start_pos,
     )
     out_t = ttnn.to_torch(
-        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)
+        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
     )[:1]
     assert_with_pcc(ref, out_t[0].float(), 0.99)  # bf16 online-softmax op (matches sparse_sdpa's own PCC bar)

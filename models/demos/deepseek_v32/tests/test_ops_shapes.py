@@ -14,6 +14,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v32.tests.mesh_utils import parametrize_mesh_device
 from models.demos.deepseek_v32.tt import ops
 
 pytestmark = pytest.mark.dev  # fast op-contract tests — inner loop
@@ -32,7 +33,7 @@ def _dev(t, mesh_device):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("sq,skv", [(128, 128), (128, 512)], ids=["s128", "s128kv512"])
 def test_indexer_logits_shape(mesh_device, sq, skv):
     q = _dev(torch.randn(1, H_IDX, sq, D_IDX), mesh_device)
@@ -42,7 +43,7 @@ def test_indexer_logits_shape(mesh_device, sq, skv):
     assert list(logits.shape) == [1, 1, sq, skv]
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("sq,skv,k", [(128, 512, 64), (128, 4096, 2048)], ids=["k64", "k2048"])
 def test_topk_indices_shape(mesh_device, sq, skv, k):
     # topk_large_indices is ROW_MAJOR bf16 in (chains off indexer_score's row-major out).
@@ -57,16 +58,18 @@ def test_topk_indices_shape(mesh_device, sq, skv, k):
     assert list(indices.shape) == [1, 1, sq, k]
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@parametrize_mesh_device()
 @pytest.mark.parametrize("h,sq,skv,k", [(128, 128, 512, 64)], ids=["h128"])
 def test_sparse_mla_shape(mesh_device, h, sq, skv, k):
-    # q is head-sharded across TP (mesh axis 1); kvpe/indices replicated; out head-sharded.
+    # q is SP-sharded on sequence (dim2, mesh axis 0) and TP-sharded on heads (dim1,
+    # mesh axis 1) — the production layout sparse_mla consumes; kvpe/indices replicated
+    # (sparse_mla mesh_partitions indices onto SP internally). out is sharded the same way.
     q = ttnn.from_torch(
         torch.randn(1, h, sq, KVPE_DIM),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 1)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1)),
     )
     kvpe = ttnn.from_torch(
         torch.randn(1, 1, skv, KVPE_DIM, dtype=torch.bfloat16),  # full-T latent, replicated on device
@@ -84,6 +87,6 @@ def test_sparse_mla_shape(mesh_device, h, sq, skv, k):
     )
     out = ops.sparse_mla(q, kvpe, idx, scale=KVPE_DIM**-0.5)
     out_t = ttnn.to_torch(
-        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)
+        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
     )[:1]
     assert list(out_t.shape) == [1, h, sq, KV_RANK]
