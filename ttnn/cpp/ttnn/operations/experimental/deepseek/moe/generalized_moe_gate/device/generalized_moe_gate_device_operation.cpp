@@ -87,7 +87,7 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     uint32_t h = in_shape[in_shape.size() - 2];
     uint32_t w = in_shape[in_shape.size() - 1];
     TT_FATAL(h * w == 256, "Input tensor must have 256 elements per block (last two dims = one 256-block)");
-    // input_indices is one 256-block (arange 0-255), reused for every block (kernel adds b*256).
+    // input_indices holds one tile per 256-block, each uploaded with GLOBAL expert ids (block b = arange + b*256).
     uint32_t idx_h = in_idx_shape[in_idx_shape.size() - 2];
     uint32_t idx_w = in_idx_shape[in_idx_shape.size() - 1];
     TT_FATAL(idx_h * idx_w == 256, "input_indices must have 256 elements (one block, last two dims)");

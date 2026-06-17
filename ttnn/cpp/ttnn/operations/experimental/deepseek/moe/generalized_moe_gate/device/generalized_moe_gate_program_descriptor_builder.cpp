@@ -246,7 +246,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     program_desc.kernels.push_back(std::move(writer));
     program_desc.kernels.push_back(std::move(compute_k));
 
-    program_desc.cbs.reserve(8);
+    program_desc.cbs.reserve(10);
     program_desc.cbs.push_back(std::move(in_cb_desc));
     program_desc.cbs.push_back(std::move(bias_cb_desc));
     program_desc.cbs.push_back(std::move(out_cb_desc));
