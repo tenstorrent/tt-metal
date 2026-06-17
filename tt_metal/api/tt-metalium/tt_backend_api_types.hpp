@@ -34,6 +34,8 @@ enum class DataFormat : uint8_t {
     Lf8 = 10,
     Fp8_e4m3 = 26,
     MxFp4 = 22,
+    MxFp4_2x_B = 29,  // remapped in genfiles.
+    MxFp4_2x_A = 27,
     MxFp6P = 21,
     MxFp6R = 19,
     MxFp8R = 18,
