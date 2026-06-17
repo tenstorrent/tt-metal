@@ -1,13 +1,10 @@
 """
-Conv2d patch-embedding for the Janus-Pro-7B vision model.
-
-The convolution weight is folded into a 2D matrix so the patch projection runs
-as a single ttnn.linear over the unfolded input. A 4D conv weight is reshaped to
-(out_channels, in_channels * kernel_size**2); its inner dimension is zero-padded
-to a tile multiple.
+This is the Conv2dPath of Janus-Pro-7B
+We have reused the exisiting Conv2dPath of TtLlamaConv2dPath with few modifications.
+We have added a check for weight to convert 4D to 2D
 """
 
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,16 +15,16 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 
 
-class TtJanusProConv2dPatch(LightweightModule):
+class TtJanusConv2dPatch(LightweightModule):
     """Conv2D Patching layer.
     Column parallel over unfolded input.
     Arguments:
         in_channels: Input channels.
         out_channels: Output channels.
         kernel_size: Size of convolution kernel.
-        stride: Stride for convolution.
-        bias: Use bias in Conv2d.
-    Input: (bsz, in_channels, height, width)
+        stride (default 1): Stride for convolution.
+        bias (default False): Use bias in Conv2d.
+    Input: (bsz, in_channels, width, height)
     Output: (bsz, num_tokens, out_channels)
     """
 

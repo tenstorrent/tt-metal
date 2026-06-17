@@ -64,7 +64,8 @@ def test_conv2d_inference(
     assert H % kernel_size == 0, "Height should be divisible by kernel_size."
     assert W % kernel_size == 0, "Width should be divisible by kernel_size."
 
-    input_tensor = torch.randn((B, NCH, H, W))
+    ref_dtype = state_dict[f"{first_layer_prefix}weight"].dtype
+    input_tensor = torch.randn((B, NCH, H, W), dtype=ref_dtype)
 
     ##### Perform the torch ops #####
     reference_model = model_args.reference_siglip_patch_embed()

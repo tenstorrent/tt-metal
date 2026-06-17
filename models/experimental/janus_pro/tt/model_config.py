@@ -129,27 +129,36 @@ class ModelArgs(TTModelArgs):
         return JanusForConditionalGeneration
 
     def load_state_dict(self):
-        # Weight-seeding path: take weights from the base model at its native checkpoint dtype.
-        # Do NOT route through reference_vision_transformer() below, which upcasts to float32 for
-        # the golden reference only. Mirrors models/demos/multimodal/gemma3, which likewise keeps
-        # the float32 upcast off the weight path.
-        model = super().reference_vision_transformer(wrap=False)
+        model = self.reference_vision_transformer(wrap=False)
         return convert_vision_hf_to_meta(model.state_dict(), self.head_dim)
 
-    def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        # Golden-reference path: force float32 so the reference matches float32 test inputs (a stable
-        # PCC baseline). Float an ISOLATED model instance, never self.cached_hf_model (which seeds the
-        # TT weights via load_state_dict), so the upcast cannot leak into the weight path regardless of
-        # call order. Mirrors models/demos/multimodal/gemma3.tt.model_config.reference_vision_transformer.
-        model = self.get_hf_model_cls().from_pretrained(
-            self.CKPT_DIR, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
-        )
-        model = model.float()
-        if wrap:
-            from models.tt_transformers.tt.model_config import HfModelWrapper
+    def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
+        if is_vision:
+            prefix = "model.vision_model.encoder."
+        else:
+            prefix = ""
 
-            return HfModelWrapper(model, self.head_dim, use_hf_rope=self.use_hf_rope)
-        return model
+        layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
+
+        text_module_map = {
+            "MLP": "feed_forward",
+            "Attention": "attention",
+            "TransformerBlock": "",
+            "": "",
+        }
+        vision_module_map = {
+            "MLP": "mlp.",
+            "Attention": "attn.",
+            "TransformerBlock": "",
+            "": "",
+        }
+        module_map = vision_module_map if is_vision else text_module_map
+
+        return prefix + layer_prefix + module_map[module_name]
+
+    def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
+        model = super().reference_vision_transformer(wrap=wrap, load_checkpoint=load_checkpoint)
+        return model.float()
 
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
@@ -158,3 +167,31 @@ class ModelArgs(TTModelArgs):
     def reference_vision_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.embeddings
+
+    def reference_vision_layernorm(self, layer_name="layer_norm1"):
+        model = self.reference_vision_model()
+        if layer_name == "layer_norm1":
+            return model.encoder.layers[0].layer_norm1
+        elif layer_name == "layer_norm2":
+            return model.encoder.layers[0].layer_norm2
+        return model.post_layernorm
+
+    def reference_vision_attention(self):
+        model = self.reference_vision_transformer(wrap=False)
+        return model.model.vision_model.encoder.layers[0].self_attn
+
+    def reference_vision_mlp(self):
+        model = self.reference_vision_transformer(wrap=False)
+        return model.model.vision_model.encoder.layers[0].mlp
+
+    def reference_vision_encoder_block(self):
+        model = self.reference_vision_transformer(wrap=False)
+        return model.model.vision_model.encoder.layers[0]
+
+    def reference_vision_encoder(self):
+        model = self.reference_vision_transformer(wrap=False)
+        return model.model.vision_model.encoder
+
+    def reference_vision_model(self):
+        model = self.reference_vision_transformer(wrap=False)
+        return model.model.vision_model
