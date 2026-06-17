@@ -1361,18 +1361,6 @@ def test_ltx_per_token_timestep_nonuniform(
         H=H,
         W=W,
     )
-    # Control oracle: uniform sigma_high everywhere (no anchor). If the anchor genuinely propagates
-    # to the non-frame0 tokens in ONE block, ref_video 'rest' must differ from this.
-    ref_uniform = _diffusers_video_model_ref_pertoken(
-        torch_model,
-        video_lat=video_lat_real,
-        video_prompt=video_prompt,
-        video_ts_real=torch.full((video_N_real,), sigma_high, dtype=torch.float32),
-        sigma_scalar=sigma_high,
-        F=F,
-        H=H,
-        W=W,
-    )
     del torch_model
 
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
@@ -1405,30 +1393,13 @@ def test_ltx_per_token_timestep_nonuniform(
             video_timestep_torch=video_timestep_torch,
         )
     ).squeeze(0)[:, :video_N_real, :]
-
-    # Reconciliation: does TT effectively IGNORE the sigma=0 anchor and behave like uniform sigma_high?
-    # (= "coherent but unconditioned video"). Compare against a TT pass with a uniform sigma_high
-    # timestep and against an oracle run at uniform sigma_high.
-    video_ts_uniform = torch.full((video_N,), sigma_high, dtype=torch.float32)
-    out_tt_uniform = LTXTransformerModel.device_to_host(
-        model.forward(
-            video_1BNI_torch=video_lat.unsqueeze(0),
-            video_prompt_1BLP=tt_video_prompt,
-            video_rope_cos=tt_vc,
-            video_rope_sin=tt_vs,
-            video_N=video_N_real,
-            trans_mat=tt_trans_mat,
-            timestep_torch=torch.tensor([sigma_high]),
-            video_timestep_torch=video_ts_uniform,
-        )
-    ).squeeze(0)[:, :video_N_real, :]
     del model
 
     assert out_tt.shape == ref_video.shape, f"{out_tt.shape} vs {ref_video.shape}"
     assert torch.isfinite(out_tt).all(), "NaN/Inf in per-token output"
 
-    # Localize: frame-0 (sigma=0, pinned) region vs the rest (sigma_high). A fused-gate broadcast
-    # bug shows up as the "rest" region tracking the oracle far worse than frame 0.
+    # Localize frame-0 (pinned, sigma=0) vs the rest (sigma_high): a per-token gate that doesn't
+    # reach the fused epilogues makes the "rest" track the oracle far worse than frame 0.
     def _pcc(a, b):
         a32, b32 = a.float().flatten(), b.float().flatten()
         return torch.corrcoef(torch.stack([a32, b32]))[0, 1].item()
@@ -1436,34 +1407,6 @@ def test_ltx_per_token_timestep_nonuniform(
     pcc_all = _pcc(ref_video, out_tt)
     pcc_f0 = _pcc(ref_video[:, :frame0_tokens, :], out_tt[:, :frame0_tokens, :])
     pcc_rest = _pcc(ref_video[:, frame0_tokens:, :], out_tt[:, frame0_tokens:, :])
-    logger.info(f"NON-UNIFORM per-token (TT vs ORACLE): all={pcc_all:.5f}  frame0={pcc_f0:.5f}  rest={pcc_rest:.5f}")
-
-    # Reconciliation metrics.
-    ignore_all = _pcc(out_tt, out_tt_uniform)
-    ignore_f0 = _pcc(out_tt[:, :frame0_tokens, :], out_tt_uniform[:, :frame0_tokens, :])
-    ignore_rest = _pcc(out_tt[:, frame0_tokens:, :], out_tt_uniform[:, frame0_tokens:, :])
-    logger.info(
-        f"RECONCILE (TT-nonuniform vs TT-uniform_high): all={ignore_all:.5f} "
-        f"frame0={ignore_f0:.5f} rest={ignore_rest:.5f}  "
-        f"[~1.0 on 'rest' => TT ignores the anchor for non-frame0 tokens = coherent-but-unconditioned]"
-    )
-    uni_vs_oracle = _pcc(ref_video[:, frame0_tokens:, :], out_tt_uniform[:, frame0_tokens:, :])
-    logger.info(f"control (TT-uniform_high 'rest' vs nonuniform ORACLE 'rest'): {uni_vs_oracle:.5f}")
-    # Does the anchor propagate in the ORACLE? oracle-nonuniform 'rest' vs oracle-uniform 'rest':
-    # < 1.0 => the sigma=0 anchor DOES influence non-frame0 tokens in one block (so the 'rest' gap is real).
-    oracle_anchor_prop = _pcc(ref_video[:, frame0_tokens:, :], ref_uniform[:, frame0_tokens:, :])
-    logger.info(
-        f"ORACLE anchor propagation (nonuniform 'rest' vs uniform 'rest'): {oracle_anchor_prop:.5f} "
-        f"[<1.0 => anchor influences the rest in the oracle; TT's 0.9997 self-match => TT does NOT]"
-    )
-    # BASELINE: TT-uniform vs ORACLE-uniform at the SAME sigma_high (no conditioning involved at all).
-    # If this is low, the 'rest' gap is a high-sigma precision artifact, NOT the I2V per-token bug.
-    base_all = _pcc(ref_uniform, out_tt_uniform)
-    base_f0 = _pcc(ref_uniform[:, :frame0_tokens, :], out_tt_uniform[:, :frame0_tokens, :])
-    base_rest = _pcc(ref_uniform[:, frame0_tokens:, :], out_tt_uniform[:, frame0_tokens:, :])
-    logger.info(
-        f"BASELINE (TT-uniform vs ORACLE-uniform @ sigma_high): all={base_all:.5f} frame0={base_f0:.5f} rest={base_rest:.5f}"
-    )
+    logger.info(f"non-uniform per-token (TT vs oracle): all={pcc_all:.5f} frame0={pcc_f0:.5f} rest={pcc_rest:.5f}")
 
     assert_quality(ref_video, out_tt, pcc=0.99, relative_rmse=0.03)
-    logger.info("PASSED: non-uniform per-token timestep matches the diffusers oracle")
