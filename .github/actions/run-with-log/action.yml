@@ -30,16 +30,21 @@ runs:
         RUN_WITH_LOG_SCRIPT: ${{ inputs.run }}
         RUN_WITH_LOG_FILE: ${{ inputs.log-file }}
       run: |
-        # errexit off for the wrapper so the marker is written even when the
+        # errexit off for the wrapper so the markers are written even when the
         # script fails — a failed run must stay a failure, not look like a kill.
         set +e
         mkdir -p "$(dirname "$RUN_WITH_LOG_FILE")"
+
+        # Start sentinel as the log's first line (truncates/creates the file).
+        # The parser treats a log that starts but never finishes as a
+        # timeout-minutes kill; logs without it are not tracked at all.
+        printf '[==tt-log-start-line==]\n' > "$RUN_WITH_LOG_FILE"
 
         # Run as its own bash file, matching a normal run step (errexit +
         # pipefail), so the script keeps full fidelity and its own exit code.
         script=$(mktemp)
         printf '%s\n' "$RUN_WITH_LOG_SCRIPT" > "$script"
-        bash --noprofile --norc -eo pipefail "$script" 2>&1 | tee "$RUN_WITH_LOG_FILE"
+        bash --noprofile --norc -eo pipefail "$script" 2>&1 | tee -a "$RUN_WITH_LOG_FILE"
         rc=${PIPESTATUS[0]}
         rm -f "$script"
 

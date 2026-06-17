@@ -19,9 +19,10 @@ jobs:
           run: |
             echo hello
             echo world
-      - name: Assert marker present, exit 0
+      - name: Assert start + finish markers, exit 0
         run: |
           tail -3 out/ok.log
+          head -1 out/ok.log | grep -qx '\[==tt-log-start-line==\]'
           tail -1 out/ok.log | grep -qx '\[==tt-log-finish-line==\] exit_code=0'
 
   failure-case:
@@ -56,11 +57,13 @@ jobs:
           run: |
             echo started
             sleep 120
-      - name: Assert killed, marker absent
+      - name: Assert started but no finish marker (timeout signature)
         run: |
           test "${{ steps.run.outcome }}" != success
           grep -q '^started$' out/timeout.log
+          # start sentinel written before the script ran, finish never reached
+          head -1 out/timeout.log | grep -qx '\[==tt-log-start-line==\]'
           if grep -q tt-log-finish-line out/timeout.log; then
-            echo "::error::marker present after timeout kill — bug"; exit 1
+            echo "::error::finish marker present after timeout kill — bug"; exit 1
           fi
-          echo "marker correctly absent (outcome=${{ steps.run.outcome }})"
+          echo "tracked-but-truncated signature correct (outcome=${{ steps.run.outcome }})"

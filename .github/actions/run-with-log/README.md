@@ -1,17 +1,21 @@
 # `run-with-log`
 
 Run a bash script like a normal `run:` step, but capture its combined output to
-a `.log` file and append a completion marker as the final line:
+a `.log` file framed by two sentinels — a start line first, a finish line last:
 
 ```
+[==tt-log-start-line==]
+…script output…
 [==tt-log-finish-line==] exit_code=<N>
 ```
 
-The marker is a generic end-of-run sentinel. Its **absence** means the shell was
-killed before finishing — most usefully a GitHub `timeout-minutes` kill, which
-leaves no trace in the log otherwise. Tooling that reads the logs (the
-`ai_summary` parser in tenstorrent/tt-github-actions) uses this to tell a
-timeout apart from a crash.
+The pair lets a reader reason **per log file**: start **and** finish → ran to
+completion; start but **no** finish → the shell was killed before finishing
+(most usefully a GitHub `timeout-minutes` kill, which leaves no other trace);
+**neither** → not produced by run-with-log, so it's ignored. The `ai_summary`
+parser (tenstorrent/tt-github-actions) uses this to tell a timeout from a crash,
+and to leave untracked logs (e.g. a backgrounded server's tail) out of the
+verdict.
 
 Replaces hand-rolled `tee` / `PIPESTATUS` blocks copied across workflows.
 
