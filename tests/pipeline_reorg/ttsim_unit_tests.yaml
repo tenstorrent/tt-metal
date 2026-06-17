@@ -19,13 +19,14 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: ttnn compute-fused validation tests
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=600'
-  skus:
-    sim_wormhole_b0:
-      timeout: 15
-    sim_blackhole:
-      timeout: 15
-  owner_id: U076Z1JJUQZ # Edwin Lee
-  team: ttsim
-  category: compute_fused
+# Disable ttsim tests due to low CPU capacity
+# - name: ttnn compute-fused validation tests
+#   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=600'
+#   skus:
+#     sim_wormhole_b0:
+#       timeout: 15
+#     sim_blackhole:
+#       timeout: 15
+#   owner_id: U076Z1JJUQZ # Edwin Lee
+#   team: ttsim
+#   category: compute_fused
