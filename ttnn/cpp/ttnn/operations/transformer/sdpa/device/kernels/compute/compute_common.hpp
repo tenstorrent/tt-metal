@@ -820,11 +820,10 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 
 #ifdef TRISC_MATH
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    SFPU_UNARY_CALL(
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_softplus_first_column,
-        (APPROX),
         idst,
         VectorMode::C,
         beta,
