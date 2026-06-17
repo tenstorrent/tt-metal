@@ -20,5 +20,6 @@ Goal completion requirements:
 - Relevant $optimize checklist items are completed with evidence for the vLLM serving path.
 - Use $tt-enable-tracing for trace capture, nonblocking replay, async readback, stale inputs, or serving trace correctness.
 - Prefill TTFT and decode t/s/u for batch-1 inference are reported at the top of README.md.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
 
 Do not mark this goal complete while any completion requirement is unmet.

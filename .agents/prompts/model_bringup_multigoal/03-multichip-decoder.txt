@@ -17,5 +17,6 @@ Goal completion requirements:
 - For MoE models, the completed path keeps gate-selected active-expert execution. Dense all-expert execution does not satisfy completion unless evidence proves it is faster during decode.
 - models/autoports/<model>/doc/multichip_decoder/README.md and work_log.md record commands, PCC, perf, mesh plan, limitations, and exact artifacts.
 - The decoder has a real multichip implementation that is correct, fits the full model's weights/KV-cache expectations, and is suitable as the full-model layer stack baseline.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
 
 Do not mark this goal complete while any completion requirement is unmet.

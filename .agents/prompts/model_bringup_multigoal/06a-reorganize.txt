@@ -13,5 +13,6 @@ Goal completion requirements:
 - Performance is preserved: refreshed warmed TTFT and trace-verified decode t/s/u are not materially worse than the pre-refactor baseline under the same workload and config.
 - Runtime fallback/trace contract is preserved in the measured path (no new host argmax, full-logits readback, untraced sampling, or per-token host feedback loop).
 - models/autoports/<model>/doc/reorganize/README.md and work_log.md record before/after structure, commands, tests, metrics, artifacts, and any unresolved limits.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
 
 Do not mark this goal complete while any completion requirement is unmet.
