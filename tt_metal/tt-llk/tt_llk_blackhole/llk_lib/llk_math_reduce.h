@@ -35,6 +35,12 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
+    // The MOVB2D/MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
+    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
+    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
+    // return it to the operand driven baseline. WH does the same in its fp32 transpose.
+    math::_configure_mov_ops_zero_flag_state_();
+
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -63,6 +69,9 @@ inline void reduce_row_perform_transpose()
     TTI_ZEROSRC(0, 1, 0, 1);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
+
+    // Restore the operand-driven baseline for the currently configured formats.
+    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
 }
 
 /**
