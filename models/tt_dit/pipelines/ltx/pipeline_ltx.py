@@ -142,6 +142,11 @@ class LTXTransformerState:
         self._tt_video_timestep = StateTensor()
         self._tt_video_ts_pair = StateTensor()
         self._tt_video_pin_mask = StateTensor()
+        # I2V frame-0 pin buffers: held across every denoise step and read by the (eager) pin, so
+        # they MUST be pre-allocated before trace capture — otherwise they land in the trace's
+        # activation region and get clobbered on replay, pinning garbage (intermittent static).
+        self._tt_i2v_mask = StateTensor()
+        self._tt_i2v_clean = StateTensor()
         self._tt_video_pad_mask = StateTensor()
         self._tt_audio_pad_mask = StateTensor()
         self._tt_video_rope_cos = StateTensor()

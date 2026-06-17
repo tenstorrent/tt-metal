@@ -242,6 +242,15 @@ class LTXDistilledPipeline(LTXPipeline):
                 mesh_axes=[None, None, sp_axis, None],
                 device=self.mesh_device,
             )
+            # I2V pin buffers (mask + clean frame-0 latent): reserve here so traced replays can't
+            # clobber them. Allocated for every stage even when unused by t2v — small and harmless.
+            for buf in (state._tt_i2v_mask, state._tt_i2v_clean):
+                buf.update(
+                    torch.zeros(1, 1, video_N, self.in_channels),
+                    False,
+                    mesh_axes=[None, None, sp_axis, None],
+                    device=self.mesh_device,
+                )
 
     def _denoise_no_guidance(
         self,
@@ -386,18 +395,13 @@ class LTXDistilledPipeline(LTXPipeline):
             mask_host[:, :, :video_N_real, :] = denoise_mask[0, :, 0].unsqueeze(-1).expand(-1, self.in_channels)
             clean_host = torch.zeros(1, 1, video_N, self.in_channels)
             clean_host[:, :, :video_N_real, :] = clean_latent
-            tt_i2v_mask = bf16_tensor(
-                mask_host,
-                device=self.mesh_device,
-                mesh_axis=sp_axis,
-                shard_dim=-2,
+            # Write into the pre-allocated, trace-baked buffers (copy-in-place when traced) so the
+            # held pin inputs keep stable addresses across replays — never freshly allocated here.
+            state._tt_i2v_mask.update(mask_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+            state._tt_i2v_clean.update(
+                clean_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
             )
-            tt_i2v_clean = bf16_tensor(
-                clean_host,
-                device=self.mesh_device,
-                mesh_axis=sp_axis,
-                shard_dim=-2,
-            )
+            tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
         for step_idx in range(num_steps):
             sigma = sigmas[step_idx].item()
