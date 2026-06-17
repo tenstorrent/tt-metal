@@ -124,14 +124,12 @@
 - name: ttnn nightly eltwise tests group 1
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150:
-      timeout: 50
-    wh_n300:
-      timeout: 50
-    bh_p100:
-      timeout: 50
+    wh_n150_civ2:
+      timeout: 75
+    wh_n300_civ2:
+      timeout: 75
     bh_p150b_civ2:
-      timeout: 50
+      timeout: 75
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -139,14 +137,12 @@
 - name: ttnn nightly eltwise tests group 2
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150:
-      timeout: 30
-    wh_n300:
-      timeout: 30
-    bh_p100:
-      timeout: 30
+    wh_n150_civ2:
+      timeout: 45
+    wh_n300_civ2:
+      timeout: 45
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 45
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -154,14 +150,12 @@
 - name: ttnn nightly eltwise tests group 3
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150:
-      timeout: 30
-    wh_n300:
-      timeout: 30
-    bh_p100:
-      timeout: 30
+    wh_n150_civ2:
+      timeout: 45
+    wh_n300_civ2:
+      timeout: 45
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 45
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -169,14 +163,12 @@
 - name: ttnn nightly eltwise tests group 4
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150:
-      timeout: 35
-    wh_n300:
-      timeout: 35
-    bh_p100:
-      timeout: 35
+    wh_n150_civ2:
+      timeout: 55
+    wh_n300_civ2:
+      timeout: 55
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 55
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
