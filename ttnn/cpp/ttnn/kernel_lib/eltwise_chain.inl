@@ -1939,10 +1939,12 @@ ALWI void elem_apply_compute(
         (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
         (void)chain_lane_width; (void)Ht; (void)Wt;
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
-        // InputLifecycle::Streaming wait fires per-tile (Block walks); upfront wait is idempotent.
+        // Per-block-iteration input waits — mutually exclusive by policy (Streaming forces
+        // block_size 1, so per_tile and per_block never both fire). The Bulk upfront wait is NOT
+        // here: it's hoisted once to the chain boundary (elem_wait_upfront, pre-loop fold), so it's
+        // placed exactly once rather than re-issued per block-iter relying on idempotency.
         elem.wait_per_tile(i_flat + inner_count);
         elem.wait_per_block(inner_count);
-        elem.wait_upfront(Ht, Wt);
         if constexpr (EmitMathInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             elem.init();  // instance dispatch (see convention note above)
@@ -2044,6 +2046,10 @@ ALWI void apply_pack_phase(
 }
 
 template <class E>
+ALWI void elem_wait_upfront(const E& e, uint32_t Ht, uint32_t Wt) {
+    if constexpr (is_cb_reader_op_v<E>) e.wait_upfront(Ht, Wt);
+}
+template <class E>
 ALWI void elem_reserve_upfront(const E& e, uint32_t Ht, uint32_t Wt) {
     if constexpr (is_cb_writer_op_v<E>) e.reserve_upfront(Ht, Wt);
 }
@@ -2105,8 +2111,12 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     const uint32_t Ht = shape.Ht;
     const uint32_t Wt = shape.Wt;
 
-    // Upfront output reserve — fires once for the whole Ht*Wt window for the upfront-reserve
-    // policies (Bulk, BulkReservePerTile, BulkReservePerChunk), mirroring the end-of-chain folds.
+    // Upfront input wait + output reserve — each fires once for the whole Ht*Wt window for its
+    // upfront policies (Bulk / HeldBulk / BulkDrain on the input wait; Bulk-reserve on the output),
+    // bracketing the loop with the end-of-chain pop_upfront_end / push_at_end folds. The input
+    // wait is hoisted here (not sprayed per block-iter) so it's placed exactly once — symmetric
+    // with its pop_upfront_end partner — rather than relying on cb_wait_front idempotency.
+    (detail::elem_wait_upfront(elts, Ht, Wt), ...);
     (detail::elem_reserve_upfront(elts, Ht, Wt), ...);
 
     // Outer 2D loop. `flat_base = ht * Wt + wt_base` is computed once per (ht, wt_base) pair.
