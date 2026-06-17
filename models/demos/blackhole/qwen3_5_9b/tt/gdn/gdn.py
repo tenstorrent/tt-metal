@@ -469,7 +469,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
         core_attn_out = ttnn.transpose(core_attn_out, 1, 2)
         core_attn_out = ttnn.typecast(core_attn_out, initial_dtype)
 
-        # decode_forward unpacks this 2-tuple and copies the state back into the
+        # forward_decode unpacks this 2-tuple and copies the state back into the
         # persistent buffer for the next step (mirrors chunk_gated_delta_rule).
         return core_attn_out, last_recurrent_state
 
@@ -562,7 +562,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def decode_forward(self, hidden_states, attention_mask=None):
+    def forward_decode(self, hidden_states, attention_mask=None):
         # hidden_states [1, 1, B, hidden_size]
         weights = self.weights
         batch_size, seq_len = hidden_states.shape[2], 1
