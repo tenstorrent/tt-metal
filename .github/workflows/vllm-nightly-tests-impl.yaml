@@ -392,6 +392,17 @@ jobs:
       - in-service
       # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
       - ${{ ((matrix.test-group.runner-label == 'BH-Quietbox-2' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
+    # Per-phase log paths kept job-level so they resolve in both the ${{ env }}
+    # expression context (run-with-log log-file inputs) and the container step
+    # shells ($FILE_*). container.env is shell-only, not visible to expressions.
+    env:
+      FILE_SERVER_PID: "./server.pid"
+      FILE_INSTALL_LOG: "./output/vllm_install.log"
+      FILE_SERVER_LOG: "./output/vllm_server.log"
+      FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
+      FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
+      FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
+      FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -403,13 +414,6 @@ jobs:
         HF_HUB_OFFLINE: 1
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
-        FILE_SERVER_PID: "./server.pid"
-        FILE_INSTALL_LOG: "./output/vllm_install.log"
-        FILE_SERVER_LOG: "./output/vllm_server.log"
-        FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
-        FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
-        FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
-        FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -458,7 +462,7 @@ jobs:
       - name: 📀 Install vLLM
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: output/vllm_install.log
+          log-file: ${{ env.FILE_INSTALL_LOG }}
           run: |
             VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
             if [ -d vllm/plugins/vllm-tt-plugin ]; then
@@ -595,7 +599,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: output/vllm_benchmark.log
+          log-file: ${{ env.FILE_BENCHMARK_LOG }}
           run: |
             if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
               ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
@@ -639,7 +643,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: output/vllm_benchmark_structured_output.log
+          log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
           run: |
             if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
               ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
@@ -682,7 +686,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: output/vllm_multimodal_test.log
+          log-file: ${{ env.FILE_MULTIMODAL_TEST_LOG }}
           run: |
             curl http://localhost:8000/v1/chat/completions \
               -H "Content-Type: application/json" \
@@ -729,7 +733,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: output/vllm_sampling_tests.log
+          log-file: ${{ env.FILE_SAMPLING_TESTS_LOG }}
           run: |
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
             if [ -n "$FILTER" ]; then
