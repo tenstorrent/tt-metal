@@ -78,7 +78,7 @@ jobs:
   test-dispatch:
     needs: [check-harbor, build-artifact]
     timeout-minutes: 120
-    runs-on: ${{ fromJSON(inputs.runner-label) }}
+    runs-on: tt-ubuntu-2204-n150-stable
     container:
       image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
       env:
@@ -92,7 +92,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
         - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent --device /dev/fuse --cap-add SYS_ADMIN"
     defaults:
       run:
         shell: bash
@@ -137,7 +137,10 @@ jobs:
       - name: Run regression in loop
         run: |
           uv pip install pytest-repeat
-          ${{ inputs.command }}
+          apt-get update && apt-get install -y httpdirfs
+          mkdir -p /mnt/huggingface
+          httpdirfs http://large-file-cache.large-file-cache.svc.cluster.local/mldata/model_checkpoints/pytorch/huggingface /mnt/huggingface
+          ls -la /mnt/huggingface
         shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
