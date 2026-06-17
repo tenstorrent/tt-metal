@@ -77,8 +77,8 @@ def test_ttnn_dispatch_combine(
     topology,
     use_predictable_data,
     dispatched_buffer_layout,
-    is_ci_env=False,
-    is_ci_v2_env=False,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
     if (is_ci_env or is_ci_v2_env) and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
