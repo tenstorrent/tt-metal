@@ -210,8 +210,26 @@ void compile_one(
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "compile", format_args(args), log_file.path());
     }
-    tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    const std::string dephash_path = obj_temp_path + ".dephash";
+    tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_path);
     fs::remove(temp_d_path);
+
+    // Preprocess-and-ship inputs (.ii) have no #includes, so the compiler emits no usable .d and the
+    // dephash above is never written -> dependencies_up_to_date() always fails and the kernel recompiles
+    // on every run (no cache reuse). The shipped .ii is self-contained (all headers expanded inline), so
+    // record IT as the sole dependency: hashing the .ii content fully and correctly captures the build
+    // inputs, and validates across runs (the client re-ships an identical .ii when nothing changed).
+    const std::string& src = target.srcs[src_index];
+    const bool is_preprocessed = src.size() >= 3 && src.compare(src.size() - 3, 3, ".ii") == 0;
+    if (is_preprocessed && !fs::exists(dephash_path)) {
+        std::ofstream hash_file(dephash_path);
+        tt::jit_build::ParsedDependencies deps{{obj_temp_path, {src}}};
+        tt::jit_build::write_dependency_hashes(deps, out_dir, obj_temp_path, hash_file);
+        hash_file.close();
+        if (hash_file.fail()) {
+            fs::remove(dephash_path);
+        }
+    }
 }
 
 void link_one(

@@ -622,6 +622,24 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
     std::ofstream hash_file(dephash_file.path());
     jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
+    // 1a: fold each object's source+header dependency hashes (its .o.dephash) into the .elf.dephash so
+    // the latter fully describes the build inputs. A later run can then validate and REUSE the .elf even
+    // when the intermediate .o is absent (e.g. a cache warmed by the remote server, which ships only the
+    // .elf). Kernels only — firmware links objects from other build states, so this->objs_ would not match.
+    // Freshly compiled objects' dephash is still at the temp name (renamed after link); cached ones at the
+    // final name — try both.
+    if (!this->is_fw_ && !hash_file.fail()) {
+        for (size_t i = 0; i < this->objs_.size(); ++i) {
+            for (const std::string& cand :
+                 {out_dir + this->objs_[i] + ".dephash", out_dir + this->temp_objs_[i] + ".dephash"}) {
+                std::ifstream obj_dh(cand);
+                if (obj_dh.is_open()) {
+                    hash_file << obj_dh.rdbuf();
+                    break;
+                }
+            }
+        }
+    }
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
@@ -694,6 +712,30 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     // Check build state once: if build parameters (flags, defines, includes from HAL, etc.)
     // have changed, force full recompilation and relinking.
     bool state_changed = !build_state_matches(out_dir);
+
+    // 1a fast path (agnostic local reuse): a kernel whose final .elf(s) are present with an up-to-date
+    // SOURCE-COMPLETE dephash is fully cached -> skip compile AND link; the intermediate .o is not
+    // required. This lets a cache warmed by the remote server (which ships only the .elf) be reused by a
+    // plain local build, regardless of how the .elf got there. Local builds still honor a changed
+    // .build_state; a server-warmed cache has no .build_state, so we trust the (source-complete) dephash.
+    if (!this->is_fw_ && !env_.get_rtoptions().get_force_jit_compile()) {
+        const bool have_state = fs::exists(out_dir + string(BUILD_STATE_HASH_FILE));
+        if (!have_state || !state_changed) {
+            bool all_cached = true;
+            for (const auto* target : link_targets) {
+                std::string tdir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
+                if (target->need_link(tdir)) {
+                    all_cached = false;
+                    break;
+                }
+            }
+            if (all_cached) {
+                BuildCacheTelemetry::inst().record_compile(static_cast<uint32_t>(num_objs), 0);
+                extract_zone_src_locations(out_dir);
+                return;
+            }
+        }
+    }
 
     auto compiled = compile(out_dir, settings, state_changed);
 
