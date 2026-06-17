@@ -160,7 +160,7 @@ struct DataflowBufferSpec {
 //   endpoints.
 //
 // Placement: Specified directly via producer_consumer_map (rather than derived as
-//   for local DFBs.
+//   for local DFBs).
 //
 struct CrossNodeDataflowBufferSpec {
     // A cross-node DFB has all of the same properties as a local DFB
