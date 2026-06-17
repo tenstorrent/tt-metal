@@ -15,8 +15,9 @@ namespace ckernel::sfpu {
 // |x| <= 1 we evaluate tanhshrink directly via the factored odd polynomial x^3 * Q(x^2)
 // (Q is a degree-3 minimax fit of (x - tanh(x))/x^3 on [0,1]); this preserves the x^3
 // leading behaviour and has no cancellation. For |x| > 1 the cancellation is mild, so we
-// reuse the fast production tanh approximation (polynomial for bf16, sigmoid-based for
-// fp32) and return x - tanh(x).
+// return x - tanh(x). bf16 needs only ~2 result ULP there, so it uses a local degree-3
+// tanh polynomial (cheaper than the shared deg-6 _sfpu_tanh_polynomial_); fp32 keeps the
+// sigmoid-based accurate tanh (deg-3 would be ~1700 fp32 ULP).
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanhshrink() {
 #pragma GCC unroll 8
@@ -45,13 +46,22 @@ inline void calculate_tanhshrink() {
         }
         sfpi::vFloat result = x * u * Q;  // default = small path
 
-        // --- large |x| path: x - tanh(x) using the fast production tanh ---
+        // --- large |x| path: x - tanh(x) ---
         v_if(ax > sfpi::vFloat(1.0f)) {
             sfpi::vFloat tanhx;
             if constexpr (is_fp32_dest_acc_en) {
                 tanhx = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(x);
             } else {
-                tanhx = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(x);
+                // tanh(|x|) via a degree-3 minimax fit on [1,3.3] (coeffs high->low power).
+                // The poly crosses 1.0 monotonically near x~3.12 and stays >1 beyond, so the
+                // clamp to 1.0 holds the saturation tail exactly (including +/-inf).
+                sfpi::vFloat p = sfpi::vFloat(5.3348409333e-02f);
+                p = p * ax + sfpi::vFloat(-4.0859283753e-01f);
+                p = p * ax + sfpi::vFloat(1.0561303143e+00f);
+                p = p * ax + sfpi::vFloat(6.1829000893e-02f);
+                sfpi::vFloat one = sfpi::vConst1;
+                sfpi::vec_min_max(p, one);    // p = min(p, 1.0)
+                tanhx = sfpi::copysgn(p, x);  // tanh(-x) = -tanh(x)
             }
             result = x - tanhx;
         }
