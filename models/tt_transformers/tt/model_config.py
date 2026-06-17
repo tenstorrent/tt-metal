@@ -54,7 +54,11 @@ ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 # Resolving these paths against the repo root makes LOCAL_LLAMA_PARAMS /
 # LOCAL_HF_PARAMS independent of the caller's current working directory, which
 # matters when tt-run scripts cd into an example directory before launching.
-_REPO_ROOT = Path(os.environ.get("TT_METAL_RUNTIME_ROOT") or os.environ.get("TT_METAL_HOME"))
+_REPO_ROOT = Path(
+    os.environ.get("TT_METAL_RUNTIME_ROOT")
+    or os.environ.get("TT_METAL_HOME")
+    or str(Path(__file__).resolve().parents[3])
+)
 
 
 class TensorGroup(Enum):
