@@ -1165,3 +1165,46 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
             torch_tensor = torch.cat((torch_tensor, tile_row), 2)
 
     return torch_tensor
+
+
+# ── transformers 5.x Cache API compatibility ────────────────────────────────
+# transformers 5.x removed the legacy Cache API: DynamicCache no longer exposes
+# from_legacy_cache / to_legacy_cache / key_cache / value_cache (per-layer KV now
+# lives at cache.layers[i].keys/.values). These helpers work on both 4.x and 5.x.
+def hf_cache_layer_kv(cache, layer_idx):
+    """Return (key, value) tensors for a layer of a transformers Cache."""
+    if hasattr(cache, "key_cache"):  # transformers < 5.x
+        return cache.key_cache[layer_idx], cache.value_cache[layer_idx]
+    layer = cache.layers[layer_idx]  # transformers >= 5.x
+    return layer.keys, layer.values
+
+
+def hf_cache_to_legacy(cache):
+    """Export a transformers Cache to the legacy tuple-of-(key, value) format."""
+    if hasattr(cache, "to_legacy_cache"):  # transformers < 5.x
+        return cache.to_legacy_cache()
+    return tuple((layer.keys, layer.values) for layer in cache.layers)  # transformers >= 5.x
+
+
+def hf_dynamic_cache_from_legacy(layer_kvs):
+    """Build a transformers DynamicCache from per-layer (key, value) tuples."""
+    from transformers import DynamicCache
+
+    layer_kvs = tuple(layer_kvs)
+    if hasattr(DynamicCache, "from_legacy_cache"):  # transformers < 5.x
+        return DynamicCache.from_legacy_cache(layer_kvs)
+    return DynamicCache(layer_kvs)  # transformers >= 5.x
+
+
+def hf_cache_num_layers(cache):
+    """Number of populated layers in a transformers Cache (version-tolerant)."""
+    return len(cache.key_cache) if hasattr(cache, "key_cache") else len(cache.layers)
+
+
+def hf_empty_encoder_decoder_cache():
+    """Create an empty transformers EncoderDecoderCache (version-tolerant)."""
+    from transformers import DynamicCache, EncoderDecoderCache
+
+    if hasattr(EncoderDecoderCache, "from_legacy_cache"):  # transformers < 5.x
+        return EncoderDecoderCache.from_legacy_cache(None)
+    return EncoderDecoderCache(DynamicCache(), DynamicCache())  # transformers >= 5.x

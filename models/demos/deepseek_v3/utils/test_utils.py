@@ -16,7 +16,7 @@ from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, hf_cache_to_legacy, hf_dynamic_cache_from_legacy
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -236,7 +236,7 @@ def paged_caches_from_torch(
 
 
 def transformers_cache_from_torch(torch_caches: tuple[torch.Tensor, ...]) -> DynamicCache:
-    return DynamicCache.from_legacy_cache(
+    return hf_dynamic_cache_from_legacy(
         tuple(
             (torch_cache, torch.empty((*torch_cache.shape[:-1], 0), dtype=torch_cache.dtype))
             for torch_cache in torch_caches
@@ -245,7 +245,7 @@ def transformers_cache_from_torch(torch_caches: tuple[torch.Tensor, ...]) -> Dyn
 
 
 def torch_cache_from_transformers(cache: DynamicCache) -> tuple[torch.Tensor, ...]:
-    torch_cache, _ = zip(*cache.to_legacy_cache())
+    torch_cache, _ = zip(*hf_cache_to_legacy(cache))
     return torch_cache
 
 
@@ -412,7 +412,7 @@ def run_reference_with_attention(
                 position_ids_chunk = position_ids[:, start_idx:end_idx].contiguous()
 
                 # Determine current cache length to properly construct mask
-                legacy_cache = current_cache.to_legacy_cache()
+                legacy_cache = hf_cache_to_legacy(current_cache)
                 if layer_idx is not None:
                     cache_tensor = legacy_cache[layer_idx][0]
                 else:

@@ -11,7 +11,7 @@ from transformers.cache_utils import DynamicCache
 from transformers.models.mllama.modeling_mllama import MllamaTextCrossAttention
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.common.utility_functions import comp_allclose, comp_pcc, hf_cache_layer_kv, nearest_32
 from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
@@ -102,7 +102,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         torch.ones(batch, 1, dim), pt_xattn_tokens, past_key_value=past_key_values, attention_mask=None
     )
     # tt_model expects a list of Key and Value projections
-    pt_xattn_cache_chunks = [past_key_values.key_cache[layer_idx], past_key_values.value_cache[layer_idx]]
+    pt_xattn_cache_chunks = list(hf_cache_layer_kv(past_key_values, layer_idx))
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(

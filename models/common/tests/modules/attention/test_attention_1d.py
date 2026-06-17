@@ -26,6 +26,8 @@ import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
 
+from models.common.utility_functions import hf_cache_layer_kv, hf_cache_num_layers
+
 # transformers 5.x moved no_init_weights to transformers.initialization; fall back
 # to the old location for transformers < 5.x.
 try:
@@ -335,20 +337,20 @@ class HfAttentionWrapper:
     @property
     def cache_k(self) -> torch.Tensor:
         """Get key cache in shape [batch, seq_len, n_kv_heads, head_dim]."""
-        if len(self.past_key_value.key_cache) == 0:
+        if hf_cache_num_layers(self.past_key_value) == 0:
             return torch.zeros(0)
         # DynamicCache stores as [batch, n_heads, seq_len, head_dim]
         # Transpose to [batch, seq_len, n_heads, head_dim]
-        return self.past_key_value.key_cache[0].transpose(1, 2)
+        return hf_cache_layer_kv(self.past_key_value, 0)[0].transpose(1, 2)
 
     @property
     def cache_v(self) -> torch.Tensor:
         """Get value cache in shape [batch, seq_len, n_kv_heads, head_dim]."""
-        if len(self.past_key_value.value_cache) == 0:
+        if hf_cache_num_layers(self.past_key_value) == 0:
             return torch.zeros(0)
         # DynamicCache stores as [batch, n_heads, seq_len, head_dim]
         # Transpose to [batch, seq_len, n_heads, head_dim]
-        return self.past_key_value.value_cache[0].transpose(1, 2)
+        return hf_cache_layer_kv(self.past_key_value, 0)[1].transpose(1, 2)
 
 
 # =============================================================================

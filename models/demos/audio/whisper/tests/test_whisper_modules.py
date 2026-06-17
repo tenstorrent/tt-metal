@@ -14,7 +14,12 @@ from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfi
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole, torch_random
+from models.common.utility_functions import (
+    hf_cache_layer_kv,
+    hf_empty_encoder_decoder_cache,
+    is_blackhole,
+    torch_random,
+)
 from models.demos.audio.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
 from models.demos.audio.whisper.tt.whisper_generator import EncoderTraceState, run_encoder_traced_or_eager
@@ -119,7 +124,7 @@ def test_whisper_attention(
 
     past_key_values = None
     if use_kv_cache:
-        past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
+        past_key_values = hf_empty_encoder_decoder_cache()
         kv_cache, _ = init_kv_cache(
             config,
             mesh_device,
@@ -174,8 +179,8 @@ def test_whisper_attention(
 
         if use_kv_cache:
             layer_cache = past_key_values.self_attention_cache
-            past_k_hf = layer_cache.key_cache[0]
-            past_v_hf = layer_cache.value_cache[0]
+            past_k_hf = hf_cache_layer_kv(layer_cache, 0)[0]
+            past_v_hf = hf_cache_layer_kv(layer_cache, 0)[1]
         else:
             past_k_hf = past_v_hf = None
 
@@ -703,7 +708,7 @@ def test_traced_decoder_executor(
     # Create HF reference model
     hf_model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
     _ensure_hf_whisper_attn_eager(hf_model)
-    hf_past_key_values = EncoderDecoderCache.from_legacy_cache(None)
+    hf_past_key_values = hf_empty_encoder_decoder_cache()
 
     # Preprocess model parameters for TTNN
     ttnn_parameters = preprocess_model_parameters(

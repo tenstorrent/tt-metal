@@ -15,7 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
+from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.common import (
     Mode,
     calculate_hidden_dim,
@@ -4131,7 +4131,7 @@ class HfAttentionWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = self.past_key_value.to_legacy_cache()
+        [(k, v)] = hf_cache_to_legacy(self.past_key_value)
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
         if self.use_hf_rope:
@@ -4154,7 +4154,7 @@ class HfAttentionWrapper:
 
     @property
     def cache_v(self):
-        [(k, v)] = self.past_key_value.to_legacy_cache()
+        [(k, v)] = hf_cache_to_legacy(self.past_key_value)
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
@@ -4219,7 +4219,7 @@ class HfDecoderWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
+        [(k, v)] = hf_cache_to_legacy(self.past_key_values)
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
         if self.use_hf_rope:
@@ -4242,7 +4242,7 @@ class HfDecoderWrapper:
 
     @property
     def cache_v(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
+        [(k, v)] = hf_cache_to_legacy(self.past_key_values)
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
@@ -4294,7 +4294,7 @@ class HfModelWrapper:
 
     @property
     def cache_k(self):
-        kvs = self.past_key_values.to_legacy_cache()
+        kvs = hf_cache_to_legacy(self.past_key_values)
         meta_ks = []
         for k, v in kvs:
             hf_k = k.permute(
@@ -4324,7 +4324,7 @@ class HfModelWrapper:
 
     @property
     def cache_v(self):
-        kvs = self.past_key_values.to_legacy_cache()
+        kvs = hf_cache_to_legacy(self.past_key_values)
         return [
             v.permute(0, 2, 1, 3) for k, v in kvs
         ]  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)

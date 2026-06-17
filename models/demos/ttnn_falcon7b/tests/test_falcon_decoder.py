@@ -8,6 +8,7 @@ import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.ttnn_falcon7b.tt.common import (
     create_attention_input,
     create_attention_mask,
@@ -133,12 +134,12 @@ def test_falcon_decoder(
 
     assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
     assert_with_pcc(
-        pytorch_layer_present.key_cache[0].squeeze(1),
-        tt_layer_present[0].to(pytorch_layer_present.key_cache[0].dtype),
+        hf_cache_layer_kv(pytorch_layer_present, 0)[0].squeeze(1),
+        tt_layer_present[0].to(hf_cache_layer_kv(pytorch_layer_present, 0)[0].dtype),
         expected_pcc,
     )
     assert_with_pcc(
-        pytorch_layer_present.value_cache[0].squeeze(1),
-        tt_layer_present[1].to(pytorch_layer_present.value_cache[0].dtype),
+        hf_cache_layer_kv(pytorch_layer_present, 0)[1].squeeze(1),
+        tt_layer_present[1].to(hf_cache_layer_kv(pytorch_layer_present, 0)[1].dtype),
         expected_pcc,
     )
