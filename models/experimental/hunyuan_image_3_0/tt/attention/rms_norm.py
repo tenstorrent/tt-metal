@@ -39,6 +39,11 @@ class HunyuanTtRMSNorm(LightweightModule):
     ):
         super().__init__()
         key = weight_key.removesuffix(".weight")
+        # Norm weights are 1-D (loaded ROW_MAJOR) and precision-sensitive; bf8/bf4
+        # are TILE-only and inappropriate here. Keep norms in bf16 even when the
+        # backbone runs bf8 matmul weights (mixed precision — see MEMORY_FIT_PLAN.md).
+        if weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            weight_dtype = ttnn.bfloat16
         self._norm = RMSNorm(
             device=device,
             dim=dim,
