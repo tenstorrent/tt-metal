@@ -40,9 +40,9 @@ models/experimental/mistral_24b/
 └── tests/
     ├── pipeline_tests/
     │   ├── test_end2end.py                     # End-to-end vision-text demo
-    │   ├── test_isl_sweep.py                   # Context-window sweep (4k–128k)
-    │   ├── test_text_decoder.py                # Decode hidden-states PCC (32 steps)
-    │   ├── test_text_decoder_decode_logits.py  # Decode logits PCC — 32 steps vs HF reference
+    │   ├── test_isl_sweep.py                   # Context-window sweep (1k–128k)
+    │   ├── test_text_decoder.py                # Decode logits PCC
+    │   ├── test_text_prefill_logits.py          # Prefill last-token logits PCC
     │   ├── test_vision_model.py                # Vision model PCC
     │   └── test_vision_tower.py                # Vision tower PCC
     └── (unit tests)
@@ -87,22 +87,24 @@ pytest models/experimental/mistral_24b/tests/pipeline_tests/test_end2end.py
 
 ---
 
-### Accuracy — Decode Logits PCC (32 generation steps)
+### Accuracy — Text Decoder Logits PCC
 
-After a 128-token real-text prefill, compares per-step decode logits (full model: transformer layers + norm + lm_head) against HuggingFace reference for **32 consecutive generation steps**.
+Compares full decode logits (40 layers + norm + lm_head) against HF using synthetic random activations for 32 decode steps. PCC threshold: **≥ 0.98**.
 
 ```bash
-pytest models/experimental/mistral_24b/tests/pipeline_tests/test_text_decoder_decode_logits.py
+pytest models/experimental/mistral_24b/tests/pipeline_tests/test_text_decoder.py
 ```
 
 ---
 
-### Accuracy — Text Decoder Hidden-States PCC
+### Accuracy — Text Prefill Logits PCC
 
-Compares all 40 decoder layer hidden-state outputs (before norm + lm_head) against HF using synthetic random activations for 32 decode steps. PCC threshold: **≥ 0.98**.
+Full-depth prefill last-token logits (40 layers + norm + lm_head) vs HuggingFace over
+increasing sequence lengths from *Tale of Two Cities* (128 → 128k tokens).
+PCC threshold: **≥ 0.97**.
 
 ```bash
-pytest models/experimental/mistral_24b/tests/pipeline_tests/test_text_decoder.py
+pytest models/experimental/mistral_24b/tests/pipeline_tests/test_text_prefill_logits.py
 ```
 
 ---
@@ -127,9 +129,11 @@ pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_tower.py
 
 ---
 
-### Performance — ISL Sweep (4k–128k context window)
+### Performance — ISL Sweep (1k–128k context window)
 
 Sweeps input sequence length through the full vision-text pipeline. Text prompt is sourced from the *Tale of Two Cities* corpus; one image is always included. Output is fixed at **200 tokens** per sweep point.
+
+The sweep starts at **1k**: every run includes the vision tower, which produces ~1024 image tokens plus chat-template overhead. A context window below ~1k cannot fit image + text, so those points are skipped in `test_isl_sweep.py`.
 
 ```bash
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_isl_sweep.py
@@ -182,53 +186,71 @@ Measured on **Blackhole QuietBox-2 (BH QB-2)** with mesh device `P150x4` (logica
 | b1_isl64k | 1 | 64k (65536) | 64546 | 25.52 | 25.52 |
 | b1_isl128k | 1 | 128k (131072) | 130082 | 20.41 | 20.41 |
 
+> Note: decode throughput varies from ~33 tok/s/u to ~20 tok/s/u as context length increases (1k → 128k).
+
+---
+
+## Prefill Logits PCC — Last Token
+
+Results from `test_text_prefill_logits.py` on **BH QB-2 (`P150x4`)**. *Tale of Two Cities* tokens; full model (40 layers + norm + lm_head). PCC threshold: **≥ 0.97**.
+
+| seq_len | PCC |
+|---:|------:|
+| 128 | 0.996038 |
+| 256 | 0.998660 |
+| 1024 | 0.994131 |
+| 3072 | 0.995028 |
+| 4096 | 0.991853 |
+| 8192 | 0.981217 |
+| 16384 | 0.985105 |
+| 32k, 64k, 128k | TBD |
+
+> Note: larger context lengths take longer to verify because the HuggingFace reference runs a full 24B forward pass over the entire sequence.
+
 ---
 
 ## Decode Logits PCC — 32 Generation Steps
 
-Results from `test_text_decoder_decode_logits.py`. Prefill: 128 tokens from *Tale of Two Cities*. Prefill PCC threshold: ≥ 0.99. Per-step decode PCC threshold: ≥ 0.97.
+Results from `test_text_decoder.py` on **BH QB-2 (`P150x4`)**. Synthetic random activations; full model (40 layers + norm + lm_head). Per-step PCC threshold: **≥ 0.98**.
 
-> Values below are placeholders — update after running the test.
-
-| Step | Position | PCC |
-|---:|---:|---:|
-| 0 | 128 | 0.994161 |
-| 1 | 129 | 0.987024 |
-| 2 | 130 | 0.993026 |
-| 3 | 131 | 0.996192 |
-| 4 | 132 |  0.996960|
-| 5 | 133 |  0.997819|
-| 6 | 134 |  0.996799|
-| 7 | 135 |  0.997560|
-| 8 | 136 |  0.996585|
-| 9 | 137 |  0.997587|
-| 10 | 138 | 0.998238|
-| 11 | 139 | 0.997792|
-| 12 | 140 | 0.997527|
-| 13 | 141 | 0.997662|
-| 14 | 142 | 0.998111|
-| 15 | 143 |  0.993457|
-| 16 | 144 |  0.992316|
-| 17 | 145 |  0.982824|
-| 18 | 146 |  0.994470|
-| 19 | 147 |  0.996441|
-| 20 | 148 |  0.998085|
-| 21 | 149 |  0.997162|
-| 22 | 150 |  0.997821|
-| 23 | 151 |  0.998436|
-| 24 | 152 |  0.996853|
-| 25 | 153 |  0.996763|
-| 26 | 154 |  0.997244|
-| 27 | 155 |  0.997038|
-| 28 | 156 |  0.996458|
-| 29 | 157 |  0.997501|
-| 30 | 158 |  0.997934|
-| 31 | 159 |  0.996043|
-| **Prefill last-token** | **127** | **—** | **—** |
+| Step | PCC |
+|---:|------:|
+| 0 |  0.998570 |
+| 1 |  0.998120 |
+| 2 |  0.998177 |
+| 3 |  0.998114 |
+| 4 |  0.997983 |
+| 5 |  0.998259 |
+| 6 |  0.998331 |
+| 7 |  0.998045 |
+| 8 |  0.998336 |
+| 9 |  0.997582 |
+| 10 | 0.997241 |
+| 11 | 0.997598 |
+| 12 | 0.997913 |
+| 13 | 0.997852 |
+| 14 | 0.997882 |
+| 15 | 0.997420 |
+| 16 | 0.997740 |
+| 17 | 0.997481 |
+| 18 | 0.998059 |
+| 19 | 0.998072 |
+| 20 | 0.997810 |
+| 21 | 0.997656 |
+| 22 | 0.997532 |
+| 23 | 0.997628 |
+| 24 | 0.997396 |
+| 25 | 0.997667 |
+| 26 | 0.996565 |
+| 27 | 0.996754 |
+| 28 | 0.997992 |
+| 29 | 0.997651 |
+| 30 | 0.997734 |
+| 31 | 0.997757 |
 
 ---
 
-## Torch Fallbacks
+## Open items
 
-The following operation run on host CPU (PyTorch) rather than on-device (TTNN):
-`torch.nn.Unfold` — Patch extraction in `tt/vision_conv2d.py`
+1. Prefill logits PCC verification at context lengths ≥32k (32k, 64k, 128k).
+2. ISL sweep performance analysis at 64k and 128k context lengths (~25 and ~20 tok/s/u decode throughput, respectively).

@@ -62,7 +62,7 @@ PROMPT_FILE = os.path.join(TT_METAL_HOME, "models/tt_transformers/tests/tale-of-
 # overhead, so the image + text prompt fits the context window with room for OUTPUT_SEQ_LEN.
 IMAGE_TOKEN_MARGIN = 1280
 
-# (id, batch_size, max_seq_len) sweep points: batch 1 over context windows 128..128k.
+# (id, batch_size, max_seq_len) sweep points: batch 1 over context windows 1k..128k.
 ISL_SWEEP = [
     ("b1_isl1k", 1, 1 * 1024),
     ("b1_isl2k", 1, 2 * 1024),

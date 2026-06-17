@@ -2,16 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Multi-layer decoder PCC test for the Mistral-24B text decoder.
+Decode logits PCC test for Mistral-Small-3.1-24B text decoder.
 
-Modeled on ``models/tt_transformers/tests/mixtral/test_mixtral_decoder.py`` (which compares
-a single TT ``TransformerBlock`` against one HF ``MixtralDecoderLayer``), extended to a
-*stack* of decoder layers:
-
-  * Under test: the first ``num_layers`` TT ``TransformerBlock``s (the decode layers of
-    ``MistralTransformer``), run in sequence.
-  * Reference: the matching HF decoder layers (``reference_model.model.layers``),
-    run in the same order.
+Full model (40 layers + norm + lm_head) vs HuggingFace on synthetic random activations
+for 32 decode steps. HF reference calls ``model.norm`` and ``lm_head`` directly.
 """
 
 import os
@@ -25,7 +19,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_blackhole
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig
-from models.tt_transformers.tt.model_config import DecodersPrecision, TensorGroup
+from models.tt_transformers.tt.model_config import DecodersPrecision
 from models.experimental.mistral_24b.tt.model import MistralTransformer as Transformer
 from models.experimental.mistral_24b.tests.pipeline_tests.test_end2end import setup_vision_model_args
 
@@ -50,21 +44,16 @@ def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
 @torch.no_grad()
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "num_layers",
-    (None,),
-    ids=["all_layers"],
+    "generation_length",
+    (32,),
 )
 @pytest.mark.parametrize(
     "batch_size",
     (1,),
 )
 @pytest.mark.parametrize(
-    "generation_length",
-    (32,),
-)
-@pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # Decode-only unit test; positions stay small (start at 0, accumulate via the cache).
+    (1024,),
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -72,7 +61,7 @@ def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
 )
 @pytest.mark.parametrize(
     "device_params",
-    fabric_1d_trace_device_params(num_command_queues=2),  # Arch-adaptive trace region: 30 MiB WH / 35 MiB BH.
+    fabric_1d_trace_device_params(num_command_queues=2),
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -84,7 +73,8 @@ def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
     ],
     indirect=True,
 )
-def test_text_decoder(num_layers, max_seq_len, batch_size, generation_length, page_params, mesh_device, reset_seeds):
+def test_text_decoder(max_seq_len, batch_size, generation_length, page_params, mesh_device, reset_seeds):
+    """Decode logits PCC: full model (40 layers + norm + lm_head) vs HF on synthetic activations."""
     pcc_required = 0.98
     dtype = ttnn.bfloat8_b
     mode = Mode.DECODE
@@ -93,18 +83,15 @@ def test_text_decoder(num_layers, max_seq_len, batch_size, generation_length, pa
     optimizations = lambda margs: DecodersPrecision.accuracy(margs.n_layers, margs.model_name)
     model_args, _ = setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optimizations)
 
-    # Number of decoder layers to stack. Default (None) = the full model.
-    num_layers = model_args.n_layers if num_layers is None else min(num_layers, model_args.n_layers)
-    logger.info(f"Testing a stack of {num_layers} / {model_args.n_layers} decoder layers (output hidden states only)")
-
     state_dict = model_args.load_state_dict()
 
     reference_model = model_args.reference_transformer(wrap=False, load_checkpoint=True)
     reference_model.eval()
-    ref_layers = reference_model.model.layers[:num_layers]
+    ref_layers = reference_model.model.layers
     ref_rotary_emb = reference_model.model.rotary_emb
+    ref_norm = reference_model.model.norm
+    ref_lm_head = reference_model.lm_head
 
-    # Paged attention config + page table (block-shuffled, like the reference model test).
     paged_attention_config = PagedAttentionConfig(
         block_size=page_params["page_block_size"],
         max_num_blocks=page_params["page_max_num_blocks"],
@@ -126,7 +113,6 @@ def test_text_decoder(num_layers, max_seq_len, batch_size, generation_length, pa
         ),
     )
 
-    # Full TT text model; we exercise only its first `num_layers` decode blocks.
     tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
@@ -135,15 +121,10 @@ def test_text_decoder(num_layers, max_seq_len, batch_size, generation_length, pa
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
-    tt_layers = tt_model.layers[:num_layers]
-    tt_kv_cache = [layer.attention.layer_past for layer in tt_layers]
+    tt_kv_cache = [layer.attention.layer_past for layer in tt_model.layers]
 
     seqlen = 1
     generation_start_pos = 0
-
-    # Reference KV cache, accumulated across decode steps so the HF layers attend the SAME
-    # history the TT decode blocks build in their (per-layer) KV cache. A single DynamicCache
-    # is shared across the stacked layers — it indexes K/V per layer_idx internally.
     ref_kv_cache = DynamicCache()
 
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
@@ -158,11 +139,14 @@ def test_text_decoder(num_layers, max_seq_len, batch_size, generation_length, pa
         ),
     )
 
+    mesh_composer = ttnn.ConcatMesh2dToTensor(
+        mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
+    )
+
     all_tests_pass = True
     for i in range(generation_length):
         logger.info(f"[Text Decoder] Generating token {i}")
 
-        # Synthetic input: random hidden state in [-1, 1], identical for TT and reference.
         pt_decode_input = (
             torch.rand(
                 batch_size, seqlen, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
@@ -176,51 +160,29 @@ def test_text_decoder(num_layers, max_seq_len, batch_size, generation_length, pa
             model_args.get_residual_mem_config(mode, None),
         )
 
-        # Per-position global (and local, for Mistral's dual RoPE) rotation matrices.
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
         rot_mats_local = (
             tt_model.rope_local_setup.get_rot_mats(current_pos) if hasattr(tt_model, "rope_local_setup") else None
         )
 
-        # --- TT: run the synthetic hidden state through the stacked decode blocks. ---
-        # Mirrors models/tt_transformers/tt/model.py Transformer.forward's per-layer loop
-        # (residual memcfg + per-layer activation dtype), but stops before norm + lm_head.
-        x = decode_input
-        for layer_idx, layer in enumerate(tt_layers):
-            activation_dtype = model_args.decoders_optimizations.get_tensor_dtype(
-                decoder_id=layer_idx, tensor=TensorGroup.ACTIVATION
-            )
-            if not model_args.is_galaxy:
-                x = ttnn.to_memory_config(x, model_args.get_residual_mem_config(mode, None), activation_dtype)
-            elif activation_dtype is not None and x.dtype != activation_dtype:
-                x = ttnn.typecast(x, activation_dtype)
-            x = layer(
-                x,
-                current_pos_tensor,
-                rot_mats_global=rot_mats,
-                rot_mats_local=rot_mats_local,
-                mode=mode,
-                page_table=page_table_tt,
-                kv_cache=tt_kv_cache[layer_idx],
-                batch_size=batch_size,
-            )
-
-        mesh_composer = ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
+        tt_out = tt_model(
+            decode_input,
+            current_pos_tensor,
+            rot_mats_global=rot_mats,
+            rot_mats_local=rot_mats_local,
+            mode=mode,
+            page_table=page_table_tt,
+            kv_cache=tt_kv_cache,
+            batch_size=batch_size,
         )
         tt_output_torch = (
-            ttnn.to_torch(x, mesh_composer=mesh_composer)
+            ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
             .permute(2, 1, 0, 3)
-            .squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.dim]
+            .squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.vocab_size]
         )
-        ttnn.deallocate(x)
+        ttnn.deallocate(tt_out)
 
-        # --- Reference: run the same input through the matching HF decoder layers. ---
-        # Decode at `current_pos`, accumulating into ref_kv_cache so the layers attend the same
-        # growing history as the TT decode blocks. attention_mask=None is correct for a single
-        # decode token (it attends all cached positions = causal). Output is the stacked layers'
-        # hidden states (no final norm / lm_head).
-        cache_position = torch.tensor([int(current_pos[0])])  # absolute index of this token in the cache
+        cache_position = torch.tensor([int(current_pos[0])])
         position_ids = cache_position.unsqueeze(0).expand(batch_size, -1)
         position_embeddings = ref_rotary_emb(pt_decode_input, position_ids)
         ref_hidden = pt_decode_input
@@ -235,22 +197,18 @@ def test_text_decoder(num_layers, max_seq_len, batch_size, generation_length, pa
                 position_embeddings=position_embeddings,
             )
             ref_hidden = layer_out[0] if isinstance(layer_out, tuple) else layer_out
-        ref_output = ref_hidden[:, :, : model_args.dim]
+        ref_logits = ref_lm_head(ref_norm(ref_hidden))[:, :, : model_args.vocab_size]
 
-        # Some HF variants return output only for the first batch item; compare matching rows.
-        batch_cmp = ref_output.shape[0]
-        passing, pcc_message = comp_pcc(ref_output, tt_output_torch[:batch_cmp], pcc_required)
+        batch_cmp = ref_logits.shape[0]
+        passing, pcc_message = comp_pcc(ref_logits, tt_output_torch[:batch_cmp], pcc_required)
 
-        logger.info(comp_allclose(ref_output, tt_output_torch[:batch_cmp]))
+        logger.info(comp_allclose(ref_logits, tt_output_torch[:batch_cmp]))
         logger.info(pcc_message)
 
-        if passing:
-            logger.info(f"Mistral-24B Text Decoder ({num_layers} layers) Passed")
-        else:
-            logger.warning(f"Mistral-24B Text Decoder ({num_layers} layers) Failed")
+        if not passing:
+            logger.warning(f"Mistral-24B Text Decoder logits failed at position {current_pos[0].item()}")
             all_tests_pass = False
 
-        # Advance position for the next decode step.
         current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
@@ -263,4 +221,4 @@ def test_text_decoder(num_layers, max_seq_len, batch_size, generation_length, pa
             ),
         )
 
-    assert all_tests_pass, f"PCC below {pcc_required} for one or more decode iterations. Check warnings!"
+    assert all_tests_pass, f"Logits PCC below {pcc_required} for one or more decode iterations. Check warnings!"
