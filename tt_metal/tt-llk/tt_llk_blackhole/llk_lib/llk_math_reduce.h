@@ -26,9 +26,9 @@ template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 
 /**
- * @brief Transpose the pooled row result through SrcB so a row-reduction lands as a column in the destination register.
+ * @brief Transpose the pooled row result through SrcB so a row reduction lands as a column in the destination register.
  *
- * Only used for MAX pool (GMPOOL does column-wise max of SrcA only, cannot use the operand-swap path).
+ * Only used for MAX pool (GMPOOL does column wise max of SrcA only).
  *
  * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
  */
@@ -78,7 +78,6 @@ inline void reduce_row_perform_transpose()
 template <PoolType type, bool high_fidelity, std::uint32_t clear_mode, std::uint32_t index = 0>
 inline void reduce_pool_op()
 {
-    // Pool face from SrcA (REDUCE_ROW: scaler; COL/SCALAR: data)
     if constexpr (type == PoolType::MAX)
     {
         TTI_GMPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, index);
@@ -114,6 +113,11 @@ inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
     reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
 }
 
+/**
+ * @brief Advance the dest counter past the current face row so the next row writes to the correct offset.
+ *
+ * @param is_narrow_tile: True when tile width < tile height (num_faces_c < num_faces_r), halving the stride.
+ */
 inline void reduce_row_advance_dest(const bool is_narrow_tile)
 {
     if (!is_narrow_tile)
@@ -126,13 +130,13 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
 }
 
 /**
- * @brief Configure the reduce MOP for all paths: REDUCE_ROW SUM/AVG uses a replay-buffer pair,
- *        high-fidelity COL/SCALAR uses a multi-phase GAPOOL loop, MAX and LoFi COL/SCALAR need no MOP.
+ * @brief Configure the reduce MOP for all paths: REDUCE_ROW SUM/AVG records a dual replay-buffer
+ *        MOP, high-fidelity COL/SCALAR programs a multi-phase GAPOOL loop, all other paths need no MOP.
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @tparam math_fidelity: Controls the number of fidelity phases per MVMUL/GAPOOL half.
- * @param tensor_shape: Tile shape determining face count and dest row stride.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param tensor_shape: Tile shape determining face count and dest stride.
  */
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
@@ -199,6 +203,24 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
     }
 }
 
+/**
+ * @brief Perform a reduction on the math thread, pooling faces into the destination register.
+ *
+ * REDUCE_ROW SUM/AVG uses MVMUL to multiply each face row by a column-scaler in SrcB, producing the reduced
+ * column directly in dest; MAX pools each face row then transposes the result into dest via SrcB.
+ * REDUCE_COL pools down rows of faces; REDUCE_SCALAR pools all faces then transposes the partial result
+ * into a single column for a final pool.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
+ * @param dst_index: Tile index into the destination register.
+ * @param tensor_shape: Tensor shape describing tile dimensions.
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this
+ *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
+ */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
 {
@@ -299,6 +321,14 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
 }
 
+/**
+ * @brief Program address mod registers for the reduce operation.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param tensor_shape: Tile shape determining dest stride for REDUCE_ROW.
+ */
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 {
@@ -384,7 +414,9 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ * @param tensor_shape: Tile shape describing tile dimensions.
+ * @note Call @ref _llk_math_reduce_ with matching template args after this function,
+ *       and @ref _llk_math_reduce_uninit_ after the last reduce to restore modified state.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
