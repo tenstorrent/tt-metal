@@ -3716,10 +3716,14 @@ class ModelArgs:
                         local_files_only=os.getenv("CI") == "true",
                     )
 
-        # HACK: Assume that we want the language model layers only
-        if hasattr(model, "language_model"):
+        # HACK: Assume that we want the language model layers only.
+        # transformers 5.x nests the text model under model.model.language_model for
+        # multimodal models (e.g. Mllama); <5 exposed model.language_model directly.
+        if hasattr(model, "language_model"):  # transformers <5 multimodal
             model.model = model.language_model
             # We keep language_model because transformers don't let us change or delete it
+        elif hasattr(model.model, "language_model"):  # transformers >=5 multimodal
+            model.model = model.model.language_model
         model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
@@ -3729,14 +3733,17 @@ class ModelArgs:
 
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector
+        # transformers 5.x nests multi_modal_projector under model.model
+        layer = getattr(model, "multi_modal_projector", None) or model.model.multi_modal_projector
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector.mm_soft_emb_norm
+        # transformers 5.x nests multi_modal_projector under model.model
+        mmp = getattr(model, "multi_modal_projector", None) or model.model.multi_modal_projector
+        layer = mmp.mm_soft_emb_norm
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3817,9 +3824,9 @@ class ModelArgs:
         model = self.reference_vision_transformer(wrap=False)
         if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
             # Mistral-Small-3.1-24B-Instruct-2503 has a different structure
-            layer = model.vision_tower
+            layer = self._get_vision_tower(model)
         else:
-            layer = model.vision_tower.vision_model
+            layer = self._get_vision_tower(model).vision_model
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3837,21 +3844,21 @@ class ModelArgs:
 
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings.patch_embedding
+        layer = self._get_vision_tower(model).vision_model.embeddings.patch_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_pos_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings.position_embedding
+        layer = self._get_vision_tower(model).vision_model.embeddings.position_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings
+        layer = self._get_vision_tower(model).vision_model.embeddings
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3859,11 +3866,11 @@ class ModelArgs:
     def reference_vision_layernorm(self, layer_name="layer_norm1"):
         model = self.reference_vision_transformer(wrap=False)
         if layer_name == "layer_norm1":
-            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm1
+            layer = self._get_vision_tower(model).vision_model.encoder.layers[0].layer_norm1
         elif layer_name == "layer_norm2":
-            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm2
+            layer = self._get_vision_tower(model).vision_model.encoder.layers[0].layer_norm2
         else:
-            layer = model.vision_tower.vision_model.post_layernorm
+            layer = self._get_vision_tower(model).vision_model.post_layernorm
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3881,7 +3888,7 @@ class ModelArgs:
 
     def reference_vision_encoder_block(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0]
+        layer = self._get_vision_tower(model).vision_model.encoder.layers[0]
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer

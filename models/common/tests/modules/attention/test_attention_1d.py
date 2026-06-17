@@ -1250,9 +1250,11 @@ def test_attention_1d_vs_reference(
         with no_init_weights():
             # MllamaForConditionalGeneration uses _from_config (internal method) instead of from_config
             hf_model = MllamaForConditionalGeneration._from_config(hf_config, torch_dtype=torch.bfloat16)
-        # Mllama has layers directly at language_model.layers (not language_model.model.layers)
-        first_layer = hf_model.language_model.layers[0]
-        rotary_emb = getattr(hf_model.language_model, "rotary_emb", None)
+        # Mllama has layers directly at language_model.layers (not language_model.model.layers).
+        # transformers 5.x nests the text model under hf_model.model.language_model.
+        text_model = hf_model.language_model if hasattr(hf_model, "language_model") else hf_model.model.language_model
+        first_layer = text_model.layers[0]
+        rotary_emb = getattr(text_model, "rotary_emb", None)
     else:
         with no_init_weights():
             hf_model = AutoModelForCausalLM.from_config(hf_config, torch_dtype=torch.bfloat16)
