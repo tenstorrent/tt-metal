@@ -482,25 +482,49 @@ jobs:
           dump_tenstorrent_process_details() {
             echo "::group::Tenstorrent driver pids"
 
-            local pids
-            pids="$(
+            local pid_candidates visible_pids hidden_pids
+            pid_candidates="$(
               {
                 find /proc/driver/tenstorrent -path '*/pids' -type f -exec cat {} \; 2>/dev/null
                 find /sys/kernel/debug/tenstorrent -path '*/pids' -type f -exec cat {} \; 2>/dev/null
-              } | tr -cs '0-9' '\n' | sort -n | uniq
+              } | tr -cs '0-9' '\n' | awk '$1 > 1 { print }' | sort -n | uniq
             )"
 
-            if [ -z "$pids" ]; then
-              echo "No Tenstorrent driver pids found."
+            if [ -z "$pid_candidates" ]; then
+              echo "No non-zero Tenstorrent driver PID candidates found."
+              echo "This usually means the driver reported no active clients, or the pids file contains only counts/status fields."
               echo "::endgroup::"
               return 0
             fi
 
-            echo "PIDs reported by Tenstorrent driver:"
-            printf '%s\n' "$pids"
+            echo "Non-zero numeric PID candidates from Tenstorrent driver files:"
+            printf '%s\n' "$pid_candidates"
+
+            while IFS= read -r pid; do
+              [ -n "$pid" ] || continue
+              if [ -d "/proc/${pid}" ]; then
+                visible_pids="${visible_pids}${pid}"$'\n'
+              else
+                hidden_pids="${hidden_pids}${pid}"$'\n'
+              fi
+            done <<< "$pid_candidates"
+
+            if [ -n "$hidden_pids" ]; then
+              echo
+              echo "PID candidates not visible in this container's /proc namespace:"
+              printf '%s' "$hidden_pids" | sort -n | uniq
+              echo "These may be host PIDs from another namespace, stale driver entries, or non-PID numeric fields."
+            fi
+
+            if [ -z "$visible_pids" ]; then
+              echo
+              echo "No PID candidates are visible in this container's /proc namespace."
+              echo "::endgroup::"
+              return 0
+            fi
 
             echo
-            echo "Process details:"
+            echo "Visible process details:"
             while IFS= read -r pid; do
               [ -n "$pid" ] || continue
               echo "----- PID ${pid} -----"
@@ -516,7 +540,7 @@ jobs:
                 cat "/proc/${pid}/limits" 2>&1 || true
               fi
               echo
-            done <<< "$pids"
+            done <<< "$(printf '%s' "$visible_pids" | sort -n | uniq)"
 
             echo "::endgroup::"
           }
@@ -524,32 +548,111 @@ jobs:
           dump_device_users() {
             echo "::group::Processes using Tenstorrent device nodes"
 
-            local found_device=0
-            for dev in /dev/tenstorrent*; do
+            local found_device=0 devices
+            devices="$(find /dev -maxdepth 3 \( -name 'tenstorrent*' -o -path '/dev/tenstorrent/*' \) -print 2>/dev/null | sort -u)"
+            while IFS= read -r dev; do
               [ -e "$dev" ] || continue
               found_device=1
               echo "----- ${dev} -----"
               ls -la "$dev" 2>&1 || true
+
+              echo
+              echo "Visible /proc fd users for ${dev}:"
+              local found_fd_user=0
+              for fd in /proc/[0-9]*/fd/*; do
+                local target pid
+                target="$(readlink "$fd" 2>/dev/null || true)"
+                if [ "$target" = "$dev" ]; then
+                  found_fd_user=1
+                  pid="${fd#/proc/}"
+                  pid="${pid%%/*}"
+                  echo "PID ${pid} has fd ${fd##*/} -> ${target}"
+                  ps -p "$pid" -o pid,ppid,user,stat,etime,etimes,cmd 2>&1 || true
+                fi
+              done
+              if [ "$found_fd_user" -eq 0 ]; then
+                echo "No visible processes in this container have ${dev} open."
+              fi
+
               if command -v fuser >/dev/null 2>&1; then
                 echo
                 echo "fuser -v ${dev}:"
                 fuser -v "$dev" 2>&1 || true
+              elif command -v sudo >/dev/null 2>&1 && sudo -n sh -c 'command -v fuser >/dev/null 2>&1'; then
+                echo
+                echo "sudo fuser -v ${dev}:"
+                sudo -n fuser -v "$dev" 2>&1 || true
               else
-                echo "fuser is not installed."
+                echo "fuser is not installed in this container."
               fi
               if command -v lsof >/dev/null 2>&1; then
                 echo
                 echo "lsof ${dev}:"
                 lsof "$dev" 2>&1 || true
+              elif command -v sudo >/dev/null 2>&1 && sudo -n sh -c 'command -v lsof >/dev/null 2>&1'; then
+                echo
+                echo "sudo lsof ${dev}:"
+                sudo -n lsof "$dev" 2>&1 || true
               else
-                echo "lsof is not installed."
+                echo "lsof is not installed in this container."
               fi
               echo
-            done
+            done <<< "$devices"
 
             if [ "$found_device" -eq 0 ]; then
               echo "No /dev/tenstorrent* device nodes found."
             fi
+
+            echo "::endgroup::"
+          }
+
+          dump_all_visible_processes() {
+            echo "::group::All visible processes"
+
+            echo "ps -efww:"
+            ps -efww 2>&1 || true
+
+            echo
+            echo "ps auxww:"
+            ps auxww 2>&1 || true
+
+            echo
+            echo "ps with namespace/session/process group fields:"
+            ps -eo pid,ppid,pgid,sid,user,stat,etime,etimes,%cpu,%mem,args --sort=pid 2>&1 || true
+
+            if command -v pstree >/dev/null 2>&1; then
+              echo
+              echo "pstree -ap:"
+              pstree -ap 2>&1 || true
+            else
+              echo
+              echo "pstree is not installed in this container."
+            fi
+
+            echo
+            echo "Per-process /proc status for visible PIDs:"
+            for proc_dir in /proc/[0-9]*; do
+              [ -d "$proc_dir" ] || continue
+              local pid
+              pid="${proc_dir#/proc/}"
+              echo "----- PID ${pid} -----"
+              if [ -r "${proc_dir}/status" ]; then
+                grep -E '^(Name|State|Tgid|Pid|PPid|TracerPid|Uid|Gid|NStgid|NSpid|NSpgid|NSsid|VmPeak|VmSize|VmRSS|Threads|SigQ|CapInh|CapPrm|CapEff|CapBnd|CapAmb):' "${proc_dir}/status" 2>&1 || true
+              else
+                echo "${proc_dir}/status is not readable."
+              fi
+              if [ -r "${proc_dir}/cmdline" ]; then
+                echo -n "Cmdline: "
+                tr '\0' ' ' < "${proc_dir}/cmdline" 2>/dev/null || true
+                echo
+              fi
+              if [ -L "${proc_dir}/cwd" ]; then
+                echo "Cwd: $(readlink "${proc_dir}/cwd" 2>/dev/null || true)"
+              fi
+              if [ -L "${proc_dir}/exe" ]; then
+                echo "Exe: $(readlink "${proc_dir}/exe" 2>/dev/null || true)"
+              fi
+            done
 
             echo "::endgroup::"
           }
@@ -565,6 +668,7 @@ jobs:
 
           dump_tenstorrent_process_details
           dump_device_users
+          dump_all_visible_processes
 
           run_group "Tenstorrent-related processes" \
             bash -c "ps -eo pid,ppid,user,stat,etime,etimes,cmd --sort=pid | awk 'tolower(\$0) ~ /tenstorrent|tt-metal|tt_metal|ttnn|vllm|python|uvicorn|ray|pytest|tracy/ { print }'"
@@ -573,7 +677,7 @@ jobs:
           run_group "PCI Tenstorrent devices" \
             bash -c "lspci -D 2>/dev/null | awk 'tolower(\$0) ~ /tenstorrent|1e52/ { print }' || true; echo; find /sys/bus/pci/drivers/tenstorrent -maxdepth 2 -print 2>&1 || true"
           run_group "Kernel and driver state" \
-            bash -c "uname -a; echo; id; echo; lsmod 2>/dev/null | awk 'tolower(\$0) ~ /tenstorrent|tt/ { print }' || true; echo; dmesg -T 2>&1 | tail -n 200 || true"
+            bash -c "uname -a; echo; id; echo; grep -E '^(CapEff|CapPrm|NSpid):' /proc/self/status 2>&1 || true; echo; lsmod 2>/dev/null | awk 'tolower(\$0) ~ /tenstorrent|tt/ { print }' || true; echo; if [ \"\$(id -u)\" -eq 0 ]; then dmesg -T 2>&1; elif command -v sudo >/dev/null 2>&1; then sudo -n dmesg -T 2>&1; else echo 'Cannot run dmesg: not root and sudo is not installed.'; fi | tail -n 200 || true; echo; if command -v journalctl >/dev/null 2>&1; then journalctl -k -n 200 --no-pager 2>&1; elif command -v sudo >/dev/null 2>&1 && sudo -n sh -c 'command -v journalctl >/dev/null 2>&1'; then sudo -n journalctl -k -n 200 --no-pager 2>&1; else echo 'journalctl is not installed in this container.'; fi"
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
