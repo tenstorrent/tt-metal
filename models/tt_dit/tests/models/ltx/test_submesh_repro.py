@@ -258,3 +258,37 @@ def test_heavy_parent_then_child_neighbor_pad_cq0(mesh_device):
     ttnn.reset_cq_in_use(audio)
     ttnn.reset_cq_in_use(mesh)
     print("[REPRO] PASS: heavy parent + child neighbor_pad cq0 completed", flush=True)
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _PARAMS, indirect=["mesh_device", "device_params"])
+def test_parent_npad_then_child_npad_cq0(mesh_device):
+    """H9: parent runs NEIGHBOR_PAD on 4x8 (multicast barrier over the full mesh), quiesce, then the
+    overlapping 1x4 child runs neighbor_pad (multicast barrier over its 4 shared chips).
+
+    neighbor_pad's Phase-0 startup barrier is a MULTICAST across the cluster axis (unlike all_gather's
+    unicast). The video VAE decode runs neighbor_pad on the full parent mesh before audio; the child's
+    neighbor_pad multicast then targets chips the parent's neighbor_pad multicast just drove. This
+    tests whether parent-then-child OVERLAPPING NEIGHBOR_PAD (the real multicast-on-multicast case)
+    deadlocks where heavy parent all_gather + child neighbor_pad (H7) did not.
+    """
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(4, 8))
+    ccl = CCLManager(mesh, num_links=2, topology=ttnn.Topology.Linear)
+
+    # Parent neighbor_pad on the full mesh, T-sharded over mesh_axis=1 (the 8-wide axis).
+    for i in range(8):
+        mode = "replicate" if i % 2 == 0 else "zeros"
+        _run_neighbor_pad(ccl, mesh, f"parent 4x8 cq0 npad {i}", padding_mode=mode)
+    print("[REPRO] parent 4x8 neighbor_pad done", flush=True)
+
+    audio = mesh.create_submesh(ttnn.MeshShape(1, 4))
+    audio_ccl = CCLManager(audio, num_links=2, topology=ttnn.Topology.Linear)
+    ttnn.synchronize_device(parent)
+
+    for i in range(8):
+        mode = "replicate" if i % 2 == 0 else "zeros"
+        _run_neighbor_pad(audio_ccl, audio, f"child 1x4 cq0 npad {i}", padding_mode=mode)
+
+    ttnn.reset_cq_in_use(audio)
+    ttnn.reset_cq_in_use(mesh)
+    print("[REPRO] PASS: parent npad + child npad cq0 completed", flush=True)
