@@ -408,35 +408,39 @@ def main():
         )
 
         # --- perf (opt-in): per-stage traced breakdown ----------------------------------
-        # PI05_E2E_STAGES=1 splits the SAME captured per-submesh traces into the three
-        # stage groups (all_subs is built vision+prefill+denoise, so slicing by chip count
-        # is exact) and times each group's replay+drain separately. Drain on each stage's
-        # last-in-chain chip; sockets enforce the chain so that chip finishing implies its
-        # upstream did. This inserts 2 extra sync barriers vs the flat e2e loop above, so
-        # the per-stage sum runs slightly higher than dt_ms — read it as attribution, not
-        # a replacement for the e2e number. No recapture: reuses ordered/tids as-is.
+        # PI05_E2E_STAGES=1 attributes the SAME e2e replay to vision/prefill/denoise.
+        # We must NOT dispatch one stage and drain before dispatching the next: the
+        # captured traces carry cross-stage sockets (vision's send_direct_async lands in
+        # prefill's recv buffer; prefill's KV migration sends into denoise), so a send
+        # blocks until the matching recv trace is in flight. Draining mid-pipeline then
+        # deadlocks. Instead dispatch ALL 28 traces non-blocking (every handshake live,
+        # exactly like the e2e loop), then drain in dependency order vision→prefill→
+        # denoise; the time between successive drains is that stage's latency. No extra
+        # barriers, so the three sum to ~dt_ms.
         if os.environ.get("PI05_E2E_STAGES", "").lower() in ("1", "true", "yes", "on"):
             nv, npf = len(h.vision_per_chip), len(h.prefill_per_chip)
-            groups = [
-                ("vision ", ordered[:nv], h.vision_per_chip[-1]),
-                ("prefill", ordered[nv : nv + npf], h.prefill_per_chip[-1]),
-                ("denoise", ordered[nv + npf :], h.denoise_per_chip[0]),
+            drains = [
+                ("vision ", nv, h.vision_per_chip[-1]),
+                ("prefill", npf, h.prefill_per_chip[-1]),
+                ("denoise", len(ordered) - nv - npf, h.denoise_per_chip[0]),
             ]
-            sums = {name: 0.0 for name, _, _ in groups}
+            sums = {name: 0.0 for name, _, _ in drains}
             ttnn.synchronize_device(h.denoise_per_chip[0])
             for _ in range(nperf):
                 pipe._refresh_noise_buffer()
-                for name, grp, drain in groups:
-                    t0 = time.perf_counter()
-                    for sm, tid in grp:
-                        ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+                for sm, tid in ordered:  # dispatch ALL first → sockets handshake, no deadlock
+                    ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+                t_prev = time.perf_counter()
+                for name, _, drain in drains:  # progressive drains in dependency order
                     ttnn.synchronize_device(drain)
-                    sums[name] += (time.perf_counter() - t0) * 1000.0
+                    now = time.perf_counter()
+                    sums[name] += (now - t_prev) * 1000.0
+                    t_prev = now
             total = sum(sums.values()) / nperf
-            for name, grp, _ in groups:
+            for name, nchips, _ in drains:
                 ms = sums[name] / nperf
-                log(f"PERF/stage: {name} ({len(grp):2d} chips) = {ms:6.2f} ms  ({100.0*ms/total:4.1f}% of staged sum)")
-            log(f"PERF/stage: staged sum = {total:.2f} ms/inference (avg of {nperf}; +2 barriers vs e2e {dt_ms:.2f})")
+                log(f"PERF/stage: {name} ({nchips:2d} chips) = {ms:6.2f} ms  ({100.0*ms/total:4.1f}% of e2e)")
+            log(f"PERF/stage: sum = {total:.2f} ms/inference (avg of {nperf}; matches e2e {dt_ms:.2f})")
 
         # --- perf (opt-in): IO-inclusive end-to-end serving latency ---------------------
         # PI05_E2E_IO=1 wraps each timed iteration with the host<->device transfers a real
