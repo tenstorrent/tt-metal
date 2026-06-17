@@ -48,7 +48,7 @@ PERF_TEST_MESH_IDS = [
 ]
 
 PERF_TEST_DEVICE_PARAMS = [
-    {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}
+    {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}
 ]
 
 
