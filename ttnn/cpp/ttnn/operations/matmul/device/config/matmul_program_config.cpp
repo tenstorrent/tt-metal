@@ -452,6 +452,24 @@ MatmulProgramConfig create_matmul_program_config(
     uint32_t k_tiles_per_core;
     if (input_b_is_batched) {
         TT_FATAL(!fused_activation.has_value(), "Cannot use activation with batched input b");
+        // When A batch=1 and B batch>1, route to 1D mcast config so the in0_reuse
+        // optimization fires: A is loaded into L1 once and reused across all B batches.
+        if (batch_size_a == 1 && !a_is_sharded && !input_tensor_b.is_sharded()) {
+            return get_mcast_1d_config(
+                input_tensor_a,
+                input_tensor_b,
+                transpose_a,
+                transpose_b,
+                bias_single_tile_size,
+                /*fuse_batch=*/false,
+                fused_activation,
+                /*mcast_in0=*/false,
+                /*out_sharded=*/false,
+                core_coord,
+                compute_kernel_config,
+                output_dtype,
+                /*all_dram_interleaved=*/false);
+        }
         if (!a_is_sharded && !input_tensor_b.is_sharded()) {
             m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
             n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
@@ -1103,6 +1121,24 @@ MatmulProgramConfig create_simple_matmul_program_config(
                           mem_config.buffer_type() == BufferType::DRAM;
 
     const bool all_dram_interleaved = all_dram && all_interleaved;
+
+    // A batch=1 with B batched: route to 1D mcast so in0_reuse fires (A stays in L1, B batches loop)
+    if (get_batch_size(a_shape_padded) == 1 && get_batch_size(b_shape_padded) > 1 && all_interleaved) {
+        return get_mcast_1d_config(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            /*fuse_batch=*/false,
+            std::nullopt,
+            /*mcast_in0=*/false,
+            /*out_sharded=*/false,
+            compute_with_storage_grid_size,
+            compute_kernel_config,
+            output_dtype,
+            all_dram_interleaved);
+    }
 
     uint32_t height = a_shape_padded[-2];
     uint32_t width = b_shape_padded[-1];

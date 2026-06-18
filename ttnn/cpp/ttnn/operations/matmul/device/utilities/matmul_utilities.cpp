@@ -163,12 +163,13 @@ ttnn::Shape compute_matmul_output_shape(
     }
 
     // Optimization: Reuse input A (in0) across batches when A's batch dimension is 1
-    // and B's batch dimension is > 1. For matmul shapes BxHaxMxK / BxHbxKxN where Ha=1 and Hb>1,
-    // the same A tensor can be reused for each batch element of B rather than reading A repeatedly.
-    // Restrict to rank-4 tensors to ensure dim 1 is correctly identified as the batch dimension
-    // and to prevent out-of-bounds indexing with lower-rank shapes.
-    if (a_rank == 4 && b_rank == 4 && input_shape_a[1] == 1 && input_shape_b[1] > 1) {
-        output_shape[1] = input_shape_b[1];
+    // and B's batch dimension is > 1. The "broadcast batch dim" is the last dim before [M,K]:
+    // rank-3 → dim[0], rank-4 → dim[1], etc. (index = rank - 3).
+    if (a_rank >= 3 && b_rank == a_rank) {
+        const int batch_dim = static_cast<int>(a_rank) - 3;
+        if (input_shape_a[batch_dim] == 1 && input_shape_b[batch_dim] > 1) {
+            output_shape[batch_dim] = input_shape_b[batch_dim];
+        }
     }
     return output_shape;
 }

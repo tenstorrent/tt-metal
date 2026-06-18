@@ -907,10 +907,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             if (config.fuse_batch || config.fused_activation.has_value() || config.mcast_in0) {
                 return false;
             }
-            if (a_shape.rank() != 4 || b_shape.rank() != 4) {
+            if (a_shape.rank() != b_shape.rank() || a_shape.rank() < 3) {
                 return false;
             }
-            if (a_shape[1] != 1) {
+            if (a_shape[static_cast<int>(a_shape.rank()) - 3] != 1) {
                 return false;
             }
             if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
@@ -921,11 +921,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
             TT_FATAL(
-                a_shape[i] == b_shape[i] || (i == 1 && in0_reuse()),
+                a_shape[i] == b_shape[i] || (i == static_cast<int>(a_shape.rank()) - 3 && in0_reuse()),
                 "bmm (non-bcast matmul) expects input tensors of shapes "
-                "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed on dim 1 "
-                "for rank-4 tensors when a[1]=1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig with "
-                "fuse_batch=false, fused_activation=none, mcast_in0=false, and non-sharded inputs for in0 reuse "
+                "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed on "
+                "the broadcast batch dim when a[batch_dim]=1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig "
+                "with fuse_batch=false, fused_activation=none, mcast_in0=false, and non-sharded inputs for in0 reuse "
                 "optimization)",
                 i,
                 a_shape[i],
