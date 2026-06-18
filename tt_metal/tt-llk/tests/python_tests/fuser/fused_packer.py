@@ -55,7 +55,18 @@ class Packer:
         block_tiles_x = operation.block_tiles_x
         block_tiles_y = operation.block_tiles_y
 
-        tensor = tilize_block(tensor, output_dims, output_format).flatten()
+        tile_dims = (
+            pack_node.output.tile_shape.total_row_dim(),
+            pack_node.output.tile_shape.total_col_dim(),
+        )
+        num_faces = pack_node.output.tile_shape.total_num_faces()
+        tensor = tilize_block(
+            tensor,
+            output_dims,
+            output_format,
+            num_faces=num_faces,
+            tile_dimensions=tile_dims,
+        ).flatten()
         tile_grid = tensor.view(tile_count_y, tile_count_x, tile_size)
 
         accumulated = torch.zeros(
@@ -71,7 +82,13 @@ class Packer:
             tile_count_y, tile_count_x, tile_size, dtype=tensor.dtype
         )
         result_grid[:block_tiles_y, :block_tiles_x] = accumulated
-        return untilize_block(result_grid.flatten(), output_format, output_dims)
+        return untilize_block(
+            result_grid.flatten(),
+            output_format,
+            output_dims,
+            tile_dimensions=tile_dims,
+            num_faces=num_faces,
+        )
 
     @staticmethod
     def _relu_golden(

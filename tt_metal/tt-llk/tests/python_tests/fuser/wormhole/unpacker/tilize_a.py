@@ -57,6 +57,10 @@ class UnpackerTilizeA(Unpacker):
             compute_unit.src_a.dimensions,
             compute_unit.src_a.data_format,
             compute_unit.src_a.tile_shape.total_num_faces(),
+            tile_dimensions=(
+                compute_unit.src_a.tile_shape.total_row_dim(),
+                compute_unit.src_a.tile_shape.total_col_dim(),
+            ),
         )
 
         return tilized_a, None
