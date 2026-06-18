@@ -150,10 +150,6 @@ add_custom_target(
 )
 
 # Tracy profiler WASM viewer (Emscripten).
-# Fetch emsdk via CPM, but install toolchain artifacts under the build tree (not shared CPM cache).
-# Note emsdk has to be installed the repo just has the scripts, not the toolchain artifacts.
-set(_cpm_source_cache_save "${CPM_SOURCE_CACHE}")
-set(CPM_SOURCE_CACHE "")
 CPMAddPackage(
     NAME emsdk
     GITHUB_REPOSITORY emscripten-core/emsdk
@@ -161,8 +157,6 @@ CPMAddPackage(
         0dfff153dc3c596948ac088b8853006c570f2609 # 5.0.7-4-g0dfff15
     DOWNLOAD_ONLY YES
 )
-set(CPM_SOURCE_CACHE "${_cpm_source_cache_save}")
-unset(_cpm_source_cache_save)
 
 set(EMSDK_DIR "${emsdk_SOURCE_DIR}")
 set(EMSCRIPTEN_TOOLCHAIN_FILE "${EMSDK_DIR}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")
