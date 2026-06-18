@@ -1,6 +1,6 @@
 ---
 name: stage-review
-description: Independently review a TTNN model bringup stage before it is allowed to pass. Use when a stage is complete or near-complete and Codex needs a fresh xhigh subagent to compare the stage output against the original goal contract, skill requirements, logs, generated model outputs, checks, benchmarks, and code artifacts; identify bugs, oddities, contradictions, weak dismissals, or suspicious behavior that hard-edged stage gates missed; and return a blocking/pass verdict.
+description: Independently review a TTNN model bringup stage before it is allowed to pass. Use when a stage is complete or near-complete and Codex needs a fresh xhigh subagent to compare the stage output against the original goal contract, skill requirements, logs, generated model outputs, checks, benchmarks, and code artifacts; identify bugs, oddities, contradictions, weak dismissals, or suspicious behavior that hard-edged stage gates missed; and return a clean-pass or more-work-needed verdict.
 ---
 
 # Stage Review
@@ -42,7 +42,7 @@ paths and a compact stage contract over passing your conclusions.
 Reviewer mode: when your prompt says you are the independent reviewer, or you
 were spawned with this skill plus a concrete stage contract and artifact paths,
 perform the review directly. Do not spawn another reviewer. In this mode your
-verdict can be `clean-pass` or `block`.
+verdict can be `clean-pass` or `more-work-needed`.
 
 In main-agent mode, if no subagent tool is available, do a serial review only as
 a temporary fallback and mark the result `not-independent`. This means the
@@ -65,16 +65,16 @@ Tell the reviewer:
   text.
 - Read actual generated outputs for generation, full-model, vLLM, and release
   stages.
-- Treat visible wrongness as a blocker until fixed, reproduced in a control, or
-  otherwise proven expected by evidence.
+- Treat visible wrongness as required work until fixed, reproduced in a control,
+  or otherwise proven expected by evidence.
 - Treat checks passing as insufficient when artifacts show a contradiction.
 - Treat words such as `minor`, `known`, `remaining`, `generally`, `mostly`,
   `except`, `but`, `waived`, `xfailed`, or `out of scope` as review triggers.
-- Prefer precise blocking findings over broad advice.
+- Prefer precise required-work findings over broad advice.
 
-## Blocking Standard
+## More-Work-Needed Standard
 
-Block the stage when evidence shows one of these:
+Return `more-work-needed` when evidence shows one of these:
 
 - visible model/output wrongness has no control, fix, or evidence-backed
   explanation;
@@ -88,17 +88,26 @@ Block the stage when evidence shows one of these:
   proving the largest feasible context;
 - the stage dismisses a material anomaly with prose instead of investigation.
 
-Do not block only because a stronger evidence format would be nice. If the goal
-and skill accept tests, code inspection, runner configuration, logs, and summary
-JSON as evidence, do not invent a new required runtime-counter or profiler
-artifact unless the existing artifacts are only prose, fail to tie the claim to
-the measured path, or contradict the claim. Put such requests under
-`Hard-Check Gaps` unless they hide a concrete correctness or performance risk.
+Do not return `more-work-needed` only because a stronger evidence format would
+be nice. If the goal and skill accept tests, code inspection, runner
+configuration, logs, and summary JSON as evidence, do not invent a new required
+runtime-counter or profiler artifact unless the existing artifacts are only
+prose, fail to tie the claim to the measured path, or contradict the claim. Put
+such requests under `Hard-Check Gaps` unless they hide a concrete correctness or
+performance risk.
 
 Treat warnings that mention corruption, stale inputs, invalid cache use, trace
 lifecycle hazards, wrong language/output behavior, host fallbacks, or device
-health as blockers when they touch the stage's core contract and are not
+health as required work when they touch the stage's core contract and are not
 classified in the stage evidence.
+
+A review verdict of `more-work-needed` means exactly that: the stage is not
+ready to pass yet. It is a remediation trigger, not permission for the stage
+owner to set the Codex goal to terminal `blocked`. The stage owner must treat
+each finding as work: fix it directly when the cause is obvious, or use
+`$autofix` when the fix is not obvious or the first direct fix does not close
+the gate. Only a later, explicit `$autofix` failure or an unrecoverable external
+dependency can justify terminal goal `blocked`.
 
 ## What To Inspect
 
@@ -145,11 +154,12 @@ Affected path:
 Control or comparison:
 Likely subsystem:
 Investigation performed:
-Resolution: fixed / controlled / blocking
+Resolution: fixed / controlled / more-work-needed
 ```
 
 Prose acknowledgement is not resolution. If the anomaly is visible in model
-behavior and there is no control showing it is expected, mark it blocking.
+behavior and there is no control showing it is expected, return
+`more-work-needed`.
 
 ## Reviewer Prompt Template
 
@@ -194,15 +204,15 @@ Require this output:
 ```markdown
 # Stage Review
 
-Verdict: clean-pass | block
+Verdict: clean-pass | more-work-needed
 
-## Blocking Findings
+## Required Work
 - P1/P2: <title>
   Evidence:
   Why this matters:
   Required next step:
 
-## Non-Blocking Concerns
+## Other Concerns
 - ...
 
 ## Hard-Check Gaps
@@ -227,7 +237,7 @@ Verdict: clean-pass | block
 - ...
 ```
 
-Only `clean-pass` with no blocking findings satisfies this skill.
+Only `clean-pass` with no required work satisfies this skill.
 
 If the main agent could not obtain an independent review, report
 `not-independent` as a fallback status outside the reviewer verdict. Do not use
@@ -238,7 +248,9 @@ it to complete the stage.
 After the reviewer returns:
 
 1. Read the findings and verify that the cited artifacts exist.
-2. If the verdict is `block`, do not mark the stage complete. Use the relevant
-   debugging or `$autofix` skill to resolve it, then rerun `$stage-review`.
+2. If the verdict is `more-work-needed`, do not mark the stage complete or
+   terminal `blocked`. Treat the findings as the next stage work item. Use the
+   relevant debugging skill or `$autofix` to resolve it, then rerun
+   `$stage-review`.
 3. If the verdict is `clean-pass`, record the review artifact or subagent final
    answer path in the stage work log.

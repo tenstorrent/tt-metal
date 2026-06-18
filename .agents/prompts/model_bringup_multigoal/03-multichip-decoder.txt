@@ -1,4 +1,4 @@
-/goal Use $multichip for the HF_MODEL optimized decoder in the current tt-metal checkout.
+/goal Use $multichip and $tt-device-usage for the HF_MODEL optimized decoder in the current tt-metal checkout.
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
@@ -18,6 +18,6 @@ Goal completion requirements:
 - For MoE models, the completed path keeps gate-selected active-expert execution. Dense all-expert execution does not satisfy completion unless evidence proves it is faster during decode.
 - models/autoports/<model>/doc/multichip_decoder/README.md and work_log.md record commands, PCC, perf, mesh plan, limitations, and exact artifacts.
 - The decoder has a real multichip implementation that is correct, fits the full model's weights/KV-cache expectations, and is suitable as the full-model layer stack baseline.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
 
-Do not mark this goal complete while any completion requirement is unmet.
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

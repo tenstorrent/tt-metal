@@ -48,6 +48,8 @@ class StageState:
     active_turns: set[str] = field(default_factory=set)
     last_turn_status: str | None = None
     last_turn_error: str | None = None
+    ignore_stale_goal_objective: bool = False
+    stale_goal_objective_ignored: bool = False
 
 
 class AppServerClient:
@@ -533,6 +535,20 @@ def update_stage_state(state: StageState, message: JsonObject) -> None:
             return
         objective = goal.get("objective")
         if objective != state.objective:
+            if state.ignore_stale_goal_objective:
+                # Resumed threads can replay an older thread/goal/updated event
+                # from the pre-resume objective. Ignore it after the resume path
+                # has explicitly reset the live objective.
+                if not state.stale_goal_objective_ignored:
+                    expected = repr(state.objective[:120])
+                    actual = repr(str(objective)[:120])
+                    print(
+                        "ignored stale resumed goal objective update; "
+                        f"expected_prefix={expected} actual_prefix={actual}",
+                        file=sys.stderr,
+                    )
+                    state.stale_goal_objective_ignored = True
+                return
             raise RuntimeError(
                 "app-server goal objective changed unexpectedly.\n"
                 f"Expected: {state.objective!r}\nActual: {objective!r}"
@@ -724,7 +740,7 @@ def execute_resumed_goal(
     input_items, _missing = input_items_for_resume(repo, message, objective)
     with output_log.open("w", encoding="utf-8") as log:
         resumed = client.request("thread/resume", thread_resume_params(args, repo, thread_id), log)
-        state = StageState(thread_id=thread_id, objective=objective)
+        state = StageState(thread_id=thread_id, objective=objective, ignore_stale_goal_objective=True)
         state.active_turns.update(in_progress_turn_ids(resumed))
         if state.active_turns:
             active = client.request(

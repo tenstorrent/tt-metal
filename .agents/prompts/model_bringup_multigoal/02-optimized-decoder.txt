@@ -1,4 +1,4 @@
-/goal Use $optimize for the HF_MODEL functional decoder in the current tt-metal checkout.
+/goal Use $optimize and $tt-device-usage for the HF_MODEL functional decoder in the current tt-metal checkout.
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
@@ -17,6 +17,6 @@ Goal completion requirements:
 - models/autoports/<model>/doc/optimized_decoder/README.md and work_log.md record commands, before/after PCC and perf, chosen configs, tt-perf-report conclusions, rejected options, limitations, and exact artifacts.
 - The checklist in the $optimize skill has been completed with evidence
 - The decoder is genuinely optimized for the current hardware within TTNN's available capabilities. No remaining decoder optimization work is deferred to a later stage.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
 
-Do not mark this goal complete while any completion requirement is unmet.
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

@@ -1,4 +1,4 @@
-/goal Use $functional-decoder for HF_MODEL in the current tt-metal checkout.
+/goal Use $functional-decoder and $tt-device-usage for HF_MODEL in the current tt-metal checkout.
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
@@ -16,6 +16,6 @@ Goal completion requirements:
 - Determinism/repeated-input evidence and a watcher-clean run exist.
 - models/autoports/<model>/doc/functional_decoder/README.md and work_log.md record commands, PCC, perf, limitations, and exact artifacts.
 - The functional-decoder skill's final objectives are satisfied.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
 
-Do not mark this goal complete while any completion requirement is unmet.
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
