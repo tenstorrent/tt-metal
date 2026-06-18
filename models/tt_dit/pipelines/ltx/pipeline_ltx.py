@@ -358,6 +358,12 @@ class LTXPipeline:
         # ``_prepare_transformer(idx)``.
         self.transformer: LTXTransformerModel | None = None
         self.transformer_states: list[TransformerState] = []
+        # Dynamic (runtime) LoRA staging for variant 0. ``load_lora_weights``
+        # stages specs here; ``fuse_lora`` rebuilds + reloads variant 0 in place;
+        # ``unload_lora_weights`` restores the base. See those methods.
+        self._pending_lora: list[LoraSpec] = []
+        self._lora_persist: bool = False
+        self._lora_fused: bool = False
         self.vae_decoder = None
         self.vae_encoder = None
         self.upsampler: LTXLatentUpsampler | None = None
@@ -808,6 +814,106 @@ class LTXPipeline:
         """Initial/priming load of variant ``idx`` (preserves the current behavior:
         no-op when already loaded, writes a cache, no force-reload)."""
         self._load_transformer(idx)
+
+    # =========================================================================
+    # Dynamic (runtime) LoRA API
+    #
+    # Loads a LoRA *after* model init without tearing the transformer down, for
+    # runtime swapping in serving (tt-inference-server). We host-fuse the LoRA
+    # into a state dict and re-upload variant 0 through the normal sharded load
+    # path, so TP/FSDP sharding and the per-device QKV head-interleave are
+    # handled for free. The variant-0 Module object is reused, so the non-LoRA
+    # path is untouched and ``unload_lora_weights`` is an exact rollback. With
+    # ``dynamic_load`` evictions, ``_prepare_transformer(0)`` re-reads the
+    # (mutated) variant-0 state, so the active LoRA re-fuses on reload.
+    # =========================================================================
+
+    @staticmethod
+    def _coerce_lora_specs(lora, strength: float) -> list[LoraSpec]:
+        """Coerce a path / ``LoraSpec`` / ``(path, strength)`` tuple / list of
+        those into ``list[LoraSpec]``. Device-free so it is unit-testable.
+        ``strength`` is the default applied to bare paths."""
+        if isinstance(lora, LoraSpec):
+            return [lora]
+        if isinstance(lora, (str, os.PathLike)):
+            return [LoraSpec(os.fspath(lora), strength)]
+
+        specs: list[LoraSpec] = []
+        for item in lora:
+            if isinstance(item, LoraSpec):
+                specs.append(item)
+            elif isinstance(item, (str, os.PathLike)):
+                specs.append(LoraSpec(os.fspath(item), strength))
+            elif isinstance(item, (tuple, list)) and len(item) == 2:
+                specs.append(LoraSpec(os.fspath(item[0]), float(item[1])))
+            else:
+                raise TypeError(f"Unsupported LoRA spec: {item!r}")
+        return specs
+
+    def load_lora_weights(self, lora, *, strength: float = 1.0, persist_cache: bool = False) -> None:
+        """Resolve + validate + stage one or more LoRA adaptors for variant 0.
+
+        ``lora`` is a path, a ``LoraSpec``, a ``(path, strength)`` tuple, or a
+        list of those. This only stages — call ``fuse_lora`` to actually rebuild
+        and reload the transformer. ``persist_cache=True`` writes the fused
+        weights to ``TT_DIT_CACHE_DIR`` (default is fuse-in-memory only)."""
+        specs = self._coerce_lora_specs(lora, strength)
+        if not specs:
+            raise ValueError("load_lora_weights() requires at least one LoRA")
+        for s in specs:
+            if not os.path.isfile(s.path):
+                raise FileNotFoundError(f"LoRA file not found: {s.path}")
+        self._pending_lora = specs
+        self._lora_persist = persist_cache
+        logger.info(
+            "Staged LoRA(s) for fusing: "
+            + ", ".join(f"{os.path.basename(s.path)}@{s.strength}" for s in specs)
+            + f" (persist_cache={persist_cache})"
+        )
+
+    def fuse_lora(self, lora_scale: float = 1.0) -> None:
+        """Rebuild variant 0 with the staged LoRA fused in and reload it in place.
+
+        ``lora_scale`` multiplies every staged strength (e.g. a global runtime
+        slider). Releases captured traces first when traced — they reference the
+        pre-fuse weights — so the next ``generate`` re-captures. Survives a
+        coresident eviction because variant-0 state now carries the LoRA."""
+        if not self._pending_lora:
+            logger.warning("fuse_lora() with no staged LoRA — call load_lora_weights() first; no-op")
+            return
+        specs = [LoraSpec(s.path, s.strength * lora_scale) for s in self._pending_lora]
+
+        state = self.transformer_states[0]
+        state.lora_specs = specs
+        state.cache_name = self._build_transformer_cache_name(self.checkpoint_name, specs)
+        state.create_cache = self._lora_persist
+        state.state_dict_provider = lambda s=specs: self._build_transformer_state_dict(
+            self.checkpoint_name, s, strict=True
+        )
+
+        if self._traced:
+            self.release_traces()
+        self._load_transformer(0, force_reload=True)
+        self._lora_fused = True
+        logger.info(f"Fused {len(specs)} LoRA(s) into variant 0 (lora_scale={lora_scale}, persist={self._lora_persist})")
+
+    def unload_lora_weights(self) -> None:
+        """Restore variant 0 to the unmodified base weights. No-op if not fused."""
+        if not self._lora_fused:
+            return
+        state = self.transformer_states[0]
+        state.lora_specs = []
+        state.cache_name = self._build_transformer_cache_name(self.checkpoint_name, [])
+        state.create_cache = True
+        state.state_dict_provider = lambda: self._build_transformer_state_dict(self.checkpoint_name, [])
+
+        if self._traced:
+            self.release_traces()
+        self._load_transformer(0, force_reload=True)
+        self._lora_fused = False
+        self._pending_lora = []
+        self._lora_persist = False
+        logger.info("Unloaded LoRA — variant 0 restored to base weights")
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
         """Disk-cache path for on-device prompt embeddings. Separate namespace from the
