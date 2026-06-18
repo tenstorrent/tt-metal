@@ -234,7 +234,7 @@ public:
 
 } // namespace llk::san
 
-#define LLK_SAN_FUNCTION(function) llk::san::FunctionZone _function_zone_
+#define LLK_SAN_FUNCTION() llk::san::FunctionZone _function_zone_
 
 #define LLK_SAN_SILENT_ZONE() [[maybe_unused]] llk::san::SilentZone _silent_zone_
 
@@ -325,9 +325,9 @@ void operation_uninit()
 
 } // namespace llk::san
 
-#define LLK_SAN_FUNCTION(function) \
-    do                             \
-    {                              \
+#define LLK_SAN_FUNCTION() \
+    do                     \
+    {                      \
     } while (false)
 
 #define LLK_SAN_SILENT_ZONE() \
