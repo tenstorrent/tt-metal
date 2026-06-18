@@ -176,6 +176,7 @@ from ttnn._ttnn.fabric import (
     get_tt_fabric_max_payload_size_bytes,
     get_eth_forwarding_direction,
     get_all_fabric_mesh_ids,
+    get_physical_mesh_shapes,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
