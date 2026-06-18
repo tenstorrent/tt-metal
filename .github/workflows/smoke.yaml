@@ -174,16 +174,7 @@ jobs:
           TT_METAL_WATCHER_TEST_MODE: 1
           TT_LOGGER_LEVEL: warn
         run: |
-          # The runtime-tensor tests were consolidated into the tt-metalium smoke
-          # binary and overrun the smoke timeout on the slower
-          # N300-llmbox-viommu-prio LB runner. Skip just those tests on just this
-          # runner; every other smoke runner keeps full coverage.
-          tensor_test_filter='-*CreateTensor*:*EmptyTensor*:*TensorLayout*:*ConsumedMemoryBytesPerBank*:*VectorConversion*:*NDSharding*:*LegacyToNdSharding*:*NdToLegacySharding*:*BufferDistributionSpecCreation*:*MeshTensorDataMovementTest*:*MeshTensorPinnedMemoryBudgetTest*:MeshTensorDeviceTest.UniformCopyToDevice_ReusesPinnedMemoryCacheEntries:MeshTensorDeviceTest.HostTensorCopyKeepsPinnedMemoryCacheEntriesUntilLastPinRelease:MeshTensorDeviceTest.UniformCopyToHost_ReusesPinnedMemoryCacheEntries:MeshTensorDeviceTest.LargeWriteRoundtrip_PinnedMemoryPath:MeshTensorDeviceTest.LargeWriteRoundtrip_HeightShardedDeviceRequiringShardPadding'
-          if [ "${{ inputs.runner }}" = "N300-llmbox-viommu-prio" ] && [ "${{ inputs.product }}" = "tt-metalium" ]; then
-            /usr/bin/${{ inputs.product }}-validation-smoke --gtest_filter="$tensor_test_filter"
-          else
-            /usr/bin/${{ inputs.product }}-validation-smoke
-          fi
+          /usr/bin/${{ inputs.product }}-validation-smoke
 
       - name: Merge LLVM coverage
         if: ${{ inputs.upload-coverage }}
