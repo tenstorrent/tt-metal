@@ -1,3 +1,5 @@
+# force merge gate find-changes cmake change
+
 cmake_minimum_required(VERSION 3.24...4.2)
 
 # Forgetting to clone submodules is a common omission and results in a poor error message
