@@ -503,7 +503,6 @@ inline void _llk_pack_init_(
     llk::san::pack_operand_check(llk::san::IGNORE, pack_src_format, llk::san::IGNORE, face_r_dim, tile_c_dim, num_faces, llk::san::IGNORE, llk::san::IGNORE);
     llk::san::operation_init<llk::san::Operation::Pack>();
     // sstanisic todo: implement
-    // llk_san_must_uninit<llk_san_op::Pack>(); // lololol uninit doesn't exist
     // llk_san_extended_state_mask(llk_san_cfg::Addrmod, llk_san_cfg::Mop, llk_san_cfg::CH0Strides, llk_san_cfg::CH1Strides, llk_san_cfg::AdcXX);
 
     // 8bit datums in the unpack src format are not affected by the blackhole issue,
@@ -530,6 +529,8 @@ inline void _llk_pack_init_(
  */
 inline void _llk_pack_uninit_()
 {
+    llk::san::operation_uninit<llk::san::Operation::Pack>();
+
     // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default.
 }
 
