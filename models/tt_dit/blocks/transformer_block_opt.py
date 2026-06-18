@@ -290,7 +290,7 @@ class TransformerBlock(Module):
         )
 
         if self.context_pre_only:
-            prompt_scale_attn, prompt_shift_attn = temb_mod_params_txt
+            prompt_scale_attn, prompt_shift_attn = temb_mod_params_txt[:2]
             prompt_gate_attn = None
             prompt_shift_ff = None
             prompt_scale_ff = None

@@ -271,11 +271,6 @@ def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, ma
     tt_tokens_out = tensor.to_torch(tt_out.tokens)
     tt_logits = tensor.to_torch(ttnn.stack(tt_out.logits, dim=1), mesh_axes=[..., tp_axis])
 
-    # To compare generated tokens, remove `guide` in the call to `model.generate`!
-    # for i in range(tt_tokens_out.size(0)):
-    #     print(tokenizer.decode(tokens_out[i]))
-    #     print(tokenizer.decode(tt_tokens_out[i]))
-
     if mask is not None:
         # Masked positions on the start of the sequence contain random values from computing softmax over all -inf
         # so we remove them before comparison.

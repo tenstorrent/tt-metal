@@ -21,8 +21,6 @@ from ..utils.padding import PaddingConfig, pad_weight_tensor
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    pass
-
     from ..parallel.config import DiTParallelConfig
     from ..parallel.manager import CCLManager
 

@@ -40,7 +40,7 @@ class ModelLocationGenerator(Protocol):
         endpoint_prefix: str = "",
         download_dir_suffix: str = "",
     ) -> str:
-        ...
+        pass
 
 
 # TODO: Fix shape compatibility

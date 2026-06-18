@@ -129,7 +129,7 @@ class CCLManager:
         """
         # Create cache key from the parameters
         dim = self.get_dim(dim, shape)
-        cache_key = (tuple(shape), dim, mesh_axis)
+        cache_key = (tuple(shape), dim, mesh_axis, return_output_buffer, return_intermediate)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:

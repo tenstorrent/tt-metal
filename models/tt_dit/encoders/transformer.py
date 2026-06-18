@@ -145,7 +145,6 @@ class TransformerEncoder(Module):
             batch_size, seq_len = tokens.shape
 
         device = tokens.device()
-        dtype = self.token_embedding.weight.dtype
 
         start_pos = cache.position if cache is not None else 0
 
@@ -590,8 +589,6 @@ class Attention(Module):
             padded_kv_seq_len = -(-kv_seq_len // 32) * 32
             k = ttnn.pad(k, [(0, padded_kv_seq_len - kv_seq_len), (0, 0)], value=0)
             v = ttnn.pad(v, [(0, padded_kv_seq_len - kv_seq_len), (0, 0)], value=0)
-        else:
-            padded_kv_seq_len = kv_seq_len
 
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
