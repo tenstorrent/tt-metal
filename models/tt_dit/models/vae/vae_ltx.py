@@ -6,19 +6,30 @@
 
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
 import torch
+from einops import rearrange
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import ConvDims, _ntuple, aligned_channels, conv_pad_height, conv_pad_width, get_conv3d_config
-from ...utils.tensor import typed_tensor
+from ...utils.conv3d import (
+    ConvDims,
+    _ntuple,
+    aligned_channels,
+    conv_pad_height,
+    conv_pad_in_channels,
+    conv_pad_width,
+    get_conv3d_config,
+)
+from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
 
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
@@ -124,8 +135,6 @@ class LTXCausalConv3d(Module):
             H=dims_H,
             W=dims_W,
         )
-
-        from models.common.utility_functions import is_blackhole
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -474,8 +483,6 @@ class LTXDepthToSpaceUpsample(Module):
         conv_dims: ConvDims | None = None,
     ) -> None:
         super().__init__()
-        import math
-
         self.stride = stride
         self.out_channels_reduction_factor = out_channels_reduction_factor
         self.residual = residual
@@ -525,8 +532,6 @@ class LTXDepthToSpaceUpsample(Module):
         logical_w: int = 0,
     ) -> tuple[ttnn.Tensor, int, int]:
         """Upsample by `stride`; returns (out, new_logical_h, new_logical_w) scaled by p2/p3."""
-        import math
-
         B, T, H, W, _ = x_BTHWC.shape
         p1, p2, p3 = self.stride
 
@@ -773,12 +778,11 @@ class LTXVideoDecoder(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(self, sample_BCTHW: torch.Tensor) -> torch.Tensor:
-        """
-        Decode latent (B, 128, F', H', W') → video (B, 3, F, H, W).
-        """
-        from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
+    def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
+        """Decode latent (B, 128, F', H', W') → video.
 
+        output_type: "float" → (B, 3, F, H, W) float32 [-1, 1]; "rgb" → (B, 3, F, H, W) uint8 RGB planar.
+        """
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
@@ -815,33 +819,27 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
         sample_tt = self.conv_out(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
 
-        # Gather fractured (B, T, H_per_device, W_per_device, C_out) back to a single torch tensor.
+        # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large
+        # (channels-last would gather a length-3 innermost). conv_out channels are ordered (c, p, r, q).
+        p, q, r = 1, self.patch_size, self.patch_size
+        B_, T_, H4, W4, _ = sample_tt.shape
+        sample_tt = ttnn.reshape(sample_tt, (B_, T_, H4, W4, 3, p, r, q))
+        sample_tt = ttnn.permute(sample_tt, (0, 4, 1, 5, 2, 7, 3, 6))
+        sample_tt = ttnn.reshape(sample_tt, (B_, 3, T_ * p, H4 * q, W4 * r))  # (B, 3, T, H, W)
+
         concat_dims = [None, None]
-        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
-        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
+        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 4
+        # uint8 cast rides the gather pre-transfer so the d2h moves one byte/elem (reshape rejects uint8).
+        pre_fn = float_to_uint8 if output_type == "rgb" else None
         result = fast_device_to_host(
             sample_tt,
             self.mesh_device,
             concat_dims,
             ccl_manager=self.ccl_manager,
-        )  # (B, T_out, H_out, W_out, C_out)
-
-        # Crop padded H/W rows/columns before the final depth-to-space unpatch.
-        result = result[:, :, :logical_h, :logical_w, :]
-
-        # Unpatchify: (B, T, H/4, W/4, 48) → (B, 3, T, H, W) via depth-to-space.
-        result = result.permute(0, 4, 1, 2, 3)
-        from einops import rearrange
-
-        result = rearrange(
-            result,
-            "b (c p r q) f h w -> b c (f p) (h q) (w r)",
-            p=1,
-            q=self.patch_size,
-            r=self.patch_size,
+            pre_transfer_fn=pre_fn,
         )
-
-        return result
+        return result[:, :, :, : logical_h * q, : logical_w * r]  # crop mesh padding
 
 
 # =============================================================================
@@ -883,8 +881,6 @@ class LTXSpaceToDepthDownsample(Module):
         conv_dims: ConvDims | None = None,
     ) -> None:
         super().__init__()
-        import math
-
         self.stride = stride
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -1178,11 +1174,6 @@ class LTXVideoEncoder(Module):
 
     def forward(self, sample_BCTHW: torch.Tensor) -> torch.Tensor:
         """Encode video (B, 3, F, H, W) in [-1, 1] -> normalized latent means (B, 128, F', H', W')."""
-        from einops import rearrange
-
-        from ...utils.conv3d import conv_pad_in_channels
-        from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
-
         # Crop trailing frames so F == 1 + 8*k (mirrors the reference encoder).
         frames_count = sample_BCTHW.shape[2]
         if (frames_count - 1) % 8 != 0:

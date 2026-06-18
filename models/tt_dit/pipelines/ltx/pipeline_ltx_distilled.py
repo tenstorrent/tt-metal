@@ -491,69 +491,12 @@ class LTXDistilledPipeline(LTXPipeline):
         ).squeeze(0)
         return v_final[:, :video_N_real, :], a_final[:, :audio_N_real, :]
 
-    @staticmethod
-    def _write_stage1_wav(audio_obj, path: str) -> None:
-        """Write decoded audio as stereo WAV (2, T) → (T, 2) for soundfile."""
-        import soundfile as sf
-
-        wav = audio_obj.waveform
-        if wav.dim() == 3:
-            wav = wav[0]
-        if wav.dim() == 2:
-            wav = wav.transpose(0, 1)
-        sf.write(path, wav.cpu().numpy(), int(audio_obj.sampling_rate))
-
-    def generate_stage1_only(
-        self,
-        prompt: str,
-        *,
-        output_path: str,
-        num_frames: int = 121,
-        height: int = 512,
-        width: int = 768,
-        seed: int = 10,
-        fps: int = 24,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run stage-1 denoise only; optionally dump ``<output_path>_s1.wav``."""
-        assert height % 64 == 0, f"Height must be divisible by 64 (got {height})"
-        assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
-
-        s1_height, s1_width = height // 2, width // 2
-        # On-device Gemma encode (coresident-excluded with the DiT/VAE, so it auto-evicts
-        # them and _prepare_transformer(0) evicts the encoder back). Only load on a cache miss.
-        if not os.path.exists(self._device_embed_cache_path([prompt])):
-            self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt])
-        v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
-
-        self._prepare_transformer(0)
-
-        s1_video, s1_audio = self._denoise_no_guidance(
-            v_embeds,
-            a_embeds,
-            num_frames=num_frames,
-            height=s1_height,
-            width=s1_width,
-            sigma_values=DISTILLED_SIGMA_VALUES,
-            seed=seed,
-        )
-
-        if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes") or os.environ.get(
-            "LTX_DUMP_STAGE1_AUDIO", ""
-        ).lower() in ("1", "true", "yes"):
-            s1_path = output_path.replace(".mp4", "_s1.wav")
-            audio_obj = self.decode_audio(s1_audio, num_frames, fps=fps)
-            if audio_obj is not None:
-                self._write_stage1_wav(audio_obj, s1_path)
-                logger.info(f"Stage-1 audio dump: wrote {s1_path}")
-
-        return s1_video, s1_audio
-
     def generate(
         self,
         prompt: str,
         *,
-        output_path: str,
+        output_path: str | None = None,
+        output_type: str = "rgb",
         # I2V: list of (image_path, frame_idx, strength). Only frame_idx==0 is supported.
         images: list[tuple[str, int, float]] | None = None,
         num_frames: int = 121,
@@ -561,8 +504,13 @@ class LTXDistilledPipeline(LTXPipeline):
         width: int = 768,
         seed: int = 10,
         fps: int = 24,
-    ) -> str:
-        """Run the distilled 2-stage AV pipeline and write an MP4."""
+    ):
+        """Run the distilled 2-stage AV pipeline.
+
+        output_path given → encode an AV MP4 and return its path (str).
+        output_path None  → return ``(frames, audio)`` for the caller to encode: frames per
+                            ``output_type`` (see ``decode_latents``), audio = decoded ``Audio``.
+        """
         assert height % 64 == 0, f"Height must be divisible by 64 (got {height})"
         assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
 
@@ -626,14 +574,6 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
 
-        if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes"):
-            s1_path = output_path.replace(".mp4", "_s1.wav")
-            audio_obj = self.decode_audio(s1_audio, num_frames, fps=fps)
-            if audio_obj is not None:
-                self._write_stage1_wav(audio_obj, s1_path)
-                logger.info(f"LTX_DECODE_S1_AUDIO: wrote {s1_path}")
-            return output_path
-
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
@@ -673,8 +613,10 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
+        # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
+        decode_type = "float" if output_path is not None else output_type
         t0 = time.time()
-        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
+        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
@@ -685,10 +627,13 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
 
+        self.last_timings = list(timings)
+        if output_path is None:
+            logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | frames={tuple(video_pixels.shape)}")
+            return video_pixels, audio_obj
+
         t0 = time.time()
         export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
-
-        self.last_timings = list(timings)
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
         return output_path
