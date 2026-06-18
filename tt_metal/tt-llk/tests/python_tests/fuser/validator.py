@@ -62,10 +62,6 @@ def _tile_dims(ts: TileShape) -> Tuple[int, int]:
     return (ts.total_row_dim(), ts.total_col_dim())
 
 
-def _is_valid_tile(dims: Tuple[int, int]) -> bool:
-    return dims in SUPPORTED_TILE_SIZES
-
-
 def _is_sfpu_tile(dims: Tuple[int, int]) -> bool:
     return dims in ((16, 32), (32, 32), (32, 16))
 
