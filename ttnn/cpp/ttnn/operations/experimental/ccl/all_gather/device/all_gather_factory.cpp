@@ -184,23 +184,23 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     //
     // Glossary:
     //   input page     -- one page of the input tensor.
-    //   output page    -- one page of the output tensor.
-    //                     In concat mode the *kernel-visible* output page size is
-    //                     smaller than the tensor's actual output page.
-    //   stripe         -- a run of consecutive output page ids this device writes
-    //                     before jumping past other devices' contributions.
+    //   output page    -- one page of the output tensor (the real buffer page).
+    //   chunk          -- one NOC write = min(input_page, output_page) bytes. An input
+    //                     page = split_factor chunks; an output page = output_chunks_per_page
+    //                     chunks. The kernel iterator walks chunks.
+    //   stripe         -- a run of consecutive chunks this device writes before
+    //                     jumping past other devices' contributions.
     //   stripe jump    -- value the kernel adds to output_page_id at the stripe
     //                     boundary.
-    //   stripe distance-- page-id distance from start of one of this device's
-    //                     stripes to the start of the next.
     //
     // Three copy modes, picked by input vs output page sizes:
-    //   matched (in == out): 1 write per input page, byte offset = 0.
-    //   concat  (out > in) : 1 write per input page, byte offset = (d % concat_factor) * in.
-    //   split   (in > out) : split_factor writes per input page, byte offset = 0.
+    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
+    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each
+    //                        chunk lands at a byte offset within a shared output page.
+    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
     //
-    // Kernel is a dumb page iterator. Iteration pattern is periodic stripes, i.e.
-    // consecutive pages (stripe) followed by periodic jumps (to the next stripe).
+    // Kernel is a dumb chunk iterator. Iteration pattern is:
+    //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
     //
     // Host derives the iterator parameters from input/output page sizes, gather dim,
     // and device index.
@@ -217,20 +217,18 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     }
 
     // --- Copy mode ---
-    // Exactly one of concat_factor or split_factor is > 1 (or both = 1 in matched mode).
-    const uint32_t concat_factor = std::max(1u, output_page_size / input_page_size);
+    // output_chunks_per_page > 1 in concat mode; split_factor > 1 in split mode; both
+    // = 1 in matched mode (output_chunk_size == input_page_size == output_page_size).
+    const uint32_t output_chunk_size = std::min(input_page_size, output_page_size);  // NOC write size
+    const uint32_t output_chunks_per_page = std::max(1u, output_page_size / input_page_size);
     const uint32_t split_factor = std::max(1u, input_page_size / output_page_size);
 
-    // kernel_output_page_size = bytes per write = min(input, output).
-    const uint32_t kernel_output_page_size = std::min(input_page_size, output_page_size);
-    const uint32_t output_page_byte_offset = (device_idx % concat_factor) * input_page_size;
-    const uint32_t device_slot = device_idx / concat_factor;
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    const uint32_t num_output_pages = num_input_pages * split_factor;
+    const uint32_t num_output_chunks = num_input_pages * split_factor;
 
     // --- CB sizing ---
     // cb_page_size is a multiple of input_page_size, which is itself a multiple of
-    // kernel_output_page_size = min(input, output), so the kernel increments both
+    // output_chunk_size = min(input, output), so the kernel increments both
     // the cb_read_ptr and cb_write_ptr cleanly.
     const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
     uint32_t cb_page_size = input_page_size * pages_per_packet;
@@ -275,14 +273,24 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         input_pages_per_stripe *= extent;
     }
 
-    // In concat mode each iter goes to a different output page (one chunk per row
-    // from this device), so the stripe is 1 long. Otherwise the stripe spans this
-    // device's full contribution: input_pages_per_stripe * split_factor consecutive
-    // output pages.
-    const uint32_t output_pages_per_stripe = (concat_factor > 1) ? 1u : input_pages_per_stripe * split_factor;
-    const uint32_t output_page_stripe_distance = (num_devices * input_pages_per_stripe * split_factor) / concat_factor;
-    const uint32_t output_page_stripe_jump = output_page_stripe_distance - output_pages_per_stripe + 1;
-    TT_FATAL(output_pages_per_stripe > 0, "output_pages_per_stripe must be > 0");
+    // Stripe = this device's contiguous run of chunks per row = input_pages_per_stripe
+    // * split_factor. Measured in chunks (not output pages) so multi-shard concat works:
+    // a stripe's chunks are laid across output pages via the inner byte-offset counter
+    // and may straddle pages.
+    const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
+    const uint32_t stripe_distance_chunks = num_devices * output_chunks_per_stripe;
+    const uint32_t output_pages_per_row = stripe_distance_chunks / output_chunks_per_page;
+    // This device's chunk phase within the output page. Constant across rows because
+    // output_chunks_per_page divides stripe_distance_chunks (valid output sharding).
+    const uint32_t off_start_chunks = (device_idx * output_chunks_per_stripe) % output_chunks_per_page;
+    // Page carries accumulated while walking one full stripe.
+    const uint32_t in_stripe_carries = (off_start_chunks + output_chunks_per_stripe - 1) / output_chunks_per_page;
+    // Value added to output_page_id at the stripe boundary (jump to this device's run
+    // in the next row): pages_per_row minus the carries already taken within the stripe.
+    const uint32_t output_page_stripe_jump = output_pages_per_row - in_stripe_carries;
+    // Per-device byte offset phase the iterator resets to at each stripe boundary.
+    const uint32_t output_page_byte_offset = off_start_chunks * output_chunk_size;
+    TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -301,9 +309,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     std::vector<uint32_t> reader_compile_args = {
         cb0_id,                          // cb0_id
         input_page_size,                 // input tensor page size
-        kernel_output_page_size,         // kernel-visible page size = min(input, output)
-        output_pages_per_stripe,         // stripe length (writes before a stripe jump)
-        output_page_stripe_jump,         // value added to page_id at stripe boundary
+        output_chunk_size,               // NOC write size = min(input, output)
+        output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
+        output_chunks_per_stripe,        // stripe length in chunks (before a stripe jump)
+        output_page_stripe_jump,         // value added to output_page_id at stripe boundary
         cb_page_size,                    // cb entry size
         packet_size,                     // packet_size
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
@@ -316,9 +325,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // Writer (covers backward directions W-line + N-rect)
     std::vector<uint32_t> writer_compile_args = {
         cb0_id,                          // cb0_id
-        kernel_output_page_size,         // kernel-visible page size = min(input, output)
-        output_pages_per_stripe,         // stripe length (writes before a stripe jump)
-        output_page_stripe_jump,         // value added to page_id at stripe boundary
+        output_chunk_size,               // NOC write size = min(input, output)
+        output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
+        output_chunks_per_stripe,        // stripe length in chunks (before a stripe jump)
+        output_page_stripe_jump,         // value added to output_page_id at stripe boundary
         cb_page_size,                    // cb entry size
         packet_size,                     // packet_size
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
@@ -352,23 +362,23 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
 
-        // Map this worker's slice of input pages to its slice of output writes.
-        // num_output_pages already accounts for split_factor, so in matched/concat
+        // Map this worker's slice of input pages to its slice of output chunks.
+        // num_output_chunks already accounts for split_factor, so in matched/concat
         // modes the ratio cancels back to num_input_pages.
-        uint32_t local_output_start = (input_tile_id_start * num_output_pages) / num_input_pages;
-        uint32_t local_output_end = (input_tile_id_end * num_output_pages) / num_input_pages;
-        uint32_t num_worker_output_pages = local_output_end - local_output_start;
-        // Map local write index -> global output page id of this device's first write:
-        //     stripe_index           = local / output_pages_per_stripe
-        //     position_in_stripe     = local % output_pages_per_stripe
-        //     output_page_id_start   = stripe_index * output_page_stripe_distance
-        //                            + device_slot * output_pages_per_stripe
-        //                            + position_in_stripe
-        // Concat with concat_factor=N collapses naturally (stripe_distance=1, device_slot=0).
-        uint32_t output_page_id_start = (local_output_start / output_pages_per_stripe) * output_page_stripe_distance +
-                                        device_slot * output_pages_per_stripe +
-                                        local_output_start % output_pages_per_stripe;
-        uint32_t output_page_in_stripe_start = local_output_start % output_pages_per_stripe;
+        uint32_t local_output_start = (input_tile_id_start * num_output_chunks) / num_input_pages;
+        uint32_t local_output_end = (input_tile_id_end * num_output_chunks) / num_input_pages;
+        uint32_t num_worker_output_chunks = local_output_end - local_output_start;
+        // s_start = global chunk index of this worker's first write:
+        //     stripe_index  = local / output_chunks_per_stripe
+        //     pos_in_stripe = local % output_chunks_per_stripe
+        //     s_start       = stripe_index * stripe_distance_chunks    (skip other devices' rows)
+        //                   + device_idx   * output_chunks_per_stripe  (this device's run in the row)
+        //                   + pos_in_stripe
+        uint32_t s_start = (local_output_start / output_chunks_per_stripe) * stripe_distance_chunks +
+                           device_idx * output_chunks_per_stripe + local_output_start % output_chunks_per_stripe;
+        uint32_t output_page_id_start = s_start / output_chunks_per_page;
+        uint32_t output_page_byte_offset_start = (s_start % output_chunks_per_page) * output_chunk_size;
+        uint32_t output_chunk_in_stripe_start = local_output_start % output_chunks_per_stripe;
 
         // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:
         //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
@@ -382,9 +392,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             input_tile_id_start,                // input_page_id_start
             input_tile_id_end,                  // input_page_id_end
             output_page_id_start,               // output page start
-            output_page_in_stripe_start,        // initial position within stripe
-            output_page_byte_offset,            // byte offset within output page (nonzero only in page-concat)
-            num_worker_output_pages,            // number of output pages for this worker
+            output_chunk_in_stripe_start,       // initial chunk position within stripe
+            output_page_byte_offset,            // per-device offset phase (reset at stripe boundary)
+            output_page_byte_offset_start,      // worker's initial byte offset within output page
+            num_worker_output_chunks,           // number of output chunks for this worker
             device_idx,                         // this device's index
             barrier_sem.address(),              // barrier_sem L1 address
             virtual_core.x,                     // barrier_sem location (core.x)
@@ -423,9 +434,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // output tensor address
             output_page_id_start,               // output page start
-            output_page_in_stripe_start,        // initial position within stripe
-            output_page_byte_offset,            // byte offset within output page (nonzero only in page-concat)
-            num_worker_output_pages,            // number of output pages for this worker
+            output_chunk_in_stripe_start,       // initial chunk position within stripe
+            output_page_byte_offset,            // per-device offset phase (reset at stripe boundary)
+            output_page_byte_offset_start,      // worker's initial byte offset within output page
+            num_worker_output_chunks,           // number of output chunks for this worker
             device_idx,                         // this device's index
             barrier_sem.address(),              // barrier_sem L1 address
             virtual_core.x,                     // barrier_sem location (core.x)
@@ -490,15 +502,15 @@ void AllGatherFactory::override_runtime_arguments(
             GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
 
         for (const auto& core : shared_vars.sender_worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr, [9]=barrier_sem
+            // reader: [0]=input_addr, [1]=output_addr, [10]=barrier_sem
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
             worker_reader_sender_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
             worker_reader_sender_runtime_args[1] = output_tensor.buffer()->address();
-            worker_reader_sender_runtime_args[9] = barrier_sem_addr;
-            // writer: [0]=output_addr, [6]=barrier_sem
+            worker_reader_sender_runtime_args[10] = barrier_sem_addr;
+            // writer: [0]=output_addr, [7]=barrier_sem
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
             worker_writer_sender_runtime_args[0] = output_tensor.buffer()->address();
-            worker_writer_sender_runtime_args[6] = barrier_sem_addr;
+            worker_writer_sender_runtime_args[7] = barrier_sem_addr;
         }
     }
 }

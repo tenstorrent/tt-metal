@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <array>
+#include <utility>
 
 #include "common.hpp"
 
@@ -28,20 +29,22 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t output_pages_per_stripe = get_compile_time_arg_val(3);
-    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t num_connections = get_compile_time_arg_val(8);
-    constexpr bool do_init_barrier = get_compile_time_arg_val(9) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
+    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(2);
+    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(3);
+    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(4);
+    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
+    constexpr uint32_t packet_size = get_compile_time_arg_val(7);
+    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t num_connections = get_compile_time_arg_val(9);
+    constexpr bool do_init_barrier = get_compile_time_arg_val(10) != 0;
+    constexpr auto input_tensor_args = TensorAccessorArgs<11>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
+    constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
-    constexpr uint32_t outputs_per_cb_page = cb_page_size / output_page_size;
+    constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
     constexpr uint32_t num_banks = NUM_DRAM_BANKS;  // compile-time constant available in kernels
 
     ///////////////////////////////////////////////////
@@ -53,9 +56,10 @@ void kernel_main() {
     const uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_page_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_in_stripe_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_chunk_in_stripe_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_page_byte_offset = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_output_pages = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_page_byte_offset_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_output_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
@@ -112,7 +116,7 @@ void kernel_main() {
 #endif
 
     // Allocate header and set state for data sends
-    FabricWriter<output_page_size, packet_size, load_balance_across_alt_routes> fabric(
+    FabricWriter<output_chunk_size, packet_size, load_balance_across_alt_routes> fabric(
         noc, fabric_connection, num_connections, ranges, ranges_alt);
 
     // Allocate header and set state for semaphore sends
@@ -185,24 +189,31 @@ void kernel_main() {
     auto valid_input_page_id = [&]() __attribute__((always_inline)) { return input_page_id < input_page_id_end; };
     auto next_input_page_id = [&]() __attribute__((always_inline)) { return input_page_id++; };
 
-    // "iterator" for output_tensor
-    // Walks output_pages_per_stripe consecutive pages, then jumps by output_page_stripe_jump
-    // to skip over other devices' contributions. Supports any gather dim for any N-D shape.
-    // See the "Page indexing" glossary block in all_gather_factory.cpp.
+    // "iterator" for output_tensor:
+    //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
+    // (see the "Page indexing" glossary in all_gather_factory.cpp)
+    // Returns {output_page_id, byte_offset} for the current chunk, then advances.
+    // Supports any gather dim, any N-D shape, any shard spec.
     uint32_t output_page_id = output_page_id_start;
-    uint32_t output_pages_sent = 0;
-    uint32_t output_page_in_stripe = output_page_in_stripe_start;
-    auto valid_output_page_id = [&]() __attribute__((always_inline)) { return output_pages_sent < num_output_pages; };
-    auto next_output_page_id = [&]() __attribute__((always_inline)) {
-        auto page_id = output_page_id;
-        output_pages_sent++;
-        if (++output_page_in_stripe == output_pages_per_stripe) {
-            output_page_in_stripe = 0;
+    uint32_t output_page_byte_off = output_page_byte_offset_start;
+    uint32_t output_chunks_sent = 0;
+    uint32_t output_chunk_in_stripe = output_chunk_in_stripe_start;
+    auto valid_output_chunk = [&]() __attribute__((always_inline)) { return output_chunks_sent < num_output_chunks; };
+    auto next_output_chunk = [&]() __attribute__((always_inline)) {
+        std::pair<uint32_t, uint32_t> loc{output_page_id, output_page_byte_off};
+        output_chunks_sent++;
+        if (++output_chunk_in_stripe == output_chunks_per_stripe) {
+            output_chunk_in_stripe = 0;
             output_page_id += output_page_stripe_jump;
+            output_page_byte_off = output_page_byte_offset;
         } else {
-            output_page_id++;
+            output_page_byte_off += output_chunk_size;
+            if (output_page_byte_off == output_page_size) {
+                output_page_byte_off = 0;
+                output_page_id++;
+            }
         }
-        return page_id;
+        return loc;
     };
 
     // We reserve one to kick start the pipeline, and then it is steady state
@@ -243,12 +254,12 @@ void kernel_main() {
 
             if constexpr (enable_fabric) {
                 // Send Fabric data in our dir
-                for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_page_id(); ++i) {
-                    auto page_id = next_output_page_id();
+                for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_chunk(); ++i) {
+                    auto [page_id, page_byte_offset] = next_output_chunk();
                     auto fabric_tensor_page_addr = tt::tt_fabric::addrgen_detail::get_noc_address(
-                        output_tensor_accessor, page_id, output_page_byte_offset);
+                        output_tensor_accessor, page_id, page_byte_offset);
                     fabric.async_write(l1_read_addr, fabric_tensor_page_addr);
-                    l1_read_addr += output_page_size;
+                    l1_read_addr += output_chunk_size;
                 }
                 fabric.async_writes_flushed();
                 if (l1_read_addr == l1_end_addr) {
@@ -272,12 +283,12 @@ void kernel_main() {
 
         if constexpr (enable_fabric) {
             // Send Fabric data in our dir
-            for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_page_id(); ++i) {
-                auto page_id = next_output_page_id();
-                auto fabric_tensor_page_addr = tt::tt_fabric::addrgen_detail::get_noc_address(
-                    output_tensor_accessor, page_id, output_page_byte_offset);
+            for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_chunk(); ++i) {
+                auto [page_id, page_byte_offset] = next_output_chunk();
+                auto fabric_tensor_page_addr =
+                    tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, page_byte_offset);
                 fabric.async_write(l1_read_addr, fabric_tensor_page_addr);
-                l1_read_addr += output_page_size;
+                l1_read_addr += output_chunk_size;
             }
             fabric.async_writes_flushed();
             if (l1_read_addr == l1_end_addr) {
