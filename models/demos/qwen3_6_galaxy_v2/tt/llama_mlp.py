@@ -200,6 +200,14 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
+        # Blocker-#1 decode probe: mirror the prefill bf16 fix on the traced decode
+        # path. Hold the gate/up matmul outputs + their reduce_scatter SUM in bf16
+        # (the precision-critical partial-K sum), and route the SiLU*up product
+        # through the pre-allocated bf16 all-gather buffer (BINARY_MUL_BF16). The
+        # down-proj + FF2 all_reduce stay bf8 (buffer-pinned). Gated default-off.
+        _ccl_dt = ttnn.bfloat16 if os.environ.get("QWEN36_MLP_CCL_BF16", "0") == "1" else ttnn.bfloat8_b
+        _ag_buf_key = "BINARY_MUL_BF16" if _ccl_dt == ttnn.bfloat16 else "BINARY_MUL"
+
         compute_kernel = (
             self.args.compute_kernel_config_lofi if self.four_bit_mlp else self.args.compute_kernel_config_hifi2
         )
@@ -271,7 +279,7 @@ class TtLlamaMLP(LightweightModule):
                 x,
                 self.w1,
                 compute_kernel_config=compute_kernel,
-                dtype=ttnn.bfloat8_b,
+                dtype=_ccl_dt,
                 program_config=pc_1_3,
                 memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
@@ -280,7 +288,7 @@ class TtLlamaMLP(LightweightModule):
                 x,
                 self.w3,
                 compute_kernel_config=compute_kernel,
-                dtype=ttnn.bfloat8_b,
+                dtype=_ccl_dt,
                 program_config=pc_1_3,
                 memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
@@ -308,7 +316,7 @@ class TtLlamaMLP(LightweightModule):
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
+            dtype=_ccl_dt,
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
 
@@ -321,7 +329,7 @@ class TtLlamaMLP(LightweightModule):
             cluster_axis=1,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            buffer_key="BINARY_MUL",
+            buffer_key=_ag_buf_key,
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
 
@@ -331,7 +339,7 @@ class TtLlamaMLP(LightweightModule):
             w2_in,
             self.w2,
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
+            dtype=_ccl_dt,
             program_config=pc_2,
             memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
@@ -357,6 +365,20 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
+        # Blocker-#1 probe: TP=4 (working 27B) keeps the entire SwiGLU intermediate
+        # (gate/up partial-sum reduction + SiLU*up product) in bf16 and does a single
+        # bf16 all_reduce; galaxy_v2 reduces the partial sums and runs the activation
+        # product in bf8_b at every layer. bf8 accumulation noise corrupts the logit
+        # distribution tail (kills sampling, EOS-first-token on long/video prefill).
+        # Set QWEN36_MLP_CCL_BF16=1 to hold the prefill FF intermediate in bf16 (DRAM,
+        # safe to widen) and confirm/refute that as the root cause.
+        _ccl_dt = ttnn.bfloat16 if os.environ.get("QWEN36_MLP_CCL_BF16", "0") == "1" else ttnn.bfloat8_b
+        # bf16 gate/up reduce_scatter: use a "_BF16"-suffixed buffer key so the ring
+        # reduce_scatter MISSES the dtype-pinned bf8 persistent buffer and falls back to
+        # a fresh (input-dtype = bf16) allocation — avoids the bf8-interim NaN. The
+        # non-ring path ignores the key (always fresh), so this is safe either way.
+        _ff1_rs_key = "FF1_BF16" if _ccl_dt == ttnn.bfloat16 else "FF1"
+        _ff3_rs_key = "FF3_BF16" if _ccl_dt == ttnn.bfloat16 else "FF3"
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
@@ -377,7 +399,7 @@ class TtLlamaMLP(LightweightModule):
                     if self.four_bit_mlp
                     else self.args.compute_kernel_config_hifi2_fp16
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=_ccl_dt,
                 program_config=short_lens_pc_1_3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -395,7 +417,7 @@ class TtLlamaMLP(LightweightModule):
             cluster_axis=1,
             num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
             memory_config=w1_out.memory_config(),
-            buffer_key="FF1",
+            buffer_key=_ff1_rs_key,
             dim=3,
             batch_size=batch_size,
         )
@@ -411,7 +433,7 @@ class TtLlamaMLP(LightweightModule):
                     if self.four_bit_mlp
                     else self.args.compute_kernel_config_hifi2_fp16
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=_ccl_dt,
                 program_config=short_lens_pc_1_3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -429,11 +451,16 @@ class TtLlamaMLP(LightweightModule):
             cluster_axis=1,
             num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
             memory_config=w3_out.memory_config(),
-            buffer_key="FF3",
+            buffer_key=_ff3_rs_key,
             dim=3,
             batch_size=batch_size,
         )
         ttnn.deallocate(w3_out)
+        # Cast the SiLU*up product back to bf8 here: the gate/up partial-K SUM
+        # (reduce_scatter above) is the precision-critical op and now runs in bf16,
+        # but line_all_gather below uses a dtype-pinned (bf8) persistent buffer and
+        # the gather is non-summing (pure concatenation), so a single bf8 cast here
+        # is harmless and avoids the buffer-dtype mismatch.
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,

@@ -1253,6 +1253,11 @@ class TtLlamaAttention(LightweightModule):
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
+        # Blocker-#1: bf16 attention-WO sum (QWEN36_MLP_CCL_BF16). The decode attn output
+        # all_reduce (cluster_axis=0) feeds the residual every full-attn layer; bf8 here
+        # accumulates drift across 16 layers. bf16 output makes line_all_reduce pick the
+        # bf16 cluster_axis=0 scratch (shared with FF2/DO). Gated default-off.
+        _wo_dt = ttnn.bfloat16 if os.environ.get("QWEN36_MLP_CCL_BF16", "0") == "1" else ttnn.bfloat8_b
         dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
             attn_output_cat,
             self.wo,
@@ -1260,7 +1265,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            dtype=ttnn.bfloat8_b,
+            dtype=_wo_dt,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
@@ -1314,6 +1319,10 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
+        # NOTE: prefill xqkv bf16 (QWEN36_MLP_CCL_BF16) was tried to clean the KV cache
+        # feeding decode, but it did NOT fix the LaTeX/formula sampling collapse and
+        # slightly worsened greedy (chat-template token leak), so it was reverted. The
+        # remaining tail degeneration is not a CCL-reduction dtype issue.
         xqkv = ttnn.linear(
             x_11SH,
             self.wqkv_interleaved,

@@ -140,6 +140,14 @@ class TT_CCL:
             self.persistent_buffers = self.get_persistent_buffers()
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
+            # bf16 FF-reduce path (QWEN36_MLP_CCL_BF16): the sharded llama_reduce_scatter
+            # interim must match the input dtype, so allocate a parallel bf16 interim pool.
+            # Gated so the default bf8 path pays no extra L1/DRAM.
+            self.reduce_scatter_buffers_bf16 = (
+                self.get_decode_reduce_scatter_buffers(dtype=ttnn.bfloat16)
+                if (self.is_qwen36 and os.environ.get("QWEN36_MLP_CCL_BF16", "0") == "1")
+                else None
+            )
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
@@ -496,6 +504,21 @@ class TT_CCL:
         )
         persistent_buffers[cluster_axis] = tt_buffer
 
+        # bf16 FF2/DO all_reduce scratch (QWEN36_MLP_CCL_BF16): the down-proj sum is the
+        # last bf8 reduction feeding the residual each layer. all_reduce_async needs a
+        # dtype-matched persistent buffer, so allocate a bf16 cluster_axis=0 variant.
+        # Gated so the default bf8 path pays no extra L1.
+        self._ff2_ar_buffer_bf16 = None
+        if self.is_qwen36 and os.environ.get("QWEN36_MLP_CCL_BF16", "0") == "1":
+            self._ff2_ar_buffer_bf16 = ttnn.from_torch(
+                torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=buffer_mem_cfg,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+
         # Create persistent buffers for cluster axis 1
         cluster_axis = 1
         num_input_cores_create_qkv = 10
@@ -677,12 +700,16 @@ class TT_CCL:
         )
         self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
-    def get_decode_reduce_scatter_buffers(self):
+    def get_decode_reduce_scatter_buffers(self, dtype=ttnn.bfloat8_b):
         """
         Currently, this is hardcoded with llama specific shapes.
 
         Creates double buffered persistent CCL buffers for each cluster axis.
 
+        ``dtype`` selects the interim packet-staging dtype. The sharded
+        ``llama_reduce_scatter`` corrupts (→ NaN) when its interim buffer dtype
+        differs from the input, so the bf16 FF-reduce path (QWEN36_MLP_CCL_BF16)
+        needs a matching bfloat16 interim variant.
         """
 
         persistent_buffers = [[], []]
@@ -699,7 +726,7 @@ class TT_CCL:
                     torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=dtype,
                     memory_config=buffer_mem_cfg,
                     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
                 )
@@ -1127,6 +1154,14 @@ class TT_CCL:
                 )
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
+                # bf16 FF2/DO sum (QWEN36_MLP_CCL_BF16): match the bf16 input with the
+                # bf16 scratch buffer so all_reduce_async sums in bf16, not bf8.
+                if (
+                    cluster_axis == 0
+                    and getattr(self, "_ff2_ar_buffer_bf16", None) is not None
+                    and input_tensor_mesh.dtype == ttnn.bfloat16
+                ):
+                    persistent_buffer = self._ff2_ar_buffer_bf16
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,
@@ -1551,9 +1586,16 @@ class TT_CCL:
             ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         else:
-            persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
-                self.reduce_scatter_buffer_idx[cluster_axis]
-            ]
+            # bf16 FF-reduce (QWEN36_MLP_CCL_BF16): the interim packet buffer dtype must
+            # match the input or the kernel corrupts the data (→ NaN). Use the parallel
+            # bf16 interim pool when the input is bf16 and the pool was allocated.
+            _rs_pool = self.reduce_scatter_buffers
+            if (
+                getattr(self, "reduce_scatter_buffers_bf16", None) is not None
+                and input_tensor_mesh.dtype == ttnn.bfloat16
+            ):
+                _rs_pool = self.reduce_scatter_buffers_bf16
+            persistent_interim_buffer = _rs_pool[cluster_axis][self.reduce_scatter_buffer_idx[cluster_axis]]
             ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
                 input_tensor_mesh,
                 persistent_interim_buffer,
