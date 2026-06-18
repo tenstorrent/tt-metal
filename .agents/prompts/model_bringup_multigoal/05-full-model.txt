@@ -1,4 +1,4 @@
-/goal Use $full-model for the HF_MODEL optimized multichip decoder in the current tt-metal checkout.
+/goal Use $full-model and $tt-device-usage for the HF_MODEL optimized multichip decoder in the current tt-metal checkout.
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
@@ -19,6 +19,6 @@ Goal completion requirements:
 - models/autoports/<model>/doc/full_model/README.md and work_log.md record commands, top-k accuracy, qualitative verdict, perf, limitations, and exact artifacts.
 - Canonical split sampling is required for completion. If force-argmax, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampler op dominates token-out decode, fix the LM-head/sampling contract before completing the goal.
 - The generator supports an explicit host-sampling compatibility mode for tests that require host sampling, while the optimized measured token-out path remains on-device traced sampling.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
 
-Do not mark this goal complete while any completion requirement is unmet.
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

@@ -1,4 +1,4 @@
-/goal Use $vllm-integration for the HF_MODEL datatype-selected optimized full model in the current tt-metal checkout.
+/goal Use $vllm-integration and $tt-device-usage for HF_MODEL.
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
@@ -24,6 +24,6 @@ Goal completion requirements:
 - model serves through the shared vLLM path with evidence.
 - Primary single-user vLLM TTFT and decode t/s/u are reported at the top of README.md, with CI serving-burst metrics secondary and workload shapes next to every number.
 - Any host-sampling mode needed by shared tests is explicit and optional; it must not replace the on-device traced sampling path used for performance.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
 
-Do not mark this goal complete while any completion requirement is unmet.
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

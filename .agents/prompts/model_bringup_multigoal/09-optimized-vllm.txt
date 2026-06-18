@@ -1,4 +1,4 @@
-/goal Use $vllm-integration and $optimize for HF_MODEL vLLM serving in this tt-metal checkout.
+/goal Use $vllm-integration, $optimize, and $tt-device-usage for HF_MODEL vLLM serving in this tt-metal checkout.
 
 Subagents are authorized when a selected skill requests or recommends them.
 
@@ -22,6 +22,6 @@ Goal completion requirements:
 - Relevant $optimize checklist items are completed with evidence for the vLLM serving path.
 - Use $tt-enable-tracing for trace capture, nonblocking replay, async readback, stale inputs, or serving trace correctness.
 - README.md leads with primary single-user vLLM TTFT and decode t/s/u; CI serving-burst metrics are secondary. Workload shapes sit next to every number.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
 
-Do not mark this goal complete while any completion requirement is unmet.
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
