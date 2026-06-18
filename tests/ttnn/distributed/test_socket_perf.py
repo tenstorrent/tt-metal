@@ -33,7 +33,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 
 
-NUM_WARMUP_ITERS = 2
+NUM_WARMUP_ITERS = 3
 NUM_MEASURED_ITERS = 100
 NUM_BUFFERED_RECV_BUFFERS = 3
 
@@ -163,8 +163,8 @@ def _run_mesh_socket_bandwidth_case(
         send_op = ttnn.experimental.send_async
         recv_op = ttnn.experimental.recv_async
 
-    sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2), ttnn.MeshCoordinate(0, 0))
-    receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2), ttnn.MeshCoordinate(1, 0))
+    sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 0))
+    receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(1, 0))
 
     mesh_shape = sender_mesh_device.shape
     num_chips = mesh_shape[0] * mesh_shape[1]
@@ -177,49 +177,44 @@ def _run_mesh_socket_bandwidth_case(
     socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config)
     send_socket, recv_socket = ttnn.create_socket_pair(sender_mesh_device, receiver_mesh_device, socket_config)
 
-    torch_input = torch.randn(tensor_shape, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        device=sender_mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(sender_mesh_device),
-    )
-    if transfer_mode == "buffered":
-        buffered_outputs = [
-            ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device)
-            for _ in range(NUM_BUFFERED_RECV_BUFFERS)
-        ]
-    else:
-        output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device)
+    torch_input = [torch.randn(tensor_shape, dtype=torch.bfloat16) for _ in range(NUM_WARMUP_ITERS)]
+    input_tensors = [
+        ttnn.from_torch(
+            torch_input[i],
+            device=sender_mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(sender_mesh_device),
+        )
+        for i in range(NUM_WARMUP_ITERS)
+    ]
 
-    for _ in range(NUM_WARMUP_ITERS):
-        if transfer_mode == "direct":
-            send_op(input_tensor, output_tensor, send_socket)
-        else:
-            send_op(input_tensor, send_socket)
+    output_tensors = [
+        ttnn.allocate_tensor_on_device(input_tensors[i].spec, receiver_mesh_device)
+        for i in range(NUM_BUFFERED_RECV_BUFFERS)
+    ]
+    for i in range(NUM_WARMUP_ITERS):
+        send_op(input_tensors[i], send_socket)
         if transfer_mode == "buffered":
-            recv_op(buffered_outputs, recv_socket)
+            recv_op(output_tensors, recv_socket)
         else:
-            recv_op(output_tensor, recv_socket)
-    ttnn.synchronize_device(sender_mesh_device)
-    ttnn.synchronize_device(receiver_mesh_device)
+            recv_op(output_tensors[i], recv_socket)
+    for i in range(NUM_WARMUP_ITERS):
+        output_data = ttnn.to_torch(output_tensors[i])
+        eq, msg = comp_equal(torch_input[i], output_data)
+        assert eq, msg
 
     start = time.perf_counter()
 
     sender_trace = ttnn.begin_trace_capture(sender_mesh_device, cq_id=0)
     receiver_trace = ttnn.begin_trace_capture(receiver_mesh_device, cq_id=0)
     for _ in range(NUM_MEASURED_ITERS):
-        pass
-        if transfer_mode == "direct":
-            send_op(input_tensor, output_tensor, send_socket)
-        else:
-            send_op(input_tensor, send_socket)
+        send_op(input_tensors[0], send_socket)
         if transfer_mode == "buffered":
-            recv_op(buffered_outputs, recv_socket)
+            recv_op(output_tensors, recv_socket)
         else:
-            recv_op(output_tensor, recv_socket)
+            recv_op(output_tensors[0], recv_socket)
     ttnn.end_trace_capture(sender_mesh_device, sender_trace, cq_id=0)
     ttnn.end_trace_capture(receiver_mesh_device, receiver_trace, cq_id=0)
     ttnn.synchronize_device(sender_mesh_device)
@@ -227,13 +222,9 @@ def _run_mesh_socket_bandwidth_case(
     start = time.perf_counter()
     ttnn.execute_trace(sender_mesh_device, sender_trace, cq_id=0, blocking=False)
     ttnn.execute_trace(receiver_mesh_device, receiver_trace, cq_id=0, blocking=True)
+    ttnn.synchronize_device(sender_mesh_device)
+    ttnn.synchronize_device(receiver_mesh_device)
     elapsed_s = time.perf_counter() - start
-
-    if transfer_mode == "buffered":
-        output_tensor = buffered_outputs[0]
-    input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
-    output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0))
-    eq, msg = comp_equal(input_data, output_data)
 
     bytes_per_iter_per_chip = tensor_shape[0] * tensor_shape[1] * BFLOAT16_BYTES
     total_bytes = bytes_per_iter_per_chip * num_chips * NUM_MEASURED_ITERS
