@@ -5,17 +5,50 @@
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/work_split.hpp"
 
-#include <map>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include <limits>
 #include <string>
+#include <vector>
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactory::create_descriptor(
+namespace {
+
+// ---------------------------------------------------------------------------
+// Named resource ids (replace the legacy magic CB indices and positional args).
+// ---------------------------------------------------------------------------
+
+// DataflowBuffers (one per legacy CB c_0..c_7).
+const DFBSpecName INPUT_DFB{"input"};                      // c_0: input values
+const DFBSpecName INDEX_DFB{"index"};                      // c_1: generated indices
+const DFBSpecName TRANSPOSED_VAL_DFB{"transposed_val"};    // c_2: transposed value staging
+const DFBSpecName TRANSPOSED_IND_DFB{"transposed_ind"};    // c_3: transposed index staging
+const DFBSpecName RESULT_PREP_VAL_DFB{"result_prep_val"};  // c_4: result-prep values (double buffered)
+const DFBSpecName RESULT_PREP_IND_DFB{"result_prep_ind"};  // c_5: result-prep indices (double buffered)
+const DFBSpecName OUTPUT_VAL_DFB{"output_val"};            // c_6: output values
+const DFBSpecName OUTPUT_IND_DFB{"output_ind"};            // c_7: output indices
+
+// Tensor parameters.
+const TensorParamName INPUT_TENSOR{"input"};
+const TensorParamName INDICES_TENSOR{"indices"};
+const TensorParamName VALUES_OUT_TENSOR{"values_out"};
+const TensorParamName INDICES_OUT_TENSOR{"indices_out"};
+
+// Kernels.
+const KernelSpecName READER_KERNEL{"reader"};
+const KernelSpecName WRITER_KERNEL{"writer"};
+const KernelSpecName COMPUTE_KERNEL{"compute"};
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProgramFactory::create_program_artifacts(
     const TopkParams& operation_attributes,
     const TopkInputs& tensor_args,
     std::tuple<Tensor, Tensor>& tensor_return_value) {
@@ -29,8 +62,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     // Determine index output format based on dimension size constraints
     const ttnn::Shape input_shape = input_tensor.padded_shape();
     const bool uint16_output = (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
-
-    ProgramDescriptor desc;
 
     // Data format conversions for circular buffer configurations
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -76,10 +107,16 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     const auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
-    const std::vector<CoreCoord>& cores = corerange_to_cores(core_range, total_number_of_cores, true);
 
     // Number of tiles needed to store K top elements
     const uint32_t Ktiles = tt::div_up(args.k, tile_width);
+
+    // GENERATE_INDICES is hardcoded to 1 today (GH issue #36329); the precomputed-indices
+    // read path (the only consumer of the optional indices tensor) is compiled out. The
+    // optional `indices` TensorParameter / binding is enumerated regardless, gated by the
+    // same condition so the typed path stays correct when #36329 is fixed.
+    constexpr bool generate_indices = true;
+    const bool bind_precomputed_indices = tensor_args.indices.has_value() && !generate_indices;
 
     // Pipeline Flow:
     // Input CB -> Reader Kernel -> Transposed CBs -> Compute Kernel -> Result Prep CBs -> Output CBs -> Writer Kernel
@@ -90,205 +127,285 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     const uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // Intermediate TopK results (double-buffered)
     const uint32_t output_cb_tile_count = Ktiles;           // Final output buffer
 
-    // Circular Buffer Creations:
-    constexpr uint32_t input_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = input_cb_tile_count * input_tile_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_cb_index),
-            .data_format = input_cb_data_format,
-            .page_size = input_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t index_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = input_cb_tile_count * index_tile_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_cb_index),
-            .data_format = output_ind_cb_data_format,
-            .page_size = index_tile_size,
-        }}},
-    });
-
-    // Uses bf16 when input is bfp8/bfp4 so that the insertion sort operates at higher
-    // precision and avoids shared-exponent corruption of tiles adjacent to inf values.
-    constexpr uint32_t transposed_val_cb_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = transposed_cb_tile_count * compute_tile_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(transposed_val_cb_index),
-            .data_format = compute_cb_data_format,
-            .page_size = compute_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t transposed_ind_cb_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = transposed_cb_tile_count * index_tile_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(transposed_ind_cb_index),
-            .data_format = output_ind_cb_data_format,
-            .page_size = index_tile_size,
-        }}},
-    });
-
-    // Uses bf16 when input is bfp8/bfp4 (same rationale as transposed_val_cb_index).
-    constexpr uint32_t result_prep_val_cb_index = tt::CBIndex::c_4;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = result_prep_cb_tile_count * compute_tile_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(result_prep_val_cb_index),
-            .data_format = compute_cb_data_format,
-            .page_size = compute_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t result_prep_ind_cb_index = tt::CBIndex::c_5;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = result_prep_cb_tile_count * index_tile_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(result_prep_ind_cb_index),
-            .data_format = output_ind_cb_data_format,
-            .page_size = index_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t output_val_cb_index = tt::CBIndex::c_6;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_tile_count * value_tile_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_val_cb_index),
-            .data_format = output_val_cb_data_format,
-            .page_size = value_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_7;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_tile_count * index_tile_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_ind_cb_index),
-            .data_format = output_ind_cb_data_format,
-            .page_size = index_tile_size,
-        }}},
-    });
-
-    // Kernel Creations:
-    std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index,                       // Input values
-        index_cb_index,                       // Generated indices
-        Ht,                                   // Height in tiles
-        Wt,                                   // Width in tiles
-        total_number_of_cores,                // Total number of cores
-        static_cast<uint32_t>(uint16_output)  // Index format flag
+    // ----------------------------------------------------------------------
+    // DataflowBuffer specs (one per legacy CB). Every DFB is bound to the
+    // compute kernel, so each carries data_format_metadata.
+    // ----------------------------------------------------------------------
+    Group<DataflowBufferSpec> dfbs = {
+        DataflowBufferSpec{
+            .unique_id = INPUT_DFB,
+            .entry_size = input_tile_size,
+            .num_entries = input_cb_tile_count,
+            .data_format_metadata = input_cb_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = INDEX_DFB,
+            .entry_size = index_tile_size,
+            .num_entries = input_cb_tile_count,
+            .data_format_metadata = output_ind_cb_data_format,
+        },
+        // Uses bf16 when input is bfp8/bfp4 so the insertion sort operates at higher
+        // precision and avoids shared-exponent corruption of tiles adjacent to inf values.
+        DataflowBufferSpec{
+            .unique_id = TRANSPOSED_VAL_DFB,
+            .entry_size = compute_tile_size,
+            .num_entries = transposed_cb_tile_count,
+            .data_format_metadata = compute_cb_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = TRANSPOSED_IND_DFB,
+            .entry_size = index_tile_size,
+            .num_entries = transposed_cb_tile_count,
+            .data_format_metadata = output_ind_cb_data_format,
+        },
+        // Uses bf16 when input is bfp8/bfp4 (same rationale as transposed_val).
+        DataflowBufferSpec{
+            .unique_id = RESULT_PREP_VAL_DFB,
+            .entry_size = compute_tile_size,
+            .num_entries = result_prep_cb_tile_count,
+            .data_format_metadata = compute_cb_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = RESULT_PREP_IND_DFB,
+            .entry_size = index_tile_size,
+            .num_entries = result_prep_cb_tile_count,
+            .data_format_metadata = output_ind_cb_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = OUTPUT_VAL_DFB,
+            .entry_size = value_tile_size,
+            .num_entries = output_cb_tile_count,
+            .data_format_metadata = output_val_cb_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = OUTPUT_IND_DFB,
+            .entry_size = index_tile_size,
+            .num_entries = output_cb_tile_count,
+            .data_format_metadata = output_ind_cb_data_format,
+        },
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
-    if (tensor_args.indices.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.indices->mesh_tensor()).append_to(reader_compile_time_args);
+
+    // ----------------------------------------------------------------------
+    // Tensor parameters (one per distinct originating tensor).
+    // ----------------------------------------------------------------------
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()},
+        TensorParameter{.unique_id = VALUES_OUT_TENSOR, .spec = value_tensor.tensor_spec()},
+        TensorParameter{.unique_id = INDICES_OUT_TENSOR, .spec = index_tensor.tensor_spec()},
+    };
+    if (bind_precomputed_indices) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = INDICES_TENSOR, .spec = tensor_args.indices->mesh_tensor().tensor_spec()});
     }
-    const std::map<std::string, std::string> reader_defines_map = {
-        {"GENERATE_INDICES", "1"},  // tensor_args.indices.has_value() ? "0" : "1" - GH issue: #36329
+
+    // ----------------------------------------------------------------------
+    // Reader kernel.
+    // ----------------------------------------------------------------------
+    KernelSpec reader{
+        .unique_id = READER_KERNEL,
+        .source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
+        .compiler_options =
+            {
+                .defines = generate_indices ? KernelSpec::CompilerOptions::Defines{{"GENERATE_INDICES", "1"}}
+                                            : KernelSpec::CompilerOptions::Defines{},
+            },
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = INDEX_DFB, .accessor_name = "index", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "inout"},
+            },
+        .compile_time_args =
+            {
+                {"Ht", Ht},
+                {"Wt", Wt},
+                {"total_number_of_cores", total_number_of_cores},
+                {"uint16_output", static_cast<uint32_t>(uint16_output)},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"id", "work_per_core"},
+            },
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
     };
-    KernelDescriptor::Defines reader_defines(reader_defines_map.begin(), reader_defines_map.end());
+    if (bind_precomputed_indices) {
+        reader.tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = INDICES_TENSOR, .accessor_name = "indices"});
+    }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_range;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = std::move(reader_defines);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    std::vector<uint32_t> writer_compile_time_args = {
-        output_val_cb_index,   // CB6: Output values
-        output_ind_cb_index,   // CB7: Output indices
-        Ht,                    // Height in tiles
-        Ktiles,                // K value in tiles
-        total_number_of_cores  // Total number of cores
-    };
-    tt::tt_metal::TensorAccessorArgs(value_tensor).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(index_tensor).append_to(writer_compile_time_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_range;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    const std::vector<uint32_t> compute_args = {
-        input_cb_index,                            // Input values
-        index_cb_index,                            // Input indices
-        transposed_val_cb_index,                   // Transposed values
-        transposed_ind_cb_index,                   // Transposed indices
-        result_prep_val_cb_index,                  // Result prep values
-        result_prep_ind_cb_index,                  // Result prep indices
-        output_val_cb_index,                       // Output values
-        output_ind_cb_index,                       // Output indices
-        Ht,                                        // Height in tiles
-        Wt,                                        // Width in tiles
-        Ktiles,                                    // K value in tiles
-        static_cast<std::uint32_t>(args.largest),  // Sort order: largest (true) or smallest (false)
+    // ----------------------------------------------------------------------
+    // Writer kernel.
+    // ----------------------------------------------------------------------
+    KernelSpec writer{
+        .unique_id = WRITER_KERNEL,
+        .source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_VAL_DFB,
+                    .accessor_name = "values",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_IND_DFB,
+                    .accessor_name = "indices",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = VALUES_OUT_TENSOR, .accessor_name = "values"},
+                TensorBinding{.tensor_parameter_name = INDICES_OUT_TENSOR, .accessor_name = "out_indices"},
+            },
+        .compile_time_args =
+            {
+                {"Ht", Ht},
+                {"Kt", Ktiles},
+                {"total_number_of_cores", total_number_of_cores},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"id", "work_per_core"},
+            },
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
     };
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_range;
-    compute_desc.compile_time_args = compute_args;
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = !uint16_output,
-        .dst_full_sync_en = false,
+    // ----------------------------------------------------------------------
+    // Compute kernel.
+    // c_2..c_5 are self-loop (PRODUCER + CONSUMER): the compute kernel both
+    // reserves/pushes and waits/pops these staging / result-prep buffers itself.
+    // ----------------------------------------------------------------------
+    KernelSpec compute{
+        .unique_id = COMPUTE_KERNEL,
+        .source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = INDEX_DFB, .accessor_name = "index", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = TRANSPOSED_VAL_DFB,
+                    .accessor_name = "transposed_val",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = TRANSPOSED_VAL_DFB,
+                    .accessor_name = "transposed_val",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = TRANSPOSED_IND_DFB,
+                    .accessor_name = "transposed_ind",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = TRANSPOSED_IND_DFB,
+                    .accessor_name = "transposed_ind",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = RESULT_PREP_VAL_DFB,
+                    .accessor_name = "result_prep_val",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = RESULT_PREP_VAL_DFB,
+                    .accessor_name = "result_prep_val",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = RESULT_PREP_IND_DFB,
+                    .accessor_name = "result_prep_ind",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = RESULT_PREP_IND_DFB,
+                    .accessor_name = "result_prep_ind",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_VAL_DFB,
+                    .accessor_name = "output_val",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_IND_DFB,
+                    .accessor_name = "output_ind",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .compile_time_args =
+            {
+                {"Ht", Ht},
+                {"Wt", Wt},
+                {"output_tiles", Ktiles},
+                {"largest", static_cast<uint32_t>(args.largest)},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"work_per_core"},
+            },
+        .hw_config =
+            ComputeHardwareConfig{
+                .fp32_dest_acc_en = !uint16_output,
+                .dst_full_sync_en = false,
+            },
     };
+
+    // ----------------------------------------------------------------------
+    // Assemble the spec.
+    // ----------------------------------------------------------------------
+    ProgramSpec spec{
+        .name = "topk_single_core",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "topk",
+                    .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL},
+                    .target_nodes = core_range,
+                },
+            },
+    };
+
+    // ----------------------------------------------------------------------
+    // Run args: per-core (id, work_per_core) for reader/writer; (work_per_core)
+    // for compute. id is the sequential per-core offset, matching the legacy loop.
+    // ----------------------------------------------------------------------
+    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
+    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    Group<KernelRunArgs::NodeRuntimeArgs> compute_node_args;
 
     uint32_t id = 0;  // Offset for the next core in the group
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                reader_desc.emplace_runtime_args(
-                    core,
-                    {
-                        input_tensor,
-                        id,
-                        work_per_core,
-                        tensor_args.indices.has_value()
-                            ? static_cast<uint32_t>(tensor_args.indices->mesh_tensor().address())
-                            : 0u,  // Optional indices tensor
-                    });
-                writer_desc.emplace_runtime_args(
-                    core,
-                    {
-                        value_tensor,
-                        index_tensor,
-                        id,
-                        work_per_core,
-                    });
-                compute_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        work_per_core,
-                    });
+                reader_node_args.push_back({.node = core, .args = {{"id", id}, {"work_per_core", work_per_core}}});
+                writer_node_args.push_back({.node = core, .args = {{"id", id}, {"work_per_core", work_per_core}}});
+                compute_node_args.push_back({.node = core, .args = {{"work_per_core", work_per_core}}});
                 id++;
             }
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramRunArgs run_args{
+        .kernel_run_args =
+            {
+                KernelRunArgs{.kernel = READER_KERNEL, .runtime_arg_values = std::move(reader_node_args)},
+                KernelRunArgs{.kernel = WRITER_KERNEL, .runtime_arg_values = std::move(writer_node_args)},
+                KernelRunArgs{.kernel = COMPUTE_KERNEL, .runtime_arg_values = std::move(compute_node_args)},
+            },
+        .tensor_args =
+            {
+                {INPUT_TENSOR, input_tensor},
+                {VALUES_OUT_TENSOR, value_tensor},
+                {INDICES_OUT_TENSOR, index_tensor},
+            },
+    };
+    if (bind_precomputed_indices) {
+        run_args.tensor_args.emplace(INDICES_TENSOR, tensor_args.indices->mesh_tensor());
+    }
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim
