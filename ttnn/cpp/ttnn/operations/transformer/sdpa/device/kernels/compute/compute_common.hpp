@@ -1305,7 +1305,7 @@ ALWI void matmul_blocks(
     CircularBuffer cb_mask(mask_cb);
     CircularBuffer cb_zero(zero_cb);
 
-    mm_block_init_short(
+    matmul_block_init(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     const uint32_t output_num_tiles = M * N;
@@ -1346,7 +1346,7 @@ ALWI void matmul_blocks(
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
                 reconfig_data_format(in1_cb, in0_cb);
-                mm_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
+                matmul_block_init(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -1395,7 +1395,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
      * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
      */
 
-    mm_block_init_short(
+    matmul_block_init(
         out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     constexpr uint32_t output_num_tiles = M * N;
