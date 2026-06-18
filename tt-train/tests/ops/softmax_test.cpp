@@ -40,6 +40,7 @@ xt::xarray<float> xt_softmax(const xt::xarray<float>& input, uint32_t dim = 3U) 
     return result;
 }
 
+// Disabled: flaky — https://github.com/tenstorrent/tt-metal/issues/46422
 TEST_F(SoftmaxTest, DISABLED_SoftmaxTest_Batch) {
     using namespace ttml;
 
