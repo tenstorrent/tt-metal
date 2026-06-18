@@ -682,14 +682,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     bool conv_tile_pack_row_major = false;
     // caller_owns class (default; was the env-gated TT_CONV_TRM_CALLER_OWNS PoC): the deep-K
     // packer_l1_acc + bias convs that pin used to capture (rn50 DS2/DS3/L3a/L3b/L4a/L4b) now route
-    // through the matmul-helper caller_owns_pack_target + TileRowMajor path instead of SBM+pin. These
-    // convs all satisfy out_subblock_w == per_core_N (in1_num_subblocks == 1), so TileRowMajor is
-    // BYTE-IDENTICAL to SubblockMajor — we KEEP the SBM-derived subblock (do NOT re-derive the relaxed/
-    // taller subblock) and only flip the layout flag + emit the caller_owns define (below, near the
-    // compute_defines). The decision is finalized after get_cb_info (where partials_cb_uses_output is
-    // known); see the conv_caller_owns block following the CB-info call. TT_CONV_TRM_DISABLE forces the
-    // old SBM+pin path back for an A/B. caller_owns and pin are mutually exclusive (the kernel keys
-    // pin off SubblockMajor; caller_owns forces TileRowMajor → conv_pin computes false).
+    // through the matmul-helper caller_owns_pack_target + TileRowMajor path (pin has been deleted —
+    // GH#45995). These convs all satisfy out_subblock_w == per_core_N (in1_num_subblocks == 1), so
+    // TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the SBM-derived subblock (do NOT
+    // re-derive the relaxed/taller subblock) and only flip the layout flag + emit the caller_owns
+    // define (below, near the compute_defines). The decision is finalized after get_cb_info (where
+    // partials_cb_uses_output is known); see the conv_caller_owns block following the CB-info call.
+    // TT_CONV_TRM_DISABLE forces the plain SBM non-pin FIFO path back for a caller_owns-vs-SBM A/B.
     bool conv_caller_owns = false;
     {
         const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
@@ -909,38 +908,37 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
 
-    // ── caller_owns class (DEFAULT — replaces SBM+pin for the deep-K INTERM-target pin class) ─────────
-    // The compute kernel used to pin (pin_interm_to_captured_base) exactly when:
+    // ── caller_owns class (DEFAULT — replaces the deleted pin for the deep-K INTERM-target class) ─────
+    // The compute kernel used to pin (the now-deleted pin_interm_to_captured_base) exactly when:
     //     packer_l1_acc && SubblockMajor && (fuse_bias || untilize_out || !partials_cb_uses_output)
-    // (see conv_pin in conv_bmm_tilize.cpp). Dropping pin routes that class through the matmul-helper
+    // Pin has been removed (GH#45995); that class now routes through the matmul-helper
     // caller_owns_pack_target + TileRowMajor path instead. caller_owns requires TileRowMajor layout +
     // DEDICATED (non-aliased) partials. For the engaged convs out_subblock_w == per_core_N
     // (in1_num_subblocks == 1), so TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the
     // SBM-derived subblock (no relaxed re-derive) and only flip the layout flag + emit
-    // CONV_CALLER_OWNS_PACK_TARGET. The kernel then computes conv_pin == false (it requires SubblockMajor;
-    // caller_owns forces TileRowMajor) — caller_owns and pin stay mutually exclusive.
+    // CONV_CALLER_OWNS_PACK_TARGET.
     //
     // Engage only when the production no-bias TRM-relaxed path above did NOT already claim this conv
     // (conv_tile_pack_row_major still false): that path re-derives a taller subblock, which is incompatible
-    // with the byte-identical SBM-subblock requirement here. TT_CONV_TRM_DISABLE forces the SBM+pin path
-    // back (get_cb_info also re-aliases partials under that flag) for a true caller_owns-vs-pin A/B.
+    // with the byte-identical SBM-subblock requirement here. TT_CONV_TRM_DISABLE forces the plain SBM
+    // non-pin FIFO path back (get_cb_info also re-aliases the single-output-block partials onto OUT under
+    // that flag) for a caller_owns-vs-SBM-non-pin A/B.
     //
-    // Scope: the INTERM-target members of the pin class — the matmul packs its last K-block to the
+    // Scope: the INTERM-target members of the former pin class — the matmul packs its last K-block to the
     // DEDICATED matmul_partials_cb (LastBlockTarget::Interm), and the kernel's caller_owns reserve/push
     // is on matmul_partials_cb. The downstream consumer reads partials and writes a DISTINCT out_cb:
     //   • fuse_bias  (step a): bias-add reads partials → out_cb. Validated on rn50 DS2/DS3/L3a/L3b/L4a/L4b
-    //     (bit-identical to SBM+pin).
+    //     (bit-identical to the old SBM+pin).
     //   • untilize_out, no bias (step a′): the untilize phase reads the row-major partials via plain
     //     `untilize` (WaitMode::WaitBlock) → out_cb — the SAME helper instantiation CCL all_gather and the
     //     bias path use (LastBlockTarget::Interm + TileRowMajor + caller_owns_pack_target). The +12.7%
-    //     pin win on these (vu_512_30x40_BS ROW_MAJOR) is preserved without pin.
+    //     win on these (vu_512_30x40_BS ROW_MAJOR) is preserved without pin.
     // The OUT target (no bias, no untilize, dedicated multi-output-block partials) is NOT migrated to
-    // caller_owns and is taken off pin via the dropped !partials_cb_uses_output trigger in conv_pin (it
-    // runs the helper's NON-pin FIFO). Rationale: it has no production-trace vehicle (every real no-bias
-    // TILE conv is single-output-block → partials aliased onto OUT → already non-pin; multi-output-block
-    // OUT pin is only reachable via a synthetic act_block_h override), and caller_owns + the Out-target
-    // software-reload would need new shared-helper logic untested by any shipped caller (CCL/bias/untilize
-    // all use the Interm target). The synthetic-only non-pin perf delta is accepted.
+    // caller_owns: it runs the helper's NON-pin FIFO. Rationale: it has no production-trace vehicle (every
+    // real no-bias TILE conv is single-output-block → partials aliased onto OUT → already non-pin;
+    // multi-output-block OUT was only reachable via a synthetic act_block_h override), and caller_owns +
+    // the Out-target software-reload would need new shared-helper logic untested by any shipped caller
+    // (CCL/bias/untilize all use the Interm target). The synthetic-only non-pin perf delta is accepted.
     //
     // caller_owns keeps the SBM-derived subblock (no relaxed re-derive). For in1_num_subblocks == 1
     // (out_subblock_w == per_core_N) TileRowMajor is BYTE-IDENTICAL to SBM; for in1_num_subblocks > 1
@@ -1139,7 +1137,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // out_subblock_{h,w} were already folded into the compute compile args.
     if (conv_tile_pack_row_major) {
         compute_defines["CONV_TILE_PACK_ROW_MAJOR"] = "1";
-        // caller_owns class (default, replaces SBM+pin for the deep-K fuse_bias + packer_l1_acc pin
+        // caller_owns class (default, replaces the deleted pin for the deep-K fuse_bias + packer_l1_acc
         // class): tell the kernel to switch the matmul interm pack onto the caller_owns_pack_target
         // contract (single outer reserve/push, helper skips its own reserve/push/drain). The other
         // (no-bias) TileRowMajor convs keep the helper-owned reserve/push.
@@ -1148,32 +1146,23 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
     }
 
-    // CONV_PIN_AUDIT: mirror the kernel's conv_pin constexpr from the host flags so the drop-pin
-    // invariant is log-confirmable per conv without device-side logging. After step a′ the kernel is
-    //   conv_pin = packer_l1_acc && (output_layout==SubblockMajor) && (fuse_bias || untilize_out)
-    // and the kernel forces TileRowMajor (→ SubblockMajor false) whenever conv_tile_pack_row_major is set
-    // (caller_owns OR the no-bias TRM-relaxed path), so the host mirror is
-    // SubblockMajor == !conv_tile_pack_row_major. In the default (non-TT_CONV_TRM_DISABLE) path this
-    // resolves to conv_pin == false for every conv: fuse_bias/untilize_out go caller_owns (TileRowMajor),
-    // and the OUT target no longer triggers pin.
-    {
-        const bool host_subblock_major = !conv_tile_pack_row_major;
-        const bool host_conv_pin = packer_l1_acc_en && host_subblock_major && (has_bias || untilize_out);
-        log_debug(
-            tt::LogOp,
-            "CONV_PIN_AUDIT conv_pin={} | packer_l1_acc={} subblock_major={} has_bias={} untilize_out={} "
-            "dedicated_partials={} | trm={} caller_owns={} per_core_M={} per_core_N={}",
-            host_conv_pin,
-            packer_l1_acc_en,
-            host_subblock_major,
-            has_bias,
-            untilize_out,
-            !partials_cb_uses_output,
-            conv_tile_pack_row_major,
-            conv_caller_owns,
-            act_block_h_ntiles,
-            weight_block_w_ntiles);
-    }
+    // CONV_LAYOUT_AUDIT: log the per-conv layout routing decision so the drop-pin migration is
+    // log-confirmable without device-side logging. Pin has been deleted; in the default
+    // (non-TT_CONV_TRM_DISABLE) path the deep-K packer_l1_acc INTERM-target convs (fuse_bias/untilize_out)
+    // route to caller_owns (TileRowMajor) and everything else runs the helper's plain non-pin FIFO.
+    log_debug(
+        tt::LogOp,
+        "CONV_LAYOUT_AUDIT | packer_l1_acc={} subblock_major={} has_bias={} untilize_out={} "
+        "dedicated_partials={} | trm={} caller_owns={} per_core_M={} per_core_N={}",
+        packer_l1_acc_en,
+        !conv_tile_pack_row_major,
+        has_bias,
+        untilize_out,
+        !partials_cb_uses_output,
+        conv_tile_pack_row_major,
+        conv_caller_owns,
+        act_block_h_ntiles,
+        weight_block_w_ntiles);
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));

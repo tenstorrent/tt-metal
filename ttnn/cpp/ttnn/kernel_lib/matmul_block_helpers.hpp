@@ -15,9 +15,9 @@
 namespace compute_kernel_lib {
 
 /**
- * SUPPORT MATRIX vs. PIN OPTIMIZATION — read this first.
+ * SUPPORT MATRIX — read this first.
  *
- * The helper's FULL, caller-agnostic support matrix is the NON-PIN path:
+ * The helper's FULL, caller-agnostic support matrix is the default FIFO path:
  *   OutputCBLayout {SubblockMajor, TileRowMajor}
  *     × packer_l1_acc {on, off}
  *     × bias {fused, none}
@@ -28,23 +28,16 @@ namespace compute_kernel_lib {
  * default. This is the FIFO spill/reload path: the helper
  * reserves/pushes/pops the pack target in one-block increments per K-block.
  *
- * pin_interm_to_captured_base (see the param doc on matmul_block below) is NOT part
- * of that matrix — it is an OPT-IN performance optimization layered on top, which a
- * caller selects only where it wins. It reserves the output block ONCE, packs each
- * K-block to fixed offsets, and skips the per-K-block L1_ACC drain. Because that
- * fixed-offset packing is intrinsically subblock-contiguous, pin composes ONLY with
- * OutputCBLayout::SubblockMajor AND packer_l1_acc — enforced by a static_assert in
- * the .inl. There is deliberately NO TileRowMajor + pin: no caller needs it and the
- * mechanisms don't compose. (Pin is opt-in only for a caller whose interm is a
- * dedicated single-output-block region under deep-K packer_l1_acc accumulation;
- * every other path, including all TileRowMajor quadrants, runs non-pin.)
+ * (Removed pin: the former pin_interm_to_captured_base opt-in — reserve-once,
+ * pack each K-block to fixed offsets, skip the per-K-block L1_ACC drain — has been
+ * deleted [GH#45995]. The caller_owns_pack_target contract below recovers the exact
+ * same drain-skip win, so no caller needs pin.)
  *
- * TileRowMajor's analogous "accumulate K-blocks into a fixed region" capability DOES
- * exist, but via a different, caller-owned contract: caller_owns_pack_target paired
- * with TileRowMajor + packer_l1_acc + Interm (the helper skips all its own
- * reserve/push/drain; the caller does one reserve before + one push after).
- * Callers that accumulate K-blocks into a caller-owned fixed region via
- * absolute-offset packing use this; the default FIFO callers do not.
+ * "Accumulate K-blocks into a fixed region" is available via the caller-owned
+ * contract: caller_owns_pack_target paired with TileRowMajor + packer_l1_acc + Interm
+ * (the helper skips all its own reserve/push/drain; the caller does one reserve before
+ * + one push after). Callers that accumulate K-blocks into a caller-owned fixed region
+ * via absolute-offset packing use this; the default FIFO callers do not.
  */
 
 /**
@@ -522,28 +515,6 @@ struct NoIn1BaseOffset {
  *   PreKBlockFn       Functor called at the start of each K-block iteration, before
  *                     input CB waits. Receives (block, num_k_blocks, is_last).
  *                     Use for per-K-block preprocessing such as in0_transpose.
- *   pin_interm_to_captured_base
- *                     Default false (non-pin — the FIFO spill/reload path every default
- *                     caller uses; do not change). OPT-IN perf feature for a
- *                     caller whose interm_buf is a DEDICATED single-output-block L1 region:
- *                     instead of the per-K-block
- *                     reserve / push / wait_front / pop_front FIFO choreography, the helper
- *                     reserves the whole out_block on interm ONCE at K-loop entry, packs
- *                     each K-block's subblock partials to FIXED subblock-contiguous tile
- *                     offsets within that reservation (pack_tile<true>), skips the per-K-block
- *                     interm drain entirely, and pushes the full block ONCE at exit. This
- *                     recovers the packer_l1_acc drain-skip win (no per-K-block CB
- *                     bookkeeping; L1_ACC integrates per-address across K-blocks at the fixed
- *                     offsets). Requires packer_l1_acc (the drain-skip only exists with L1
- *                     accumulation) and tile_order == SubblockMajor; supports BOTH
- *                     last_block_target == Interm (one pinned region, exit push makes it
- *                     visible) and Out / OutWithRelu (non-last spills pinned + accumulated,
- *                     last block reloads the accumulated partial from the fixed offset and
- *                     packs sequentially to out_buf). Caller MUST size interm_buf to exactly
- *                     ONE output block and reset its rd/wr ptrs to a fixed base each outer
- *                     iteration so each output block reuses the same region. No
- *                     pin_base_tile_offset is needed — the dedicated one-block
- *                     region wraps to the caller-reset base per output block. batch must be 1.
  *   PostKBlockFn      Functor called at the very end of each K-block iteration, after
  *                     input pop_front and after the L1_ACC partial drain. Receives
  *                     (block, num_k_blocks, is_last). Symmetric counterpart to
@@ -840,7 +811,6 @@ template <
     InputPolicy in1_policy = InputPolicy::WaitAndPopPerKBlock,
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock,
-    bool pin_interm_to_captured_base = false,
     typename PostKBlockFn = NoPostKBlock,
     uint32_t untilize_block_ct_dim = 0,
     typename KBlockInnerDimFn = NoKBlockInnerDimFn,

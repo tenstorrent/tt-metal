@@ -398,36 +398,17 @@ void kernel_main() {
     // exactly this many tiles on the dedicated partials CB once per outer iter (= L4a's 4×2 = 8).
     constexpr uint32_t out_block_num_tiles = (in0_num_subblocks * out_subblock_h) * in1_block_w;
 
-    // ── PIN (legacy perf feature being eliminated; GH#45995) ──────────────────────────────────────
-    // pin_interm_to_captured_base recovered the packer_l1_acc per-K-block DRAIN-SKIP win by reserving
-    // the whole out_block ONCE at K-loop entry, packing each K-block's subblock partials to FIXED
-    // offsets (L1_ACC integrates per-address), skipping the per-K-block interm reserve/push/wait/pop,
-    // and pushing once at exit. The matmul-helper caller_owns_pack_target contract recovers the EXACT
-    // same drain-skip without the bespoke pin machinery (one caller reserve_back before the K-loop +
-    // one push_back after; the helper skips its own per-block reserve/push/drain).
-    //
-    // DROP-PIN (step a + a′): conv no longer selects pin for ANY conv. The factory routes the deep-K
-    // packer_l1_acc INTERM-target classes (fuse_bias [step a] AND untilize_out [step a′]) through
-    // caller_owns_pack_target + TileRowMajor instead — those convs are SBM (in1_num_subblocks==1) so
-    // TileRowMajor is BYTE-IDENTICAL to SubblockMajor, and caller_owns forces TileRowMajor →
-    // conv_output_layout != SubblockMajor → conv_pin computes false. The only remaining pin trigger was
-    // the OUT target (no-bias, no-untilize, DEDICATED multi-output-block partials); step a′ drops that
-    // trigger from conv_pin so those convs run the helper's NON-pin FIFO (the dedicated one-block
-    // partials makes the non-pin FIFO wrap to base every K-block, so L1_ACC still accumulates at a
-    // fixed base — see the dedicate-partials note at the top of kernel_main). The OUT target was NOT
-    // migrated to caller_owns because it has no production-trace vehicle (every real no-bias TILE conv
-    // is single-output-block → partials aliased onto OUT → already non-pin; the multi-output-block OUT
-    // pin path is only reachable via a synthetic act_block_h override) AND caller_owns + the Out-target
-    // software-reload would need new shared-helper logic untested by any shipped caller. The synthetic-
-    // only non-pin perf delta is accepted.
-    //
-    // conv_pin is now ALWAYS false: fuse_bias/untilize_out go caller_owns (TileRowMajor), and the OUT
-    // trigger is gone. The pin_interm_to_captured_base helper feature is still wired (passed below) for
-    // a clean step (b) deletion once no caller uses it; here it always resolves to false.
-    constexpr bool conv_pin_interm_target = fuse_bias || untilize_out;
-    constexpr bool conv_pin = packer_l1_acc &&
-                              (conv_output_layout == compute_kernel_lib::OutputCBLayout::SubblockMajor) &&
-                              conv_pin_interm_target;
+    // ── PIN REMOVED (GH#45995) ────────────────────────────────────────────────────────────────────
+    // The former pin_interm_to_captured_base perf feature (reserve the whole out_block ONCE at K-loop
+    // entry, pack each K-block's subblock partials to FIXED offsets so L1_ACC integrates per-address,
+    // skip the per-K-block interm reserve/push/wait/pop, push once at exit) has been deleted from the
+    // matmul helper and all callers. The deep-K packer_l1_acc INTERM-target classes (fuse_bias and
+    // untilize_out) now route through the matmul-helper caller_owns_pack_target + TileRowMajor path
+    // (one caller reserve_back before the K-loop + one push_back after; the helper skips its own
+    // per-block reserve/push/drain), which recovers the EXACT same drain-skip win without the bespoke
+    // pin machinery. The former OUT-target trigger ran the helper's NON-pin FIFO over a dedicated
+    // one-block partials region (the FIFO wraps to base every K-block, so L1_ACC still accumulates at a
+    // fixed base — see the dedicate-partials note at the top of kernel_main).
 
     constexpr uint32_t out_block_w = in1_block_w;
 
@@ -615,7 +596,6 @@ void kernel_main() {
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 MatmulPostFn,
                 PreKBlockFn,
-                /*pin_interm_to_captured_base=*/conv_pin,
                 compute_kernel_lib::NoPostKBlock,
                 /*untilize_block_ct_dim=*/0,
                 compute_kernel_lib::NoKBlockInnerDimFn,
