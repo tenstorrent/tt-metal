@@ -202,38 +202,29 @@ void kernel_main() {
     }
 
     // -----------------------------------------------------------------------
-    // 4. Read b_proj, a_proj, A_log, dt_bias → compute decay & beta scalars
+    // 4. Read precomputed decay & beta scalars.
+    //    These are now computed host-side via vectorized ttnn ops (sigmoid /
+    //    exp / softplus) to keep expf/logf OFF the NCRISC dataflow core — its
+    //    local data region is small on Wormhole and the libm tables overflow it.
+    //    b_acc carries beta = sigmoid(b_proj);
+    //    a_acc carries decay = exp(-exp(A_log) * softplus(a_proj + dt_bias)).
+    //    a_log_acc / dt_acc are no longer read here (kept in the op signature).
     // -----------------------------------------------------------------------
     {
-        uint32_t b_tile_idx = head_idx / 32;
-        uint32_t b_elem_idx = head_idx % 32;
+        uint32_t tile_idx = head_idx / 32;
+        uint32_t elem_idx = head_idx % 32;
+
         cb_reserve_back(cb_beta, 1);
         uint32_t beta_l1 = get_write_ptr(cb_beta);
-        noc_async_read_tile(b_tile_idx, b_acc, beta_l1);
+        noc_async_read_tile(tile_idx, b_acc, beta_l1);
         noc_async_read_barrier();
-        float b_val = extract_bf16_element_1d(beta_l1, b_elem_idx);
+        float beta_val = extract_bf16_element_1d(beta_l1, elem_idx);
 
         cb_reserve_back(cb_g, 1);
         uint32_t g_l1 = get_write_ptr(cb_g);
-        uint32_t a_tile_idx = head_idx / 32;
-        uint32_t a_elem_idx = head_idx % 32;
-        noc_async_read_tile(a_tile_idx, a_acc, g_l1);
+        noc_async_read_tile(tile_idx, a_acc, g_l1);
         noc_async_read_barrier();
-        float a_val = extract_bf16_element_1d(g_l1, a_elem_idx);
-
-        noc_async_read_tile(a_tile_idx, a_log_acc, beta_l1);
-        noc_async_read_barrier();
-        float a_log_val = extract_bf16_element_1d(beta_l1, a_elem_idx);
-
-        noc_async_read_tile(a_tile_idx, dt_acc, beta_l1);
-        noc_async_read_barrier();
-        float dt_bias_val = extract_bf16_element_1d(beta_l1, a_elem_idx);
-
-        float beta_val = 1.0f / (1.0f + expf(-b_val));
-
-        float a_plus_dt = a_val + dt_bias_val;
-        float sp = (a_plus_dt > 20.0f) ? a_plus_dt : logf(1.0f + expf(a_plus_dt));
-        float decay_val = expf(-expf(a_log_val) * sp);
+        float decay_val = extract_bf16_element_1d(g_l1, elem_idx);
 
         write_bf16_scalar_tile(g_l1, decay_val);
         cb_push_back(cb_g, 1);

@@ -159,3 +159,6 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# qwen36 docker runtime HOME (caches/logs)
+.docker_home/

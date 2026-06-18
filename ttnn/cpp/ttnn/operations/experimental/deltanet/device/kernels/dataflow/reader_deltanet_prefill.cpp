@@ -13,9 +13,46 @@
 // cached to avoid redundant DRAM reads.
 
 #include <cstdint>
-#include <cmath>
 
 #include "api/dataflow/dataflow_api.h"
+
+// Table-free expf / sqrtf. The NCRISC local data region (segment[1]) on
+// Wormhole is only 0x830 bytes; pulling in newlib's expf/logf/sqrtf overflows
+// it. logf was removed by moving decay/beta host-side; these inline approxs
+// remove the last libm math (silu's expf + conv/L2norm sqrtf). Accuracy is
+// ~1e-6 relative — far below bf16's ~1e-3, so numerically negligible.
+FORCE_INLINE float fast_expf(float x) {
+    if (x < -87.0f) return 0.0f;
+    if (x > 88.0f) x = 88.0f;
+    constexpr float LOG2E = 1.44269504088896f;
+    constexpr float LN2 = 0.6931471805599453f;
+    float kf = x * LOG2E;
+    int k = (int)(kf + (kf >= 0.0f ? 0.5f : -0.5f));  // round-to-nearest, no libm
+    float r = x - (float)k * LN2;                      // |r| <= ln2/2
+    // exp(r) via degree-5 Taylor (r small)
+    float p = 1.0f + r * (1.0f + r * (0.5f + r * (0.16666667f + r * (0.041666668f + r * 0.008333334f))));
+    // 2^k via exponent bit construction
+    int e = k + 127;
+    if (e < 1) return 0.0f;
+    if (e > 254) e = 254;
+    uint32_t bits = ((uint32_t)e) << 23;
+    float two_k;
+    __builtin_memcpy(&two_k, &bits, sizeof(float));
+    return p * two_k;
+}
+
+FORCE_INLINE float fast_rsqrtf(float x) {
+    uint32_t i;
+    __builtin_memcpy(&i, &x, sizeof(uint32_t));
+    i = 0x5f3759dfu - (i >> 1);
+    float y;
+    __builtin_memcpy(&y, &i, sizeof(float));
+    y = y * (1.5f - 0.5f * x * y * y);  // Newton iter 1
+    y = y * (1.5f - 0.5f * x * y * y);  // Newton iter 2
+    return y;
+}
+
+FORCE_INLINE float fast_sqrtf(float x) { return x > 0.0f ? x * fast_rsqrtf(x) : 0.0f; }
 
 FORCE_INLINE float bf16_to_f32(uint16_t bf16) {
     uint32_t f32_bits = static_cast<uint32_t>(bf16) << 16;
@@ -72,7 +109,7 @@ FORCE_INLINE void write_bf16_scalar_tile(uint32_t tile_l1_addr, float value) {
 }
 
 FORCE_INLINE float silu_f32(float x) {
-    return x / (1.0f + expf(-x));
+    return x / (1.0f + fast_expf(-x));
 }
 
 void kernel_main() {
@@ -188,7 +225,7 @@ void kernel_main() {
     noc_async_read_barrier();
 
     // 3-5: Pre-compute scaler and eps values for per-iteration push
-    float inv_sqrt_dv = 1.0f / sqrtf(static_cast<float>(Dv));
+    float inv_sqrt_dv = fast_rsqrtf(static_cast<float>(Dv));
     uint16_t sv_bf16 = f32_to_bf16(inv_sqrt_dv);
 
     // ===================================================================
@@ -327,9 +364,9 @@ void kernel_main() {
                     }
                 }
                 constexpr float l2_eps = 1e-6f;
-                float inv_norm = 1.0f / sqrtf(sum_sq + l2_eps);
+                float inv_norm = fast_rsqrtf(sum_sq + l2_eps);
                 if (comp == 0) {
-                    constexpr float scale = 1.0f / sqrtf(static_cast<float>(Dk));
+                    float scale = fast_rsqrtf(static_cast<float>(Dk));
                     inv_norm *= scale;
                 }
                 for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
@@ -381,40 +418,32 @@ void kernel_main() {
         }
 
         // ---------------------------------------------------------------
-        // C. Read b/a projections and compute decay + beta scalars
+        // C. Read precomputed decay & beta scalars.
+        //    Computed host-side via vectorized ttnn ops (sigmoid / exp /
+        //    softplus) to keep expf/logf OFF the NCRISC dataflow core — its
+        //    local data region is small on Wormhole and the libm tables
+        //    overflow it (mirrors the decode reader_deltanet_full.cpp fix).
+        //    b_acc carries beta = sigmoid(b_proj);
+        //    a_acc carries decay = exp(-exp(A_log) * softplus(a_proj + dt_bias)).
+        //    a_log_acc / dt_acc are no longer read here (kept in op signature).
+        //    b/a are [1, 1, S, H_padded]: token s at tile_row, within_row.
         // ---------------------------------------------------------------
         {
-            // b_proj and a_proj are [1, 1, S, H_padded]. Token s at tile_row, within_row.
             uint32_t ba_tile_row_offset = tile_row * ba_col_tiles;
-            uint32_t b_tile_idx = ba_tile_row_offset + head_idx / 32;
-            uint32_t b_elem_col = head_idx % 32;
+            uint32_t tile_idx = ba_tile_row_offset + head_idx / 32;
+            uint32_t elem_col = head_idx % 32;
 
             cb_reserve_back(cb_beta, 1);
             uint32_t beta_l1 = get_write_ptr(cb_beta);
-            noc_async_read_tile(b_tile_idx, b_acc, beta_l1);
+            noc_async_read_tile(tile_idx, b_acc, beta_l1);
             noc_async_read_barrier();
-            float b_val = extract_bf16_element_2d(beta_l1, within_row, b_elem_col);
+            float beta_val = extract_bf16_element_2d(beta_l1, within_row, elem_col);
 
             cb_reserve_back(cb_g, 1);
             uint32_t g_l1 = get_write_ptr(cb_g);
-            uint32_t a_tile_idx = ba_tile_row_offset + head_idx / 32;
-            noc_async_read_tile(a_tile_idx, a_acc, g_l1);
+            noc_async_read_tile(tile_idx, a_acc, g_l1);
             noc_async_read_barrier();
-            float a_val = extract_bf16_element_2d(g_l1, within_row, head_idx % 32);
-
-            // Read A_log and dt_bias (these are [1,1,1,H] — always tile_row 0)
-            noc_async_read_tile(head_idx / 32, a_log_acc, beta_l1);
-            noc_async_read_barrier();
-            float a_log_val = extract_bf16_element_1d(beta_l1, head_idx % 32);
-
-            noc_async_read_tile(head_idx / 32, dt_acc, beta_l1);
-            noc_async_read_barrier();
-            float dt_bias_val = extract_bf16_element_1d(beta_l1, head_idx % 32);
-
-            float beta_val = 1.0f / (1.0f + expf(-b_val));
-            float a_plus_dt = a_val + dt_bias_val;
-            float sp = (a_plus_dt > 20.0f) ? a_plus_dt : logf(1.0f + expf(a_plus_dt));
-            float decay_val = expf(-expf(a_log_val) * sp);
+            float decay_val = extract_bf16_element_2d(g_l1, within_row, elem_col);
 
             write_bf16_scalar_tile(g_l1, decay_val);
             cb_push_back(cb_g, 1);

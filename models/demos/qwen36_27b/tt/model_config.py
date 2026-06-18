@@ -38,14 +38,71 @@ class Qwen36ModelConfig:
 
     # Weight quantization
     weights_dtype: ttnn.DataType = ttnn.bfloat8_b
+    # Dense (attn/deltanet/mlp/lm_head) dtype override for the TP path; falls
+    # back to weights_dtype when None.
+    dense_dtype: ttnn.DataType = None
 
     # Inference
     max_batch_size: int = 1
     max_seq_len: int = 8192
 
+    # ---- vLLM + tensor-parallel (TP) path (everything is dense; TP=8) ----
+    # When dense_tp is True the whole stack (attn q/k/v/o, deltanet projections,
+    # MLP gate/up col-parallel + down row-parallel, lm_head vocab col-parallel)
+    # is sharded across `tp_size` devices on a 1xN line mesh (FABRIC_1D, Linear).
+    dense_tp: bool = False
+    tp_size: int = 8
+    # On-device decode attention (no host round-trip; enables trace).
+    ondevice_attn: bool = False
+    # Fixed contiguous KV cache length for the vLLM contiguous-decode path.
+    kv_cache_len: int = 2048
+    # Matmul math fidelity: None -> ttnn default (HiFi4); else "LoFi"/"HiFi2"/...
+    math_fidelity: str = None
+
     # Paths
     model_name: str = "Qwen/Qwen3.6-27B"
     cache_path: Path = field(default_factory=lambda: Path("/home/yito/ttwork/tt-metal/models/demos/qwen36_27b/weights"))
+
+    def get_dense_dtype(self, default):
+        """Dtype for dense weights. Lets the TP path run dense in (e.g.) bf16
+        while keeping a different default; falls back to weights_dtype."""
+        return self.dense_dtype if self.dense_dtype is not None else default
+
+    _kcfg_cache = None
+
+    def matmul_kcfg(self):
+        """compute_kernel_config for matmuls (None => ttnn default)."""
+        if self.math_fidelity is None:
+            return None
+        if self._kcfg_cache is None:
+            self._kcfg_cache = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=getattr(ttnn.MathFidelity, self.math_fidelity),
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+        return self._kcfg_cache
+
+    # ---- DeltaNet derived dims (mirror the coder_next config helpers) ----
+    @property
+    def head_expand_ratio(self) -> int:
+        return self.linear_num_value_heads // self.linear_num_key_heads  # 48//16 = 3
+
+    @property
+    def linear_key_dim(self) -> int:
+        return self.linear_num_key_heads * self.linear_key_head_dim  # 16*128 = 2048
+
+    @property
+    def linear_value_dim(self) -> int:
+        return self.linear_num_value_heads * self.linear_value_head_dim  # 48*128 = 6144
+
+    @property
+    def conv_dim(self) -> int:
+        return self.linear_key_dim * 2 + self.linear_value_dim  # 2048*2 + 6144 = 10240
+
+    @property
+    def num_kv_groups(self) -> int:
+        return self.num_attention_heads // self.num_key_value_heads  # 24//4 = 6
 
     @property
     def layer_types(self) -> list[str]:
