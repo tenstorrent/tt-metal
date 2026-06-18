@@ -268,8 +268,6 @@ enum class Operation : std::uint8_t
     PackUntilize
 };
 
-// START: get this working before we require uninits for everything
-
 template <Operation op>
 struct OperationMustUninit : std::false_type
 {
@@ -292,8 +290,6 @@ struct OperationMustUninit<Operation::UnpackUntilize> : std::true_type
 
 template <Operation op>
 inline constexpr bool operation_must_uninit = OperationMustUninit<op>::value;
-
-// END: temp fix for uninits
 
 struct OperationState
 {

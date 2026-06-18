@@ -403,7 +403,7 @@ inline void _llk_pack_init_(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack init supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     llk::san::pack_operand_check(llk::san::IGNORE, llk::san::IGNORE, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
-    // sstanisic todo: sanitizer: propagate enum
+    // sstanisic todo: sanitizer: propagate enum (see #47440)
     llk::san::operation_init<llk::san::Operation::Pack>(pack_mode == PackMode::Untilize);
 
     if constexpr (!skip_addrmod_config)
@@ -457,7 +457,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
-    // sstanisic todo: sanitizer: propagate enum
+    // sstanisic todo: sanitizer: propagate enum (see #47440)
     llk::san::operation_check<llk::san::Operation::Pack>(pack_mode == PackMode::Untilize);
 
     if constexpr (pack_mode != PackMode::Untilize)

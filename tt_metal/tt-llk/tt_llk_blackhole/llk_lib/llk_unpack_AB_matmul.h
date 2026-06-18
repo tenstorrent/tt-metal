@@ -241,7 +241,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     // 16x16 matmul not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
     LLK_ASSERT(!(unpA_num_faces == 1 && unpB_num_faces == 1), "16x16 by 16x16 matmul is not supported");
 
-    // sstanisic todo: unpb_num_faces is annoying
+    // sstanisic todo: unpb_num_faces is annoying (see #47440)
     llk::san::unpack_operand_check(
         llk::san::IGNORE,
         llk::san::IGNORE,
