@@ -245,6 +245,9 @@ class ttMLA(_ttMLAv3):
         # All-reduce(SUM) the partial logits over tp -> full head-summed logit before top-k. The op emits
         # ROW_MAJOR; _tp_rs_ag (reduce_scatter+all_gather) runs in TILE, so round-trip the layout.
         if self.tp_factor > 1:
+            # The op emits ROW_MAJOR; round-trip to TILE for the all-reduce. Passing RM straight to the
+            # CCL is correct but ~10 ms slower — ttnn's RM reduce_scatter/all_gather tilize-with-padding
+            # internally and add RM concats, costing more than this explicit ~6 ms tilize/untilize.
             logits = ttnn.to_layout(logits, ttnn.TILE_LAYOUT)
             logits = self._tp_rs_ag(logits)  # RS+AG over tp_axis == all-reduce SUM (reduce accumulates fp32)
             logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
