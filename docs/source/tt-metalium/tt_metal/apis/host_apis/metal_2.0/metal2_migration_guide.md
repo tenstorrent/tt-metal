@@ -895,13 +895,13 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
         .spec       = std::move(spec),
         .run_params = std::move(run_params),
         // .op_owned_tensors = {},  // default-empty; populate only when the factory
-        //                          // allocates its own scratch / workspace tensors,
+        //                          // carries op-owned (config / index-table / workspace) tensors,
         //                          // whose lifetime then tracks the cached entry.
     };
 }
 ```
 
-`ProgramArtifacts` has three fields — `spec`, `run_params`, and `op_owned_tensors` (default-empty). Most ports leave `op_owned_tensors` defaulted; a factory that allocates its own scratch / workspace `MeshTensor`s returns them there, and the framework keeps them alive at a stable address for the cached `Program`'s lifetime. (Op-owned `GlobalSemaphore`s are not supported — the artifact carries only `MeshTensor`s.)
+`ProgramArtifacts` has three fields — `spec`, `run_params`, and `op_owned_tensors` (default-empty). Most ports leave `op_owned_tensors` defaulted; a factory that carries op-owned `MeshTensor`s (config / index-table / workspace tensors it builds beyond the op's io) returns them there, and the framework keeps them alive at a stable address for the cached `Program`'s lifetime. (Op-owned `GlobalSemaphore`s are not supported — the artifact carries only `MeshTensor`s.)
 
 > **Tensor types in a ProgramFactory.** A factory sits between two tensor-type universes; you'll see three names but only two real types:
 > - **`ttnn::Tensor`** — TTNN's PyTorch-like tensor wrapper. Can in general represent either a host-resident or device-resident tensor, but **is always device-resident in a ProgramFactory.** This is what `tensor_args` and `tensor_return_value` carry into `create_program_artifacts`.

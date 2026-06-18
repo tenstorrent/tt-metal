@@ -19,7 +19,7 @@ A Metal 2.0 op factory satisfies **`MetalV2FactoryConcept`**: it implements a si
 This is the Metal 2.0 factory concept ops port to today. It supports:
 
 - **Single-program** — the factory produces one `ProgramSpec`, stamped identically across the mesh.
-- **Op-owned device tensors (optional)** — the factory *may* allocate its own scratch / workspace `MeshTensor`s and return them in `op_owned_tensors`; the framework parks them in the cache entry at a stable address for the cached `Program`'s lifetime. It may **not** allocate its own `GlobalSemaphore`s (the artifact carries only `MeshTensor`s). Every tensor a `TensorArgument` references must be reachable from `tensor_args` / `tensor_return_value` *or* be one of the `op_owned_tensors`.
+- **Op-owned device tensors (optional)** — the factory *may* carry op-owned `MeshTensor`s (config / index-table / workspace tensors it builds beyond the op's io) in `op_owned_tensors`; the framework parks them in the cache entry at a stable address for the cached `Program`'s lifetime. It may **not** allocate its own `GlobalSemaphore`s (the artifact carries only `MeshTensor`s). Every tensor a `TensorArgument` references must be reachable from `tensor_args` / `tensor_return_value` *or* be one of the `op_owned_tensors`.
 - **Strict tensor-arg matching** — every `TensorParameter` enforces an exact `TensorSpec` match when the framework binds a tensor to it.
 
 ```cpp
@@ -46,7 +46,7 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
     return ttnn::device_operation::ProgramArtifacts{
         .spec       = std::move(spec),
         .run_params = std::move(run_args),
-        // .op_owned_tensors = std::move(scratch),  // only if the factory allocates its own tensors
+        // .op_owned_tensors = std::move(op_owned),  // only if the factory carries op-owned tensors
     };
 }
 ```
@@ -80,7 +80,7 @@ The "anything else" cases — and the reason they're blocked:
 
 Op-owned *tensors* are supported on this concept; the remaining gaps — op-owned `GlobalSemaphore`s and genuine multi-program workloads — are not porter-resolvable and are tracked separately. If you hit one, the op is parked until that framework work lands — record it in the audit so it feeds prioritization.
 
-> **Heads-up — a legacy `MeshWorkload` is not automatically a multi-program op.** Some legacy ops construct a `MeshWorkload` only because the legacy framework couldn't carry op-owned tensors on the single-program path. If every per-coord program is structurally identical (same kernels, same DFB shape, same bindings — only the tensor data differs) and the only thing pushing it multi-program was a resource workaround, the op is *morally* single-program and **ports cleanly** — carry its workspace tensors in `op_owned_tensors` on the single-program concept and drop the `MeshWorkload`. Record it as a resource-workaround unwind rather than genuine per-coord variation.
+> **Heads-up — a legacy `MeshWorkload` is not automatically a multi-program op.** Some legacy ops construct a `MeshWorkload` only because the legacy framework couldn't carry op-owned tensors on the single-program path. If every per-coord program is structurally identical (same kernels, same DFB shape, same bindings — only the tensor data differs) and the only thing pushing it multi-program was a resource workaround, the op is *morally* single-program and **ports cleanly** — carry its **op-owned** tensors in `op_owned_tensors` on the single-program concept and drop the `MeshWorkload`. Record it as a resource-workaround unwind rather than genuine per-coord variation.
 
 ### Tensor-arg matching — keep strict
 
