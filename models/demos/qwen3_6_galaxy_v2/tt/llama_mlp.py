@@ -373,12 +373,17 @@ class TtLlamaMLP(LightweightModule):
         # Set QWEN36_MLP_CCL_BF16=1 to hold the prefill FF intermediate in bf16 (DRAM,
         # safe to widen) and confirm/refute that as the root cause.
         _ccl_dt = ttnn.bfloat16 if os.environ.get("QWEN36_MLP_CCL_BF16", "0") == "1" else ttnn.bfloat8_b
-        # bf16 gate/up reduce_scatter: use a "_BF16"-suffixed buffer key so the ring
-        # reduce_scatter MISSES the dtype-pinned bf8 persistent buffer and falls back to
-        # a fresh (input-dtype = bf16) allocation — avoids the bf8-interim NaN. The
-        # non-ring path ignores the key (always fresh), so this is safe either way.
-        _ff1_rs_key = "FF1_BF16" if _ccl_dt == ttnn.bfloat16 else "FF1"
-        _ff3_rs_key = "FF3_BF16" if _ccl_dt == ttnn.bfloat16 else "FF3"
+        # bf16 gate/up reduce_scatter is ONLY taken on the ttnn.linear path
+        # (seq_len < 4096 or batch_size > 1); the seq_len >= 4096 path uses
+        # minimal_matmul which always outputs bf8. Only on the bf16 path do we use a
+        # "_BF16"-suffixed buffer key so the ring reduce_scatter MISSES the dtype-pinned
+        # bf8 persistent buffer and falls back to a fresh (bf16) allocation. Using the
+        # "_BF16" key on the seq_len >= 4096 (bf8) path forces the no-persistent-buffer
+        # ring path, which DEADLOCKS at large seqlen — so gate the key on the same
+        # condition as the bf16 matmul output.
+        _w1w3_bf16 = (_ccl_dt == ttnn.bfloat16) and (seq_len < 4096 or batch_size > 1)
+        _ff1_rs_key = "FF1_BF16" if _w1w3_bf16 else "FF1"
+        _ff3_rs_key = "FF3_BF16" if _w1w3_bf16 else "FF3"
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
