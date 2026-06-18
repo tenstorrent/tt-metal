@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBl
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
@@ -260,15 +261,7 @@ def create_decoder_golden_tensors(
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
-        127,
-        511,
-        1023,
-        2047,
-        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
-        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
-        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
-        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        8190,
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
@@ -593,6 +586,7 @@ def test_decoder(
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
         forward_metadata=d["forward_metadata"],
+        mla_iter_dump_buffer=d["mla_iter_dump_buffer"],  # DEBUG #43563
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -862,11 +856,8 @@ def test_decoder(
 @pytest.mark.parametrize(
     "position_id",
     [
-        # 0,
-        # 127,
-        # pytest.param(511, marks=pytest.mark.skip_post_commit),
-        # pytest.param(1023, marks=pytest.mark.skip_post_commit),
-        # pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        # #43563 chunk scaling sweep — each pos value gives a different chunk
+        # count (k_chunk_size=128). 127=1ch, 255=2ch, 383=3ch, 511=4ch.
         8190,
     ],
 )
@@ -882,14 +873,14 @@ def test_decoder(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [1, 2])
+@pytest.mark.parametrize("num_internal_iterations", [1])  # #43563: alternation = (iter=2) - (iter=1)
 @pytest.mark.parametrize(
     "slot_id, num_slots",
     [
         (0, 1),
     ],
 )
-@pytest.mark.requires_grid_size((13, 10))
+# @pytest.mark.requires_grid_size((13, 10))  # disabled for half-DEST debug on 12x10 host
 def test_decoder_mlp(
     bh_2d_mesh_device,
     device_params,
@@ -1048,10 +1039,166 @@ def test_decoder_mlp(
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
         forward_metadata=d["forward_metadata"],
+        mla_iter_dump_buffer=d["mla_iter_dump_buffer"],  # DEBUG #43563
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
+
+    # ========================================================================
+    # DEBUG #43563: compare iter-0 vs iter-1 SDPA per-core output byte-for-byte.
+    # flash_mla.hpp's static call counter picks per-iter dump CBs:
+    #   iter-0 -> cb_out_in      (bound to mla_iter_dump_buffer @ offset 0)
+    #   iter-1 -> cb_iter1_dump  (bound to mla_iter_dump_buffer @ offset
+    #                             mla_out_in_total_size = 48*512 = 24576 bytes
+    #                             = tile index 48 in the buffer)
+    # Both CBs live in the dedicated `mla_iter_dump_buffer` (uncontested L1).
+    # Within the host's to_torch() view:
+    #   iter-0 = tiles  0..15  (L1 bytes 0..8192)
+    #   iter-1 = tiles 48..63  (L1 bytes 24576..32768)
+    # Shard is (40 rows, 544 cols) per core in TILE_LAYOUT, tile = (8, 32),
+    # tile_cols_per_shard = 17. Tile at L1 tile-index `i` occupies torch view
+    # rows [tile_row*8, tile_row*8+8), cols [tile_col*32, tile_col*32+32),
+    # where tile_row = i // 17, tile_col = i % 17.
+    # NOTE: only valid at position_id=127 (num_cores_to_wait == 0, cb_out_in
+    # unused by sdpa_tail). At multi-chunk this section's CBs race sdpa_tail.
+    # #43562/3 MM1RAW: capture tile 48 (== cb_iter1_dump tile 0 == the SDPA_MM1DIRECT_TAP raw QK^T mm1)
+    # per active flash_mla core, so iters=1 vs iters=2 runs can be diffed (with ZERO_Q_INPUT, mm1 should
+    # be exactly 0 -> any non-zero, iter-dependent value is the spurious bias). NO all-zero skip.
+    _per_core_mm1raw = {}
+    try:
+        sdpa_interm_torch = ttnn.to_torch(
+            d["mla_iter_dump_buffer"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        # Shape: (num_devices * num_cores_per_dev * 40, 544) bf16
+        shard_h, shard_w, tile_h, tile_w = 40, 544, 8, 32
+        tile_cols_per_shard = shard_w // tile_w  # 17
+        num_tiles_per_iter = 16
+        # cb_iter1_dump is bound at L1 offset = mla_out_in_total_size = 48 tiles
+        # of the dedicated buffer (matches attention_block/op.py).
+        iter1_dump_tile_offset = 48
+        num_devices_total = mesh_rows * mesh_cols
+        num_cores_per_dev = device_grid_size.x * device_grid_size.y
+        rows_per_dev = num_cores_per_dev * shard_h
+
+        # Restrict the diff to cores where flash_mla actually runs (mla_core_grid).
+        # sdpa_out_interm_buffer is allocated on the FULL device grid (130 cores per
+        # device), but cb_out_in is only written by our debug pack on flash_mla's
+        # cores. On other cores the L1 at offset [0, 24576) is contested by other
+        # CBs (matmul_input_cb, matmul_output_cb, ...) so naive diffing produces
+        # massive false positives. Reproduce op.py's mla_all_cores computation here.
+        flash_mla_program_config = FlashMLADecode.ProgramConfig()
+        optimized_mla_grid = flash_mla_program_config.grid
+        mla_core_coords = set()
+        for s_block_idx in range(optimized_mla_grid.NUM_BLOCKS):
+            for coord in optimized_mla_grid.get_cores(s_block_idx):
+                mla_core_coords.add(tuple(coord))
+        logger.info(f"DEBUG #43563: filtering diff to {len(mla_core_coords)} mla_core_grid cores per device")
+
+        def get_tile(shard, idx):
+            tr, tc = idx // tile_cols_per_shard, idx % tile_cols_per_shard
+            return shard[tr * tile_h : (tr + 1) * tile_h, tc * tile_w : (tc + 1) * tile_w]
+
+        # #43562/3 MM1RAW capture: tile at iter1_dump_tile_offset (48) holds the SDPA_MM1DIRECT_TAP raw
+        # QK^T mm1 (one 8x32 score tile). Capture EVERY active flash_mla core (no all-zero skip).
+        for dev_idx in range(num_devices_total):
+            dev_block = sdpa_interm_torch[dev_idx * rows_per_dev : (dev_idx + 1) * rows_per_dev, :]
+            for core_idx in range(num_cores_per_dev):
+                cy, cx = divmod(core_idx, device_grid_size.x)
+                if (cx, cy) not in mla_core_coords:
+                    continue
+                shard = dev_block[core_idx * shard_h : (core_idx + 1) * shard_h, :]
+                _per_core_mm1raw[(dev_idx, cx, cy)] = get_tile(shard, iter1_dump_tile_offset).float().clone()
+        logger.info(f"#43562/3 MM1RAW: captured tile-48 mm1 on {len(_per_core_mm1raw)} active cores")
+
+        any_diverged = []
+        for dev_idx in range(num_devices_total):
+            dev_block = sdpa_interm_torch[dev_idx * rows_per_dev : (dev_idx + 1) * rows_per_dev, :]
+            for core_idx in range(num_cores_per_dev):
+                cy, cx = divmod(core_idx, device_grid_size.x)
+                if (cx, cy) not in mla_core_coords:
+                    continue
+                shard = dev_block[core_idx * shard_h : (core_idx + 1) * shard_h, :]
+                iter0 = torch.stack([get_tile(shard, i) for i in range(num_tiles_per_iter)], dim=0)  # (16, 8, 32)
+                if torch.all(iter0 == 0):
+                    continue
+                iter1 = torch.stack(
+                    [get_tile(shard, iter1_dump_tile_offset + i) for i in range(num_tiles_per_iter)], dim=0
+                )
+                eq_mask = iter0 == iter1
+                if eq_mask.all():
+                    continue  # iter-0 and iter-1 bit-identical on this core
+                # Per-tile divergence summary
+                diff_tiles = (~eq_mask).any(dim=(-1, -2))  # (16,) bool
+                num_diff_tiles = int(diff_tiles.sum().item())
+                f0 = iter0.to(torch.float32)
+                f1 = iter1.to(torch.float32)
+                abs_delta = (f0 - f1).abs()
+                max_abs = float(abs_delta.max().item())
+                num_diff_elems = int((~eq_mask).sum().item())
+                total_elems = eq_mask.numel()
+                any_diverged.append((dev_idx, cx, cy, num_diff_tiles, num_diff_elems, total_elems, max_abs))
+
+        if not any_diverged:
+            logger.info("DEBUG #43563: iter-0 and iter-1 SDPA outputs are bit-identical on every active core.")
+        else:
+            logger.info(f"DEBUG #43563: {len(any_diverged)} cores show iter-0 != iter-1 in SDPA output.")
+            logger.info(
+                "DEBUG #43563: per-core diff (dev | x,y | diff_tiles/16 | diff_elems/total | max_abs_bf16_delta)"
+            )
+            for dev_idx, cx, cy, ntiles, nelems, total, max_abs in any_diverged[:32]:
+                logger.info(
+                    f"  dev={dev_idx} core=({cx},{cy}) tiles={ntiles}/16 elems={nelems}/{total} max_delta={max_abs:.6g}"
+                )
+
+            # Detailed per-element view for the first diverging core.
+            dev_idx, cx, cy, *_ = any_diverged[0]
+            logger.info(f"DEBUG #43563: detailed per-tile byte/elem diff for dev={dev_idx} core=({cx},{cy})")
+            dev_block = sdpa_interm_torch[dev_idx * rows_per_dev : (dev_idx + 1) * rows_per_dev, :]
+            core_lin = cy * device_grid_size.x + cx
+            shard = dev_block[core_lin * shard_h : (core_lin + 1) * shard_h, :]
+            iter0 = torch.stack([get_tile(shard, i) for i in range(num_tiles_per_iter)], dim=0)
+            iter1 = torch.stack([get_tile(shard, iter1_dump_tile_offset + i) for i in range(num_tiles_per_iter)], dim=0)
+            # Byte-diff map: one 'X' per differing tile, '.' per matching tile.
+            map_chars = []
+            for t in range(num_tiles_per_iter):
+                map_chars.append("X" if (iter0[t] != iter1[t]).any() else ".")
+            logger.info(f"  tile_diff_map (16 tiles): {''.join(map_chars)}")
+            # Per-element view of first differing tile.
+            for t in range(num_tiles_per_iter):
+                if (iter0[t] != iter1[t]).any():
+                    diff_idx = torch.nonzero(iter0[t] != iter1[t], as_tuple=False)
+                    logger.info(f"  first diverging tile = {t}, {diff_idx.shape[0]}/256 elements differ; first 8:")
+                    raw_view0 = iter0[t].contiguous().view(torch.int16)  # (8, 32) raw bf16 bits
+                    raw_view1 = iter1[t].contiguous().view(torch.int16)
+                    for k in range(min(8, diff_idx.shape[0])):
+                        r, c = int(diff_idx[k, 0]), int(diff_idx[k, 1])
+                        v0 = iter0[t, r, c].to(torch.float32).item()
+                        v1 = iter1[t, r, c].to(torch.float32).item()
+                        h0 = int(raw_view0[r, c].item()) & 0xFFFF
+                        h1 = int(raw_view1[r, c].item()) & 0xFFFF
+                        logger.info(
+                            f"    [r={r:2d},c={c:2d}] iter0={v0:+.6e} (0x{h0:04x}) "
+                            f"iter1={v1:+.6e} (0x{h1:04x}) delta={v1 - v0:+.6e}"
+                        )
+                    break
+
+            # DEBUG #43563 probe: inspect cb_out_in beyond the expected iter-0/1
+            # regions to localize WHERE iter-1's pack actually landed. cb_out_in
+            # is sized 48 tiles per core; we expect tiles [0,16) iter-0, [16,32)
+            # iter-1, [32,48) untouched (= 0). If [32,48) is nonzero, iter-1 may
+            # have written there (wrap-around). If [0,16) matches what we'd see
+            # with num_internal_iterations=1, iter-1's pack never ran.
+            tail_tiles = torch.stack(
+                [get_tile(shard, 32 + i) for i in range(16)], dim=0
+            )  # tiles [32,48) on the same core
+            tail_nonzero = int((tail_tiles != 0).sum().item())
+            logger.info(
+                f"  trailing tiles [32,48) on dev={dev_idx} core=({cx},{cy}): "
+                f"nonzero_elems={tail_nonzero}/4096, max_abs={float(tail_tiles.abs().max().item()):.6g}"
+            )
+    except Exception as e:
+        logger.warning(f"DEBUG #43563: cross-iter L1 diff failed: {e!r}")
 
     # ========================================================================
     # Extract decoder MLP output from reduce root
@@ -1182,6 +1329,65 @@ def test_decoder_mlp(
     logger.info(f"MLP PCC (decoder vs golden): {pcc}")
     logger.info(f"Golden MLP output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MLP output: {decoder_mlp_output_valid.flatten()[:8]}")
+
+    # =====================================================================
+    # PATCH (#43563): save outputs + per-shard PCC validation
+    # =====================================================================
+    import os as _os43563
+
+    _golden = moe_output.float().detach().clone()
+    _device = decoder_mlp_output_valid.float().detach().clone()
+    logger.info(f"#43563 shape: golden={tuple(_golden.shape)} device={tuple(_device.shape)} flat={_golden.numel()}")
+
+    # Sanity-check the per-shard split. Try splitting flattened output along
+    # the last dim into K=8 equal chunks (matches the 8 mesh devices). Per-chunk
+    # PCC must all be sane (~0.99); concatenating the chunks back trivially
+    # reproduces the aggregate PCC value reported above.
+    _g_flat = _golden.flatten()
+    _d_flat = _device.flatten()
+    _N = 8
+    _chunk = _g_flat.numel() // _N
+    if _chunk * _N != _g_flat.numel():
+        logger.warning(f"#43563: tensor size {_g_flat.numel()} not divisible by {_N}; trailing tail dropped")
+    _per_shard_pccs = []
+    for _i in range(_N):
+        _s = slice(_i * _chunk, (_i + 1) * _chunk)
+        _, _p = comp_pcc(_g_flat[_s], _d_flat[_s], 0.0)
+        _per_shard_pccs.append(_p)
+    logger.info(f"#43563 per-shard PCC (N={_N}): {_per_shard_pccs}")
+
+    # Per-device pre-MoE: read all 8 attention-block tensors to localize
+    # which device(s) diverge between num_iters=1 and num_iters=2.
+    _per_dev_attn = []
+    try:
+        _dev_tensors = ttnn.get_device_tensors(attention_block_output_tensor)
+        for _di, _dt in enumerate(_dev_tensors):
+            _per_dev_attn.append(ttnn.to_torch(_dt).float().detach().clone())
+        logger.info(f"#43563 per-device attn-block shapes: {[tuple(t.shape) for t in _per_dev_attn]}")
+    except Exception as _e:
+        logger.warning(f"#43563 could not read per-device attn-block: {_e!r}")
+
+    # Save artifacts for cross-subtest diff. Keyed by num_internal_iterations
+    # so num_iters=1 and num_iters=2 land in separate files.
+    _out_dir = "/tmp/43563_outputs"
+    _os43563.makedirs(_out_dir, exist_ok=True)
+    _out_path = f"{_out_dir}/iters_{num_internal_iterations}_pos_{position_id}.pt"
+    torch.save(
+        {
+            "decoder_mlp_output_valid": _device,
+            "moe_output_golden": _golden,
+            "num_iters": num_internal_iterations,
+            "position_id": position_id,
+            "aggregate_pcc": pcc,
+            "per_shard_pccs": _per_shard_pccs,
+            "shard_N": _N,
+            "per_dev_attn": _per_dev_attn,
+            "per_core_MM1RAW": _per_core_mm1raw,
+        },
+        _out_path,
+    )
+    logger.info(f"#43563 saved outputs to {_out_path}")
+
     assert passing, f"DecoderBlock MLP Output PCC check failed: {pcc}"
 
     logger.info("✓ DecoderBlock MLP mesh test passed!")

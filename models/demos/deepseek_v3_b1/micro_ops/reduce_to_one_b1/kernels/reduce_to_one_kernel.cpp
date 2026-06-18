@@ -12,6 +12,12 @@
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"
 
+// #43563: 1 = force ODD DEST bank (1) at op start; compare to bank-0 baseline at niters=1 to test
+// whether reduce_to_one's LOCAL combine (binary_dest_reuse_tiles DEST_TO_SRCA) is bank-sensitive,
+// isolated from the (separate, bank-independent) non-idempotent-loop bug seen at niters>1.
+#define FORCE_ODD_BANK_43563 0
+#define FORCE_MATH_ONLY_43563 0
+
 void kernel_main() {
     using ReduceToOne = deepseek_b1_ops::ReduceToOneB1;
 
@@ -108,6 +114,15 @@ void kernel_main() {
     constexpr uint32_t num_loop_iters = get_named_compile_time_arg_val("num_loop_iters");
     ReduceToOne::Op<CTArgs, true> op;
     for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
+#if defined(COMPILE_FOR_TRISC) && defined(FORCE_ODD_BANK_43563) && FORCE_ODD_BANK_43563
+        MATH((llk_math_pack_sync_init<false>()));
+        PACK((llk_pack_dest_init<false, false>(0)));
+        MATH((ckernel::math::dest_section_flip()));
+#if !FORCE_MATH_ONLY_43563
+        PACK((ckernel::packer::flip_packer_dest_offset_id()));
+        PACK((ckernel::packer::select_packer_dest_registers<DstSync::SyncHalf>()));
+#endif
+#endif
         op(rt_args);
     }
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)

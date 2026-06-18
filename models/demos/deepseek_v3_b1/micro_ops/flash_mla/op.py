@@ -355,6 +355,7 @@ class FlashMLADecode:
         scale: float,
         program_config: "FlashMLAProgramConfig",
         compute_kernel_config: "ttnn.DeviceComputeKernelConfig",
+        sum_tap_tensor: "ttnn.Tensor" = None,  # #43563 SUM TAP: optional side buffer sharded like output_tensor
     ) -> ttnn.Tensor:
         """
         Execute flash MLA decode operation using ttnn.generic_op.
@@ -567,6 +568,7 @@ class FlashMLADecode:
         cb_interm_out = 7  # intermediate output for tree reduction
         cb_interm_ms = 8  # intermediate m/s stats for tree reduction
         cb_out_final = 9  # final sharded output
+        cb_sum_tap = 10  # #43563 SUM TAP: side buffer for per-core running sum partial (output cores)
 
         # Intermediate output tiles for tree reduction
         # With tree reduction, senders can complete their steps out of order (e.g., S5 may send
@@ -702,6 +704,9 @@ class FlashMLADecode:
             ("cb_out_o", cb_out_o),
             ("cb_out_ms", cb_out_ms),
             ("cb_out_final", cb_out_final),
+            # #43563 SUM TAP: side CB id (== cb_out_final when no tap tensor, so the kernel's
+            # vestigial cb_iter1_dump slot stays harmless if the tap macro is off).
+            ("cb_sum_tap", cb_sum_tap if sum_tap_tensor is not None else cb_out_final),
         ]
 
         # =========================================================================
@@ -786,6 +791,12 @@ class FlashMLADecode:
         # cb_out_final: final sharded output
         cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_final, output_tensor)
         cb_descriptors.append(cb_out_descriptor)
+
+        # #43563 SUM TAP: side CB sharded identically to the output tensor (8 output cores). Each
+        # output core packs its max/sum DEST tile here after the chunk loop (see flash_mla.hpp,
+        # SDPA_SUM_TAP_43563). Only created when a tap tensor is supplied.
+        if sum_tap_tensor is not None:
+            cb_descriptors.append(ttnn.cb_descriptor_from_sharded_tensor(cb_sum_tap, sum_tap_tensor))
 
         # =========================================================================
         # Create semaphore descriptors (matching C++ lines 724-725)
@@ -934,6 +945,8 @@ class FlashMLADecode:
         )
 
         io_tensors = [q_tensor, kv_cache_tensor, cur_pos_tensor, output_tensor]
+        if sum_tap_tensor is not None:
+            io_tensors.append(sum_tap_tensor)  # #43563 SUM TAP side buffer
         ttnn.generic_op(io_tensors, program_descriptor)
 
         return output_tensor

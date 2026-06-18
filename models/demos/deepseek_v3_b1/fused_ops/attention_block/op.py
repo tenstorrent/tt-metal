@@ -258,6 +258,7 @@ class AttentionBlock:
         fabric_config=None,
         broadcast_topology_override=None,
         forward_metadata=False,
+        mla_iter_dump_buffer=None,  # DEBUG #43563: dedicated L1 buffer for flash_mla iter dumps
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -970,6 +971,11 @@ class AttentionBlock:
         mla_out_ms_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output MS CB for MLA
         mla_mask_cb = cb_id_context.get_cb_id(q_df, TD_8x32)  # Mask CB for MLA
         mla_out_final_cb = mla_out_o_cb  # Output final CB for MLA, unused for full fused attention block
+        # DEBUG #43563: second debug CB for iter-1's flash_mla dump. Bound to the
+        # SAME mla_iter_dump_buffer as mla_out_in_cb but at a higher L1 offset,
+        # so iter-0 (cb_out_in) and iter-1 (cb_iter1_dump) write to disjoint
+        # regions and both survive until host readback.
+        mla_iter1_dump_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
         bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # Packet buffer for CCL broadcast
@@ -1775,6 +1781,7 @@ class AttentionBlock:
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
             ("mla_out_final_cb", mla_out_final_cb),
+            ("mla_iter1_dump_cb", mla_iter1_dump_cb),  # DEBUG #43563
         ]
 
         # Get NOC coordinates for this device
@@ -2009,6 +2016,12 @@ class AttentionBlock:
         ref_kv_cache_tensor = kv_cache_tensors_per_device[0]
         ref_sdpa_kv_cache_buffer = sdpa_kv_cache_buffers_per_device[0]
         ref_sdpa_out_interm_buffer = sdpa_out_interm_buffers_per_device[0]
+        # DEBUG #43563: dedicated buffer used for the cb_out_in binding when wired
+        # through. Falls back to sdpa_out_interm_buffer if not provided.
+        if mla_iter_dump_buffer is not None:
+            ref_mla_iter_dump_buffer = ttnn.get_device_tensors(mla_iter_dump_buffer)[0]
+        else:
+            ref_mla_iter_dump_buffer = ref_sdpa_out_interm_buffer
         ref_post_sdpa_weights1_fused_tensor = post_sdpa_weights1_fused_tensors_per_device[0]
         ref_post_sdpa_weights2_fused_tensor = post_sdpa_weights2_fused_tensors_per_device[0]
         ref_attention_block_output_tensor = attention_block_output_tensors_per_device[0]
@@ -2608,9 +2621,13 @@ class AttentionBlock:
         if optimized_mla_grid.NUM_TREE_REDUCTION_STEPS > 0:
             # cb_out_in: output input (tiny tile)
             mla_out_in_total_size = mla_intermed_output_tiles * stats_tile_size
+            # DEBUG #43563: bind cb_out_in to the dedicated iter-dump buffer so its
+            # L1 region is *not* aliased by post-SDPA CBs. ref_mla_iter_dump_buffer
+            # equals ref_sdpa_out_interm_buffer when no dedicated buffer is wired
+            # through (default), preserving the original behavior for production.
             mla_out_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                 mla_out_in_cb,
-                ref_sdpa_out_interm_buffer,
+                ref_mla_iter_dump_buffer,
                 address_offset=0,
                 total_size=mla_out_in_total_size,
                 core_ranges=full_device_grid,
@@ -2624,6 +2641,31 @@ class AttentionBlock:
                 )
             ]
             mla_cb_descriptors.append(mla_out_in_cb_descriptor)
+            # DEBUG #43563: cb_iter1_dump binding. Lives in the dedicated
+            # mla_iter_dump_buffer at offset = mla_out_in_total_size (just past
+            # cb_out_in's region). Sized for one iter's worth of out_chunk_tiles
+            # = 16 tiles (8192 bytes). Static counter in flash_mla.hpp picks
+            # cb_out_in for iter-0 and cb_iter1_dump for iter-1 so both dumps
+            # survive in disjoint L1 regions.
+            # #43563 L+MS TAP (gated, off by default): when SDPA_LMS_TAP_43563 is enabled the kernel
+            # packs vDHt L tiles + 1 MS tile here, so size for (out0_t + 1) tiles. Harmless when off.
+            mla_iter1_dump_total_size = (out0_t + 1) * stats_tile_size  # L (vDHt) + MS (1) tiles
+            mla_iter1_dump_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                mla_iter1_dump_cb,
+                ref_mla_iter_dump_buffer,
+                address_offset=mla_out_in_total_size,
+                total_size=mla_iter1_dump_total_size,
+                core_ranges=full_device_grid,
+            )
+            mla_iter1_dump_cb_descriptor.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=mla_iter1_dump_cb,
+                    data_format=stats_df,
+                    page_size=stats_tile_size,
+                    tile=stats_tile_descriptor,
+                )
+            ]
+            mla_cb_descriptors.append(mla_iter1_dump_cb_descriptor)
             # cb_ms_in: m/s stats input (m and s are packed into single tile)
             mla_ms_in_total_size = mla_intermed_ms_tiles * stats_tile_size
             mla_ms_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(

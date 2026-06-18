@@ -202,6 +202,7 @@ class DecoderBlock:
         persistent_mode=False,
         is_torus=True,
         forward_metadata=False,
+        mla_iter_dump_buffer=None,  # DEBUG #43563: dedicated L1 buffer for flash_mla iter dumps
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -257,6 +258,7 @@ class DecoderBlock:
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
             forward_metadata=forward_metadata,
+            mla_iter_dump_buffer=mla_iter_dump_buffer,  # DEBUG #43563
         )
 
         moe = MoeOp(
@@ -396,6 +398,16 @@ class DecoderBlock:
             my_defines = moe.kernel_defines
             if ctx["device_kernel_defines"] is not None:
                 my_defines = ctx["device_kernel_defines"] + moe.kernel_defines
+            # PATCH (#43563 debug): enable CB-hash debug LLK to bisect iter-PCC divergence.
+            my_defines = my_defines + [("DEBUG_CB_HASH", "1")]
+            # PATCH (#43563 debug): pick which flash_mla call halts the TRISC.
+            # Set via env var TT_HALT_FLASH_MLA_ITER (0 = iter-0 entry, 1 = iter-1
+            # entry). When unset, the ebreak gate is never compiled in.
+            import os as _os_43563
+
+            _halt_iter = _os_43563.environ.get("TT_HALT_FLASH_MLA_ITER")
+            if _halt_iter is not None:
+                my_defines = my_defines + [("HALT_FLASH_MLA_ITER", _halt_iter)]
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp",
                 core_ranges=full_device_grid,

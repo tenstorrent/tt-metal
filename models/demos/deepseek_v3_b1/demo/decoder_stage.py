@@ -191,6 +191,25 @@ def create_decoder_block_tensors(
         tile=ttnn.Tile([8, 32]),
     )
 
+    # DEBUG #43563: dedicated, *uncontested* L1 buffer for flash_mla iter-0/iter-1
+    # output dumps. Same shape/sharding as sdpa_out_interm_buffer, but a separate
+    # ttnn tensor so the L1 region is not aliased by post-SDPA CBs. When this
+    # buffer is wired through AttentionBlock.get_program_context, cb_out_in is
+    # bound to it (offset 0) instead of sdpa_out_interm_buffer. Subsequent
+    # post-SDPA writes still go to sdpa_out_interm_buffer's L1, so our flash_mla
+    # dump survives in this buffer's L1 until the test reads it.
+    mla_iter_dump_buffer = ttnn.from_torch(
+        torch.zeros((sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_out_interm_shard_spec
+        ),
+        mesh_mapper=mesh_mapper,
+        tile=ttnn.Tile([8, 32]),
+    )
+
     if torch_input is None:
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
@@ -643,6 +662,7 @@ def create_decoder_block_tensors(
         "scale": scale,
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
+        "mla_iter_dump_buffer": mla_iter_dump_buffer,  # DEBUG #43563
         "ttnn_sdpa_output": ttnn_sdpa_output,
         "sender_coord": sender_coord,
         "ttnn_sdpa_input_l": None,

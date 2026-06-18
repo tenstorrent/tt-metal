@@ -220,6 +220,11 @@ def verify_output(output_tensor, submesh_device, root_coord, ref_output):
 
 def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coord=(0, 1), is_torus=False):
     """Run reduce_to_one test."""
+    # #43563: override internal iteration count to compare iters=1 vs iters=2 (bank-parity bug oracle).
+    import os as _os43563
+
+    if _os43563.environ.get("R43563_NITERS"):
+        num_iterations = int(_os43563.environ["R43563_NITERS"])
     print(f"\n=== Testing reduce_to_one (num_iterations={num_iterations}) ===")
 
     config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
@@ -237,6 +242,13 @@ def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coo
         is_torus=is_torus,
     )
     ttnn.synchronize_device(config["submesh_device"])
+
+    # #43563: save full output for exact iters=1-vs-2 comparison across runs.
+    _save43563 = _os43563.environ.get("R43563_SAVE")
+    if _save43563:
+        _ot = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(config["submesh_device"], dim=0))
+        torch.save(_ot.float().detach().clone(), _save43563)
+        print(f"#43563 saved reduce_to_one output to {_save43563} (niters={num_iterations})")
 
     # Verify output
     print("\nVerifying output...")

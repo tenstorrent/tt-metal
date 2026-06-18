@@ -126,6 +126,14 @@ def test_gated_local_reduce(device, tile_h, tile_w, group1_num_tiles, group2_num
 
     # Convert back to torch and verify
     output_torch = ttnn.to_torch(ttnn_result)
+    # #43563: save full output for exact bank0-vs-bank1 comparison across runs.
+    import os as _os43563
+
+    if _os43563.environ.get("R43563_SAVE"):
+        import torch as _t43563
+
+        _t43563.save(output_torch.float().detach().clone(), _os43563.environ["R43563_SAVE"])
+        logger.info(f"#43563 saved gated_local_reduce output to {_os43563.environ['R43563_SAVE']}")
     assert output_torch.shape == (tile_h, tile_w), f"Expected shape ({tile_h}, {tile_w}), got {output_torch.shape}"
 
     # SiLU uses approximation, so we use a slightly lower PCC threshold

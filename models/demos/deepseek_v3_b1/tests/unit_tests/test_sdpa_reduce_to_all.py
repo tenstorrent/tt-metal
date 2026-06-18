@@ -321,6 +321,14 @@ def verify_sdpa_reduce_to_all_output(
     output_l_torch = ttnn.to_torch(output_mesh, mesh_composer=ttnn.ConcatMeshToTensor(inputs.submesh_device, dim=0))
     out_l_root = output_l_torch[0]
 
+    # #43563: save full output for exact bank0-vs-bank1 comparison across runs.
+    import os as _os43563
+
+    _os43563.makedirs("/tmp/43563_reduce", exist_ok=True)
+    _path43563 = _os43563.environ.get("R43563_SAVE", "/tmp/43563_reduce/out.pt")
+    torch.save(output_l_torch.float().detach().clone(), _path43563)
+    logger.info(f"#43563 saved reduce output to {_path43563}")
+
     max_diff = torch.max(torch.abs(out_l_root.flatten().float() - inputs.ref_l.flatten().float())).item()
     match = max_diff < inputs.max_diff_check
 

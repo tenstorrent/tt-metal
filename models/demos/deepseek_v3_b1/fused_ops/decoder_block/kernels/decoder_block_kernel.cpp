@@ -1282,7 +1282,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("mla_ms_in_cb"),
         get_named_compile_time_arg_val("mla_out_o_cb"),
         get_named_compile_time_arg_val("mla_out_ms_cb"),
-        get_named_compile_time_arg_val("mla_out_final_cb")>;
+        get_named_compile_time_arg_val("mla_out_final_cb"),
+        get_named_compile_time_arg_val("mla_iter1_dump_cb")>;  // DEBUG #43563
 
     // Matmul4 CTArgs
     using Matmul4CTArgs =
@@ -3040,8 +3041,41 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
-        // MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
-        // PACK((llk_pack_dest_init<fp32_dest_acc_en, false>(0)));
+        // Workaround for tenstorrent/tt-metal#43563 (Deepseek Blitz Alternating PCC).
+        // Restored after the surgical fix at flash_mla.hpp:748 was empirically a no-op:
+        // the SDPA SFPU helpers (ckernel_sfpu_sdpa_reduce_row.h:144,177,202 and
+        // sdpa.h:169,180,200) already TT_SETC16 the per-thread MATH_Offset to
+        // `src_index + get_dest_buffer_base()` themselves before every PACK-frontend
+        // SFPLOAD, so a write to MATH_Offset at iter top is overwritten before any
+        // SFPU read. The divergence is therefore not in per-thread MATH_Offset
+        // management — bank 1 produces numerically different output from bank 0
+        // even when all known DEST-addressing registers (TRISC1.MATH_Offset,
+        // TRISC2.MATH_Offset via SDPA helpers, PACK_SEC0..3) point at the correct
+        // bank. Root cause still open; iter-top re-init papers over it by forcing
+        // every iter to run in bank 0.
+#if defined(COMPILE_FOR_TRISC)
+        // Workaround for #43563. Coordinated MATH+PACK dest_offset_id reset
+        // at iter top forces every iteration to enter flash_mla on DEST bank 0.
+        // Root cause (bank-1 numerically different from bank-0 with identical
+        // addressing registers, identical bank contents, and no LOADMACRO in
+        // play) remains open after extensive investigation — see debug_log.md
+        // Attempts 24-35. Surgical alternatives all failed:
+        //  - ZEROACC of bank at flash_mla entry (residue not the cause)
+        //  - DISABLE_SFPLOADMACRO=1 globally (LOADMACRO not the cause)
+        //  - SFPNOPs between recip back-to-back LOADMACROs (per PR #45660)
+        //  - SFPNOPs after reduce_max/sum SFPSTOREs
+        //  - MATH-only or PACK-only reset (both crash with KV cache desync)
+        // The remaining hypothesis is a HW-level bank-1 vs bank-0 asymmetry
+        // (FPU MVMUL/MOVD2B path or SFPU pipeline) that needs RTL inspection.
+        // TEMPORARILY DISABLED for chunk-count scaling sweep — restore before commit.
+        // #43563 (Attempt 58, 2026-06-03): MEASURED — this resync at iter-top (runs every
+        // iteration immediately before mla_body()->flash_mla) does NOT fix the divergence:
+        // 16 cores still show iter0!=iter1, per-shard PCC unchanged (4th decimal). So pinning
+        // DEST to bank 0 every iteration does NOT eliminate the alternation => the iteration
+        // dependence is NOT purely DEST-bank parity. Inherited "reduces gap to 0" claim NOT reproduced.
+        // MATH((llk_math_pack_sync_init<false>()));
+        // PACK((llk_pack_dest_init<false, false>(0)));
+#endif
 #ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {

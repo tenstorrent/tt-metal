@@ -16,6 +16,11 @@
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/local_reduce.hpp"
 
+// #43563: force ODD DEST bank (1) at compute start to test if local_reduce's acc_to_dest
+// (DST[0]=A+B+DST[0]) reads bank-dependent leftover. Compare bank0 vs bank1 output bitwise.
+#define FORCE_ODD_BANK_43563 0
+#define FORCE_MATH_ONLY_43563 0
+
 struct Core {
     static constexpr bool is_active_core = get_named_compile_time_arg_val("is_active_core") == 1;
 };
@@ -46,6 +51,15 @@ void kernel_main() {
         constexpr uint32_t group1_num_tiles = get_named_compile_time_arg_val("gated_local_reduce_group1_num_tiles");
         constexpr uint32_t group2_num_tiles = get_named_compile_time_arg_val("gated_local_reduce_group2_num_tiles");
         deepseek_compute_kernel_init();
+#if FORCE_ODD_BANK_43563
+        MATH((llk_math_pack_sync_init<false>()));
+        PACK((llk_pack_dest_init<false, false>(0)));
+        MATH((ckernel::math::dest_section_flip()));
+#if !FORCE_MATH_ONLY_43563
+        PACK((ckernel::packer::flip_packer_dest_offset_id()));
+        PACK((ckernel::packer::select_packer_dest_registers<DstSync::SyncHalf>()));
+#endif
+#endif
 
         // ================================================================
         // Phase 1: reduce(group1) + SiLU -> intermed[0]  (ADD with SiLU)

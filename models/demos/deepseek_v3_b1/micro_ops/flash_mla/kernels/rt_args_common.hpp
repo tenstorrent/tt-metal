@@ -7,6 +7,20 @@
 #include <cstdint>
 #include <tuple>
 
+// #43563 COLLECTIVE-COUPLING ISOLATION probe. When 1: for core_num==2 (the S3 worker) ONLY, drop
+// its last KV chunk so it processes 4 chunks instead of 5. This makes S2 (core_num==1) the lone deep
+// worker at a position where, un-hacked, BOTH S2 and S3 are deep (e.g. pos4351). All other cores —
+// including S2 — are left byte-identical. If S2's iter1-vs-iter2 divergence disappears, S3's depth
+// (the 2nd deep worker) is the causal trigger (collective coupling, position-independent). If S2
+// still diverges, the position/total-chunks drives it. 0 = off (kernel unchanged). Defaulted OFF.
+#define HACK_S3_SHALLOW_43563 0
+
+// #43563 DECISIVE PER-CORE TEST. When 1: for core_num==1 (the S2 worker) ONLY, drop its last KV
+// chunk so it processes one fewer chunk (e.g. 4 instead of 5), leaving every other core byte-identical.
+// Mirrors HACK_S3_SHALLOW_43563 but targets S2. If S2's iter1-vs-iter2 divergence disappears, the
+// trigger is S2's OWN accumulation depth (its 5th FULL chunk) — per-core, not collective. 0 = off.
+#define HACK_S2_SHALLOW_43563 0
+
 inline uint32_t nearest_n(uint32_t x, uint32_t n) { return ((x + n - 1) / n) * n; }
 
 // Given a global current position and this device's SP parameters, determine:
@@ -76,6 +90,24 @@ inline std::tuple<uint32_t, uint32_t, uint32_t> get_runtime_args(
         k_chunk_start = core_num;
         k_chunk_end =
             k_chunk_start + (num_chunks_for_core > 0 ? (num_chunks_for_core - 1) * num_cores_per_batch + 1 : 0);
+
+#if defined(HACK_S3_SHALLOW_43563) && HACK_S3_SHALLOW_43563
+        // #43563 probe: force ONLY core_num==2 (S3) to do one fewer chunk (drop its last chunk),
+        // leaving every other core (incl. core_num==1 / S2) untouched. Only fires in the strided
+        // (more-chunks-than-cores) regime and only when S3 actually has >1 chunk.
+        if (core_num == 2 && num_chunks_for_core > 1) {
+            k_chunk_end = k_chunk_start + (num_chunks_for_core - 2) * num_cores_per_batch + 1;
+        }
+#endif
+
+#if defined(HACK_S2_SHALLOW_43563) && HACK_S2_SHALLOW_43563
+        // #43563 decisive per-core test: force ONLY core_num==1 (S2) to do one fewer chunk (drop its
+        // last chunk), leaving every other core (incl. core_num==0 / S1 and core_num==2 / S3) untouched.
+        // Only fires in the strided (more-chunks-than-cores) regime and only when S2 has >1 chunk.
+        if (core_num == 1 && num_chunks_for_core > 1) {
+            k_chunk_end = k_chunk_start + (num_chunks_for_core - 2) * num_cores_per_batch + 1;
+        }
+#endif
     }
 
     return {num_chunks_value, k_chunk_start, k_chunk_end};

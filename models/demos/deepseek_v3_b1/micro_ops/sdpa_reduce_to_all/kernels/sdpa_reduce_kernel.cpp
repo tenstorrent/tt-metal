@@ -23,6 +23,12 @@
 #include "../../../unified_kernels/sdpa_reduce_forwarder.hpp"
 #include "../../../metadata/metadata.hpp"
 
+// #43563 ISOLATION (Attempt 62): force the worker reduce (sdpa_tail_streaming) to start on the
+// odd-iteration DEST bank (1) vs default (0). If outputs differ for identical inputs, the CROSS-DEVICE
+// reduce is bank-sensitive (the multi-device-only culprit). FORCE_MATH_ONLY=1 validates the flip is real.
+#define FORCE_ODD_BANK_43563 0
+#define FORCE_MATH_ONLY_43563 0
+
 void kernel_main() {
     constexpr bool is_worker = get_named_compile_time_arg_val("is_worker") == 1;
 
@@ -216,6 +222,15 @@ void kernel_main() {
         Worker::Op<ComputeCTArgs> op;
         {
             DeviceZoneScopedN("SDPA_REDUCE_COMPUTE");
+#if FORCE_ODD_BANK_43563
+            MATH((llk_math_pack_sync_init<false>()));
+            PACK((llk_pack_dest_init<false, false>(0)));
+            MATH((ckernel::math::dest_section_flip()));
+#if !FORCE_MATH_ONLY_43563
+            PACK((ckernel::packer::flip_packer_dest_offset_id()));
+            PACK((ckernel::packer::select_packer_dest_registers<DstSync::SyncHalf>()));
+#endif
+#endif
             op(compute_args);
         }
     }

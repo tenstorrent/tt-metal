@@ -9,8 +9,27 @@
 
 #include "../../../unified_kernels/flash_mla.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
+#include "api/debug/dprint.h"
+
+// #43563: DPRINT proof-of-life. 1 = print a one-liner from every RISC at kernel start.
+// VERIFIED WORKING 2026-06-05 with TT_METAL_DPRINT_CORES=all TT_METAL_DPRINT_CHIPS=all.
+#define DPRINT_PROBE_43563 0
+
+// #43563: isolation probes (Attempt 61) proved the SDPA (compute_sdpa_chunk + sdpa_tail) is
+// BANK-SYMMETRIC; macros default off. Toggle to re-run the force-bank experiments.
+#define FORCE_ODD_BANK_43563 0
+#define FORCE_MATH_ONLY_43563 0
 
 void kernel_main() {
+#if DPRINT_PROBE_43563
+#if defined(COMPILE_FOR_BRISC)
+    DPRINT << "HELLO_43563 from BRISC" << ENDL();
+#elif defined(COMPILE_FOR_NCRISC)
+    DPRINT << "HELLO_43563 from NCRISC" << ENDL();
+#elif defined(COMPILE_FOR_TRISC)
+    DPRINT << "HELLO_43563 from TRISC" << ENDL();
+#endif
+#endif
 #if defined(COMPILE_FOR_BRISC)
     uint32_t arg_idx = 0;
     deepseek_b1_ops::FlashMLADecode::ReaderArgs args{
@@ -142,7 +161,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("cb_ms_in"),
         get_named_compile_time_arg_val("cb_out_o"),
         get_named_compile_time_arg_val("cb_out_ms"),
-        get_named_compile_time_arg_val("cb_out_final")>;
+        get_named_compile_time_arg_val("cb_out_final"),
+        get_named_compile_time_arg_val("cb_sum_tap")>;  // #43563 SUM TAP: side CB (cb_iter1_dump slot)
 
     deepseek_compute_kernel_init();
 #endif
@@ -162,5 +182,15 @@ void kernel_main() {
     deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, true> op;
     volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
     op.set_pos_and_slot(args, pos_ptr[0], 0);
+#if defined(COMPILE_FOR_TRISC) && FORCE_ODD_BANK_43563
+    // Reset to bank 0 (known-good, like Austin's hack) then flip BOTH MATH and PACK to bank 1.
+    MATH((llk_math_pack_sync_init<false>()));
+    PACK((llk_pack_dest_init<false, false>(0)));
+    MATH((ckernel::math::dest_section_flip()));
+#if !FORCE_MATH_ONLY_43563
+    PACK((ckernel::packer::flip_packer_dest_offset_id()));
+    PACK((ckernel::packer::select_packer_dest_registers<DstSync::SyncHalf>()));
+#endif
+#endif
     op(args);
 }

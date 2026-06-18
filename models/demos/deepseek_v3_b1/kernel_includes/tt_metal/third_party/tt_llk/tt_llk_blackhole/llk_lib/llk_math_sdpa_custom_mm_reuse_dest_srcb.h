@@ -14,6 +14,18 @@
 
 using namespace ckernel;
 
+// #43563 "2nd STALLWAIT" fix: the PV matmul entry stall currently waits only on WAIT_SFPU | SRCB_VLD
+// and is MISSING SRCA_VLD (the V operand), while its pre-MVMUL DEST setup (SETC16 DEST-offset +
+// reset_counters) runs before SrcA is confirmed valid — the same defect fixed on the QK matmul via
+// SRCA_VLD | SRCB_VLD (cf. FIX_MASKDEST_STALL_43563 in the sibling llk_math_sdpa_custom_mm.h).
+// 1 = add p_stall::SRCA_VLD to the entry stall mask. 0 = original (default).
+#define FIX_PV_SRCA_VLD_43563 0
+
+// #43562/3 EXPERIMENT: drop the CLR_B from the PV matmul's exit SETRWC (below), so the PV does NOT flip
+// the SrcB read-bank on exit. Tests whether the per-chunk SrcB-bank PARITY (PV=odd, fix makes it even)
+// is the carrier of the QK alternation. 1 = SET_ABD only (no CLR_B, even parity). 0 = original CLR_B.
+#define FIX_PV_NO_CLRB_43563 0
+
 // sdpa_custom_mm_reuse_dest_srcb
 // Custom matmul that uses MOP to loop both srcA and srcB along inner dim. Output height
 // and width should be single tile with tile shape [1, 32]. Further work will uplift the
@@ -117,7 +129,11 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     static_assert(output_granularity >= 1, "output_granularity must be >= 1");
     constexpr uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     uint32_t dest_buffer_base = get_dest_buffer_base();
+#if FIX_PV_SRCA_VLD_43563
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+#else
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+#endif
     for (uint32_t i = 0; i < kt_dim; i++) {
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index + i * 8 * 2 + dest_buffer_base);
         math::reset_counters(p_setrwc::SET_ABD_F);
@@ -141,5 +157,10 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
             }
         }
     }
+#if defined(FIX_PV_NO_CLRB_43563) && FIX_PV_NO_CLRB_43563
+    // #43562/3 EXPERIMENT: no CLR_B -> PV does not flip SrcB read-bank on exit (even per-chunk parity).
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
+#else
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+#endif
 }
