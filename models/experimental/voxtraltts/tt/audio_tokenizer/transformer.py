@@ -17,6 +17,7 @@ from models.experimental.voxtraltts.utils.config_helpers import (
 )
 from models.experimental.voxtraltts.tt.attention import VoxtralTTAttention
 from models.experimental.voxtraltts.tt.mlp import VoxtralTTMLP
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
 from models.tt_transformers.tt.common import Mode
 
 
@@ -108,18 +109,16 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
         self.attention_scale = None
         self.ffn_scale = None
         if self.layer_scale:
-            self.attention_scale = ttnn.from_torch(
+            self.attention_scale = voxtral_from_torch(
                 state_dict[f"{prefix}.attention_scale"].reshape(1, 1, 1, tokenizer_cfg.dim),
-                device=device,
+                device,
                 dtype=output_dtype,
-                layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self.ffn_scale = ttnn.from_torch(
+            self.ffn_scale = voxtral_from_torch(
                 state_dict[f"{prefix}.ffn_scale"].reshape(1, 1, 1, tokenizer_cfg.dim),
-                device=device,
+                device,
                 dtype=output_dtype,
-                layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
