@@ -418,7 +418,9 @@ class TtGatedDeltaNet(LightweightModule):
 
         hist = deltanet_state.conv_hist.get(li)
         if hist is None:
-            # seed (h0,h1,h2) from the prefill conv_state once, then stay on-device.
+            # seed (h0,h1,h2) ONCE from the prefill conv_state into FIXED buffers; then
+            # they are updated IN-PLACE (ttnn.copy) every step — required so a captured
+            # decode trace replays against stable buffer addresses.
             cs = deltanet_state.get_conv_state_cpu(li, self.conv_kernel_size)  # [1,conv_dim,ck] or None
 
             def mk(vec):
@@ -430,15 +432,19 @@ class TtGatedDeltaNet(LightweightModule):
             else:
                 z = torch.zeros(conv_dim)
                 hist = [mk(z), mk(z), mk(z)]
-        h0, h1, h2 = hist
+            deltanet_state.conv_hist[li] = hist
+        h0, h1, h2 = hist  # fixed buffers
         w0, w1, w2, w3 = self.conv_w_cols
         dot = ttnn.add(ttnn.add(ttnn.mul(w0, h0), ttnn.mul(w1, h1)),
                        ttnn.add(ttnn.mul(w2, h2), ttnn.mul(w3, qkv)))
         conv = ttnn.silu(dot)
         ttnn.deallocate(dot)
-        # shift history; raw qkv becomes the newest prior input (kept; caller won't free it)
-        ttnn.deallocate(h0)
-        deltanet_state.conv_hist[li] = [h1, h2, qkv]
+        # shift history IN-PLACE into the same buffers: h0<-h1, h1<-h2, h2<-x (raw qkv).
+        # Order matters (read-before-overwrite). qkv's value now lives in h2 -> free qkv.
+        ttnn.copy(h1, h0)
+        ttnn.copy(h2, h1)
+        ttnn.copy(qkv, h2)
+        ttnn.deallocate(qkv)
         # split q|k|v and per-head L2norm (q also scaled by 1/sqrt(Dk)); v unchanged
         q = ttnn.slice(conv, [0, 0, 0, 0], [1, 1, 1, kd])
         k = ttnn.slice(conv, [0, 0, 0, kd], [1, 1, 1, 2 * kd])
