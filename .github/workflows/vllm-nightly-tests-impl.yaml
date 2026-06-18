@@ -341,6 +341,7 @@ jobs:
             {
               "name": "[WH-T3K] Qwen3-VL-32B-Instruct",
               "model": "Qwen/Qwen3-VL-32B-Instruct",
+              "coherence-test": true,
               "server-timeout": 10,
               "benchmark-timeout": 10,
               "runner-label": "config-t3000",
