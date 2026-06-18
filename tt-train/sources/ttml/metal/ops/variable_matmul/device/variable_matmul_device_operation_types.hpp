@@ -47,10 +47,11 @@ struct VariableMatmulParams {
     bool transpose_b = false;
 
     // Per-call matmul-M extent in tiles (0 = use the input's full M). Does NOT cap the work:
-    // InputAndOutputRow re-derives the actual per-core M from the offsets at runtime. Used to
-    // pick the grid orientation and to bound the host-side output-shape check. Feeds the program
-    // hash (via use_offset / transpose_core_grid), so a stable value reuses one cached program
-    // while values crossing the 0/>0 or M-vs-N thresholds compile distinct programs.
+    // InputAndOutputRow re-derives the actual per-core M from the offsets at runtime. Its one job
+    // is picking the grid orientation (transpose_core_grid), which is compile-time and can't be
+    // inferred from the tensors (in the shared-buffer path their M is the full T_cap). Feeds the
+    // program hash (via use_offset / transpose_core_grid), so a stable value reuses one cached
+    // program while values crossing the 0/>0 or M-vs-N thresholds compile distinct programs.
     uint32_t expected_M_tiles = 0;
 
     // How the on-device offsets are interpreted (see OffsetsRole). offsets_start_index is the

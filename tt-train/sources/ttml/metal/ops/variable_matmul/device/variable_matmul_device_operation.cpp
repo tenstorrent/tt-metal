@@ -137,17 +137,17 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         check_on_device(out, "output tensor");
         const auto& out_logical = out.logical_shape();
         const uint32_t matmul_N = operation_attributes.transpose_b ? w_logical[-2] : w_logical[-1];
-        const uint32_t out_M_tiles = tt::div_up(out_logical[-2], TILE_HEIGHT);
         const uint32_t out_N = out_logical[-1];
-        const uint32_t M_tiles_actual = tt::div_up(M, TILE_HEIGHT);
         TT_FATAL(out.layout() == Layout::TILE, "variable_matmul output tensor must be TILE layout");
         TT_FATAL(out.dtype() == act_tensor.dtype(), "variable_matmul output dtype must match input dtype");
         TT_FATAL(out_N == matmul_N, "variable_matmul output N ({}) must match matmul N ({})", out_N, matmul_N);
+        // Write-at-offset writes the same row indices it reads, so the output parent must be the
+        // same row space as the input.
         TT_FATAL(
-            M_tiles_actual <= out_M_tiles,
-            "variable_matmul actual_M tiles {} exceeds output M tiles {}",
-            M_tiles_actual,
-            out_M_tiles);
+            M_parent == out_logical[-2],
+            "variable_matmul output rows ({}) must equal input rows ({})",
+            out_logical[-2],
+            M_parent);
     }
 
     const auto role = operation_attributes.offsets_role;

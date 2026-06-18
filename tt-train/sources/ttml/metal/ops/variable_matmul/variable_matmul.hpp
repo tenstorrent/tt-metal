@@ -53,8 +53,8 @@ ttnn::Tensor variable_matmul_into_rows(
     const ttnn::Tensor& offsets_tensor,
     const ttnn::Tensor& output_tensor,
     uint32_t offsets_start_index = 0,
-    // Per-call matmul-M extent in tiles: grid-orientation hint + output-bounds check. See the
-    // expected_M_tiles doc in the device types header.
+    // Per-call matmul-M extent in tiles: a build-time hint for the grid orientation only (the
+    // actual rows processed come from offsets). See the expected_M_tiles doc in the types header.
     uint32_t expected_M_tiles = 0,
     bool transpose_a = false,
     bool transpose_b = false,
