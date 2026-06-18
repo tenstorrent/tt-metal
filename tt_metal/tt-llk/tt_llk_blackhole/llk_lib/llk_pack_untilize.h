@@ -210,8 +210,6 @@ inline void _llk_pack_untilize_init_(
     llk::san::pack_operand_check(
         llk::san::IGNORE, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, llk::san::IGNORE, llk::san::IGNORE);
     llk::san::operation_init<llk::san::Operation::PackUntilize>(block_ct_dim, full_ct_dim, narrow_row);
-    // sstanisic todo: implement
-    // llk_san_extended_state_mask(llk_san_cfg::Addrmod, llk_san_cfg::Mop, llk_san_cfg::CH0Strides, llk_san_cfg::AdcXX); // GPRs are not tracked here for now
 
     _llk_pack_untilize_configure_addrmod_();
 
@@ -338,8 +336,6 @@ inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
     llk::san::pack_operand_check(
         llk::san::IGNORE, pack_src_format, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE);
     llk::san::operation_uninit<llk::san::Operation::PackUntilize>();
-    // sstanisic todo: implement
-    // llk_san_extended_state_mask<true>(llk_san_cfg::CH0Strides);
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);

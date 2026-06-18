@@ -222,9 +222,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     llk::san::operation_init<llk::san::Operation::UnpackABMatmul>(
         kernel_broadcast_a, kernel_broadcast_b, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
 
-    // sstanisic todo: implement
-    // llk_san_extended_state_mask(llk_san_cfg::Transpose, llk_san_cfg::AdcXX, llk_san_cfg::Mop); // ADCZW counters and GPRS not tracked here for now
-
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure

@@ -92,9 +92,6 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
         llk::san::IGNORE,
         llk::san::IGNORE);
     llk::san::operation_init<llk::san::Operation::UnpackUntilize>();
-    // sstanisic todo:
-    // llk_san_extended_state_mask(llk_san_cfg::Transpose, llk_san_cfg::AdcXX, llk_san_cfg::CH1Strides, llk_san_cfg::TileDesc, llk_san_cfg::Mop); // GPRS not
-    // tracked here for now
 
     // Always include setup calls first for safety (as recommended by maintainer)
     // Disable transpose when unused

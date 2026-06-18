@@ -406,8 +406,6 @@ inline void _llk_pack_init_(
     // sstanisic todo: sanitizer: propagate enum
     llk::san::operation_init<llk::san::Operation::Pack>(pack_mode == PackMode::Untilize);
 
-    // sstanisic todo: implement
-    // llk_san_extended_state_mask(llk_san_cfg::Addrmod, llk_san_cfg::Mop, llk_san_cfg::L1Offset, llk_san_cfg::AdcXX);
     if constexpr (!skip_addrmod_config)
     {
         _llk_pack_configure_addrmod_<pack_mode>();

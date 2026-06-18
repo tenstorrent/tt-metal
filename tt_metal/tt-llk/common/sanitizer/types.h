@@ -206,28 +206,6 @@ public:
     }
 };
 
-// TODO: refactor below
-
-enum class llk_san_cfg_t
-{
-    Addrmod,
-    Mop,
-    DvalidDisable,
-    CH0Strides,
-    CH1Strides,
-    TileDesc,
-    AdcXX,
-    Transpose,
-    L1Offset
-};
-
-enum class llk_san_operand_t
-{
-    SrcA,
-    SrcB,
-    Dst
-};
-
 // UNPACK operand state
 struct UnpackSrcState
 {
