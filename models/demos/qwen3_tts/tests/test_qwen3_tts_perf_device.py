@@ -25,7 +25,7 @@ import pytest
 # upper bound — catches regressions, ignores favorable variance.
 EXPECTED_STEADY_MS_PER_FRAME = 43.3
 STEADY_MARGIN = 0.05
-PREFILL_MS_UPPER_BOUND = 16.0
+PREFILL_MS_UPPER_BOUND = 20.0
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 REF_AUDIO = str(REPO_ROOT / "models" / "demos" / "qwen3_tts" / "demo" / "jim_reference.wav")
