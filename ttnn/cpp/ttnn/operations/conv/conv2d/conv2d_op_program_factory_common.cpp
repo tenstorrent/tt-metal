@@ -272,12 +272,20 @@ std::vector<CBInfo> get_cb_info(
     // staging buffer the untilize phase reads — cannot alias onto the RM output), and !is_1d_depthwise
     // (dest-reuse path, no partials CB).
     const bool single_output_block = (per_core_out_ntiles == out_block_num_tiles);
-    const bool can_alias_partials_onto_out =
-        single_output_block && (partial_dtype == output_datatype) && !untilize_out && !is_1d_depthwise_conv
-        // PoC (TT_CONV_TRM_CALLER_OWNS): the caller_owns path packs the matmul into a DEDICATED partials
-        // region and bias-add reads partials while writing a DISTINCT OUT buffer. Aliasing partials onto
-        // OUT would make bias-add read and write the same L1 — so force partials dedicated under the flag.
-        && (std::getenv("TT_CONV_TRM_CALLER_OWNS") == nullptr);
+    // caller_owns class (default; was the env-gated TT_CONV_TRM_CALLER_OWNS PoC): the deep-K
+    // packer_l1_acc + bias convs that pin used to capture now route through the matmul-helper
+    // caller_owns_pack_target + TileRowMajor path (conv2d_op_sharded_program_factory.cpp). That path
+    // packs the matmul into a DEDICATED partials region while bias-add reads partials and writes a
+    // DISTINCT OUT buffer; aliasing partials onto OUT would make bias-add read and write the same L1.
+    // So force partials dedicated for this class. The other pin-class members (untilize_out interm
+    // target; multi-output-block) are already dedicated by the !untilize_out / !single_output_block
+    // terms below — only the single-output-block TILE-out bias+l1_acc case (rn50 DS2/DS3/L3a/L3b/
+    // L4a/L4b) needed the alias suppressed. TT_CONV_TRM_DISABLE forces the old SBM+pin alias back.
+    const bool caller_owns_class_forces_dedicated =
+        packer_l1_acc && enable_bias && (std::getenv("TT_CONV_TRM_DISABLE") == nullptr);
+    const bool can_alias_partials_onto_out = single_output_block && (partial_dtype == output_datatype) &&
+                                             !untilize_out && !is_1d_depthwise_conv &&
+                                             !caller_owns_class_forces_dedicated;
     const uint32_t matmul_partials_num_pages =
         is_1d_depthwise_conv ? 0
         : can_alias_partials_onto_out
