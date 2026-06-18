@@ -51,30 +51,7 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
-    echo "========== ttrun debug (runner) =========="
-    echo "TT_METAL_HOME=${TT_METAL_HOME}"
-    echo "PRTE_MCA_prte_default_hostfile=${PRTE_MCA_prte_default_hostfile:-unset}"
-    echo "TTRUN_DIR=${TTRUN_DIR}"
-    echo "TTRUN_PY=${TTRUN_PY}"
-    ls -la "${TTRUN_PY}" || true
-    ls -la "${TTRUN_DIR}" || true
-    for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
-      echo "--- ${TTRUN_DIR}/${f} ---"
-      cat "${TTRUN_DIR}/${f}" 2>&1 || echo "(missing)"
-    done
-    echo "========== PIPELINE_HOSTS =========="
-    echo "${PIPELINE_HOSTS}"
-    echo "========== workers: /etc/ttop =========="
-    mpirun --pernode --tag-output bash -lc '
-      echo "$(hostname):"
-      ls -la /etc/ttop 2>&1 || echo "  /etc/ttop missing"
-      for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
-        echo "  --- $f ---"
-        cat "/etc/ttop/$f" 2>&1 || echo "  (missing)"
-      done
-    ' || true
-
-    LOGURU_LEVEL=DEBUG TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
@@ -97,29 +74,6 @@
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-
-    echo "========== ttrun debug (runner) =========="
-    echo "TT_METAL_HOME=${TT_METAL_HOME}"
-    echo "PRTE_MCA_prte_default_hostfile=${PRTE_MCA_prte_default_hostfile:-unset}"
-    echo "TTRUN_DIR=${TTRUN_DIR}"
-    echo "TTRUN_PY=${TTRUN_PY}"
-    ls -la "${TTRUN_PY}" || true
-    ls -la "${TTRUN_DIR}" || true
-    for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
-      echo "--- ${TTRUN_DIR}/${f} ---"
-      cat "${TTRUN_DIR}/${f}" 2>&1 || echo "(missing)"
-    done
-    echo "========== PIPELINE_HOSTS =========="
-    echo "${PIPELINE_HOSTS}"
-    echo "========== workers: /etc/ttop =========="
-    mpirun --pernode --tag-output bash -lc '
-      echo "$(hostname):"
-      ls -la /etc/ttop 2>&1 || echo "  /etc/ttop missing"
-      for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
-        echo "  --- $f ---"
-        cat "/etc/ttop/$f" 2>&1 || echo "  (missing)"
-      done
-    ' || true
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
@@ -152,25 +106,6 @@
     cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
-    echo "========== ttrun debug (runner) =========="
-    echo "TT_METAL_HOME=${TT_METAL_HOME}"
-    echo "PRTE_MCA_prte_default_hostfile=${PRTE_MCA_prte_default_hostfile:-unset}"
-    echo "TTRUN_PY=${TTRUN_PY}"
-    ls -la "${TTRUN_PY}" || true
-    echo "--- /etc/ttop/hostfile ---"
-    cat /etc/ttop/hostfile 2>&1 || echo "(missing)"
-    for f in rev_c_rank_file_superpod rev_c_rank_binding_superpod.yaml; do
-      echo "--- ${f} ---"
-      cat "${f}" 2>&1 || echo "(missing)"
-    done
-    echo "========== PIPELINE_HOSTS =========="
-    echo "${PIPELINE_HOSTS}"
-    echo "========== workers: /etc/ttop/hostfile =========="
-    mpirun --pernode --tag-output bash -lc '
-      echo "$(hostname): /etc/ttop/hostfile"
-      cat /etc/ttop/hostfile 2>&1 || echo "  (missing)"
-    ' || true
-
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
@@ -198,26 +133,7 @@
     cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
-    echo "========== ttrun debug (runner) =========="
-    echo "TT_METAL_HOME=${TT_METAL_HOME}"
-    echo "PRTE_MCA_prte_default_hostfile=${PRTE_MCA_prte_default_hostfile:-unset}"
-    echo "TTRUN_PY=${TTRUN_PY}"
-    ls -la "${TTRUN_PY}" || true
-    echo "--- /etc/ttop/hostfile ---"
-    cat /etc/ttop/hostfile 2>&1 || echo "(missing)"
-    for f in rev_c_rank_file_superpod rev_c_rank_binding_superpod.yaml; do
-      echo "--- ${f} ---"
-      cat "${f}" 2>&1 || echo "(missing)"
-    done
-    echo "========== PIPELINE_HOSTS =========="
-    echo "${PIPELINE_HOSTS}"
-    echo "========== workers: /etc/ttop/hostfile =========="
-    mpirun --pernode --tag-output bash -lc '
-      echo "$(hostname): /etc/ttop/hostfile"
-      cat /etc/ttop/hostfile 2>&1 || echo "  (missing)"
-    ' || true
-
-    LOGURU_LEVEL=DEBUG TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       --rank-binding rev_c_rank_binding_superpod.yaml \
@@ -242,25 +158,6 @@
     cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
     cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-
-    echo "========== ttrun debug (runner) =========="
-    echo "TT_METAL_HOME=${TT_METAL_HOME}"
-    echo "PRTE_MCA_prte_default_hostfile=${PRTE_MCA_prte_default_hostfile:-unset}"
-    echo "TTRUN_PY=${TTRUN_PY}"
-    ls -la "${TTRUN_PY}" || true
-    echo "--- /etc/ttop/hostfile ---"
-    cat /etc/ttop/hostfile 2>&1 || echo "(missing)"
-    for f in rev_c_rank_file_superpod rev_c_rank_binding_superpod.yaml; do
-      echo "--- ${f} ---"
-      cat "${f}" 2>&1 || echo "(missing)"
-    done
-    echo "========== PIPELINE_HOSTS =========="
-    echo "${PIPELINE_HOSTS}"
-    echo "========== workers: /etc/ttop/hostfile =========="
-    mpirun --pernode --tag-output bash -lc '
-      echo "$(hostname): /etc/ttop/hostfile"
-      cat /etc/ttop/hostfile 2>&1 || echo "  (missing)"
-    ' || true
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
