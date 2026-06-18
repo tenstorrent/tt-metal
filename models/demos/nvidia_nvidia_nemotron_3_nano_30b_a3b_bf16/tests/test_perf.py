@@ -372,8 +372,7 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         allocate_decoder_state,
     )
 
-    # sweep4: only the two ISLs that OOM'd in sweep3 (data for 128-65536 already collected).
-    ISL_LIST = [131072, 262112]
+    ISL_LIST = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262112]
     N_DECODE = 30
 
     tokenizer = AutoTokenizer.from_pretrained(_SNAP)
