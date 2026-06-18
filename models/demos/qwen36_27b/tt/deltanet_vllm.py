@@ -35,7 +35,7 @@ class TtDeltaNetState:
     single-sequence shapes exactly.
     """
 
-    def __init__(self, num_layers, layer_types, device, config, batch=1):
+    def __init__(self, num_layers, layer_types, device, config, batch=1, batched=None):
         self.device = device
         self.batch = batch
         self.conv_states = {}
@@ -50,6 +50,14 @@ class TtDeltaNetState:
         # When True, state updates write IN-PLACE into the fixed buffers (ttnn.copy)
         # instead of swapping the tensor handle — required for trace (static buffers).
         self.trace_mode = False
+        # num_seq>1: recurrent state is head-parallel SHARDED (dim1: num_v_heads -> nvp
+        # per chip) so the batched decode op reads each chip's nvp heads. conv_states
+        # stay gathered (conv_hist derives from them, re-laid per-chip at seed time).
+        # `batched` overrides config (the prefill TEMP state must stay GATHERED even when
+        # the persistent decode state is sharded — prefill uses the gathered op).
+        self.batched = bool(getattr(config, "batched_decode", False)) if batched is None else bool(batched)
+        tp = getattr(config, "tp_size", 8)
+        rs_mapper = ttnn.ShardTensorToMesh(device, dim=1) if (self.batched and getattr(config, "dense_tp", False)) else None
 
         for i in range(num_layers):
             if layer_types[i] == "linear_attention":
@@ -58,7 +66,10 @@ class TtDeltaNetState:
                 v_dim = config.linear_value_head_dim
                 conv_dim = config.linear_key_head_dim * config.linear_num_key_heads * 2 + v_dim * num_v_heads
 
-                self.recurrent_states[i] = ttnn.zeros(
+                self.recurrent_states[i] = ttnn.from_torch(
+                    torch.zeros(batch, num_v_heads, k_dim, v_dim, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=rs_mapper,
+                ) if rs_mapper is not None else ttnn.zeros(
                     [batch, num_v_heads, k_dim, v_dim],
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
@@ -657,6 +668,153 @@ class TtGatedDeltaNet(LightweightModule):
         output_tt = self._to_seq_major(output_tt, B)  # [B,1,1,H*Dv] -> [1,1,B,H*Dv]
         return self._out_proj(output_tt)
 
+    # ================= batched (num_seq>1) head-parallel SHARDED decode =================
+    @staticmethod
+    def _flatten_B(x):
+        """[1,1,B,W] -> [1,1,1,B*W] (flatten batch into the channel dim, ROW_MAJOR)."""
+        B, W = int(x.shape[2]), int(x.shape[3])
+        xr = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        xr = ttnn.reshape(xr, [1, 1, 1, B * W])
+        out = ttnn.to_layout(xr, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(xr)
+        return out
+
+    def _seed_conv_hist_sharded(self, deltanet_state, B):
+        """Build per-chip per-batch conv history h0,h1,h2 = [1,1,B,cdp] from the
+        (gathered) prefill conv_states [B,1,conv_dim,32]. The conv_dim channels are
+        re-laid PER-CHIP-INTERLEAVED [q_c|k_c|v_c] and sharded (matching in_proj_qkv_sh);
+        cols 1,2,3 are the 3 prior conv inputs. Host-built once per request batch."""
+        li = self.layer_idx
+        Dk, Dv, Hk, Hv, TP = self.head_k_dim, self.head_v_dim, self.num_k_heads, self.num_v_heads, self.tp_size
+        nkp, nvp = self.nkp, self.nvp
+        cs_dev = deltanet_state.conv_states.get(li)
+        cs = mesh_to_torch(cs_dev).float()  # [B,1,conv_dim,32]
+        ck = self.conv_kernel_size
+
+        def interleave_rows(flat):  # flat [rows, conv_dim] -> per-chip-interleaved [rows, conv_dim]
+            q = flat[:, :self.key_dim].reshape(-1, Hk, Dk)
+            k = flat[:, self.key_dim:2 * self.key_dim].reshape(-1, Hk, Dk)
+            v = flat[:, 2 * self.key_dim:].reshape(-1, Hv, Dv)
+            blk = [torch.cat([q[:, c * nkp:(c + 1) * nkp].reshape(q.shape[0], -1),
+                              k[:, c * nkp:(c + 1) * nkp].reshape(k.shape[0], -1),
+                              v[:, c * nvp:(c + 1) * nvp].reshape(v.shape[0], -1)], dim=1) for c in range(TP)]
+            return torch.cat(blk, dim=1)
+        # per-batch, build the 3 history columns interleaved over channels -> [B, conv_dim] each
+        cols = []
+        for j in (1, 2, 3):
+            colj = cs[:, 0, :, j]  # [B, conv_dim]
+            cols.append(interleave_rows(colj))  # [B, conv_dim] interleaved
+        SH3 = ttnn.ShardTensorToMesh(self.device, dim=3)
+        hist = []
+        for colj in cols:  # [B, conv_dim] -> [1,1,B,conv_dim] sharded dim3 -> per chip [1,1,B,cdp]
+            hist.append(ttnn.from_torch(colj.reshape(1, 1, B, -1).to(torch.bfloat16),
+                                        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=SH3))
+        deltanet_state.conv_hist[li] = hist
+        return hist
+
+    def _conv_prep_sharded(self, qkv, deltanet_state, B):
+        """Per-chip per-batch conv1d+SiLU+L2norm. qkv [1,1,B,cdp] per chip (per-chip-
+        interleaved channels). Returns op-layout qkvF [1,1,1,B*cdp] (B flattened into
+        the head dim)."""
+        li = self.layer_idx
+        Dk, Dv, nkp, nvp = self.head_k_dim, self.head_v_dim, self.nkp, self.nvp
+        kdp, vdp = nkp * Dk, nvp * Dv
+        cdp = 2 * kdp + vdp
+        hist = deltanet_state.conv_hist.get(li)
+        if hist is None:
+            hist = self._seed_conv_hist_sharded(deltanet_state, B)
+        h0, h1, h2 = hist
+        w0, w1, w2, w3 = self.conv_w_cols_sh  # [1,1,1,cdp] broadcast over B
+        dot = ttnn.add(ttnn.add(ttnn.mul(w0, h0), ttnn.mul(w1, h1)),
+                       ttnn.add(ttnn.mul(w2, h2), ttnn.mul(w3, qkv)))
+        conv = ttnn.silu(dot)
+        ttnn.deallocate(dot)
+        ttnn.copy(h1, h0)
+        ttnn.copy(h2, h1)
+        ttnn.copy(qkv, h2)
+        ttnn.deallocate(qkv)
+        q = ttnn.slice(conv, [0, 0, 0, 0], [1, 1, B, kdp])
+        k = ttnn.slice(conv, [0, 0, 0, kdp], [1, 1, B, 2 * kdp])
+        v = ttnn.slice(conv, [0, 0, 0, 2 * kdp], [1, 1, B, cdp])
+        ttnn.deallocate(conv)
+        qf = self._l2norm_per_head_dev(self._flatten_B(q), B * nkp, Dk, scale=self.scale)
+        kf = self._l2norm_per_head_dev(self._flatten_B(k), B * nkp, Dk)
+        vf = self._flatten_B(v)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        out = ttnn.concat([qf, kf, vf], dim=3)  # [1,1,1,B*cdp]
+        ttnn.deallocate(qf)
+        ttnn.deallocate(kf)
+        ttnn.deallocate(vf)
+        return out
+
+    def _out_proj_sharded(self, x):
+        """out_proj for sharded decode: x already per-chip [1,1,B,vdp] (the row-parallel
+        input shard) -> local matmul -> all_reduce. (No mesh_partition.)"""
+        out = ttnn.linear(x, self.out_proj_w, compute_kernel_config=self.config.matmul_kcfg())
+        return ttnn.all_reduce(out, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear)
+
+    def _decode_step_sharded(self, hidden_states, deltanet_state):
+        """Batched (num_seq>1) head-parallel sharded decode. Each chip owns nkp k-heads
+        / nvp v-heads; the op runs num_heads=B*nvp (B flattened into the head dim).
+        No all_gather; out_proj all_reduces."""
+        B = hidden_states.shape[2]
+        Dk, Dv, nkp, nvp = self.head_k_dim, self.head_v_dim, self.nkp, self.nvp
+        kdp, vdp = nkp * Dk, nvp * Dv
+        cdp = 2 * kdp + vdp
+        qkv = ttnn.linear(hidden_states, self.in_proj_qkv_sh)   # [1,1,B,cdp]
+        z = ttnn.linear(hidden_states, self.in_proj_z_sh)       # [1,1,B,vdp]
+        bproj = ttnn.linear(hidden_states, self.in_proj_b_sh)   # [1,1,B,nvp]
+        aproj = ttnn.linear(hidden_states, self.in_proj_a_sh)
+        beta = ttnn.sigmoid(bproj)
+        ttnn.deallocate(bproj)
+        a_dt = ttnn.add(aproj, self.dt_bias_sh)
+        ttnn.deallocate(aproj)
+        sp = ttnn.softplus(a_dt, beta=1.0, threshold=20.0)
+        ttnn.deallocate(a_dt)
+        expA = ttnn.exp(self.A_log_sh)
+        scaled = ttnn.mul(expA, sp)
+        ttnn.deallocate(expA)
+        ttnn.deallocate(sp)
+        decay = ttnn.exp(ttnn.neg(scaled))
+        ttnn.deallocate(scaled)
+        qkvF = self._conv_prep_sharded(qkv, deltanet_state, B)  # [1,1,1,B*cdp]; consumes qkv
+        zf = self._flatten_B(z)
+        betaf = self._flatten_B(beta)
+        decayf = self._flatten_B(decay)
+        ttnn.deallocate(z)
+        ttnn.deallocate(beta)
+        ttnn.deallocate(decay)
+        state = deltanet_state.get_recurrent_state(self.layer_idx)  # [B,nvp,Dk,Dv] per chip
+        # vestigial conv_state + conv1d_weight (decode reader is pass-through); sized [.,.,B*cdp,32] per chip
+        conv_dummy = self._sharded_conv_dummy(B)
+        o, new_state, _ = _deltanet_decode_full_op(
+            qkvF, zf, betaf, decayf, conv_dummy, state,
+            conv_dummy, self.A_log_sh, self.dt_bias_sh, self.norm_weight,
+            num_heads=B * nvp, num_k_heads=B * nkp, k_head_dim=Dk, v_head_dim=Dv,
+            conv_dim=B * cdp, conv_kernel_size=self.conv_kernel_size, head_expand_ratio=self.head_expand_ratio,
+        )
+        deltanet_state.set_recurrent_state(self.layer_idx, new_state)
+        for t in (qkvF, zf, betaf, decayf):
+            ttnn.deallocate(t)
+        o = ttnn.to_layout(o, ttnn.ROW_MAJOR_LAYOUT)
+        o = ttnn.reshape(o, [1, 1, B, vdp])  # un-flatten B
+        o = ttnn.to_layout(o, ttnn.TILE_LAYOUT)
+        return self._out_proj_sharded(o)
+
+    def _sharded_conv_dummy(self, B):
+        """Vestigial sharded conv tensor [1,1,B*cdp_full,32] (the decode reader is
+        pass-through, so conv_state/conv1d_weight content is unused) — built once."""
+        if getattr(self, "_conv_dummy", None) is None or self._conv_dummy_B != B:
+            conv_dim = self.key_dim * 2 + self.value_dim
+            SH2 = ttnn.ShardTensorToMesh(self.device, dim=2)
+            self._conv_dummy = ttnn.from_torch(
+                torch.zeros(1, 1, B * conv_dim, 32, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=SH2)
+            self._conv_dummy_B = B
+        return self._conv_dummy
+
     def _prefill_fused(self, hidden_states, deltanet_state):
         """Multi-token (B=1) prefill via the fused device kernel."""
         S = hidden_states.shape[2]
@@ -716,6 +874,8 @@ class TtGatedDeltaNet(LightweightModule):
     def forward(self, hidden_states, deltanet_state, mode="decode"):
         if mode == "decode":
             if USE_FULL_FUSED_KERNEL:
+                if self.batched_decode:  # num_seq>1: head-parallel sharded batched decode
+                    return self._decode_step_sharded(hidden_states, deltanet_state)
                 return self._decode_step_full_fused(hidden_states, deltanet_state)
             raise RuntimeError(
                 "qwen36 vLLM DeltaNet decode requires the fused deltanet_decode_full kernel "

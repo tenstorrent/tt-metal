@@ -118,6 +118,10 @@ class Qwen3_5ForConditionalGeneration:
     ):
         cfg = _hf_config_to_cfg(hf_config, max_seq_len, n_layers)
         ckpt_path = getattr(hf_config, "_name_or_path", None) or "/home/yito/work/qwen36_27b_hf"
+        # num_seq>1 -> head-parallel SHARDED batched DeltaNet decode. QWEN36_FORCE_SHARDED
+        # forces it at max_batch=1 (to validate the sharded compute against the gathered path).
+        import os as _os
+        cfg.batched_decode = (max_batch_size > 1) or bool(_os.environ.get("QWEN36_FORCE_SHARDED"))
         sd = StreamingStateDict(ckpt_path, config=cfg)
         model = TtQwen36VllmModel(mesh_device, sd, cfg, dense_tp=True, tp_size=8)
         return cls(model, cfg, mesh_device, max_batch_size)
@@ -183,6 +187,19 @@ class Qwen3_5ForConditionalGeneration:
                         pass
                 persistent._reseed_conv_hist = True  # reseed conv_hist in-place next decode
                 continue
+            # batched (max_batch>1): the persistent recurrent state is head-parallel
+            # SHARDED (dim1), but the prefill temp state is replicated [1,nv,Dk,Dv];
+            # re-shard it (dim1) before the dim0 row-scatter. conv stays gathered.
+            if getattr(persistent, "batched", False):
+                from models.demos.qwen36_27b.tt.mesh_utils import to_torch as _m2t
+                rt_cpu = _m2t(rt)  # [1,nv,Dk,Dv]
+                rt_sh = ttnn.from_torch(rt_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                        device=self.mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1))
+                try:
+                    ttnn.deallocate(rt)
+                except Exception:
+                    pass
+                rt = rt_sh
             persistent.write_recurrent_slot(li, row, rt)
             persistent.write_conv_slot(li, row, ct)
             if persistent.recurrent_states[li] is not rt:

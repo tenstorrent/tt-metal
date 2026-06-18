@@ -159,7 +159,10 @@ class TtQwen36VllmModel(LightweightModule):
 
     def _maybe_reseed_conv_hist(self, deltanet_state):
         """A new request's prefill (in-place state path) flags conv_hist stale; re-seed
-        the fixed conv_hist buffers in-place from the new conv_state before this decode."""
+        the fixed conv_hist buffers in-place from the new conv_state before this decode.
+        Skipped for batched (num_seq>1): the sharded conv prep self-seeds per-batch."""
+        if getattr(self.config, "batched_decode", False):
+            return
         if getattr(deltanet_state, "_reseed_conv_hist", False):
             for i, layer in enumerate(self.layers):
                 if self.config.layer_types[i] != "full_attention":
@@ -235,7 +238,7 @@ class TtQwen36VllmModel(LightweightModule):
         recurrence in a fresh B=1 DeltaNet state.
         Returns (last-token logits [1,1,1,vocab_padded], temp DeltaNet state B=1)."""
         row = batch_idx
-        temp = self.create_deltanet_state(batch=1)
+        temp = self.create_deltanet_state(batch=1, batched=False)  # prefill is GATHERED
         hidden_states = self.embed(token_ids)  # [1,1,L,H]
         L = token_ids.shape[1]
         pos = positions if isinstance(positions, torch.Tensor) else torch.tensor(positions)
@@ -285,5 +288,6 @@ class TtQwen36VllmModel(LightweightModule):
         logits = self._lm_head(last_tt, pad_token_dim=True)
         return logits, temp
 
-    def create_deltanet_state(self, batch=1):
-        return TtDeltaNetState(self.num_layers, self.config.layer_types, self.device, self.config, batch=batch)
+    def create_deltanet_state(self, batch=1, batched=None):
+        return TtDeltaNetState(self.num_layers, self.config.layer_types, self.device, self.config,
+                               batch=batch, batched=batched)
