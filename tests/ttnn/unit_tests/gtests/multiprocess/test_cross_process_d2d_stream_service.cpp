@@ -536,7 +536,7 @@ MeshWorkload make_stress_signal_workload(D2DStreamServiceSender* outbound, const
 // The standalone outbound overwrite-gate (d2d_sync): runs on the sender's worker
 // grid and waits the sender's consumed_sem (prev iter forwarded). Separate from the
 // op — the unbundled split that mirrors a real graph.
-MeshWorkload make_gate_workload(D2DStreamServiceSender* sender, const std::shared_ptr<MeshDevice>& mesh) {
+MeshWorkload make_gate_workload(D2DStreamServiceSender* sender, const std::shared_ptr<MeshDevice>&) {
     const auto& coords = sender->get_backing_tensor().tensor_topology().mesh_coords();
     const CoreRange worker_cores = sender->get_worker_cores();
     const std::vector<uint32_t> ct_args = {static_cast<uint32_t>(sender->get_consumed_sem_addr())};

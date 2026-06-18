@@ -95,14 +95,10 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::DeviceAddr;
 using ::tt::tt_metal::H2DStreamService;
 using ::tt::tt_metal::Layout;
-using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::NOC;
-using ::tt::tt_metal::PageConfig;
 using ::tt::tt_metal::SetRuntimeArgs;
 using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorAccessorArgs;
-using ::tt::tt_metal::TensorLayout;
-using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::EnqueueMeshWorkload;
 using ::tt::tt_metal::distributed::Finish;
@@ -112,7 +108,6 @@ using ::tt::tt_metal::distributed::MeshDevice;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
 using ::tt::tt_metal::distributed::MeshShape;
 using ::tt::tt_metal::distributed::MeshWorkload;
-using ::tt::tt_metal::distributed::ReadShard;
 using ::tt::tt_metal::distributed::SocketMemoryConfig;
 
 // FABRIC_2D over the system mesh (D2D needs fabric; H2D is PCIe and unaffected).
@@ -575,7 +570,7 @@ TEST_F(StreamPipelineTest, ShapeNarrowUneven) {
 // ===========================================================================
 
 // fixed_per_core_shape == 32 pages/core, 512 u32/page (dense, perfectly even).
-static ttnn::Shape fixed_per_core_shape(const CoreRange& workers) {
+ttnn::Shape fixed_per_core_shape(const CoreRange& workers) {
     return ttnn::Shape({1, 1, 32u * core_range_volume(workers), 512u});
 }
 

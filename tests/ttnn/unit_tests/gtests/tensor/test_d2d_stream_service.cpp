@@ -92,7 +92,6 @@ using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::NOC;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Program;
 using ::tt::tt_metal::SetRuntimeArgs;
 using ::tt::tt_metal::TensorAccessorArgs;
 using ::tt::tt_metal::TensorLayout;
