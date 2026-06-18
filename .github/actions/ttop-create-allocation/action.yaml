@@ -34,7 +34,7 @@ runs:
           annotations:
             ci.tenstorrent.com/created-by: ${{ github.actor }}
             ci.tenstorrent.com/repository: ${{ github.repository }}
-            ci.tenstorrent.com/run-id: ${{ github.run_id }}
+            ci.tenstorrent.com/run-id: "${{ github.run_id }}"
             ci.tenstorrent.com/workflow-ref: ${{ github.workflow_ref }}
             ci.tenstorrent.com/event-name: ${{ github.event_name }}
         spec:
