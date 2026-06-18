@@ -5,7 +5,7 @@
 import pytest
 import torch
 from loguru import logger
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from transformers import BertForQuestionAnswering, BertTokenizer
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, profiler
@@ -15,6 +15,7 @@ from models.demos.metal_BERT_large_11.tt.model_config import (
     get_tt_cache_path,
     skip_unsupported_config,
 )
+from models.demos.utils.qa_pipeline_compat import QuestionAnsweringPipeline
 
 
 def run_bert_question_and_answering_inference(
@@ -64,8 +65,7 @@ def run_bert_question_and_answering_inference(
             return_token_type_ids=token_type_ids,
             return_tensors="pt",
         )
-        nlp = pipeline(
-            "question-answering",
+        nlp = QuestionAnsweringPipeline(
             model=hugging_face_reference_model,
             tokenizer=tokenizer,
         )

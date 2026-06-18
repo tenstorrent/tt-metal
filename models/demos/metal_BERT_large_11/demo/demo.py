@@ -8,7 +8,7 @@ import evaluate
 import pytest
 import torch
 from loguru import logger
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from transformers import BertForQuestionAnswering, BertTokenizer
 
 import ttnn
 from models.common.utility_functions import profiler
@@ -19,6 +19,7 @@ from models.demos.metal_BERT_large_11.tt.model_config import (
     get_tt_cache_path,
     skip_unsupported_config,
 )
+from models.demos.utils.qa_pipeline_compat import QuestionAnsweringPipeline
 
 
 def load_inputs(input_path, batch):
@@ -62,8 +63,7 @@ def run_bert_question_and_answering_inference_squadv2(
     # set up tokenizer
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
-    nlp = pipeline(
-        "question-answering",
+    nlp = QuestionAnsweringPipeline(
         model=hugging_face_reference_model,
         tokenizer=tokenizer,
     )
@@ -189,8 +189,7 @@ def run_bert_question_and_answering_inference(
     # set up tokenizer
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
-    nlp = pipeline(
-        "question-answering",
+    nlp = QuestionAnsweringPipeline(
         model=hugging_face_reference_model,
         tokenizer=tokenizer,
     )

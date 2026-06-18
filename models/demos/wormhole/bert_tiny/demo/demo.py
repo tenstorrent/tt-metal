@@ -8,12 +8,13 @@ import evaluate
 import pytest
 import torch
 from loguru import logger
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from transformers import BertForQuestionAnswering, BertTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
+from models.demos.utils.qa_pipeline_compat import QuestionAnsweringPipeline
 from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
 
 
@@ -54,7 +55,7 @@ def run_bert_question_and_answering_inference(
     tokenizer_name = str(model_location_generator(model_name, model_subdir="Bert"))
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
     config = hugging_face_reference_model.config
-    nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+    nlp = QuestionAnsweringPipeline(model=hugging_face_reference_model, tokenizer=tokenizer)
 
     profiler.start(f"preprocessing_parameter")
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
@@ -184,7 +185,7 @@ def run_bert_question_and_answering_inference_squad_v2(
             convert_to_ttnn=lambda *_: True,
         )
 
-    nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+    nlp = QuestionAnsweringPipeline(model=hugging_face_reference_model, tokenizer=tokenizer)
 
     attention_mask = True
     token_type_ids = True

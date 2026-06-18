@@ -9,13 +9,14 @@ import pytest
 import torch
 import transformers
 from loguru import logger
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from transformers import BertForQuestionAnswering, BertTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert, ttnn_optimized_sharded_bert
+from models.demos.utils.qa_pipeline_compat import QuestionAnsweringPipeline
 
 
 def load_inputs(input_path, batch):
@@ -59,7 +60,7 @@ def run_bert_question_and_answering_inference(
     tokenizer_name = str(model_location_generator(model_name, model_subdir="Bert"))
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
     config = hugging_face_reference_model.config
-    nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+    nlp = QuestionAnsweringPipeline(model=hugging_face_reference_model, tokenizer=tokenizer)
 
     if bert == ttnn_bert:
         tt_model_name = f"ttnn_{model_name}"
@@ -208,7 +209,7 @@ def run_bert_question_and_answering_inference_squad_v2(
         device=device,
     )
 
-    nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+    nlp = QuestionAnsweringPipeline(model=hugging_face_reference_model, tokenizer=tokenizer)
 
     attention_mask = True
     token_type_ids = True
