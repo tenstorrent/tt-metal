@@ -218,8 +218,23 @@ constexpr const char* tensor_shape_dim_name(const std::uint8_t dim)
         ::ckernel::tensor_shape_dim_name((ts).face_c_dim),                                        \
         ::ckernel::tensor_shape_dim_name((ts).num_faces_r_dim),                                   \
         ::ckernel::tensor_shape_dim_name((ts).num_faces_c_dim))
+
+#define LLK_VALIDATE_TENSOR_SHAPE_PAIR_EMIT_(fn_lit, in0, in1)                                                    \
+    DEVICE_PRINT(                                                                                                 \
+        "[" fn_lit                                                                                                \
+        "] tensor_shape_pair: in0_face_r_dim={} in0_face_c_dim={} in0_num_faces_r_dim={} in0_num_faces_c_dim={} " \
+        "in1_face_r_dim={} in1_face_c_dim={} in1_num_faces_r_dim={} in1_num_faces_c_dim={}\n",                    \
+        static_cast<unsigned>((in0).face_r_dim),                                                                  \
+        static_cast<unsigned>((in0).face_c_dim),                                                                  \
+        static_cast<unsigned>((in0).num_faces_r_dim),                                                             \
+        static_cast<unsigned>((in0).num_faces_c_dim),                                                             \
+        static_cast<unsigned>((in1).face_r_dim),                                                                  \
+        static_cast<unsigned>((in1).face_c_dim),                                                                  \
+        static_cast<unsigned>((in1).num_faces_r_dim),                                                             \
+        static_cast<unsigned>((in1).num_faces_c_dim))
 #else
 #define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn_name, ts) ((void)0)
+#define LLK_VALIDATE_TENSOR_SHAPE_PAIR_EMIT_(fn_lit, in0, in1) ((void)0)
 #endif
 
 #define LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(checker, fn, ts) \
@@ -232,15 +247,29 @@ constexpr const char* tensor_shape_dim_name(const std::uint8_t dim)
         }                                                       \
     } while (0)
 
+#define LLK_VALIDATE_TENSOR_SHAPE_PAIR_WITH_CHECKER(checker, fn_enum, fn_lit, in0, in1) \
+    do                                                                                  \
+    {                                                                                   \
+        if (!checker(fn_enum, in0, in1))                                                \
+        {                                                                               \
+            LLK_VALIDATE_TENSOR_SHAPE_PAIR_EMIT_(fn_lit, in0, in1);                     \
+            ::ckernel::assert_tensor_shape_unobserved_();                               \
+        }                                                                               \
+    } while (0)
+
 #define LLK_VALIDATE_TENSOR_SHAPE_UNPACK(fn, ts) LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_unpack_tensor_shape_covered, fn, ts)
 #define LLK_VALIDATE_TENSOR_SHAPE_MATH(fn, ts)   LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_math_tensor_shape_covered, fn, ts)
 #define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn, ts)   LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_pack_tensor_shape_covered, fn, ts)
+#define LLK_VALIDATE_TENSOR_SHAPE_MATH_PAIR(fn_enum, fn_lit, in0, in1) \
+    LLK_VALIDATE_TENSOR_SHAPE_PAIR_WITH_CHECKER(::ckernel::coverage::is_math_tensor_shape_pair_covered, fn_enum, fn_lit, in0, in1)
 
 #else
 
 #define LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(checker, fn_name, ts) ((void)0)
+#define LLK_VALIDATE_TENSOR_SHAPE_PAIR_WITH_CHECKER(checker, fn_enum, fn_lit, in0, in1) ((void)0)
 #define LLK_VALIDATE_TENSOR_SHAPE_UNPACK(fn_name, ts)                ((void)0)
 #define LLK_VALIDATE_TENSOR_SHAPE_MATH(fn_name, ts)                  ((void)0)
 #define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn_name, ts)                  ((void)0)
+#define LLK_VALIDATE_TENSOR_SHAPE_MATH_PAIR(fn_enum, fn_lit, in0, in1)                  ((void)0)
 
 #endif // defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)

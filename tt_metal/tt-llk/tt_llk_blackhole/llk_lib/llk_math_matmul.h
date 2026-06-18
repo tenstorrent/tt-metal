@@ -12,12 +12,30 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 
 #ifndef HF
 #define HF 0
 #endif
 
 using namespace ckernel;
+
+inline ckernel::TensorShape make_matmul_tensor_shape(const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim)
+{
+    LLK_ASSERT(tile_r_dim > 0 && tile_r_dim <= TILE_R_DIM, "matmul tile row dimension must be in range [1, 32]");
+    LLK_ASSERT(tile_c_dim == FACE_C_DIM || tile_c_dim == TILE_C_DIM, "matmul tile column dimension must be 16 or 32");
+    return ckernel::make_tensor_shape(
+        static_cast<std::uint8_t>(tile_r_dim < FACE_R_DIM ? tile_r_dim : FACE_R_DIM),
+        FACE_C_DIM,
+        static_cast<std::uint8_t>(tile_r_dim > FACE_R_DIM ? 2 : 1),
+        static_cast<std::uint8_t>(tile_c_dim > FACE_C_DIM ? 2 : 1));
+}
+
+inline bool matmul_has_partial_face(const ckernel::TensorShape& in0_tensor_shape, const ckernel::TensorShape& in1_tensor_shape)
+{
+    return in0_tensor_shape.face_r_dim < FACE_R_DIM || in1_tensor_shape.face_r_dim < FACE_R_DIM;
+}
 
 /**
  * @brief Program the matmul address-mod slots for the given tile shapes, transpose, and fidelity.
@@ -37,13 +55,19 @@ using namespace ckernel;
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline void matmul_configure_addrmod(
     const bool transpose,
-    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face            = false)
+    const ckernel::TensorShape& in0_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape& in1_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     constexpr std::uint32_t fidelity_increment = is_high_fidelity(math_fidelity) ? 1 : 0;
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(in0_tensor_shape), "Invalid in0 tensor shape for matmul");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(in1_tensor_shape), "Invalid in1 tensor shape for matmul");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH_PAIR(
+        ckernel::coverage::TensorShapeFunctionCoverage::matmul_configure_addrmod, "matmul_configure_addrmod", in0_tensor_shape, in1_tensor_shape);
+    const std::uint32_t in0_tile_r_dim = in0_tensor_shape.total_row_dim();
+    const std::uint32_t in0_tile_c_dim = in0_tensor_shape.total_col_dim();
+    const std::uint32_t in1_tile_r_dim = in1_tensor_shape.total_row_dim();
+    const std::uint32_t in1_tile_c_dim = in1_tensor_shape.total_col_dim();
+    const bool partial_face            = matmul_has_partial_face(in0_tensor_shape, in1_tensor_shape);
     // 16x16 inputs not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
     LLK_ASSERT(
         !((in0_tile_r_dim == FACE_R_DIM) && (in0_tile_c_dim == FACE_C_DIM) && (in1_tile_r_dim == FACE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)),
@@ -310,11 +334,8 @@ template <MathFidelity math_fidelity>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
-    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face            = false)
+    const ckernel::TensorShape& in0_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape& in1_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
@@ -327,6 +348,16 @@ inline void matmul_configure_mop(
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(in0_tensor_shape), "Invalid in0 tensor shape for matmul");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(in1_tensor_shape), "Invalid in1 tensor shape for matmul");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH_PAIR(
+        ckernel::coverage::TensorShapeFunctionCoverage::matmul_configure_mop, "matmul_configure_mop", in0_tensor_shape, in1_tensor_shape);
+    const std::uint32_t in0_tile_r_dim = in0_tensor_shape.total_row_dim();
+    const std::uint32_t in0_tile_c_dim = in0_tensor_shape.total_col_dim();
+    const std::uint32_t in1_tile_r_dim = in1_tensor_shape.total_row_dim();
+    const std::uint32_t in1_tile_c_dim = in1_tensor_shape.total_col_dim();
+    const bool partial_face            = matmul_has_partial_face(in0_tensor_shape, in1_tensor_shape);
 
     const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
     const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
@@ -558,11 +589,8 @@ template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline void matmul_configure_mop_throttled(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
-    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face            = false)
+    const ckernel::TensorShape& in0_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape& in1_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
@@ -573,6 +601,15 @@ inline void matmul_configure_mop_throttled(
     // if col major layout faces are ordered as f0,f2,f1,f3
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(in0_tensor_shape), "Invalid in0 tensor shape for matmul");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(in1_tensor_shape), "Invalid in1 tensor shape for matmul");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH_PAIR(
+        ckernel::coverage::TensorShapeFunctionCoverage::matmul_configure_mop_throttled, "matmul_configure_mop_throttled", in0_tensor_shape, in1_tensor_shape);
+    const std::uint32_t in0_tile_r_dim = in0_tensor_shape.total_row_dim();
+    const std::uint32_t in0_tile_c_dim = in0_tensor_shape.total_col_dim();
+    const std::uint32_t in1_tile_r_dim = in1_tensor_shape.total_row_dim();
+    const std::uint32_t in1_tile_c_dim = in1_tensor_shape.total_col_dim();
+    const bool partial_face            = matmul_has_partial_face(in0_tensor_shape, in1_tensor_shape);
     LLK_ASSERT(
         (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) && !partial_face,
         "MM throttling only enabled for full 32x32 tile size");
@@ -656,28 +693,30 @@ inline void matmul_configure_mop_throttled(
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(
-    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face            = false,
-    const std::uint32_t transpose      = 0,
-    const std::uint32_t ct_dim         = 1,
-    const std::uint32_t rt_dim         = 1)
+    const ckernel::TensorShape& in0_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape& in1_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const std::uint32_t transpose                = 0,
+    const std::uint32_t ct_dim                   = 1,
+    const std::uint32_t rt_dim                   = 1)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(in0_tensor_shape), "Invalid in0 tensor shape for matmul");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(in1_tensor_shape), "Invalid in1 tensor shape for matmul");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH_PAIR(
+        ckernel::coverage::TensorShapeFunctionCoverage::_llk_math_matmul_init_, "_llk_math_matmul_init_", in0_tensor_shape, in1_tensor_shape);
+    const std::uint32_t in1_tile_r_dim = in1_tensor_shape.total_row_dim();
+    const std::uint32_t in1_tile_c_dim = in1_tensor_shape.total_col_dim();
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
 
-    matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tensor_shape, in1_tensor_shape);
 
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
-            ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(ct_dim, rt_dim, in0_tensor_shape, in1_tensor_shape);
     }
     else
     {
-        matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tensor_shape, in1_tensor_shape);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

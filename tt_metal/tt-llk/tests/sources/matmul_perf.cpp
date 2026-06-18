@@ -137,11 +137,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             RT_DIM);
 #else
         _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            /* tile A */ TILE_R_DIM,
-            /* tile A */ TILE_C_DIM,
-            /* tile B */ TILE_R_DIM,
-            /* tile B */ TILE_C_DIM,
-            /* partial face */ false,
+            ckernel::DEFAULT_TENSOR_SHAPE,
+            ckernel::DEFAULT_TENSOR_SHAPE,
             /* transpose */ false,
             CT_DIM,
             RT_DIM);
