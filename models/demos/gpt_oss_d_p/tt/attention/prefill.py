@@ -94,54 +94,58 @@ def prefill_forward(
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
-    # Fill KV cache
-    k_cache, v_cache = kv_cache
-    tt_k_pre_cast = tt_k
-    tt_v_pre_cast = tt_v
-    tt_k = ttnn.typecast(tt_k, k_cache.dtype)
-    tt_v = ttnn.typecast(tt_v, v_cache.dtype)
-    tt_k_pre_cast.deallocate(True)
-    tt_v_pre_cast.deallocate(True)
+    # Fill KV cache. When kv_cache is None the SDPA below still operates on the
+    # freshly-computed tt_k / tt_v directly, so activations are correct; only the
+    # persistent cache is skipped.  Activation-accuracy tests use this path to
+    # avoid allocating cache for all 94 layers.
+    if kv_cache is not None:
+        k_cache, v_cache = kv_cache
+        tt_k_pre_cast = tt_k
+        tt_v_pre_cast = tt_v
+        tt_k = ttnn.typecast(tt_k, k_cache.dtype)
+        tt_v = ttnn.typecast(tt_v, v_cache.dtype)
+        tt_k_pre_cast.deallocate(True)
+        tt_v_pre_cast.deallocate(True)
 
-    if page_table is not None:
-        block_size = k_cache.shape[2]
-        page_len = page_table.shape[-1] * block_size
-        if batch_size > 1:
-            # Per-user paged cache fill. The flattened approach (reshape batch into seq
-            # + flattened page_table) produces wrong cache for users beyond the first —
-            # paged_fill_cache doesn't correctly handle positions beyond the original
-            # page_table's block count. Use per-user calls with batch_idx=0 instead.
-            for b in range(batch_size):
-                k_b = tt_k[b : b + 1, :, :, :]
-                v_b = tt_v[b : b + 1, :, :, :]
-                pt_b = page_table[b : b + 1, :]
-                k_b_fill = k_b[:, :, :page_len, :] if page_len < k_b.shape[2] else k_b
-                v_b_fill = v_b[:, :, :page_len, :] if page_len < v_b.shape[2] else v_b
-                ttnn.experimental.paged_fill_cache(k_cache, k_b_fill, pt_b, batch_idx=0)
-                ttnn.experimental.paged_fill_cache(v_cache, v_b_fill, pt_b, batch_idx=0)
-        else:
-            tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
-            tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
-            ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
-            if page_len < tt_k.shape[2]:
-                tt_k_sliced.deallocate(True)
-            if page_len < tt_v.shape[2]:
-                tt_v_sliced.deallocate(True)
+        if page_table is not None:
+            block_size = k_cache.shape[2]
+            page_len = page_table.shape[-1] * block_size
+            if batch_size > 1:
+                # Per-user paged cache fill. The flattened approach (reshape batch into seq
+                # + flattened page_table) produces wrong cache for users beyond the first —
+                # paged_fill_cache doesn't correctly handle positions beyond the original
+                # page_table's block count. Use per-user calls with batch_idx=0 instead.
+                for b in range(batch_size):
+                    k_b = tt_k[b : b + 1, :, :, :]
+                    v_b = tt_v[b : b + 1, :, :, :]
+                    pt_b = page_table[b : b + 1, :]
+                    k_b_fill = k_b[:, :, :page_len, :] if page_len < k_b.shape[2] else k_b
+                    v_b_fill = v_b[:, :, :page_len, :] if page_len < v_b.shape[2] else v_b
+                    ttnn.experimental.paged_fill_cache(k_cache, k_b_fill, pt_b, batch_idx=0)
+                    ttnn.experimental.paged_fill_cache(v_cache, v_b_fill, pt_b, batch_idx=0)
+            else:
+                tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
+                tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
+                ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
+                if page_len < tt_k.shape[2]:
+                    tt_k_sliced.deallocate(True)
+                if page_len < tt_v.shape[2]:
+                    tt_v_sliced.deallocate(True)
 
-    else:
-        # Non-paged attention
-        if batch_size > 1:
-            for b in range(batch_size):
-                k_b = ttnn.slice(tt_k, (b, 0, 0, 0), (b + 1, tt_k.shape[1], tt_k.shape[2], tt_k.shape[3]))
-                v_b = ttnn.slice(tt_v, (b, 0, 0, 0), (b + 1, tt_v.shape[1], tt_v.shape[2], tt_v.shape[3]))
-                ttnn.fill_cache(k_cache, k_b, batch_idx=b)
-                ttnn.fill_cache(v_cache, v_b, batch_idx=b)
-                k_b.deallocate(True)
-                v_b.deallocate(True)
         else:
-            ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
-            ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
+            # Non-paged attention
+            if batch_size > 1:
+                for b in range(batch_size):
+                    k_b = ttnn.slice(tt_k, (b, 0, 0, 0), (b + 1, tt_k.shape[1], tt_k.shape[2], tt_k.shape[3]))
+                    v_b = ttnn.slice(tt_v, (b, 0, 0, 0), (b + 1, tt_v.shape[1], tt_v.shape[2], tt_v.shape[3]))
+                    ttnn.fill_cache(k_cache, k_b, batch_idx=b)
+                    ttnn.fill_cache(v_cache, v_b, batch_idx=b)
+                    k_b.deallocate(True)
+                    v_b.deallocate(True)
+            else:
+                ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
+                ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
     # Scaled dot-product attention
     tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
