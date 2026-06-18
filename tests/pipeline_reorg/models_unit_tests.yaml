@@ -22,6 +22,8 @@
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
+    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model.py -k full
+    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: llama3.1-8b
   skus:
     wh_n150:
@@ -32,15 +34,6 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-
-# COVERAGE GAP — migrated off tests/scripts/t3000/run_t3000_integration_tests.sh
-# (run_t3000_llama3_tests). The whole-model correctness checks below are NOT yet
-# covered by the per-module Llama 3.1-8B unit entry above (test_embedding/rms_norm/
-# mlp/attention/decoder/*). Port them here (or confirm the per-module tests
-# supersede them) before relying solely on the tiered pipeline:
-#   export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-#   pytest models/tt_transformers/tests/test_model.py -k full
-#   pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
 
 - name: Llama 3.2-1B unit tests
   cmd: |
@@ -95,6 +88,12 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
+    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model.py -k quick
+    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
+    # GAP from t3k integration: pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400
+    # GAP from t3k integration: pytest models/tt_transformers/tests/multimodal/test_llama_image_transformer.py
+    # GAP from t3k integration: pytest models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py
+    # GAP from t3k integration: pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py
   model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
@@ -102,21 +101,6 @@
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-
-# COVERAGE GAP — migrated off tests/scripts/t3000/run_t3000_integration_tests.sh
-# (run_t3000_llama3_90b_tests + run_t3000_llama3.2-90b-vision_freq_tests). The
-# whole-model + full vision-transformer/encoder checks below are NOT covered by
-# the per-module Llama 3.2-90B-Vision unit entry above (which exercises the
-# sub-modules: image_mlp/image_attention/image_block/cross_attention/cross_block/
-# conv2d_patch/class_embedding/positional/tile_position). Port them here (or
-# confirm the per-module tests supersede them) before relying solely on tiered:
-#   export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
-#   pytest models/tt_transformers/tests/test_model.py -k quick
-#   pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
-#   pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400
-#   pytest models/tt_transformers/tests/multimodal/test_llama_image_transformer.py
-#   pytest models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py
-#   pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py
 
 - name: Llama 3.3-70B unit tests
   cmd: |
@@ -197,6 +181,8 @@
     pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
+    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model.py -k full
+    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: mistral-7b
   skus:
     wh_n150:
@@ -204,15 +190,6 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-
-# COVERAGE GAP — migrated off tests/scripts/t3000/run_t3000_integration_tests.sh
-# (run_t3000_mistral_tests). The whole-model correctness checks below are NOT yet
-# covered by the per-module Mistral-7B unit entry above (test_embedding/attention/
-# mlp/rms_norm/decoder/*). Port them here (or confirm the per-module tests
-# supersede them) before relying solely on the tiered pipeline:
-#   export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3
-#   pytest models/tt_transformers/tests/test_model.py -k full
-#   pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
 
 - name: Gemma-3-4B unit tests
   cmd: |
