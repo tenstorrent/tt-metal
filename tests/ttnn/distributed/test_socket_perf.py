@@ -149,7 +149,9 @@ def _run_mesh_socket_bandwidth_case(
     direct-write ``send_direct_async``/``recv_direct_async`` ops (which bypass the socket FIFO for
     payload data and only use it for the handshake and completion signal).
     """
-    torch.manual_seed(0)
+    import time
+
+    torch.manual_seed(time.time())
 
     if transfer_mode == "buffered":
         send_op = ttnn.experimental.buffered_send
@@ -168,7 +170,10 @@ def _run_mesh_socket_bandwidth_case(
     num_chips = mesh_shape[0] * mesh_shape[1]
 
     socket_connections = _build_socket_connections(mesh_shape, num_connections)
-    socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_page_size * 4)
+    if transfer_mode == "direct":
+        socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 128)
+    else:
+        socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_page_size * 4)
     socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config)
     send_socket, recv_socket = ttnn.create_socket_pair(sender_mesh_device, receiver_mesh_device, socket_config)
 
@@ -178,7 +183,7 @@ def _run_mesh_socket_bandwidth_case(
         device=sender_mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         mesh_mapper=ttnn.ReplicateTensorToMesh(sender_mesh_device),
     )
     if transfer_mode == "buffered":
@@ -190,7 +195,10 @@ def _run_mesh_socket_bandwidth_case(
         output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device)
 
     for _ in range(NUM_WARMUP_ITERS):
-        send_op(input_tensor, send_socket)
+        if transfer_mode == "direct":
+            send_op(input_tensor, output_tensor, send_socket)
+        else:
+            send_op(input_tensor, send_socket)
         if transfer_mode == "buffered":
             recv_op(buffered_outputs, recv_socket)
         else:
@@ -199,14 +207,26 @@ def _run_mesh_socket_bandwidth_case(
     ttnn.synchronize_device(receiver_mesh_device)
 
     start = time.perf_counter()
+
+    sender_trace = ttnn.begin_trace_capture(sender_mesh_device, cq_id=0)
+    receiver_trace = ttnn.begin_trace_capture(receiver_mesh_device, cq_id=0)
     for _ in range(NUM_MEASURED_ITERS):
-        send_op(input_tensor, send_socket)
+        pass
+        if transfer_mode == "direct":
+            send_op(input_tensor, output_tensor, send_socket)
+        else:
+            send_op(input_tensor, send_socket)
         if transfer_mode == "buffered":
             recv_op(buffered_outputs, recv_socket)
         else:
             recv_op(output_tensor, recv_socket)
+    ttnn.end_trace_capture(sender_mesh_device, sender_trace, cq_id=0)
+    ttnn.end_trace_capture(receiver_mesh_device, receiver_trace, cq_id=0)
     ttnn.synchronize_device(sender_mesh_device)
     ttnn.synchronize_device(receiver_mesh_device)
+    start = time.perf_counter()
+    ttnn.execute_trace(sender_mesh_device, sender_trace, cq_id=0, blocking=False)
+    ttnn.execute_trace(receiver_mesh_device, receiver_trace, cq_id=0, blocking=True)
     elapsed_s = time.perf_counter() - start
 
     if transfer_mode == "buffered":
@@ -214,7 +234,6 @@ def _run_mesh_socket_bandwidth_case(
     input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
     output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0))
     eq, msg = comp_equal(input_data, output_data)
-    assert eq, msg
 
     bytes_per_iter_per_chip = tensor_shape[0] * tensor_shape[1] * BFLOAT16_BYTES
     total_bytes = bytes_per_iter_per_chip * num_chips * NUM_MEASURED_ITERS
@@ -245,16 +264,29 @@ def _run_mesh_socket_bandwidth_case(
             "aggregate_bw_gbps": round(aggregate_bw_gbps, 4),
         }
     )
+    assert eq, msg
+
+
+fabric_router_config = ttnn.FabricRouterConfig()
+fabric_router_config.max_packet_payload_size_bytes = 1088 * 8
 
 
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": 2048}], indirect=True
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "l1_small_size": 2048,
+            "fabric_router_config": fabric_router_config,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "tensor_shape",
-    [[968, 2048]],
+    [[1024, 2048]],
     ids=lambda v: f"size{v}",
 )
 @pytest.mark.parametrize(
