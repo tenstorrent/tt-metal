@@ -18,8 +18,12 @@
 
 namespace ckernel::sfpu {
 
-template <bool is_fp32_dest_acc_en>
+// tanh(x): t = 0.5*expm1(abs(2*x)); sgn(x) * t / (t + 1)
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
+    sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
+    sfpi::vFloat t, rcp, x0, x1, tmp;
+    sfpi::vInt magic_seed;
+
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
     x *= 2.0f;
     // Rounds the absolute value of j, clamped to [0, 255].
@@ -27,13 +31,10 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
     sfpi::vInt i = m;
 
-    sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
-    sfpi::vFloat t, rcp, x0, x1, tmp;
-    sfpi::vInt magic_seed;
-
     a = sfpi::setsgn(x, 0);
     f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
 
+    // expm1(f)
     r = 1.974105835e-04f;
     r = r * f + 1.393318176e-3f;
     r = r * f + 8.331298828e-3f;
@@ -51,6 +52,8 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     x0 = r * scale + bias0;
     y = a * 0.0f + 1.0f;
     x1 = x0 + 1.0f;
+
+    // computes x0/x1 via reciprocal and residual correction
     magic_seed = 0xfef30000;
     rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
     t = x1 * rcp + 1.0f;
@@ -62,6 +65,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
         y = t * rcp + y;
     }
     v_endif;
+
     return sfpi::copysgn(y, x);
 }
 
@@ -120,8 +124,7 @@ inline void calculate_tanh() {
             sfpi::vFloat result;
 
             if constexpr (is_fp32_dest_acc_en) {
-                // Use accurate sigmoid-based tanh for fp32
-                result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
+                result = _sfpu_tanh_fp32_accurate_(val);
             } else {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
                 result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
