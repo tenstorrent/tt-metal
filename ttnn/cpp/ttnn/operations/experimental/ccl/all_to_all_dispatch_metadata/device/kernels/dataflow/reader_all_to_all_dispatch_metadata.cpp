@@ -87,6 +87,8 @@ void kernel_main() {
     constexpr uint32_t shared_expert_data_size_bytes = num_shared_experts * sizeof(uint16_t);
     constexpr uint16_t bf16_one = 0x3f80;
 
+    Noc noc;
+
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
     const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
@@ -126,7 +128,7 @@ void kernel_main() {
         if constexpr (num_shared_experts > 0) {
             const uint32_t shared_expert_id_l1_addr = l1_write_addr + indices_page_size;
             tt_memmove<false, true, true, shared_expert_data_size_bytes>(
-                shared_expert_id_l1_addr, shared_expert_ids_addr, shared_expert_data_size_bytes);
+                noc, shared_expert_id_l1_addr, shared_expert_ids_addr, shared_expert_data_size_bytes);
         }
 
         // Only primary worker reads scores (only primary sends metadata)
