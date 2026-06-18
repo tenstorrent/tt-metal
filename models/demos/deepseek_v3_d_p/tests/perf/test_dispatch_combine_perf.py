@@ -40,26 +40,29 @@ _REAL_INDICES_TOPOS = [("linear", 2), ("ring", 2)]
 # are developed separately, so each is asserted against its own baseline —
 # a regression localizes to the responsible kernel.
 _DISPATCH_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    # (topo, nlinks, layer, col): expected_ns. Averaged over 3 CI runs on LB
-    # against LONGBOOK_QA_ENG_25600/expert_routing.safetensors.
-    ("linear", 2, 27, 2): 12_097_001,  # 43.2%
-    ("linear", 2, 38, 0): 7_133_901,  # 41.2%
-    ("linear", 2, 50, 0): 8_486_784,  # 39.9%
-    ("linear", 2, 28, 1): 11_040_680,  # 39.5%
-    ("ring", 2, 27, 2): 7_176_132,
-    ("ring", 2, 38, 0): 5_160_985,
-    ("ring", 2, 50, 0): 4_932_906,
-    ("ring", 2, 28, 1): 5_612_649,
+    # (topo, nlinks, layer, col): expected_ns. Re-centered to the midpoint of the observed
+    # min/max across 16 main-branch CI runs (2026-06-13..18) spanning 5 LB runners
+    # (f01cs01/02/08, f04cs03/04), against LONGBOOK_QA_ENG_25600/expert_routing.safetensors.
+    # Percent comment = dispatch-group in-col share for that layer/col.
+    ("linear", 2, 27, 2): 12_129_621,  # 43.2%
+    ("linear", 2, 38, 0): 7_158_222,  # 41.2%
+    ("linear", 2, 50, 0): 8_484_394,  # 39.9%
+    ("linear", 2, 28, 1): 11_039_234,  # 39.5%
+    ("ring", 2, 27, 2): 7_216_744,
+    ("ring", 2, 38, 0): 5_130_980,
+    ("ring", 2, 50, 0): 4_848_732,
+    ("ring", 2, 28, 1): 5_595_338,
 }
 _COMBINE_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 27, 2): 11_953_557,
-    ("linear", 2, 38, 0): 8_342_082,
-    ("linear", 2, 50, 0): 8_468_503,
-    ("linear", 2, 28, 1): 12_180_094,
-    ("ring", 2, 27, 2): 11_521_053,
-    ("ring", 2, 38, 0): 6_168_482,
-    ("ring", 2, 50, 0): 6_372_161,
-    ("ring", 2, 28, 1): 10_628_641,
+    # Re-centered to observed midpoint (same 16-run / 5-runner sample as dispatch above).
+    ("linear", 2, 27, 2): 12_015_238,
+    ("linear", 2, 38, 0): 8_353_550,
+    ("linear", 2, 50, 0): 8_515_742,
+    ("linear", 2, 28, 1): 12_191_696,
+    ("ring", 2, 27, 2): 11_506_808,
+    ("ring", 2, 38, 0): 6_168_426,
+    ("ring", 2, 50, 0): 6_306_488,
+    ("ring", 2, 28, 1): 10_286_688,
 }
 
 
@@ -122,7 +125,7 @@ _DISPATCH_COMBINE_PERF_PARAMS = [
             "DispatchDeviceOperation": _DISPATCH_REAL_INDICES_EXPECTED_NS[(topo, nlinks, layer, col)],
             "CombineDeviceOperation": _COMBINE_REAL_INDICES_EXPECTED_NS[(topo, nlinks, layer, col)],
         },
-        margin=0.05 if topo == "ring" else 0.03,
+        margin=0.045 if topo == "ring" else 0.03,
         captured_layer=layer,
         captured_col=col,
         worker_dir="models/demos/deepseek_v3_d_p/tests/perf",
