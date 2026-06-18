@@ -368,16 +368,14 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // Saturation threshold for tanh -> +/- 1 is dtype-dependent:
-    //   BF16 mode: 8.667 to match torch's vectorized CPU tanh (Sleef / VML),
-    //              which collapses to exactly +/- 1 once |scaled| crosses
-    //              ~8.668. Required so that BF16(kernel) == BF16(torch FP32).
-    //   FP32 mode: 19.07, the threshold above which FP64 tanh itself saturates
-    //              (1 - tanh(s) < 2^-54 half-ULP at 1.0 -> s > 19.07).
-    //              Using 8.667 here would over-saturate ~6700 FP32 inputs that
-    //              an FP64 reference correctly computes as small non-zero
-    //              values, producing thousands of ULPs of "error" vs FP64.
-    constexpr float TANH_SAT_THRESHOLD = is_fp32_dest_acc_en ? 19.07f : 8.667f;
+    // Saturation threshold for tanh -> +/- 1. Match torch's vectorized CPU
+    // tanh (Sleef / VML), which collapses to exactly +/- 1 once |scaled|
+    // crosses ~8.668. Empirically torch's FP64 path also saturates around
+    // this threshold (not at the strict IEEE-754 round-to-nearest crossover
+    // at |scaled| ~ 19.07 that you'd predict from FP64 ULPs), so using the
+    // same threshold in both BF16 and FP32 dest-acc modes gives the closest
+    // match against both torch FP32->BF16 and torch FP64->FP32 references.
+    constexpr float TANH_SAT_THRESHOLD = 8.667f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -414,17 +412,39 @@ inline void calculate_gelu_tanh() {
             result = x;
         }
         v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            // Active region: use the identity 1 + tanh(s) = 2*sigmoid(2s),
-            //   0.5 * x * (1 + tanh(scaled)) = x * sigmoid(2 * scaled)
-            // which skips the catastrophic 2*sig - 1 cancellation that
-            // limits the tanh-chain to ~5 FP32 ULPs at magnitude 1.0 (and
-            // thereby ~hundreds of ULPs at the small (1 + tanh) magnitude).
-            // The sigmoid path runs in FP32 with FP32-accurate exp + 2-step
-            // NR reciprocal so the result is precise to ~1-2 FP32 ULPs at
-            // its OWN magnitude — no cancellation, no magnification.
-            sfpi::vFloat two_scaled = 2.0f * scaled;
-            sfpi::vFloat sig = _sfpu_sigmoid_<true>(two_scaled);
-            result = x * sig;
+            // Active region. The formulation is dtype-conditional to match
+            // PyTorch's reference behaviour in each mode:
+            //
+            // BF16 dest-acc mode -> use the cancellation chain
+            //   `0.5 * x * (1 + tanh(scaled))`, computing tanh as
+            //   `2*sigmoid(2*scaled) - 1` exactly like torch's CPU FP32
+            //   path. The `2*sig - 1` subtraction loses ~9-10 bits of
+            //   FP32 precision, but BF16's 7-bit mantissa absorbs that
+            //   loss harmlessly. Matching torch's exact rounding (rather
+            //   than being "more accurate" than torch via the sigmoid
+            //   identity below) avoids ~10 BF16 inputs in x in [-5.0, -4.75]
+            //   where torch FP32->BF16 and an identity-based result round
+            //   to different BF16 values.
+            //
+            // FP32 dest-acc mode -> use the identity
+            //   `1 + tanh(s) = 2*sigmoid(2s)` directly, so
+            //   `0.5 * x * (1 + tanh) = x * sigmoid(2*scaled)`. This skips
+            //   the `2*sig - 1` cancellation entirely. The result has FP32
+            //   precision at its OWN magnitude (not at magnitude 1.0), so
+            //   the ~1/m ULP magnification that previously inflated a
+            //   ~5-ULP-at-1.0 error into ~hundreds-of-ULPs-at-(1+tanh) is
+            //   gone. The reference for FP32 is torch FP64 -> FP32, which
+            //   is also free of FP32 cancellation, so the two paths agree.
+            if constexpr (is_fp32_dest_acc_en) {
+                sfpi::vFloat two_scaled = 2.0f * scaled;
+                sfpi::vFloat sig = _sfpu_sigmoid_<true>(two_scaled);
+                result = x * sig;
+            } else {
+                sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
+                sfpi::vFloat one_plus = 1.0f + t;
+                sfpi::vFloat half_x = 0.5f * x;
+                result = half_x * one_plus;
+            }
         }
         v_endif;
 
