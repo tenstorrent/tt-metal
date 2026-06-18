@@ -10,9 +10,10 @@ Head sharding with GQA (heads=12, kv_heads=2, head_dim=128) across nd=4 chips:
     pure MHA with num_heads=3, num_kv_heads=1.
   - qkv_proj column-parallel: per-chip fused weight [Q3 | K1 | V1] (width 640),
     sharded across chips along the output dim.
-  - o_proj row-parallel: input is the chip's 3-head attention output (384), the
-    weight is sharded along the contraction dim, partial sums all-reduced to the
-    full replicated hidden.
+  - o_proj REPLICATED: the chip's 3-head attention output (384) is all-gathered
+    to the full ctx (H), then a full (replicated) o_proj weight produces the full
+    replicated hidden directly -- one ctx all_gather instead of a reduce_scatter +
+    all_gather of the full-H partial.
 
 Input  x   : replicated [B, S, H]
 Output out : replicated [B, S, H]
@@ -22,12 +23,13 @@ import torch
 import ttnn
 
 from models.experimental.dots_ocr_tp4.tt.common import (
-    all_reduce,
+    all_gather_last_dim,
     matmul_m_dim,
     prefill_matmul_2d_config,
     qkv_prefill_matmul_config,
     shard_to_mesh,
     to_l1,
+    to_replicated,
     tp_degree,
 )
 from models.experimental.tt_symbiote.core.module import TTNNModule
@@ -148,15 +150,16 @@ class DotsOCRAttentionTP4(TTNNModule):
             fused_b = torch.cat(b_blocks, dim=0).reshape(1, -1)  # [1, nd*640]
             self.qkv_bias = shard_to_mesh(fused_b, self.mesh_device, dim=-1, dtype=ttnn.bfloat16)
 
-        # o_proj row-parallel: weight [H, q_size]; shard the contraction dim
-        # (q_size) which lines up 1:1 with the per-chip Q-head columns.
-        o_w = torch_attn.o_proj.weight.data  # [H, q_size]
-        self.o_w = shard_to_mesh(o_w.t().contiguous(), self.mesh_device, dim=0, dtype=self.o_weight_dtype)
+        # o_proj REPLICATED (vision-attention pattern): every chip holds the full
+        # [ctx=H, H] weight and computes the full hidden from the all-gathered ctx,
+        # so there is NO partial-sum reduce. This replaces the row-parallel o_proj +
+        # reduce_scatter + all_gather with a single all_gather of the (narrower)
+        # head-group ctx -- the gathered o_proj output is already replicated.
+        o_w = torch_attn.o_proj.weight.data  # [H, ctx=H]
+        self.o_w = to_replicated(o_w.t().contiguous(), self.mesh_device, dtype=self.o_weight_dtype)
         o_has_bias = getattr(torch_attn.o_proj, "bias", None) is not None
         if o_has_bias:
-            # o_proj bias is added once to the full (reduced) output -> replicate.
-            from models.experimental.dots_ocr_tp4.tt.common import to_replicated
-
+            # o_proj bias is added once to the full output -> replicate.
             self.o_bias = to_replicated(
                 torch_attn.o_proj.bias.data.reshape(1, -1), self.mesh_device, dtype=ttnn.bfloat16
             )
@@ -260,23 +263,33 @@ class DotsOCRAttentionTP4(TTNNModule):
         ttnn.deallocate(qkv)
         return q, k, v
 
-    def _o_proj_all_reduce(self, attn):
-        # Decode (seq==1) keeps the o_proj matmul + all-reduce L1-resident.
+    def _o_proj_replicated(self, attn):
+        """All-gather this chip's head-group ctx -> full ctx, then a REPLICATED
+        o_proj (full weight) -> full hidden on every chip.
+
+        Replaces the row-parallel o_proj's reduce_scatter + all_gather (an
+        all-reduce of the full-H partial) with a single all_gather of the narrower
+        head-group ctx (q_heads_per_chip*head_dim) -- ~half the CCL bytes and the
+        result is already replicated, so no post-matmul collective. Gathering ctx
+        to DRAM also keeps the matmul in0 off L1, avoiding the L1-in0->HiFi4 trap
+        that pinned the old row-parallel o_proj at HiFi4.
+        """
         is_decode = int(attn.shape[-2]) == 1
         out_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        ctx_full = all_gather_last_dim(attn, self.mesh_device)  # [.., ctx/TP] -> [.., ctx=H]
+        ttnn.deallocate(attn)
         o_pc = prefill_matmul_2d_config(
-            self.mesh_device, matmul_m_dim(attn), int(attn.shape[-1]), int(self.o_w.shape[-1]), fp32_dest=False
+            self.mesh_device, matmul_m_dim(ctx_full), int(ctx_full.shape[-1]), int(self.o_w.shape[-1]), fp32_dest=False
         )
         out = ttnn.linear(
-            attn,
+            ctx_full,
             self.o_w,
-            dtype=ttnn.bfloat4_b,
+            dtype=ttnn.bfloat16,
             memory_config=out_mc,
             compute_kernel_config=self.o_compute,
             program_config=o_pc,
         )
-        ttnn.deallocate(attn)
-        out = all_reduce(out, self.mesh_device, output_memory_config=out_mc)
+        ttnn.deallocate(ctx_full)
         if self.o_bias is not None:
             out = ttnn.add(out, self.o_bias, memory_config=out_mc)
         return out
@@ -330,7 +343,7 @@ class DotsOCRAttentionTP4(TTNNModule):
 
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.squeeze(attn, 1)  # [B, S, q_heads_per_chip*head_dim]
-        return self._o_proj_all_reduce(attn)
+        return self._o_proj_replicated(attn)
 
     def _forward_decode(self, x: ttnn.Tensor, past_key_value, cache_position) -> ttnn.Tensor:
         """Single-token decode reading/writing the paged KV cache (per chip)."""
@@ -399,4 +412,4 @@ class DotsOCRAttentionTP4(TTNNModule):
         attn = ttnn.to_memory_config(attn, ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.slice(attn, [0, 0, 0, 0], [1, 1, batch_size, int(attn.shape[-1])])
         attn = ttnn.squeeze(attn, 1)  # [1, B, H*D]
-        return self._o_proj_all_reduce(attn)
+        return self._o_proj_replicated(attn)

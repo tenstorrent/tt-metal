@@ -75,6 +75,37 @@ def _decode_o_proj_col_dram_sharded_program_config(k_per_dev: int, n_per_dev: in
     )
 
 
+def _gqa_head_shard_perm(num_q_heads: int, num_kv_heads: int, head_dim: int, tp: int) -> list[int]:
+    """Row permutation of the conventional fused QKV weight into per-device blocks.
+
+    The conventional fused QKV weight is ``[Q_all | K_all | V_all]`` along the
+    output (row) dim. To head-shard across ``tp`` devices (vision attention
+    pattern, GQA-adapted), device ``d`` must own a contiguous block
+    ``[Q heads(d) | K head(d) | V head(d)]`` so a plain ``dim=-1`` shard of the
+    transposed weight hands each rank exactly its heads, and
+    ``nlp_create_qkv_heads(num_heads=q_per_dev, num_kv_heads=1)`` then splits it
+    locally. With ``num_kv_heads < tp`` the single KV head is *replicated* across
+    the ``tp // num_kv_heads`` devices in its group (matching the decode layout in
+    ``dots_ocr.py``: device ``d`` uses KV head ``d // group``). Whole ``head_dim``
+    blocks are permuted so each head's half-half RoPE layout is preserved.
+
+    Returns ``tp * (q_per_dev + 2) * head_dim`` indices (KV rows duplicated).
+    """
+    q_per_dev = num_q_heads // tp
+    group = tp // num_kv_heads  # devices sharing one KV head
+    k_off = num_q_heads * head_dim  # K region start in the fused output
+    v_off = k_off + num_kv_heads * head_dim  # V region start
+    perm: list[int] = []
+    for d in range(tp):
+        for lh in range(q_per_dev):
+            g = d * q_per_dev + lh  # global Q head index
+            perm.extend(range(g * head_dim, g * head_dim + head_dim))
+        kv = d // group  # KV head this device owns
+        perm.extend(range(k_off + kv * head_dim, k_off + kv * head_dim + head_dim))
+        perm.extend(range(v_off + kv * head_dim, v_off + kv * head_dim + head_dim))
+    return perm
+
+
 class _TTNNDotsOCRQKVPrefillLinear(TTNNLinearLLamaIColShardedWAllReduced):
     """QKV-shaped linear for the prefill path only.
 
@@ -389,6 +420,12 @@ class TTNNDotsOCRAttention(TTNNModule):
         self._qkv_bias_torch = None
         self._q_size = None
         self._kv_size = None
+        # Head-sharded TP prefill path (built in move_weights_to_device_impl).
+        self._tp_degree = 1
+        self._tt_qkv_prefill_tp_weight = None
+        self._tt_qkv_prefill_tp_bias = None
+        self._tt_o_proj_tp_weight = None
+        self._tt_o_proj_tp_bias = None
 
     @classmethod
     def from_torch(cls, hf_attn, qkv_n_parallel: bool = False):
@@ -501,6 +538,16 @@ class TTNNDotsOCRAttention(TTNNModule):
         # O projection (block-sharded tuned prefill matmul + decode DRAM-sharded fast path)
         new_attn.o_proj = _TTNNDotsOCROProjPrefillLinear.from_torch(hf_attn.o_proj)
 
+        # Raw torch weights kept for the head-sharded TP prefill path (built in
+        # move_weights_to_device_impl when the mesh is a CCL/TP mesh with heads
+        # divisible by TP). Conventional [Q_all|K_all|V_all] QKV + full o_proj.
+        new_attn._qkv_prefill_conv_weight_torch = fused_weight_conv  # [out=q+2kv, in=H]
+        new_attn._qkv_prefill_conv_bias_torch = fused_linear_conv.bias.data.clone() if has_any_bias else None
+        new_attn._o_proj_weight_torch = hf_attn.o_proj.weight.data.clone()  # [out=H, in=H]
+        new_attn._o_proj_bias_torch = (
+            hf_attn.o_proj.bias.data.clone() if getattr(hf_attn.o_proj, "bias", None) is not None else None
+        )
+
         new_attn.sdpa = TTNNSDPAAttention()
         new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
 
@@ -593,6 +640,67 @@ class TTNNDotsOCRAttention(TTNNModule):
             )
         self._rotary_setup = TTNNDotsOCRAttention._shared_rotary_setups[setup_key]
 
+        # ------------------------------------------------------------------
+        # Head-sharded TP prefill weights (vision attention pattern, GQA).
+        # Built when the mesh is a CCL/TP mesh and the Q heads divide evenly
+        # across TP. Device d owns Q heads [d*q_per_dev : (d+1)*q_per_dev] plus
+        # KV head d//group, so the per-device fused QKV is [3Q | 1K | 1V] (640
+        # cols at TP4). The o_proj is column-sharded (full gathered ctx in ->
+        # this device's hidden/TP cols out), so the attention output stays in
+        # the SP-sharded hidden layout and feeds the residual add with no gather.
+        # ------------------------------------------------------------------
+        tp = _tp_num_shards(self.device) if _tp_requires_ccl(self.device) else 1
+        self._tp_degree = tp if (tp > 1 and self.num_attention_heads % tp == 0) else 1
+        if self._tp_degree > 1:
+            perm = _gqa_head_shard_perm(
+                self.num_attention_heads, self.num_key_value_heads, self.head_dim, self._tp_degree
+            )
+            qkv_w_t = self._qkv_prefill_conv_weight_torch[perm, :].t().contiguous()  # [in=H, out=tp*640]
+            self._tt_qkv_prefill_tp_weight = ttnn.as_tensor(
+                qkv_w_t,
+                device=self.device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=_tp_mesh_mapper(self.device, -1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if self._qkv_prefill_conv_bias_torch is not None:
+                qkv_b = self._qkv_prefill_conv_bias_torch[perm].contiguous().reshape(1, -1)
+                self._tt_qkv_prefill_tp_bias = ttnn.as_tensor(
+                    qkv_b,
+                    device=self.device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=_tp_mesh_mapper(self.device, -1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            # Column-sharded o_proj: transposed [in=H, out=H] sharded on out.
+            o_w_t = self._o_proj_weight_torch.t().contiguous()  # [in=H, out=H]
+            self._tt_o_proj_tp_weight = ttnn.as_tensor(
+                o_w_t,
+                device=self.device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=_tp_mesh_mapper(self.device, -1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if self._o_proj_bias_torch is not None:
+                o_b = self._o_proj_bias_torch.reshape(1, -1)
+                self._tt_o_proj_tp_bias = ttnn.as_tensor(
+                    o_b,
+                    device=self.device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=_tp_mesh_mapper(self.device, -1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            self._tp_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+
     def _get_cur_pos_device_tensor(self, cache_position, batch_size):
         cp = cache_position
         if isinstance(cp, TorchTTNNTensor):
@@ -638,6 +746,8 @@ class TTNNDotsOCRAttention(TTNNModule):
         return qkv_states
 
     def _forward_prefill(self, hidden_states, attention_mask, past_key_values, cache_position):
+        if getattr(self, "_tp_degree", 1) > 1:
+            return self._forward_prefill_head_sharded(hidden_states, attention_mask, past_key_values, cache_position)
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
 
         # Prefill uses qkv_proj_prefill (conventional [Q_all|K_all|V_all] weight),
@@ -722,6 +832,125 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         attn_output = self.o_proj(attn_output)
         return attn_output, None
+
+    def _forward_prefill_head_sharded(self, hidden_states, attention_mask, past_key_values, cache_position):
+        """Head-sharded TP prefill (vision attention pattern, GQA-adapted).
+
+        Input/output stay in the SP-sharded hidden layout (``hidden/TP`` cols).
+        Dataflow (one all_gather replaces the K-parallel QKV reduce_scatter+
+        all_gather; the heads run sharded so SDPA is 1/TP the work):
+
+          1. all_gather the hidden shard -> full hidden on every device,
+          2. head-sharded QKV matmul -> this device's [q_per_dev Q | 1 K | 1 V],
+          3. create_heads + RoPE + SDPA on this device's heads only,
+          4. all_gather the head-group ctx -> full ctx,
+          5. column-sharded o_proj -> this device's hidden/TP output (no gather).
+        """
+        _ = attention_mask  # prefill is causal; no external mask
+        tp = self._tp_degree
+        q_per_dev = self.num_attention_heads // tp
+        batch_size, seq_length = int(hidden_states.shape[0]), int(hidden_states.shape[1])
+
+        hs = hidden_states
+        if hs.layout != ttnn.TILE_LAYOUT:
+            hs = ttnn.to_layout(hs, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hs = ttnn.reshape(hs, (batch_size, 1, seq_length, -1))
+
+        num_links = _ccl_num_links(self.device)
+        full_hidden = ttnn.all_gather(
+            hs,
+            dim=3,
+            num_links=num_links,
+            cluster_axis=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+
+        qkv = ttnn.linear(
+            full_hidden,
+            self._tt_qkv_prefill_tp_weight,
+            bias=self._tt_qkv_prefill_tp_bias,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self._tp_compute_kernel_config,
+        )
+        ttnn.deallocate(full_hidden)
+
+        query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=q_per_dev,
+            num_kv_heads=1,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv)
+
+        seq_len = query_states.shape[2]
+        cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
+        query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin)
+        key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin)
+        if query_states.shape[2] != seq_len:
+            query_states = query_states[:, :, :seq_len, :]
+        if key_states.shape[2] != seq_len:
+            key_states = key_states[:, :, :seq_len, :]
+
+        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
+        if past_key_values is not None and use_paged:
+            k_fill = (
+                key_states
+                if key_states.dtype == ttnn.bfloat16
+                else ttnn.typecast(key_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            )
+            v_fill = (
+                value_states
+                if value_states.dtype == ttnn.bfloat16
+                else ttnn.typecast(value_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            )
+            past_key_values.paged_fill_on_device(k_fill, v_fill, layer_idx=self.layer_idx, batch_idx=0)
+            if k_fill is not key_states:
+                ttnn.deallocate(k_fill)
+            if v_fill is not value_states:
+                ttnn.deallocate(v_fill)
+
+        self.sdpa.memory_config = ttnn.L1_MEMORY_CONFIG
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            is_causal=self.is_causal,
+            scale=self.scaling,
+            program_config=self.sdpa.program_config,
+            compute_kernel_config=self.sdpa.compute_kernel_config,
+            memory_config=self.sdpa.memory_config,
+        )
+        ttnn.deallocate(query_states)
+        ttnn.deallocate(key_states)
+        ttnn.deallocate(value_states)
+
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_output = ttnn.squeeze(attn_output, 1)  # [B, S, ctx/TP]
+
+        ctx_full = ttnn.all_gather(
+            ttnn.reshape(attn_output, (batch_size, 1, seq_length, -1)),
+            dim=3,
+            num_links=num_links,
+            cluster_axis=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        ttnn.deallocate(attn_output)
+
+        out = ttnn.linear(
+            ctx_full,
+            self._tt_o_proj_tp_weight,
+            bias=self._tt_o_proj_tp_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._tp_compute_kernel_config,
+        )
+        ttnn.deallocate(ctx_full)
+        out = ttnn.reshape(out, (batch_size, seq_length, -1))
+        return out, None
 
     def _forward_decode_paged(
         self,
