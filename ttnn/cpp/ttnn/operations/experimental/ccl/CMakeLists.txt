@@ -29,7 +29,6 @@ file(
     ring_attention_all_gather_async/device/kernels/*
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
-    slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
     strided_reduce_scatter_async/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
