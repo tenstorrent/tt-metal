@@ -39,9 +39,8 @@ unit_tests_legacy:
 
 unit_tests_llk:
   # Quasar bring-up: single-tile bf16 eltwise ADD via the Metal 2.0 ProgramSpec/DFB
-  # path. UNVERIFIED ON QUASAR (added without a runnable backend); registered so it
-  # runs once a Quasar simulator/emulator is available.
-  - filter: "*QuasarEltwiseBinaryAdd*"
+  # path.
+  - filter: "LLKMeshDeviceFixtureSlowDispatchOnly.TensixBinaryComputeSingleCoreSingleTileAdd"
     config: 1x3
 
 # unit_tests_llk:

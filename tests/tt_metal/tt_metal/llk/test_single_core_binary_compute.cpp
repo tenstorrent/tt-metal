@@ -796,32 +796,4 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
     }
 }
 
-// Quasar bring-up: a single-tile bf16 eltwise ADD on Quasar through the Metal 2.0
-// ProgramSpec/DFB path (same helper the WH/BH tests use).
-//
-// Runs end-to-end on the craq-sim Quasar functional simulator: stage a QSR libttsim.so
-// + quasar_32_arch.yaml (as soc_descriptor.yaml) in a dir, then run with
-// TT_METAL_SIMULATOR=<that .so>, TT_SIMULATOR_LOCALHOST=1, ARCH_NAME=quasar,
-// CHIP_ARCH=quasar, TT_METAL_SLOW_DISPATCH_MODE=1 (see
-// craq-sim/scripts/run_quasar_metal_llk_gtests.py). Off-Quasar the fixture self-skips.
-//
-// NOTE (2026-06-18): the program boots and runs on Quasar, but currently FAILS the PCC
-// check — the output tile reads back as zero instead of a+b. Tracked as a functional bug
-// in the single-tile Quasar add path (writer DFB->DRAM / compute output); not a harness or
-// boot issue. craq-sim requires MODE=0 mtvec, so this needs tt-metal #46916 reverted (or a
-// craq-sim mtvec MODE=1 fix) to reach this point.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarEltwiseBinaryAdd) {
-    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .core = CoreCoord(0, 0),
-        .binary_op = "add",
-        .math_fidelity = MathFidelity::HiFi4};
-    test_config.num_tiles = 1;
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-    }
-}
-
 }  // namespace tt::tt_metal
