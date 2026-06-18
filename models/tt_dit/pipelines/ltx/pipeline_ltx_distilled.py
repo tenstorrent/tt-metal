@@ -591,14 +591,24 @@ class LTXDistilledPipeline(LTXPipeline):
             if cond_imgs:
                 assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run I2V conditioning"
                 img_path, _, cond_strength = cond_imgs[0]
-                logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
-                t0 = time.time()
-                img_s1 = self._load_conditioning_image(img_path, s1_height, s1_width)
-                img_full = self._load_conditioning_image(img_path, height, width)
-                s1_cond_latent = self.encode_image(img_s1)
-                full_cond_latent = self.encode_image(img_full)
-                timings.append(("Image encode", time.time() - t0))
-                logger.info(f"Image encode: {time.time() - t0:.1f}s")
+                # The conditioning latent depends only on (image, resolution), so encode once and
+                # memoize. This skips re-running the eager VAE encoder on later gens (e.g. the traced
+                # steady-state replay pass, where re-encoding has been observed to hang the device).
+                s1_key = (img_path, s1_height, s1_width)
+                full_key = (img_path, height, width)
+                cache = self._i2v_cond_cache
+                if s1_key in cache and full_key in cache:
+                    s1_cond_latent, full_cond_latent = cache[s1_key], cache[full_key]
+                    logger.info(f"I2V: reusing cached conditioning latents for {img_path} (strength={cond_strength})")
+                else:
+                    logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
+                    t0 = time.time()
+                    img_s1 = self._load_conditioning_image(img_path, s1_height, s1_width)
+                    img_full = self._load_conditioning_image(img_path, height, width)
+                    s1_cond_latent = cache[s1_key] = self.encode_image(img_s1)
+                    full_cond_latent = cache[full_key] = self.encode_image(img_full)
+                    timings.append(("Image encode", time.time() - t0))
+                    logger.info(f"Image encode: {time.time() - t0:.1f}s")
 
         t0 = time.time()
         self._prepare_transformer(0)
