@@ -390,7 +390,13 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
             TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
-            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))),
+            // Page size: the AlignedPageSize CTA on the common path, or -- under the
+            // dynamic_page_size relaxation -- the per-binding CRTA word the host re-derives from the
+            // bound buffer each dispatch, so it stays fresh across program-cache hits. The args
+            // getter branches CTA-vs-CRTA internally; without the explicit 3rd arg the delegate
+            // would default to the (now zero) AlignedPageSize CTA under the relaxation.
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{}.get_aligned_page_size()) {
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
             "TensorAccessorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");

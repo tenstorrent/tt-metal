@@ -236,6 +236,26 @@ struct TensorParameterAdvancedOptions {
     //  - For a sharded tensor, the TensorAccessor configuration dynamically reflects the
     //    argument's actual shape. (Shape becomes an implicit runtime argument.)
     bool dynamic_tensor_shape = false;
+
+    // Permit tensor arguments whose byte page size varies at runtime.
+    // For an interleaved row-major tensor the page size = last_dim_width * element_size, which
+    // changes with the tensor's shape; when one compiled program is reused across shapes (a
+    // program-cache hit on the fast path) a compile-time page size goes stale and the
+    // TensorAccessor strides by the wrong number of bytes. This carries the page size as a
+    // runtime field that the host re-derives from the bound buffer every dispatch.
+    // Effects:
+    //  - The page size becomes an implicit runtime argument, auto-derived from the buffer
+    //    (the user cannot supply a wrong value).
+    //  - INTERLEAVED ROW-MAJOR only. Forbidden on tiled (page size is dtype/tile-fixed) and
+    //    sharded (page size is spec-fixed) layouts: a hard error is raised at spec resolution.
+    //
+    // CAUTION:
+    // This is an ADVANCED option. The TensorAccessor will track the runtime page size, but the
+    // REST of your kernel must too -- loop bounds, circular-buffer sizing, and any address math
+    // beyond the accessor. Setting this on a kernel that assumes a fixed page size will silently
+    // mis-address. Orthogonal to dynamic_tensor_shape: a width-varying tensor changes both its
+    // logical shape and its page size, so the typical use case sets BOTH flags.
+    bool dynamic_page_size = false;
 };
 
 }  // namespace tt::tt_metal::experimental
