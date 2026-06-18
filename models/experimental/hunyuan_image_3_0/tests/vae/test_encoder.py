@@ -61,7 +61,7 @@ def device_params(request):
     return {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_conv_in_vs_pytorch(mesh_device):
     mesh_device.enable_program_cache()
     x = pad_encoder_channels_bcthw(get_input())
@@ -72,7 +72,7 @@ def test_conv_in_vs_pytorch(mesh_device):
     assert_pcc(pt_out, tt_out, label="conv_in")
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 @pytest.mark.parametrize("level", [0, 1, 2, 3, 4])
 def test_down_block_vs_pytorch(mesh_device, level):
     mesh_device.enable_program_cache()
@@ -98,7 +98,7 @@ def test_down_block_vs_pytorch(mesh_device, level):
     assert_pcc(pt_out, tt_out, label=f"down_block_{level}")
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_encoder_down_vs_pytorch(mesh_device):
     mesh_device.enable_program_cache()
     x = get_encoder_down_input()
@@ -110,7 +110,7 @@ def test_encoder_down_vs_pytorch(mesh_device):
     assert_pcc(pt_out, tt_out, label="encoder_down")
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_mid_vs_pytorch(mesh_device):
     mesh_device.enable_program_cache()
     x = get_mid_input()
@@ -122,7 +122,7 @@ def test_mid_vs_pytorch(mesh_device):
     assert_pcc(pt_out, tt_out, label="mid")
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_encoder_head_vs_pytorch(mesh_device):
     mesh_device.enable_program_cache()
     x = get_encoder_head_input()
@@ -133,7 +133,7 @@ def test_encoder_head_vs_pytorch(mesh_device):
     assert_pcc(pt_out, tt_out, label="encoder_head")
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_full_encoder_vs_pytorch(mesh_device):
     mesh_device.enable_program_cache()
     x = pad_encoder_channels_bcthw(get_input())
