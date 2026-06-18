@@ -23,7 +23,10 @@ from models.common.utility_functions import (
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": True,
+            # The 8x4 Blackhole Galaxy decode path runs column-axis (cluster_axis=1) and row-axis
+            # (cluster_axis=0) collectives on device, which requires a 2D-torus fabric. A 1D fabric
+            # cannot route the cross-column all_gather (fabric forwarding_direction lookup fails).
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         }
     ],
     indirect=True,
@@ -70,7 +73,6 @@ def test_qwen_transformer_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 2
 
     state_dict = model_args.load_state_dict()
 
@@ -134,6 +136,9 @@ def test_qwen_transformer_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="decode",
+        # Decode-only test: skip prefill CCL setup so the model stays in decode mode
+        # (matches demo_decode.py). Otherwise the model is left in prefill mode after init.
+        decode_mode_only=True,
     )
 
     seqlen = 1
@@ -164,7 +169,7 @@ def test_qwen_transformer_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos)
+        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
         # Run TT model
         tt_out = tt_model(

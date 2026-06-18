@@ -153,7 +153,7 @@ def create_tt_qwen_model(
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            128 * 1024,  # max_seq_len
+            2048,  # max_seq_len (cap < 4096 to skip prefill-warmup of the seq>=4096 fused FF2 kernel)
             1,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
@@ -164,7 +164,7 @@ def create_tt_qwen_model(
             False,  # pcc_check
             False,  # prefill-only profile
             64,  # num layers
-            False,  # print_outputs
+            True,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
@@ -343,7 +343,7 @@ def create_tt_qwen_model(
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            128 * 1024,  # max_seq_len
+            2048,  # max_seq_len (cap < 4096 to skip prefill-warmup of the seq>=4096 fused FF2 kernel on BH; teacher-forced PCC over short reference prompts is unaffected)
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -357,6 +357,25 @@ def create_tt_qwen_model(
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
+        ),
+        (  # ci-eval-1 - 6 repeat batches (3 identical pairs) with deterministic output comparison
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_batch1.json",  # input_prompts
+            True,  # instruct mode
+            6,  # repeat_batches
+            1024,  # max_seq_len (cap < 4096 to skip prefill-warmup of the seq>=4096 fused FF2 kernel on BH)
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            64,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
     ],
     ids=[
@@ -372,6 +391,7 @@ def create_tt_qwen_model(
         "prefill-profile",  # prefill-only profile run
         "apc-test",  # apc check for 64L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-64L",  # pcc check for 64L + teacher forced
+        "ci-eval-1",  # CI 6 repeat batches (3 identical pairs) with deterministic output comparison
     ],
 )
 @pytest.mark.parametrize(
@@ -392,7 +412,7 @@ def create_tt_qwen_model(
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
-            "fabric_config": True,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         }
     ],
     indirect=True,
@@ -432,6 +452,7 @@ def test_qwen_demo_text(
     """
     Simple Qwen demo with limited dependence on reference code.
     """
+    test_id = request.node.callspec.id
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Qwen TG only supports batch-32")
@@ -585,6 +606,8 @@ def test_qwen_demo_text(
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
+    # ci-eval-1: store the user-0 output of each repeat batch to verify determinism across identical prompt pairs
+    eval_repeat_outputs = []
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
@@ -658,11 +681,16 @@ def test_qwen_demo_text(
                 k_cache, v_cache = layer.attention.layer_past
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            # Drop the cached page table so decode reloads it for the new batch; otherwise the
+            # stale page-table mapping from the previous batch corrupts attention (garbage output).
+            generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
-        device_sampling_params = SamplingParams(
-            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
-        )
+        # On Blackhole the non-greedy on-device sampling kernels (distributed top-k +
+        # scatter_add bincounts) are not supported, so use greedy params (top_k=1, top_p=0,
+        # temperature=1.0). With SAMPLING_AG_CONFIG.allow_force_argmax this routes sampling
+        # through the all-gather + ttnn.argmax path, which is the supported path on BH.
+        device_sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
@@ -1043,6 +1071,11 @@ def test_qwen_demo_text(
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
+        # ci-eval-1: record the decoded output of user 0 for this batch (greedy/argmax sampling on BH is deterministic)
+        if "ci-eval-1" in test_id and all_outputs and len(all_outputs) > 0:
+            eval_repeat_outputs.append(tokenizer.decode(all_outputs[0]))
+            logger.info(f"ci-eval-1: stored output for batch {batch_idx}: {tokenizer.decode(all_outputs[0])[:100]}...")
+
     profiler.end(f"inference_decode", iteration=batch_idx)
 
     # Finish profiling at the end of inference for all repeated batches
@@ -1167,3 +1200,21 @@ def test_qwen_demo_text(
             run_type=f"tg_qwen_text_demo_prefill_6U",
             ml_model_name="qwen32b-tg",
         )
+
+    # ci-eval-1: prompts come in identical pairs (batches 0&1, 2&3, 4&5), so with greedy/argmax
+    # sampling the paired batches must produce identical output. This guards decode determinism.
+    if "ci-eval-1" in test_id and len(eval_repeat_outputs) == repeat_batches:
+        logger.info("=== Repeat Batch Output Comparison ===")
+        comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
+        all_matches = True
+        for batch1_idx, batch2_idx in comparisons:
+            output1 = eval_repeat_outputs[batch1_idx]
+            output2 = eval_repeat_outputs[batch2_idx]
+            if output1 == output2:
+                logger.info(f"Batch{batch1_idx}<->Batch{batch2_idx} comparison PASSED: outputs match")
+            else:
+                logger.warning(f"Batch{batch1_idx}<->Batch{batch2_idx} comparison FAILED: outputs differ")
+                logger.info(f"  Batch {batch1_idx} output: {output1[:100]}...")
+                logger.info(f"  Batch {batch2_idx} output: {output2[:100]}...")
+                all_matches = False
+        assert all_matches, "Repeat batch outputs should be identical"

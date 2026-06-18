@@ -210,10 +210,14 @@
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/tests/test_qwen_accuracy.py
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "ci-eval-1"
   model: qwen3-32b-galaxy
   skus:
     wh_galaxy_perf:
       timeout: 10
+      tier: 1
+    bh_galaxy_perf:
+      timeout: 15
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models

@@ -2476,7 +2476,7 @@ class TtModelArgs:
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
 
-        hop_grid = [(3, 6)] if prefetch else []  # FIXME: Make not hard coded
+        hop_grid = [(3, 6)]
         hop_core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(

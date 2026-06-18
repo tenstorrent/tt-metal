@@ -5,6 +5,7 @@
 import ttnn
 import torch
 import os
+from loguru import logger
 
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
@@ -22,6 +23,23 @@ USE_LINE_AG = {
 
 
 class TT_CCL:
+    @staticmethod
+    def _ensure_min_interim_shard_width(memory_config, min_width):
+        if memory_config is None or not memory_config.is_sharded() or memory_config.shard_spec is None:
+            return memory_config
+        shard_spec = memory_config.shard_spec
+        if shard_spec.shape[1] >= min_width:
+            return memory_config
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                shard_spec.grid,
+                [shard_spec.shape[0], min_width],
+                shard_spec.orientation,
+            ),
+        )
+
     def __init__(
         self,
         mesh_device,
@@ -32,16 +50,40 @@ class TT_CCL:
         is_qwen=False,
     ):
         self.mode = mode
+        self.is_qwen = is_qwen
+        # Wormhole / TG always run with the prefetcher; the Blackhole bring-up runs without it.
+        # The no-prefetcher (Blackhole) buffer-sizing and stable-CCL fallbacks below are gated on
+        # this so the prefetcher (Wormhole) path stays byte-for-byte identical to main.
+        self.use_prefetcher = getattr(model_args, "use_prefetcher", True)
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
 
         self.mesh_device = mesh_device
-        self.sub_device_crs = all_crs if mode == "prefill" else model_args.sub_core_grids
-        self.worker_sub_device_id = worker_sub_device_id
+        # If no worker subdevice is provided (e.g. prefetcher disabled), keep CCL on the full core set.
+        self.sub_device_crs = (
+            all_crs if mode == "prefill" or worker_sub_device_id is None else model_args.sub_core_grids
+        )
+        # Some experimental CCL kernels require a non-optional subdevice_id argument.
+        # When prefetcher is disabled, use the default full-device subdevice id.
+        self.worker_sub_device_id = worker_sub_device_id if worker_sub_device_id is not None else ttnn.SubDeviceId(0)
         self.model_config = model_args.model_config
+        if mode == "decode" and is_qwen and not self.use_prefetcher:
+            # Runtime guard: keep Qwen decode interim shards well above kernel minimum.
+            self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = self._ensure_min_interim_shard_width(
+                self.model_config.get("REDUCE_SCATTER_INTERIM_MEMCFG"), 1280
+            )
+            self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"] = self._ensure_min_interim_shard_width(
+                self.model_config.get("RS_CREATE_HEADS_INTERIM_MEMCFG"), 1280
+            )
+            logger.info(
+                f"TT_CCL decode interim shard widths (post-guard): "
+                f"RS_CREATE_HEADS={self.model_config['RS_CREATE_HEADS_INTERIM_MEMCFG'].shard_spec.shape[1]}, "
+                f"REDUCE_SCATTER={self.model_config['REDUCE_SCATTER_INTERIM_MEMCFG'].shard_spec.shape[1]}"
+            )
         self.weight_cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
         self.num_cbs = 2
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
+        self.cluster_shape = model_args.cluster_shape
         self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
 
         self.ring_topology = self.model_config["CCL_TOPOLOGY"] == ttnn.Topology.Ring
@@ -50,7 +92,6 @@ class TT_CCL:
         self.use_ring_rs_prefill = (self.ring_topology and not LINE_RS) and mode == "prefill"
         self.max_top_k = model_args.max_top_k
         self.max_batch_size = model_args.max_batch_size
-        self.cluster_shape = model_args.cluster_shape
         self.is_qwen = is_qwen
 
         # Double buffered on each axis
@@ -122,6 +163,30 @@ class TT_CCL:
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
 
+    def reset_global_semaphores(self):
+        """Reset all global semaphores to 0 and rotating indices, so a reused CCL behaves like a
+        freshly-created one. close() only resets the stall group and leaves semaphores intact, so
+        when a CCL is reused across repeat batches the semaphore values drift away from the
+        trace-capture-time state (which assumes fresh 0-valued semaphores), eventually hanging the
+        CCL ops. Resetting here re-establishes that clean state at each mode switch."""
+
+        def _reset(obj):
+            if isinstance(obj, (list, tuple)):
+                for item in obj:
+                    _reset(item)
+            elif obj is not None:
+                ttnn.reset_global_semaphore_value(obj, 0)
+
+        for container in (
+            self.gather_semaphore_handles,
+            self.barrier_semaphore_handles,
+            getattr(self, "from_semaphore_handles", None),
+            getattr(self, "to_semaphore_handles", None),
+            getattr(self, "reduce_semaphore_handles", None),
+        ):
+            _reset(container)
+        self.reset_gather_and_buffer_idx()
+
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
         semaphore_index = cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
@@ -129,28 +194,35 @@ class TT_CCL:
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
     def get_all_gather_concat_inter_buffer(self):
-        intermediate_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
-                ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
-                ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
-            ]
-        )
+        if ttnn.get_arch_name().lower() == "blackhole":
+            # BH Galaxy has a smaller compute grid than TG; avoid hardcoded y=9 coordinates.
+            bh_intermediate_cores = min(32, self.sub_device_crs.num_cores())
+            intermediate_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                ttnn.CoreCoord(1, 0), bh_intermediate_cores, self.sub_device_crs, row_wise=True
+            )
+        else:
+            intermediate_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
+                ]
+            )
         intermediate_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -160,7 +232,7 @@ class TT_CCL:
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        temp_shape = [8, 128, 32, 128]
+        temp_shape = [self.cluster_shape[0], 32 * self.cluster_shape[1], 32, 128]
         intermediate_tensor = torch.zeros(temp_shape, dtype=torch.bfloat16)
         tt_intermediate_tensor = ttnn.from_torch(
             intermediate_tensor,
@@ -168,7 +240,7 @@ class TT_CCL:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=intermediate_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=self.cluster_shape),
         )
         tt_intermediate_tensors = [tt_intermediate_tensor]
         return tt_intermediate_tensors
@@ -333,8 +405,8 @@ class TT_CCL:
 
         persistent_buffers = [None, None]
 
-        cluster_shape = (8, 4)
-        M = 32
+        cluster_shape = tuple(self.cluster_shape)
+        default_M = 32
         num_cores = self.sub_device_crs.num_cores()
 
         # Create persistent buffers for cluster axis 0
@@ -342,17 +414,30 @@ class TT_CCL:
         N_per_shard = (
             2048 // 16 * cluster_shape[cluster_axis] if not self.is_qwen else 1280 // 10 * cluster_shape[cluster_axis]
         )  # FF2/DO
+        M_axis0 = default_M
+        if self.is_qwen:
+            # all_reduce_async validates: buffer_shard_volume >= output_shard_volume * ring_size.
+            # For decode residual all-reduce on axis 0 this requires width >= output_width * mesh_rows.
+            decode_residual_memcfg = self.model_config.get("DECODE_RESIDUAL_MEMCFG", None)
+            if (
+                decode_residual_memcfg is not None
+                and decode_residual_memcfg.is_sharded()
+                and decode_residual_memcfg.shard_spec is not None
+            ):
+                required_width = decode_residual_memcfg.shard_spec.shape[1] * cluster_shape[cluster_axis]
+                N_per_shard = max(N_per_shard, required_width)
+                M_axis0 = max(M_axis0, decode_residual_memcfg.shard_spec.shape[0])
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 self.sub_device_crs,
-                [M, N_per_shard],
+                [M_axis0, N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
         tt_buffer = ttnn.from_torch(
-            torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
+            torch.zeros((*cluster_shape, M_axis0, N_per_shard * num_cores)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
@@ -370,12 +455,12 @@ class TT_CCL:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 self.sub_device_crs,
-                [M, N_per_shard],
+                [default_M, N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
         tt_buffer = ttnn.from_torch(
-            torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
+            torch.zeros((*cluster_shape, default_M, N_per_shard * num_cores)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
@@ -396,13 +481,13 @@ class TT_CCL:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 self.sub_device_crs,
-                [M, N_per_shard],
+                [default_M, N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
 
         self.tt_lm_head_buffer = ttnn.from_torch(
-            torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
+            torch.zeros((*cluster_shape, default_M, N_per_shard * num_cores)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
@@ -426,12 +511,20 @@ class TT_CCL:
 
         # Create persistent buffers for cluster axis 1
         cluster_axis = 1
-        buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
+        if self.use_prefetcher:
+            # Wormhole / prefetcher path: identical to main.
+            buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
+            shard_width = 512  # 512 = 4 devices * 4 pages per packet * 32 tile_width
+        else:
+            buffer_mem_cfg = self._ensure_min_interim_shard_width(
+                self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"], 1280 if self.is_qwen else 512
+            )
+            shard_width = buffer_mem_cfg.shard_spec.shape[1]
         for _ in range(self.num_cbs):
             tt_buffer = (
-                # 512 = 4 devices * 4 pages per packet * 32 tile_width
+                # Derive packet width from memcfg (BH needs 640 here).
                 ttnn.from_torch(
-                    torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
+                    torch.zeros((*cluster_shape, 32, shard_width * buffer_mem_cfg.shard_spec.num_cores())),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat8_b,
@@ -453,16 +546,27 @@ class TT_CCL:
 
         persistent_buffers = [None, None]
 
-        cluster_shape = (8, 4)
-        num_pages_per_packet = 4
-        shard_height = 32
+        cluster_shape = tuple(self.cluster_shape)
 
         # Create persistent buffers for cluster axis 1
         cluster_axis = 1
-        buffer_mem_cfg = self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"]
-        torch_buffer = torch.zeros(
-            (*cluster_shape, shard_height, cluster_shape[cluster_axis] * num_pages_per_packet * 32 * 5)
-        )
+        if self.use_prefetcher:
+            # Wormhole / prefetcher path: identical to main.
+            num_pages_per_packet = 4
+            shard_height = 32
+            buffer_mem_cfg = self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"]
+            torch_buffer = torch.zeros(
+                (*cluster_shape, shard_height, cluster_shape[cluster_axis] * num_pages_per_packet * 32 * 5)
+            )
+        else:
+            rs_interim_memcfg = self.model_config.get(
+                "REDUCE_SCATTER_INTERIM_MEMCFG", self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"]
+            )
+            buffer_mem_cfg = self._ensure_min_interim_shard_width(rs_interim_memcfg, 1280 if self.is_qwen else 512)
+            shard_height = buffer_mem_cfg.shard_spec.shape[0]
+            shard_width = buffer_mem_cfg.shard_spec.shape[1]
+            num_shard_cores = buffer_mem_cfg.shard_spec.num_cores()
+            torch_buffer = torch.zeros((*cluster_shape, shard_height, shard_width * num_shard_cores))
         persistent_buffers[cluster_axis] = ttnn.from_torch(
             torch_buffer,
             device=self.mesh_device,
@@ -963,6 +1067,27 @@ class TT_CCL:
         batch_size=1,
     ):
         if self.mode == "prefill":
+            if self.is_qwen and not self.model_config.get("USE_PREFETCHER", True):
+                # BH no-prefetch: reduce_scatter_minimal_async (the ring prefill path) deadlocks on
+                # the 2D-torus fabric for the column reduction. Use the stable ttnn.reduce_scatter
+                # with the configured Ring topology, mirroring the working decode no-prefetch path.
+                B = input_tensor_mesh.shape[1]
+                input_tensor_mesh = ttnn.reshape(
+                    input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+                )
+                seqlen = input_tensor_mesh.shape[-2]
+                ttnn_tensor_out = ttnn.reduce_scatter(
+                    input_tensor_mesh,
+                    dim,
+                    cluster_axis=cluster_axis,
+                    memory_config=memory_config,
+                    topology=self.model_config["CCL_TOPOLOGY"],
+                    num_links=num_links,
+                    subdevice_id=self.worker_sub_device_id,
+                )
+                ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
+                self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+                return ttnn_tensor_out
             if self.use_ring_rs_prefill:
                 return self.ring_reduce_scatter(
                     input_tensor_mesh,
@@ -998,26 +1123,38 @@ class TT_CCL:
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
         else:
-            persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
-                self.reduce_scatter_buffer_idx[cluster_axis]
-            ]
-            ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
-                input_tensor_mesh,
-                persistent_interim_buffer,
-                dim,
-                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-                self.worker_sub_device_id,
-                cluster_axis=1,
-                mesh_device=self.mesh_device,
-                num_links=num_links,
-                memory_config=memory_config,
-                topology=self.model_config["CCL_TOPOLOGY"],
-                use_noc1_only=use_noc1_only,
-            )
-            self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-            self.reduce_scatter_buffer_idx[cluster_axis] = (
-                self.reduce_scatter_buffer_idx[cluster_axis] + 1
-            ) % self.num_cbs
+            if self.is_qwen and not self.model_config.get("USE_PREFETCHER", True):
+                ttnn_tensor_out = ttnn.reduce_scatter(
+                    input_tensor_mesh,
+                    dim,
+                    cluster_axis=cluster_axis,
+                    memory_config=memory_config,
+                    topology=self.model_config["CCL_TOPOLOGY"],
+                    num_links=num_links,
+                    subdevice_id=self.worker_sub_device_id,
+                )
+                self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+            else:
+                persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
+                    self.reduce_scatter_buffer_idx[cluster_axis]
+                ]
+                ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
+                    input_tensor_mesh,
+                    persistent_interim_buffer,
+                    dim,
+                    self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+                    self.worker_sub_device_id,
+                    cluster_axis=1,
+                    mesh_device=self.mesh_device,
+                    num_links=num_links,
+                    memory_config=memory_config,
+                    topology=self.model_config["CCL_TOPOLOGY"],
+                    use_noc1_only=use_noc1_only,
+                )
+                self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+                self.reduce_scatter_buffer_idx[cluster_axis] = (
+                    self.reduce_scatter_buffer_idx[cluster_axis] + 1
+                ) % self.num_cbs
 
         return ttnn_tensor_out
 
@@ -1048,7 +1185,8 @@ class TT_CCL:
             self.persistent_buffers[B * seqlen].get(buffer_key, None) if B * seqlen in self.persistent_buffers else None
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
-        num_links = 4
+        # Cap to the links physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
+        num_links = min(4, self.model_config["GALAXY_NUM_LINKS"])
         # Seeing better performance for longer sequence lengths with num_workers_per_link = 4
         if seqlen > 128:
             num_workers_per_link = 4
@@ -1082,6 +1220,8 @@ class TT_CCL:
         num_links=1,
         buffer_key=None,
         use_optimal_ccl_for_llama=False,
+        use_subdevice=True,
+        use_experimental_all_gather=False,
     ):
         topology = ttnn.Topology.Linear
 
@@ -1121,32 +1261,79 @@ class TT_CCL:
             topology = self.model_config["CCL_TOPOLOGY"]
             assert buffer_key is not None, "buffer_key is None"
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
-        # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
-        barrier_semaphore = None
-        if persistent_buffer is None:
-            barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
-        semaphores = (
-            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
-            if self.use_ring_ag_prefill
-            else [
-                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-                self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
-            ]
-        )
-        ttnn_tensor_out = ttnn.experimental.all_gather_async(
-            input_tensor_mesh,
-            dim,
-            cluster_axis=cluster_axis,
-            mesh_device=self.mesh_device,
-            topology=topology,
-            multi_device_global_semaphore=semaphores,
-            persistent_output_tensor=persistent_buffer,
-            barrier_semaphore=barrier_semaphore,
-            num_links=num_links,
-            memory_config=memory_config,
-            subdevice_id=self.worker_sub_device_id,
-            use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
-        )
+        if use_experimental_all_gather or self.use_prefetcher:
+            # Wormhole / prefetcher path uses the experimental async all-gather (identical to main).
+            # The Blackhole no-prefetcher bring-up uses the stable public all_gather below.
+            barrier_semaphore = None
+            if persistent_buffer is None:
+                barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
+            semaphores = (
+                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
+                if self.use_ring_ag_prefill
+                else [
+                    self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+                    self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
+                ]
+            )
+            ttnn_tensor_out = ttnn.experimental.all_gather_async(
+                input_tensor_mesh,
+                dim,
+                cluster_axis=cluster_axis,
+                mesh_device=self.mesh_device,
+                topology=topology,
+                multi_device_global_semaphore=semaphores,
+                persistent_output_tensor=persistent_buffer,
+                barrier_semaphore=barrier_semaphore,
+                num_links=num_links,
+                memory_config=memory_config,
+                subdevice_id=self.worker_sub_device_id if use_subdevice else None,
+                use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
+            )
+        else:
+            # Default to the stable/public all_gather API.
+            # Keep stable path simple: avoid preallocated output tensor because
+            # its program cache/sub-device interaction can mismatch core groups.
+            # Also prefer TILE input to avoid composite row-major all_gather (concat path),
+            # which is where sub-device core-group mismatches are observed.
+            all_gather_input = input_tensor_mesh
+            if all_gather_input.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+                all_gather_input = ttnn.to_layout(all_gather_input, ttnn.TILE_LAYOUT)
+
+            stable_memory_config = memory_config
+            if (
+                stable_memory_config is not None
+                and stable_memory_config.is_sharded()
+                and stable_memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                and stable_memory_config.shard_spec is not None
+            ):
+                # Stable device all_gather validates width-sharded output specs strictly:
+                # shard height must equal full physical height (all dims except width).
+                output_shape = list(all_gather_input.shape)
+                output_shape[dim] *= self.cluster_shape[cluster_axis]
+                physical_height = 1
+                for shape_dim in output_shape[:-1]:
+                    physical_height *= shape_dim
+                shard_spec = stable_memory_config.shard_spec
+                if shard_spec.shape[0] != physical_height:
+                    stable_memory_config = ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                        stable_memory_config.buffer_type,
+                        ttnn.ShardSpec(
+                            shard_spec.grid,
+                            [physical_height, shard_spec.shape[1]],
+                            shard_spec.orientation,
+                        ),
+                    )
+
+            ttnn_tensor_out = ttnn.all_gather(
+                all_gather_input,
+                dim,
+                cluster_axis=cluster_axis,
+                topology=topology,
+                num_links=num_links,
+                memory_config=stable_memory_config,
+                subdevice_id=self.worker_sub_device_id if use_subdevice else None,
+            )
         if self.mode == "prefill" and buffer_key is not None:
             # reshape input back
             if buffer_key != "LM_HEAD":
@@ -1171,7 +1358,8 @@ class TT_CCL:
         )
         # persistent_buffers = None
 
-        num_links = 4
+        # Cap to the links physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
+        num_links = min(4, self.model_config["GALAXY_NUM_LINKS"])
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
@@ -1228,9 +1416,10 @@ class TT_CCL:
             core_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
 
         div_axis = core_grid.x if force_transpose else core_grid.y
+        max_links = self.model_config["GALAXY_NUM_LINKS"]
         num_links = 1
         for nl in [4, 3, 2, 1]:
-            if div_axis % nl == 0:
+            if nl <= max_links and div_axis % nl == 0:
                 num_links = nl
                 break
 
@@ -1264,91 +1453,146 @@ class TT_CCL:
         return output[0]
 
     def all_gather_concat(
-        self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8, use_noc1_only=False
+        self,
+        input_tensor_mesh,
+        dim,
+        cluster_axis,
+        memory_config,
+        num_links=1,
+        num_heads=8,
+        use_noc1_only=False,
+        batch_first=False,
     ):
-        ttnn_tensor_out = ttnn.experimental.all_gather_concat(
+        if self.use_prefetcher:
+            # Wormhole / prefetcher path: identical to main (fused experimental all_gather_concat).
+            ttnn_tensor_out = ttnn.experimental.all_gather_concat(
+                input_tensor_mesh,
+                self.all_gather_concat_inter_tensor[0],
+                dim,
+                cluster_axis=cluster_axis,
+                mesh_device=self.mesh_device,
+                topology=self.model_config["CCL_TOPOLOGY"],
+                multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][
+                    self.gather_idx[cluster_axis]
+                ],
+                num_links=num_links,
+                num_heads=num_heads,
+                memory_config=memory_config,
+                subdevice_id=self.worker_sub_device_id,
+                use_noc1_only=use_noc1_only,
+            )
+            self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+            return ttnn_tensor_out
+
+        # Non-experimental fallback path: all-gather heads, then concatenate heads.
+        # num_links is forced to 1 for decode stability.
+        effective_num_links = 1
+        gather_dim = dim
+        gather_memory_config = memory_config
+        if self.mode == "decode" and dim == 1:
+            # Keep the existing gather axis: it produces the 32x32 tile shape
+            # required by nlp_concat_heads_decode. We only swap the logical
+            # users/head axes below before invoking the concat op.
+            gather_memory_config = self.model_config["GATHER_USERS_MEMCFG"](self.cluster_shape[1])
+        buffer_key = "SDPA" if self.mode == "decode" else None
+        gathered = self.line_all_gather(
             input_tensor_mesh,
-            self.all_gather_concat_inter_tensor[0],
-            dim,
+            dim=gather_dim,
             cluster_axis=cluster_axis,
-            mesh_device=self.mesh_device,
-            topology=self.model_config["CCL_TOPOLOGY"],
-            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            num_links=num_links,
-            num_heads=num_heads,
-            memory_config=memory_config,
-            subdevice_id=self.worker_sub_device_id,
-            use_noc1_only=use_noc1_only,
-        )
-        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-        return ttnn_tensor_out
-
-    def line_all_reduce_host(self, input_tensor_mesh, cluster_axis, num_links, memory_config):
-        dim = 3
-
-        ##### Host side implementation #####
-        rs_output_tensor_mesh = self.line_reduce_scatter_host(
-            input_tensor_mesh,
-            memory_config,
-            dim,
-            cluster_axis,
-            num_links=num_links,
-            math_op=ttnn.ReduceType.Sum,
+            memory_config=gather_memory_config,
+            num_links=effective_num_links,
+            buffer_key=buffer_key,
+            use_subdevice=True,
         )
 
-        output_tensor_mesh = self.line_all_gather_host(
-            rs_output_tensor_mesh,
-            dim,
-            cluster_axis,
-            memory_config,
-            num_links=num_links,
-        )
+        if self.mode == "decode":
+            concat_heads_op = ttnn.experimental.nlp_concat_heads_decode
+        else:
+            concat_heads_op = getattr(ttnn, "nlp_concat_heads", None)
+            if concat_heads_op is None:
+                concat_heads_op = ttnn.experimental.nlp_concat_heads
 
-        return output_tensor_mesh
+        concat_input = gathered
+        if self.mode == "decode" and dim == 1:
+            concat_input = ttnn.transpose(gathered, 1, 2)
+            concat_input = ttnn.to_layout(concat_input, ttnn.TILE_LAYOUT)
+            concat_input = ttnn.to_memory_config(concat_input, gather_memory_config)
+        else:
+            try:
+                gathered_memcfg = gathered.memory_config()
+                if self.mode != "decode" and gathered_memcfg.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+                    # nlp_concat_heads does not accept WIDTH_SHARDED input.
+                    concat_input = ttnn.to_memory_config(gathered, ttnn.DRAM_MEMORY_CONFIG)
+            except Exception:
+                # nlp_concat_heads does not accept WIDTH_SHARDED input.
+                concat_input = gathered
 
-    def line_reduce_scatter_host(
-        self, input_tensor_mesh, memory_config, dim, cluster_axis, num_links=1, math_op=ttnn.ReduceType.Sum
-    ):
-        ##### Host side implementation #####
-        dims = [0, 1]
-        dtype = input_tensor_mesh.get_dtype()
-        torch_tensor_mesh = ttnn.to_torch(
-            input_tensor_mesh, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=(8, 4))
-        )
+        decode_concat_sub_core_grids = None
+        if self.mode == "decode":
+            try:
+                decode_concat_sub_core_grids = concat_input.memory_config().shard_spec.grid
+            except Exception:
+                decode_concat_sub_core_grids = None
+        use_two_step_concat = False
+        try:
+            use_two_step_concat = (
+                memory_config is not None
+                and memory_config.is_sharded()
+                and memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            )
+        except Exception:
+            use_two_step_concat = False
 
-        torch_tensor_mesh = torch.sum(torch_tensor_mesh, dim=cluster_axis, keepdim=True)
+        if use_two_step_concat:
+            # Avoid passing WIDTH_SHARDED output memcfg directly into concat_heads,
+            # then explicitly reshard output in a second step.
+            if self.mode == "decode":
+                concat_tmp = concat_heads_op(
+                    concat_input,
+                    num_heads=num_heads,
+                    sub_core_grids=decode_concat_sub_core_grids,
+                )
+            else:
+                concat_tmp = concat_heads_op(concat_input)
+            target_memcfg = memory_config
+            try:
+                shard_spec = memory_config.shard_spec
+                concat_shape = tuple(concat_tmp.shape)
+                physical_height = 1
+                for shape_dim in concat_shape[:-1]:
+                    physical_height *= shape_dim
+                output_width = concat_shape[-1]
+                # Build a safe width-sharded spec directly from concat output shape:
+                # - shard height must match physical height for WIDTH_SHARDED
+                # - use full output width per shard to avoid over-sharding on width
+                adjusted_shard_width = ((output_width + 31) // 32) * 32
+                target_memcfg = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    memory_config.buffer_type,
+                    ttnn.ShardSpec(
+                        shard_spec.grid,
+                        [physical_height, adjusted_shard_width],
+                        shard_spec.orientation,
+                    ),
+                )
+            except Exception:
+                target_memcfg = memory_config
 
-        dims[cluster_axis] = dim
-        ttnn_tensor_out = ttnn.from_torch(
-            torch_tensor_mesh,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=(8, 4)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        return ttnn_tensor_out
-
-    def line_all_gather_host(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1):
-        ##### Host side implementation #####
-        dims = [0, 0] if dim != 0 else [1, 1]
-        dims[cluster_axis] = dim
-        dtype = input_tensor_mesh.get_dtype()
-        torch_tensor_mesh = ttnn.to_torch(
-            input_tensor_mesh, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=(8, 4))
-        )
-
-        dims[cluster_axis] = None
-        ttnn_tensor_out = ttnn.from_torch(
-            torch_tensor_mesh,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=(8, 4)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
+            ttnn_tensor_out = ttnn.to_memory_config(concat_tmp, target_memcfg)
+            concat_tmp.deallocate(True)
+        else:
+            if self.mode == "decode":
+                ttnn_tensor_out = concat_heads_op(
+                    concat_input,
+                    num_heads=num_heads,
+                    memory_config=memory_config,
+                    sub_core_grids=decode_concat_sub_core_grids,
+                )
+            else:
+                ttnn_tensor_out = concat_heads_op(concat_input, memory_config=memory_config)
+        if concat_input is not gathered:
+            concat_input.deallocate(True)
+        gathered.deallocate(True)
         return ttnn_tensor_out
 
     def close(self):
@@ -1362,6 +1606,7 @@ def tt_distributed_rmsnorm(
     mesh_device,
     compute_kernel_config,
     tt_ccl=None,
+    output_dtype=None,
 ):
     use_2d_grid = False
 
@@ -1375,7 +1620,8 @@ def tt_distributed_rmsnorm(
     )
     tt_stats.deallocate(True)
 
-    # Run distributed rmsnorm part 2
+    # Run distributed rmsnorm part 2. output_dtype lets the caller keep the norm output bf8 even when
+    # the residual input is bf16 (BH no-prefetch), so downstream matmul activations stay small in L1.
     tt_out = ttnn.rms_norm_post_all_gather(
         inp,
         tt_stats_gathered,
@@ -1383,6 +1629,7 @@ def tt_distributed_rmsnorm(
         weight=gamma,
         compute_kernel_config=compute_kernel_config,
         use_2d_core_grid=use_2d_grid,
+        dtype=output_dtype,
     )
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)
@@ -1404,7 +1651,11 @@ def tt_sharded_distributed_rmsnorm(
     use_noc1_only=False,
     ccl_topology=None,
 ):
-    # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+    # Keep a fixed decode norm boundary contract from model config.
+    if inp.memory_config() != ln_sharded_input_memcfg:
+        inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+    if res is not None and res.memory_config() != ln_sharded_input_memcfg:
+        res = ttnn.to_memory_config(res, memory_config=ln_sharded_input_memcfg)
 
     # Run distributed rmsnorm part 1
     cluster_axis = 1

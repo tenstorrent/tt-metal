@@ -55,12 +55,9 @@ from models.common.utility_functions import (
     "seq_len",
     (2048, 4096, 8192),
     ids=[
-        # "128",
         "2048",
         "4096",
         "8192",
-        # "32k",
-        # "64k",
     ],
 )
 @pytest.mark.parametrize(
@@ -79,7 +76,7 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": True}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}],
     indirect=True,
 )
 def test_qwen_model_prefill_inference(
@@ -298,7 +295,7 @@ def test_qwen_model_prefill_inference(
     tt_output_torch = tt_output_torch * torch.rsqrt(
         tt_output_torch.pow(2).mean(-1, keepdim=True) + tt_model.norm.norm.eps
     )
-    tt_output_torch = tt_output_torch * tt_model.norm_weight
+    tt_output_torch = tt_output_torch * state_dict[f"{state_dict_prefix}norm.weight"].to(tt_output_torch.dtype)
 
     # Apply LM head on host (CPU)
     # Get the last token output for prefill
@@ -306,7 +303,7 @@ def test_qwen_model_prefill_inference(
 
     # Load the LM head weight from state dict and apply it on host
     lm_head_weight = state_dict[f"{state_dict_prefix}output.weight"]  # [vocab_size, hidden_dim]
-    tt_output_torch = torch.matmul(last_token_output, lm_head_weight.T)  # [batch, 1, vocab_size]
+    tt_output_torch = torch.matmul(last_token_output.float(), lm_head_weight.T.float())  # [batch, 1, vocab_size]
     logger.info(f"Finished running TT model.")
 
     if run_ref_pt:
@@ -337,12 +334,8 @@ def test_qwen_model_prefill_inference(
         if cache_pcc:
             for i in range(model_args.n_layers):
                 pytorch_layer_present = [
-                    reference_model.layers[i]
-                    .attention.cache_k.clone()
-                    .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                    reference_model.layers[i]
-                    .attention.cache_v.clone()
-                    .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    reference_model.cache_k[i].clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    reference_model.cache_v[i].clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                 ]
 
                 tt_layer_present = []

@@ -353,9 +353,15 @@ class Generator(WarmupForwardMixin):
                 warmup_empty_slots = list(range(batch))
 
                 if not sampling_parameters_sweeped:
+                    # On Blackhole the non-greedy/penalty sampling kernels (scatter_add bincounts)
+                    # are not supported, so only warm up greedy (argmax) sampling.
+                    non_greedy_decoding_on_device = on_device_sampling_enabled and not getattr(
+                        self.model.args, "is_blackhole", False
+                    )
                     sampling_params_list = self._create_sampling_params(
                         can_sample_on_device=on_device_sampling_enabled,
                         batch_size=batch,
+                        greedy_only=not non_greedy_decoding_on_device,
                     )
                 else:
                     sampling_params_list = [None]
@@ -418,6 +424,15 @@ class Generator(WarmupForwardMixin):
                 tt_out_logits_all_users,
                 start_pos=[num_cached],
             )
+
+        # Flush device synchronisation state accumulated during phase 2.
+        # The prefix-caching (sp1) traces run chunked SDPA followed by a column
+        # line_all_reduce / all_gather into persistent buffers, which leaves CCL
+        # semaphore / stall-group state behind. Without this decode->prefill cycle
+        # the first real prefill inherits that stale state and produces corrupted
+        # output (mirrors the phase-1 -> phase-2 flush above).
+        self.model.switch_mode("decode")
+        self.model.switch_mode("prefill")
 
         # trace_id_prefill dict check
         logger.info("Prefill warmup completed")
@@ -947,8 +962,10 @@ class Generator(WarmupForwardMixin):
 
                 sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
 
-                # sampled_tokens has 32 entries ordered by slot.
-                sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
+                # sampled_tokens has 32 entries ordered by slot. The regular sampling kernel
+                # returns [1,1,1,32]; the force-argmax (Blackhole) path returns [1,1,32]. Flatten
+                # so both shapes work.
+                sampled_tensor = sampled_tokens.reshape(-1)  # Shape: [32]
                 output_toks = sampled_tensor[empty_slots]
                 _log_sampling_debug(
                     self._sampling_debug_enabled,
@@ -1814,8 +1831,9 @@ class Generator(WarmupForwardMixin):
             ttnn.synchronize_device(self.mesh_device)
             return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs[0, 0, :, :]
 
-        # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
-        return tt_out[0, 0, 0, :], tt_log_probs[0, 0, 0, :]
+        # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor.
+        # The regular sampling kernel returns [1,1,1,32]; force-argmax returns [1,1,32]. Flatten so both work.
+        return tt_out.reshape(-1), tt_log_probs.reshape(-1)
 
     def chat_completion(
         self,
