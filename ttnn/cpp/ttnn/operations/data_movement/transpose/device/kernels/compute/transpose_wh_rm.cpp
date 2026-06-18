@@ -89,7 +89,6 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, CircularBuffer& cb_ou
         }
         cb_out_buf.push_back(Ht);
 
-        cb_out_buf.wait_front(Ht);
         tile_idx = tile_idx - HtWt + 1;
     }
     pack_untilize_uninit(cb_out);
