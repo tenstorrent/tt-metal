@@ -110,18 +110,37 @@ def decode_forward(
         # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
         # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
         batch = tt_q.shape[1]
-        if batch == 1:
-            tt_q = apply_rope(tt_q, cos_pos, sin_pos, token_index=0)
-            if not is_kv_shared:
-                tt_k = apply_rope(tt_k, cos_pos, sin_pos, token_index=0)
+        if batch > 1:
+            cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
+            sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
+
+        def _rope(t):
+            if batch == 1:
+                return apply_rope(t, cos_pos, sin_pos, token_index=0)
+            return apply_rope_decode_peruser(t, cos_b, sin_b)
+
+        # Q+K share cos/sin and head_dim, so rotate them in a SINGLE call by
+        # concatenating along the heads dim (cos/sin broadcast over heads), then
+        # split back — one rotary_embedding per layer instead of two. apply_rope's
+        # decode path pads the heads dim to TILE_HEIGHT (32) and slices back, so
+        # this requires the combined head count to fit in 32 (true for every
+        # supported variant/TP); otherwise fall back to separate Q/K rotations.
+        if is_kv_shared:
+            # Only Q needs RoPE (K comes from the source layer's cache).
+            tt_q = _rope(tt_q)
+        elif tt_q.shape[2] + tt_k.shape[2] <= 32:
+            nq = tt_q.shape[2]
+            qk = ttnn.concat([tt_q, tt_k], dim=2)
+            tt_q.deallocate(True)
+            tt_k.deallocate(True)
+            qk_roped = _rope(qk)
+            qk.deallocate(True)
+            tt_q = qk_roped[:, :, :nq, :]
+            tt_k = qk_roped[:, :, nq:, :]
+            qk_roped.deallocate(True)
         else:
-            cos_b = ttnn.transpose(cos_pos, 1, 2)  # [1, batch_pad, 1, head_dim]
-            sin_b = ttnn.transpose(sin_pos, 1, 2)
-            cos_b = cos_b[:, :batch, :, :]
-            sin_b = sin_b[:, :batch, :, :]
-            tt_q = apply_rope_decode_peruser(tt_q, cos_b, sin_b)
-            if not is_kv_shared:
-                tt_k = apply_rope_decode_peruser(tt_k, cos_b, sin_b)
+            tt_q = _rope(tt_q)
+            tt_k = _rope(tt_k)
     else:
         # Legacy path: full 4D cache with Python int token_index
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)

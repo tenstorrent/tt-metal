@@ -16,6 +16,7 @@ from .operations import (
     apply_per_head_norm,
     apply_qkv_projection,
     apply_rope,
+    apply_rope_qk_fused,
     chunked_prefill_sdpa,
     chunked_prefill_sdpa_sliding,
     concat_heads,
@@ -60,9 +61,12 @@ def _prefill_forward_single(
         tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache)
+    # Fuse Q+K into one rotary_embedding call (cos/sin broadcast over heads).
+    # KV-shared layers rotate Q only — K comes already-RoPE'd from the source layer.
     if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache)
+        tt_q, tt_k = apply_rope_qk_fused(tt_q, tt_k, cos_cache, sin_cache)
+    else:
+        tt_q = apply_rope(tt_q, cos_cache, sin_cache)
 
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
@@ -213,9 +217,12 @@ def prefill_forward(
         tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache)
+    # Fuse Q+K into one rotary_embedding call (cos/sin broadcast over heads).
+    # KV-shared layers rotate Q only — K comes already-RoPE'd from the source layer.
     if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache)
+        tt_q, tt_k = apply_rope_qk_fused(tt_q, tt_k, cos_cache, sin_cache)
+    else:
+        tt_q = apply_rope(tt_q, cos_cache, sin_cache)
 
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
