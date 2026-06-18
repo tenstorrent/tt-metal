@@ -968,7 +968,7 @@ def run_chunked_transformer_no_pcc(
 @pytest.mark.parametrize(
     "with_h2d_service, h2d_isolated_claim",
     [(False, False), (True, False), (True, True)],
-    ids=["nosvc", "h2dsvc", "h2dsvc_isolated"],
+    ids=["nosvc", "h2dsvc_regular", "h2dsvc_isolated"],
 )
 @pytest.mark.parametrize("num_iters", [1, 2, 10, 20], ids=["iters1", "two_iters", "iters10", "iters20"])
 @pytest.mark.parametrize("n_chunks", [1, 11], ids=["chunks1", "chunks11"])
