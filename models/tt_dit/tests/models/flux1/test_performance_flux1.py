@@ -30,21 +30,12 @@ PERF_TEST_IMAGE_PARAMS = [
 ]
 
 PERF_TEST_MESH_PARAMS = [
-    [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
-    [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
-    [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-    [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 2],
-    [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
-    [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 2],
-]
-
-PERF_TEST_MESH_IDS = [
-    "1x2sp0tp1",
-    "2x2sp0tp1",
-    "wh_2x4sp0tp1",
-    "bh_2x4sp0tp1",
-    "wh_4x8sp0tp1",
-    "bh_4x8sp0tp1",
+    pytest.param((1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2, id="1x2sp0tp1"),
+    pytest.param((2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2, id="2x2sp0tp1"),
+    pytest.param((2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, id="wh_2x4sp0tp1"),
+    pytest.param((2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 2, id="bh_2x4sp0tp1"),
+    pytest.param((4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4, id="wh_4x8sp0tp1"),
+    pytest.param((4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 2, id="bh_4x8sp0tp1"),
 ]
 
 PERF_TEST_DEVICE_PARAMS = [
@@ -65,7 +56,6 @@ PERF_TEST_DEVICE_PARAMS = [
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     PERF_TEST_MESH_PARAMS,
-    ids=PERF_TEST_MESH_IDS,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -145,13 +135,11 @@ def test_flux1_pipeline_performance_speed(
 
     # Optional Tracy profiling (if available)
     profiler = None
-    traced = False
     try:
         from tracy import Profiler
 
         profiler = Profiler()
         profiler.enable()
-        traced = True
         logger.info("Tracy profiling enabled")
     except ImportError:
         logger.info("Tracy profiler not available, continuing without profiling")
@@ -166,7 +154,6 @@ def test_flux1_pipeline_performance_speed(
                 images = pipeline.run_single_prompt(
                     prompt=TEST_PROMPTS[prompt_idx],
                     num_inference_steps=num_inference_steps,
-                    traced=traced,
                     on_event=profiler_event_callback(benchmark_profiler, i),
                 )
             images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")

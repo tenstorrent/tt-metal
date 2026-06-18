@@ -37,7 +37,6 @@ class PipelineAPIMixin:
         negative_prompt: str | None = None,
         num_inference_steps: int,
         seed: int = 0,
-        traced: bool = False,
         on_event: PipelineEventCallback | None = None,
     ) -> _R_co:
         return self(
@@ -45,6 +44,6 @@ class PipelineAPIMixin:
             negative_prompts=[negative_prompt] if negative_prompt is not None else None,
             num_inference_steps=num_inference_steps,
             seed=seed,
-            traced=traced,
+            traced=True,
             on_event=on_event,
         )
