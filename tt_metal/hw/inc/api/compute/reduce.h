@@ -63,7 +63,19 @@ namespace ckernel {
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifdef ARCH_BLACKHOLE
+    // BH REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
+    // Reconfig formats to match: SrcA=scaler format, SrcB=data
+    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
+    if constexpr (swap_operands) {
+        state_configure(icb_scaler, icb, ocb, call_line);
+        reconfig_data_format(icb_scaler, icb);
+    } else {
+        state_configure(icb, icb_scaler, ocb, call_line);
+    }
+#else
     state_configure(icb, icb_scaler, ocb, call_line);
+#endif
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>(
