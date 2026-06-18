@@ -144,7 +144,7 @@ class TT_CCL:
             # interim must match the input dtype, so allocate a parallel bf16 interim pool.
             # Gated so the default bf8 path pays no extra L1/DRAM.
             self.reduce_scatter_buffers_bf16 = (
-                self.get_decode_reduce_scatter_buffers(dtype=ttnn.bfloat16)
+                self.get_decode_reduce_scatter_buffers(dtype=ttnn.bfloat16, num_buffers=1)
                 if (self.is_qwen36 and os.environ.get("QWEN36_MLP_CCL_BF16", "0") == "1")
                 else None
             )
@@ -700,7 +700,7 @@ class TT_CCL:
         )
         self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
-    def get_decode_reduce_scatter_buffers(self, dtype=ttnn.bfloat8_b):
+    def get_decode_reduce_scatter_buffers(self, dtype=ttnn.bfloat8_b, num_buffers=None):
         """
         Currently, this is hardcoded with llama specific shapes.
 
@@ -710,16 +710,23 @@ class TT_CCL:
         ``llama_reduce_scatter`` corrupts (→ NaN) when its interim buffer dtype
         differs from the input, so the bf16 FF-reduce path (QWEN36_MLP_CCL_BF16)
         needs a matching bfloat16 interim variant.
+
+        ``num_buffers`` overrides the double-buffer count. The bf16 variant uses 1
+        (not num_cbs) to reclaim high-L1 space the vision encoder needs for its
+        circular buffers (the extra bf16 interim was pushing the vision attention
+        CBs past the L1 ceiling). Single-buffered is correct (each reduce_scatter
+        fully consumes the interim before the next), only losing cross-call overlap.
         """
 
         persistent_buffers = [[], []]
 
         cluster_shape = (8, 4)
+        _n = num_buffers if num_buffers is not None else self.num_cbs
 
         # Create persistent buffers for cluster axis 1
         cluster_axis = 1
         buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
-        for _ in range(self.num_cbs):
+        for _ in range(_n):
             tt_buffer = (
                 # 512 = 4 devices * 4 pages per packet * 32 tile_width
                 ttnn.from_torch(
@@ -1595,7 +1602,10 @@ class TT_CCL:
                 and input_tensor_mesh.dtype == ttnn.bfloat16
             ):
                 _rs_pool = self.reduce_scatter_buffers_bf16
-            persistent_interim_buffer = _rs_pool[cluster_axis][self.reduce_scatter_buffer_idx[cluster_axis]]
+            # bf16 pool is single-buffered (1 entry) to save high-L1 for the vision
+            # encoder; wrap the cycling index by the actual pool length.
+            _rs_idx = self.reduce_scatter_buffer_idx[cluster_axis] % len(_rs_pool[cluster_axis])
+            persistent_interim_buffer = _rs_pool[cluster_axis][_rs_idx]
             ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
                 input_tensor_mesh,
                 persistent_interim_buffer,
