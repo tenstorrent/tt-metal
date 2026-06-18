@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import inspect
 import os
 
 import pytest
@@ -98,8 +99,19 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
 
     # Initially the cache functionality of HF is used with a placeholder tensor of torch.ones to compute and store the Key and Value projections in memory
     # see link on how the cache is used: https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/models/mllama/modeling_mllama.py#L484-L496
+    # transformers 5.x renamed the cache kwarg past_key_value -> past_key_values; passing the old
+    # name leaves it in **kwargs (ignored), so the cache is never populated -> later IndexError.
+    _pkv_kw = (
+        "past_key_values"
+        if "past_key_values" in inspect.signature(reference_model.forward).parameters
+        else "past_key_value"
+    )
     reference_model.forward(
-        torch.ones(batch, 1, dim), pt_xattn_tokens, past_key_value=past_key_values, attention_mask=None
+        torch.ones(batch, 1, dim),
+        pt_xattn_tokens,
+        attention_mask=None,
+        use_cache=True,
+        **{_pkv_kw: past_key_values},
     )
     # tt_model expects a list of Key and Value projections
     pt_xattn_cache_chunks = list(hf_cache_layer_kv(past_key_values, layer_idx))
@@ -157,7 +169,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         # Key and Values projections are stored in cache thus the cross-attention features are replaced with None and only Query input is passed to compute its projection and proceed to the computation of attention.
         # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st output of the subclass method indexed as [0].
         pt_out = reference_model.forward(
-            pt_x, None, past_key_value=past_key_values, attention_mask=xattn_mask, cache_position=[layer_idx]
+            pt_x, None, attention_mask=xattn_mask, cache_position=[layer_idx], **{_pkv_kw: past_key_values}
         )[0] * full_text_mask.squeeze(1)
 
         if mode == Mode.PREFILL:

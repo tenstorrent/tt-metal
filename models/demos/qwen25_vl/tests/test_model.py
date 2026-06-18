@@ -167,6 +167,9 @@ def test_vision_model_inference(
 
     # Run reference model
     reference_output = reference_model(pt_pixel_values, image_grid_thw)
+    # transformers 5.x returns a BaseModelOutputWithPooling instead of a bare tensor.
+    if hasattr(reference_output, "last_hidden_state"):
+        reference_output = reference_output.last_hidden_state
 
     tt_out = ttnn.to_torch(
         tt_out,

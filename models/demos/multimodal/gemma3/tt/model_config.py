@@ -545,6 +545,10 @@ class ModelArgs(TTModelArgs):
             model = self._gemma_dummy_hf_model()
         else:
             model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+        # transformers 5.x from_pretrained honors the checkpoint dtype (bf16); force float32 so the
+        # golden reference matches float32 inputs (e.g. the multi_modal_projector matmul, which
+        # otherwise raises "expected m1 and m2 to have the same dtype, but got: float != BFloat16").
+        model = model.float()
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)
             return wrapper
