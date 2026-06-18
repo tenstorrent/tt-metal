@@ -1,6 +1,6 @@
 # tt-run rank binding for a 2-rank pipeline-parallel prefill run.
 #
-# One 2-rank world (get_size()==2, get_rank()==0/1 in pipeline_prefill_runner),
+# One 2-rank world (get_size()==2, get_rank()==0/1 in prefill_runner),
 # two independent single-galaxy 8x4 meshes — rank 0 on mesh 0, rank 1 on mesh 1.
 # Cross-rank activations go host->host through PREFILL_PP_DIR (shared NFS), so the
 # two galaxies do NOT need fabric between them; only each mesh's own intra-galaxy
@@ -12,7 +12,7 @@
 #     --tcp-interface <IFACE> \
 #     --rank-binding models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_rank_binding_2rank.yaml \
 #     --mpi-args "--host bh-glx-d03u02:1,bh-glx-d03u08:1 --map-by slot --bind-to none --tag-output" \
-#     python3 -m models.demos.deepseek_v3_d_p.tt.runners.pipeline_prefill_runner
+#     python3 -m models.demos.deepseek_v3_d_p.tt.runners.prefill_runner
 #
 # VERIFY before running (cluster-specific, not guessable from the runner side):
 #   * mesh_graph_desc_path: must define TWO independent 8x4 BH-galaxy meshes
@@ -38,6 +38,7 @@ rank_bindings:
 mesh_graph_desc_path: models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_2galaxy_mesh_graph_descriptor.textproto
 
 global_env:
+  PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
   # Host->host activation handoff dir. Must be shared across both hosts (the runner's
   # /dev/shm default is per-host and won't cross). /data is NFS (10.32.13.1:/data) on this
   # cluster; change this for a different setup.

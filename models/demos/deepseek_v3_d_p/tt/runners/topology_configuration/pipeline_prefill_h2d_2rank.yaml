@@ -27,6 +27,7 @@ rank_bindings:
 mesh_graph_desc_path: models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_2galaxy_mesh_graph_descriptor.textproto
 
 global_env:
+  PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
   PREFILL_PP_DIR: "/data/jjovicic/pp_acts"
   PREFILL_STANDALONE_PCC: "1"
   PREFILL_STANDALONE_NCHUNKS: "4"
