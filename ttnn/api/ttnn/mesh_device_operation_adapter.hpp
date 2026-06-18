@@ -622,7 +622,7 @@ public:
     // ProgramRunArgs via SetProgramRunArgs.
     //
     // On cache hit: re-run create_program_spec and re-apply ALL run args via
-    // SetProgramRunArgs (no Program rebuild) -- see apply_descriptor.
+    // SetProgramRunArgs (no Program rebuild) -- see apply_program_spec.
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
@@ -664,22 +664,19 @@ public:
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
-        // The framework's cache-hit dispatcher (handle_mesh_adapter_cache_hit in
-        // device_operation.hpp) prefers a method named `apply_descriptor` over
-        // `override_runtime_arguments` when both exist. We adopt the name to slot into
-        // that hook -- "descriptor" is the dispatcher's historical naming, not a
-        // reference to ProgramDescriptor.
+        // Cache-hit hook for the Metal 2.0 spec path. The dispatcher (handle_mesh_adapter_cache_hit
+        // in device_operation.hpp) routes to one of three distinct, by-name hooks -- apply_descriptor
+        // (descriptor path), apply_program_spec (this), override_runtime_arguments (legacy path) -- so
+        // the three architectures never share a cache-hit entry point.
         //
-        // On a cache hit we re-run the factory to obtain fresh ProgramRunArgs and
-        // re-apply ALL of them via SetProgramRunArgs (no Program rebuild). Re-applying
-        // every run arg each dispatch is what makes hashing the full ProgramSpec a
-        // correct-by-construction cache key: any value NOT re-applied would be frozen
-        // from the cache-miss build and would therefore have to be part of the key.
-        // Because we re-apply everything, values that live in ProgramRunArgs rather than
-        // the spec -- e.g. tensor addresses, or an RNG seed -- are correctly excluded
-        // from the key yet still take effect on every dispatch. The spec is identical
-        // across hits by construction (it is the key), so only the run args change.
-        static void apply_descriptor(
+        // On a cache hit we re-run the factory to obtain fresh ProgramRunArgs and re-apply ALL of them
+        // via SetProgramRunArgs (no Program rebuild). Re-applying every run arg each dispatch is what
+        // makes hashing the full ProgramSpec a correct-by-construction cache key: any value NOT
+        // re-applied would be frozen from the cache-miss build and would therefore have to be part of
+        // the key. Because we re-apply everything, values that live in ProgramRunArgs rather than the
+        // spec -- e.g. tensor addresses -- are correctly excluded from the key yet still take effect on
+        // every dispatch. The spec is identical across hits (it is the key), so only the run args change.
+        static void apply_program_spec(
             cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
