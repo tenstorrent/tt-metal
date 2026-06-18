@@ -103,6 +103,52 @@ class TtnnDiffusionDriveModel:
         return self
 
     # ------------------------------------------------------------------
+    # Stage 3.4: install TTNN perception head (drop-in submodule swaps)
+    # ------------------------------------------------------------------
+
+    def build_stage3_4(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Replace the perception-head ops with TTNN drop-ins.
+
+        Swaps four submodules of ``DiffusionDriveModel`` in place:
+          ``_bev_downscale`` (1×1 conv), ``_status_encoding`` (Linear),
+          ``bev_proj`` (Linear+ReLU+LN), and ``_tf_decoder`` (3-layer
+          TransformerDecoder).  Each TTNN drop-in keeps the original call
+          signature, so ``DiffusionDriveModel.forward`` is untouched.
+
+        Chainable; typically called after ``build_stage3``.  Returns self.
+        """
+        from models.demos.diffusion_drive.tt.ttnn_perception import (
+            TtnnBevProj,
+            TtnnConv1x1,
+            TtnnLinear,
+            TtnnTransformerDecoder,
+        )
+
+        m = self._model
+        m._bev_downscale = TtnnConv1x1(m._bev_downscale, device)
+        m._status_encoding = TtnnLinear(m._status_encoding, device)
+        m.bev_proj = TtnnBevProj(m.bev_proj, device)
+        m._tf_decoder = TtnnTransformerDecoder(m._tf_decoder, device)
+        return self
+
+    # ------------------------------------------------------------------
+    # Stage 3.5: install TTNN trajectory-head denoiser (drop-in submodule swaps)
+    # ------------------------------------------------------------------
+
+    def build_stage3_5(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Replace the TrajectoryHead denoiser's weight-bearing modules with TTNN
+        drop-ins (plan_anchor_encoder, time_mlp, and per decoder layer: grid-sample
+        cross-attention, the two MHAs, FFN, norms, FiLM modulation, task heads).
+
+        The DDIM ``scheduler.step``, sinusoidal embed and norm/denorm glue stay on
+        host (Stage-3.7 consolidation target).  Chainable.  Returns self.
+        """
+        from models.demos.diffusion_drive.tt.ttnn_trajectory import install_ttnn_trajectory_head
+
+        install_ttnn_trajectory_head(self._model._trajectory_head, device)
+        return self
+
+    # ------------------------------------------------------------------
     # Forward (Stage 1 / Stage 2 / Stage 3)
     # ------------------------------------------------------------------
 
