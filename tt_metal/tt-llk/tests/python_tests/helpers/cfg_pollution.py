@@ -48,7 +48,11 @@ import random
 import sys
 from functools import lru_cache
 
-from ttexalens.tt_exalens_lib import check_context, convert_coordinate
+from ttexalens.tt_exalens_lib import (
+    check_context,
+    convert_coordinate,
+    write_words_to_device,
+)
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .logger import logger
@@ -374,6 +378,70 @@ def _log_landed(log: list[dict], summary_prefix: str) -> None:
         )
 
 
+# In-kernel pollution plan: host writes a magic-tagged plan to the device-print L1 region
+# (0x15000), which the trisc.cpp prologue reads and applies via SETC16 (thread-private) /
+# cfg_write (shared) BEFORE the kernel's init. This thrashes config through the same ports the
+# kernel reads — reaching thread-private addr-mod that host CFG writes cannot.
+_INKERNEL_PLAN_BASE = 0x15000
+_INKERNEL_PLAN_MAGIC = 0x504F4C31  # 'POL1', must match trisc.cpp
+# Restore plan (restore-mode): pristine CFG replayed before the poison so each trial starts clean
+# WITHOUT a per-trial tt-smi -r. Same quad format, different L1 base/magic (must match trisc.cpp).
+_INKERNEL_RESTORE_BASE = 0x1A000
+_INKERNEL_RESTORE_MAGIC = 0x52535431  # 'RST1'
+
+# addr32 written via SETC16 (thread-private ThreadConfig) in real LLK code: the addr-mod section
+# regs and CFG_STATE_ID. Everything else defaults to the shared cfg_write port. (BH addr32.)
+_SETC16_ADDR32 = set(range(12, 55)) | {0}  # ADDR_MOD_AB/DST/BIAS SEC0-7 span ~12..54; refine as needed
+
+
+def _port_for(addr32: int) -> int:
+    return 1 if addr32 in _SETC16_ADDR32 else 0
+
+
+def write_inkernel_plan(
+    location: str, entries, *, device_id: int = 0, context=None
+) -> int:
+    """Write a pollution plan [(addr32, value[, port[, mask]]), ...] to L1 for the prologue.
+
+    port omitted -> inferred from _port_for (SETC16 for addr-mod/state, cfg_write otherwise).
+    mask omitted -> 0xFFFFFFFF (whole word). On the shared port the prologue RMWs so unmasked
+    bits are preserved (used to keep firmware-owned bits like DISABLE_RISC_BP intact).
+    Returns the number of entries written.
+    """
+    words = [_INKERNEL_PLAN_MAGIC, len(entries)]
+    for e in entries:
+        addr32, value = e[0], e[1]
+        port = e[2] if len(e) > 2 else _port_for(addr32)
+        mask = e[3] if len(e) > 3 else 0xFFFFFFFF
+        words += [addr32, value, port, mask]
+    write_words_to_device(
+        location, _INKERNEL_PLAN_BASE, words, device_id=device_id, context=context
+    )
+    return len(entries)
+
+
+def write_inkernel_restore(
+    location: str, entries, *, device_id: int = 0, context=None
+) -> int:
+    """Write a pristine-restore plan [(addr32, value[, port[, mask]]), ...] to L1 0x1A000.
+
+    Replayed by the prologue BEFORE the poison plan (restore-mode): re-establishes the clean
+    post-reset CFG so a trial isn't contaminated by a prior trial's poison in never-written
+    fields. Same quad encoding as the poison plan, distinct base/magic. Constant across a
+    catalog run (the captured pristine baseline), so a driver writes it once and reuses it.
+    """
+    words = [_INKERNEL_RESTORE_MAGIC, len(entries)]
+    for e in entries:
+        addr32, value = e[0], e[1]
+        port = e[2] if len(e) > 2 else _port_for(addr32)
+        mask = e[3] if len(e) > 3 else 0xFFFFFFFF
+        words += [addr32, value, port, mask]
+    write_words_to_device(
+        location, _INKERNEL_RESTORE_BASE, words, device_id=device_id, context=context
+    )
+    return len(entries)
+
+
 def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=None):
     """Pollute / snapshot CFG based on env. No-op (returns None) unless one is set.
 
@@ -403,6 +471,33 @@ def maybe_pollute_cfg_from_env(location: str, *, device_id: int = 0, context=Non
     """
     arch = get_chip_architecture()
     env_preserve = parse_preserve(os.environ.get("LLK_POLLUTE_PRESERVE"))
+
+    # Restore-mode: replay the pristine baseline first (so the prologue's poison overlays a clean
+    # CFG without a per-trial reset). Written alongside — NOT instead of — the poison plan below.
+    restore_path = os.environ.get("LLK_POLLUTE_INKERNEL_RESTORE")
+    if restore_path:
+        with open(restore_path) as f:
+            rplan = json.load(f)
+        rentries = [tuple(e) for e in rplan["entries"]]
+        nr = write_inkernel_restore(
+            location, rentries, device_id=device_id, context=context
+        )
+        msg = f"[CFG-POLLUTE] restore entries={nr} -> L1 0x{_INKERNEL_RESTORE_BASE:X}"
+        print(msg, file=sys.stderr, flush=True)
+        logger.warning(msg)
+
+    inkernel_path = os.environ.get("LLK_POLLUTE_INKERNEL")
+    if inkernel_path:
+        with open(inkernel_path) as f:
+            plan = json.load(f)
+        entries = [tuple(e) for e in plan["entries"]]
+        n = write_inkernel_plan(
+            location, entries, device_id=device_id, context=context
+        )
+        msg = f"[CFG-POLLUTE] inkernel plan entries={n} -> L1 0x{_INKERNEL_PLAN_BASE:X}"
+        print(msg, file=sys.stderr, flush=True)
+        logger.warning(msg)
+        return None
 
     snap_path = os.environ.get("LLK_POLLUTE_SNAPSHOT")
     if snap_path:
