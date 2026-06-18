@@ -126,9 +126,9 @@ def main():
         fabric = ttnn.FabricConfig.FABRIC_1D
         topology = ttnn.Topology.Linear
     elif is_blackhole():
-        # Multi-row BH Galaxy (e.g. 4×8): TP axis (cols) is a ring, EP/SP axis (rows) is a line.
-        # Use a single Linear topology through CCLManager for now.
-        fabric = ttnn.FabricConfig.FABRIC_1D_RING
+        # Multi-row BH Galaxy (e.g. 4×8): BH plain-mesh MGD has LINE topology on both
+        # axes; ring fabric requires torus links that don't exist on BH.
+        fabric = ttnn.FabricConfig.FABRIC_1D
         topology = ttnn.Topology.Linear
     else:
         fabric = ttnn.FabricConfig.FABRIC_1D_RING

@@ -26,9 +26,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, profiler, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole, profiler, skip_for_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.mlp import MLP
+
+_GALAXY_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D if is_blackhole() else ttnn.FabricConfig.FABRIC_1D_RING
 from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
@@ -349,7 +351,7 @@ def _skip_single_device_ccl():
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": _GALAXY_FABRIC_CONFIG,
             "trace_region_size": 30000000,
         }
     ],
@@ -432,7 +434,7 @@ def test_gpt_oss_moe(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": _GALAXY_FABRIC_CONFIG,
             "trace_region_size": 30000000,
         }
     ],
