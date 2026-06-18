@@ -15,15 +15,13 @@ Usage (from codegen/ directory):
 import argparse
 from pathlib import Path
 
-from . import ARCH_DIR_MAP, KERNEL_CONFIGS, get_function_names, settings
+from . import ARCH_DIR_MAP, KERNEL_CONFIGS, get_function_names, get_kernel_dest
 
 
 def scaffold_kernel(op: str, kernel_type: str, arch: str) -> Path:
     """Create a skeleton kernel header with empty function bodies."""
     config = KERNEL_CONFIGS[kernel_type]
-    arch_dir = ARCH_DIR_MAP[arch]
-    rel_path = config["file_pattern"].format(op=op)
-    full_path = settings.tt_llk_root / arch_dir / rel_path
+    full_path = get_kernel_dest(op, kernel_type, arch)
 
     impl_name, init_name, uninit_name = get_function_names(op, kernel_type)
 

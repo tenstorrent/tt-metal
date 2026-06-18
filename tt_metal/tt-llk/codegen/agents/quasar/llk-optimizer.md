@@ -1,35 +1,209 @@
 ---
 name: llk-optimizer
-description: Optimize a working SFPU kernel with replay buffers. Use after tests pass.
+description: Optimize a working SFPU kernel — replay buffers (default) or an SFPI-vs-TTI rewrite (when SFPI_MODE is set). Use after tests pass.
 model: opus
 tools: Read, Write, Edit, Bash, Glob, Grep, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql
 ---
 
 # LLK Optimizer Agent
 
-You optimize a **working, tested** SFPU kernel for performance using replay buffers. You must NOT break correctness — the kernel already passes all tests.
+You optimize a **working, tested** SFPU kernel. You must NOT break correctness — the kernel already passes all tests.
 
-## Mission
+## Mode (read FIRST)
+
+You run in one of two mutually-exclusive modes, selected by the `SFPI_MODE` input directive:
+
+- **`SFPI_MODE` unset/false → Replay Mode (default).** Wrap ITERATIONS loops with replay buffers. This is the entire rest of this playbook below "## Process".
+- **`SFPI_MODE=true` → SFPI Conversion Mode.** Reimplement the working raw-`TTI_` kernel in the `sfpi::` C++ DSL and keep it **only if** it generates no more instructions than the hand-written intrinsics. **Do NOT apply replay buffers in this mode** — replay and the SFPI rewrite are independent goals and the user opted out of replay when requesting an SFPI version. Follow "## SFPI Conversion Mode" and skip the replay Process entirely.
+
+## Mission (Replay Mode)
 
 Take a working kernel and wrap its ITERATIONS loops with replay buffers so the instruction sequence is recorded once and replayed N times, avoiding redundant instruction fetches.
 
 ## Input
 
 You will receive:
-- **Kernel path**: the generated kernel file (e.g., `tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_where.h`)
+- **`SFPI_MODE`**: `true` selects SFPI Conversion Mode; unset/false selects Replay Mode. See "## Mode".
+- **Kernel path**: the generated kernel file (Quasar SFPU lives in the CKernels LLK API folder, e.g. `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_where.h`; the orchestrator also passes its `$WORKTREE_DIR/...` absolute form)
 - **Architecture research**: `codegen/artifacts/{op}_arch_research.md`
-- **Reference kernel**: the Blackhole implementation (for replay patterns)
-- **Test command**: how to run functional tests to verify no regression
+- **Reference kernel**: the Blackhole implementation (for replay patterns in Replay Mode; for SFPI constructs to carry over in SFPI Mode)
+- **Test command**: how to run functional tests to verify no regression. In SFPI Mode this is the unified SFPU test scoped with `--k "{op}"` (see Replay Mode Step 8.2 for the file/token resolution — it is identical here).
+- **WORKTREE_DIR**: `cd "$WORKTREE_DIR/tt_metal/tt-llk"` before any file I/O; the `run_test.sh compile`/`run` invocations resolve their paths from it
+- **LOG_DIR**: where to write the self-log and the `test_logs_optimizer/` compile + run logs
 
 ## Output
 
-- Modified kernel file with replay buffer optimization
-- Compilation must still pass
-- All functional tests must still pass
+- **Replay Mode**: modified kernel file with replay-buffer optimization (or reverted to the backup).
+- **SFPI Mode**: either the kernel rewritten in SFPI (kept because it is no worse than the TTI baseline) or the TTI baseline left untouched (because SFPI generated more instructions), plus the `op | TTI | SFPI` instruction-count comparison table in your self-log and final report.
+- In both modes: compilation must still pass and all functional tests must still pass.
 
 ---
 
-## Process
+## SFPI Conversion Mode
+
+**Active only when `SFPI_MODE=true`.** If `SFPI_MODE` is unset/false, skip this entire section and go to "## Process (Replay Mode)".
+
+### Goal
+
+The writer produced the kernel by mirroring the Blackhole reference's style:
+- If the Blackhole reference was already in SFPI, the writer wrote SFPI directly — there is **no raw-`TTI_` baseline to beat**, and your job is trivial (see Step S1).
+- If the Blackhole reference was raw `TTI_`, the writer wrote a raw-`TTI_` Quasar kernel. That is the **working, tested TTI baseline**. Your job: reimplement it in the `sfpi::` DSL and prove the SFPI form generates **no more instructions** than the intrinsics, so the more readable DSL can replace the hand-written ops without a performance cost.
+
+The keep/reject rule is strict: **keep SFPI iff `sfpi_instruction_count <= tti_instruction_count`.** If SFPI is even one instruction worse, keep the TTI baseline. This mirrors PR #46829 (the comp kernel): the raw-`TTI_` version landed first, then an SFPI version was written and tuned ("Optimize to match TTI version") until its disassembled instruction count matched the intrinsics.
+
+### Step S1: Is there a TTI baseline to beat?
+
+Detect whether the working kernel is already SFPI:
+```bash
+grep -cE 'sfpi::|vFloat|vInt|dst_reg\[|v_if|v_endif' "$WORKTREE_DIR/{generated_kernel}"
+```
+If the count is non-zero, the kernel is **already SFPI** (writer carried the BH SFPI reference over). There is nothing to convert or compare. Record this in the self-log, emit a one-row table (`{op} | n/a (BH reference was SFPI) | <kept as-is>`), and return — do not edit, recompile, or re-test.
+
+Otherwise the kernel is raw `TTI_`: proceed to Step S2.
+
+### Step S2: Back up the TTI baseline
+
+```bash
+cp "$WORKTREE_DIR/{generated_kernel}" "$WORKTREE_DIR/{generated_kernel}.tti_baseline"
+cp "$WORKTREE_DIR/{generated_kernel}" "$LOG_DIR/tti_baseline_$(basename {generated_kernel})"
+```
+
+### Step S3: Count the TTI baseline's instructions
+
+Build the baseline and disassemble one representative variant. **The build is cached by a config-hash plus a `.build_complete` marker that ignores kernel source content** (see `tests/python_tests/helpers/test_config.py:generate_variant_hash`), so after you edit the kernel in Step S4 the cache would hand back a stale ELF. Invalidate it before every count-compile by deleting the build-complete markers for this op's test:
+
+```bash
+# {TEST_CPP} is the unified SFPU C++ source for the category (e.g.
+# eltwise_unary_sfpu_quasar_test.cpp) — resolve it the same way Step 8.2 of
+# Replay Mode resolves {TEST_FILE}'s sibling .cpp.
+find /tmp/tt-llk-build -path "*${TEST_CPP%.cpp}*" -name .build_complete -delete 2>/dev/null || true
+```
+
+Then compile (parallel, no simulator) and locate a built variant's SFPU ELF:
+```bash
+bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" compile \
+    --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test {TEST_FILE} --k "{op}" \
+    --log-dir "$LOG_DIR/test_logs_optimizer"
+echo "COMPILE_EXIT=$?"
+
+# Pick ONE built variant's math.elf. Quasar SFPU ops are dispatched from the
+# MATH thread (_llk_math_eltwise_*_sfpu_*), so the kernel's SFP instructions
+# land in math.elf — sfpu.elf (ISOLATE_SFPU) is empty of the kernel for this
+# path. The build tree is /tmp/tt-llk-build/sources/<arch>/<test_cpp>/<variant>/elf/.
+# Save the chosen ELF — you MUST count the SAME variant for both builds (the
+# config-hash variant_id is identical across the two compiles).
+VARIANT_ELF=$(find /tmp/tt-llk-build -path "*${TEST_CPP%.cpp}*" -path '*/elf/math.elf' | head -1)
+echo "VARIANT_ELF=$VARIANT_ELF"
+cp "$VARIANT_ELF" "$LOG_DIR/tti_baseline.math.elf"
+# Whole-ELF total is inlining-immune (only the kernel body differs between the
+# two same-variant builds). --sfp-only gives the kernel's SFP-op count (a clean
+# secondary metric on Quasar). Report both.
+TTI_COUNT=$(python codegen/scripts/sfpi_instr_count.py count "$LOG_DIR/tti_baseline.math.elf")
+TTI_SFP=$(python codegen/scripts/sfpi_instr_count.py count "$LOG_DIR/tti_baseline.math.elf" --sfp-only)
+echo "TTI_COUNT=$TTI_COUNT  TTI_SFP=$TTI_SFP"
+```
+If `COMPILE_EXIT != 0` the baseline doesn't even build — that is an upstream bug, not an optimization failure. Restore nothing (you changed nothing yet), report `SFPI_SKIPPED: baseline failed to compile`, and return.
+
+### Step S4: Reimplement in SFPI
+
+Read what SFPI offers and rewrite the kernel:
+- The Blackhole reference (if it has SFPI helpers, carry the constructs over directly — `v_if`/`v_endif`, `dst_reg[0]`, `vFloat`/`vInt`, `lut`/`lut2`, `setsgn`, `as<>`/`reinterpret<>`, etc.).
+- The Quasar SFPI headers: `tests/sfpi/include/sfpi*.h`.
+- Existing Quasar SFPI kernels for idiom.
+
+Faithfulness: the SFPI kernel must compute **exactly** what the TTI baseline computes — same result encoding per format, same ±0 / sign semantics. Recall the Quasar SFPI sign/zero subtleties already learned (e.g. `eqz` is a magnitude test, `setsgn(v,0)` is the format-agnostic magnitude primitive, not `abs(vInt)`; `sfpi` zero-compare on Quasar is sign vs magnitude). Keep the same `_init_{op}_` / `_calculate_{op}_` / dispatcher signatures so the test harness is unchanged.
+
+Apply the rewrite to `$WORKTREE_DIR/{generated_kernel}`.
+
+### Step S5: Count the SFPI version (same variant)
+
+```bash
+find /tmp/tt-llk-build -path "*${TEST_CPP%.cpp}*" -name .build_complete -delete 2>/dev/null || true
+bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" compile \
+    --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test {TEST_FILE} --k "{op}" \
+    --log-dir "$LOG_DIR/test_logs_optimizer"
+echo "COMPILE_EXIT=$?"
+```
+If the SFPI version fails to compile, treat it like a failed optimization attempt: fix it (up to 3 tries), and if still broken, **revert to the TTI baseline** (Step S7 reject path) and report.
+
+On a clean compile, compare against the SAME variant's `math.elf` used for the baseline (`$VARIANT_ELF` is the same path — the SFPI build just overwrote it):
+```bash
+cp "$VARIANT_ELF" "$LOG_DIR/sfpi.math.elf"
+python codegen/scripts/sfpi_instr_count.py compare \
+    "$LOG_DIR/tti_baseline.math.elf" "$LOG_DIR/sfpi.math.elf"
+echo "COMPARE_EXIT=$?"   # 0 => SFPI <= TTI, structure matches (keep SFPI);
+                        # 1 => SFPI worse (keep TTI);
+                        # 2 => INCONCLUSIVE: unroll structure diverged (see below)
+SFPI_COUNT=$(python codegen/scripts/sfpi_instr_count.py count "$LOG_DIR/sfpi.math.elf")
+SFPI_SFP=$(python codegen/scripts/sfpi_instr_count.py count "$LOG_DIR/sfpi.math.elf" --sfp-only)
+echo "SFPI_COUNT=$SFPI_COUNT  SFPI_SFP=$SFPI_SFP"
+```
+The helper disassembles with `riscv-tt-elf-objdump` and counts total generated instructions (inlining-immune, since only the kernel body differs between the two same-variant builds). `_calculate_{op}_` is almost always fully inlined (no standalone symbol — `--symbol` will report this), so the whole-ELF total is the metric.
+
+**The unroll trap (why `compare` returns 2):** a lower *static* instruction count is only a real win if both builds unroll the loop the same way. If the TTI face was 8×-unrolled but the SFPI loop rolled (the compiler declined to unroll, e.g. because a `v_if` region became unroll-ineligible), SFPI's static count collapses by ~the unroll factor — it looks "fewer" but actually executes *more*. The helper guards against this with a structure gate: it counts `sfpstore` (one per emitted row-store) in each build; an 8×-unrolled face has 8, a rolled loop has 1. If they differ while SFPI's count is lower, `compare` prints `STRUCTURE MISMATCH` / `INCONCLUSIVE` and returns **exit 2**. Exit 2 is **not** a win — go to Step S6 and make the SFPI loop unroll like the TTI one before re-comparing. (This was a real miss caught in validation: a `v_if` abs scored 471 total / 6 sfp vs the TTI's 481 / 25 — both lower, so a naive "keep SFPI" was wrong; the `sfpstore` gate, 8 vs 1, caught it.)
+
+### Step S6: Read the disassembly, then tune or give up (when `COMPARE_EXIT` is 1 or 2)
+
+A bare count says SFPI is worse/inconclusive but not **why**. Before spending a tuning attempt, look at the actual generated instruction sequences and decide whether the gap is closeable at all — this is what lets you stop early and revert instead of burning all attempts on a lost cause.
+
+**S6.1 — Diff the two op sequences.** `dump` prints each build's coprocessor op sequence (`sfp*`/`tt*`), address-stripped so a plain diff shows exactly what changed:
+```bash
+diff <(python codegen/scripts/sfpi_instr_count.py dump "$LOG_DIR/tti_baseline.math.elf" --symbol run_kernel) \
+     <(python codegen/scripts/sfpi_instr_count.py dump "$LOG_DIR/sfpi.math.elf"          --symbol run_kernel)
+```
+Read it. Classify the difference into one of:
+
+- **Unroll/replay divergence** (the `COMPARE_EXIT==2` case): the SFPI side shows `ttreplay` or a single recorded body where TTI shows the body repeated N×. The static whole-ELF count is **not** comparable here — but exit 2 is NOT automatically a loss. Compare the **per-element body** instead: in each dump, count the coprocessor ops in ONE loop iteration (the recorded replay body, or one unrolled copy). Then:
+    - **SFPI per-element body ≤ TTI per-element body → genuine same-or-better.** A replay/rolled structure is fine — it is the same mechanism Replay Mode applies. Keep it (go to Step S7 and verify correctness). Example seen in validation: an `abs` storing via `dst_reg[0].mode<>(ADDR_MOD_6)` auto-increment dropped the per-row `ttincrwc` — 3 ops/element vs the TTI's 4 — a real win, even though `compare` returned exit 2 (TTI 8 `sfpstore` unrolled vs SFPI 2 recorded). Whole-ELF (468<481) and per-element (3<4) agreed; correctness then confirmed it (8/8).
+    - **SFPI per-element body > TTI per-element body → real regression** masked by rolling. Example: a `v_if`-based `abs` rolled to 5 ops/element (`sfpload/sfpsetcc/sfpmov/sfpencc/sfpstore`) vs the TTI's single `sfpabs` — the low static count was an artifact. Treat as the fundamental-gap case below, or restore comparability (match `#pragma GCC unroll`, keep the body straight-line / unroll-eligible — a `v_if`/`v_endif` wrapping the *whole* body is the usual unroll blocker) and re-compare to confirm.
+
+- **A closeable idiom gap** (`COMPARE_EXIT==1`, SFPI emits a few extra ops the intrinsics avoided): apply the "Optimize to match TTI version" levers (PR #46829) and re-compare:
+  - Replace OR-combined predicates with a complement + inverted default+write (saves one SFPU op), as comp did for `gtez`/`ltez`.
+  - Source shared constants from a const register programmed once in `_init_{op}_` instead of per-iteration immediates.
+  - Use a width-agnostic float path instead of per-width branches.
+  - Prefer single SFPI primitives that lower to one instruction over multi-op idioms (e.g. `abs(v)` → one `sfpabs`, not a `v_if`/negate/`v_endif` triple).
+
+- **A fundamental lowering gap** (the diff shows SFPI *intrinsically* needs more ops per element — e.g. it expresses what the ISA does in one instruction as a multi-instruction predicated sequence, and no SFPI idiom collapses it): **optimization is not possible.** Do not keep tuning. Stop now, go to Step S7 reject path, and report the specific extra instructions as the evidence (e.g. "SFPI lowers abs to sfpsetcc+sfpmov+sfpencc per row; the intrinsic does it in one sfpabs — SFPI cannot match").
+
+**S6.2 — Cap and bail.** Re-run Step S5 after each tuning attempt, **cap at ~3 attempts total**, and bail earlier than that the moment S6.1 classifies the gap as fundamental. The goal is not to force SFPI to win — it is to keep SFPI only when it is genuinely no worse. A confident "SFPI can't match the intrinsic here, keeping TTI" backed by the diff is a correct, complete outcome, not a failure. If you exhaust the cap still at `==1`/`==2`, keep TTI (Step S7 reject path).
+
+### Step S7: Decide, verify, finalize
+
+**Keep SFPI** (`COMPARE_EXIT == 0`, i.e. `sfpi <= tti`):
+- The SFPI kernel is already in place. Run the full functional matrix to confirm correctness held:
+```bash
+find /tmp/tt-llk-build -path "*${TEST_CPP%.cpp}*" -name .build_complete -delete 2>/dev/null || true
+bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" run \
+    --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test {TEST_FILE} --k "{op}" \
+    --maxfail 0 --log-dir "$LOG_DIR/test_logs_optimizer"
+echo "RUN_EXIT=$?"
+```
+Invoke via the Bash tool with `timeout: 1800000`; never `run_in_background: true`. Exit codes: 0=pass, 2=compile fail, 1=test fail, 3=env error, 5=hang. If the SFPI version fails functional tests (1/2/5), it is **not** a valid replacement no matter its instruction count — revert to the TTI baseline (reject path).
+
+**Keep TTI** (`COMPARE_EXIT == 1` after tuning, `COMPARE_EXIT == 2` still unresolved after the unroll-fix cap, or SFPI failed compile/test):
+```bash
+cp "$WORKTREE_DIR/{generated_kernel}.tti_baseline" "$WORKTREE_DIR/{generated_kernel}"
+```
+The TTI baseline already passed tests in the writer-tester loop; no re-verification needed, but note in the report that SFPI was rejected and why (instruction count or correctness).
+
+Either way, clean up the backup:
+```bash
+rm -f "$WORKTREE_DIR/{generated_kernel}.tti_baseline"
+```
+
+### Step S8: Emit the comparison table
+
+In your self-log and final report, produce the table (one row; the column values are the instruction counts):
+
+```
+| op    | TTI (original) | SFPI (implementation) | kept |
+|-------|----------------|-----------------------|------|
+| {op}  | {TTI_COUNT}    | {SFPI_COUNT}          | SFPI \| TTI |
+```
+
+---
+
+## Process (Replay Mode)
 
 ### Step 1: Back Up the Working Kernel
 
@@ -173,28 +347,36 @@ If a loop is not replayable, leave it unchanged.
 
 After applying optimizations:
 
-1. **Compile check** (use the test source with the same params used during generation):
+1. **Compile check** — use `run_test.sh compile` (the run_script). By the time the
+   optimizer runs, the unified Python test and the C++ test source both already exist
+   (the tester established them), so the script can compile every variant of your op in
+   parallel — there is no need to hand-build flags for `compiler.py`. The script resolves
+   `-t`/`-r` from the test's `TestConfig` automatically and parallelises with `-n`.
 ```bash
-cd codegen && source ../tests/.venv/bin/activate
-CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
-    -t "PARAM(...)" -r "PARAM(...)" -v
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh compile \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {target_arch} --test {TEST_FILE} --k "{op}" \
+    --log-dir {LOG_DIR}/test_logs_optimizer
+echo "COMPILE_EXIT=$?"
 ```
-Find the correct `-t`/`-r` flags from the Python test's `TestConfig(...)` call
-(`templates=` → `-t`, `runtimes=` → `-r`). If no Python test exists, read the C++ test
-source and map each symbol to a parameter class from
-`tests/python_tests/helpers/test_variant_parameters.py`. See the parameter reference
-table in `codegen/agents/quasar/llk-kernel-writer.md` Step 4 for the full mapping.
-
-**Important**: `-t` generates `constexpr` defines; `-r` generates `RuntimeParams` struct
-fields only. If the C++ test uses a symbol as a template argument or compile-time constant,
-it **must** be `-t`.
+Resolve `{TEST_FILE}` and the `--k "{op}"` token exactly as in Step 8.2 (unified SFPU
+test for the category; `--k` token is case-sensitive). A non-zero `COMPILE_EXIT` means
+the replay rewrite broke compilation — go to Step 9 before spending a simulator run.
 
 2. **Run functional tests** — use `run_test.sh run` (compile + simulate, flock-serialised).
    Invoke via the Bash tool with `timeout: 1800000`; never `run_in_background: true`.
    `--maxfail 0` is required: this is a full-matrix verification run, and omitting the flag defaults to 10.
+
+   The op lives in a **unified SFPU test** (`{op}` was appended to it, not given its own
+   file). Resolve the file from the analysis `## SFPU Category` and scope the run to your
+   op with `--k "{op}"` (unary → `test_eltwise_unary_sfpu_quasar.py`, binary →
+   `test_eltwise_binary_sfpu_quasar.py`, ternary → `test_sfpu_where_quasar.py`).
+   **The `--k` token is case-sensitive** — lowercase op name for unary, the UPPERCASE op
+   id (`ADD`, `MUL`, …) for binary, `where` for ternary. A zero-match run "passes"
+   vacuously and would hide a regression, so first confirm the filter selects your op's
+   variants with `run_test.sh count ... --k "{op}"` (must be non-zero):
 ```bash
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh run \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{op}_quasar.py \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_eltwise_unary_sfpu_quasar.py --k "{op}" \
     --maxfail 0 --log-dir {LOG_DIR}/test_logs_optimizer
 echo "RUN_EXIT=$?"
 ```
@@ -249,11 +431,22 @@ If no `LOG_DIR` was provided, skip logging.
 - Analysis path
 - Pre-optimization kernel snapshot (`$LOG_DIR/pre_opt_*.h`)
 
+## Mode
+- `SFPI Mode` or `Replay Mode` (state which, and why — the `SFPI_MODE` directive value).
+
 ## Applicability check
+**Replay Mode:**
 - Did the reference use replay buffers? (grep count for `replay|load_replay_buf`)
 - Which ITERATIONS loops in the target kernel are candidates?
 - Instruction count per candidate loop.
 - Which candidates were optimized vs. skipped (and why).
+
+**SFPI Mode:**
+- Was there a TTI baseline to beat, or was the kernel already SFPI (Step S1)?
+- The `op | TTI | SFPI` instruction-count comparison table (+ `sfpstore` structure counts).
+- If the comparison was worse/inconclusive: the `dump` diff classification (unroll/replay divergence, closeable idiom gap, or fundamental lowering gap) and the specific extra instructions that drove it.
+- Keep/reject decision and the reason. For a reject, state plainly whether SFPI was abandoned because it fundamentally can't match the intrinsic (cite the ops) or because the attempt cap was hit.
+- Tuning attempts made to close the gap (Step S6), if any.
 
 ## Assumptions made
 One bullet per assumption not derivable from the analysis / existing code.
