@@ -25,6 +25,11 @@ excludeAgent: "cloud-agent"
 - **Shared telemetry structs**: when multiple cores or devices write telemetry data that the host reads, define a single shared struct rather than scattering loose fields. This ensures alignment, simplifies versioning, and avoids field ordering bugs.
 - **Compute on host, not device, when possible**: if the host has the data to derive a metric (e.g., utilization = delta_busy / delta_total), do the calculation there. Avoid expensive division on device just to simplify host code.
 - **Sub-device awareness in utilities**: test fixtures and utility functions that query device properties (`compute_with_storage_grid_size`) must not accidentally include dispatch cores. Use the sub-device-aware APIs.
+- **`constexpr` for new device-side APIs**: all new device API functions and traits must be `constexpr` by design to guarantee zero runtime cost. Do not defer `constexpr` cleanup to later — it is a correctness requirement for device-side code.
+- **Accept typed resource references, not raw addresses**: kernel helper functions should accept references to typed resources (CB, DFB, NoC handle) rather than raw `uint32_t` addresses. This catches misuse at compile time and improves readability.
+- **Use top-level APIs in tests, not impl setters**: test code should exercise the public API surface, not reach into `*_impl` internals. If a test needs impl access, that signals a missing public API — file an issue rather than working around it.
+- **Watcher validation for mutually exclusive modes**: when a hardware resource has exclusive modes (e.g., iDMA mode on a command buffer), add watcher checks that fire if the resource is misused while in that mode. Silent corruption is worse than a watcher assert.
+- **Track limitations with issues**: when asserting on a known limitation (e.g., restricting buffer resizing scenarios), open a tracking issue (P2+) for the future relaxation. The assert message should reference the issue number.
 
 ## 🟢 SUGGESTION
 
@@ -32,6 +37,8 @@ excludeAgent: "cloud-agent"
 - Consider `always_inline` for very small firmware helper functions (cache invalidation, register reads) that are called in tight loops on device.
 - When asserting or early-returning in firmware init paths, add a comment explaining what invariant is being checked and what external state could violate it.
 - Use `enchantum::values_generator` with care — ensure all enum values, including sentinel/host-only values like `NONE`, are handled or excluded explicitly.
+- Profiler timestamp zones should include disambiguation context (loop iteration index, core ID) so measurements are distinguishable in trace output.
+- Discourage using DFB declarations for raw scratch memory — prefer `CoreLocalMem` or structured allocations that convey intent.
 
 ## Review Checklist
 
@@ -45,3 +52,7 @@ excludeAgent: "cloud-agent"
 - [ ] Function/API names accurately describe what they do (not overly broad)
 - [ ] Test-only code lives under `tests/`, not in production directories
 - [ ] Telemetry/shared data uses a struct, not loose fields
+- [ ] New device APIs are `constexpr`
+- [ ] Kernel helpers accept typed resource refs, not raw addresses
+- [ ] Tests use public APIs, not impl internals
+- [ ] Exclusive-mode resources have watcher checks for misuse
