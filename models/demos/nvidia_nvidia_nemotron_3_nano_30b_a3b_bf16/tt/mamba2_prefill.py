@@ -59,7 +59,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _col, _rep_keyed, _row, all_gather, all_reduce
+from .tp import _col, _rep_keyed, all_gather
 
 # ---------------------------------------------------------------------------
 # Constants (must match mamba2_layer.py exactly)
@@ -532,10 +532,13 @@ def mamba2_prefill_layer_forward(
     )
     scan_out = ttnn.mul(xg_normed_flat, nw_tt)  # [B, S, 4096]
 
-    # ---- 14. out_proj: row-parallel → partial [B, S, 2688]/device → full via all_reduce ----
-    op_tt = _row(out_proj_weight, mesh_device)  # [2688, 1024]/device
-    _out_partial = ttnn.linear(scan_out, op_tt, transpose_b=True)  # [B, S, 2688] partial
-    out = all_reduce(_out_partial)  # [B, S, 2688] full
+    # ---- 14. out_proj: column-parallel → partial [B, S, 672]/device → full via all_gather ----
+    # scan_out is replicated (SSM used the gathered in_proj output), so column-parallel
+    # is correct: each device computes a different slice of the output rows.
+    # Weight: [2688, 4096] → [672, 4096]/device (22 MB → 5.5 MB per layer/device).
+    op_tt = _col(out_proj_weight, mesh_device)  # [672, 4096]/device
+    _out_partial = ttnn.linear(scan_out, op_tt, transpose_b=True)  # [B, S, 672]/device
+    out = all_gather(_out_partial, dim=2)  # [B, S, 2688] full
     _out_partial.deallocate(True)
 
     # ---- 15. Residual -------------------------------------------------
