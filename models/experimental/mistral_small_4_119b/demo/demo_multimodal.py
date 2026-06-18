@@ -393,7 +393,11 @@ def generate(
         avg = sum(decode_times) / len(decode_times)
         logger.info(f"Generated {len(generated_ids)} tokens | decode avg {avg:.0f} ms/tok ({1000/avg:.1f} tok/s)")
 
-    return tokenizer.decode(generated_ids, skip_special_tokens=True)
+    full_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+    # Log the full decoded text as one line so it is visible in non-TTY logs (CI);
+    # the streamed print() above renders only on an interactive terminal.
+    logger.info(f"Generated: {full_text!r}")
+    return full_text
 
 
 def generate_hf(
