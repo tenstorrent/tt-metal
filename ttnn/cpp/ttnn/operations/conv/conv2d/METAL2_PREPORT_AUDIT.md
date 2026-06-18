@@ -16,12 +16,12 @@ Single device operation in this directory:
 | Field | Value |
 |---|---|
 | **Op directory** | `ttnn/cpp/ttnn/operations/conv/conv2d` |
-| **Overall** | GREEN |
+| **Overall** | **RED** (blocked on framework gap — see Result) |
 | **DOps / Factories** | `Conv2dDeviceOperation` → `Conv2dShardedProgramFactory`, `Conv2dWidthShardedProgramFactory` |
 | *Prereqs* — ProgramDescriptor | Yes |
 | *Prereqs* — Device 2.0 (every kernel used) | Yes |
 | *Prereqs* — Cross-op escapes | Ok |
-| *Feature Support* — overall | GREEN |
+| *Feature Support* — overall | **RED** (split-reader multi-consumer borrowed DFB violates the per-node single-consumer invariant) |
 | *Feature Support* — Variadic-CTA | Ok |
 | *TTNN Readiness* — Op-owned tensors | Yes: both factories — `conv_reader_indices_tensor` (`conv2d_op_sharded_program_factory.cpp:1563-1572`, `conv2d_op_width_sharded_program_factory.cpp:727-736`) |
 | *TTNN Readiness* — MeshWorkload needed | No (op-owned tensors — carried natively, single-program) |
@@ -35,13 +35,15 @@ Single device operation in this directory:
 
 ## Result
 
-**GREEN → brief issued.** All gates clear:
+**RED → routed to wait-for-feature (no brief).** Primary blocker: the borrowed-memory ACT input shard is read by **multiple co-located (same-node) consumers** via the **split reader** — violating the DFB single-consumer-per-node invariant (`dataflow_buffer_spec.hpp:40-48`); the spec validator TT_FATALs. Routed to wait-for-feature: needs a borrowed-DFB mode supporting multiple same-node consumers, or a local read-only `TensorAccessor` to replace borrowed read-only CBs.
 
-- **ProgramDescriptor** — both factories populate `ProgramDescriptor` / `WorkloadDescriptor` via `KernelDescriptor` / `CBDescriptor` / `SemaphoreDescriptor`; no imperative `host_api.hpp` builder calls.
-- **Device 2.0** — every kernel the op instantiates (10 referenced kernels + the shared `conv_reader_common.hpp` + the pool donor header) is fully on the Device 2.0 object-oriented data-movement API. No legacy idioms; only the sanctioned free functions `get_tile_size` / `get_local_cb_interface` appear.
-- **Feature compatibility** — no UNSUPPORTED feature fires. Borrowed-memory DFBs are in use (LANDED).
+This is **not a permanent block** — it unblocks the moment the framework adds the capability (multi-same-node-consumer borrowed DFB, or a read-only-TensorAccessor substitute). The rest of the audit holds: the prerequisite gates pass and only the borrowed-DFB usage hits the unsupported sub-case.
 
-Port work is mechanical: per-binding `TensorParameter` conversion (all Case 1), borrowed-memory DFB wiring (`borrowed_from`), the `ACT_SHARDED` fake-CB workaround, and deletion of the custom `compute_program_hash`.
+- **ProgramDescriptor** — PASS. Both factories populate `ProgramDescriptor` / `WorkloadDescriptor` via `KernelDescriptor` / `CBDescriptor` / `SemaphoreDescriptor`; no imperative `host_api.hpp` builder calls.
+- **Device 2.0** — PASS. Every kernel the op instantiates (10 referenced kernels + the shared `conv_reader_common.hpp` + the pool donor header) is fully on the Device 2.0 object-oriented data-movement API. No legacy idioms; only the sanctioned free functions `get_tile_size` / `get_local_cb_interface` appear.
+- **Feature compatibility** — **RED on borrowed-memory DFB usage.** The borrowed-memory DFB *feature* is LANDED, but **this op's usage** — two co-located data-movement kernels on the same cores both consuming the borrowed ACT input-shard CB (overlapping node coverage, split reader) — hits an UNSUPPORTED sub-case the spec validator rejects. See the *Split-reader multi-consumer borrowed DFB violation* detail under Feature compatibility.
+
+Once the framework gap closes, the residual port work is mechanical: per-binding `TensorParameter` conversion (all Case 1), borrowed-memory DFB wiring (`borrowed_from`), the `ACT_SHARDED` fake-CB workaround, and deletion of the custom `compute_program_hash`.
 
 ## Gate detail
 
@@ -73,7 +75,7 @@ Port work is mechanical: per-binding `TensorParameter` conversion (all Case 1), 
   | Feature | Status | Notes |
   |---|---|---|
   | GlobalCircularBuffer | N/A | `global_circular_buffer.hpp` is `#include`d at `conv2d_device_operation.hpp:12` but no `GlobalCircularBuffer` type, `CreateGlobalCircularBuffer`, `.global_circular_buffer` field, `remote_cb`/`remote_index`, or 4-arg `CreateCircularBuffer(..., global_cb)` is used anywhere. Header-only presence; feature absent. |
-  | Dynamic CircularBuffer (borrowed memory) | GREEN | `emit_cb_descriptors` (`conv2d_op_program_factory_common.cpp:756`) sets `CBDescriptor::buffer` non-null for `ACT_SHARDED` (input buffer), `OUT`/`MATMUL_PARTIALS` (output buffer), `READER_INDICES` (indices buffer) — `:770-795`. Port uses `borrowed_from`. |
+  | Dynamic CircularBuffer (borrowed memory) | **RED** | Feature LANDED, but **this op's usage is UNSUPPORTED**: the borrowed `ACT_SHARDED` input shard is consumed by **two co-located (same-node) data-movement kernels** via the split reader → violates the DFB single-consumer-per-node invariant (`dataflow_buffer_spec.hpp:40-48`); the spec validator TT_FATALs. `emit_cb_descriptors` (`conv2d_op_program_factory_common.cpp:756`) sets `CBDescriptor::buffer` non-null for `ACT_SHARDED` (input buffer), `OUT`/`MATMUL_PARTIALS` (output buffer), `READER_INDICES` (indices buffer) — `:770-795`. See the *Split-reader multi-consumer borrowed DFB violation* detail below. |
   | CBDescriptor `address_offset` (non-zero) | N/A | No `.address_offset` set on any `CBDescriptor`; no `set_address_offset` / 4-arg `UpdateDynamicCircularBufferAddress`. Default zero. |
   | Aliased Circular Buffers | N/A | Every `CBDescriptor::format_descriptors` initializer is single-element (`conv2d_op_program_factory_common.cpp:789`). No multi-`buffer_index` config. |
   | GlobalSemaphore | N/A | No `GlobalSemaphore` type, `CreateGlobalSemaphore`, or `global_semaphore.hpp`. All semaphores are plain `SemaphoreDescriptor`. |
@@ -81,6 +83,21 @@ Port work is mechanical: per-binding `TensorParameter` conversion (all Case 1), 
   | Dynamic TensorAccessor (`ArgConfig::Runtime*`) | N/A | No `ArgConfig::Runtime*` token anywhere. All `TensorAccessorArgs(buffer)` are the single-argument standard form (`conv2d_op_sharded_program_factory.cpp:875,1035,1036`; `conv2d_op_width_sharded_program_factory.cpp:571,578,579`). |
   | `UpdateCircularBuffer*` | N/A | No `UpdateCircularBufferTotalSize` / `UpdateCircularBufferPageSize` / `UpdateDynamicCircularBufferAddressAndTotalSize` calls. The two `UpdateDynamicCircularBufferAddress` mentions (`...sharded...:686`, `...width_sharded...:465,472`) are comments documenting that the call is **not** needed (framework patches addresses on cache hit). |
   | Variable-count compile-time arguments (CTA varargs) | N/A | `tensor_args_t` (`Conv2dInputs`) is fixed: `a`, `b`, `std::optional<Tensor> bias` — no `std::vector<Tensor>`. CT-arg vectors are built with fixed (branch-determined) cardinality; no kernel reads `get_compile_time_arg_val(i)` with a runtime-varying `i`. |
+
+#### Split-reader multi-consumer borrowed DFB violation (RED — the op-level gate)
+
+The borrowed-memory ACT input shard is consumed by **two co-located (same-node) data-movement kernels on the same cores** — the split reader. This violates the Metal 2.0 DFB per-node consumer invariant (`tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp:40-48`): a DFB instance has exactly **one** producer and **one** consumer kernel instance per node; multiple consumers are legal ONLY with (a) non-overlapping node coverage, (b) same kernel kind, AND (c) identical binding-site params. The split reader fails (a) — both kernels run on the **same core grid** with **overlapping node coverage** on the same borrowed CB. The spec validator (`program_spec.cpp`) TT_FATALs.
+
+Evidence:
+
+- **Split-reader enable / second-reader path:** `enable_split_reader` at `device/conv2d_op_sharded_program_factory.cpp:347-348`; the second-reader CB `Conv2dCb::ACT_SECOND_READER` at `:94`; split path at `:141`.
+- **Two same-node consumers of the borrowed ACT shard:** the borrowed ACT input shard is consumed by the **reader (RISCV_1)** AND the **writer-acting-as-second-reader (RISCV_0)** on the **same cores** → two same-node, same-kind (both DM) consumers of one borrowed DFB → invariant violation.
+
+This was confirmed by a prior hands-on port attempt that hit the TT_FATAL.
+
+**PR #47084 (op-owned tensors) does NOT resolve this — it is a different blocker.** The original report did not attribute the block to #47084, but to be explicit for the porter: #47084 concerns carrying op-owned intermediate tensors and is orthogonal to the split-reader multi-same-node-consumer borrowed-DFB gate. The gate clears only when the framework adds a borrowed-DFB mode supporting multiple same-node consumers, or a local read-only `TensorAccessor` substitute for borrowed read-only CBs.
+
+**Clean-subset note:** conv2d's split reader is enabled by `enable_split_reader` (`:347-348`); a non-split-reader configuration would route the borrowed ACT shard through a single same-node consumer and would not trip this invariant. That single-consumer path is a *candidate* portable subset — but the op as shipped exercises the split reader on the height-sharded and block-sharded paths, so the op-level verdict is **RED**. Verify the single-reader path's coverage before relying on it as a carve-out.
 
 ## Port-work summary  *(mirrors the brief)*
 
@@ -140,4 +157,5 @@ The custom `compute_program_hash` (`device/conv2d_device_operation.cpp:145`) has
 
 ## Recipe notes
 
+- **Recipe blind spot (correctness fix).** The original audit over-cleared this op to GREEN because the recipe's borrowed-memory *causal-link gate* (§TensorAccessor handling) marks any borrowed-memory DFB read "clean" once it finds a producer + consumer, but does **not** check the DFB **per-node consumer invariant** (`dataflow_buffer_spec.hpp:40-48`). The missed case is the **split-reader multi-consumer borrowed DFB**: two co-located DM kernels on the same cores both reading the borrowed input-shard CB (overlapping node coverage) — a GATE, not clean. The recipe has been amended to add this invariant check to the gate.
 - The Buffer*-binding shape (recipe *Detection — host side*, `Buffer*`-binding form) and the kernel-side `TensorAccessor(args, addr)` form (Case 1) co-occur here: the host pushes a `Buffer*` into the RTA list (framework-patched), and the *kernel* turns that base into a `TensorAccessor`. The recipe says the `Buffer*` form is "Case 2 (raw `uint32_t` base)", but the kernel here actually constructs a `TensorAccessor` from it, which the recipe elsewhere defines as Case 1. I classified by the *kernel's* use (Case 1, per "classify by what the kernel does with the tensor's base pointer"), since the binding's destination construct is what the port rewrites. Worth a one-line clarification in the recipe that the `Buffer*` host shape does not by itself force Case 2 — the kernel's downstream use still decides Case 1 vs 2.
