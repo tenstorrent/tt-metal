@@ -33,3 +33,4 @@ global_env:
   # 11 chunks (56320 tokens = full golden trace); single-rank baseline. max_seq_len auto-derives.
 
   PREFILL_STANDALONE_NCHUNKS: "11"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"

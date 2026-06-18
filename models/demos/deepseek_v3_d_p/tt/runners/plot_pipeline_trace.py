@@ -100,7 +100,9 @@ def main():
             dur = compute_dur(rank, c)
             estimated = dur is None
             if estimated:
-                dur = min(est_compute, slot_e - s)  # last rank: estimate, clamp to the slot
+                # last rank: clamp the upstream-median estimate to the slot. With no proxy data at all
+                # (single rank), there is no pipeline overlap, so the whole slot IS the compute.
+                dur = min(est_compute, slot_e - s) if est_compute > 0 else (slot_e - s)
             comp_end = s + dur
             color = cmap(c % cmap.N)
             # Compute block (solid). The idle time (comp_end -> next chunk start) is left UNDRAWN, so

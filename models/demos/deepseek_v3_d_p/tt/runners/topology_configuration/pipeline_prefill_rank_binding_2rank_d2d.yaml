@@ -32,3 +32,4 @@ global_env:
 
   # 11 chunks x 5120 = 56320 tokens (full golden trace); max_seq_len auto-derives.
   PREFILL_STANDALONE_NCHUNKS: "11"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
