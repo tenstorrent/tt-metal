@@ -35,6 +35,7 @@ def main():
     ap.add_argument("--gen", type=int, default=8, help="decode steps")
     ap.add_argument("--layers", type=int, default=64)
     ap.add_argument("--max-seq-len", type=int, default=512)
+    ap.add_argument("--trace", action="store_true", help="enable_trace=True for decode (trace capture/replay)")
     args = ap.parse_args()
 
     from models.demos.qwen36_27b.tt.generator_vllm import Qwen3_5ForConditionalGeneration
@@ -72,14 +73,23 @@ def main():
               f"next={nxt} ({tok.decode([nxt])!r}) top5={[tok.decode([t]) for t in top5]}", flush=True)
 
         out = [nxt]
+        import time as _time
+        step_ms = []
         for s in range(args.gen):
             pos = L + s
+            _t0 = _time.perf_counter()
             dl = gen.decode_forward(torch.tensor([[nxt]]), page_table=page_table, kv_cache=kv,
-                                    start_pos=torch.tensor([pos]))
+                                    start_pos=torch.tensor([pos]), enable_trace=args.trace)
             host = gen.process_decode_output_host(gen.read_decode_output(dl))
+            step_ms.append((_time.perf_counter() - _t0) * 1000)
             lv = host[0, 0]
             nxt = int(torch.argmax(lv).item())
             out.append(nxt)
+        # first 1-2 steps include trace capture; report steady-state median of the rest
+        warm = step_ms[2:] if len(step_ms) > 3 else step_ms
+        import statistics as _st
+        print(f"[val] decode step ms: {[round(x) for x in step_ms]} | steady median={_st.median(warm):.0f} ms/tok "
+              f"(trace={args.trace})", flush=True)
         print(f"[val] decode {args.gen} steps -> ids {out}", flush=True)
         print(f"[val] GENERATION: {args.prompt!r} + {tok.decode(out)!r}", flush=True)
         print("VAL_DONE", flush=True)

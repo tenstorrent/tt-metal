@@ -117,6 +117,34 @@ class TtDeltaNetState:
             padded, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
         )
 
+    # ----- decode trace: snapshot/restore the running (decode-mutated) state -----
+    def snapshot_decode_state(self):
+        """Host snapshot of the state mutated during decode: recurrent_states (rs)
+        and conv_hist. The trace compile+capture runs advance this running state
+        twice; restoring this snapshot afterward resets it to the post-prefill value
+        so the first replay starts correctly. (conv_states/cs is NOT mutated in the
+        decode path, so it is not snapshotted.)"""
+        return {
+            "recur": {li: mesh_to_torch(rs).clone() for li, rs in self.recurrent_states.items()},
+            "hist": {li: [mesh_to_torch(t).clone() for t in h] for li, h in self.conv_hist.items()},
+        }
+
+    def restore_decode_state(self, snap):
+        """Restore the snapshot IN-PLACE into the existing fixed buffers (so captured
+        trace buffer addresses stay valid)."""
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        for li, rs_cpu in snap["recur"].items():
+            tmp = ttnn.from_torch(rs_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                  device=self.device, mesh_mapper=rep)
+            ttnn.copy(tmp, self.recurrent_states[li])
+            ttnn.deallocate(tmp)
+        for li, hs in snap["hist"].items():
+            for k, t_cpu in enumerate(hs):
+                tmp = ttnn.from_torch(t_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                      device=self.device, mesh_mapper=rep)
+                ttnn.copy(tmp, self.conv_hist[li][k])
+                ttnn.deallocate(tmp)
+
     # ----- vLLM continuous batching: per-request slot management -----
     @staticmethod
     def _scatter_row(full, row, row_tensor):
@@ -402,6 +430,28 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(outr)
         return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
 
+    def _seed_conv_hist(self, deltanet_state):
+        """Create the FIXED conv-history buffers (h0,h1,h2) for this layer from the
+        prefill conv_state (cols 1,2,3 = the 3 prior conv inputs); zeros if none.
+        Stored in deltanet_state.conv_hist[layer_idx]. For trace, call this for all
+        DeltaNet layers BEFORE capture so the buffers exist to snapshot/restore."""
+        li = self.layer_idx
+        conv_dim = self.key_dim * 2 + self.value_dim
+        rep = ttnn.ReplicateTensorToMesh(self.device) if self.dense_tp else None
+
+        def mk(vec):
+            return ttnn.from_torch(vec.contiguous().reshape(1, 1, 1, -1).to(torch.bfloat16),
+                                   dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        cs = deltanet_state.get_conv_state_cpu(li, self.conv_kernel_size)  # [1,conv_dim,ck] or None
+        if cs is not None:
+            csq = cs.squeeze(0).float()
+            hist = [mk(csq[:, 1]), mk(csq[:, 2]), mk(csq[:, 3])]
+        else:
+            z = torch.zeros(conv_dim)
+            hist = [mk(z), mk(z), mk(z)]
+        deltanet_state.conv_hist[li] = hist
+        return hist
+
     def _decode_conv_prep(self, qkv, deltanet_state, B):
         """On-device causal conv1d + SiLU + per-head L2norm (+ q scale) for decode
         (the deltanet_decode_full reader is PASS-THROUGH for qkv). Eliminates the
@@ -418,21 +468,7 @@ class TtGatedDeltaNet(LightweightModule):
 
         hist = deltanet_state.conv_hist.get(li)
         if hist is None:
-            # seed (h0,h1,h2) ONCE from the prefill conv_state into FIXED buffers; then
-            # they are updated IN-PLACE (ttnn.copy) every step — required so a captured
-            # decode trace replays against stable buffer addresses.
-            cs = deltanet_state.get_conv_state_cpu(li, self.conv_kernel_size)  # [1,conv_dim,ck] or None
-
-            def mk(vec):
-                return ttnn.from_torch(vec.contiguous().reshape(1, 1, 1, -1).to(torch.bfloat16),
-                                       dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
-            if cs is not None:
-                csq = cs.squeeze(0).float()  # [conv_dim, ck]; cols 1,2,3 = the 3 prior inputs
-                hist = [mk(csq[:, 1]), mk(csq[:, 2]), mk(csq[:, 3])]
-            else:
-                z = torch.zeros(conv_dim)
-                hist = [mk(z), mk(z), mk(z)]
-            deltanet_state.conv_hist[li] = hist
+            hist = self._seed_conv_hist(deltanet_state)
         h0, h1, h2 = hist  # fixed buffers
         w0, w1, w2, w3 = self.conv_w_cols
         dot = ttnn.add(ttnn.add(ttnn.mul(w0, h0), ttnn.mul(w1, h1)),

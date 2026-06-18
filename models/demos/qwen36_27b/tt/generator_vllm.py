@@ -256,7 +256,8 @@ class Qwen3_5ForConditionalGeneration:
         cur_pos = ttnn.from_torch(pos_p.to(torch.int32), device=self.mesh_device, mesh_mapper=rep)
         pt_tt = ttnn.from_torch(pt_p, device=self.mesh_device, mesh_mapper=rep)
         state = self._persistent_state()
-        logits = self.model.forward_vllm_decode(tok_p, pt_tt, cur_pos, pos_p, kv_cache, state)
+        logits = self.model.forward_vllm_decode(tok_p, pt_tt, cur_pos, pos_p, kv_cache, state,
+                                                enable_trace=enable_trace)
         return logits
 
     # ---- output plumbing ----

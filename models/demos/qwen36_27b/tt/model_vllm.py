@@ -119,43 +119,103 @@ class TtQwen36VllmModel(LightweightModule):
         return logits
 
     # ---- vLLM decode (continuous batching, contiguous KV) ----
-    def forward_vllm_decode(self, token_ids, page_table, cur_pos, positions, kv_caches, deltanet_state):
-        """token_ids [B,1] CPU; cur_pos device int32 [B]; positions CPU int [B];
-        deltanet_state persistent [max_batch,...]. Returns logits [1,1,B,vocab_padded]."""
-        hidden_states = self.embed(token_ids)  # [1,1,B,H]
+    def _decode_host_inputs(self, token_ids, positions):
+        """Host-side per-step decode inputs (computed OUTSIDE any trace): embedding
+        lookup + RoPE gather. Returns torch tensors (emb [1,1,B,H], cos/sin [1,B,1,rd],
+        cur_pos [B] int32)."""
         B = token_ids.shape[0]
         rd = self.config.rotary_dim
-        pos = positions if isinstance(positions, torch.Tensor) else torch.tensor(positions)
+        pos = positions if isinstance(positions, torch.Tensor) else torch.as_tensor(positions)
+        emb = self.embedding_weight[token_ids].reshape(1, 1, B, -1)
         cos = self.cos_cache[0, 0][pos].reshape(1, B, 1, rd)
         sin = self.sin_cache[0, 0][pos].reshape(1, B, 1, rd)
+        return emb, cos, sin, pos.to(torch.int32).reshape(-1)
+
+    def _mk(self, host, dtype, layout=ttnn.TILE_LAYOUT):
         rep = ttnn.ReplicateTensorToMesh(self.device) if self.dense_tp else None
-        cos_t = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
-        sin_t = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        return ttnn.from_torch(host, dtype=dtype, layout=layout, device=self.device, mesh_mapper=rep)
 
-        import os as _os
-        _dd = _os.environ.get("QWEN36_DUMP_DEC")  # dump decode-step per-layer acts (first call only)
-        _dec = [] if (_dd and not getattr(self, "_dec_dumped", False)) else None
-        if _dec is not None:
-            _dec.append(("embed", mesh_to_torch(hidden_states).float().reshape(1, -1).clone()))
+    def _copy_into(self, buf, host, dtype, layout=ttnn.TILE_LAYOUT):
+        tmp = self._mk(host, dtype, layout)
+        ttnn.copy(tmp, buf)
+        ttnn.deallocate(tmp)
 
+    def _run_decode_layers(self, hidden, cos_t, sin_t, cur_pos, deltanet_state, dump=None):
+        """Device-only decode: 64 layers (DeltaNet/GQA, in-place state) + lm_head.
+        All inputs are device tensors; traceable. `dump` (eager only) collects per-layer
+        host activations for the PCC harness."""
+        if dump is not None:
+            dump.append(("embed", mesh_to_torch(hidden).float().reshape(1, -1).clone()))
         for i, layer in enumerate(self.layers):
             lt = self.config.layer_types[i]
             if lt == "full_attention":
-                hidden_states, _ = layer(
-                    hidden_states, deltanet_state=deltanet_state, cos=cos_t, sin=sin_t,
-                    mode="decode", position=cur_pos)
+                hidden, _ = layer(hidden, deltanet_state=deltanet_state, cos=cos_t, sin=sin_t,
+                                  mode="decode", position=cur_pos)
             else:
-                hidden_states, _ = layer(hidden_states, deltanet_state=deltanet_state, mode="decode")
-            if _dec is not None:
-                _dec.append((f"layer{i}:{lt}", mesh_to_torch(hidden_states).float().reshape(1, -1).clone()))
+                hidden, _ = layer(hidden, deltanet_state=deltanet_state, mode="decode")
+            if dump is not None:
+                dump.append((f"layer{i}:{lt}", mesh_to_torch(hidden).float().reshape(1, -1).clone()))
+        return self._lm_head(hidden, pad_token_dim=False)
 
-        if _dec is not None:
-            torch.save({"names": [n for n, _ in _dec],
-                        "acts": torch.stack([a for _, a in _dec], dim=0)}, _dd)
+    def forward_vllm_decode(self, token_ids, page_table, cur_pos, positions, kv_caches,
+                            deltanet_state, enable_trace=False):
+        """token_ids [B,1] CPU; positions [B]; deltanet_state persistent [max_batch,...].
+        Returns logits [1,1,B,vocab_padded]."""
+        emb, cos, sin, cpos = self._decode_host_inputs(token_ids, positions)
+        if enable_trace:
+            return self._decode_traced(emb, cos, sin, cpos, deltanet_state)
+        # eager
+        hidden = self._mk(emb, self.dtype)
+        cos_t = self._mk(cos, ttnn.bfloat16)
+        sin_t = self._mk(sin, ttnn.bfloat16)
+        cur = self._mk(cpos, ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        import os as _os
+        _dd = _os.environ.get("QWEN36_DUMP_DEC")
+        dump = [] if (_dd and not getattr(self, "_dec_dumped", False)) else None
+        logits = self._run_decode_layers(hidden, cos_t, sin_t, cur, deltanet_state, dump=dump)
+        for t in (hidden, cos_t, sin_t, cur):
+            ttnn.deallocate(t)
+        if dump is not None:
+            torch.save({"names": [n for n, _ in dump],
+                        "acts": torch.stack([a for _, a in dump], dim=0)}, _dd)
             self._dec_dumped = True
-            print(f"[val] dumped {len(_dec)} TT decode-step acts -> {_dd}", flush=True)
+            print(f"[val] dumped {len(dump)} TT decode-step acts -> {_dd}", flush=True)
+        return logits
 
-        return self._lm_head(hidden_states, pad_token_dim=False)
+    def _decode_traced(self, emb, cos, sin, cpos, deltanet_state):
+        """Captured-trace decode. The 64-layer+lm_head graph is captured once over
+        FIXED input buffers and replayed each step (no per-op host dispatch). DeltaNet
+        running state (recurrent + conv history) is updated IN-PLACE; the compile+capture
+        runs advance it twice, so we snapshot the post-prefill state and restore it after
+        capture. cur_pos/cos/sin/embed are refreshed into the fixed buffers each step."""
+        dev = self.device
+        if getattr(self, "_dec_trace_id", None) is None:
+            # seed conv history for all DeltaNet layers so the buffers exist + snapshot-able
+            for i, layer in enumerate(self.layers):
+                if self.config.layer_types[i] != "full_attention":
+                    layer.token_mixer._seed_conv_hist(deltanet_state)
+            deltanet_state.trace_mode = True  # in-place recurrent/conv-state writeback
+            snap = deltanet_state.snapshot_decode_state()
+            # fixed input buffers
+            self._tr_hidden = self._mk(emb, self.dtype)
+            self._tr_cos = self._mk(cos, ttnn.bfloat16)
+            self._tr_sin = self._mk(sin, ttnn.bfloat16)
+            self._tr_cur = self._mk(cpos, ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # compile run (eager) to JIT-compile the kernels
+            ttnn.deallocate(self._run_decode_layers(self._tr_hidden, self._tr_cos, self._tr_sin, self._tr_cur, deltanet_state))
+            # capture
+            tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._tr_out = self._run_decode_layers(self._tr_hidden, self._tr_cos, self._tr_sin, self._tr_cur, deltanet_state)
+            ttnn.end_trace_capture(dev, tid, cq_id=0)
+            self._dec_trace_id = tid
+            deltanet_state.restore_decode_state(snap)  # undo the 2 setup-run advances
+        else:
+            self._copy_into(self._tr_hidden, emb, self.dtype)
+            self._copy_into(self._tr_cos, cos, ttnn.bfloat16)
+            self._copy_into(self._tr_sin, sin, ttnn.bfloat16)
+            self._copy_into(self._tr_cur, cpos, ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.execute_trace(dev, self._dec_trace_id, cq_id=0, blocking=False)
+        return self._tr_out
 
     def forward_vllm_prefill(self, token_ids, page_table, positions, kv_caches, batch_idx=0):
         """Prefill ONE request (prompt [1,L]). Fills the contiguous per-chip KV
