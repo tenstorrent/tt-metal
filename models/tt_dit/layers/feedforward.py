@@ -118,6 +118,7 @@ class ParallelFeedForward(Module):
         scalar: float = 1.0,
         compute_kernel_config=None,
         parallel_config=None,
+        core_grid=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -125,7 +126,9 @@ class ParallelFeedForward(Module):
         Both addcmul_a and addcmul_b are already at their per-TP-device [D/tp] slice —
         no AllGather or scatter matmul is required.
         """
-        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config)
+        ff1_out = self.ff1(
+            x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config, core_grid=core_grid
+        )
         return self.ff2.forward_fused_addcmul(
             ff1_out,
             addcmul_a,

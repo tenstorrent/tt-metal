@@ -224,6 +224,7 @@ grid_12_9_configs = {
     ),  # 463.7 μs, −6.4% vs baseline — ff1 spatial xc-merged (sweep rank-1, 2026-06-11)
     (512, 6144, 4608): (8, 8, 8, (2, 2)),  # 377.8 μs — attn to_qkv TP4_SP8 (sweep rank-1, 2026-06-12)
     (1024, 6144, 2304): (3, 8, 8, (1, 4)),  # 269.9 μs, −21.4% vs baseline — attn to_qkv (sweep rank-1, 2026-06-11)
+    (1152, 6144, 2304): (3, 8, 12, (1, 4)),  # 293.8 μs — SNG_attn_to_qkv 1152 tokens (sweep rank-1, 2026-06-21)
     (512, 6144, 2304): (2, 8, 12, (1, 3)),  # dual-grid sweep 12x9, 116.2 μs, 41.8% FLOP util
     (9472, 5120, 1280): (10, 8, 8, (2, 1)),
     (2368, 5120, 1280): (10, 8, 6, (2, 1)),
@@ -409,6 +410,20 @@ def _compute_heuristic_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int
     return M_block, K_block, N_block, (sb_h, sb_w)
 
 
+grid_12_8_configs = {
+    # Concat-shapes grid sweep — bh_4x8_sp0_tp1 (TP8_SP4), K_global=6144
+    # Source: 1024_TP8_X_both_06_21_26.csv.  Swept 2026-06-22.
+    # All ops: AllGatherMinimalMatmulAsyncOp (agmm).
+    (1152, 6144, 4608): (8, 8, 9, (4, 1)),  # 445.2 µs, −2.7% vs 12×9 — ff1 xc-merged plain
+    (1024, 6144, 4608): (4, 8, 9, (4, 1)),  # 423.4 µs, −2.1% vs 12×9 — ff1 spatial plain
+    (128, 6144, 4608): (2, 6, 14, (2, 2)),  # 388.1 µs (+8.5% vs 12×9 winner) — 12×9 preferred
+    (1152, 6144, 2304): (3, 8, 10, (3, 1)),  # 273.0 µs, −7.1% vs 12×9 — attn to_qkv xc-merged
+    (1024, 6144, 2304): (3, 8, 10, (3, 1)),  # 252.6 µs, −6.4% vs 12×9 — attn to_qkv spatial
+    (1024, 6144, 768): (8, 8, 3, (4, 1)),  # 194.5 µs, ≈flat vs 12×9 (194.3) — attn to_out spatial
+    (128, 6144, 2304): (2, 12, 6, (2, 2)),  # 209.1 µs (+11.2% vs 12×9 winner) — 12×9 preferred
+    (128, 6144, 768): (4, 12, 4, (2, 2)),  # 87.4 µs, −2.2% vs 12×9 — attn to_out prompt
+}
+
 _grid_config_lookup = {
     (8, 8): grid_88_configs,
     (8, 9): grid_89_configs,
@@ -416,6 +431,7 @@ _grid_config_lookup = {
     (12, 10): grid_12_10_configs,
     (11, 10): grid_11_10_configs,
     (12, 9): grid_12_9_configs,
+    (12, 8): grid_12_8_configs,
 }
 
 
