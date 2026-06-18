@@ -402,13 +402,13 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale)
     // Store the value in lreg0 and reload later since the following instructions overwrite it
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     // Technically we only need to reprogram a single constant here, instead of all 3 used by reciprocal init
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value          = Converter::as_float(eps);
     l0                              = l0 + eps_value;
-    l0                              = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(l0);
+    l0                              = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
     sfpi::vFloat scale_value        = Converter::as_float(scale);
     l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
@@ -745,13 +745,13 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
     TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value          = Converter::as_float(eps);
     l0                              = l0 + eps_value;
-    l0                              = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(l0);
+    l0                              = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
     sfpi::vFloat scale_value        = Converter::as_float(scale);
     l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
@@ -771,7 +771,7 @@ inline void _init_generalized_moe_gate_topk()
     // Note: For BH there is no conflict with reg usage between the gate and reciprocal
     // For WH, since we use reg 14 to broadcast, this would overwrite the recip value, so we init within the top8 fn
     // instead of ahead of time
-    // _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    // sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 } // namespace sfpu
