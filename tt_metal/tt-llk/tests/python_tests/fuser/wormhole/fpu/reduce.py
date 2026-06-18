@@ -38,10 +38,10 @@ class ReduceFpu(Fpu):
         config: GlobalConfig,
         compute_unit: ComputeNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = operation.output.data_format
+        output_format = config.sentinel.golden_math_format
         dimensions = operation.max_output_dimensions
         tile_cnt = (dimensions[0] * dimensions[1]) // 1024
-        num_faces = operation.output.tile_shape.total_num_faces()
+        num_faces = operation.tile_shape.total_num_faces()
 
         reduce_dim = self.reduce_dim
         pool_type = self.reduce_pool

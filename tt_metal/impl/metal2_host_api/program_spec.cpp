@@ -52,12 +52,12 @@ static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 // Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
     // Name -> spec lookups.
-    // dfb_by_name covers BOTH local and remote DFBs.
-    // For remote DFBs, the pointee is the inner dfb_spec.
-    // To check if a DFB is remote, check the remote_dfb_by_name map.
+    // dfb_by_name covers BOTH local and cross-node DFBs.
+    // For cross-node DFBs, the pointee is the inner dfb_spec.
+    // To check if a DFB is cross-node, check the cross_node_dfb_by_name map.
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
-    std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
+    std::unordered_map<DFBSpecName, const CrossNodeDataflowBufferSpec*> cross_node_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
 
@@ -66,7 +66,7 @@ struct CollectedSpecData {
     std::unordered_map<TensorParamName, std::vector<const KernelSpec*>> tensor_parameter_users;
 
     // DFB endpoint info (derived from kernel bindings).
-    // Populated for both local and remote DFBs.
+    // Populated for both local and cross-node DFBs.
     //
     // Multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) may bind the same DFB,
     // provided they have non-overlapping node coverage and matching binding-site parameters
@@ -296,15 +296,15 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(inserted, "Duplicate DataflowBufferSpec name '{}'", dfb.unique_id);
     }
 
-    // Collect RemoteDataflowBufferSpecs (remote DFBs).
-    // Remote DFBs share the DFB name space with local DFBs, since kernel bindings
+    // Collect CrossNodeDataflowBufferSpecs (cross-node DFBs).
+    // Cross-node DFBs share the DFB name space with local DFBs, since kernel bindings
     // refer to either kind by the same DFBSpecName.
-    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
-        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
-        auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &remote_dfb.dfb_spec);
-        TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and remote DFBs)", name);
-        auto [it2, inserted2] = collected.remote_dfb_by_name.try_emplace(name, &remote_dfb);
-        TT_FATAL(inserted2, "Duplicate RemoteDataflowBufferSpec name '{}'", name);
+    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
+        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
+        auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &cross_node_dfb.dfb_spec);
+        TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and cross-node DFBs)", name);
+        auto [it2, inserted2] = collected.cross_node_dfb_by_name.try_emplace(name, &cross_node_dfb);
+        TT_FATAL(inserted2, "Duplicate CrossNodeDataflowBufferSpec name '{}'", name);
     }
 
     // Build DFB endpoint info from kernel bindings
@@ -398,7 +398,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             } else if (dfb_binding.endpoint_type == DFBEndpointType::CONSUMER) {
                 endpoint_info.consumers.push_back({&kernel, &dfb_binding});
             } else {
-                TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
+                TT_FATAL(false, "RELAY endpoints are only used for cross-node DFB, which is not supported yet");
             }
         }
     }
@@ -411,18 +411,18 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(!endpoint_info.consumers.empty(), "DFB '{}' has no consumer", dfb_name);
     }
 
-    // Referential integrity: every declared DFB (local or remote) must be bound by some kernel
+    // Referential integrity: every declared DFB (local or cross-node) must be bound by some kernel
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             collected.dfb_endpoints.contains(dfb.unique_id),
             "DFB '{}' is defined but not bound by any kernel",
             dfb.unique_id);
     }
-    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
-        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
+    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
+        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
         TT_FATAL(
             collected.dfb_endpoints.contains(name),
-            "RemoteDataflowBufferSpec '{}' is defined but not bound by any kernel",
+            "CrossNodeDataflowBufferSpec '{}' is defined but not bound by any kernel",
             name);
     }
 
@@ -506,7 +506,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     // kernel binds the parameter directly. Count that as a use so the completeness check below doesn't
     // reject a borrowed-only parameter. Existence of the referent is validated separately in the
     // borrowed-DFB checks. Only local DFBs are walked here: borrowed memory is a local-L1 feature,
-    // so spec.dataflow_buffers is the relevant set (remote DFBs are runtime-unsupported).
+    // so spec.dataflow_buffers is the relevant set (cross-node DFBs are runtime-unsupported).
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.borrowed_from.has_value()) {
             collected.tensor_parameter_users[*dfb.borrowed_from];  // register as used (no kernel user)
@@ -1279,18 +1279,18 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Remote DFBs are not yet supported.
+    // Cross-node DFBs are not yet supported.
     //
-    // TODO: When remote DFB is supported, add a validation checks. Enforce that
+    // TODO: When cross-node DFB is supported, add a validation checks. Enforce that
     //       each (producer_node, consumer_node) entry in producer_consumer_map has
     //       p_node != c_node.
 
     TT_FATAL(
-        spec.remote_dataflow_buffers.empty(),
-        "RemoteDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
-        "by the runtime. (ProgramSpec '{}' has {} remote DFB(s).)",
+        spec.cross_node_dataflow_buffers.empty(),
+        "CrossNodeDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
+        "by the runtime. (ProgramSpec '{}' has {} cross-node DFB(s).)",
         spec.name,
-        spec.remote_dataflow_buffers.size());
+        spec.cross_node_dataflow_buffers.size());
 
     // Validate borrowed-memory DFBs.
     //
@@ -2524,6 +2524,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .unpack_to_dest_mode = unpack_modes,
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
+        .enable_2x_src_format = compute_config.enable_2x_src_format,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),

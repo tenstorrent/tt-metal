@@ -2,20 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end tests for the DRAM-core prefetcher path on single Blackhole.
+"""End-to-end tests for the Tensor prefetcher path on single Blackhole.
 
 Three scopes:
 
-1. ``test_dram_core_prefetcher_BH_param`` — parameterized shape coverage with
+1. ``test_tensor_prefetcher_BH_param`` — parameterized shape coverage with
    PCC vs ``torch.matmul``. Topology: 8 DRAM banks × ``recv_per_bank``
    receivers/bank → ring of 8 × recv_per_bank. Production Llama-3.1-8B on
    single BH uses recv_per_bank=8 (ring=64); smaller rings are exercised for
    QKV/FF cases that fit at lower recv_per_bank.
 
    Each case builds a fresh DRAM-sender GlobalCircularBuffer, launches the
-   DRAM-core prefetcher via ``ttnn.experimental.start_dram_core_prefetcher``,
+   Tensor prefetcher via ``ttnn.experimental.start_tensor_prefetcher``,
    runs ``ttnn.linear`` with the same gcb, and PCC-checks against
-   ``torch.matmul``. ``stop_dram_core_prefetcher`` drains the pipeline after
+   ``torch.matmul``. ``stop_tensor_prefetcher`` drains the pipeline after
    the matmul finishes.
 
    Receiver layout: each bank's receivers sit at row-major-adjacent ring
@@ -30,7 +30,7 @@ Three scopes:
    the original single-push-per-K-block path; M=2 unlocks FF1
    (K=4096 N=14336) at ring=64.
 
-2. ``test_dram_core_prefetcher_multi_tensor`` — multi-tensor smoke. The
+2. ``test_tensor_prefetcher_multi_tensor`` — multi-tensor smoke. The
    DRAM-core kernel's main loop iterates
    ``for layer in num_layers: for t in num_tensors:`` and prior versions
    were documented as leaving the DRISC cores in reset state when
@@ -39,7 +39,7 @@ Three scopes:
    (no matmul; the goal is to confirm both ops complete without
    hang/OOM/PCC failure across multiple ``(num_tensors, num_layers)`` combos).
 
-3. ``test_dram_core_prefetcher_trace_replay`` — trace capture/replay. Captures
+3. ``test_tensor_prefetcher_trace_replay`` — trace capture/replay. Captures
    a (queue request + consuming linear) pair into a trace, replays it
    ``replay_count`` times, and PCC-checks the matmul on every replay. See the
    comment on the test for the capture-vs-replay semantics it covers.
@@ -59,7 +59,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bytes_per_tile as _bytes_per_tile,
     bank_receivers_strided as _bank_receivers_strided,
     make_recv_contig_weight as _make_recv_contig_weight,
-    dram_core_prefetcher_session,
+    tensor_prefetcher_session,
 )
 
 
@@ -71,13 +71,13 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
 # to the unharvested case; on P100 the same parametrization runs at ring=7*recv_per_bank.
 
 
-pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
 @pytest.fixture(autouse=True)
-def _require_dram_core_prefetcher(device):
+def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
         pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
@@ -124,7 +124,7 @@ def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int)
         ("ff_wide_misaligned", 8, 2, 1, ttnn.bfloat16, 16),
     ],
 )
-def test_dram_core_prefetcher_BH_param(
+def test_tensor_prefetcher_BH_param(
     device, name, k_tiles_per_shard, n_tiles_per_receiver, recv_per_bank, dtype, gcb_size_misalign_bytes
 ):
     # ---- Topology (queries DRAM bank count so the test adapts to harvested BHs) ----
@@ -247,10 +247,10 @@ def test_dram_core_prefetcher_BH_param(
     )
 
     # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
-    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.start_tensor_prefetcher(device)
     # Fence the prefetcher against the weight write so it never reads stale DRAM.
-    ttnn.experimental.wait_for_cq_on_dram_core_prefetcher(device, 0)
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -260,7 +260,7 @@ def test_dram_core_prefetcher_BH_param(
         dtype=ttnn.bfloat16,
         global_cb=gcb,
     )
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     # ---- Verify ----
     out_torch = ttnn.to_torch(tt_out)
@@ -397,8 +397,8 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
         packer_l1_acc=True,
         dst_full_sync_en=True,
     )
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -408,7 +408,7 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
         dtype=ttnn.bfloat16,
         global_cb=gcb,
     )
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     out_torch = ttnn.to_torch(tt_out)
     expected = pt_act.float() @ pt_weight.float()
@@ -481,7 +481,7 @@ _MT_NUM_RECV_PER_BANK = 2
 _MT_K = 2048
 # N must be divisible by `num_dram_banks * _MT_NUM_RECV_PER_BANK * TILE_SIZE` for any
 # supported BH bank count. lcm(7, 8) * 2 * 32 = 56 * 64 = 3584, so 3584 works on both
-# P100 (7 banks) and P150/P300 (8 banks). The DRAM-core prefetcher auto-derives K-sub
+# P100 (7 banks) and P150/P300 (8 banks). The Tensor prefetcher auto-derives K-sub
 # blocking from the DRISC L1 budget; K=2048 lands on the K-sub-with-M=1 path here.
 _MT_N = 3584
 _MT_TILE_BYTES = 1088  # bf8_b
@@ -504,7 +504,7 @@ def _make_mt_weight(device, seed: int, num_dram_banks: int) -> ttnn.Tensor:
 
 
 @pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (3, 1), (2, 5), (3, 10)])
-def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
+def test_tensor_prefetcher_multi_tensor(device, num_tensors, num_layers):
     # Query the chip's actual DRAM bank count so the test adapts to harvested BHs
     # (P100 has 7, P150/P300 have 8). The receiver grid is laid out as
     # `num_dram_banks` columns × `_MT_NUM_RECV_PER_BANK` rows.
@@ -529,7 +529,7 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
         ),
     )
 
-    # The DRAM-core prefetcher auto-derives k_block_w_tiles = ceil(k_tiles / ring_size)
+    # The Tensor prefetcher auto-derives k_block_w_tiles = ceil(k_tiles / ring_size)
     # and pushes ring_size blocks per (layer, tensor) regardless of k_tiles. GCB and
     # consumer counts must follow ring_size, not k_tiles.
     k_tiles = _MT_K // ttnn.TILE_SIZE
@@ -552,8 +552,8 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
     # The prefetcher has no num_layers replay count anymore, so flatten the list to
     # num_layers * num_tensors entries (layout dedup keeps the wire compact). With
     # num_layers > 1 this also exercises the multi-page request split.
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(w, ring_size) for w in weights] * num_layers,
         global_cb=gcb,
@@ -565,7 +565,7 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
         page_size_bytes=push_page_size,
         global_cb=gcb,
     )
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
     ttnn.synchronize_device(device)
 
 
@@ -581,7 +581,7 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
 
 
 @pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (2, 5)])
-def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
+def test_tensor_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
     num_dram_banks = device.dram_grid_size().x
     num_recv_per_bank = _MT_NUM_RECV_PER_BANK
     num_receivers = num_dram_banks * num_recv_per_bank
@@ -612,8 +612,8 @@ def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers)
 
     num_iters_total = num_layers * num_tensors * ring_size
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(w, ring_size) for w in weights] * num_layers,
         global_cb=gcb,
@@ -624,14 +624,14 @@ def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers)
         page_size_bytes=push_page_size,
         global_cb=gcb,
     )
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
     ttnn.synchronize_device(device)
 
 
 # ---------------------------------------------------------------------------
 # Trace capture / replay
 # ---------------------------------------------------------------------------
-# `queue_dram_core_prefetcher_request` does not go through the command queue: it
+# `queue_tensor_prefetcher_request` does not go through the command queue: it
 # serializes a request into socket pages and a host worker thread fans them out to
 # the DRAM sender cores over NOC. When called with a `cq_id` whose command queue is
 # mid trace-capture, the request must be *captured* (not sent) and re-sent on every
@@ -640,7 +640,7 @@ def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers)
 # pair into a trace, replays it several times, and PCC-checks every replay.
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
 @pytest.mark.parametrize("replay_count", [1, 3])
-def test_dram_core_prefetcher_trace_replay(device, replay_count):
+def test_tensor_prefetcher_trace_replay(device, replay_count):
     """Capture a (prefetcher-request + linear) pair into a trace and replay it
     `replay_count` times; each replay must refill the GCB and produce the right
     matmul output."""
@@ -744,7 +744,7 @@ def test_dram_core_prefetcher_trace_replay(device, replay_count):
         # prefetch_and_linear queues the prefetch request and runs the consuming
         # matmul against the same gcb/program_config in one call; block_count is
         # derived from the gcb's receiver count (no need to pass ring_size).
-        return ttnn.experimental.dram_core_prefetcher_matmul.prefetch_and_linear(
+        return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
             tt_act,
             tt_weight,
             global_cb=gcb,
@@ -755,7 +755,7 @@ def test_dram_core_prefetcher_trace_replay(device, replay_count):
             dtype=dtype,
         )
 
-    with dram_core_prefetcher_session(device):
+    with tensor_prefetcher_session(device):
         # ---- Warmup: compile kernels + balance the GCB before trace capture. The
         # queue here is sent immediately (cq 0 not capturing) and consumed by the matmul. ----
         logger.info("Warmup (compile) run")

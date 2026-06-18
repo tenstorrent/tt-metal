@@ -1,0 +1,41 @@
+# This file defines the test matrix for the ttnn integration tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
+#     dispatch input. On dispatch the impl filters this matrix to entries whose
+#     category appears in the comma-separated list; on schedule the filter is
+#     bypassed and every entry runs.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: ttnn tutorials
+  # Notebook-based tutorial tests. Sets up a minimum dev environment, installs
+  # tutorial deps and tt-triage, then runs the tutorial pytest suite.
+  cmd: |
+    cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
+    uv pip install --index-strategy unsafe-best-match --no-cache -r tutorials-dev.txt
+    cd /work
+    cd scripts/basic_dev_image
+    uv pip install -r minimum-testing-kit.txt
+    cd /work
+    apt-get update && apt-get install -y curl uuid-runtime
+    source /opt/venv/bin/activate
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ./tools/triage/requirements.txt
+    python3 -m pytest tests/ttnn/notebook_tests/test_tutorials.py -v
+  skus:
+    wh_n150_civ2:
+      timeout: 30
+    bh_p100:
+      timeout: 30
+    bh_p150b_civ2_viommu:
+      timeout: 30
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: ttnn
+  category: tutorials
