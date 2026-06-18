@@ -28,6 +28,7 @@ from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
     DestAccumulation,
+    MathOperation,
     format_dict,
 )
 from helpers.param_config import (
@@ -39,6 +40,7 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
@@ -198,6 +200,10 @@ def test_eltwise_unary_typecast(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(approx_mode),
+            # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
+            # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
+            # (input, output) pair that selects the concrete typecast kernel.
+            MATH_OP(mathop=MathOperation.Typecast),
             TYPECAST_FORMATS(formats.input_format, formats.output_format),
         ],
         runtimes=[

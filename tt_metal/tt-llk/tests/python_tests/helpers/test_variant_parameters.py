@@ -974,7 +974,8 @@ class TYPECAST_FORMATS(TemplateParameter):
     """Compile-time config for the SFPU typecast test kernel.
 
     Emits the logical input/output ``DataFormat`` enum values consumed by
-    ``typecast_tile<IN, OUT>`` (mirrored in ``typecast_operations.h``) plus
+    ``typecast_tile<IN, OUT>`` (mirrored by the typecast dispatch in
+    ``sfpu_operations.h``, reached via ``SfpuType::typecast``) plus
     ``IS_INT_FPU_EN``, which routes the A2D datacopy that loads the input tile
     into Dest through the integer FPU datapath for integer inputs.
     """

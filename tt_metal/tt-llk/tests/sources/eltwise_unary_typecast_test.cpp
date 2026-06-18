@@ -11,9 +11,10 @@
 // typecast_tile -> pack_tile.
 //
 // The numeric conversion is performed in-place in Dest by the SFPU
-// `calculate_typecast_*` primitives (see helpers/include/typecast_operations.h).
-// Pairs realised purely by unpacker/packer format conversion run the same
-// copy + pack path with no SFPU call.
+// `calculate_typecast_*` primitives, dispatched through the shared unary-SFPU
+// entry points (call_unary_sfpu_operation in helpers/include/sfpu_operations.h)
+// under SfpuType::typecast. Pairs realised purely by unpacker/packer format
+// conversion run the same copy + pack path with no SFPU call.
 //
 // Compile-time configuration emitted by the Python harness:
 //   TYPECAST_IN_FORMAT  : DataFormat of the L1 input  (typecast IN_DTYPE)
@@ -68,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "typecast_operations.h"
+#include "sfpu_operations.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -97,8 +98,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Program the SFPU for this specific typecast pair (no-op for pairs handled
-    // purely by unpacker/packer format conversion).
-    test_utils::call_unary_typecast_operation_init<TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, APPROX_MODE>();
+    // purely by unpacker/packer format conversion). Goes through the shared
+    // unary-SFPU dispatch under SfpuType::typecast, with the (IN, OUT) format
+    // pair supplied as the trailing template parameters.
+    test_utils::call_unary_sfpu_operation_init<
+        SFPU_UNARY_OPERATION,
+        APPROX_MODE,
+        is_fp32_dest_acc_en,
+        iterations,
+        false /* FAST_MODE */,
+        false /* STABLE_SORT */,
+        false /* CLAMP_NEGATIVE */,
+        TYPECAST_IN_FORMAT,
+        TYPECAST_OUT_FORMAT>();
 
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -113,8 +125,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 block_tile, formats.math, formats.math);
 
             // In-place numeric typecast of the tile sitting in Dest.
-            test_utils::call_unary_typecast_operation<DST_SYNC, is_fp32_dest_acc_en, TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, APPROX_MODE, iterations>(
-                block_tile);
+            test_utils::call_unary_sfpu_operation<
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                SFPU_UNARY_OPERATION,
+                APPROX_MODE,
+                is_fp32_dest_acc_en,
+                iterations,
+                false /* FAST_MODE */,
+                false /* STABLE_SORT */,
+                false /* CLAMP_NEGATIVE */,
+                TYPECAST_IN_FORMAT,
+                TYPECAST_OUT_FORMAT>(block_tile);
         }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
