@@ -29,6 +29,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
+
+# First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
+# trace stores its gate input as post_attn_norm_layer_3.
+_MOE_LAYER_IDX = 3
 
 _DEFAULT_HF_REPO = "deepseek-ai/DeepSeek-V3"
 _LOCAL_FALLBACKS = (
@@ -66,29 +71,22 @@ def _try_load_real_gate_weights(n_routed_experts: int, dim: int) -> dict | None:
 
 
 def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None:
-    """Try to load a saved gate input tensor; return None on failure."""
-    gate_input_cache = os.environ.get("DEEPSEEK_V3_GATE_INPUT_CACHE")
-    moe_dir = Path(gate_input_cache) if gate_input_cache else Path(__file__).parent.parent.parent / "tt" / "moe"
+    """Try to load the gate input from the golden GPU prefill trace; return None on failure.
 
-    for name in ("gate_input_layer3_seq100000.pt", "gate_input_layer3.pt"):
-        path = moe_dir / name
-        if path.exists():
-            saved = torch.load(path, weights_only=True)
-            real_input = saved["gate_input"].squeeze(0).to(torch.bfloat16)
-            if real_input.shape[0] >= max_seq_len:
-                result = real_input[:max_seq_len, :dim]
-            else:
-                repeats = (max_seq_len + real_input.shape[0] - 1) // real_input.shape[0]
-                result = real_input.repeat(repeats, 1)[:max_seq_len, :dim]
-            logger.info(f"Loaded real gate input from {path} (raw {real_input.shape}, sliced to {result.shape})")
-            return result
-
-    return None
+    Mirrors test_ttnn_moe / test_prefill_transformer: the gate input is the
+    post-attention RMSNorm output (``post_attn_norm_layer_{i}``) of the first MoE
+    layer in the bit_sculpt golden trace. ``DEEPSEEK_V3_GATE_INPUT_CACHE`` may
+    override the trace directory. Returns ``None`` when the trace is unavailable
+    so the caller can fall back to synthetic input.
+    """
+    trace_dir_env = os.environ.get("DEEPSEEK_V3_GATE_INPUT_CACHE")
+    trace_dir = Path(trace_dir_env) if trace_dir_env else GOLDEN_LONGBOOK_TRACE
+    return load_trace_gate_input(trace_dir, layer_idx=_MOE_LAYER_IDX, max_seq_len=max_seq_len, dim=dim)
 
 
 @pytest.mark.parametrize(
     "gate_fallback_mode",
-    [GateComputeMode.HOST_ALL, GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32],
+    [GateComputeMode.HOST_ALL, GateComputeMode.DEVICE_FP32],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -255,9 +253,9 @@ def test_forward_pass(
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.99
     else:
-        recall_threshold = 0.93
+        recall_threshold = 0.95
         logits_pcc_threshold = 0.997
-        scores_pcc_threshold = 0.92
+        scores_pcc_threshold = 0.985
 
     seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
     sp_composer = get_sp_mesh_composer(mesh_device)

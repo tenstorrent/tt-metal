@@ -367,7 +367,7 @@ def run_model(
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
         target_recall = 0.99
     else:
-        target_recall = 0.90
+        target_recall = 0.977
 
     recall_result = validate_composed(
         tt_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
@@ -397,8 +397,8 @@ def run_model(
     # fmt: off
     dense_checks = [
         ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
-        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.90),
-        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.94),
+        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.96),
+        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.982),
     ]
     # fmt: on
 

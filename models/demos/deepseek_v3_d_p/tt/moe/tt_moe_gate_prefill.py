@@ -47,13 +47,15 @@ class TtMoEGateConfig:
     mm_configs: dict = field(
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
+            # The seq-len element below is a placeholder — __post_init__ rewrites it to the actual
+            # per-chip sequence length (self.sp_dim) so the lookup tracks the real workload.
             # per_core_N = n_routed_experts / 32 (tile width). Missing key → TTNN auto-picks.
             (4096, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=56,
                     out_subblock_h=2,
-                    out_subblock_w=4,
+                    out_subblock_w=2,
                     out_block_h=2,
                     out_block_w=4,
                     per_core_M=2,
@@ -66,7 +68,7 @@ class TtMoEGateConfig:
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=56,
-                    out_subblock_h=2,
+                    out_subblock_h=1,
                     out_subblock_w=4,
                     out_block_h=2,
                     out_block_w=4,
@@ -79,7 +81,7 @@ class TtMoEGateConfig:
             "COMPUTE_CONFIG": ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,
+                fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             ),
         }
@@ -103,6 +105,16 @@ class TtMoEGateConfig:
             else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
         )
     )
+
+    def __post_init__(self):
+        # The mm_configs tuple keys are authored with a placeholder seq-len. Re-key them to the
+        # actual per-chip sequence length (sp_dim) so _device_matmul's lookup
+        # (sp_dim, per_device_emb_dim, n_routed_experts) hits the tuned program config instead of
+        # silently falling back to TTNN's default tiling.
+        self.mm_configs = {
+            ((self.sp_dim, *key[1:]) if isinstance(key, tuple) else key): value
+            for key, value in self.mm_configs.items()
+        }
 
     @property
     def num_cores(self):

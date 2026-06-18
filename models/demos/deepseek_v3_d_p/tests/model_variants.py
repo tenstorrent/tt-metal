@@ -88,7 +88,7 @@ DSV3 = TestVariant(
     mla_ref_cache_env="DEEPSEEK_V3_MLA_REF_CACHE",
     ttnn_cache_env="TT_DS_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.996,
-    moe_pcc_threshold=0.94,
+    moe_pcc_threshold=0.982,
     prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad",
 )
 
