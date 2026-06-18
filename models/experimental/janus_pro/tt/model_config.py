@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -89,6 +89,7 @@ class ModelArgs(TTModelArgs):
         )
 
     def _set_vision_params(self, vision_config):
+        # SigLIP vision-tower dimensions used by the Janus vision encoder.
         self.vision_chunk_size = vision_config.get("image_size", 384)
         self.vision_dim = vision_config.get("hidden_size", 1024)
         self.vision_patch_size = vision_config.get("patch_size", 16)
@@ -102,13 +103,7 @@ class ModelArgs(TTModelArgs):
         self.vision_mlp_ratio = mlp_ratio
         self.vision_hidden_dim = int(self.vision_dim * mlp_ratio)
 
-        self.vision_dropout = vision_config.get("attention_dropout", 0.0)
         self.mm_tokens_per_image = vision_config.get("num_image_tokens", 576)
-
-        # Kept for parity with the Gemma3 vision tower wiring (no cross-attention in Janus).
-        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 0)
-        self.vision_n_global_layers = vision_config.get("n_global_layers", 0)
 
         act_layer = str(vision_config.get("hidden_act", "gelu")).lower()
         self.vision_act_layer = {
@@ -116,6 +111,11 @@ class ModelArgs(TTModelArgs):
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
         }.get(act_layer, ttnn.UnaryOpType.GELU)
+
+        # Janus has no image tiling or cross-attention; these exist only because
+        # the base ModelArgs.__repr__ reads them.
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
+        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 0)
 
     def _set_hf_params(self, checkpoint_dir):
         def merge_vision_config(base_config):
@@ -154,15 +154,15 @@ class ModelArgs(TTModelArgs):
 
         return state_dict
 
-    def reference_vision_transformer(self, wrap=False, load_checkpoint=False):
+    def reference_vision_transformer(self):
         from transformers import JanusForConditionalGeneration
 
         return JanusForConditionalGeneration.from_pretrained(self.CKPT_DIR)
 
     def reference_siglip_patch_embed(self):
-        model = self.reference_vision_transformer(wrap=False)
+        model = self.reference_vision_transformer()
         return model.model.vision_model.embeddings.patch_embedding
 
     def reference_vision_embedding(self):
-        model = self.reference_vision_transformer(wrap=False)
+        model = self.reference_vision_transformer()
         return model.model.vision_model.embeddings

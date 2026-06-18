@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@ from models.experimental.janus_pro.tt.janus_conv2d_patch import TtJanusConv2dPat
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
 from ttnn.device import is_blackhole
+
 
 @pytest.mark.skipif(not is_blackhole(), reason="Janus Pro requires Blackhole")
 @pytest.mark.parametrize(
