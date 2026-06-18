@@ -436,10 +436,8 @@ def test_validator_dram_sender_recv_contig_block(device, K, N, dtype, recv_per_b
         dual_senders=dual_senders,
         distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
     )
-    with dram_core_prefetcher_session(device, dual_senders_per_bank=dual_senders):
-        ttnn.experimental.queue_dram_core_prefetcher_request(
-            device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb
-        )
+    with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
         ttnn.experimental.test_dram_prefetcher_validator(
             device,
             tt_weight,
