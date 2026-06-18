@@ -5,7 +5,6 @@ import math
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
@@ -91,18 +90,6 @@ def test_reduce(
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    # REDUCE_ROW SUM/AVG uses MVMUL with operand swap (scaler→SrcA). MVMUL needs a
-    # full 16-row SrcA for the dot product, so the scaler tile must use full face dims.
-    needs_full_face_scaler = (
-        TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
-        and reduce_dim == ReduceDimension.Row
-        and pool_type != ReducePool.Max
-        and tile_shape.face_r_dim < 16
-    )
-    tile_dimensions_B = (
-        [16, tile_dimensions[1]] if needs_full_face_scaler else tile_dimensions
-    )
-
     if is_reduce_to_one:
         # Accumulating large tensors into a single value can lead to significant numerical errors
         # especially if the sum/average of the dimension is not enough to increment to the next representable value in the output format.
@@ -120,21 +107,20 @@ def test_reduce(
         tile_dimensions=tile_dimensions,
     )
 
-    scaler_size = tile_dimensions_B[0] * tile_dimensions_B[1]
     if pool_type in [
         ReducePool.Max,
         ReducePool.Sum,
     ]:  # result in srcA should be divided by 1
-        src_B = torch.full((scaler_size,), 1)
+        src_B = torch.full((tile_shape.total_tile_size(),), 1)
     else:
         # reduce average divides by length of elements in array we reduce
         if reduce_dim == ReduceDimension.Row:
-            src_B = torch.full((scaler_size,), 1 / tile_dimensions[1])
+            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[1])
         elif reduce_dim == ReduceDimension.Column:
-            src_B = torch.full((scaler_size,), 1 / tile_dimensions[0])
+            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[0])
         else:  # Scalar
             src_B = torch.full(
-                (scaler_size,),
+                (tile_shape.total_tile_size(),),
                 1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
             )
 
@@ -211,7 +197,6 @@ def test_reduce(
             face_r_dim=tile_shape.face_r_dim,
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
-            tile_dimensions_B=tile_dimensions_B,
         ),
         dest_acc=dest_acc,
     )
