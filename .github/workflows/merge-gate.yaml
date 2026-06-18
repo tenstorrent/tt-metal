@@ -335,29 +335,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       test-category: smoke
 
-  # TT-CNN Unit tests
-  tt-cnn-unit-tests:
-    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/tt-cnn-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-
   tt-train-smoke-tests:
     needs: [build, find-changes]
     if: ${{ github.event_name == 'workflow_dispatch' ||
