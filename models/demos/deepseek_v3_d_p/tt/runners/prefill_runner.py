@@ -2,27 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""DeepSeek-V3 prefill runner — single-rank production serving and N-rank pipeline.
+"""DeepSeek-V3 prefill runner — one entry point, two run modes that share the same N-rank pipeline.
 
-One entry point, two run modes selected at runtime:
+The model is split across N ranks under tt-run: each rank owns a contiguous layer slice and builds
+the same TtPrefillRuntime (first_layer_idx / is_first_rank / is_last_rank). With >1 rank the cross-rank
+hidden state moves device-to-device over fabric sockets (connected MGD + FABRIC_2D); N=1 is the
+single-galaxy case (no transport). Ranks run decoupled (no per-chunk barrier; one warm-up barrier
+after compile). The two modes run identical pipeline mechanics and differ only in the trigger:
 
-  * Request mode (default, single rank): production serving. Token chunks + per-iter
-    PrefillMetadata arrive over the H2D socket service from an external producer
-    (prefill_h2d_producer.py / the scheduler); the loop is unbounded (runs to SIGTERM).
-    Optional KV-chunk-table migration publish and per-layer LayerAck channel.
+  * Request mode (default): production serving. rank 0's tokens + per-iter PrefillMetadata arrive over
+    the H2D socket from an external producer (prefill_h2d_producer.py / the scheduler); the loop is
+    UNBOUNDED (runs to SIGTERM). KV-chunk-table migration + per-layer LayerAck are wired for the
+    single-rank case only (disabled for the pipeline for now). Shutdown for >1 rank is rough: ranks
+    block in the H2D/D2D recv device op and exit on teardown/SIGKILL (no end-of-request sentinel yet).
 
-  * Standalone mode (PREFILL_STANDALONE=1): the model is split across N ranks under tt-run
-    — each rank owns a contiguous layer slice and builds the same TtPrefillRuntime,
-    parameterized with first_layer_idx / is_first_rank / is_last_rank. With >1 rank the
-    cross-rank hidden state moves device-to-device over fabric sockets (needs a connected
-    MGD + FABRIC_2D); N=1 is the single-galaxy bring-up case (one rank, no transport). The
-    first rank's input is the golden trace (or the H2D socket with PREFILL_PP_H2D=1) for a
-    fixed PREFILL_STANDALONE_NCHUNKS chunks. Ranks run decoupled (no per-chunk barrier; one
-    warm-up barrier after compile). With PREFILL_STANDALONE_PCC=1 each rank checks the KV
-    slice it populated against the global golden trace.
+  * Standalone mode (PREFILL_STANDALONE=1): bring-up / benchmark. rank 0's input is the golden trace
+    (or the H2D socket with PREFILL_PP_H2D=1) for a fixed PREFILL_STANDALONE_NCHUNKS chunks; the loop
+    is BOUNDED and exits cleanly. PREFILL_STANDALONE_PCC=1 checks each rank's KV slice vs the golden.
 
-The model class is the single source of truth — this driver wires rank topology, input,
-transport, and the per-chunk schedule; it does not reimplement embed / layers / forward.
+The model class is the single source of truth — this driver wires rank topology, input, transport,
+and the per-chunk schedule; it does not reimplement embed / layers / forward.
 """
 
 import os
@@ -281,61 +280,42 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
     )
 
 
-def run_request_loop(runtime: TtPrefillRuntime, h2d_service: ttnn.H2DStreamService) -> None:
-    """Production single-rank serving: token IDs + per-iter PrefillMetadata arrive over the H2D socket
-    service, pushed by a separate producer (prefill_h2d_producer.py today; the scheduler in production).
-
-    `h2d_socket_sync` returns (tokens, metadata); we decode the 3xuint32 PrefillMetadata
-    [slot_id, actual_start, actual_end] and pass them to runtime.prefill (actual_start is the chunk's
-    cache write offset; actual_end - actual_start is its real-token count). Push-driven and unbounded —
-    the producer/scheduler decides how many chunks a request spans; the loop runs until SIGTERM."""
-    import time as _time
-
-    import torch
-
-    logger.info(
-        "[request] entering request loop — blocks on h2d_socket_sync for each push, "
-        "runs until SIGTERM/SIGINT. Drive it with prefill_h2d_producer.py / the scheduler."
-    )
-
-    i = 0
-    while not _shutdown:
-        # Blocks until the next producer push lands (workers wait on data_ready_sem), so the loop
-        # idle-waits here between requests.
-        tt_tokens, tt_metadata = h2d_socket_sync(
-            h2d_service, H2D_SYNC_WORKER_CORES, metadata_size_bytes=H2D_METADATA_SIZE_BYTES
-        )
-        meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
-        slot_id, actual_start, actual_end = int(meta_host[0]), int(meta_host[1]), int(meta_host[2])
-        logger.info(
-            f"[request] iter={i} metadata: slot_id={slot_id} actual_start={actual_start} "
-            f"actual_end={actual_end} actual_isl={actual_end - actual_start}"
-        )
-        _t0 = _time.perf_counter()  # time only the compute, not the idle socket wait above
-        runtime.prefill(tt_tokens, slot_id=slot_id, actual_start=actual_start, actual_end=actual_end)
-        _dt_ms = (_time.perf_counter() - _t0) * 1000.0
-        logger.info(f"[request] iter={i} chunk slot={slot_id} [{actual_start},{actual_end}) prefill = {_dt_ms:.2f} ms")
-        i += 1
-    logger.info(f"[request] loop exited after {i} requests")
-
-
-def run_standalone_loop(
-    runtime: TtPrefillRuntime, rank: int, num_ranks: int, h2d_service=None, d2d_in=None, d2d_out=None
+def run_pipeline_loop(
+    runtime: TtPrefillRuntime,
+    rank: int,
+    num_ranks: int,
+    *,
+    h2d_service=None,
+    d2d_in=None,
+    d2d_out=None,
+    bounded: bool = True,
+    do_pcc: bool = False,
 ) -> None:
-    """Decoupled per-rank loop: each rank runs its own loop, coordinated ONLY by the
-    activation+metadata file handoff (atomic rename + polling recv) — no cross-rank barrier, so an
-    upstream rank can race ahead of a downstream one (pipeline overlap). The first rank's input is
-    either the trace file or the H2D socket (h2d_service set); the per-chunk metadata (slot /
-    actual_start / actual_end / is_last) rides with each activation, so downstream ranks need no
-    shared schedule and learn the end from is_last. Every rank checks the KV slice it populated."""
+    """Decoupled per-rank pipeline loop shared by standalone and request modes — they run the SAME
+    mechanics (rank 0 gets a chunk, runs its layer slice, D2D-sends downstream; middle ranks
+    recv -> compute -> send; the last rank recv -> compute kv-only) and differ only in:
+
+      * input on rank 0: the golden trace (h2d_service is None) or the H2D socket (h2d_service set).
+      * termination: bounded=True runs exactly NUM_CHUNKS and exits cleanly (standalone / bring-up);
+        bounded=False runs until SIGTERM (request / production serving) — the producer decides the
+        chunk count, so the loop blocks on the next H2D push (rank 0) or D2D recv (downstream).
+      * do_pcc: per-rank KV PCC vs the golden trace at the end (standalone only; an unbounded loop
+        never reaches the end normally).
+
+    Per-chunk metadata (slot / actual_start / actual_end / is_last) rides with each activation, so
+    downstream ranks need no shared schedule. Unbounded shutdown is rough: downstream ranks block in
+    recv when rank 0 stops, so they exit on mesh teardown / SIGKILL rather than a clean drain."""
     cfg = runtime.config
-    slot_id = 0  # standalone always fills slot 0 (request mode takes slot_id from the per-push metadata)
+    slot_id = 0  # trace fills slot 0; h2d input takes slot_id from the per-push metadata
+
+    if not bounded and (cfg.is_first_rank and h2d_service is None):
+        raise ValueError("unbounded (request) mode requires the H2D service on the first rank for input")
 
     token_ids = None
-    n_chunks = NUM_CHUNKS if cfg.is_first_rank else None
-    if cfg.is_first_rank:
-        # The first rank drives n_chunks (NUM_CHUNKS); later ranks learn the end from is_last. The cache
-        # is sized to chunk*num_chunks by default so this fits; the guard only catches a smaller override.
+    n_chunks = (NUM_CHUNKS if cfg.is_first_rank else None) if bounded else None
+    if bounded and cfg.is_first_rank:
+        # Bounded: the first rank drives n_chunks (NUM_CHUNKS); later ranks learn the end from is_last.
+        # The cache is sized to chunk*num_chunks by default so this fits; the guard catches a smaller override.
         if h2d_service is None:
             token_ids = _load_token_ids()
             token_ids = (token_ids + [1] * (n_chunks * cfg.chunk_size))[: n_chunks * cfg.chunk_size]
@@ -346,9 +326,10 @@ def run_standalone_loop(
             )
 
     logger.info(
-        f"[pp rank {rank}/{num_ranks}] decoupled loop start (is_first={cfg.is_first_rank} "
-        f"is_last={cfg.is_last_rank} slot={slot_id} input={'h2d' if h2d_service is not None else 'trace'}"
-        + (f" chunks={n_chunks}" if cfg.is_first_rank else "")
+        f"[pp rank {rank}/{num_ranks}] {'bounded' if bounded else 'unbounded'} loop start "
+        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} slot={slot_id} "
+        f"input={'h2d' if h2d_service is not None else 'trace'}"
+        + (f" chunks={n_chunks}" if bounded and cfg.is_first_rank else "")
         + ")"
     )
 
@@ -376,11 +357,13 @@ def run_standalone_loop(
         ms_lease = (time.perf_counter() - t_lease) * 1000.0
 
         if cfg.is_first_rank:
-            if c >= n_chunks:
+            if bounded and c >= n_chunks:
                 break
             if h2d_service is not None:
                 inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
-                meta["is_last"] = c == n_chunks - 1
+                # Unbounded: the producer decides the count; the 12-byte H2D metadata carries no
+                # end-of-stream marker, so is_last stays False and the loop runs until SIGTERM.
+                meta["is_last"] = bounded and (c == n_chunks - 1)
             else:
                 kv_actual = c * cfg.chunk_size
                 inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
@@ -388,7 +371,7 @@ def run_standalone_loop(
                     "slot_id": slot_id,
                     "actual_start": kv_actual,
                     "actual_end": kv_actual + cfg.chunk_size,  # trace drives full chunks
-                    "is_last": c == n_chunks - 1,
+                    "is_last": c == n_chunks - 1,  # trace input is bounded-only
                 }
         else:
             # Non-first rank: the upstream stage's hidden state + metadata arrive over the D2D socket
@@ -455,10 +438,10 @@ def run_standalone_loop(
         f"{(time.perf_counter() - t0) * 1000.0:.2f} ms (decoupled, no barrier)"
     )
 
-    if os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
+    if do_pcc and os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
         # Each rank PCC-checks the KV slice it populated against the golden trace (offset by
-        # first_layer_idx); all ranks passing == the rank-sliced model + file handoff reproduce
-        # single-rank KV.
+        # first_layer_idx); all ranks passing == the rank-sliced model reproduces single-rank KV.
+        # Only meaningful for the bounded standalone run (an unbounded server never reaches here).
         from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import kv_cache_pcc_check
 
         trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
@@ -571,7 +554,7 @@ def main() -> None:
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         _serve_standalone(runtime, mesh_device, hf_config, rank, num_ranks, is_first_rank)
     else:
-        _serve_request(runtime, mesh_device, num_ranks)
+        _serve_request(runtime, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
@@ -612,8 +595,10 @@ def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
 
-    logger.info(f"[pp rank {rank}] setup complete, entering decoupled standalone loop")
-    run_standalone_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
+    logger.info(f"[pp rank {rank}] setup complete, entering bounded standalone loop")
+    run_pipeline_loop(
+        runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out, bounded=True, do_pcc=True
+    )
 
     if h2d_service is not None or d2d_in is not None or d2d_out is not None:
         # Free the services while the mesh + command queues are still alive (their dtors free a command
@@ -624,82 +609,96 @@ def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int
         gc.collect()
 
 
-def _serve_request(runtime, mesh_device, num_ranks: int) -> None:
+def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     """Production serving: token chunks + PrefillMetadata arrive over the H2D socket from an external
-    producer; unbounded (runs to SIGTERM). Optional KV-chunk-table migration publish + per-layer
-    LayerAck channel. Single-rank only for now — pipelined request serving (num_ranks>1) needs an
-    end-of-request / clean-shutdown protocol over the socket; use standalone mode for multi-rank."""
-    if num_ranks > 1:
-        raise NotImplementedError(
-            f"request mode is single-rank only (got num_ranks={num_ranks}); run multi-rank pipeline "
-            f"with PREFILL_STANDALONE=1 (h2d-fed pipeline serving is not wired yet)"
-        )
+    producer (prefill_h2d_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
+    mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
+    and that it runs forever.
 
-    # compile() leaves a custom sub-device manager loaded; H2DStreamService's init program validates
-    # its cores against the default whole-chip sub-device, so revert first.
-    mesh_device.clear_loaded_sub_device_manager()
-    h2d_service = build_h2d_service(
-        mesh_device,
-        mesh_shape=GLOBAL_MESH_SHAPE,
-        chunk_size=CHUNK_SIZE,
-        mapper_config=H2D_MAPPER_CONFIG,
-        worker_cores=H2D_SYNC_WORKER_CORES,
-        metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
-    )
-    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    descriptor_path = h2d_service.export_descriptor(service_id)
-    logger.info(
-        f"[h2d] exported descriptor service_id={service_id!r} -> {descriptor_path}; "
-        f"run prefill_h2d_producer.py / the scheduler in another process to drive token pushes."
-    )
+    Migration (KV-chunk-table publish) + per-layer LayerAck are wired for the single-rank case only;
+    they are disabled for num_ranks>1 (pipelined migration is future work). Shutdown for num_ranks>1 is
+    rough: downstream ranks block in D2D recv when rank 0 stops, so they exit on teardown / SIGKILL."""
+    single_rank = num_ranks == 1
 
-    if os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
-        # Standalone-worker model: build the KV chunk address table from the device KV layout and
-        # serialize it; the orchestrator forwards the path to the migration_worker. Only the runner
-        # knows the KV NoC addresses, so it must build the table (no IPC with the worker).
-        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
-            build_and_serialize_kv_chunk_table,
-            send_kv_chunk_table,
-        )
+    ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
-        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-        build_and_serialize_kv_chunk_table(
-            mesh_device=mesh_device,
-            kvpe_cache=runtime.kvpe_cache,
-            seq_len=MAX_SEQ_LEN,
-            num_layers=NUM_LAYERS,
+    # H2D input service lives on the first rank only (downstream ranks read from D2D). compile() leaves
+    # a custom sub-device manager loaded; the service's init program validates its cores against the
+    # default whole-chip sub-device, so revert first.
+    h2d_service = None
+    if is_first_rank:
+        mesh_device.clear_loaded_sub_device_manager()
+        h2d_service = build_h2d_service(
+            mesh_device,
             mesh_shape=GLOBAL_MESH_SHAPE,
-            sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
-            num_users=NUM_USERS,
-            path=table_path,
+            chunk_size=CHUNK_SIZE,
+            mapper_config=H2D_MAPPER_CONFIG,
+            worker_cores=H2D_SYNC_WORKER_CORES,
+            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
         )
-        send_kv_chunk_table(table_path)
+        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+        descriptor_path = h2d_service.export_descriptor(service_id)
+        logger.info(
+            f"[pp rank {rank}] [h2d] descriptor service_id={service_id!r} -> {descriptor_path}; "
+            f"drive it with prefill_h2d_producer.py / the scheduler."
+        )
 
-    # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler reads the delta and
-    # drives the migration worker. InterProcessCounterChannel owns a named POSIX shm the scheduler
-    # connects to via shm_layer_ack_name(service_id).
-    ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
-    _stale_ack_shm = f"/dev/shm/{ack_shm_name.lstrip('/')}"
-    if os.path.exists(_stale_ack_shm):
-        # A prior run that didn't tear down cleanly leaves the segment behind, so shm_open(O_CREAT|
-        # O_EXCL) fails with EEXIST. Remove it first.
-        logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
-        os.remove(_stale_ack_shm)
-    ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-    runtime.set_layer_ack_channel(ack_channel)
-    logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+    # D2D pipeline transport for num_ranks>1 (same as standalone).
+    d2d_in = d2d_out = None
+    if num_ranks > 1:
+        mesh_device.clear_loaded_sub_device_manager()
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
 
-    logger.info("Setup complete, entering request loop")
-    run_request_loop(runtime, h2d_service)
+    # Migration KV-chunk-table + LayerAck: single-rank only (disabled for the pipeline for now).
+    ack_channel = None
+    if single_rank:
+        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+        if os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
+            # Only the runner knows the KV NoC addresses, so it builds + serializes the chunk table the
+            # orchestrator forwards to the migration_worker.
+            from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
+                build_and_serialize_kv_chunk_table,
+                send_kv_chunk_table,
+            )
 
-    # Release the H2D service while the mesh + command queues + service core are still alive (its dtor
-    # frees a command queue and service-core L1; running after close_mesh_device aborts).
+            table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+            build_and_serialize_kv_chunk_table(
+                mesh_device=mesh_device,
+                kvpe_cache=runtime.kvpe_cache,
+                seq_len=MAX_SEQ_LEN,
+                num_layers=NUM_LAYERS,
+                mesh_shape=GLOBAL_MESH_SHAPE,
+                sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
+                num_users=NUM_USERS,
+                path=table_path,
+            )
+            send_kv_chunk_table(table_path)
+
+        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler reads the delta.
+        ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+        _stale_ack_shm = f"/dev/shm/{ack_shm_name.lstrip('/')}"
+        if os.path.exists(_stale_ack_shm):
+            # A prior run that didn't tear down cleanly leaves the segment behind (shm_open O_EXCL fails).
+            logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
+            os.remove(_stale_ack_shm)
+        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+        runtime.set_layer_ack_channel(ack_channel)
+        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+
+    logger.info(f"[pp rank {rank}] setup complete, entering unbounded request loop")
+    run_pipeline_loop(
+        runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out, bounded=False, do_pcc=False
+    )
+
+    # Release services while the mesh + command queues are still alive (their dtors free a command
+    # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
     import gc
 
-    del h2d_service
+    h2d_service = d2d_in = d2d_out = None
     gc.collect()
-    ack_channel.shutdown()  # munmap + shm_unlink
-    del ack_channel
+    if ack_channel is not None:
+        ack_channel.shutdown()  # munmap + shm_unlink
+        ack_channel = None
 
 
 if __name__ == "__main__":
