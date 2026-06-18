@@ -50,4 +50,5 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        return "_llk_math_reduce_block_max_row_uninit_runtime_();\n"
+        dest_acc = config.dest_acc.cpp_enum_value
+        return f"_llk_math_reduce_block_max_row_uninit_runtime_<{dest_acc}>();\n"

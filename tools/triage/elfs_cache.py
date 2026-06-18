@@ -8,8 +8,8 @@ Usage:
     elfs_cache
 
 Description:
-    Thread-safe data provider for caching ParsedElfFile objects.
-    Provides an API for grabbing or caching ParsedElfFile objects by given elf path.
+    Thread-safe data provider for caching ElfFile objects.
+    Provides an API for grabbing or caching ElfFile objects by given elf path.
 
 Owner:
     adjordjevic-TT
@@ -20,7 +20,7 @@ import threading
 
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
-from ttexalens.hardware.risc_debug import ParsedElfFile
+from ttexalens.elf import ElfFile
 from ttexalens.tt_exalens_lib import parse_elf
 from utils import INFO
 
@@ -31,10 +31,10 @@ script_config = ScriptConfig(
 
 class ElfsCache:
     """
-    Thread-safe cache for ParsedElfFile objects.
+    Thread-safe cache for ElfFile objects.
     When `enabled=False` the cache acts as a pass-through: every lookup
     re-parses the ELF and returns it without storing a reference, so the
-    ParsedElfFile is released (and its file descriptor closed) once the
+    ElfFile is released (and its file descriptor closed) once the
     caller drops it. Intended as a mitigation toggle via --disable-elf-cache
     if the cache misbehaves.
     """
@@ -42,13 +42,13 @@ class ElfsCache:
     def __init__(self, context: Context, enabled: bool = True):
         self.context = context
         self._enabled = enabled
-        self._cache: dict[str, ParsedElfFile] = {}
+        self._cache: dict[str, ElfFile] = {}
         self._lock = threading.Lock()
 
         self._distinct_paths: set[str] = set()
         self._total_bytes = 0
 
-    def __getitem__(self, elf_path: str) -> ParsedElfFile:
+    def __getitem__(self, elf_path: str) -> ElfFile:
         if not os.path.exists(elf_path):
             raise TTTriageError(f"ELF file {elf_path} does not exist.")
 

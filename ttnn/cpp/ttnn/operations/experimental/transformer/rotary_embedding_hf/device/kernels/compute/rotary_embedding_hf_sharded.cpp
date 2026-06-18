@@ -7,7 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/dest_format_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;

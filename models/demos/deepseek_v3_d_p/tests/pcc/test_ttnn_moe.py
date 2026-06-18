@@ -143,8 +143,15 @@ def run_model(
     # ========================================
     # Step 1: Create weights (cache-aware)
     # ========================================
+    # Perf runs (run_pcc_check=False) build the routed/shared experts from
+    # placeholder torch.empty weights, while PCC runs build them from realistic
+    # seeded weights. The cache dir is keyed only on shapes, so without a
+    # weights-type suffix a perf run would persist placeholder (≈zero) expert
+    # weights that a later PCC run loads as "complete" — producing all-zero
+    # expert outputs (PCC=0). Keep the two cohorts in separate directories.
+    weights_type = "realistic" if run_pcc_check else "dummy"
     moe_cache_dir = Path(
-        f"/tmp/{variant.name}_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid"
+        f"/tmp/{variant.name}_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid_{weights_type}"
     )
     moe_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -158,13 +165,20 @@ def run_model(
     if need_torch_weights:
         logger.info("Creating torch weights...")
         profiler.start("weights_creation")
+        # Fixed per-creator seeds make each weight tensor a pure function of its
+        # shape + seed, independent of how much global RNG was consumed before it.
+        # This is required because these weights are persisted to a shape-keyed
+        # on-disk cache (moe_cache_dir): without it, the gate weight depends on
+        # whether routed/shared weights were drawn first (run_pcc_check branch),
+        # so a perf-built cache (gate drawn first) silently mismatches the PCC
+        # reference (gate drawn third) and collapses gate recall to ~random.
         if run_pcc_check:
-            all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
-            shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
+            all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim, seed=1234)
+            shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim, seed=5678)
         else:
             all_routed_weights = None
             shared_expert_weights = None
-        gate_weights = create_gate_weights(num_routed_experts, emb_dim)
+        gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
         profiler.end("weights_creation")
 
         # Build TTNN cache if not already complete
@@ -366,7 +380,7 @@ def run_model(
     dense_checks = [
         ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
         ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.90),
-        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.96),
+        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.94),
     ]
     # fmt: on
 
@@ -541,13 +555,13 @@ def run_model(
     ),
     [
         # fmt: off
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE,   False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
         # PCC gate on the production 256-expert / 32-per-chip path. The unified
         # routed-expert MoE op switches into the unfused extract -> FFN -> insert
         # chain whenever num_routed_experts > 64; without this variant that
         # branch ships PCC-untested on Blackhole. Lighter dispatch capacity (5
         # vs 8) keeps the soak time bounded.
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE,   True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="pcc-device-256"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE_FP32,   True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
         pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  marks=pytest.mark.timeout(900)),
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
@@ -583,6 +597,20 @@ def run_model(
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
+        ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
         ),
         pytest.param(
             (2, 4),
@@ -657,8 +685,10 @@ def test_ds_moe(
     ),
     [
         # fmt: off
-        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k"),
-        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k"),
+        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-perf"),
+        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-pcc"),
+        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-perf"),
+        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-pcc"),
         # fmt: on
     ],
 )

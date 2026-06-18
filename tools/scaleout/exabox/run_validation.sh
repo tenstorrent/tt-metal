@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -23,9 +27,11 @@ Optional:
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
     --volume <host-path>                    Additional volume mount for Docker containers (can be repeated)
-                                            /data/scaleout_configs is mounted by default; each host path
-                                            is mounted at the same path inside the container
-    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
+                                            /data/scaleout_configs is mounted by default when it exists on
+                                            the host; each host path is mounted at the same path inside
+                                            the container
+    --mpi-if <interface>                    Network interface for MPI TCP transport
+                                            (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
     --validation-args <args>                Extra arguments passed verbatim to run_cluster_validation (quoted string)
@@ -57,8 +63,15 @@ ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
-EXTRA_VOLUMES=(/data/scaleout_configs)
-MPI_IF="ens5f0np0"
+# /data/scaleout_configs is a Markham-cluster convention. Only mount it when it
+# actually exists locally; otherwise Docker fails trying to auto-create the
+# missing bind-mount source path (mkdir: permission denied) and every rank dies
+# before run_cluster_validation starts. Sites that keep configs elsewhere just
+# pass them via --volume / the descriptor path flags.
+EXTRA_VOLUMES=()
+[[ -d /data/scaleout_configs ]] && EXTRA_VOLUMES+=(/data/scaleout_configs)
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
 VALIDATION_EXTRA_ARGS=()
 
@@ -138,6 +151,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
             shift 2
             ;;
         --mpi-args)
@@ -199,6 +213,15 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     echo ""
     show_help
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    echo "Auto-detected MPI interface: $MPI_IF"
 fi
 
 run_cluster_validation() {
@@ -365,6 +388,14 @@ for ((i=1; i<=ITERATIONS; i++)); do
             echo ""
             echo "Running cluster validation..."
             run_cluster_validation "$OUTPUT_DIR/iteration_${i}"
+            VALIDATION_EXIT_CODE=$?
+            # Surface validation failures explicitly. Without this, a container
+            # that dies before run_cluster_validation starts (e.g. a bad bind
+            # mount -> docker exit 126) produces no output yet the loop still
+            # prints "completed", masking the failure.
+            if [[ $VALIDATION_EXIT_CODE -ne 0 ]]; then
+                echo "ERROR: cluster validation FAILED (exit code $VALIDATION_EXIT_CODE)"
+            fi
         else
             echo "Skipping validation due to mpirun failure"
         fi

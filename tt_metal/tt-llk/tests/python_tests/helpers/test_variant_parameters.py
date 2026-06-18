@@ -141,6 +141,22 @@ class SFPU_INT_OP(TemplateParameter):
         return ""
 
 
+@dataclass
+class SFPU_BINARY_OP(TemplateParameter):
+    """Select the consolidated Quasar binary-SFPU op at compile time.
+
+    Emits ``constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::<op>;``,
+    consumed by ``sfpu_operations_quasar.h``. ``op`` is one of:
+    ADD, MUL, DIV, GT, LT, LE, GE, MAX, MIN (reusing the LLK BinaryOp enum, like
+    Blackhole — int vs float MUL is disambiguated by the math format in the cpp).
+    """
+
+    op: str = "ADD"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::{self.op};"
+
+
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
     """Generate the appropriate operation constants based on the math operation type."""
     constants = []
@@ -280,6 +296,24 @@ class IMPLIED_MATH_FORMAT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool IMPLIED_MATH_FORMAT = {self.implied_math_format.value};"
+
+
+@dataclass
+class ENABLE_2X_FORMAT(TemplateParameter):
+    enable_2x_format: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool ENABLE_2X_FORMAT = {str(self.enable_2x_format).lower()};"
+        )
+
+
+@dataclass
+class ENABLE_DIRECT_INDEXING(TemplateParameter):
+    enable_direct_indexing: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool ENABLE_DIRECT_INDEXING = {str(self.enable_direct_indexing).lower()};"
 
 
 @dataclass

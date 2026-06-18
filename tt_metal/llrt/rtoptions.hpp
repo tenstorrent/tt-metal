@@ -301,6 +301,9 @@ class RunTimeOptions {
     // Enable fabric VC2 (neighbour exchange, single-hop)
     bool enable_fabric_vc2 = false;
 
+    // EXPERIMENTAL: Enable VC1 inter-mesh pass-through routing (A->B->C). Not deadlock-safe.
+    bool enable_fabric_mesh_pass_through = false;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -739,6 +742,10 @@ public:
     // Fabric VC2 enable
     bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }
     void set_enable_fabric_vc2(bool enable) { enable_fabric_vc2 = enable; }
+
+    // EXPERIMENTAL: Fabric VC1 inter-mesh pass-through enable (A->B->C). Not deadlock-safe.
+    bool get_enable_fabric_mesh_pass_through() const { return enable_fabric_mesh_pass_through; }
+    void set_enable_fabric_mesh_pass_through(bool enable) { enable_fabric_mesh_pass_through = enable; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }

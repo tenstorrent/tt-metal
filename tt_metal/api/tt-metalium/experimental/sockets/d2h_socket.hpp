@@ -178,6 +178,13 @@ public:
     uint32_t get_page_size() const { return page_size_; }
 
     /**
+     * @brief Returns the current size of the FIFO in bytes.
+     *
+     * @return The current size of the FIFO in bytes.
+     */
+    uint32_t get_fifo_curr_size() const { return fifo_curr_size_; }
+
+    /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
      *
      * This address should be passed to the device kernel (typically as a compile-time
