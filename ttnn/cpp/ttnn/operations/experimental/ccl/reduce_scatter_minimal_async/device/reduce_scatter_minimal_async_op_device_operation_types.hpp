@@ -68,6 +68,53 @@ struct ReduceScatterMinimalAsyncParams {
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         return attrs;
     }
+
+    // Compile-time attributes drive the default program-cache reflection hash and the canonical key
+    // (ttsl::hash::hash_objects_with_default_seed + ttsl::hash::canonical_key). They list exactly the
+    // structure-affecting fields, mirroring the set the (now-removed) custom compute_program_hash used:
+    //   - `semaphore` (std::vector<GlobalSemaphore>) is excluded: it is runtime-only (semaphore
+    //     addresses are passed to runtime args) and was never part of the old custom hash.
+    //   - `barrier_semaphore` (std::optional<GlobalSemaphore>) is reduced to its presence bool: the old
+    //     hash hashed only `barrier_semaphore.has_value()`, since only the presence (not the runtime
+    //     address) affects program structure.
+    //   - `sub_device_id` is included: the old hash hashed the derived subdevice worker-core range
+    //     (mesh_device->worker_cores(TENSIX, sub_device_id...)), which is per-device-constant given the
+    //     sub-device id. `sub_device_id` is the structural input of that computation (the program cache
+    //     is per-device, so the derived core range need not be re-encoded).
+    // The program-factory selection (Ring vs Line) is a pure function of `topology`, which is included,
+    // so the default path (which does not encode program_factory.index()) stays correct.
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "optional_intermediate_mem_config",
+        "topology",
+        "has_barrier_semaphore",
+        "using_persistent_buffers",
+        "sub_device_id",
+        "cluster_axis",
+        "chunks_per_sync",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
+        "compute_kernel_config");
+    auto attribute_values() const {
+        return std::make_tuple(
+            dim,
+            num_links,
+            ring_size,
+            output_mem_config,
+            optional_intermediate_mem_config,
+            topology,
+            barrier_semaphore.has_value(),
+            using_persistent_buffers,
+            sub_device_id,
+            cluster_axis,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            compute_kernel_config);
+    }
 };
 
 struct ReduceScatterMinimalAsyncInputs {

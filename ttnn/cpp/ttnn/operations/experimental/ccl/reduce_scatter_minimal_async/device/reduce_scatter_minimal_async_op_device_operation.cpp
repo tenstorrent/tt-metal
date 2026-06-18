@@ -150,36 +150,6 @@ std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalAsyncDeviceOperati
     return {input_topology, std::move(output_topology)};
 }
 
-ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<ReduceScatterMinimalAsyncDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.optional_intermediate_mem_config,
-        operation_attributes.topology,
-        operation_attributes.barrier_semaphore.has_value(),
-        operation_attributes.using_persistent_buffers,
-        operation_attributes.cluster_axis,
-        operation_attributes.chunks_per_sync,
-        operation_attributes.num_workers_per_link,
-        operation_attributes.num_buffers_per_channel,
-        operation_attributes.compute_kernel_config,
-        subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceScatterMinimalAsyncDeviceOperation::tensor_return_value_t>
 ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
