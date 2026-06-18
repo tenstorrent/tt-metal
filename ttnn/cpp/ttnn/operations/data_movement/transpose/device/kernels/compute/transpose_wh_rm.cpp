@@ -1,6 +1,15 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+// Metal 2.0 compute kernel for transpose WH (RM), serving BOTH the interleaved (non-SHARDED) and the
+// sharded (SHARDED) paths. This is the single source: the pre-Metal-2.0 copy had no other consumers, so
+// it was replaced in place rather than forked.
+//   non-SHARDED: dfb::src0 (input), dfb::tilize (intermediate self-loop), dfb::out (output).
+//   SHARDED:     dfb::in_scratch (c_24), dfb::tilize (c_25); output is dfb::out_stage (c_27) when Ht > 8
+//                else dfb::out (c_16). The legacy "(Ht > 8) ? c_27 : c_16" compile-time ternary is
+//                promoted to the OUT_STAGE preprocessor define so the unbound token never enters name
+//                lookup. All SHARDED CB indices are now framework-assigned DFBs (no raw tt::CBIndex).
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -9,6 +18,7 @@
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "experimental/kernel_args.h"
 
 template <
     uint32_t Wt,
@@ -19,7 +29,7 @@ template <
     uint32_t pack_num_pages_last_col,
     uint32_t pack_num_pages_last_row_col,
     uint32_t cb_out>
-ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, CircularBuffer& cb_out_buf) {
+ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_wh_init_short(cb_tilize);
@@ -65,7 +75,7 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 }
 
 template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out>
-ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, CircularBuffer& cb_out_buf) {
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_wh_init_short(cb_tilize);
@@ -96,16 +106,16 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, CircularBuffer& cb_ou
 }
 
 void kernel_main() {
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(2);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto HtWt = get_arg(args::HtWt);
 #ifdef SHARDED
-    constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t last_output_row_num_datums = get_compile_time_arg_val(4);
-    constexpr uint32_t pack_num_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t pack_num_pages_last_col = get_compile_time_arg_val(6);
-    constexpr uint32_t pack_num_pages_last_row = get_compile_time_arg_val(7);
-    constexpr uint32_t pack_num_pages_last_row_col = get_compile_time_arg_val(8);
+    constexpr uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
+    constexpr uint32_t last_output_row_num_datums = get_arg(args::last_output_row_num_datums);
+    [[maybe_unused]] constexpr uint32_t pack_num_pages = get_arg(args::pack_num_pages);
+    constexpr uint32_t pack_num_pages_last_col = get_arg(args::pack_num_pages_last_col);
+    [[maybe_unused]] constexpr uint32_t pack_num_pages_last_row = get_arg(args::pack_num_pages_last_row);
+    constexpr uint32_t pack_num_pages_last_row_col = get_arg(args::pack_num_pages_last_row_col);
     // In order to support full_ct_dim > block_ct_dim, we would need to change use_narrow_row and row_size conditions to
     // be:
     //
@@ -119,22 +129,25 @@ void kernel_main() {
     constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
 
 #else
-    uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(0);
+    auto num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
 #endif
 
 #ifdef SHARDED
-    constexpr auto cb_in = tt::CBIndex::c_24;
-    constexpr auto cb_tilize = tt::CBIndex::c_25;
-    constexpr auto cb_out_idx =
-        (Ht > 8) ? tt::CBIndex::c_27 : tt::CBIndex::c_16;  // temporary fix until pack_untilize is fully fixed
+    constexpr auto cb_in = dfb::in_scratch;
+    constexpr auto cb_tilize = dfb::tilize;
+#ifdef OUT_STAGE
+    constexpr auto cb_out_idx = dfb::out_stage;  // temporary fix until pack_untilize is fully fixed (Ht > 8)
 #else
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_tilize = tt::CBIndex::c_24;
-    constexpr auto cb_out_idx = tt::CBIndex::c_16;
+    constexpr auto cb_out_idx = dfb::out;
+#endif
+#else
+    constexpr auto cb_in = dfb::src0;
+    constexpr auto cb_tilize = dfb::tilize;
+    constexpr auto cb_out_idx = dfb::out;
 #endif
 
-    CircularBuffer cb_tilize_buf(cb_tilize);
-    CircularBuffer cb_out(cb_out_idx);
+    DataflowBuffer cb_tilize_buf(cb_tilize);
+    DataflowBuffer cb_out(cb_out_idx);
 
     unary_op_init_common(cb_in, cb_out_idx);
 

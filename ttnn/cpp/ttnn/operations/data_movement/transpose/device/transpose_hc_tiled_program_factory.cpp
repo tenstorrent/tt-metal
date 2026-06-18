@@ -152,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
     // This is a "fake CB" (legacy c_1) — the kernel uses it purely as an address source (get_write_ptr,
     // then direct memory copy), with no real FIFO producer/consumer. It is bound as a self-loop DFB on
     // the reading kernel (PRODUCER + CONSUMER) to satisfy the validator's producer-and-consumer rule.
-    // See METAL2_PORT_REPORT.md "Open items". Only present (and only referenced kernel-side) when
+    // Only present (and only referenced kernel-side) when
     // MISALIGNED.
     if (misaligned) {
         spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{

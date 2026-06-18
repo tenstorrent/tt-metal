@@ -76,7 +76,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     // NOTE: the legacy factory built these accessors with ArgConfig::RuntimeTensorShape (tensor
     // shape passed as a runtime arg so one cached program serves varying shapes). The Metal 2.0
     // TensorParameter binding bakes the shape into the accessor's compile-time args by default;
-    // see METAL2_PORT_REPORT.md "Open items" for the dynamic_tensor_shape consideration.
+    // the dynamic_tensor_shape relaxation is a known open item (shape baked into accessor CT args).
     m2::KernelSpec reader{
         .unique_id = m2::KernelSpecName{"reader"},
         .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"

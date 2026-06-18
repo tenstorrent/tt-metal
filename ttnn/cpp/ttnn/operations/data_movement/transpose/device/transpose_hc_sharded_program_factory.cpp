@@ -338,7 +338,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     // resolves at runtime from the input/output TensorArguments (the legacy factory set CBDescriptor
     // .buffer + relied on UpdateDynamicCircularBufferAddress on cache hit). Both DFBs are accessed by
     // base pointer only (get_read_ptr / get_write_ptr + NOC), with no real FIFO producer/consumer, so
-    // each is bound as a self-loop on every kernel that touches it. See METAL2_PORT_REPORT.md.
+    // each is bound as a self-loop on every kernel that touches it.
     spec.dataflow_buffers = {
         m2::DataflowBufferSpec{
             .unique_id = m2::DFBSpecName{"src0"},

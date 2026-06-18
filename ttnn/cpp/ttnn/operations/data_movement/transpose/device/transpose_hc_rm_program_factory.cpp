@@ -158,7 +158,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
 
     // The legacy factory built the input/output accessors with TensorAccessorArgs(RuntimeTensorShape)
     // and plumbed the buffer addresses through RTA slot 0; both collapse to the TensorBindings below.
-    // See METAL2_PORT_REPORT.md "Open items" for the dynamic_tensor_shape consideration. The legacy
+    // The dynamic_tensor_shape relaxation is a known open item. The legacy
     // CTA `src0_buffer->aligned_page_size()` was consumed only by the TensorAccessorArgs plumbing
     // (never read by the kernel) and disappears with it.
     m2::KernelSpec reader{

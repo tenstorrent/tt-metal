@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 fork of eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp.
 // The legacy source is shared by ~30 ops that have not yet migrated; this copy is named-binding
 // ported for the transpose WH (tiled) writer only. Keep the two in sync until the legacy copy's
-// last consumer ports (see METAL2_PORT_REPORT.md).
+// last consumer ports.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

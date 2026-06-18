@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 fork of transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp.
 // The legacy source is also used by the (unmigrated) permute_tiled factory; this copy is named-binding
 // ported for the transpose HC (tiled, interleaved) reader only. Keep the two in sync until the legacy
-// copy's last consumer ports (see METAL2_PORT_REPORT.md). Logic UNCHANGED; only the access mechanism
+// copy's last consumer ports. Logic UNCHANGED; only the access mechanism
 // moves to named bindings:
 //   - input CB c_0       -> dfb::src0    (reader produces tiles; writer consumes)
 //   - padding CB c_1     -> dfb::padding (conditional; reader produces, writer consumes; #ifdef NEEDS_PADDING)

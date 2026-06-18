@@ -140,7 +140,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     auto max_padding_write = face_shape[0] * face_shape[1];
     // padding DFB (legacy CB c_1): only present when needs_padding. The reader produces one padding
     // entry, the writer consumes it. The conditional binding is honored kernel-side via #ifdef
-    // NEEDS_PADDING. See METAL2_PORT_REPORT.md.
+    // NEEDS_PADDING.
     if (needs_padding) {
         spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = m2::DFBSpecName{"padding"},

@@ -103,7 +103,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     // tilize (legacy c_25): allocated; compute self-loop (tilize writes, transpose reads back).
     // out_stage (legacy c_27, only Ht > 8): allocated; compute produces (pack-untilize), writer consumes.
     // The legacy c_26 ("im2") DFB is dead — no kernel reads or writes it — so it is omitted (a Metal 2.0
-    //   DFB requires >=1 producer and >=1 consumer). See METAL2_PORT_REPORT.md "Open items".
+    //   DFB requires >=1 producer and >=1 consumer).
     uint32_t num_in_tiles = wt * 2;  // double buffer
     uint32_t num_im_tiles = ht * wt;
     spec.dataflow_buffers = {
@@ -178,7 +178,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
     };
 
-    // ---- Compute (reuses transpose_wh_rm_m2.cpp SHARDED branch) ----
+    // ---- Compute (reuses transpose_wh_rm.cpp SHARDED branch) ----
     m2::ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         // Keep both the tilize input (in_scratch / c_24) and its output (tilize / c_25, which feeds the
@@ -193,7 +193,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     m2::KernelSpec compute{
         .unique_id = m2::KernelSpecName{"compute"},
         .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
-                                        "transpose_wh_rm_m2.cpp"},
+                                        "transpose_wh_rm.cpp"},
         .compile_time_args =
             {
                 {"Ht", ht},

@@ -174,8 +174,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     // src0 DFB (legacy CB c_0) and output DFB (legacy CB c_16). The RM path adds a "tilize"
     // intermediate DFB (legacy CB c_24). The legacy c_25 ("im2", marked TODO REMOVE) is dead — no
     // kernel reads or writes it on the interleaved RM path — so it is omitted (a Metal 2.0 DFB
-    // requires >=1 producer and >=1 consumer; binding a never-touched buffer is impossible). See
-    // METAL2_PORT_REPORT.md "Open items".
+    // requires >=1 producer and >=1 consumer; binding a never-touched buffer is impossible).
     uint32_t num_input_tiles = row_major ? wt * 2 : 2;
     uint32_t num_output_tiles = row_major ? ht * 2 : 2;
 
@@ -217,14 +216,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                                           "writer_unary_interleaved_start_id_m2.cpp"};
     const std::filesystem::path compute_source =
         row_major ? std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
-                                          "transpose_wh_rm_m2.cpp"}
+                                          "transpose_wh_rm.cpp"}
                   : std::filesystem::path{"ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
                                           "transpose_wh_m2.cpp"};
 
     // ---- Reader ----
     // The legacy factory built the input accessor with TensorAccessorArgs(RuntimeTensorShape) and
-    // plumbed the buffer address through an RTA; both collapse to the TensorBinding below. See
-    // METAL2_PORT_REPORT.md "Open items" for the dynamic_tensor_shape consideration.
+    // plumbed the buffer address through an RTA; both collapse to the TensorBinding below. The dynamic_tensor_shape
+    // relaxation is a known open item.
     m2::KernelSpec reader{
         .unique_id = m2::KernelSpecName{"reader"},
         .source = reader_source,

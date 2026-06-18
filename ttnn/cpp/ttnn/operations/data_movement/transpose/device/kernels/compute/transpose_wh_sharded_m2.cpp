@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 fork of transpose/device/kernels/compute/transpose_wh_sharded.cpp. The legacy source is
 // also used by the (unmigrated) experimental transformer create_qkv_heads* / split_qkv ops; this copy
 // is named-binding ported for the transpose WH sharded compute kernel only. Keep the two in sync until
-// the legacy copy's last consumer ports (see METAL2_PORT_REPORT.md). Logic UNCHANGED; only the access
+// the legacy copy's last consumer ports. Logic UNCHANGED; only the access
 // mechanism moves to named bindings:
 //   - input CB c_0  -> dfb::src0 (borrowed input shard; compute consumes)
 //   - output CB c_16 -> dfb::out  (borrowed output shard; compute produces)

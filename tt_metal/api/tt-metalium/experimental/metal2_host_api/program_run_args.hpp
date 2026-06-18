@@ -58,8 +58,9 @@ struct ProgramRunArgs {
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
-        // Fix A: heap-free inline key (RtaName) instead of std::string -> the per-node Table
-        // build allocates no string heap for long arg names; ops still write {{"name", value}}.
+        // Key type is the heap-free inline RtaName, not std::string: this per-node Table is rebuilt
+        // every dispatch, so a std::string key would heap-allocate for any name past the SSO threshold.
+        // RtaName stores the name inline. Ops still write {{"name", value}} -- the API is unchanged.
         using RuntimeArgValues = Table<RtaName, uint32_t>;
         struct NodeRuntimeArgs {
             NodeCoord node;

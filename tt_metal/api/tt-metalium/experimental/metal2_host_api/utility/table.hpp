@@ -68,9 +68,10 @@ private:
     // Entries are stored as a mutable std::pair<K, V> (so the backing vector stays
     // easy to grow, erase, and assign), but exposed through the iterators below as
     // the const-key value_type.
-    // Fix B: inline (small-vector) backing so small Tables (per-node RTAs, CTAs, defines —
-    // typically <=8 entries) build with NO heap allocation. Falls back to heap above the
-    // inline capacity, so semantics are unchanged.
+    // Inline (small-vector) backing so the hot per-node runtime-arg Tables -- rebuilt every dispatch
+    // and <=8 entries in practice -- build with no heap allocation. Larger cold Tables (a
+    // compile-time-arg Table can reach ~19 entries) spill to heap above the inline capacity; that is
+    // fine, since those are built once per cache miss, not per dispatch. Semantics are unchanged.
     using Storage = ttsl::SmallVector<std::pair<K, V>, 8>;
 
 public:

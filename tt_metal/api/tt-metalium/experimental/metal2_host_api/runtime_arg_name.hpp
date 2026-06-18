@@ -25,12 +25,14 @@ namespace tt::tt_metal::experimental {
 // Implicitly constructible from string literals / std::string, so op factories keep writing
 // {{"name", value}} unchanged -- the public API design is untouched.
 struct RtaName {
-    static constexpr std::size_t CAP = 39;  // covers the longest observed arg name (33) + margin
+    static constexpr std::size_t CAP = 32;  // longest runtime-arg name in use is 24 chars; 32 leaves margin
     char data_[CAP] = {};
     std::uint8_t len_ = 0;
 
     RtaName() = default;
     RtaName(std::string_view s) {  // NOLINT(google-explicit-constructor): implicit by design
+        // Fail loud rather than silently truncate: two names that differ only past CAP would alias to
+        // the same key and fetch each other's args. A name this long means CAP needs raising, not trimming.
         TT_FATAL(s.size() <= CAP, "RtaName '{}' exceeds inline capacity {} ({} chars)", s, CAP, s.size());
         len_ = static_cast<std::uint8_t>(s.size());
         std::memcpy(data_, s.data(), len_);
@@ -39,7 +41,6 @@ struct RtaName {
     RtaName(const std::string& s) : RtaName(std::string_view(s)) {}  // NOLINT(google-explicit-constructor)
 
     std::string_view view() const { return std::string_view(data_, len_); }
-    std::string str() const { return std::string(data_, len_); }
 
     bool operator==(const RtaName& o) const { return len_ == o.len_ && std::memcmp(data_, o.data_, len_) == 0; }
 };
