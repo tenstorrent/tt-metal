@@ -187,7 +187,7 @@ class StimuliConfig:
                 self.stimuli_res_format,
                 self.tile_dimensions,
                 format_tile_sizes,
-                use_srcs=self.use_srcs,
+                use_srcs=self._operand_use_srcs("Res"),
                 dest_acc=self._dest_acc_32b,
             )
 
@@ -659,87 +659,85 @@ class StimuliConfig:
                 twos_complement=self.twos_complement,
             )
 
-    def collect_results(self, location="0,0"):
-        res_use_srcs = self._operand_use_srcs("Res")
-        tile_size_res_bytes = calculate_tile_size_bytes(
-            self.stimuli_res_format,
+    def _collect(
+        self,
+        operand: str,
+        addr: int,
+        fmt,
+        count: int,
+        sfpu: bool,
+        *,
+        debug_label: str | None = None,
+        location="0,0",
+    ):
+        use_srcs = self._operand_use_srcs(operand)
+        tile_size_bytes = calculate_tile_size_bytes(
+            fmt,
             self.tile_dimensions,
             format_tile_sizes,
-            use_srcs=res_use_srcs,
+            use_srcs=use_srcs,
             dest_acc=self._dest_acc_32b,
         )
-        read_bytes_cnt = tile_size_res_bytes * self.tile_count_res
+        read_bytes_cnt = tile_size_bytes * count
 
-        _GREEN, _DIM, _RST = "\033[32m", "\033[2m", "\033[0m"
-        logger.debug(
-            "Reading {}Res  0x{:08X}{} {}← {} B{}",
-            _GREEN,
-            self.buf_res_addr,
-            _RST,
-            _DIM,
-            read_bytes_cnt,
-            _RST,
-        )
+        if debug_label is not None:
+            _GREEN, _DIM, _RST = "\033[32m", "\033[2m", "\033[0m"
+            logger.debug(
+                "Reading {}{}{}  0x{:08X}{} {}← {} B{}",
+                _GREEN,
+                debug_label,
+                _RST,
+                addr,
+                _RST,
+                _DIM,
+                read_bytes_cnt,
+                _RST,
+            )
 
-        read_data = read_from_device(
-            location, self.buf_res_addr, num_bytes=read_bytes_cnt
-        )
+        read_data = read_from_device(location, addr, num_bytes=read_bytes_cnt)
 
         # Pass explicit tile_stride_bytes when tiles are densely packed
-        # (use_dense_tile_dimensions or use_srcs).  For the backward-compatible
+        # (use_dense_tile_dimensions or use_srcs). For the backward-compatible
         # path, pass None so unpack_res_tiles strides at the full 32×32 tile
         # size and extracts only the needed faces.
         stride_bytes = (
-            tile_size_res_bytes
-            if (self.use_dense_tile_dimensions or res_use_srcs)
-            else None
+            tile_size_bytes if (self.use_dense_tile_dimensions or use_srcs) else None
         )
-        res_from_L1 = unpack_res_tiles(
+        return unpack_res_tiles(
             read_data,
-            self.stimuli_res_format,
-            self.tile_count_res,
-            self.sfpu,
+            fmt,
+            count,
+            sfpu,
             self.num_faces,
             self.face_r_dim,
             tile_stride_bytes=stride_bytes,
-            use_srcs=res_use_srcs,
+            use_srcs=use_srcs,
             dest_acc=self._dest_acc_32b,
             twos_complement=self.twos_complement,
         )
-        return res_from_L1
+
+    def collect_results(self, location="0,0"):
+        return self._collect(
+            "Res",
+            self.buf_res_addr,
+            self.stimuli_res_format,
+            self.tile_count_res,
+            self.sfpu,
+            debug_label="Res",
+            location=location,
+        )
 
     def collect_buffer_c_results(self, location="0,0"):
         if self.buffer_C is None:
             raise ValueError("buffer_C is not configured")
 
-        tile_size_c_bytes = calculate_tile_size_bytes(
-            self.stimuli_C_format,
-            self.tile_dimensions,
-            format_tile_sizes,
-            use_srcs=self._operand_use_srcs("C"),
-        )
-        read_bytes_cnt = tile_size_c_bytes * self.tile_count_C
-
-        read_data = read_from_device(
-            location, self.buf_c_addr, num_bytes=read_bytes_cnt
-        )
-
-        stride_bytes = (
-            tile_size_c_bytes
-            if (self.use_dense_tile_dimensions or self._operand_use_srcs("C"))
-            else None
-        )
-        return unpack_res_tiles(
-            read_data,
+        return self._collect(
+            "C",
+            self.buf_c_addr,
             self.stimuli_C_format,
             self.tile_count_C,
             sfpu=False,
-            num_faces=self.num_faces,
-            face_r_dim=self.face_r_dim,
-            tile_stride_bytes=stride_bytes,
-            use_srcs=self._operand_use_srcs("C"),
-            dest_acc=self._dest_acc_32b,
-            twos_complement=self.twos_complement,
+            location=location,
         )
 
     def save_to_cache(self):
