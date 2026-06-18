@@ -53,7 +53,7 @@ FORCE_INLINE uint32_t dfb_read_blob_u32(uintptr_t blob_addr, uint32_t byte_off) 
 }
 
 // Device-side shadow of dfb_hart_init_entry_t, populated by dfb_read_init_entry_header.
-// Mirrors the 24B on-disk layout (including txn_ids[4] + _pad[2]) captured in 6 u32 reads.
+// Mirrors the 24B on-disk layout (including txn_ids[4] + remapper_pair_index) captured in 6 u32 reads.
 struct dfb_init_entry_hdr_t {
     uint8_t logical_dfb_id;
     uint8_t num_tcs;
@@ -68,6 +68,7 @@ struct dfb_init_entry_hdr_t {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
     uint8_t txn_ids[dfb::NUM_TXN_IDS];  // bytes 18–21 (DM only; 0 elsewhere)
+    uint8_t remapper_pair_index;  // byte 22; 0xFF if not remapped
 };
 
 // Fix A: read the entire 24B dfb_hart_init_entry_t (__attribute__((packed))) as 6 u32s.
@@ -81,7 +82,7 @@ struct dfb_init_entry_hdr_t {
 //   w2 = stride_in_entries (u32)
 //   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [23:16]=threshold  [31:24]=num_entries_per_txn_id
 //   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
-//   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [31:16]=_pad
+//   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index  [31:24]=_pad
 
 // Shared unpack helper: called with either a volatile uncached or a plain cached pointer.
 template <typename PtrT>
@@ -104,6 +105,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.txn_ids[1]                 = static_cast<uint8_t>(w4 >> 24);
     h.txn_ids[2]                 = static_cast<uint8_t>(w5);
     h.txn_ids[3]                 = static_cast<uint8_t>(w5 >> 8);
+    h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 16);
     return h;
 }
 
@@ -481,44 +483,6 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     //     enable_remapper_hw = end_remapper_config_time - t_before_enable;
     // }
 
-#if DFB_DM1_TC_INIT_OPTION == 2
-    // Option 2: after the remapper is enabled, DM1 (not the producer) resets each remapped
-    // producer's tile counter and sets its capacity, then publishes producer readiness on
-    // behalf of that producer. The producer skips the remapper-enable spin + TC HW init +
-    // publish in setup_local_dfb_interfaces (gated by dm1_owns_remapped_producer_ready there)
-    // and instead waits on the published signal in DataflowBuffer's ctor (dfb_ensure_ready).
-    if (enable_remapper) {
-        const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
-        const uint32_t dfb_signal_region_off = ghdr->dfb_signal_region_off;
-        volatile tt_l1_ptr uint8_t* tc_blob_ptr = config_base + dm1_remapper_blob_offset;
-        for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
-            const volatile dfb_dm1_remapper_entry_header_t* entry_hdr =
-                reinterpret_cast<const volatile dfb_dm1_remapper_entry_header_t*>(tc_blob_ptr);
-            const int num_rmp = entry_hdr->num_remapper_slots;
-            const uint32_t entry_bytes = sizeof(dfb_dm1_remapper_entry_header_t)
-                                         + static_cast<uint32_t>(num_rmp) * sizeof(dfb_dm0_remapper_slot_t);
-            const volatile dfb_dm0_remapper_slot_t* slots =
-                reinterpret_cast<const volatile dfb_dm0_remapper_slot_t*>(
-                    tc_blob_ptr + sizeof(dfb_dm1_remapper_entry_header_t));
-            for (int s = 0; s < num_rmp; s++) {
-                const uint8_t sig_bit = slots[s].producer_signal_bit;
-                // 0xFF marks a non-primary producer whose TC is not HW-inited (and not published).
-                if (sig_bit == 0xFFu) {
-                    continue;
-                }
-                const uint8_t packed_ptc = slots[s].packed_tile_counter;
-                const uint8_t tc_id = dfb::get_counter_id(packed_ptc);
-                const uint8_t tensix_id = dfb::get_tensix_id(packed_ptc);
-                overlay::fast_llk_intf_reset(tensix_id, tc_id);
-                overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, slots[s].capacity);
-                dfb_publish_producer_ready(
-                    config_cached, dfb_signal_region_off, static_cast<uint8_t>(logical_dfb_id), sig_bit);
-            }
-            tc_blob_ptr += entry_bytes;
-        }
-    }
-#endif
-
     WAYPOINT("RSD");
     const uint32_t end_time = rdcycle();
 
@@ -751,59 +715,48 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
         WAYPOINT("L4");
 
-        // --- Producer-only: remapper spin + TC HW init + publish ready ---
+        // --- Producer-only: wait for remapper pair + TC HW init + publish ready ---
 #if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
         if (eh.flags & DFB_HART_FLAG_IS_PRODUCER) {
-#if DFB_DM1_TC_INIT_OPTION == 2
-            // Option 2: DM1 owns TC reset/set-capacity and the readiness publish for producers
-            // routed through the remapper (see setup_dfb_remapper). Such producers skip the
-            // remapper-enable spin, local TC HW init, and the publish here, and instead wait on
-            // the DM1-published signal in DataflowBuffer's ctor (dfb_ensure_ready).
-            const bool dm1_owns_remapped_producer_ready = (eh.flags & DFB_HART_FLAG_REMAPPER_EN) != 0;
-#else
-            // Option 0 (default, baseline): the producer performs its own TC HW init and publish.
-            constexpr bool dm1_owns_remapped_producer_ready = false;
-#endif
-            if (!dm1_owns_remapped_producer_ready) {
-                // if (eh.flags & DFB_HART_FLAG_REMAPPER_EN) {
-                //     const uint32_t spin_start = rdcycle();
-                //     WAYPOINT("RMSW");
-                //     // while (!overlay::RemapperAPI::is_remapper_enabled()); // only need to do this if a remapped tc needs to be reset/set-capacity
-                //     WAYPOINT("RMSD");
-                //     total_remapper_spin += rdcycle() - spin_start;
-                // }
-
-                const uint32_t tc_hw_start = rdcycle();
-                for (uint8_t t = 0; t < num_tcs; t++) {
-                    const uint8_t packed_ptc = iface.tc_slots[t].packed_tile_counter;
-                    const uint8_t tc_id = dfb::get_counter_id(packed_ptc);
-#ifndef COMPILE_FOR_TRISC
-                    const uint8_t tensix_id = dfb::get_tensix_id(packed_ptc);
-                    const uint32_t t_reset = rdcycle();
-                    overlay::fast_llk_intf_reset(tensix_id, tc_id);
-                    total_tc_reset_hw += rdcycle() - t_reset;
-                    const uint32_t t_cap = rdcycle();
-                    overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, eh.capacity);
-                    total_tc_capacity_hw += rdcycle() - t_cap;
-#elif defined(UCK_CHLKC_PACK)
-                    const uint32_t t_reset = rdcycle();
-                    ckernel::trisc::tile_counters[tc_id].f.reset = 1;
-                    total_tc_reset_hw += rdcycle() - t_reset;
-                    const uint32_t t_cap = rdcycle();
-                    ckernel::trisc::tile_counters[tc_id].f.buf_capacity = eh.capacity;
-                    total_tc_capacity_hw += rdcycle() - t_cap;
-#endif
+            // Remapped producers: spin until DM1 has written this pair's ClientL config with
+            // non-zero valid bits (bits [11:8]). No global remapper-enable wait is needed.
+            if (eh.flags & DFB_HART_FLAG_REMAPPER_EN) {
+                const uint32_t spin_start = rdcycle();
+                const uint32_t pair_idx = eh.remapper_pair_index;
+                WAYPOINT("RMSW");
+                while (overlay::RemapperAPI::get_clientL_valid_hw(pair_idx) == 0u) {
                 }
-                total_tc_hw += rdcycle() - tc_hw_start;
-
-                // Publish readiness for this producer's unique slot (no-op if producer_signal_bit
-                // is 0xFF). Remapped producers under DFB_DM1_TC_INIT_OPTION != 0 skip this; DM1
-                // publishes on their behalf after enabling the remapper + initializing their TC.
-                const uint32_t t_sig_start = rdcycle();
-                dfb_publish_producer_ready(
-                    config_cached, dfb_signal_region_off, eh.logical_dfb_id, eh.producer_signal_bit);
-                total_sig_write += rdcycle() - t_sig_start;
+                WAYPOINT("RMSD");
+                total_remapper_spin += rdcycle() - spin_start;
             }
+
+            const uint32_t tc_hw_start = rdcycle();
+            for (uint8_t t = 0; t < num_tcs; t++) {
+                const uint8_t packed_ptc = iface.tc_slots[t].packed_tile_counter;
+                const uint8_t tc_id = dfb::get_counter_id(packed_ptc);
+#ifndef COMPILE_FOR_TRISC
+                const uint8_t tensix_id = dfb::get_tensix_id(packed_ptc);
+                const uint32_t t_reset = rdcycle();
+                overlay::fast_llk_intf_reset(tensix_id, tc_id);
+                total_tc_reset_hw += rdcycle() - t_reset;
+                const uint32_t t_cap = rdcycle();
+                overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, eh.capacity);
+                total_tc_capacity_hw += rdcycle() - t_cap;
+#elif defined(UCK_CHLKC_PACK)
+                const uint32_t t_reset = rdcycle();
+                ckernel::trisc::tile_counters[tc_id].f.reset = 1;
+                total_tc_reset_hw += rdcycle() - t_reset;
+                const uint32_t t_cap = rdcycle();
+                ckernel::trisc::tile_counters[tc_id].f.buf_capacity = eh.capacity;
+                total_tc_capacity_hw += rdcycle() - t_cap;
+#endif
+            }
+            total_tc_hw += rdcycle() - tc_hw_start;
+
+            const uint32_t t_sig_start = rdcycle();
+            dfb_publish_producer_ready(
+                config_cached, dfb_signal_region_off, eh.logical_dfb_id, eh.producer_signal_bit);
+            total_sig_write += rdcycle() - t_sig_start;
         }
 #endif  // !COMPILE_FOR_TRISC || UCK_CHLKC_PACK
 
