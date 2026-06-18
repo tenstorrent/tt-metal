@@ -172,7 +172,6 @@ skus:
       count: 4
       match_labels:
         exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
 
   bh_sp4:
     runs_on:
