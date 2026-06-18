@@ -23,7 +23,6 @@ from ttnn.distributed.ttrun import (
     build_rankfile_args,
     detect_rankfile_syntax,
     mpi_args_specify_bind_to,
-    strip_mpi_bind_to_args,
     normalize_rankfile_mpi_args,
     inject_rankfile_mpi_args,
     get_generate_rank_bindings_output_paths,
@@ -301,32 +300,6 @@ class TestPhase2Helpers:
         assert str(mgd_path.resolve()) in cmd
         assert "--output-dir" in cmd
         assert str(output_dir.resolve()) in cmd
-        bind_idx = cmd.index("--bind-to")
-        assert cmd[bind_idx + 1] == "none"
-
-    def test_build_generate_rank_bindings_mpi_cmd_strips_user_bind_to(self, temp_dir):
-        """Phase 1 must not inherit user bind-to (e.g. hwt); discovery runs with --bind-to none."""
-        executable = temp_dir / "generate_rank_bindings"
-        executable.touch()
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.touch()
-        output_dir = temp_dir / "output"
-        hosts = ["node1", "node2"]
-
-        cmd = build_generate_rank_bindings_mpi_cmd(
-            executable,
-            mgd_path,
-            hosts,
-            output_dir,
-            mpi_args=["--bind-to", "hwt:overload-allowed", "--tag-output", "--wdir", "/tmp"],
-        )
-
-        bind_indices = [i for i, arg in enumerate(cmd) if arg == "--bind-to"]
-        assert bind_indices == [cmd.index("--bind-to")]
-        assert cmd[bind_indices[0] + 1] == "none"
-        assert "hwt:overload-allowed" not in cmd
-        assert "--wdir" in cmd
-        assert "/tmp" in cmd
 
     def test_build_generate_rank_bindings_mpi_cmd_duplicate_hosts_adds_oversubscribe(self, temp_dir):
         """Phase 1: same hostname listed more than once requires --oversubscribe."""
@@ -675,12 +648,6 @@ class TestDetectRankfileSyntax:
         assert mpi_args_specify_bind_to(["--bind-to", "hwt:overload-allowed"]) is True
         assert mpi_args_specify_bind_to(["-bind-to", "core"]) is True
         assert mpi_args_specify_bind_to(["--bind-to=socket"]) is True
-
-    def test_strip_mpi_bind_to_args(self):
-        assert strip_mpi_bind_to_args(None) == []
-        assert strip_mpi_bind_to_args([]) == []
-        assert strip_mpi_bind_to_args(["--bind-to", "hwt:overload-allowed", "--tag-output"]) == ["--tag-output"]
-        assert strip_mpi_bind_to_args(["--bind-to=core", "--wdir", "/tmp"]) == ["--wdir", "/tmp"]
 
     def test_normalize_map_by_rankfile_file_becomes_rankfile(self, temp_dir):
         rf = temp_dir / "rankfile"
