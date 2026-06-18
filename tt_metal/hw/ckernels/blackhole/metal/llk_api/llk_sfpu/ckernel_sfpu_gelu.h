@@ -368,14 +368,16 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // |scaled| beyond TANH_SAT_THRESHOLD saturates tanh to +/- 1 to match
-    // torch's vectorized CPU tanh (Sleef / VML), which collapses to exactly
-    // +/- 1 once |scaled| crosses ~8.668. The 8.667 threshold sits in the
-    // narrow band between the observed BF16-input saturation point and the
-    // observed FP32-input non-saturation point:
-    //   BF16 x = -5.0625 -> scaled ~= -8.6683 (torch SATURATES; we must too)
-    //   FP32 x = -5.0613 -> scaled ~= -8.6642 (torch does NOT saturate)
-    constexpr float TANH_SAT_THRESHOLD = 8.667f;
+    // Saturation threshold for tanh -> +/- 1 is dtype-dependent:
+    //   BF16 mode: 8.667 to match torch's vectorized CPU tanh (Sleef / VML),
+    //              which collapses to exactly +/- 1 once |scaled| crosses
+    //              ~8.668. Required so that BF16(kernel) == BF16(torch FP32).
+    //   FP32 mode: 19.07, the threshold above which FP64 tanh itself saturates
+    //              (1 - tanh(s) < 2^-54 half-ULP at 1.0 -> s > 19.07).
+    //              Using 8.667 here would over-saturate ~6700 FP32 inputs that
+    //              an FP64 reference correctly computes as small non-zero
+    //              values, producing thousands of ULPs of "error" vs FP64.
+    constexpr float TANH_SAT_THRESHOLD = is_fp32_dest_acc_en ? 19.07f : 8.667f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
