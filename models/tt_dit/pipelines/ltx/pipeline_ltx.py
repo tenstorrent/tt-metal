@@ -615,7 +615,13 @@ class LTXPipeline:
             has_audio=self.mode == "av",
             apply_gated_attention=self._has_gate,
             cross_attention_adaln=self._cross_attention_adaln,
-            image_conditioning=self.SUPPORTS_IMAGE_CONDITIONING and bool(getattr(self, "_vae_encoder_blocks", [])),
+            image_conditioning=(
+                self.SUPPORTS_IMAGE_CONDITIONING
+                and bool(getattr(self, "_vae_encoder_blocks", []))
+                # RUN_I2V=0 forces the fast scalar-AdaLN path (no per-token video timesteps).
+                # Opting out here also disables passing images= to generate(); the transformer asserts on it.
+                and os.environ.get("RUN_I2V", "1") != "0"
+            ),
         )
 
     def _new_vae_encoder(self, num_frames: int, height: int, width: int) -> LTXVideoEncoder:
