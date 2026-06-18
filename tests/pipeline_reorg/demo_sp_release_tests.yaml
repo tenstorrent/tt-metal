@@ -69,7 +69,7 @@
   model: deepseek_prefill
   skus:
     bh_loudbox:
-      timeout: 20
+      timeout: 30
   owner_id: U0ACLAM77PS # Kosta Grujcic
   team: models
 
