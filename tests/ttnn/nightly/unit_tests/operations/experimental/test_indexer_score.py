@@ -442,3 +442,69 @@ def test_indexer_score_sp7_math_util(heads, q_id, k_id, fidelity):
         f"cores={core_count}, V={valid_tiles} tiles, mm={mm_flops / 1e9:.1f} GFLOP, "
         f"peak={peak} FLOP/cyc/core @ {_BH_CLOCK_GHZ} GHz -> math_util={math_util:.1f}%"
     )
+
+
+# ---------------------------------------------------------------------------
+# Device-perf op-test band check (CI-gated by INDEXER_SCORE_PERF_CHECKS=1; runs in the "ops perf tests"
+# job of perf-device-models). Mirrors SDPA's test_sdpa_perf_check: measure sp_rank-7 HiFi2 math
+# utilization (the deployed bf16 q + bfp8 k path) via tracy and assert it stays within a symmetric +/-
+# band, catching both regressions and unexpected speedups. Expected values were measured on a Blackhole
+# dev board; the band is wider than SDPA's 1% while the op's cross-board perf is still being characterized.
+# ---------------------------------------------------------------------------
+INDEXER_PERF_MARGIN = 0.02  # symmetric +/- 2%
+
+_INDEXER_PERF_CHECK_CONFIGS = [
+    # (case_id, heads, expected_util) at HiFi2 (bf16 q, bfp8 k), sp_rank 7
+    ("glm5", 8, 70.1),
+    ("dsv32", 16, 76.1),
+]
+
+
+@pytest.mark.skipif(
+    os.environ.get("INDEXER_SCORE_PERF_CHECKS") != "1",
+    reason="Set INDEXER_SCORE_PERF_CHECKS=1 to run (CI: ops perf tests job)",
+)
+@pytest.mark.parametrize(
+    "case_id, heads, expected_util",
+    _INDEXER_PERF_CHECK_CONFIGS,
+    ids=[f"{case_id}_heads{heads}" for case_id, heads, _ in _INDEXER_PERF_CHECK_CONFIGS],
+)
+def test_indexer_score_perf_check(case_id, heads, expected_util):
+    """GLM5.1 / DSv32 sp_rank-7 HiFi2 math utilization via tracy, asserted within +/- INDEXER_PERF_MARGIN."""
+    from tracy.process_model_log import run_device_profiler
+    from tests.nightly.sdpa_perf_utils import post_process_ops_log
+
+    subdir = "ttnn_indexer_score_perf_check"
+    perf_id = f"heads{heads}_q_bf16_k_bfp8"  # HiFi2 (bf16 q, bfp8 k)
+    command = (
+        "pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::"
+        f"test_indexer_score_sp7_perf_impl[{perf_id}]"
+    )
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir,
+        float_columns=["CORE COUNT", "DEVICE KERNEL DURATION [ns]"],
+        columns=["ATTRIBUTES"],
+        sum_vals=False,
+        has_signposts=False,
+    )
+    assert len(r["DEVICE KERNEL DURATION [ns]"]) > 0, "profiler returned no indexer_score ops"
+
+    core_count = int(r["CORE COUNT"][0])
+    duration_ns = float(r["DEVICE KERNEL DURATION [ns]"].min())
+    mm_flops = indexer_mm_flops(sp7_valid_tiles(), heads)
+    peak = _MM_FLOPS_PER_CYCLE_PER_CORE["HiFi2"]
+    cycles = duration_ns * _BH_CLOCK_GHZ
+    utilization = (mm_flops / (core_count * cycles * peak)) * 100 if core_count > 0 else 0.0
+
+    lower = expected_util * (1 - INDEXER_PERF_MARGIN)
+    upper = expected_util * (1 + INDEXER_PERF_MARGIN)
+    logger.info(
+        f"indexer_score perf check {case_id} heads={heads} (HiFi2): duration={duration_ns / 1e6:.3f} ms, "
+        f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+    )
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {INDEXER_PERF_MARGIN * 100:.1f}%)"
+    )
