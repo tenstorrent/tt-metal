@@ -368,19 +368,15 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // Saturation threshold for tanh -> +/- 1, dtype-dependent:
-    //   BF16 mode: 8.667 to match torch's vectorized CPU tanh (Sleef / VML)
-    //              which collapses to +/- 1 at |scaled| > ~8.668. Required so
-    //              BF16(kernel) == BF16(torch FP32 -> BF16) for the saturation
-    //              band inputs (x in [-5.16, -5.06] all -> 0 in BF16).
-    //   FP32 mode: 19.07, the analytical FP64 saturation point — where
-    //              1 - tanh(s) drops below FP64 half-ULP at 1.0 (= 2^-54 =
-    //              5.55e-17) so torch's `1 + tanh` rounds to 0 exactly. A
-    //              torch sweep confirms this empirically: gelu(-7.2, FP64) =
-    //              -4e-16 (scaled ~= 19.05, NOT saturated) and gelu(-7.3,
-    //              FP64) = -0 (scaled ~= 19.70, saturated); 19.07 sits in
-    //              the gap and matches torch's actual behaviour.
-    constexpr float TANH_SAT_THRESHOLD = is_fp32_dest_acc_en ? 19.07f : 8.667f;
+    // Saturation threshold for tanh -> +/- 1. Matches torch's vectorized CPU
+    // tanh (Sleef / VML), which collapses to exactly +/- 1 once |scaled|
+    // crosses ~8.668. The 8.667 threshold sits just below that, in the gap
+    // between the BF16 grid point x = -5.0625 (scaled ~= -8.6683, torch
+    // saturates) and the next less-negative BF16 grid point x = -5.03125
+    // (scaled ~= -8.56, torch does not saturate). Same threshold for FP32
+    // and BF16 modes — we use torch's FP32 chain as the reference in both,
+    // so the algorithmic behaviour should match.
+    constexpr float TANH_SAT_THRESHOLD = 8.667f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -417,39 +413,18 @@ inline void calculate_gelu_tanh() {
             result = x;
         }
         v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            // Active region. The formulation is dtype-conditional to match
-            // PyTorch's reference behaviour in each mode:
-            //
-            // BF16 dest-acc mode -> use the cancellation chain
-            //   `0.5 * x * (1 + tanh(scaled))`, computing tanh as
-            //   `2*sigmoid(2*scaled) - 1` exactly like torch's CPU FP32
-            //   path. The `2*sig - 1` subtraction loses ~9-10 bits of
-            //   FP32 precision, but BF16's 7-bit mantissa absorbs that
-            //   loss harmlessly. Matching torch's exact rounding (rather
-            //   than being "more accurate" than torch via the sigmoid
-            //   identity below) avoids ~10 BF16 inputs in x in [-5.0, -4.75]
-            //   where torch FP32->BF16 and an identity-based result round
-            //   to different BF16 values.
-            //
-            // FP32 dest-acc mode -> use the identity
-            //   `1 + tanh(s) = 2*sigmoid(2s)` directly, so
-            //   `0.5 * x * (1 + tanh) = x * sigmoid(2*scaled)`. This skips
-            //   the `2*sig - 1` cancellation entirely. The result has FP32
-            //   precision at its OWN magnitude (not at magnitude 1.0), so
-            //   the ~1/m ULP magnification that previously inflated a
-            //   ~5-ULP-at-1.0 error into ~hundreds-of-ULPs-at-(1+tanh) is
-            //   gone. The reference for FP32 is torch FP64 -> FP32, which
-            //   is also free of FP32 cancellation, so the two paths agree.
-            if constexpr (is_fp32_dest_acc_en) {
-                sfpi::vFloat two_scaled = 2.0f * scaled;
-                sfpi::vFloat sig = _sfpu_sigmoid_<true>(two_scaled);
-                result = x * sig;
-            } else {
-                sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
-                sfpi::vFloat one_plus = 1.0f + t;
-                sfpi::vFloat half_x = 0.5f * x;
-                result = half_x * one_plus;
-            }
+            // Active region: cancellation chain `0.5 * x * (1 + tanh(scaled))`,
+            // computing tanh as `2*sigmoid(2*scaled) - 1`. This matches
+            // PyTorch's CPU implementation exactly (same formula, same
+            // algorithmic precision floor). The `2*sig - 1` subtraction
+            // loses ~9-10 bits of FP32 precision at small `(1+tanh)`, which
+            // shows up as ~hundreds of FP32 ULPs at the small result
+            // magnitude — that's the algorithmic floor of this formula,
+            // not a kernel deficiency. (BF16 hides it via 7-bit truncation.)
+            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
+            sfpi::vFloat one_plus = 1.0f + t;
+            sfpi::vFloat half_x = 0.5f * x;
+            result = half_x * one_plus;
         }
         v_endif;
 
