@@ -108,6 +108,7 @@ def main():
 
     from transformers import AutoConfig, AutoTokenizer
 
+    from models.common.utility_functions import is_blackhole
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
     from models.demos.gpt_oss.tt.model_config import ModelArgs
     from models.demos.gpt_oss.utils.general_utils import get_default_num_links
@@ -116,9 +117,28 @@ def main():
 
     shape = (args.rows, args.cols)
     sp = shape[0]  # sequence-parallel factor == mesh rows
-    print(f"[prefill] mesh={shape} SP={sp} TP={shape[1]} prompt={args.prompt!r}", flush=True)
 
-    fabric = ttnn.FabricConfig.FABRIC_1D_RING if shape != (1, 1) else None
+    if shape == (1, 1):
+        fabric = None
+        topology = ttnn.Topology.Linear
+    elif is_blackhole() and shape[0] == 1:
+        # Single-row BH (e.g. 1×8 T3K): TP chips are in a line, not a ring.
+        fabric = ttnn.FabricConfig.FABRIC_1D
+        topology = ttnn.Topology.Linear
+    elif is_blackhole():
+        # Multi-row BH Galaxy (e.g. 4×8): TP axis (cols) is a ring, EP/SP axis (rows) is a line.
+        # Use a single Linear topology through CCLManager for now.
+        fabric = ttnn.FabricConfig.FABRIC_1D_RING
+        topology = ttnn.Topology.Linear
+    else:
+        fabric = ttnn.FabricConfig.FABRIC_1D_RING
+        topology = ttnn.Topology.Ring
+
+    print(
+        f"[prefill] mesh={shape} SP={sp} TP={shape[1]} fabric={fabric} topology={topology} prompt={args.prompt!r}",
+        flush=True,
+    )
+
     if fabric is not None:
         ttnn.set_fabric_config(fabric)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(*shape))
@@ -144,7 +164,7 @@ def main():
         state_dict = ModelArgs.load_state_dict(model_args.weights_path, dummy_weights=False)
         cache = model_args.weight_cache_path(ttnn.bfloat8_b)
         mesh_config = MeshConfig(shape, decode=ModeConfig(tp=shape[1], ep=shape[0]))
-        ccl = CCLManager(mesh, num_links=get_default_num_links(mesh))
+        ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=topology)
 
         model = Model(
             mesh_device=mesh,
