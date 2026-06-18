@@ -467,7 +467,9 @@ def vit_encoder(
 
     # transformers 5.x removed ViTEncoder (ViTModel.encoder.layer -> ViTModel.layers),
     # so the preprocessed params are the layer list directly (no `.layer` sub-key).
-    encoder_layers = parameters.layer if hasattr(parameters, "layer") else parameters
+    # NB: use `in` (dict membership), not hasattr — ParameterDict.__getattr__ is dict.__getitem__,
+    # so hasattr() on a missing key raises KeyError instead of returning False.
+    encoder_layers = parameters.layer if "layer" in parameters else parameters
     for index, encoder_parameters in enumerate(encoder_layers):
         encoder_output = vit_layer(
             config,
@@ -491,7 +493,9 @@ def vit(
     hidden_states = vit_encoder(
         config,
         embeddings_output,
-        parameters=parameters.vit.encoder if hasattr(parameters.vit, "encoder") else parameters.vit.layers,
+        # `in` (dict membership), not hasattr: ParameterDict.__getattr__ is dict.__getitem__, so
+        # hasattr() on a missing key raises KeyError. 5.x has no `encoder` (ViTModel.layers).
+        parameters=parameters.vit.encoder if "encoder" in parameters.vit else parameters.vit.layers,
     )
 
     # Final LayerNorm

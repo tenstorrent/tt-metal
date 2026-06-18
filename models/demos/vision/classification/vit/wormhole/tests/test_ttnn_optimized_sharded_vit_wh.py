@@ -367,7 +367,9 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
         model = vit.layers.to(torch.float32)
         hidden = torch_hidden_states
         for layer in model:
-            hidden = layer(hidden)[0]
+            # 5.x ViTLayer.forward returns a bare Tensor (4.x returned a tuple); don't index [0],
+            # which would slice off the batch dim and corrupt the shape for the next layer.
+            hidden = layer(hidden)
         torch_output = hidden
 
     parameters = preprocess_model_parameters(
