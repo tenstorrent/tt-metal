@@ -19,7 +19,7 @@ on:
         required: false
         type: string
         default: unit
-        description: "Time-budget workflow key passed to verify_time_budget.py (smoke for merge-gate, unit for L2/standalone)."
+        description: "smoke: core triage (merge-gate); unit: hang-report test (L2 nightly). Selects yaml and verify_time_budget.py key."
       enable-watcher:
         description: "Enable watcher"
         default: false
@@ -32,16 +32,12 @@ on:
         description: "Enable LLK asserts"
         default: false
         type: boolean
-      run-hang-report-test:
-        description: "true: run ONLY the hang-report test; false: run only the core triage tests"
-        default: false
-        type: boolean
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.apply-filters.outputs.matrix }}
+      matrix: ${{ steps.prepare.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ${{ inputs.test-category == 'smoke' && './tests/pipeline_reorg/triage_smoke_merge_gate_tests.yaml' || './tests/pipeline_reorg/triage_tests.yaml' }}
     steps:
@@ -70,29 +66,6 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Select hang-report vs core triage rows
-        id: apply-filters
-        env:
-          MATRIX: ${{ steps.prepare.outputs.matrix }}
-          RUN_HANG_REPORT: ${{ inputs.run-hang-report-test }}
-        run: |
-          # run-hang-report-test selects which rows run (they are disjoint):
-          #   true  -> only the hang-report test (nightly's unique coverage)
-          #   false -> only the core triage tests (already gated on merge-gate)
-          if [[ "${{ inputs.test-category }}" == "smoke" ]]; then
-            selected="$MATRIX"
-          elif [[ "$RUN_HANG_REPORT" == "true" ]]; then
-            selected=$(echo "$MATRIX" | jq -c '[.[] | select((.tags // []) | index("hang-report"))]')
-          else
-            selected=$(echo "$MATRIX" | jq -c '[.[] | select((.tags // []) | index("hang-report") | not)]')
-          fi
-          count=$(echo "$selected" | jq 'length')
-          if [[ "$count" -eq 0 ]]; then
-            echo "::warning::No triage tests selected for enabled SKU(s) '${{ inputs.enabled-skus }}'; matrix is empty and jobs will be skipped."
-          fi
-          echo "matrix<<EOF" >> $GITHUB_OUTPUT
-          echo "$selected" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
   triage-tests:
     needs: load-test-matrix
