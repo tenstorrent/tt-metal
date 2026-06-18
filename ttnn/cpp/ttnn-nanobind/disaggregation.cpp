@@ -10,6 +10,7 @@
 
 #include <tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.hpp"
 
 namespace ttnn::disaggregation {
 
@@ -173,6 +174,21 @@ void bind_disaggregation_api(nb::module_& mod) {
             &KvChunkAddressTable::num_position_chunks,
             "Number of position chunks (computed from config).")
         .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries in the table.");
+
+    // Protobuf file round-trip. Lets a model-side callback build a table from
+    // its live KV cache, write the .pb, and hand the path to a migration
+    // endpoint (e.g. via _migration_client.send_kv_chunk_table()).
+    mod.def(
+        "export_kv_chunk_table_to_protobuf_file",
+        [](const KvChunkAddressTable& table, const std::string& path) { export_to_protobuf_file(table, path); },
+        nb::arg("table"),
+        nb::arg("path"),
+        "Serialize a KvChunkAddressTable to a protobuf file at the given path.");
+    mod.def(
+        "import_kv_chunk_table_from_protobuf_file",
+        [](const std::string& path) { return import_from_protobuf_file(path); },
+        nb::arg("path"),
+        "Deserialize a KvChunkAddressTable from a protobuf file at the given path.");
 }
 
 }  // namespace ttnn::disaggregation
