@@ -354,10 +354,45 @@ def mamba2_prefill_layer_forward(
 
     Returns (output [B, S, 2688], ssm_state_new [B, H, D, N], conv_state_new).
     """
-    residual = hidden_states
     B = hidden_states.shape[0]
     S = hidden_states.shape[1]
 
+    # For ISL > 65536 (ISL=262K: S≈257K), projected=[B,S,10304] is 5.3 GB —
+    # too large to fit alongside model weights (~26 GB) + state (1.57 GB).
+    # Split into ≤65536-token outer chunks so each projected ≤ 1.35 GB.
+    # h_prev and conv_state thread sequentially through chunks.
+    _S_M_OUTER = 65536
+    if S > _S_M_OUTER:
+        _out_chunks = []
+        _hs = ssm_state
+        _cs = conv_state
+        for _s in range(0, S, _S_M_OUTER):
+            _e = min(_s + _S_M_OUTER, S)
+            _hc = ttnn.slice(hidden_states, [0, _s, 0], [B, _e, hidden_states.shape[2]])
+            _oc, _hs, _cs = mamba2_prefill_layer_forward(
+                mesh_device,
+                _hc,
+                norm_weight,
+                in_proj_weight,
+                conv1d_weight,
+                conv1d_bias,
+                dt_bias,
+                A_log,
+                norm_mixer_weight,
+                D,
+                out_proj_weight,
+                norm_eps=norm_eps,
+                ssm_state=_hs,
+                conv_state=_cs,
+            )
+            _hc.deallocate(True)
+            _out_chunks.append(_oc)
+        _result = ttnn.concat(_out_chunks, dim=1)
+        for _oc in _out_chunks:
+            _oc.deallocate(True)
+        return _result, _hs, _cs
+
+    residual = hidden_states
     # ---- 1. Pre-block RMSNorm ----------------------------------------
     w_tt = _rep_keyed(id(norm_weight), norm_weight.bfloat16().unsqueeze(0), mesh_device)  # same key as decode path
     normed = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
