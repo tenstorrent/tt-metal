@@ -198,18 +198,11 @@ jobs:
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # run t3k tests on CIv1 for now in order to have dedicated machine
-        platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N300-viommu","N300-llmbox-viommu-prio","P150b-viommu-prio"]')
-            || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
+      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n300_civ2,wh_llmbox_civ2_prio,bh_p150b_civ2_viommu_prio' || 'wh_n300_civ2,wh_llmbox_civ2_viommu,bh_p150b_civ2_viommu' }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-metalium
       enable-kernel-ccache: true
@@ -222,18 +215,11 @@ jobs:
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # run t3k tests on CIv1 for now in order to have dedicated machine
-        platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N300-viommu","N300-llmbox-viommu-prio","P150b-viommu-prio"]')
-            || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
+      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n300_civ2,wh_llmbox_civ2_prio,bh_p150b_civ2_viommu_prio' || 'wh_n300_civ2,wh_llmbox_civ2_viommu,bh_p150b_civ2_viommu' }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-nn
       enable-kernel-ccache: true

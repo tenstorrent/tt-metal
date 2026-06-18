@@ -82,6 +82,14 @@ skus:
     runs_on:
       - tt-ubuntu-2204-N300-llmbox-stable
 
+  wh_llmbox_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-N300-llmbox-viommu-stable
+
+  wh_llmbox_civ2_prio:
+    runs_on:
+      - tt-ubuntu-2204-N300-llmbox-viommu-prio-stable
+
   bh_p100_perf:
     runs_on:
       - pipeline-perf

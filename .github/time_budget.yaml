@@ -65,7 +65,12 @@ metal_infra:
 # No official decision has been made yet for division of budgets per team.
 ttnn:
   smoke:
-    wh_n300_civ2: 40
+    wh_n150_civ2: 15
+    wh_n300_civ2: 55
+    wh_llmbox_civ2_viommu: 15
+    wh_llmbox_civ2_prio: 15
+    bh_p150b_civ2_viommu: 15
+    bh_p150b_civ2_viommu_prio: 15
   sanity:
     wh_n300_civ2: 545
     bh_p100: 545
@@ -155,6 +160,13 @@ scaleout:
     bh_quietbox_2: 80
 
 runtime:
+  smoke:
+    wh_n150_civ2: 15
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 15
+    wh_llmbox_civ2_prio: 15
+    bh_p150b_civ2_viommu: 15
+    bh_p150b_civ2_viommu_prio: 15
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
