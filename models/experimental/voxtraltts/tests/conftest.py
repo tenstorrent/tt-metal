@@ -16,7 +16,8 @@ from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 @pytest.fixture(scope="function")
 def device(request, device_params):
-    """P150: single device. QB2: 1×4 host mesh; compute is 1×1 submesh unless ``VOXTRAL_COMPUTE_MESH_SHAPE=1,4``."""
+    """P150: single device. QB2: 1×4 host mesh; compute defaults to the full 1×4 mesh, or pin a
+    single rank with ``VOXTRAL_COMPUTE_MESH_SHAPE=1,1``."""
     physical_device_id = voxtral_resolve_physical_device_id(request.config.getoption("device_id"))
     runtime = open_voxtral_runtime_mesh(device_params, device_id=physical_device_id)
     request.node.pci_ids = runtime.physical_device_ids

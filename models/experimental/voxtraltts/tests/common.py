@@ -54,17 +54,22 @@ def voxtral_requested_compute_mesh_shape() -> tuple[int, int]:
 
 
 def voxtral_compute_mesh_shape() -> ttnn.MeshShape:
-    """Compute mesh shape from ``VOXTRAL_COMPUTE_MESH_SHAPE`` (default ``1,1``).
+    """Compute mesh shape, hardware-aware.
 
-    On P150 (no 1×4 host mesh) this is always 1×1 regardless of the environment.
-    On BH QB2, ``1,4`` enables tensor-parallel text on the full host mesh; acoustic and
-    audio tokenizer replicate weights onto every device.
+    * ``VOXTRAL_COMPUTE_MESH_SHAPE`` set → honor it (``1,4`` = tensor-parallel text on the full host
+      mesh; ``1,1`` = pin a single rank).
+    * Env unset → the natural mesh for the hardware: ``1×1`` on a single card (e.g. P150), the full
+      host mesh on a multi-card host (``1×4`` on BH QB2). Acoustic and audio tokenizer replicate
+      weights onto every device; text runs tensor-parallel across the mesh.
     """
     ensure_voxtral_device_available()
-    if voxtral_host_mesh_shape() is None:
+    host = voxtral_host_mesh_shape()
+    if host is None:
         return ttnn.MeshShape(1, 1)
-    raw = os.getenv("VOXTRAL_COMPUTE_MESH_SHAPE", "1,1").strip()
-    rows, cols = voxtral_parse_mesh_shape(raw)
+    env = os.getenv("VOXTRAL_COMPUTE_MESH_SHAPE")
+    if env is None or env.strip() == "":
+        return host
+    rows, cols = voxtral_parse_mesh_shape(env)
     return ttnn.MeshShape(rows, cols)
 
 
@@ -74,6 +79,22 @@ def voxtral_host_mesh_shape() -> ttnn.MeshShape | None:
     if ttnn.device.is_blackhole() and ttnn.get_num_devices() == 4:
         return ttnn.MeshShape(1, 4)
     return None
+
+
+def voxtral_is_qb2_single_rank() -> bool:
+    """True only on a multi-card BH host (QB2) whose compute is pinned to a single ``1×1`` submesh
+    (``VOXTRAL_COMPUTE_MESH_SHAPE=1,1``).
+
+    That submesh is the one topology where the 2CQ CQ1/CQ0 handoff and the acoustic-FM trace diverge
+    (noise / early END), so callers fall back to single-CQ / untraced FM there. A plain single card
+    (P150) and the full ``1×N`` mesh are unaffected — text-decode trace is stable everywhere.
+    """
+    if ttnn.get_num_devices() < 2:
+        return False  # single card (P150) or no device → never a multi-card submesh
+    if voxtral_host_mesh_shape() is None:
+        return False
+    compute = voxtral_compute_mesh_shape()
+    return (int(compute[0]) * int(compute[1])) == 1
 
 
 def voxtral_log_runtime_mesh(runtime: "VoxtralRuntimeMesh") -> None:
@@ -170,19 +191,23 @@ def open_voxtral_runtime_mesh(
     """Open the Voxtral runtime device with host-aware mesh selection.
 
     * **P150 (1 card):** ``CreateDevice(0)`` — unchanged single-card path.
-    * **BH QB2 (4 cards):** ``open_mesh_device(1×4)`` for the host fabric topology. By default a
-      ``1×1`` submesh is used for compute (audio-safe, ``cluster_shape=(1,1)``). Set
-      ``VOXTRAL_COMPUTE_MESH_SHAPE=1,4`` to run tensor-parallel text on the full 1×4 mesh;
-      acoustic and audio tokenizer replicate weights on every device.
+    * **BH QB2 (4 cards):** ``open_mesh_device(1×4)`` for the host fabric topology. Compute uses the
+      full 1×4 mesh by default (tensor-parallel text; acoustic and audio tokenizer replicate weights
+      on every device). Set ``VOXTRAL_COMPUTE_MESH_SHAPE=1,1`` to pin compute to a single 1×1 submesh.
+
+    The compute mesh follows :func:`voxtral_compute_mesh_shape`: the env var when set, otherwise the
+    natural mesh for the detected hardware.
     """
     from conftest import set_fabric
 
     physical_device_id = voxtral_resolve_physical_device_id(device_id)
     params = dict(device_params or {})
-    requested_compute = voxtral_requested_compute_mesh_shape()
-    if int(requested_compute[0]) * int(requested_compute[1]) > 1 and params.get("fabric_config") is None:
-        params["fabric_config"] = voxtral_default_fabric_config()
     host_shape = voxtral_host_mesh_shape()
+    # Hardware-aware compute mesh: honor VOXTRAL_COMPUTE_MESH_SHAPE when set, else use the natural
+    # mesh for this host. Multi-device compute needs the CCL fabric configured before the mesh opens.
+    effective_compute = voxtral_compute_mesh_shape() if host_shape is not None else ttnn.MeshShape(1, 1)
+    if int(effective_compute[0]) * int(effective_compute[1]) > 1 and params.get("fabric_config") is None:
+        params["fabric_config"] = voxtral_default_fabric_config()
     open_kwargs, fabric = prepare_voxtral_open_mesh_kwargs(params)
     previous_default = ttnn.GetDefaultDevice()
 

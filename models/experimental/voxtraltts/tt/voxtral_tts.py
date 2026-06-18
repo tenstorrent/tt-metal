@@ -649,14 +649,24 @@ class VoxtralTTSPipeline:
                 generated_codes_tt.append(ttnn.clone(codes_tt))
 
         current_pos = S_prompt
+        # Free-run acoustic noise RNG — topology-split (the one accuracy-relevant 1×1 vs 1×N config):
+        #   * Multi-device (QB2 1×N TP): on-device ``ttnn`` noise (avoids per-step host staging).
+        #   * Single rank (P150 / 1×1 submesh): the pre-QB2 default — host ``torch`` noise for free-run.
+        #     On-device noise tips the END_AUDIO near-tie early on some prompts (truncated output on 1×1);
+        #     torch noise reproduces the validated full-length generation. ``debug``/PCC keeps torch to
+        #     match the CPU reference; ``fixed_step_count`` benchmarks keep ttnn (no early-END branch).
+        # Override either way with ``VOXTRAL_ACOUSTIC_NOISE_RNG``.
         env_noise_rng = os.environ.get("VOXTRAL_ACOUSTIC_NOISE_RNG")
-        acoustic_noise_rng = (
-            env_noise_rng.strip().lower() if env_noise_rng is not None else ("ttnn" if debug is None else "torch")
-        )
+        if env_noise_rng is not None:
+            acoustic_noise_rng = env_noise_rng.strip().lower()
+        elif self.text.inner.args.num_devices > 1:
+            acoustic_noise_rng = "ttnn" if debug is None else "torch"
+        else:
+            acoustic_noise_rng = "ttnn" if (fixed_step_count and debug is None) else "torch"
         acoustic_noise_scale = _env_float("VOXTRAL_ACOUSTIC_NOISE_SCALE", 1.0)
 
-        # Staged trace replay: text-decode trace (+ acoustic FM trace on multi-device). On BH 1×1
-        # submesh, text trace diverges numerically; default trace is OFF there (see decode_trace_enabled).
+        # Staged trace replay: text-decode trace (on by default everywhere) + acoustic FM trace (on
+        # for a plain single card and the full mesh; off only on the BH QB2 1×1 submesh, see below).
         # Debug (return_debug) keeps the legacy prefill_from_embeds + forward path for host traces.
         from models.experimental.voxtraltts.demo.decode_trace_2cq import (
             AcousticFMBuffers,
@@ -673,11 +683,17 @@ class VoxtralTTSPipeline:
         )
 
         _staged_decode = debug is None and decode_trace_enabled()
-        # BH 1×1 submesh: text-decode trace is stable; acoustic FM trace diverges (noise / bad codes).
-        # 1×4 needs both traces for throughput. Override with VOXTRAL_ACOUSTIC_FM_TRACE=1 on 1×1.
-        _acoustic_fm_trace = _staged_decode and (
-            self.text.inner.args.num_devices > 1 or os.environ.get("VOXTRAL_ACOUSTIC_FM_TRACE", "0") == "1"
-        )
+        # Acoustic FM trace (the ~78%/step bottleneck). Stable on a plain single card (P150) and on
+        # the full 1×N mesh; it only diverges (noise / bad codes) on the BH QB2 1×1 *submesh*, so it
+        # is off there by default. Force on/off anywhere with VOXTRAL_ACOUSTIC_FM_TRACE=1/0.
+        from models.experimental.voxtraltts.tests.common import voxtral_is_qb2_single_rank
+
+        _fm_env = os.environ.get("VOXTRAL_ACOUSTIC_FM_TRACE")
+        if _fm_env is not None:
+            _fm_default = _fm_env.strip().lower() not in ("0", "false", "no")
+        else:
+            _fm_default = not voxtral_is_qb2_single_rank()
+        _acoustic_fm_trace = _staged_decode and _fm_default
         _trace = _bufs = _dec2cq = None
         _ac_trace = _ac_bufs = None
         _captured = _ac_captured = False

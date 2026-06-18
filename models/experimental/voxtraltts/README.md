@@ -89,18 +89,26 @@ Uses default optimizations (dense ALiBi SDPA + Tier 1 matmul; set ``VOXTRAL_AUDI
 
 Voxtral selects the runtime device in ``open_voxtral_runtime_mesh()`` (demo and tests):
 
-| Host | Default compute | Behavior |
+The compute mesh is **hardware-aware**: when ``VOXTRAL_COMPUTE_MESH_SHAPE`` is unset the natural
+mesh for the detected host is used; when set, it is honored.
+
+| Host | Default compute (env unset) | Behavior |
 |------|-----------------|----------|
 | **P150** (1 card) | 1×1 | ``CreateDevice(0)`` — unchanged single-card path |
-| **BH QB2** (4 cards) | 1×1 submesh | ``open_mesh_device(1×4)`` host fabric + ``1×1`` compute submesh (audio-safe) |
-| **BH QB2** (4 cards) | 1×4 (optional) | Set ``VOXTRAL_COMPUTE_MESH_SHAPE=1,4`` for tensor-parallel text on the full mesh; acoustic and audio tokenizer replicate weights |
+| **BH QB2** (4 cards) | 1×4 | ``open_mesh_device(1×4)`` host fabric; tensor-parallel text on the full mesh, acoustic and audio tokenizer replicate weights |
+| **BH QB2** (4 cards) | 1×1 submesh (opt-in) | Set ``VOXTRAL_COMPUTE_MESH_SHAPE=1,1`` to pin compute to a single rank |
+
+Trace replay is **ON by default** on every topology (it removes the host-dispatch gaps that
+dominate decode). 2CQ overlap and the acoustic-FM trace are auto-tuned per topology and fall back
+to single-CQ / untraced FM only on the BH QB2 1×1 submesh (where they diverge). Override with
+``VOXTRAL_DECODE_TRACE`` / ``VOXTRAL_DECODE_TRACE_2CQ`` / ``VOXTRAL_ACOUSTIC_FM_TRACE``.
 
 ```bash
-# Demo on QB2 (default: 1×4 host, 1×1 compute)
+# Demo (auto-detects mesh: 1×1 on P150, full 1×4 on QB2)
 python models/experimental/voxtraltts/demo/demo.py --text "Hello" --output-dir out
 
-# QB2 with tensor-parallel text (experimental)
-export VOXTRAL_COMPUTE_MESH_SHAPE=1,4
+# Pin QB2 compute to a single rank (1×1 submesh)
+export VOXTRAL_COMPUTE_MESH_SHAPE=1,1
 python models/experimental/voxtraltts/demo/demo.py --text "Hello" --output-dir out
 
 # E2E PCC (uses voxtral ``device`` fixture — P150 or QB2)

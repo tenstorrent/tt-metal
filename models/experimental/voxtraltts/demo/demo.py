@@ -574,10 +574,15 @@ _CHUNK_LEAD_TRIM_MS = 0.0
 _DEGENERACY_WINDOW_FRAMES = 20
 _DEGENERACY_MIN_UNIQUE = 6
 
-# Trace-enabled path: original large-chunk thresholds (single pass for typical demo prompts).
-_TRACE_CHUNK_THRESHOLD_WORDS = 100
-_TRACE_CHUNK_THRESHOLD_WORDS_SHORT = 200
-_TRACE_CHUNK_MAX_WORDS = 200
+# Trace-enabled path: sentence-aligned chunks sized to the AR stable horizon (~200 frames / ~16 s
+# ≈ ~35 words). A single pass past that horizon makes the model emit END_AUDIO at the first strong
+# sentence boundary and drop the remaining sentences (e.g. a trailing short sentence). Chunking at
+# the horizon — one or a few whole sentences per chunk — lets each chunk run to its own END and
+# concatenate, so the full prompt is always spoken. (Sentences are never split mid-sentence; a
+# sentence longer than the cap becomes its own chunk.)
+_TRACE_CHUNK_THRESHOLD_WORDS = 35
+_TRACE_CHUNK_THRESHOLD_WORDS_SHORT = 35
+_TRACE_CHUNK_MAX_WORDS = 35
 
 
 def _estimate_acoustic_frames(n_words: int) -> int:
@@ -766,10 +771,11 @@ def _split_into_chunks(text: str, max_words: int | None = None) -> list[str]:
             if _short_chunking_enabled():
                 head, words = _take_word_chunk(words, max_words)
             else:
-                if len(words) <= max_words:
-                    head, words = words, []
-                else:
-                    head, words = words[:max_words], words[max_words:]
+                # Trace path: keep whole sentences. A sentence longer than the cap becomes its own
+                # chunk rather than being split mid-sentence (an unnatural seam); chunking exists to
+                # bound each pass to the AR horizon, and a single sentence has no internal END_AUDIO
+                # boundary to drop content at.
+                head, words = words, []
             if head:
                 chunks.append(" ".join(head))
     if buf:
@@ -1116,25 +1122,17 @@ def run_demo(args: DemoArgs) -> None:
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Trace defaults: OFF on 1×1 BH (clean audio), ON on 1×4 TP. Override with env vars.
-    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
-
-    if voxtral_requested_compute_mesh_shape() == (1, 1):
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "0")
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "0")
-    else:
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
+    # Trace is ON by default on every topology (it removes the host-dispatch gaps that dominate
+    # decode). 2CQ overlap and the acoustic-FM trace are auto-tuned per topology — single-CQ /
+    # untraced FM only on the BH QB2 1×1 submesh. Override with VOXTRAL_DECODE_TRACE /
+    # VOXTRAL_DECODE_TRACE_2CQ / VOXTRAL_ACOUSTIC_FM_TRACE, or --no-decode-trace.
     from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, decode_trace_enabled
-    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
 
-    requested_compute = voxtral_requested_compute_mesh_shape()
-    if requested_compute != (1, 1):
-        logger.warning(
-            "[demo] VOXTRAL_COMPUTE_MESH_SHAPE=%s enables tensor-parallel text on the full host mesh; "
-            "1×1 compute remains the default for single-rank production.",
-            requested_compute,
-        )
+    mesh_env = os.getenv("VOXTRAL_COMPUTE_MESH_SHAPE")
+    if mesh_env and mesh_env.strip():
+        logger.info("[demo] VOXTRAL_COMPUTE_MESH_SHAPE=%s set; using it for the compute mesh.", mesh_env.strip())
+    else:
+        logger.info("[demo] VOXTRAL_COMPUTE_MESH_SHAPE unset; selecting the compute mesh from hardware.")
 
     logger.info(
         f"[demo] trace replay={'on' if decode_trace_enabled() else 'off'}, "

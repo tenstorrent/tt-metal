@@ -59,25 +59,26 @@ def _env_flag_enabled(name: str, *, default: str = "1") -> bool:
 
 
 def decode_trace_enabled() -> bool:
-    """True when ``VOXTRAL_DECODE_TRACE`` is truthy.
+    """True when ``VOXTRAL_DECODE_TRACE`` is truthy. Default ON on every topology.
 
-    Default ON for multi-device compute (1×4 TP). Default OFF on 1×1 BH submesh — text-decode
-    trace replay diverges there (noisy codes); direct decode matches P150-quality audio. Set
-    ``VOXTRAL_DECODE_TRACE=1`` to force trace on 1×1 for experiments.
+    The text-decode trace replay is what removes the host-dispatch gaps that otherwise dominate
+    decode (see module header); it is numerically stable on a plain 1×1 card and a 1×N mesh alike.
+    Set ``VOXTRAL_DECODE_TRACE=0`` (or ``--no-decode-trace``) to force the untraced path.
     """
-    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
-
-    default = "0" if voxtral_requested_compute_mesh_shape() == (1, 1) else "1"
-    return _env_flag_enabled("VOXTRAL_DECODE_TRACE", default=default)
+    return _env_flag_enabled("VOXTRAL_DECODE_TRACE", default="1")
 
 
 def decode_trace_2cq_enabled() -> bool:
     """True when 2CQ input staging is on. Independent of ``VOXTRAL_DECODE_TRACE`` — production
-    decode always trace-replays; this flag only toggles CQ1 overlap vs single-CQ staging."""
-    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+    decode always trace-replays; this flag only toggles CQ1 overlap vs single-CQ staging.
 
-    # 1×1 submesh: single CQ avoids CQ1/CQ0 handoff races seen on BH QB2 (noise / early END).
-    default_2cq = "0" if voxtral_requested_compute_mesh_shape() == (1, 1) else "1"
+    Default ON everywhere except the BH QB2 ``1×1`` submesh, where the CQ1/CQ0 handoff races
+    (noise / early END) — single-CQ is used there. A plain single card (P150) and the full mesh
+    keep 2CQ overlap.
+    """
+    from models.experimental.voxtraltts.tests.common import voxtral_is_qb2_single_rank
+
+    default_2cq = "0" if voxtral_is_qb2_single_rank() else "1"
     return _env_flag_enabled("VOXTRAL_DECODE_TRACE_2CQ", default=default_2cq)
 
 
