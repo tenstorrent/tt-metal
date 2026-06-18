@@ -124,6 +124,10 @@ jobs:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        # Tracy device-perf tests (e.g. the SDXL group) resolve the profiler
+        # binaries at $TT_METAL_HOME/build/tools/profiler/bin. Pin it to /work to
+        # match where the build artifact is extracted (setup-job path: docker-job below).
+        TT_METAL_HOME: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -144,6 +148,9 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          # Extract the build artifact into the repo checkout (= /work) so the
+          # profiler binaries land under $TT_METAL_HOME/build, where tracy looks.
+          path: docker-job
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
