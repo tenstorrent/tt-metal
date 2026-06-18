@@ -307,6 +307,11 @@ struct OperationMustUninit<Operation::Pack> : std::true_type
 {
 };
 
+template <>
+struct OperationMustUninit<Operation::UnpackUntilize> : std::true_type
+{
+};
+
 template <Operation op>
 inline constexpr bool operation_must_uninit = OperationMustUninit<op>::value;
 

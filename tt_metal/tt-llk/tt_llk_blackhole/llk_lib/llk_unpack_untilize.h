@@ -92,7 +92,7 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
         llk::san::IGNORE,
         llk::san::IGNORE);
     llk::san::operation_init<llk::san::Operation::UnpackUntilize>();
-    // sstanisic todo:: llk::san::must_uninit<llk_san_op::UnpackUntilize>(); // lololol uninit doesn't exist
+    // sstanisic todo:
     // llk_san_extended_state_mask(llk_san_cfg::Transpose, llk_san_cfg::AdcXX, llk_san_cfg::CH1Strides, llk_san_cfg::TileDesc, llk_san_cfg::Mop); // GPRS not
     // tracked here for now
 
@@ -150,6 +150,8 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
  */
 inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {
+    llk::san::operation_uninit<llk::san::Operation::UnpackUntilize>();
+
     const DataFormat dst_format           = static_cast<DataFormat>(unpack_dst_format & 0x3);
     const std::uint32_t unpA_ch1_x_stride = dst_format == DataFormat::Float32 ? 4 : dst_format == DataFormat::Float16 ? 2 : 1;
     const std::uint32_t unpA_ch1_y_stride = FACE_C_DIM * face_r_dim * unpA_ch1_x_stride;

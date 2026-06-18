@@ -90,7 +90,6 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
     llk::san::operation_init<llk::san::Operation::UnpackUntilize>();
 
     // sstanisic todo: implement
-    // llk_san_must_uninit<llk_san_op::UnpackUntilize>(); // lololol uninit doesn't exist
     // llk_san_extended_state_mask(
     //     llk_san_cfg::Transpose, llk_san_cfg::AdcXX, llk_san_cfg::CH1Strides, llk_san_cfg::TileDesc, llk_san_cfg::Mop); // GPRS not tracked here for now
 
@@ -263,6 +262,8 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
  */
 inline void _llk_unpack_untilize_uninit_()
 {
+    llk::san::operation_uninit<llk::san::Operation::UnpackUntilize>();
+
     // Check that unpacker is done (all contexts freed up) before starting hw configuration
     wait_for_idle();
 
