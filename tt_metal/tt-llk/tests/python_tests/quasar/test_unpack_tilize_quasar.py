@@ -99,6 +99,8 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
         DataFormat.Float16,
         DataFormat.Int32,
         DataFormat.Int16,
+        DataFormat.MxFp6R,
+        DataFormat.MxFp6P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
