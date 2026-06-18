@@ -1206,42 +1206,18 @@ void py_module(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
-    // Bind MatmulMultiCoreReuseOptimizedProgramFactory for descriptor creation
+    // MatmulMultiCoreReuseOptimizedProgramFactory was migrated to the Metal 2.0 ProgramSpec
+    // concept (create_program_spec); its legacy create_descriptor pybind hook is removed. The
+    // class binding + default_core_range stay (the ttnn Python package imports this symbol).
     nb::class_<ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory>(
         mod, "MatmulMultiCoreReuseOptimizedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt)
         .def_static(
             "default_core_range",
             &ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range,
             nb::arg("device"));
 
-    // Bind MatmulMultiCoreProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreProgramFactory>(mod, "MatmulMultiCoreProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
+    // MatmulMultiCoreProgramFactory was migrated to the Metal 2.0 ProgramSpec concept
+    // (create_program_spec); its legacy create_descriptor pybind hook is removed.
 
     // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
     nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
@@ -1292,22 +1268,11 @@ void py_module(nb::module_& mod) {
             nb::arg("tensor_return_value"),
             nb::arg("core_range_set") = std::nullopt);
 
-    // Bind MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory for descriptor creation
+    // MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory was migrated to the Metal 2.0
+    // ProgramSpec concept (create_program_spec); its legacy create_descriptor pybind hook is
+    // removed. The class binding stays (the ttnn Python package imports this symbol).
     nb::class_<ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>(
-        mod, "MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
+        mod, "MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory");
 
     // Bind select_program_factory for Python-side factory dispatch
     mod.def(

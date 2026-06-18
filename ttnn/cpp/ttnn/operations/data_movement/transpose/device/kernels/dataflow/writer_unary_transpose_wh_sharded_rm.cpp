@@ -2,30 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port (in place — used only by the TransposeWHShardedRM factory, and only launched when
+// Ht > 8). Logic UNCHANGED; only the access mechanism moves to named bindings:
+//   - compute-output staging CB c_27 -> dfb::out_stage (scratch; read by base pointer; consumer)
+//   - output shard CB c_16           -> dfb::out       (borrowed output shard; written by base pointer)
+//   - positional CTAs                -> get_arg(args::...)
+// The writer is bound (and this source compiled) only on the Ht > 8 path, where both DFBs exist; the
+// `if constexpr (Ht > 8)` guard is preserved verbatim.
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(2);
-    constexpr uint32_t W_per_tile = get_compile_time_arg_val(3);
-    constexpr uint32_t W_per_tile_last = get_compile_time_arg_val(4);
-    constexpr uint32_t H_size_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t l1_read_offset_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t W_per_tile = get_arg(args::W_per_tile);
+    constexpr uint32_t W_per_tile_last = get_arg(args::W_per_tile_last);
+    constexpr uint32_t H_size_bytes = get_arg(args::H_size_bytes);
+    constexpr uint32_t l1_read_offset_bytes = get_arg(args::l1_read_offset_bytes);
 
-    constexpr auto cb_out = tt::CBIndex::c_27;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_out = dfb::out_stage;
+    constexpr auto cb_out0 = dfb::out;
 
     const uint32_t stick_size_bytes = H_size_bytes;
 
     Noc noc;
-    CircularBuffer cb_src(cb_out);
-    CircularBuffer cb_dst(cb_out0);
+    DataflowBuffer cb_src(cb_out);
+    DataflowBuffer cb_dst(cb_out0);
 
     uint32_t dst_addr = cb_dst.get_write_ptr();
 

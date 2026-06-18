@@ -8,30 +8,27 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(2);
+    auto start_id = get_arg(args::start_id);
+    auto num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t H_per_tile = get_compile_time_arg_val(1);
-    constexpr uint32_t H_per_tile_last = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr uint32_t W = get_compile_time_arg_val(4);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(5);
-    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t l1_write_offset_bytes = get_compile_time_arg_val(7);
-    constexpr auto src_args = TensorAccessorArgs<9>();
-
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto H_per_tile = get_arg(args::H_per_tile);
+    constexpr auto H_per_tile_last = get_arg(args::H_per_tile_last);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto W = get_arg(args::W);
+    constexpr auto HtWt = get_arg(args::HtWt);
+    constexpr auto W_size_bytes = get_arg(args::W_size_bytes);
+    constexpr auto l1_write_offset_bytes = get_arg(args::l1_write_offset_bytes);
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(ta::input);
 
     Noc noc;
-    CircularBuffer cb(cb_in0);
+    DataflowBuffer cb(dfb::src0);
 
     uint32_t i_stick = start_id;
 

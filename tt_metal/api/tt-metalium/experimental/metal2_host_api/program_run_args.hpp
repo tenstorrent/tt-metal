@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
@@ -57,7 +58,9 @@ struct ProgramRunArgs {
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
-        using RuntimeArgValues = Table<std::string, uint32_t>;
+        // Fix A: heap-free inline key (RtaName) instead of std::string -> the per-node Table
+        // build allocates no string heap for long arg names; ops still write {{"name", value}}.
+        using RuntimeArgValues = Table<RtaName, uint32_t>;
         struct NodeRuntimeArgs {
             NodeCoord node;
             RuntimeArgValues args;

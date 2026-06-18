@@ -28,6 +28,9 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <algorithm>
+#include <chrono>
+#include <iostream>
 #include <optional>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -1204,6 +1207,100 @@ TEST_F(ProgramRunArgsTestGen1, SetRunArgsSucceeds_PerNodeAndCommonRTAs) {
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
 
+// SetProgramRunArgs serializes named per-node RTAs by *scattering* each supplied value to its
+// declaration slot (schema name->slot index), not by walking the schema and looking each name up.
+// This test pins that behavior at the value level — which the NO_THROW tests above do not:
+//   - supplied OUT OF declaration order, values must still land at their declared slot;
+//   - a second SetProgramRunArgs (the in-place fast path that writes into the already-allocated
+//     buffer) must overwrite every slot correctly.
+// Together these cover both the scatter (slot placement) and the first-vs-subsequent buffer paths.
+TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarationSlots) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a", "b", "c"};  // declaration slots 0,1,2
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // First call (allocates the buffer). Supply c,a,b out of order on purpose.
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"c", 30}, {"a", 10}, {"b", 20}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, params);
+
+    const auto dm_kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    {
+        const auto* rta = dm_kernel->runtime_args_data(node).data();
+        ASSERT_GE(dm_kernel->runtime_args_data(node).size(), 3u);
+        EXPECT_EQ(rta[0], 10u) << "'a' must land at declaration slot 0 regardless of supplied order";
+        EXPECT_EQ(rta[1], 20u) << "'b' must land at declaration slot 1";
+        EXPECT_EQ(rta[2], 30u) << "'c' must land at declaration slot 2";
+    }
+
+    // Second call hits the in-place subsequent fast path. New values, again out of order.
+    ProgramRunArgs params2;
+    params2.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"b", 201}, {"c", 301}, {"a", 101}}}},
+    });
+    params2.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, params2);
+    {
+        const auto* rta = dm_kernel->runtime_args_data(node).data();
+        EXPECT_EQ(rta[0], 101u) << "re-Set must overwrite slot 0 in place";
+        EXPECT_EQ(rta[1], 201u) << "re-Set must overwrite slot 1 in place";
+        EXPECT_EQ(rta[2], 301u) << "re-Set must overwrite slot 2 in place";
+    }
+}
+
+// Fast-path coverage for the COMBINED named+vararg per-node layout [named_0,named_1, vararg_0..2].
+// The fast path (subsequent Set) patches the named section (scattered by slot, supplied out of
+// order) and the positional vararg section (written at offset num_named_rtas) independently and in
+// place. Pins that the vararg section lands AFTER the named section and that a re-Set overwrites
+// both correctly — distinct from the named-only test above, and the layout most likely to regress
+// if the fast/first-call split mishandles the named-vs-vararg offset.
+TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPlusVarargs_FastPathLayout) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a", "b"};  // declaration slots 0,1
+    spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto make = [&](uint32_t a, uint32_t b, std::vector<uint32_t> varargs) {
+        ProgramRunArgs p;
+        p.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"dm_kernel"},
+            .runtime_arg_values = {{node, {{"b", b}, {"a", a}}}},  // supplied out of declaration order
+            .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, std::move(varargs)}}},
+        });
+        p.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+        return p;
+    };
+
+    SetProgramRunArgs(program, make(10, 20, {100, 200, 300}));  // first call: allocates the buffer
+    const auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
+    {
+        const auto& rta = dm->runtime_args_data(node);
+        ASSERT_GE(rta.size(), 5u);
+        EXPECT_EQ(rta.data()[0], 10u) << "named 'a' at slot 0";
+        EXPECT_EQ(rta.data()[1], 20u) << "named 'b' at slot 1";
+        EXPECT_EQ(rta.data()[2], 100u) << "vararg 0 follows the named section";
+        EXPECT_EQ(rta.data()[3], 200u);
+        EXPECT_EQ(rta.data()[4], 300u);
+    }
+
+    SetProgramRunArgs(program, make(11, 21, {101, 201, 301}));  // fast path: in-place patch
+    {
+        const auto* rta = dm->runtime_args_data(node).data();
+        EXPECT_EQ(rta[0], 11u) << "fast path overwrites named slot 0";
+        EXPECT_EQ(rta[1], 21u);
+        EXPECT_EQ(rta[2], 101u) << "fast path overwrites vararg section after named";
+        EXPECT_EQ(rta[3], 201u);
+        EXPECT_EQ(rta[4], 301u);
+    }
+}
+
 TEST_F(ProgramRunArgsTestGen1, WrongRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeGen1SpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
@@ -1830,39 +1927,6 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
             ::testing::HasSubstr("tensor_layout does not match the binding's declared layout")));
 }
 
-TEST_F(ProgramRunArgsTestGen1, TensorBindingOnlyKernelMissingFromRunArgsFails) {
-    // A kernel with tensor bindings but an empty RTA/CRTA schema must still appear in
-    // kernel_run_args: SetProgramRunArgs fills the binding section CRTAs (base
-    // addresses, dynamic accessor fields) from the per-kernel entries, so omitting the
-    // kernel would leave its binding CRTAs uninitialized.
-    NodeCoord node{0, 0};
-    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    auto binding = MakeMinimalTensorParameter("input_tensor");
-    spec.tensor_parameters = {binding};
-    // Bind to dm_kernel (compute_kernel has no bindings). dm_kernel has no named RTAs/CRTAs
-    // and no varargs, so its RTA/CRTA schema is empty — the binding is the only thing forcing
-    // a kernel_run_args entry.
-    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-
-    // Omit dm_kernel from kernel_run_args (only supply compute_kernel). Provide a tensor_arg
-    // so that ValidateTensorArgs passes; the failure should come from the kernel-completeness
-    // check on the binding-owning kernel.
-    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
-    ProgramRunArgs params;
-    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-    params.tensor_args = {
-        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
-    };
-
-    EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'dm_kernel' is registered in the Program with a non-empty RTA/CRTA schema "
-                                 "but has no runtime parameters specified in ProgramRunArgs")));
-}
-
 TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
     // When both match_padded_shape_only and dynamic_tensor_shape are set, dynamic is more
     // permissive and wins. A runtime tensor whose padded_shape differs from declared should
@@ -2129,6 +2193,145 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
     ProgramRunArgs merged = MergeProgramRunArgs(std::move(a), rest);
     EXPECT_NE(FindKernel(merged, "dm_kernel"), nullptr);
     EXPECT_NE(FindKernel(merged, "compute_kernel"), nullptr);
+}
+
+// ============================================================================
+// SECTION: Fast-path overlay micro-benchmark (DISABLED — run manually)
+// ============================================================================
+//
+// NOT a correctness test. Times the host-side ProgramRunArgs update entry points
+// in a tight loop to quantify the per-call overlay cost the fast path pays on
+// every enqueue: transient container allocations, repeated lookups, and
+// re-serialization that runs independent of the cache-miss / cache-hit split.
+//
+// Absolute numbers are build-config dependent (use a Release build for citeable
+// figures); the load-bearing signal is the *relative* before/after a change on
+// the same binary. Run with:
+//   <test_binary> --gtest_also_run_disabled_tests --gtest_filter='*FastPathBench*'
+//
+// The spec is deliberately "fat": a producer kernel placed on the full device
+// grid (per-node RTAs are the dominant cost, so a large node set is the point)
+// with many named RTAs + CRTAs and several tensor bindings, plus a binding-only
+// consumer kernel omitted from kernel_run_args (so SetProgramRunArgs's second
+// pass and the binding-bearing-kernel rediscovery are exercised too).
+TEST_F(ProgramRunArgsTestGen1, DISABLED_FastPathBench_UpdateEntryPoints) {
+    // Dimensions are env-configurable so a profiling sweep can vary ONE knob at a time and
+    // attribute per-call cost by component (no external profiler needed). Unset => the standard
+    // "fat" spec. Knobs: TT_BENCH_RTAS / TT_BENCH_CRTAS / TT_BENCH_BINDINGS / TT_BENCH_NODES /
+    // TT_BENCH_ITERS.
+    auto env_size = [](const char* name, size_t dflt) -> size_t {
+        const char* v = std::getenv(name);
+        return (v != nullptr && *v != '\0') ? static_cast<size_t>(std::stoul(v)) : dflt;
+    };
+    const size_t kNumNamedRTAs = env_size("TT_BENCH_RTAS", 16);
+    const size_t kNumNamedCRTAs = env_size("TT_BENCH_CRTAS", 8);
+    const size_t kNumBindings = env_size("TT_BENCH_BINDINGS", 8);
+    const size_t kIters = env_size("TT_BENCH_ITERS", 20000);
+
+    const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
+    const size_t grid_count = static_cast<size_t>(grid.x) * static_cast<size_t>(grid.y);
+    const size_t num_nodes = std::min(env_size("TT_BENCH_NODES", grid_count), grid_count);
+    // First `num_nodes` device cores in row-major order, as a set of single-core ranges, so the
+    // node count can be swept independently of the (rectangular) device grid shape.
+    std::vector<NodeCoord> nodes;
+    std::set<NodeRange> node_ranges;
+    for (size_t i = 0; i < num_nodes; ++i) {
+        const NodeCoord c{i % grid.x, i / grid.x};
+        nodes.push_back(c);
+        node_ranges.insert(NodeRange{c, c});
+    }
+    const NodeRangeSet all_nodes(node_ranges);
+
+    // Start from the proven Gen1 (WH) spec: DM(RISCV_0) producer + compute consumer + DFB.
+    // (The Quasar mock device cannot be created on every node; the fast-path overlay work being
+    // measured here is arch-agnostic, so Gen1/WH is an equivalent and more portable harness.)
+    // All per-enqueue state lives on the DM kernel (kernels[0]); tensor bindings on a compute
+    // kernel are rejected by a temporary guard, so the DM kernel carries them.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto& dm = spec.kernels[0];  // "dm_kernel"
+
+    std::vector<std::string> rta_names;
+    std::vector<std::string> crta_names;
+    for (size_t i = 0; i < kNumNamedRTAs; ++i) {
+        rta_names.push_back("rta_" + std::to_string(i));
+    }
+    for (size_t i = 0; i < kNumNamedCRTAs; ++i) {
+        crta_names.push_back("crta_" + std::to_string(i));
+    }
+    dm.runtime_arg_schema.runtime_arg_names = rta_names;
+    dm.runtime_arg_schema.common_runtime_arg_names = crta_names;
+
+    std::vector<TensorParameter> tparams;
+    for (size_t i = 0; i < kNumBindings; ++i) {
+        const auto name = "tensor_" + std::to_string(i);
+        tparams.push_back(MakeMinimalTensorParameter(name));
+        BindTensorParameterToKernel(dm, name, "acc_" + std::to_string(i));
+    }
+    spec.tensor_parameters = tparams;
+
+    // Place the work unit across the full device grid (per-node RTAs are the dominant cost).
+    spec.work_units = {MakeMinimalWorkUnit("wu", all_nodes, {"dm_kernel", "compute_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // ---- Allocate backing tensors (stable addresses; outlive the loop) ----
+    std::vector<MeshTensor> tensors;
+    tensors.reserve(tparams.size());
+    for (const auto& tp : tparams) {
+        tensors.push_back(AllocateTensorForBinding(*mesh_device_, tp));
+    }
+
+    // ---- Build full ProgramRunArgs (DM-kernel named args for every node) ----
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs dm_args;
+    dm_args.kernel = KernelSpecName{"dm_kernel"};
+    for (const auto& node : nodes) {
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues vals;
+        for (size_t i = 0; i < kNumNamedRTAs; ++i) {
+            vals[rta_names[i]] = static_cast<uint32_t>(i + 1);
+        }
+        dm_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{node, std::move(vals)});
+    }
+    for (size_t i = 0; i < kNumNamedCRTAs; ++i) {
+        dm_args.common_runtime_arg_values[crta_names[i]] = static_cast<uint32_t>(i + 1);
+    }
+    params.kernel_run_args.push_back(std::move(dm_args));
+    // compute_kernel has an empty RTA/CRTA schema and is legitimately omitted from kernel_run_args.
+
+    for (size_t i = 0; i < tparams.size(); ++i) {
+        params.tensor_args.insert({tparams[i].unique_id, TensorArgument{tensors[i]}});
+    }
+
+    // Tensor-only args for the UpdateTensorArgs path.
+    Table<TensorParamName, TensorArgument> tensor_only_args;
+    for (size_t i = 0; i < tparams.size(); ++i) {
+        tensor_only_args.insert({tparams[i].unique_id, TensorArgument{tensors[i]}});
+    }
+
+    auto bench = [](const char* label, size_t iters, auto&& fn) {
+        fn();  // warm-up: first-invocation buffer allocation happens here, off the clock
+        const auto t0 = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < iters; ++i) {
+            fn();
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / static_cast<double>(iters);
+        std::cout << "[FASTPATH_BENCH] " << label << ": " << ns << " ns/call" << std::endl;
+    };
+
+    std::cout << "[FASTPATH_BENCH] spec: " << num_nodes << " nodes, " << kNumNamedRTAs << " RTAs, " << kNumNamedCRTAs
+              << " CRTAs, " << tparams.size() << " tensor bindings, " << kIters << " iters" << std::endl;
+
+    bench("SetProgramRunArgs    (skip_validation=true) ", kIters, [&] {
+        SetProgramRunArgs(program, params, /*skip_validation=*/true);
+    });
+    bench("SetProgramRunArgs    (skip_validation=false)", kIters, [&] {
+        SetProgramRunArgs(program, params, /*skip_validation=*/false);
+    });
+    bench("UpdateProgramRunArgs (skip_validation=true) ", kIters, [&] {
+        UpdateProgramRunArgs(program, params, /*skip_validation=*/true);
+    });
+    bench("UpdateTensorArgs     (validation always on) ", kIters, [&] { UpdateTensorArgs(program, tensor_only_args); });
 }
 
 }  // namespace
