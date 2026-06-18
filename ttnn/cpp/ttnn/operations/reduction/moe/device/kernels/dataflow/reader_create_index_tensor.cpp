@@ -74,25 +74,22 @@ void kernel_main() {
     CircularBuffer cb_topk(cb_topk_mask);
     CircularBuffer cb_expert(cb_expert_mask);
 
+    // Load all Wt expert mask tiles once, in a single burst, before the input stream loop.
+    // The expert mask row is identical for every input row, so it is read once and the
+    // tiles stay resident in the CB for all Ht rows. Loading the whole row up front gives
+    // the NoC a dedicated window for the expert reads before any input reads begin.
+    cb_expert.reserve_back(Wt);
+    for (uint32_t j = 0; j < Wt; ++j) {
+        noc.async_read(s2, cb_expert, tile_bytes_expert, {.page_id = j}, {.offset_bytes = j * tile_bytes_expert});
+    }
+    noc.async_read_barrier();
+    cb_expert.push_back(Wt);
+
     // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute
     // and we need two tiles for the bitonic sort llk We could load in an entire row of tiles at a time but that would
     // require substantially more memory (we would be double buffering four Wt sized CBs)
-
     uint32_t tile_id = 0;
-    uint32_t tile_id_expert = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        // Expert mask is not consumed by the compute kernel. Enable back once support is added to the compute kernel.
-        /*
-        cb_expert.reserve_back(Wt);
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc.async_read(
-                s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
-            tile_id_expert++;
-        }
-        noc.async_read_barrier();
-        cb_expert.push_back(Wt);
-        */
-
         // input: stream two tiles at a time (Wt is guaranteed to be a multiple of 2 for this kernel).
         for (uint32_t j = 0; j < Wt; j += 2) {
             cb_in0.reserve_back(2);

@@ -97,7 +97,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
 
             sfpi::vFloat abs_jm2 = sfpi::abs(jm2);
             bias = scale - w;
-            sfpi::vInt tail = sfpi::as<sfpi::vInt>(sfpi::convert<sfpi::vSMag8>(abs_jm2, sfpi::RoundMode::NearestEven));
+            sfpi::vInt tail = sfpi::as<sfpi::vInt>(sfpi::convert<sfpi::vSMag8>(abs_jm2, sfpi::RoundMode::Nearest));
             r = scale * r + bias;
 
             v_if(tail >= 127) {
@@ -152,7 +152,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
                 r = r * t + x;
                 // This will be -127 in the case of -NaN, otherwise 0 <= clamped <= 127.
                 sfpi::vInt clamped =
-                    sfpi::as<sfpi::vInt>(sfpi::convert<sfpi::vSMag8>(abs_jm2, sfpi::RoundMode::NearestEven));
+                    sfpi::as<sfpi::vInt>(sfpi::convert<sfpi::vSMag8>(abs_jm2, sfpi::RoundMode::Nearest));
                 r += y;
                 // Handle special cases a * log2(e) <= -125 and a * log2(e) >= 129.
                 v_if(clamped >= 127) {
@@ -181,7 +181,7 @@ inline void calculate_expm1() {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat y = _sfpu_expm1_<is_fp32_dest_acc_en>(x);
         if constexpr (!is_fp32_dest_acc_en) {
-            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = y;
         sfpi::dst_reg++;

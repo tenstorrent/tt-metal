@@ -31,20 +31,20 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
         (APPROX, RSUB_UNARY, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         scalar));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH(SFPU_INIT(unused)); }
+ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
 
 // clang-format off
 /**
@@ -62,13 +62,19 @@ ALWI void rsub_tile_init() { MATH(SFPU_INIT(unused)); }
  */
 // clang-format on
 ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsub_scalar_int32, (APPROX, 8 /* ITERATIONS */), RC, idst, scalar));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsub_scalar_int32,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        scalar));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_unary_int32_tile_init() { MATH(SFPU_INIT(unused)); }
+ALWI void rsub_unary_int32_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
 
 }  // namespace ckernel
