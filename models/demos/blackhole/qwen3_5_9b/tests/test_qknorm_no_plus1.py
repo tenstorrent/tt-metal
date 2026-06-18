@@ -1,16 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Regression test for the 27B-TP long-context (64k) degeneration root cause.
+"""Regression test pinning the attention q_norm/k_norm +1 offset (the 64k-retrieval fix).
 
-The Qwen3.5-27B-FP8 checkpoint stores the attention q_norm/k_norm weights as the already-effective
-(1+w) scale, so the TP loader (load_attention_weights_tp) must load them DIRECTLY, WITHOUT adding
-a +1 offset. An earlier build added +1 ("zero-centered correction"), which double-counted and
-over-scaled Q/K by ~2.3x -> softmax over-sharpens -> 64k retrieval collapses into repetition. The
-working reference (qwen35_27b) loads them without +1; this test pins that so the +1 can't return.
+HF Qwen3_5RMSNorm computes output*(1+weight) and the checkpoints store the raw zero-centered
+weights (means ~0.32-0.58), so the TP loader (load_attention_weights_tp) must add +1 to q_norm/
+k_norm. Without it, Q·K logits are ~14x too small, long-context attention goes UNIFORM, and 64k
+retrieval collapses. This test pins that the +1 is applied so it can't be dropped.
 
-Fast: builds a tiny synthetic state_dict and checks the loaded q_norm/k_norm equal the input
-weights (no +1), unlike the main RMSNorms which DO keep their +1 (handled elsewhere, by the
-framework norm, not this loader).
+(The filename predates the fix — an earlier hypothesis was that the ckpt already stored the (1+w)
+scale and the +1 should be removed; that was reversed. The assertions below reflect the current,
+validated behavior: q_norm/k_norm load WITH +1.)
+
+Fast: builds a tiny synthetic state_dict and checks the loaded q_norm/k_norm equal raw weights + 1.
 
 Run:
   source python_env/bin/activate
@@ -33,7 +34,7 @@ import ttnn
     indirect=True,
 )
 def test_qknorm_loaded_without_plus1(mesh_device):
-    """load_attention_weights_tp must NOT add +1 to q_norm/k_norm (matches the reference 27B)."""
+    """load_attention_weights_tp must add +1 to q_norm/k_norm (the uniform-attention/64k fix)."""
     from models.demos.blackhole.qwen3_5_9b.tt.attention.tp import load_attention_weights_tp
 
     nd = mesh_device.get_num_devices()

@@ -491,7 +491,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # snapshot the post-prefill GDN state, capture, then RESTORE it — preserving buffer addresses so
     # the trace stays valid. (KV[T] is harmlessly overwritten by the first real replay; positions
     # <T were written by the real prefill.) Every real decode step is then a pure execute_trace
-    # replay, validated bit-faithful to eager by tests/test_tp_traced_decode_parity.py (PCC == 1.0).
+    # replay, which is bit-faithful to an eager decode re-issue (PCC == 1.0).
     # Snapshot/restore is O(GDN state) and context-length independent — unlike re-prefill it does
     # not re-run multi-chunk prefill (which corrupted decode at >=4k). QWEN35_TP_DECODE_EAGER=1
     # forces the old eager loop (A/B comparison / fallback).
