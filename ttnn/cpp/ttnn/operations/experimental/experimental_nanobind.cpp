@@ -51,7 +51,7 @@
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
-#include "ttnn/operations/experimental/h2d_socket_sync/h2d_socket_sync_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/h2d_socket_sync/h2d_socket_sync_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
@@ -159,7 +159,7 @@ void py_module(nb::module_& mod) {
     // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
     quasar::bind_quasar(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
-    h2d_socket_sync::detail::bind_h2d_socket_sync(mod);
+    deepseek_prefill::detail::bind_h2d_socket_sync(mod);
     reshape::detail::bind_view(mod);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);

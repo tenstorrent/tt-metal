@@ -84,7 +84,8 @@ ProgramDescriptor H2DSocketSyncProgramFactory::create_descriptor(
 
     KernelDescriptor writer;
     writer.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/h2d_socket_sync/device/kernels/h2d_socket_sync_writer.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/h2d_socket_sync/device/kernels/"
+        "h2d_socket_sync_writer.cpp";
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = worker_crs;
     writer.compile_time_args = ct_args;

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Op test for the native C++ ``ttnn.experimental.h2d_socket_sync`` (issue #46319).
+"""Op test for the native C++ ``ttnn.experimental.deepseek_prefill.h2d_socket_sync`` (issue #46319).
 
 Mirrors ``test_embedding_socket.py``'s proven H2DStreamService setup, but exercises
 the new C++ op directly and asserts the properties that motivated the port:

@@ -10,10 +10,10 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn/operations/experimental/h2d_socket_sync/h2d_socket_sync.hpp"
+#include "h2d_socket_sync.hpp"
 #include "ttnn/tensor/socket_services.hpp"
 
-namespace ttnn::operations::experimental::h2d_socket_sync::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::h2d_socket_sync::detail {
 
 void bind_h2d_socket_sync(nb::module_& mod) {
     const auto* doc =
@@ -36,7 +36,7 @@ void bind_h2d_socket_sync(nb::module_& mod) {
             ``[tokens, metadata]``.
         )doc";
 
-    ttnn::bind_function<"h2d_socket_sync", "ttnn.experimental.">(
+    ttnn::bind_function<"h2d_socket_sync", "ttnn.experimental.deepseek_prefill.">(
         mod,
         doc,
         &ttnn::experimental::h2d_socket_sync,
@@ -45,4 +45,10 @@ void bind_h2d_socket_sync(nb::module_& mod) {
         nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0));
 }
 
-}  // namespace ttnn::operations::experimental::h2d_socket_sync::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::h2d_socket_sync::detail
+
+namespace ttnn::operations::experimental::deepseek_prefill::detail {
+
+void bind_h2d_socket_sync(::nanobind::module_& mod) { h2d_socket_sync::detail::bind_h2d_socket_sync(mod); }
+
+}  // namespace ttnn::operations::experimental::deepseek_prefill::detail
