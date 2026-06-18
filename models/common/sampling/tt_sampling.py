@@ -489,7 +489,6 @@ class TTSampling(LightweightModule):
                 dim=-1,
                 output_tensor=tt_out_tok,
                 keepdim=False,
-                use_multicore=True,
             )
             # Argmax path: logprobs not supported (force-argmax is disabled
             # when logprobs are enabled via format_sampling_params guard).
