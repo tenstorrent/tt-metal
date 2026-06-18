@@ -17,11 +17,14 @@ template <
     [[maybe_unused]] bool SCALE_EN = false,
     int ITERATIONS = SFPU_ITERATIONS,
     [[maybe_unused]] bool CLAMP_NEGATIVE = true>
-void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_factor = 0x3F80) {
     // Quasar exp does not support runtime scaling, so SCALE_EN must be false and
     // exp_base_scale_factor is ignored. The compile-time static_assert below is the
     // real guard; the previous runtime LLK_ASSERT on the value was dead (the
-    // parameter never reaches the kernel) and has been removed.
+    // parameter never reaches the kernel) and has been removed. The default value
+    // 0x3F80 (1.0f in FP16b) matches the WH/BH p_sfpu::kCONST_1_FP16B so the public
+    // signature stays consistent across architectures; Quasar does not define the
+    // named constant since the scale path is not live here.
     static_assert(SCALE_EN == false, "Non-default SCALE_EN not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
     _calculate_exp_<APPROXIMATION_MODE, ITERATIONS>();

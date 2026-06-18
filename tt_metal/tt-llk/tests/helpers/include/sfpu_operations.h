@@ -287,6 +287,17 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     }
 }
 
+// Default exp scale factor (1.0f in FP16b) used by the exp test call sites below.
+// WH/BH expose this as p_sfpu::kCONST_1_FP16B; Quasar does not define the named
+// constant (runtime exp scaling is unsupported there), so the literal 0x3F80 is
+// used. The value is identical, so the calculate_exponential() signature stays
+// consistent across architectures.
+#ifdef ARCH_QUASAR
+static constexpr std::uint32_t kExpBaseScaleFactor = 0x3F80;
+#else
+static constexpr std::uint32_t kExpBaseScaleFactor = p_sfpu::kCONST_1_FP16B;
+#endif
+
 /**
  * Calls only the init portion of a unary SFPU operation.
  * Must be paired with a subsequent call_unary_sfpu_operation() for the calculate step.
@@ -472,7 +483,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, 8, CLAMP_NEGATIVE),
             dst_index,
             VectorMode::RC,
-            p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+            kExpBaseScaleFactor /* exp_base_scale_factor */);
     }
     // Single call (else branch): calculate_exponential handles 8 or 32 iterations internally.
     else if constexpr (OPERATION == SfpuType::exponential)
@@ -484,7 +495,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
             vector_mode,
-            p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+            kExpBaseScaleFactor /* exp_base_scale_factor */);
     }
     else if constexpr (OPERATION == SfpuType::fill)
     {

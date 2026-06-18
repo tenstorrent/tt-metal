@@ -11,6 +11,18 @@
 #endif
 
 namespace ckernel {
+
+// Default exp scale factor (1.0f in FP16b), used as the architecture-agnostic default
+// for the public exp_tile() / exp_packthread_tile() signature. WH/BH expose this as the
+// named p_sfpu::kCONST_1_FP16B (their runtime scale path is live). Quasar does not define
+// the named constant because runtime exp scaling is unsupported there, so the literal
+// 0x3F80 is used; the value is identical, so the signature stays consistent across arches.
+#ifdef ARCH_QUASAR
+#define EXP_TILE_DEFAULT_SCALE 0x3F80
+#else
+#define EXP_TILE_DEFAULT_SCALE p_sfpu::kCONST_1_FP16B
+#endif
+
 /**
  * Controls whether the fast approximate exponential clamps very negative inputs.
  *
@@ -69,7 +81,7 @@ template <
     bool scale_en = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
-ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = EXP_TILE_DEFAULT_SCALE) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -105,7 +117,7 @@ template <
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
 ALWI void exp_packthread_tile(
-    uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = EXP_TILE_DEFAULT_SCALE) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

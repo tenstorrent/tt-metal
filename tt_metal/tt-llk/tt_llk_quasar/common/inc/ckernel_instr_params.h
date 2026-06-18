@@ -408,11 +408,11 @@ struct p_sfpu
         constexpr static std::uint32_t RoundZero  = 0x2;
     };
 
-    // Default exp scale factor (1.0f in FP16b). Used as the architecture-agnostic
-    // default for the public exp_tile() / calculate_exponential() signature, which
-    // is kept identical across WH/BH/Quasar. Quasar does not support runtime exp
-    // scaling, so the argument is ignored on Quasar (no runtime guard).
-    constexpr static std::uint32_t kCONST_1_FP16B = 0x3F80;
+    // Note: kCONST_1_FP16B is intentionally not defined for Quasar. Quasar does not
+    // support runtime exp scaling, so the exp scale argument is unused and the public
+    // exp_tile() / calculate_exponential() signature uses the literal 0x3F80 default
+    // directly (value identical to the WH/BH p_sfpu::kCONST_1_FP16B). WH/BH keep the
+    // named constant where the scale path is live.
 };
 
 struct p_cleardvalid
