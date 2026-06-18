@@ -295,6 +295,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
+        TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SliceWrite
@@ -525,6 +526,7 @@ add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
+add_subdirectory(cpp/ttnn/operations/experimental/quasar)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
