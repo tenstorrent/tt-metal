@@ -499,7 +499,8 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     // non-power-of-two (e.g. 2560 = 5×512 for some shard sizes), where
     // tt::align(5120, 2560) returns 7168 instead of 5120. Use modular
     // arithmetic so this works for any positive alignment.
-    uint32_t next_fifo_wr_ptr = ((write_ptr_ + page_size - 1) / page_size) * page_size;
+    uint32_t next_fifo_wr_ptr =
+        ((write_ptr_ + page_size - 1) / page_size) * page_size;
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
 
     if (next_fifo_wr_ptr >= fifo_page_aligned_size) {

@@ -30,6 +30,7 @@ static uint32_t physical_to_local_logical_id(uint32_t physical_device_num) {
         physical_device_num);
 }
 
+
 tt::umd::Cluster* PCIeCoreWriter::get_or_create_cluster() {
     std::lock_guard lock(cluster_mutex_);
     if (!shared_cluster_) {
@@ -40,9 +41,7 @@ tt::umd::Cluster* PCIeCoreWriter::get_or_create_cluster() {
 }
 
 PCIeCoreWriter::PCIeCoreWriter(uint32_t device_id, uint32_t virtual_core_x, uint32_t virtual_core_y) :
-    device_id_(physical_to_local_logical_id(device_id)),
-    virtual_core_x_(virtual_core_x),
-    virtual_core_y_(virtual_core_y) {
+    device_id_(physical_to_local_logical_id(device_id)), virtual_core_x_(virtual_core_x), virtual_core_y_(virtual_core_y) {
     // Init eagerly so topology-discovery cost is paid here rather than lazily during the first send.
     get_or_create_cluster();
 }

@@ -22,11 +22,8 @@ namespace tt::tt_metal::distributed {
  * Opens the UMD driver for the local host without going through MetalContext
  * or tt-metal's Cluster (no ethernet firmware init, no RISC reset).
  *
- * A single `tt::umd::Cluster` is shared across all PCIeCoreWriters in this
- * process — `ClusterOptions::target_devices` has no effect on SILICON
- * (TopologyDiscovery opens every visible PCIe chip regardless), so building
- * one cluster per chip wastes file descriptors and hits EMFILE quickly when
- * a connector attaches to a many-chip mesh.
+ * A single `tt::umd::Cluster` is shared across all PCIeCoreWriters in this process to
+ * avoid the file-descriptor exhaustion of building one cluster per chip.
  */
 class PCIeCoreWriter {
 public:
