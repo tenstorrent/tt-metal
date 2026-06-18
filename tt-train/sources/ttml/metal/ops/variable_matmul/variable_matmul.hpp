@@ -55,7 +55,7 @@ ttnn::Tensor variable_matmul(
     bool transpose_b = false,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     // Required when offsets_role == InputAndOutputRow (caller-provided parent buffer that
-    // the matmul writes into); ignored for InputAndWeightK (output is freshly allocated).
+    // the matmul writes into); must be nullopt for InputAndWeightK (output is freshly allocated).
     std::optional<ttnn::Tensor> output_tensor = std::nullopt,
     uint32_t offsets_start_index = 0,
     // Bounds the host-side output_tensor validation on the EP path (matters when

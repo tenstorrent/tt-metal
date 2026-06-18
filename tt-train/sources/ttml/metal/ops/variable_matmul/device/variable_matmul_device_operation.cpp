@@ -158,6 +158,10 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor_args.output_tensor.has_value(),
             "variable_matmul: OffsetsRole::InputAndOutputRow requires a caller-provided output_tensor.");
+    } else {  // InputAndWeightK
+        TT_FATAL(
+            !tensor_args.output_tensor.has_value(),
+            "variable_matmul: OffsetsRole::InputAndWeightK allocates its own output; output_tensor must be nullopt.");
     }
     const auto& off = tensor_args.offsets_tensor;
     check_on_device(off, "offsets_tensor");
