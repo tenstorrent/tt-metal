@@ -17,6 +17,7 @@ When a user asks to **"generate {kernel} for {target_arch}"**:
 - `TARGET_ARCH` = the requested architecture (default: **quasar**)
 - `KERNEL_NAME` = the kernel to generate
 - `TASK_ID` = `generate-{KERNEL_NAME}-{TARGET_ARCH}` (e.g., `generate-gelu-quasar`)
+- `SFPI_MODE` = `true` if the user **explicitly** asked for an SFPI version (phrases like "as SFPI", "sfpi version", "in sfpi", "write it in sfpi"); otherwise `false`. This is an SFPU-only optimizer directive — the writer still mirrors the Blackhole reference's style (raw `TTI_` or SFPI); when `SFPI_MODE=true` the optimizer reimplements the working raw-`TTI_` kernel in SFPI and keeps it only if it generates no more instructions than the intrinsics. Pass `SFPI_MODE` to the orchestrator.
 
 ### Solve a GitHub Issue
 
@@ -96,6 +97,7 @@ After this step:
 
 Pass to the orchestrator:
 - `KERNEL_NAME`, `TARGET_ARCH`
+- `SFPI_MODE` (`true`/`false` from Step 1)
 - `WORKTREE_DIR`, `WORKTREE_BRANCH`
 
 ### Solve Issue

@@ -129,6 +129,31 @@ def get_op_name(filepath: Path, kernel_type: str) -> str:
     return filepath.stem.replace(KERNEL_CONFIGS[kernel_type]["stem_prefix"], "")
 
 
+def get_kernel_dest(op: str, kernel_type: str, arch: str) -> Path:
+    """Return the absolute path where a generated kernel should be written.
+
+    Quasar SFPU kernels are authored directly in the tt-metal CKernels LLK API
+    folder (`tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/`) and pulled into
+    the C++ test via the `llk_sfpu/` include prefix — not in the tt-llk library.
+    Every other (kernel_type, arch) combination still lives under the tt-llk arch
+    dir per `KERNEL_CONFIGS[...]["file_pattern"]`.
+    """
+    if kernel_type == "sfpu" and arch == "quasar":
+        # tt_llk_root is .../tt_metal/tt-llk, so .parent is .../tt_metal.
+        return (
+            settings.tt_llk_root.parent
+            / "hw"
+            / "ckernels"
+            / "quasar"
+            / "metal"
+            / "llk_api"
+            / "llk_sfpu"
+            / f"ckernel_sfpu_{op}.h"
+        )
+    rel_path = KERNEL_CONFIGS[kernel_type]["file_pattern"].format(op=op)
+    return settings.tt_llk_root / ARCH_DIR_MAP[arch] / rel_path
+
+
 def get_function_names(op: str, kernel_type: str) -> tuple[str, str | None, str | None]:
     """Return (impl_name, init_name, uninit_name) for a kernel."""
     config = KERNEL_CONFIGS[kernel_type]

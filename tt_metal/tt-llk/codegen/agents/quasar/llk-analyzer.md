@@ -78,7 +78,7 @@ Before designing anything, internalize the target's conventions. New code that d
 
 ### 2a: Read the canonical target pattern (MANDATORY)
 
-**SFPU kernels** — read at least two of exp, gelu, relu, sigmoid, sqrt from `tt_llk_{target_arch}/common/inc/sfpu/`. Every Quasar SFPU kernel has the same shape; document it in the output:
+**SFPU kernels** — read at least two of exp, gelu, relu, sigmoid, sqrt from `tt_llk_{target_arch}/common/inc/sfpu/` for the canonical shape. (Those existing siblings still live in the tt-llk lib; **newly generated Quasar SFPU kernels are written to the CKernels LLK API folder** `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` instead — the writer's `kernel_template.py` chooses the path, so you do not need to prescribe an output path, only the function shape.) Every Quasar SFPU kernel has the same shape; document it in the output:
 
 ```cpp
 namespace ckernel { namespace sfpu {
@@ -123,15 +123,41 @@ Record the universal conventions:
 
 ### 2b: Read the target test harness
 
-Use Grep to find the test source and its `#ifdef ARCH_{TARGET_UPPER}` branch:
+**SFPU kernels — the test harness is a fixed unified test, not a per-op file.** New
+SFPU ops are *appended* to a consolidated test for their category; the workflow no
+longer creates `sfpu_{op}_{arch}_test.cpp` / `test_{op}_{arch}.py`. First classify
+the op, then read that category's unified harness.
+
+**Classify the op** from the parent wrapper it must fit (read in 2c):
+- Uses `_llk_math_eltwise_unary_sfpu_params_` (one Dest source) → **unary**
+- Uses `_llk_math_eltwise_binary_sfpu_params_` (two Dest sources → result) → **binary**
+- Selects between operands by a condition tile (where-shaped, 3 operands) → **ternary**
+
+Resolve the unified target from the category:
+
+| `SFPU_CATEGORY` | Python unified test | C++ test source | Op-registration point |
+|---|---|---|---|
+| **unary** | `tests/python_tests/{target_arch}/test_eltwise_unary_sfpu_{target_arch}.py` | `tests/sources/{target_arch}/eltwise_unary_sfpu_{target_arch}_test.cpp` | `tests/helpers/include/sfpu_operations_{target_arch}.h` → `init/call_unary_sfpu_operation_{target_arch}` |
+| **binary** | `tests/python_tests/{target_arch}/test_eltwise_binary_sfpu_{target_arch}.py` | `tests/sources/{target_arch}/eltwise_binary_sfpu_{target_arch}_test.cpp` | `tests/helpers/include/sfpu_operations_{target_arch}.h` → `init/call_binary_sfpu_operation_{target_arch}` |
+| **ternary** | `tests/python_tests/{target_arch}/test_sfpu_where_{target_arch}.py` | `tests/sources/{target_arch}/sfpu_where_{target_arch}_test.cpp` | where-specific harness (no shared dispatcher yet) |
+
+The unified `.cpp` test selects the op purely via its `SFPU_UNARY_OPERATION` /
+`SFPU_BINARY_OP` template param and delegates to the dispatcher header — so adding a
+unary/binary op means editing the **dispatcher header**, not the `.cpp` test. Ternary
+(`where`) has no shared dispatcher today; a second ternary op will require generalizing
+that harness (flag it in §6e Risks if applicable).
+
+Read the resolved unified test (`.py` + `.cpp`) and the dispatcher header. Record:
+- The exact function signatures / template params the dispatcher invokes for this category.
+- How the python sweep registers an op (unary: `OP_CONFIGS`; binary: the per-family op list).
+- Scenarios exercised (format combos, dest_acc, etc.).
+
+**Math / pack / unpack kernels** — there is no unified test. Use Grep to find the
+closest sibling test source and its `#ifdef ARCH_{TARGET_UPPER}` branch:
 ```
 Grep: pattern="{op}", path="tests/sources/{target_arch}", glob="*.cpp", output_mode="files_with_matches"
 ```
-
-Read the matching file. For SFPU kernels, the bundled test is typically `tests/sources/{target_arch}/sfpu_nonlinear_{target_arch}_test.cpp` (a multi-op switch). Record:
-- The exact function signatures the test calls.
-- Template params passed.
-- Scenarios exercised (format combos, dest_acc, etc.).
+Record the exact function signatures, template params, and scenarios.
 
 The test is a hard contract; deviating breaks the build.
 
@@ -173,7 +199,7 @@ Treat the injected content as your playbook for this step. For the problem at ha
    mcp__atlassian__searchConfluenceUsingCql with cql: title = "SFPNONLINEAR" AND ancestor = "1613201604"
    ```
 3. **Registers** — SrcS (`141000706`), Dest (`195493892`), SrcA/B (`65798149` / `66158593`) for math.
-4. **Formats** — Tensix Formats (`237174853`), Dest storage (`80674824`), SrcA/B storage (`83230723`). Mandatory even for format-agnostic SFPU kernels — downstream agents need the constraint list.
+4. **Formats** — **Data Format Handling (`2521530390`)** is the primary, end-to-end reference: it covers the four configurable format-attachment points along the compute datapath (L1/DMA → SrcA/SrcB/SrcS → FPU/SFPU → Dest → Packer) and the explicit-vs-implicit source for each, the format encodings (4-bit legacy, 8-bit `format_encodings_e`, BFP/MX block-float), the per-format property & bias table, explicit format config registers (`ALU_FORMAT_SPEC_REG*`, SrcS/SFPU, unpacker/packer), implicit format handling (saved Dest formats, implied SrcA/SrcB, the SFPLOAD/SFPSTORE `DEFAULT_FORMAT` semantics in §5.3, explicit-vs-implicit override arbitration), and exponent rebiasing (MOVD2A/MOVD2B/MOVB2A). Supplement with the narrower pages when you need storage-layout detail: Tensix Formats (`237174853`), Dest storage (`80674824`), SrcA/B storage (`83230723`). Mandatory even for format-agnostic SFPU kernels — downstream agents need the constraint list.
 5. **Cross-check with `assembly.yaml`** — for every instruction you cite, confirm it exists on the target:
    ```
    Grep: pattern="^{INSTRUCTION}:", path="tt_llk_{target_arch}/instructions/assembly.yaml"
@@ -364,6 +390,8 @@ Surface every uncertainty before handing off:
 
 ## Step 7: Format Applicability (MANDATORY)
 
+**Reference:** ground this section in **Data Format Handling (`2521530390`)** — the authoritative spec for how formats flow through the compute datapath. §5.3 (SFPLOAD/SFPSTORE `DEFAULT_FORMAT`) and §8.4 (SFPLOAD/SFPSTORE implicit vs explicit) explain *why* most SFPU kernels are format-agnostic (the "SFPU-specific rule" below); §3 (per-format property & bias table) and §6 (exponent rebiasing) are what you cite when an op IS format-specific (typecast / `*_int`).
+
 Start from the FULL Quasar-supported format set (`QUASAR_DATA_FORMAT_ENUM_VALUES` in `tests/python_tests/helpers/format_config.py`). Evaluate each independently — do **not** use the reference's `static_assert` as the filter. Quasar supports formats Blackhole lacks (Int16, MxFp8R, MxFp8P, Tf32).
 
 **Float16 is valid on Quasar (MANDATORY CHECK):** Float16 appears in both `QUASAR_DATA_FORMAT_ENUM_VALUES` (`format_config.py`) and `VALID_QUASAR_DEST_REG_FORMATS` (`data_format_inference.py`). Do NOT exclude Float16 based on inference from any format list — confirm by running `grep -n "Float16" tests/python_tests/helpers/data_format_inference.py` and verifying the format is present in `VALID_QUASAR_DEST_REG_FORMATS`. Float16 exclusions backed by format-list inference rather than a direct read of these files must be flagged as assumptions with a risk of being wrong.
@@ -447,6 +475,13 @@ Write `codegen/artifacts/{kernel}_analysis.md` with these sections, in order:
 
 ## Kernel Type
 {sfpu | math | pack | unpack}
+
+## SFPU Category
+{unary | binary | ternary}
+[sfpu only — write the bare category word on the line above so the orchestrator can parse it; omit this whole section for math/pack/unpack]
+- Unified Python test: `tests/python_tests/{target_arch}/test_eltwise_{category}_sfpu_{target_arch}.py` (ternary: `test_sfpu_where_{target_arch}.py`)
+- Unified C++ test: `tests/sources/{target_arch}/eltwise_{category}_sfpu_{target_arch}_test.cpp` (ternary: `sfpu_where_{target_arch}_test.cpp`)
+- Dispatcher header: `tests/helpers/include/sfpu_operations_{target_arch}.h` (ternary: none — where-specific harness)
 
 ## Reference (for generation) / Broken Code (for issue fix)
 `{path}`
