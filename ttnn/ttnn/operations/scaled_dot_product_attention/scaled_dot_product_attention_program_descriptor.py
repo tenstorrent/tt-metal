@@ -55,13 +55,24 @@ def _f32_bits(x: float) -> int:
 # Default compute-config fields (used when the caller passes no
 # compute_kernel_config). fp32_dest_acc_en is ON by default: the online-softmax
 # recurrence and the QK / PV matmuls accumulate across the DHt K-loop and across
-# every KV block, so fp32 dest accumulation is what lets (a) the fp32 dtype
-# deliver fp32-band precision (golden PCC>=0.999) and (b) the bf16
-# Q1x1x128x1024 explicit-scale cell clear its precision near-miss. HiFi2 is kept
-# (not HiFi4) to stay clear of the known-bad HiFi4 + fp32_dest_acc + bf16
-# matmul-path SUM-reduce combo (issue #38306). This is the Refinement-1
-# deliberate default change relative to Phase 0 (HiFi2 / fp32_dest_acc OFF).
-_DEFAULT_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
+# every KV block, so fp32 dest accumulation is what lets the fp32 dtype deliver
+# fp32-band precision (golden PCC>=0.999) and the bf16 Q1x1x128x1024
+# explicit-scale cell clear its precision near-miss. HiFi4 maximizes the matmul
+# pass count (full TF32 mantissa) and is what gives fp32's tight rel-RMS<=0.02
+# tolerance real headroom (HiFi2 leaves fp32 marginal/failing on deep-D shapes).
+#
+# Verifier Phase-0 note flagged HiFi4 + fp32_dest_acc + bf16 matmul-path SUM
+# reduce as the known-bad combo (issue #38306). Tested directly on this kernel
+# (bf16 multi-KV, SUM reduce every block): PCC=1.00000, rel-RMS~0.0024 — NO
+# corruption. The generic compute_kernel_lib::reduce threads MATH_FIDELITY as a
+# template arg (it does NOT hardcode HiFi4), and the SUM-reduce intermediates
+# here are fp32 (acc_dtype), so the bf16-SUM-reduce failure path of #38306 is
+# not reached. The feared constraint does not bind for the helper-based reduce.
+#
+# Refinement-1 deliberately changes the Phase-0 default (HiFi2 / fp32_dest_acc
+# OFF) — accuracy is this refinement's purpose; callers wanting throughput pass
+# an explicit compute_kernel_config (e.g. HiFi2 / LoFi).
+_DEFAULT_MATH_FIDELITY = ttnn.MathFidelity.HiFi4
 _DEFAULT_FP32_DEST_ACC = True
 _DEFAULT_MATH_APPROX = False
 _DEFAULT_DST_FULL_SYNC = False
@@ -113,9 +124,20 @@ def create_program_descriptor(
     # online-softmax running stats (m, l, O) and the score CBs must be parked in
     # Float32 between phases, otherwise pack_tile() truncates the fp32 dest back
     # to bf16 at every phase boundary and the fp32-acc gain is erased (skill §4).
-    # With fp32_dest_acc off, bf16 intermediates match the bf16 dest. bf8b is
+    #
+    # The intermediate format is ALSO forced to Float32 whenever the input dtype
+    # is not bf16 (fp32 or bf8b), independent of fp32_dest_acc_en. Empirically,
+    # bf16 intermediates fed from a non-bf16 input CB through the matmul→reduce→
+    # eltwise helper chain produce uncorrelated output (PCC ~0.07-0.37, rel-RMS
+    # >1) when fp32_dest_acc is off — the bf16 intermediate cannot carry the
+    # non-bf16 input's matmul result correctly. Float32 intermediates fix it (and
+    # cost nothing for fp32 input, which is already fp32-wide). So bf16
+    # intermediates are used ONLY for the bf16-input + fp32_dest_acc-off case,
+    # the one combination where input and intermediate formats match. bf8b is
     # never used for intermediates (block-float running stats would be lossy).
-    acc_dtype = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+    input_is_bf16 = Q.dtype == ttnn.bfloat16
+    use_bf16_intermediate = (not fp32_dest_acc_en) and input_is_bf16
+    acc_dtype = ttnn.bfloat16 if use_bf16_intermediate else ttnn.float32
     acc_tile = ttnn.tile_size(acc_dtype)
 
     # L1-aware block cap: keep the per-core input-block footprint bounded in
