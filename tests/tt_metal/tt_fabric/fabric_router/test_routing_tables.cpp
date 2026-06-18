@@ -8,8 +8,11 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <optional>
 #include <unordered_set>
+#include <utility>
 #include <yaml-cpp/yaml.h>
+#include <tt-metalium/experimental/internal/blitz_decode_pipeline.hpp>
 
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
@@ -2244,4 +2247,142 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
 
     validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
 }
+
+// ---------------------------------------------------------------------------
+// Pure CPU-only unit tests for the inter-mesh hop allocator behind the blitz
+// decode pipeline builder (detail::assign_non_colliding_hops). No control plane
+// or cluster required -- candidate pairs are synthesized to exercise contention,
+// backtracking, and infeasible corner cases. Node identity is all that matters
+// to the allocator, so synthetic FabricNodeIds stand in for real chips.
+// ---------------------------------------------------------------------------
+namespace blitz_assign_tests {
+
+using ::tt::tt_fabric::FabricNodeId;
+using ::tt::tt_fabric::MeshId;
+using ::tt::tt_metal::internal::blitz::detail::assign_non_colliding_hops;
+using HopPair = std::pair<FabricNodeId, FabricNodeId>;
+
+FabricNodeId node(std::uint32_t mesh, std::uint32_t chip) { return FabricNodeId(MeshId{mesh}, chip); }
+
+// Assert: one pair per hop, each chosen pair came from that hop's candidate list, all nodes distinct.
+void expect_valid_assignment(const std::vector<std::vector<HopPair>>& candidates, const std::vector<HopPair>& chosen) {
+    ASSERT_EQ(chosen.size(), candidates.size());
+    std::set<FabricNodeId> seen;
+    for (std::size_t i = 0; i < chosen.size(); i++) {
+        const bool from_candidates =
+            std::find(candidates[i].begin(), candidates[i].end(), chosen[i]) != candidates[i].end();
+        EXPECT_TRUE(from_candidates) << "hop " << i << " chose a pair not in its candidate list";
+        EXPECT_TRUE(seen.insert(chosen[i].first).second) << "node reused across hops (hop " << i << " exit)";
+        EXPECT_TRUE(seen.insert(chosen[i].second).second) << "node reused across hops (hop " << i << " peer)";
+    }
+}
+
+// The OLD in-ring-order greedy first-fit, kept only to prove a given input is one the old code failed
+// on -- so each contention test documents the exact regression it guards against.
+bool greedy_first_fit_succeeds(const std::vector<std::vector<HopPair>>& candidates) {
+    std::set<FabricNodeId> used;
+    for (const auto& hop : candidates) {
+        bool found = false;
+        for (const auto& p : hop) {
+            if (used.contains(p.first) || used.contains(p.second)) {
+                continue;
+            }
+            used.insert(p.first);
+            used.insert(p.second);
+            found = true;
+            break;
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TEST(BlitzDecodePipelineAssignment, NoContentionLinear) {
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{node(0, 0), node(1, 0)}},
+        {{node(1, 1), node(2, 0)}},
+        {{node(2, 1), node(0, 1)}},
+    };
+    auto result = assign_non_colliding_hops(candidates);
+    ASSERT_TRUE(result.has_value());
+    expect_valid_assignment(candidates, *result);
+}
+
+TEST(BlitzDecodePipelineAssignment, ResolvesContentionGreedyWouldStrand) {
+    // hop1's first candidate steals node(2,0), which hop2's only candidate needs -> in-ring-order
+    // greedy strands hop2. A valid assignment exists (hop1 takes its second candidate).
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{node(0, 0), node(1, 0)}},
+        {{node(1, 1), node(2, 0)}, {node(1, 2), node(2, 1)}},
+        {{node(2, 0), node(0, 1)}},
+    };
+    EXPECT_FALSE(greedy_first_fit_succeeds(candidates)) << "input should defeat naive greedy first-fit";
+    auto result = assign_non_colliding_hops(candidates);
+    ASSERT_TRUE(result.has_value());
+    expect_valid_assignment(candidates, *result);
+}
+
+TEST(BlitzDecodePipelineAssignment, RequiresBacktracking) {
+    // hop0's first candidate (A,B) consumes both nodes that hop2's two candidates need, so the solver
+    // must undo hop0's first choice and take (C,D). (hop1 is most-constrained, visited first by MRV.)
+    const FabricNodeId A = node(0, 0), B = node(1, 0), C = node(0, 1), D = node(1, 1);
+    const FabricNodeId E = node(2, 0), F = node(2, 1), G = node(3, 0), H = node(3, 1);
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{A, B}, {C, D}},
+        {{E, F}},
+        {{A, G}, {B, H}},
+    };
+    EXPECT_FALSE(greedy_first_fit_succeeds(candidates)) << "input should require backtracking";
+    auto result = assign_non_colliding_hops(candidates);
+    ASSERT_TRUE(result.has_value());
+    expect_valid_assignment(candidates, *result);
+    EXPECT_EQ((*result)[0], (HopPair{C, D})) << "hop0 should be forced onto its second candidate";
+}
+
+TEST(BlitzDecodePipelineAssignment, InfeasibleNodeReuse) {
+    // Both hops can only use node(0,0) -> no collision-free assignment.
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{node(0, 0), node(1, 0)}},
+        {{node(0, 0), node(2, 0)}},
+    };
+    EXPECT_FALSE(assign_non_colliding_hops(candidates).has_value());
+}
+
+TEST(BlitzDecodePipelineAssignment, InfeasibleEmptyHop) {
+    const std::vector<std::vector<HopPair>> candidates = {
+        {{node(0, 0), node(1, 0)}},
+        {},  // no inter-mesh cable available for this hop
+    };
+    EXPECT_FALSE(assign_non_colliding_hops(candidates).has_value());
+}
+
+TEST(BlitzDecodePipelineAssignment, ResolvesEvenRingContention) {
+    // Ring of N meshes, 2 chips each, 2 candidate cables per boundary (a->a, b->b). Adjacent hops share
+    // a mesh, so a valid layout must strictly alternate a,b around the ring -- solvable for even N.
+    // Simulates the tight decode ring where naive ordering strands a mid-chain hop.
+    const std::uint32_t N = 8;
+    std::vector<std::vector<HopPair>> candidates(N);
+    for (std::uint32_t i = 0; i < N; i++) {
+        const std::uint32_t next = (i + 1) % N;
+        candidates[i] = {{node(i, 0), node(next, 0)}, {node(i, 1), node(next, 1)}};
+    }
+    auto result = assign_non_colliding_hops(candidates);
+    ASSERT_TRUE(result.has_value());
+    expect_valid_assignment(candidates, *result);
+}
+
+TEST(BlitzDecodePipelineAssignment, InfeasibleOddRingTwoCables) {
+    // Same structure with odd N: strict a/b alternation cannot close the ring -> genuinely infeasible.
+    const std::uint32_t N = 3;
+    std::vector<std::vector<HopPair>> candidates(N);
+    for (std::uint32_t i = 0; i < N; i++) {
+        const std::uint32_t next = (i + 1) % N;
+        candidates[i] = {{node(i, 0), node(next, 0)}, {node(i, 1), node(next, 1)}};
+    }
+    EXPECT_FALSE(assign_non_colliding_hops(candidates).has_value());
+}
+
+}  // namespace blitz_assign_tests
 }  // namespace tt::tt_fabric::fabric_router_tests
