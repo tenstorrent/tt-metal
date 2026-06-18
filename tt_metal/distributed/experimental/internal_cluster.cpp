@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/internal/cluster.hpp>
+#include <tt-metalium/experimental/fabric/cluster.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 

@@ -30,6 +30,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/device.hpp
     api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/experimental/dispatch_context.hpp
+    api/tt-metalium/experimental/fabric/cluster.hpp
     api/tt-metalium/experimental/fabric/control_plane.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     api/tt-metalium/experimental/fabric/fabric.hpp
@@ -107,7 +108,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
-    api/tt-metalium/internal/cluster.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
