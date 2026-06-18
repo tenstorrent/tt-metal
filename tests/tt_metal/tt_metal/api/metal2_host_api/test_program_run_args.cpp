@@ -1148,6 +1148,71 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
         << "DFB base addr should refresh to the new MeshTensor's address after UpdateTensorArgs";
 }
 
+// Regression: a kernel that binds a tensor but declares no scalar args (no named/vararg RTAs or
+// CRTAs) may be omitted from kernel_run_args. SetProgramRunArgs must still validate, and must write
+// the binding's base address into that kernel's CRTA buffer via its second pass — the binding
+// address is per-enqueue state that has to reach the device whether or not the user supplies an
+// (otherwise-empty) kernel_run_args entry.
+TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsSucceeds) {
+    // dm_kernel binds a TensorParameter but has an empty RTA/CRTA schema; compute_kernel is empty
+    // too. Neither has scalar args, so neither needs a kernel_run_args entry.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    const std::string tensor_param = "bound_input";
+    spec.tensor_parameters = {MakeMinimalTensorParameter(tensor_param)};
+    BindTensorParameterToKernel(spec.kernels[0], tensor_param, "in_ta");  // kernels[0] == dm_kernel
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Supply the bound tensor via tensor_args, but provide NO kernel_run_args entry for the binding
+    // kernel (the whole point of the relaxation — pre-fix this aborted in ValidateProgramRunArgs).
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs params;
+    params.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor}}};
+
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    // The second pass must have allocated the kernel's CRTA buffer and written the binding address.
+    // MakeMinimalTensorParameter is non-sharded, so the binding is a single address word at offset 0.
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    ASSERT_FALSE(kernel->common_runtime_args().empty())
+        << "binding-only kernel's CRTA buffer should have been allocated by SetProgramRunArgs";
+    EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor.address()))
+        << "binding base address should be written even though the kernel was omitted from kernel_run_args";
+}
+
+TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsReSetSucceeds) {
+    // Regression: SetProgramRunArgs must be re-callable on a program whose binding-only kernel is
+    // omitted from kernel_run_args. The first call allocates the kernel's CRTA buffer in the second
+    // pass; a second call must patch it in place — set_common_runtime_args fatals if called twice, so
+    // the second pass has to use the same first-time/patch logic as the main loop.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    const std::string tensor_param = "bound_input";
+    spec.tensor_parameters = {MakeMinimalTensorParameter(tensor_param)};
+    BindTensorParameterToKernel(spec.kernels[0], tensor_param, "in_ta");  // kernels[0] == dm_kernel
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor1 =
+        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs params1;
+    params1.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor1}}};
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params1));
+
+    // Second enqueue with a different tensor: must not re-allocate (no fatal), and the binding
+    // address must update in place.
+    MeshTensor tensor2 =
+        MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ASSERT_NE(tensor1.address(), tensor2.address())
+        << "test pre-condition: two live allocations should have distinct addresses";
+    ProgramRunArgs params2;
+    params2.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor2}}};
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params2));
+
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor2.address()))
+        << "second SetProgramRunArgs should patch the binding address in place to the new tensor";
+}
+
 // ============================================================================
 // SECTION 5: Gen1 (WH/BH) Tests
 // ============================================================================
@@ -1202,6 +1267,100 @@ TEST_F(ProgramRunArgsTestGen1, SetRunArgsSucceeds_PerNodeAndCommonRTAs) {
     auto params = MakeRunArgsForMinimalSpec(node, {100, 200, 300}, {10, 20});
 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+}
+
+// SetProgramRunArgs serializes named per-node RTAs by *scattering* each supplied value to its
+// declaration slot (schema name->slot index), not by walking the schema and looking each name up.
+// This test pins that behavior at the value level — which the NO_THROW tests above do not:
+//   - supplied OUT OF declaration order, values must still land at their declared slot;
+//   - a second SetProgramRunArgs (the in-place fast path that writes into the already-allocated
+//     buffer) must overwrite every slot correctly.
+// Together these cover both the scatter (slot placement) and the first-vs-subsequent buffer paths.
+TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarationSlots) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a", "b", "c"};  // declaration slots 0,1,2
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // First call (allocates the buffer). Supply c,a,b out of order on purpose.
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"c", 30}, {"a", 10}, {"b", 20}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, params);
+
+    const auto dm_kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    {
+        const auto* rta = dm_kernel->runtime_args_data(node).data();
+        ASSERT_GE(dm_kernel->runtime_args_data(node).size(), 3u);
+        EXPECT_EQ(rta[0], 10u) << "'a' must land at declaration slot 0 regardless of supplied order";
+        EXPECT_EQ(rta[1], 20u) << "'b' must land at declaration slot 1";
+        EXPECT_EQ(rta[2], 30u) << "'c' must land at declaration slot 2";
+    }
+
+    // Second call hits the in-place subsequent fast path. New values, again out of order.
+    ProgramRunArgs params2;
+    params2.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"b", 201}, {"c", 301}, {"a", 101}}}},
+    });
+    params2.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+    SetProgramRunArgs(program, params2);
+    {
+        const auto* rta = dm_kernel->runtime_args_data(node).data();
+        EXPECT_EQ(rta[0], 101u) << "re-Set must overwrite slot 0 in place";
+        EXPECT_EQ(rta[1], 201u) << "re-Set must overwrite slot 1 in place";
+        EXPECT_EQ(rta[2], 301u) << "re-Set must overwrite slot 2 in place";
+    }
+}
+
+// Fast-path coverage for the COMBINED named+vararg per-node layout [named_0,named_1, vararg_0..2].
+// The fast path (subsequent Set) patches the named section (scattered by slot, supplied out of
+// order) and the positional vararg section (written at offset num_named_rtas) independently and in
+// place. Pins that the vararg section lands AFTER the named section and that a re-Set overwrites
+// both correctly — distinct from the named-only test above, and the layout most likely to regress
+// if the fast/first-call split mishandles the named-vs-vararg offset.
+TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPlusVarargs_FastPathLayout) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a", "b"};  // declaration slots 0,1
+    spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto make = [&](uint32_t a, uint32_t b, std::vector<uint32_t> varargs) {
+        ProgramRunArgs p;
+        p.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"dm_kernel"},
+            .runtime_arg_values = {{node, {{"b", b}, {"a", a}}}},  // supplied out of declaration order
+            .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, std::move(varargs)}}},
+        });
+        p.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+        return p;
+    };
+
+    SetProgramRunArgs(program, make(10, 20, {100, 200, 300}));  // first call: allocates the buffer
+    const auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
+    {
+        const auto& rta = dm->runtime_args_data(node);
+        ASSERT_GE(rta.size(), 5u);
+        EXPECT_EQ(rta.data()[0], 10u) << "named 'a' at slot 0";
+        EXPECT_EQ(rta.data()[1], 20u) << "named 'b' at slot 1";
+        EXPECT_EQ(rta.data()[2], 100u) << "vararg 0 follows the named section";
+        EXPECT_EQ(rta.data()[3], 200u);
+        EXPECT_EQ(rta.data()[4], 300u);
+    }
+
+    SetProgramRunArgs(program, make(11, 21, {101, 201, 301}));  // fast path: in-place patch
+    {
+        const auto* rta = dm->runtime_args_data(node).data();
+        EXPECT_EQ(rta[0], 11u) << "fast path overwrites named slot 0";
+        EXPECT_EQ(rta[1], 21u);
+        EXPECT_EQ(rta[2], 101u) << "fast path overwrites vararg section after named";
+        EXPECT_EQ(rta[3], 201u);
+        EXPECT_EQ(rta[4], 301u);
+    }
 }
 
 TEST_F(ProgramRunArgsTestGen1, WrongRuntimeArgsCountFails) {
@@ -1503,6 +1662,12 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
 }
 
 TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesAllKernelsBoundToSameTensor) {
+    // TEMPORARILY SKIPPED: this test binds the shared tensor to the compute kernel (kernels[1]),
+    // which ValidateProgramSpec now rejects until compute-path tensor bindings are supported (a day
+    // or two out). The host-side patching it exercises is unaffected by that gap; re-enable this test
+    // when the temporary compute-kernel tensor-binding guard in ValidateProgramSpec is removed.
+    GTEST_SKIP() << "Compute-kernel tensor bindings are temporarily rejected by ValidateProgramSpec.";
+
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("shared_tensor");
@@ -1830,37 +1995,30 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
             ::testing::HasSubstr("tensor_layout does not match the binding's declared layout")));
 }
 
-TEST_F(ProgramRunArgsTestGen1, TensorBindingOnlyKernelMissingFromRunArgsFails) {
-    // A kernel with tensor bindings but an empty RTA/CRTA schema must still appear in
-    // kernel_run_args: SetProgramRunArgs fills the binding section CRTAs (base
-    // addresses, dynamic accessor fields) from the per-kernel entries, so omitting the
-    // kernel would leave its binding CRTAs uninitialized.
-    NodeCoord node{0, 0};
+TEST_F(ProgramRunArgsTestGen1, TensorBindingOnlyKernelOmittedFromRunArgsSucceeds) {
+    // A kernel with tensor bindings but an empty RTA/CRTA schema may be omitted from
+    // kernel_run_args: SetProgramRunArgs fills its binding-section CRTAs (base addresses, dynamic
+    // accessor fields) in a second pass over all binding-bearing kernels, so the binding address
+    // still reaches the device. (Gen1 counterpart of the Quasar BindingOnlyKernelOmitted... test.)
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");
     spec.tensor_parameters = {binding};
-    // Bind to dm_kernel (compute_kernel has no bindings). dm_kernel has no named RTAs/CRTAs
-    // and no varargs, so its RTA/CRTA schema is empty — the binding is the only thing forcing
-    // a kernel_run_args entry.
+    // Bind to dm_kernel (compute_kernel has no bindings). dm_kernel has no named RTAs/CRTAs and no
+    // varargs, so the binding is its only per-enqueue state — and no longer forces a run-args entry.
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    // Omit dm_kernel from kernel_run_args (only supply compute_kernel). Provide a tensor_arg
-    // so that ValidateTensorArgs passes; the failure should come from the kernel-completeness
-    // check on the binding-owning kernel.
+    // Supply the bound tensor but no kernel_run_args entry for the binding kernel.
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
     ProgramRunArgs params;
-    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
 
-    EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'dm_kernel' is registered in the Program with a non-empty RTA/CRTA schema "
-                                 "but has no runtime parameters specified in ProgramRunArgs")));
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_EQ(ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor.address()))
+        << "binding address should be written even though the kernel was omitted from kernel_run_args";
 }
 
 TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {

@@ -319,7 +319,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/sort/sort_nanobind.cpp
     cpp/ttnn/operations/data_movement/gather/gather_nanobind.cpp
     cpp/ttnn/operations/data_movement/gather/tosa/gather_tosa_nanobind.cpp
-    cpp/ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.cpp
+    cpp/ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.cpp
     cpp/ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.cpp
     # ttnn-nanobind core files (appended in original CMakeLists.txt)
@@ -376,6 +376,8 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async_d2h/send_async_d2h_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp

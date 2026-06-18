@@ -158,6 +158,7 @@ def prefill_forward(
     shared_kv=None,
     keep_kv=False,
     batch_size=1,
+    valid_seq_len=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -180,6 +181,7 @@ def prefill_forward(
             ccl_manager=ccl_manager,
             shared_kv=shared_kv,
             keep_kv=keep_kv,
+            valid_seq_len=valid_seq_len,
         )
 
     tp = mesh_config.tp if mesh_config else 1

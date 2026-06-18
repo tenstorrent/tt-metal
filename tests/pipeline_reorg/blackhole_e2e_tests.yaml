@@ -219,7 +219,7 @@
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not fabric2d-" --timeout 1800 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge and cpu and 2x4 and line and not multiuser" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 2x4 and fabric2d" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device and not fabric2d-" -vvv --tb=short || exit_code=$?
     exit $exit_code
