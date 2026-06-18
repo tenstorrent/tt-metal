@@ -599,3 +599,20 @@
 #   team: models
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
+
+- name: TT-DiT Wan2.2-T2V-A14B  unit tests
+  cmd: |
+    pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/ -k t2v
+  model: wan-2.2-t2v
+  skus:
+    bh_galaxy:
+      timeout: 60
+      tier: 1
+    bh_quietbox_2:
+      timeout: 140
+      tier: 1
+    wh_galaxy:
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models

@@ -18,6 +18,7 @@ on:
           - gpt-oss-120b
           - whisper
           - dit-common
+          - wan-2.2-t2v
           # llama3.3-70b-galaxy: disabled — see #42139
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
