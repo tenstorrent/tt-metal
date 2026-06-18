@@ -44,6 +44,9 @@ class TtDeltaNetState:
         # [1,1,1,conv_dim] device tensors (h0=oldest..h2=newest-1). Lazily seeded
         # from the prefill conv_state on the first decode step, then updated on-device.
         self.conv_hist = {}
+        # set by a new request's prefill (in-place path): re-seed conv_hist buffers
+        # in-place from the new conv_state on the next decode step (keeps trace addrs).
+        self._reseed_conv_hist = False
         # When True, state updates write IN-PLACE into the fixed buffers (ttnn.copy)
         # instead of swapping the tensor handle — required for trace (static buffers).
         self.trace_mode = False
@@ -445,10 +448,19 @@ class TtGatedDeltaNet(LightweightModule):
         cs = deltanet_state.get_conv_state_cpu(li, self.conv_kernel_size)  # [1,conv_dim,ck] or None
         if cs is not None:
             csq = cs.squeeze(0).float()
-            hist = [mk(csq[:, 1]), mk(csq[:, 2]), mk(csq[:, 3])]
+            cols = [csq[:, 1], csq[:, 2], csq[:, 3]]
         else:
             z = torch.zeros(conv_dim)
-            hist = [mk(z), mk(z), mk(z)]
+            cols = [z, z, z]
+        existing = deltanet_state.conv_hist.get(li)
+        if existing is not None:
+            # in-place re-seed: keep the same buffers so a captured trace stays valid
+            for buf, col in zip(existing, cols):
+                tmp = mk(col)
+                ttnn.copy(tmp, buf)
+                ttnn.deallocate(tmp)
+            return existing
+        hist = [mk(c) for c in cols]
         deltanet_state.conv_hist[li] = hist
         return hist
 

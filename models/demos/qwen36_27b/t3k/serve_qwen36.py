@@ -40,10 +40,14 @@ def _main():
         "--block-size", "64",
         "--max-num-seqs", os.environ.get("QWEN36_MAX_NUM_SEQS", "1"),
         "--max-model-len", os.environ.get("QWEN36_MAX_MODEL_LEN", "1024"),
-        "--enforce-eager",
         "--no-enable-prefix-caching",
-        "--override-tt-config", '{"enable_model_warmup": false}',
     ]
+    # TT decode trace is controlled by override-tt-config "trace_mode" (NOT --enforce-eager,
+    # which only affects CUDA graphs). Default "none" = eager (correct multi-request,
+    # ~440 ms/tok). QWEN36_TRACE=1 -> "all" = captured-trace decode (~156 ms/tok, correct
+    # for a single stream; multi-request trace has a known nondeterministic issue).
+    trace_mode = "all" if os.environ.get("QWEN36_TRACE") else "none"
+    default_args += ["--override-tt-config", '{"enable_model_warmup": false, "trace_mode": "%s"}' % trace_mode]
     extra = os.environ.get("QWEN36_VLLM_ARGS", "")
     sys.argv = ["vllm"] + default_args + (extra.split() if extra else [])
     print(f"[serve] launching vLLM api_server: {' '.join(sys.argv[1:])}", flush=True)

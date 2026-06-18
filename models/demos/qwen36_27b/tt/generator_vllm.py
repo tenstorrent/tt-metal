@@ -163,15 +163,28 @@ class Qwen3_5ForConditionalGeneration:
         self._free_rows = sorted(set(self._free_rows))
 
     def _write_persistent_row(self, persistent, row, temp):
+        # max_batch==1: keep the persistent rs/cs buffers FIXED (a captured decode
+        # trace pins their addresses) and copy this request's prefill state IN-PLACE;
+        # flag conv_hist to be re-seeded in-place on the next decode step. (>1 keeps
+        # the row-scatter path; trace isn't used there.)
+        inplace = (self.max_batch_size == 1)
         for li in list(temp.recurrent_states.keys()):
             rt = temp.recurrent_states[li]
             ct = temp.conv_states[li]
+            pr = persistent.recurrent_states.get(li)
+            pc = persistent.conv_states.get(li)
+            if inplace and pr is not None and list(pr.shape) == list(rt.shape):
+                ttnn.copy(rt, pr)
+                ttnn.copy(ct, pc)
+                for t in (rt, ct):
+                    try:
+                        ttnn.deallocate(t)
+                    except Exception:
+                        pass
+                persistent._reseed_conv_hist = True  # reseed conv_hist in-place next decode
+                continue
             persistent.write_recurrent_slot(li, row, rt)
             persistent.write_conv_slot(li, row, ct)
-            # Only free the temp buffers if write_*_slot COPIED them (the concat
-            # path, max_batch>1). When max_batch==1 _scatter_row returns the temp
-            # tensor itself, so it now lives in `persistent`; deallocating it would
-            # leave the persistent decode state pointing at freed memory.
             if persistent.recurrent_states[li] is not rt:
                 try:
                     ttnn.deallocate(rt)
@@ -182,8 +195,6 @@ class Qwen3_5ForConditionalGeneration:
                     ttnn.deallocate(ct)
                 except Exception:
                     pass
-            # This request wrote a fresh prefill conv_state; drop any stale on-device
-            # decode conv history so the first decode step reseeds from it.
             old_hist = persistent.conv_hist.pop(li, None)
             if old_hist:
                 for t in old_hist:

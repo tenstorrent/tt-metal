@@ -157,6 +157,15 @@ class TtQwen36VllmModel(LightweightModule):
                 dump.append((f"layer{i}:{lt}", mesh_to_torch(hidden).float().reshape(1, -1).clone()))
         return self._lm_head(hidden, pad_token_dim=False)
 
+    def _maybe_reseed_conv_hist(self, deltanet_state):
+        """A new request's prefill (in-place state path) flags conv_hist stale; re-seed
+        the fixed conv_hist buffers in-place from the new conv_state before this decode."""
+        if getattr(deltanet_state, "_reseed_conv_hist", False):
+            for i, layer in enumerate(self.layers):
+                if self.config.layer_types[i] != "full_attention":
+                    layer.token_mixer._seed_conv_hist(deltanet_state)
+            deltanet_state._reseed_conv_hist = False
+
     def forward_vllm_decode(self, token_ids, page_table, cur_pos, positions, kv_caches,
                             deltanet_state, enable_trace=False):
         """token_ids [B,1] CPU; positions [B]; deltanet_state persistent [max_batch,...].
@@ -165,6 +174,7 @@ class TtQwen36VllmModel(LightweightModule):
         if enable_trace:
             return self._decode_traced(emb, cos, sin, cpos, deltanet_state)
         # eager
+        self._maybe_reseed_conv_hist(deltanet_state)
         hidden = self._mk(emb, self.dtype)
         cos_t = self._mk(cos, ttnn.bfloat16)
         sin_t = self._mk(sin, ttnn.bfloat16)
@@ -195,6 +205,7 @@ class TtQwen36VllmModel(LightweightModule):
                 if self.config.layer_types[i] != "full_attention":
                     layer.token_mixer._seed_conv_hist(deltanet_state)
             deltanet_state.trace_mode = True  # in-place recurrent/conv-state writeback
+            deltanet_state._reseed_conv_hist = False  # seeded fresh below
             snap = deltanet_state.snapshot_decode_state()
             # fixed input buffers
             self._tr_hidden = self._mk(emb, self.dtype)
@@ -210,6 +221,7 @@ class TtQwen36VllmModel(LightweightModule):
             self._dec_trace_id = tid
             deltanet_state.restore_decode_state(snap)  # undo the 2 setup-run advances
         else:
+            self._maybe_reseed_conv_hist(deltanet_state)  # in-place reseed for a new request
             self._copy_into(self._tr_hidden, emb, self.dtype)
             self._copy_into(self._tr_cos, cos, ttnn.bfloat16)
             self._copy_into(self._tr_sin, sin, ttnn.bfloat16)
