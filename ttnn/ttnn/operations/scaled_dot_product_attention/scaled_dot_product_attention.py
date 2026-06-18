@@ -78,7 +78,10 @@ INPUT_TAGGERS = {
 # special handling (no S_q==S_kv assumption) — hence no EXCLUSION.
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    # Refinement 1 — numerical configurability expansion. fp32 + bf8b join
+    # bf16. Intermediate-CB precision and dest accumulation are dtype-aware in
+    # the program descriptor; the caller can override via compute_kernel_config.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
@@ -177,18 +180,24 @@ def scaled_dot_product_attention(
     *,
     attention_mask: ttnn.Tensor = None,
     scale: float = None,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
     """Flash-Attention SDPA: ``softmax(Q @ K^T * scale + mask) @ V``.
 
     Args:
-        Q: ``(B, H_q, S_q, D)`` bf16, TILE_LAYOUT.
-        K, V: ``(B, H_kv, S_kv, D)`` bf16, TILE_LAYOUT. ``H_q % H_kv == 0``.
+        Q: ``(B, H_q, S_q, D)`` bf16 / fp32 / bf8b, TILE_LAYOUT.
+        K, V: ``(B, H_kv, S_kv, D)`` same dtype, TILE_LAYOUT. ``H_q % H_kv == 0``.
         attention_mask: optional additive mask ``(B, 1|H_q, S_q, S_kv)``
             (0=attend, -inf=mask).
         scale: optional float; ``1/sqrt(D)`` when None.
+        compute_kernel_config: optional ``ttnn.*ComputeKernelConfig`` controlling
+            ``math_fidelity`` / ``fp32_dest_acc_en`` / ``math_approx_mode`` /
+            ``dst_full_sync_en``. When None, defaults to HiFi2 +
+            fp32_dest_acc_en=True (fp32 dest accumulation for the matmul→softmax→
+            matmul chain). The intermediate-CB format follows fp32_dest_acc_en.
 
     Returns:
-        ``(B, H_q, S_q, D)`` bf16, TILE_LAYOUT.
+        ``(B, H_q, S_q, D)`` same dtype as Q, TILE_LAYOUT.
     """
     validate(Q, K, V, attention_mask=attention_mask, scale=scale)
 
@@ -207,7 +216,15 @@ def scaled_dot_product_attention(
         output_memory_config,
     )
 
-    program_descriptor = create_program_descriptor(Q, K, V, attention_mask, output_tensor, scale=resolved_scale)
+    program_descriptor = create_program_descriptor(
+        Q,
+        K,
+        V,
+        attention_mask,
+        output_tensor,
+        scale=resolved_scale,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     io_tensors = [Q, K, V]
     if attention_mask is not None:
