@@ -48,7 +48,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
-#include "impl/buffers/dram_core_prefetcher_manager.hpp"
+#include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
@@ -741,7 +741,14 @@ IDevice* MeshDeviceImpl::get_device(ChipId physical_device_id) const {
 
 std::vector<IDevice*> MeshDeviceImpl::get_devices() const {
     auto devices = view_->get_devices();
-    TT_ASSERT(!devices.empty(), "Mesh Device should have at least 1 IDevice");
+    // A mesh legitimately returns no *local* devices when its view spans device slots that
+    // are all remote — e.g. a create_submeshes() tile whose devices live on another host/rank.
+    // Various teardown paths iterate get_devices() over such submeshes, so only assert when
+    // the view has no device slots at all (a genuinely malformed mesh). Note: is_remote_only()
+    // is NOT usable here — it requires is_internal_state_initialized, which is already false by
+    // the time some teardown callers reach this. view_->num_devices() is the shape-based total
+    // (local + remote) and stays valid regardless of init/teardown state.
+    TT_ASSERT(!devices.empty() || view_->num_devices() > 0, "Mesh Device should have at least 1 IDevice");
     return devices;
 }
 
@@ -940,19 +947,19 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_.reset();
     }
 
-    // Drain any in-flight DRAM-core prefetcher kernel and release its state before the
-    // rest of the mesh tears down. If the caller forgot to call StopDramCorePrefetcher
+    // Drain any in-flight Tensor prefetcher kernel and release its state before the
+    // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher
     // we still wait for the kernel's natural num_layers exit so the GCB / receivers it
     // touches remain valid until it returns.
-    if (dram_core_prefetcher_) {
-        if (dram_core_prefetcher_->is_active()) {
+    if (tensor_prefetcher_) {
+        if (tensor_prefetcher_->is_active()) {
             log_warning(
                 tt::LogMetal,
-                "DRAM-core prefetcher was active at MeshDevice close; auto-stopping. Call "
-                "tt::tt_metal::experimental::StopDramCorePrefetcher before close to avoid this.");
-            dram_core_prefetcher_->stop();
+                "Tensor prefetcher was active at MeshDevice close; auto-stopping. Call "
+                "tt::tt_metal::experimental::StopTensorPrefetcher before close to avoid this.");
+            tensor_prefetcher_->stop();
         }
-        dram_core_prefetcher_.reset();
+        tensor_prefetcher_.reset();
     }
 
     // DRISC L1 arena is torn down after the prefetcher manager so any GCB-owned
@@ -1257,9 +1264,9 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
 
-    // Drop any DRAM-core prefetcher requests captured under this trace so they don't outlive it.
-    if (dram_core_prefetcher_) {
-        dram_core_prefetcher_->release_trace(trace_id);
+    // Drop any Tensor prefetcher requests captured under this trace so they don't outlive it.
+    if (tensor_prefetcher_) {
+        tensor_prefetcher_->release_trace(trace_id);
     }
 
     tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
@@ -1351,11 +1358,11 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
         *trace_id,
         this->mesh_id_,
         *(active_sub_device_manager->id()));
-    // Re-send any DRAM-core prefetcher requests captured during this trace's capture, before
+    // Re-send any Tensor prefetcher requests captured during this trace's capture, before
     // dispatching the trace so the host worker can begin filling the GCB as the consuming
     // program is dispatched. No-op (and no manager created) when the prefetcher is unused.
-    if (dram_core_prefetcher_) {
-        dram_core_prefetcher_->replay_trace(trace_id);
+    if (tensor_prefetcher_) {
+        tensor_prefetcher_->replay_trace(trace_id);
     }
     mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
 }
@@ -1476,12 +1483,12 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
     return *drisc_l1_arena_;
 }
 
-DramCorePrefetcherManager& MeshDeviceImpl::dram_core_prefetcher(MeshDevice* mesh_device) {
-    if (!dram_core_prefetcher_) {
-        dram_core_prefetcher_ =
-            std::make_unique<DramCorePrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
+TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_device) {
+    if (!tensor_prefetcher_) {
+        tensor_prefetcher_ =
+            std::make_unique<TensorPrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
     }
-    return *dram_core_prefetcher_;
+    return *tensor_prefetcher_;
 }
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {

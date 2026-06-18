@@ -37,6 +37,36 @@ GUI
 
 Tracy provides a GUI application for viewing profiling results. You can open saved profiling sessions or connect to a remote machine to view real-time profiling data, as long as network access to the remote system is available.
 
+Web GUI (WASM)
+~~~~~~~~~~~~~~
+
+After a successful ``python -m tracy`` profiling run with the default Tracy capture flow , Metalium automatically starts the **Tracy WASM web viewer** in the background.
+
+When the server starts, the **console logs** print the suggested **HTTP URL** (open in a browser).
+
+By default the HTTP server listens on **8080**. To use a different HTTP port, pass ``--web-app-port <port>``.
+
+In addition to the HTTP port, a **WebSocket** is used for live refresh on port *P*\ +1 (one above the chosen HTTP port *P*).
+
+Remote host (SSH)
+~~~~~~~~~~~~~~~~~
+
+If the WASM server runs on a **remote** machine (for example after ``python -m tracy`` on a lab host) but you open the viewer in a browser on your **local** machine, you must forward **both** the HTTP port and the WebSocket port. With the defaults **8080** and **8081**, SSH must tunnel local ports to the same ports on the remote loopback interface where the server is listening.
+
+Add matching ``LocalForward`` lines to your ``~/.ssh/config`` (or pass equivalent ``-L`` flags on the command line). Example for default ports:
+
+.. code-block:: text
+
+    Host my-tt-metal-host
+        HostName lab.example.com
+        User you
+
+        # Tracy WASM: HTTP and WebSocket (live refresh)
+        LocalForward 8080 127.0.0.1:8080
+        LocalForward 8081 127.0.0.1:8081
+
+Connect with ``ssh my-tt-metal-host``, then open ``http://127.0.0.1:8080/`` in a local browser. If you change the HTTP port with ``--web-app-port``, forward that port and **P**\ +1 the same way.
+
 Installing for Mac users
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -44,10 +74,11 @@ Mac users can install Tracy using Homebrew. Open a terminal and run:
 
 ..  code-block:: bash
 
-    brew uninstall tracy # Remove any old version of Tracy
-    brew tap-new $USER/tracy # Create a tap
-    wget -P $(brew --repository)/Library/Taps/$USER/homebrew-tracy/Formula/ --no-check-certificate --no-cache --no-cookies https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
-    brew install $USER/tracy/tracy # Install from the tap
+    brew tap tenstorrent/tools
+    brew update
+    brew install tenstorrent/tools/tracy
+
+For further installation options, refer to https://github.com/tenstorrent/homebrew-tools.
 
 After installation, start the Tracy GUI with:
 
@@ -102,15 +133,15 @@ Counterintuitively, the Tracy GUI connects as a TCP server, while the profiled a
 Capturing via Command Line
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Alternatively, use the ``capture-release`` CLI tool built under **tt-metal** when Tracy is enabled, under ``tt-metal/build/tools/profiler/bin`` when Tracy is enabled. This tool acts as a client that saves the profile to disk, which can then be copied and loaded into the GUI later. To use it, run the following command before starting the application:
+Alternatively, use the ``tracy-capture`` CLI tool built under **tt-metal** when Tracy is enabled, at ``tt-metal/build/tools/profiler/bin/tracy-capture``. This tool acts as a client that saves the profile to disk, which can then be copied and loaded into the GUI later. To use it, run the following command before starting the application:
 
 .. code-block:: bash
 
-    ./capture-release -o output_file_name.tracy
+    ./build/tools/profiler/bin/tracy-capture -o output_file_name.tracy
 
 .. note::
 
-    The output of ``capture-release`` is quite compressible. For large profile files, it is recommended to compress them before transferring over the network. You can use the ``-z`` option with rsync, ``-C`` with scp, or standalone tools like gzip or zstd.
+    The output of ``tracy-capture`` is quite compressible. For large profile files, it is recommended to compress them before transferring over the network. You can use the ``-z`` option with rsync, ``-C`` with scp, or standalone tools like gzip or zstd.
 
 Profiling Host Code
 -------------------

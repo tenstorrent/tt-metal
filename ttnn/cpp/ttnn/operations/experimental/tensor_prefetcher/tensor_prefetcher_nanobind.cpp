@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dram_core_prefetcher_nanobind.hpp"
+#include "tensor_prefetcher_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -10,19 +10,19 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "dram_core_prefetcher.hpp"
+#include "tensor_prefetcher.hpp"
 #include "ttnn/global_circular_buffer.hpp"
 
 namespace ttnn::operations::experimental {
 
-void bind_dram_core_prefetcher(nb::module_& mod) {
-    ttnn::bind_function<"is_dram_core_prefetcher_supported", "ttnn.experimental.">(
+void bind_tensor_prefetcher(nb::module_& mod) {
+    ttnn::bind_function<"is_tensor_prefetcher_supported", "ttnn.experimental.">(
         mod,
         R"doc(
-            Return True if the DRAM-core (DRISC) prefetcher is supported on `mesh_device`,
+            Return True if the Tensor prefetcher (DRISC) is supported on `mesh_device`,
             i.e. programmable DRAM cores are available (Blackhole with
             TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1). When this returns False,
-            start_dram_core_prefetcher would raise, so callers can use this to skip instead.
+            start_tensor_prefetcher would raise, so callers can use this to skip instead.
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to query.
@@ -30,18 +30,18 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
             Returns:
                 bool
         )doc",
-        &is_dram_core_prefetcher_supported,
+        &is_tensor_prefetcher_supported,
         nb::arg("mesh_device"));
 
-    ttnn::bind_function<"start_dram_core_prefetcher", "ttnn.experimental.">(
+    ttnn::bind_function<"start_tensor_prefetcher", "ttnn.experimental.">(
         mod,
         R"doc(
-            Start the queueable DRAM-core (DRISC) prefetcher on `mesh_device`. Returns
+            Start the queueable Tensor prefetcher (DRISC) on `mesh_device`. Returns
             immediately; one DRISC kernel parks on a per-(device, sender-core) H2D socket
-            waiting for requests. Pair with queue_dram_core_prefetcher_request and
-            stop_dram_core_prefetcher.
+            waiting for requests. Pair with queue_tensor_prefetcher_request and
+            stop_tensor_prefetcher.
 
-            Only one DRAM-core prefetcher may be active per mesh device at a time.
+            Only one Tensor prefetcher may be active per mesh device at a time.
             Receiver count is per-GCB (read from each GCB's sender state block on every
             request), so a single prefetcher can serve GCBs with different num_receivers
             values.
@@ -53,11 +53,11 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
                     and split each bank's receivers across them. Recv-contig layout only; the
                     GCB must be created with the matching flag. Defaults to False.
         )doc",
-        &start_dram_core_prefetcher,
+        &start_tensor_prefetcher,
         nb::arg("mesh_device"),
         nb::arg("dual_senders_per_bank") = false);
 
-    ttnn::bind_function<"queue_dram_core_prefetcher_request", "ttnn.experimental.">(
+    ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,
         R"doc(
             Queue one prefetch request. Non-blocking. Per-GCB ring-buffer state is
@@ -85,7 +85,7 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
             Returns:
                 None
         )doc",
-        &queue_dram_core_prefetcher_request,
+        &queue_tensor_prefetcher_request,
         nb::arg("mesh_device"),
         nb::arg("tensors"),
         nb::arg("global_cb"),
@@ -93,17 +93,17 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
         nb::arg("device_subset") = std::nullopt,
         nb::arg("cq_id") = std::nullopt);
 
-    ttnn::bind_function<"wait_for_cq_on_dram_core_prefetcher", "ttnn.experimental.">(
+    ttnn::bind_function<"wait_for_cq_on_tensor_prefetcher", "ttnn.experimental.">(
         mod,
         R"doc(
-            Fence the DRAM-core prefetcher against work enqueued on a command queue.
+            Fence the Tensor prefetcher against work enqueued on a command queue.
             Every prefetch request queued after this call waits until all work previously
             enqueued on `cq_id` has completed on device before the prefetcher reads DRAM.
             Use this to guarantee data written over `cq_id` has landed before the
             prefetcher streams it.
 
             Call synchronously on the host thread that issued the data writes — after those
-            writes, and before the queue_dram_core_prefetcher_request that consumes them.
+            writes, and before the queue_tensor_prefetcher_request that consumes them.
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to fence.
@@ -114,13 +114,13 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
             Returns:
                 None
         )doc",
-        &wait_for_cq_on_dram_core_prefetcher,
+        &wait_for_cq_on_tensor_prefetcher,
         nb::arg("mesh_device"),
         nb::arg("cq_id") = 0,
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt);
 
-    ttnn::bind_function<"stop_dram_core_prefetcher", "ttnn.experimental.">(
+    ttnn::bind_function<"stop_tensor_prefetcher", "ttnn.experimental.">(
         mod,
         R"doc(
             Push the stop sentinel to every socket, join the host worker thread, and wait
@@ -129,11 +129,11 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to stop.
         )doc",
-        &stop_dram_core_prefetcher,
+        &stop_tensor_prefetcher,
         nb::arg("mesh_device"));
 
     // DRAM-sender GCB factories. MeshDevice-only (the per-mesh DRISC L1 arena lives on
-    // MeshDeviceImpl) and only ever paired with the DRAM-core prefetcher above.
+    // MeshDeviceImpl) and only ever paired with the Tensor prefetcher above.
     ttnn::bind_function<"create_global_circular_buffer_with_dram_senders", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -181,11 +181,11 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1);
 
-    ttnn::bind_function<"dram_core_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
+    ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
             Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
-            in queue_dram_core_prefetcher_request, for a gather_in0 1D matmul fed via global_cb.
+            in queue_tensor_prefetcher_request, for a gather_in0 1D matmul fed via global_cb.
             Centralizes the recv-contig prefetcher/matmul cross-checks (num_shards == ring_size,
             weight K divisible by ring_size, weight per-receiver N == per_core_N) so call sites
             don't re-derive (and mis-derive) them. Returns the block_count (== ring_size); raises
@@ -199,7 +199,7 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
             Returns:
                 int: the validated block_count.
         )doc",
-        &ttnn::global_circular_buffer::dram_core_prefetcher_block_count_for_matmul_1d,
+        &ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d,
         nb::arg("program_config"),
         nb::arg("weight"),
         nb::arg("global_cb"));
@@ -220,7 +220,7 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
                 size: GCB size in bytes (>= ring_size * largest per-receiver page).
                 buffer_type: Buffer type (L1 or L1_SMALL).
                 dual_senders_per_bank: If True, split each bank's receivers across two DRISC sender cores
-                    (must match the StartDramCorePrefetcher flag).
+                    (must match the StartTensorPrefetcher flag).
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d_recv_contig,
         nb::keep_alive<0, 1>(),

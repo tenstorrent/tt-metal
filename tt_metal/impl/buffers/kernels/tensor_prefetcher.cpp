@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Queueable DRISC prefetcher kernel — successor to dram_core_prefetcher.cpp.
+// Queueable DRISC prefetcher kernel — successor to tensor_prefetcher.cpp.
 // Sits in a request loop on a per-(device, sender-core) H2D socket; each request
 // payload identifies the target GlobalCircularBuffer (by its DRISC L1
 // sender-state-block base, written by the GCB ctor) and carries the per-tensor
@@ -11,14 +11,14 @@
 // fifo_wr_ptr back to L1 so the next request to the same GCB resumes from the right
 // ring offset, and acks the socket page.
 //
-// Request page wire format (one socket page): a DramCorePrefetcherRequestHeader
+// Request page wire format (one socket page): a TensorPrefetcherRequestHeader
 // (one-byte command id + per-command union). The STOP command (all-zero page) exits
 // the request loop; WAIT_CQ blocks on a per-CQ signal slot; PREFETCH is followed by a
-// forward-growing table of per-tensor DramCorePrefetcherEntry (address + layout index)
+// forward-growing table of per-tensor TensorPrefetcherEntry (address + layout index)
 // and a backward-growing (from the end of the payload) deduplicated table of
-// DramCorePrefetcherTensorLayout. The kernel walks the entries in order, resolving each
+// TensorPrefetcherTensorLayout. The kernel walks the entries in order, resolving each
 // entry's geometry from the referenced layout. See
-// tt_metal/impl/buffers/dram_core_prefetcher_request.hpp.
+// tt_metal/impl/buffers/tensor_prefetcher_request.hpp.
 //
 // Per-GCB sender state block layout: see
 // tt_metal/impl/buffers/dram_sender_state_block.hpp.
@@ -31,19 +31,19 @@
 #include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
-#include "tt_metal/impl/buffers/dram_core_prefetcher_request.hpp"
+#include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
-using tt::tt_metal::DramCorePrefetcherEntry;
-using tt::tt_metal::DramCorePrefetcherRequestHeader;
-using tt::tt_metal::DramCorePrefetcherTensorLayout;
 using tt::tt_metal::DramSenderStateBlock;
 using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
+using tt::tt_metal::TensorPrefetcherEntry;
+using tt::tt_metal::TensorPrefetcherRequestHeader;
+using tt::tt_metal::TensorPrefetcherTensorLayout;
 
 // Per-stage cycle profiling — gated on watcher ring-buffer being enabled so
 // production builds pay zero (the variables and timestamp reads don't exist).
 // Decode tags ("0xA1 .. 0xAA") match the dump reader in
-// dram_core_prefetcher_drisc_profile.md.
+// tensor_prefetcher_drisc_profile.md.
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
 #include "api/debug/ring_buffer.h"
 #include "internal/tt-1xx/risc_common.h"
@@ -216,7 +216,7 @@ void kernel_main() {
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t socket_page_size = get_compile_time_arg_val(3);
     // Base of this core's per-CQ signal slots (kNumCqSignalSlots uint32 counters).
-    // WaitForCqOnDramCorePrefetcher writes an incrementing value here from the
+    // WaitForCqOnTensorPrefetcher writes an incrementing value here from the
     // dispatcher; a WAIT_CQ request blocks until the requested slot reaches it.
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
     constexpr uint32_t ring_half = stage_ring_size / 2;
@@ -246,8 +246,8 @@ void kernel_main() {
     bool has_loaded_sender_state = false;
 
     // Zero the per-CQ signal slots before parking on the socket. Safe to do here
-    // (rather than from the host) because no WaitForCqOnDramCorePrefetcher signal
-    // can be enqueued until StartDramCorePrefetcher returns to the single-threaded
+    // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
+    // can be enqueued until StartTensorPrefetcher returns to the single-threaded
     // host caller, long after this init runs.
     volatile tt_l1_ptr uint32_t* cq_signal_slots = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cq_signal_l1_base);
     for (uint32_t i = 0; i < kNumCqSignalSlots; ++i) {
@@ -258,8 +258,8 @@ void kernel_main() {
     while (true) {
         socket_wait_for_pages(socket, 1);
 
-        volatile tt_l1_ptr DramCorePrefetcherRequestHeader* req =
-            reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherRequestHeader*>(socket.read_ptr);
+        volatile tt_l1_ptr TensorPrefetcherRequestHeader* req =
+            reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherRequestHeader*>(socket.read_ptr);
         const uint8_t cmd_id = req->base.cmd_id;
         if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_STOP) {
             // Stop sentinel. Receiver pages_acked atomics target DRISC L1 while
@@ -314,17 +314,16 @@ void kernel_main() {
 
         // Entries follow the header (grow forward); the deduplicated layout table grows
         // backward from the end of the payload, so layout i lives at read_ptr +
-        // kRequestPageBytes - (i+1)*sizeof(layout). See dram_core_prefetcher_request.hpp.
-        volatile tt_l1_ptr DramCorePrefetcherEntry* entries =
-            reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherEntry*>(
-                socket.read_ptr + sizeof(DramCorePrefetcherRequestHeader));
+        // kRequestPageBytes - (i+1)*sizeof(layout). See tensor_prefetcher_request.hpp.
+        volatile tt_l1_ptr TensorPrefetcherEntry* entries = reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherEntry*>(
+            socket.read_ptr + sizeof(TensorPrefetcherRequestHeader));
         const uint32_t layout_table_end = socket.read_ptr + kRequestPageBytes;
 
         for (uint32_t e = 0; e < req_num_entries; ++e) {
             const uint32_t tensor_base = entries[e].bank_local_base;
-            volatile tt_l1_ptr DramCorePrefetcherTensorLayout* g =
-                reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherTensorLayout*>(
-                    layout_table_end - (entries[e].layout_index + 1) * sizeof(DramCorePrefetcherTensorLayout));
+            volatile tt_l1_ptr TensorPrefetcherTensorLayout* g =
+                reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherTensorLayout*>(
+                    layout_table_end - (entries[e].layout_index + 1) * sizeof(TensorPrefetcherTensorLayout));
             const uint32_t t_num_sub = g->num_sub;
             const uint32_t t_M = g->M;
             const uint32_t t_rows_per_sub = g->rows_per_sub;

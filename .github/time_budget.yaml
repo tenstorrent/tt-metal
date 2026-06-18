@@ -71,6 +71,11 @@ ttnn:
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
+    bh_p100: 760
+    bh_p150b_civ2: 1015
+    wh_n150_civ2: 1175
+    wh_n300_civ2: 1155
+    bh_p150b_civ2_viommu: 110
   e2e:
     wh_llmbox: 90
     wh_galaxy: 120
@@ -82,6 +87,9 @@ ttnn:
   integration:
     wh_llmbox: 30
     wh_galaxy: 340
+    wh_n150_civ2: 60
+    bh_p100: 30
+    bh_p150b_civ2_viommu: 30
   l2:
     wh_n150: 680
     wh_n300: 680
@@ -108,16 +116,16 @@ train:
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
-    bh_p100a_civ2_viommu: 90
+    bh_p100: 90
     bh_p150b_civ2: 90
   perf:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
-    bh_p100a_civ2_viommu: 90
+    bh_p100: 90
     bh_p150b_civ2: 240
 
 ttsim:
-  l2:
+  unit:
     sim_wormhole_b0: 15
     sim_blackhole: 15
 
@@ -182,9 +190,9 @@ llk:
     wh_n150_civ2: 180
     wh_n300_civ2: 40
     bh_p150: 40
-    bh_p150b_civ2_viommu: 70
+    bh_p150b_civ2_viommu: 110
     bh_p150b_civ2_viommu_prio: 70
-    bh_p100a_civ2_viommu: 40
+    bh_p100: 40
   e2e:
     wh_n150_civ2: 1800
     bh_p150b_civ2: 1800
@@ -198,11 +206,13 @@ llk:
 models:
   sanity:
     wh_galaxy_perf: 10
+    wh_n300_civ2: 5
+    bh_p150b_civ2_viommu: 110
   stress:
     wh_galaxy_perf: 500
   l2:
-    wh_n150: 90
-    wh_n300: 115
+    wh_n150_civ2: 90
+    wh_n300_civ2: 115
     bh_p150b_civ2: 70
   e2e:
     wh_llmbox: 198
@@ -269,11 +279,9 @@ models:
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 200
-    wh_llmbox_perf_release: 1090
-    wh_galaxy: 0
+    wh_llmbox_perf: 1290
+    wh_galaxy: 345
     wh_galaxy_perf: 150
-    wh_galaxy_release: 345
     bh_galaxy: 395
     wh_n150: 500
     wh_n150_civ2: 300
