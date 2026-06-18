@@ -7,8 +7,11 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
 #include "pcie_noc_utils.h"
 #include "../../../unified_kernels/termination.hpp"
 
@@ -34,6 +37,9 @@ constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(18);
 constexpr auto input_tensor_accessor_args = TensorAccessorArgs<19>();
 
 void kernel_main() {
+    Noc noc;
+    CircularBuffer scratch_cb(scratch_buffer_cb_index);
+
     auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_addr);
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
@@ -42,11 +48,14 @@ void kernel_main() {
     const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
     const uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
 
-    const uint32_t cb_l1_addr = get_write_ptr(scratch_buffer_cb_index);
+    const uint32_t cb_l1_addr = scratch_cb.get_write_ptr();
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
+    // Device 2.0 migration: legacy primitives retained — the PCIe wide-write-with-state path
+    // (noc_write_init_state + noc_async_wide_write_any_len_with_state, used below to drain into the
+    // host-pinned socket FIFO) has no Device 2.0 equivalent; Noc::inline_dw_write is single-DW only.
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
 
     uint64_t worker_mcast_addr = 0;
@@ -65,8 +74,11 @@ void kernel_main() {
     bool terminated = false;
     while (!terminated) {
         if constexpr (worker_sync_enabled) {
+            // Device 2.0 migration: legacy primitive retained — transfer_done_sem_addr is a GlobalSemaphore
+            // address, and Semaphore<> binds to per-program ids via get_semaphore<>(id) (no GlobalSemaphore
+            // wrapper exists), so Semaphore::inc_multicast cannot target it.
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
-            noc_async_atomic_barrier();
+            noc.async_atomic_barrier();
         }
 
         while (true) {
@@ -87,13 +99,15 @@ void kernel_main() {
 
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
             const uint32_t base_page = chunk * pages_per_chunk;
-            uint32_t dst = cb_l1_addr;
             for (uint32_t i = 0; i < pages_per_chunk; ++i) {
-                const uint64_t noc_src = input_tensor_accessor.get_noc_addr(base_page + i);
-                noc_async_read<input_tensor_page_size>(noc_src, dst, input_tensor_page_size);
-                dst += input_tensor_page_size;
+                noc.async_read<NocOptions::DEFAULT, input_tensor_page_size>(
+                    input_tensor_accessor,
+                    scratch_cb,
+                    input_tensor_page_size,
+                    {.page_id = base_page + i},
+                    {.offset_bytes = i * input_tensor_page_size});
             }
-            noc_async_read_barrier();
+            noc.async_read_barrier();
 
             if (!deepseek_b1_ops::socket_reserve_pages_with_termination(sender_socket, 1, termination_semaphore)) {
                 terminated = true;
@@ -107,7 +121,7 @@ void kernel_main() {
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,
                 socket_page_size);
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
 
             socket_push_pages(sender_socket, 1);
             socket_notify_receiver(sender_socket);
@@ -130,15 +144,15 @@ void kernel_main() {
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,
                 socket_page_size);
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
 
             socket_push_pages(sender_socket, 1);
             socket_notify_receiver(sender_socket);
         }
     }
 
-    noc_async_write_barrier();
-    noc_async_read_barrier();
+    noc.async_write_barrier();
+    noc.async_read_barrier();
     update_socket_config(sender_socket);
     socket_barrier(sender_socket);
 }
