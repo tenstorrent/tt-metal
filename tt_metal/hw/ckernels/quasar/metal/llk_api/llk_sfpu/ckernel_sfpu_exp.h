@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_assert.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 
 namespace ckernel {
@@ -19,11 +18,12 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     [[maybe_unused]] bool CLAMP_NEGATIVE = true>
 void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+    // Quasar exp does not support runtime scaling, so SCALE_EN must be false and
+    // exp_base_scale_factor is ignored. The compile-time static_assert below is the
+    // real guard; the previous runtime LLK_ASSERT on the value was dead (the
+    // parameter never reaches the kernel) and has been removed.
     static_assert(SCALE_EN == false, "Non-default SCALE_EN not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
-    LLK_ASSERT(
-        exp_base_scale_factor == p_sfpu::kCONST_1_FP16B,
-        "Scaling is not supported in the current version of exp on Quasar.");
     _calculate_exp_<APPROXIMATION_MODE, ITERATIONS>();
 }
 

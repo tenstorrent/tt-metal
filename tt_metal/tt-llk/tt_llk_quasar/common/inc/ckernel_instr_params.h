@@ -409,8 +409,9 @@ struct p_sfpu
     };
 
     // Default exp scale factor (1.0f in FP16b). Used as the architecture-agnostic
-    // default for exp_tile() / calculate_exponential(); Quasar asserts the scale
-    // equals this value since runtime scaling of exp is not yet supported.
+    // default for the public exp_tile() / calculate_exponential() signature, which
+    // is kept identical across WH/BH/Quasar. Quasar does not support runtime exp
+    // scaling, so the argument is ignored on Quasar (no runtime guard).
     constexpr static std::uint32_t kCONST_1_FP16B = 0x3F80;
 };
 
