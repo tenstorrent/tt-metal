@@ -17,13 +17,38 @@ import torch
 import ttnn
 
 
+def indexer_program_config(skv: int) -> "ttnn.IndexerScoreProgramConfig":
+    """Indexer kernel work-unit knobs for the DeepSeek-V3.2 (H_idx=64) indexer:
+    QC=2 (q_chunk=64), KC=8 (k_chunk=256), HB=16 (heads streamed in 4 groups).
+
+    ``k_chunk`` is capped to the key length because the op requires KC <= Skv/32; at the
+    model's DSA K (end_pos > index_topk=2048) the cap is inert and KC stays 8. Shape unit
+    tests with tiny Skv get the largest valid KC (e.g. Skv=128 -> KC=4).
+
+    HB=16 (not HB=0): all 64 heads resident overflows Blackhole L1 at KC>=4, so heads are
+    streamed. The TP-sharded alternative (16 heads/device + logits all-reduce) that would
+    allow HB=0 is documented in models/demos/deepseek_v32/INDEXER_OP.md ("head residency").
+    """
+    return ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=min(256, skv), head_group_size=16)
+
+
+# Full-model default (H_idx=64): QC=2 / KC=8 / HB=16.
+INDEXER_FULL_MODEL_CONFIG = indexer_program_config(256)
+
+
 def _to_host(t: ttnn.Tensor) -> torch.Tensor:
     """First-shard readback for replicated mesh tensors (test / diagnostic readback only;
     the compute path is fully on device)."""
     return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
 
 
-def indexer_logits(q: ttnn.Tensor, k: ttnn.Tensor, w: ttnn.Tensor, chunk_start_idx: int = 0) -> ttnn.Tensor:
+def indexer_logits(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    w: ttnn.Tensor,
+    chunk_start_idx: int = 0,
+    program_config: "ttnn.IndexerScoreProgramConfig | None" = None,
+) -> ttnn.Tensor:
     """
     Index scores per (query, key), causality fused:
       logits[s, t] = sum_h w[s, h] * relu(q[s, h] . k[t])  for t <= chunk_start_idx + s,
@@ -39,12 +64,19 @@ def indexer_logits(q: ttnn.Tensor, k: ttnn.Tensor, w: ttnn.Tensor, chunk_start_i
         k: [1, 1, Skv, D_idx] index keys (shared across heads), tiled bf16
         w: [1, 1, Sq, H_idx] per-head weights (weights_proj output, scales pre-folded)
         chunk_start_idx: global position of query row 0 (causal offset for chunked prefill)
+        program_config: indexer kernel work-unit knobs; defaults to the full-model
+            QC=2 / KC=8 / HB=16 (INDEXER_FULL_MODEL_CONFIG). Tests with tiny Skv pass their
+            own via indexer_program_config(Skv) (max valid KC for that key length).
     Returns:
         logits [1, 1, Sq, Skv] bf16 ROW_MAJOR; future/pad columns -inf.
     """
     # The op takes per-head weights as [1, H_idx, Sq, 1]; weights_proj gives [1, 1, Sq, H_idx].
     weights = ttnn.permute(w, (0, 3, 2, 1))  # [1, H_idx, Sq, 1]
-    return ttnn.experimental.indexer_score(q, k, weights, chunk_start_idx=chunk_start_idx)
+    if program_config is None:
+        program_config = INDEXER_FULL_MODEL_CONFIG
+    return ttnn.experimental.indexer_score(
+        q, k, weights, chunk_start_idx=chunk_start_idx, program_config=program_config
+    )
 
 
 def topk_indices(logits: ttnn.Tensor, k: int) -> ttnn.Tensor:

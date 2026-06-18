@@ -55,10 +55,12 @@ def test_indexer_logits_numerics(mesh_device, seq):
         k = torch.cat([apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis, interleaved=False).squeeze(2), k_nope], dim=-1)
         w = idx_cpu.weights_proj(x.float()) * args.index_n_heads**-0.5 * idx_cpu.softmax_scale
 
+    # seq (128) < full-model k_chunk (256): cap KC to Skv/32 (op requires KC <= Skv/32).
     logits = ops.indexer_logits(
         _dev(q.permute(0, 2, 1, 3), mesh_device),
         _dev(k.unsqueeze(1), mesh_device),
         _dev(w.unsqueeze(1), mesh_device),
+        program_config=ops.indexer_program_config(seq),
     )
     got = ops._to_host(logits)[0, 0] + mask
     assert_with_pcc(ref_score[0].float(), got.float(), LOGITS_PCC)

@@ -119,6 +119,38 @@ Defaults (HB=1) stay under 0.5 MB for any model; GLX perf config HB=64
 resident: 512K q + 128K w + 256K k + 64K acc + 64K out ≈ 1.0 MB.
 512-head model: head_block=64 streamed, Kt=64 — same kernel, no scheme change.
 
+### Head residency in the full model (HB=16, not HB=0)
+
+The V3.2 indexer has `H_idx=64` heads, and `mla.py::_indexer_topk` runs the op
+**replicated across TP** — each device builds all 64 heads (`nlp_create_qkv_heads(num_heads=64)`
+on the SP-gathered, TP-replicated q) and scores against the full key prefix. At 64 resident
+heads, the q+w residency term `HB·QC·(Dt+1)` dominates L1: `HB=0` (all 64) overflows the
+1464 KB budget for any `KC≥4` (measured: ~1.89 MB at KC=8). So the full-model default
+(`tt/ops.py::INDEXER_FULL_MODEL_CONFIG`) is **QC=2 / KC=8 / HB=16** — heads streamed in 4
+groups, which fits. `KC=8` (not the GLM5 `KC=16`) matches the op's matmul-bound DSv32 preset
+and is always valid in the model because DSA only runs when `end_pos > index_topk (2048) ≫ 8`
+tiles. (Shape unit tests with tiny `Skv` cap `KC` to `Skv/32` via `ops.indexer_program_config(Skv)`.)
+
+#### Alternative (not implemented): TP-shard the heads + all-reduce the logits
+
+The logit is a per-head sum, `logits[s,t] = Σ_h w[s,h]·relu(⟨q[s,h],k[t]⟩)`, and `relu` is
+applied per head **before** the sum — so the head-sum is separable across the TP axis. The
+op's intended DSv32 deployment exploits this: shard the 64 heads across TP=4 → **16
+heads/device**, each device's `indexer_score` emits a *partial* logit (sum over its 16 heads),
+and a **TP all-reduce(SUM)** reconstructs the full logit before top-k. The causal `−inf` mask
+is head-independent, so it is identical on every partial and survives the sum. At 16
+heads/device, `HB=0 / KC=8` fits L1 and per-device indexer compute drops 4× (no replication).
+
+Concretely this is a model-parallelism change to `_indexer_topk`: make `wq_b` column-parallel
+(shard its `H_idx·D_idx` output → 16 heads/chip, no reduce since the q-latent is already
+replicated), slice this TP-rank's 16 head-weights out of `weights_proj`, keep the **key**
+SP-gather (MQA keys are head-independent — every query still needs the full prefix), then
+all-reduce the partial logits over `tp_axis`. The trade-off vs. the chosen HB=16 path: it
+removes the 4× redundant indexer matmul but adds an all-reduce of the **full logits**
+(`[1,1,glob,end_pos]`, ~580 MB at the §7 50k+5k scale) — a large, non-overlapped collective
+that may cost more than the matmul it saves; measure before adopting. Caveat: at **TP=1** there
+is no head split (still 64 heads), so that path falls back to HB=16 streaming regardless.
+
 ## Formats / fidelity
 
 - q/w bf16; `k` accepts bfp8_b (matmul srcA only, never packed). bfp8 k halves

@@ -39,7 +39,9 @@ def test_indexer_logits_shape(mesh_device, sq, skv):
     q = _dev(torch.randn(1, H_IDX, sq, D_IDX), mesh_device)
     k = _dev(torch.randn(1, 1, skv, D_IDX), mesh_device)
     w = _dev(torch.randn(1, 1, sq, H_IDX), mesh_device)
-    logits = ops.indexer_logits(q, k, w)
+    # Skv here (128/512) is below the full-model k_chunk (256), so use the max KC valid for this
+    # key length (the op requires KC <= Skv/32); the full model keeps KC=8 since end_pos >> 256.
+    logits = ops.indexer_logits(q, k, w, program_config=ops.indexer_program_config(skv))
     assert list(logits.shape) == [1, 1, sq, skv]
 
 
