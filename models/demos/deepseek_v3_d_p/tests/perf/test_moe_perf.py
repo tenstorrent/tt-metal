@@ -15,6 +15,8 @@ Sum of per-op approximation approximates one glx column's MoE block kernel time;
 the 8x4 ground-truth test is the reference the approximation is compared against.
 """
 
+import logging
+
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
@@ -22,6 +24,7 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_model_device_perf_test_with_merge,
     run_moe_perf_with_approximation,
 )
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe"
 
@@ -57,6 +60,15 @@ def test_deepseek_v3_moe_perf_galaxy():
     """8x4 galaxy ground truth — the reference the loudbox approximation targets."""
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+
+    margin = 0.03
+    ddr_speed = get_ddr_speed()
+    if ddr_speed is not None and ddr_speed < 16000:
+        logging.warning(f"DDR speed is {ddr_speed} (expected 16000), increasing margin from {margin} to {margin * 2}")
+        margin *= 2
+    elif ddr_speed is not None and ddr_speed > 16000:
+        logging.warning(f"DDR speed is {ddr_speed} (above expected 16000), baselines may need updating")
+
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
         expected_device_perf_ns_per_iteration=41_294_210,
@@ -64,6 +76,6 @@ def test_deepseek_v3_moe_perf_galaxy():
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,
         batch_size=1,
-        margin=0.03,
+        margin=margin,
         comments="seq3200_glx_8x4_ground_truth",
     )
