@@ -1104,24 +1104,6 @@ MatmulProgramConfig create_simple_matmul_program_config(
 
     const bool all_dram_interleaved = all_dram && all_interleaved;
 
-    // A batch=1 with B batched: route to 1D mcast so in0_reuse fires (A stays in L1, B batches loop)
-    if (get_batch_size(a_shape_padded) == 1 && get_batch_size(b_shape_padded) > 1 && all_interleaved) {
-        return get_mcast_1d_config(
-            input_tensor_a,
-            input_tensor_b,
-            transpose_a,
-            transpose_b,
-            bias_single_tile_size,
-            /*fuse_batch=*/false,
-            std::nullopt,
-            /*mcast_in0=*/false,
-            /*out_sharded=*/false,
-            compute_with_storage_grid_size,
-            compute_kernel_config,
-            output_dtype,
-            all_dram_interleaved);
-    }
-
     uint32_t height = a_shape_padded[-2];
     uint32_t width = b_shape_padded[-1];
     const bool is_narrow = is_narrow_shape(height, width, all_dram);
@@ -1206,6 +1188,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
              (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or block_sharded_on_1d_row_grid));
         bool use_mcast_1d_in1_config =
             is_tall or
+            (all_interleaved and get_batch_size(a_shape_padded) == 1 and get_batch_size(b_shape_padded) > 1) or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED or block_sharded_on_1d_column_grid));
         bool use_mcast_2d_config =
