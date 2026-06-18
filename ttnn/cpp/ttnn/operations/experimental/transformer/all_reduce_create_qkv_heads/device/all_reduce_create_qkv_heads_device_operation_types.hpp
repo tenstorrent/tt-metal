@@ -10,6 +10,8 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <cstdint>
 #include <optional>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace ttnn::experimental::prim {
@@ -82,6 +84,42 @@ struct AllReduceCreateQkvHeadsParams {
         attrs.emplace_back("dtype", dtype);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
+    }
+
+    // Compile-time attributes drive the default program-cache hash and canonical key.
+    // `semaphore` (GlobalSemaphore) is excluded: it is not hashable/canonical-key serializable and
+    // is used only for runtime args (semaphore.address()), so it does not affect program structure.
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "num_links",
+        "ring_size",
+        "all_reduce_mem_config",
+        "topology",
+        "sub_device_id",
+        "head_dim",
+        "use_noc1_only",
+        "num_heads",
+        "num_kv_heads",
+        "input_on_subcoregrids",
+        "slice_size",
+        "final_mem_config",
+        "dtype",
+        "cluster_axis");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            num_links,
+            ring_size,
+            all_reduce_mem_config,
+            topology,
+            sub_device_id,
+            head_dim,
+            use_noc1_only,
+            num_heads,
+            num_kv_heads,
+            input_on_subcoregrids,
+            slice_size,
+            final_mem_config,
+            dtype,
+            cluster_axis);
     }
 };
 
