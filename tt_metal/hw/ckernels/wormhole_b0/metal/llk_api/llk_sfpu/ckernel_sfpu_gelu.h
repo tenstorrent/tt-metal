@@ -406,8 +406,17 @@ inline void calculate_gelu_tanh() {
             result = x;
         }
         v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            // Active region: actually compute the tanh formula.
-            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(scaled);
+            // Active region: actually compute the tanh formula. Force FP32
+            // precision inside tanh (2-step NR reciprocal + FP32-accurate exp)
+            // regardless of the dest-accumulator mode. The rest of this kernel
+            // already runs in FP32; if we let tanh fall back to BF16 precision
+            // for `is_fp32_dest_acc_en=false`, the ~0.5% relative error in
+            // sigmoid leaks 1 BF16 ULP into the final result for inputs whose
+            // scaled value is just above tanh's internal polynomial threshold
+            // (|scaled| ~ 0.6, i.e. x ~ 0.75). The final BF16 conversion
+            // happens at the end of this function — there's no benefit to
+            // dropping precision earlier.
+            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
             sfpi::vFloat one_plus = 1.0f + t;
             // 0.5 * x first, then multiply by (1 + tanh(...)) — matches Python
             // left-to-right associativity: `0.5 * x * one_plus_tanh`.
