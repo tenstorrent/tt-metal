@@ -137,6 +137,7 @@ def denoise_loop(
     cond,  # conditioning dict for the conditional pass (see below)
     uncond=None,  # same dict for the unconditional pass; None => no CFG
     guidance_scale: float = 1.0,
+    mesh_device=None,  # pass the MeshDevice when the backbone is mesh-resident
 ):
     """Run the diffusion denoise loop, returning the final latent (torch NCHW).
 
@@ -163,10 +164,32 @@ def denoise_loop(
     do_cfg = uncond is not None and guidance_scale != 1.0
     latent = init_latent  # torch NCHW (canonical host form; small tensor)
 
+    # Host<->device helpers — replicate to / gather from the mesh when resident.
+    def _up(t_host, dtype):
+        if mesh_device is not None:
+            return ttnn.from_torch(
+                t_host,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        return ttnn.from_torch(t_host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=step.device)
+
+    def _down(t_dev):
+        if mesh_device is not None:
+            out = ttnn.to_torch(t_dev, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            return out[:1]  # one replica (flat leading dim is 1)
+        return ttnn.to_torch(t_dev)
+
     for t in scheduler.timesteps:
-        tvec = torch.tensor([float(t)] * B)
+        # Timestep embedding: pass a (replicated) device tensor [1,1,B,1] so the
+        # embedder doesn't host-upload internally (which ignores the mesh).
+        tvec = _up(torch.tensor([float(t)] * B, dtype=torch.float32).reshape(1, 1, B, 1), ttnn.float32)
         te1 = time_embed.forward(tvec)  # [1,1,B,H]
         te2 = time_embed_2.forward(tvec)
+        ttnn.deallocate(tvec)
 
         def _one(c):
             return step(
@@ -189,14 +212,9 @@ def denoise_loop(
             pred = combined
 
         # On-device Euler update: prev = sample + (sigma_next - sigma) * pred.
-        sample = ttnn.from_torch(
-            latent.permute(0, 2, 3, 1).reshape(1, 1, B * h * w, C).contiguous(),
-            dtype=pred.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=step.device,
-        )
+        sample = _up(latent.permute(0, 2, 3, 1).reshape(1, 1, B * h * w, C).contiguous(), pred.dtype)
         nxt = scheduler.step(pred, t, sample)
-        latent = ttnn.to_torch(nxt).reshape(B, h, w, C).permute(0, 3, 1, 2).contiguous()
+        latent = _down(nxt).reshape(B, h, w, C).permute(0, 3, 1, 2).contiguous()
 
         ttnn.deallocate(pred)
         ttnn.deallocate(sample)
