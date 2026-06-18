@@ -6,7 +6,7 @@
 #   * per-galaxy FABRIC_1D trains with the [LINE, RING] 8x4 torus dim_types,
 #   * the model builds from the shared TTNN weight cache, and
 #   * the populated KV cache PCC-matches the golden trace.
-# It is the precursor to the 2-galaxy half-and-half split (pipeline_prefill_rank_binding_2rank.yaml).
+# It is the precursor to the multi-galaxy D2D pipeline split (pipeline_prefill_rank_binding_2rank_d2d.yaml).
 #
 # Uses the in-tree known-good single-galaxy descriptor (8x4, [LINE, RING]); our 2-galaxy
 # descriptor's two meshes are copies of it.

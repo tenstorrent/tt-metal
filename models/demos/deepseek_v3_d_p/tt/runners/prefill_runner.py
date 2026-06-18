@@ -11,15 +11,14 @@ One entry point, two run modes selected at runtime:
     (prefill_h2d_producer.py / the scheduler); the loop is unbounded (runs to SIGTERM).
     Optional KV-chunk-table migration publish and per-layer LayerAck channel.
 
-  * Pipeline mode (PREFILL_STANDALONE=1, or any run with >1 rank): the model is split
-    across N ranks under tt-run — each rank owns a contiguous layer slice and builds the
-    same TtPrefillRuntime, parameterized with first_layer_idx / is_first_rank /
-    is_last_rank. Cross-rank activations move either device-to-device over fabric sockets
-    (PREFILL_PP_TRANSPORT=d2d; needs a connected MGD + FABRIC_2D) or via a host/NFS file
-    round-trip (default). The first rank's input is the golden trace (or the H2D socket
-    with PREFILL_PP_H2D=1) for a fixed PREFILL_STANDALONE_NCHUNKS chunks. Ranks run
-    decoupled (no per-chunk barrier; one warm-up barrier after compile). N=1 is the
-    single-galaxy bring-up case. With PREFILL_STANDALONE_PCC=1 each rank checks the KV
+  * Standalone mode (PREFILL_STANDALONE=1): the model is split across N ranks under tt-run
+    — each rank owns a contiguous layer slice and builds the same TtPrefillRuntime,
+    parameterized with first_layer_idx / is_first_rank / is_last_rank. With >1 rank the
+    cross-rank hidden state moves device-to-device over fabric sockets (needs a connected
+    MGD + FABRIC_2D); N=1 is the single-galaxy bring-up case (one rank, no transport). The
+    first rank's input is the golden trace (or the H2D socket with PREFILL_PP_H2D=1) for a
+    fixed PREFILL_STANDALONE_NCHUNKS chunks. Ranks run decoupled (no per-chunk barrier; one
+    warm-up barrier after compile). With PREFILL_STANDALONE_PCC=1 each rank checks the KV
     slice it populated against the global golden trace.
 
 The model class is the single source of truth — this driver wires rank topology, input,
@@ -56,11 +55,11 @@ H2D_METADATA_SIZE_BYTES = 12
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
 
-# D2D socket transport (PREFILL_PP_TRANSPORT=d2d): one persistent sender/receiver pair per rank
-# boundary carries the sharded hidden state over inter-galaxy fabric, replacing the host/NFS file
-# round-trip. The activation is sharded [seq across SP rows, emb across TP cols] — the same layout the
-# embedding output uses — so the receiver backing feeds the downstream model with no reshard. The
-# per-chunk metadata (slot/start/end/is_last) rides inline as four uint32 words.
+# D2D socket transport (>1 rank): one persistent sender/receiver pair per rank boundary carries the
+# sharded hidden state over inter-galaxy fabric. The activation is sharded [seq across SP rows, emb
+# across TP cols] — the same layout the embedding output uses — so the receiver backing feeds the
+# downstream model with no reshard. The per-chunk metadata (slot/start/end/is_last) rides inline as
+# four uint32 words.
 def _d2d_worker_grid() -> ttnn.CoreRange:
     """D2D push/sync worker grid, env-configurable as PREFILL_PP_D2D_WORKER_GRID='WxH' (default 1x1).
     A grid sweep showed compute + handoff gap are flat from 1x1 to 4x4 (the per-chunk overhead is the
@@ -133,144 +132,6 @@ def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]
 
 
 # ---------------------------------------------------------------------------
-# Cross-rank activation transport
-# ---------------------------------------------------------------------------
-#
-# Gather the activation to host, hand it to the next rank through a file under PREFILL_PP_DIR,
-# reshard on the far side. Bit-exact (no precision loss beyond the activation's own dtype) so a
-# multi-rank run PCC-matches single-rank. Fully serialized + host round-trip => very slow; a
-# correctness/PCC bring-up, not a perf path. A stand-in until the D2D-socket sync ops land — when
-# they do, only send_activation / recv_activation change.
-#
-# PREFILL_PP_DIR is the handoff directory:
-#   - single host: /dev/shm (default) — per-host tmpfs, fast.
-#   - multi host:  a directory on a filesystem SHARED by all hosts (e.g. NFS). /dev/shm
-#                  is per-host and will NOT work across hosts.
-# The write is staged to a temp file and atomically renamed so a reader (esp. over NFS,
-# whose write visibility is close-to-open) never observes a partial file; the wavefront
-# barrier orders the rename before the consumer's read.
-
-_TORCH_TO_TTNN_DTYPE = {}  # populated lazily (torch import is local to keep module import cheap)
-
-
-def _act_dir() -> str:
-    return os.environ.get("PREFILL_PP_DIR", "/dev/shm")
-
-
-def _act_path(subctx: int, chunk_idx: int, producer_rank: int) -> str:
-    return os.path.join(_act_dir(), f"pp_act_sub{subctx}_c{chunk_idx}_r{producer_rank}.pt")
-
-
-def _gather_activation_to_host(mesh_device: ttnn.MeshDevice, activation: ttnn.Tensor):
-    """SP+TP-sharded [1, 1, seq_per_chip, emb/tp] -> full host [1, 1, seq, emb].
-
-    Mirrors TtPrefillTransformer._to_host's composer (mesh rows=SP concat seq dim -2,
-    mesh cols=TP concat emb dim -1) but keeps 4D so the far side reshards symmetrically.
-    """
-    return ttnn.to_torch(
-        activation,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
-    )
-
-
-def _reshard_activation_to_device(mesh_device: ttnn.MeshDevice, host_tensor, mesh_shape: tuple) -> ttnn.Tensor:
-    """Inverse of _gather_activation_to_host: full host [1, 1, seq, emb] -> SP+TP-sharded
-    device tensor matching the embedding output (seq across SP rows, emb across TP cols)."""
-    import torch
-
-    if not _TORCH_TO_TTNN_DTYPE:
-        _TORCH_TO_TTNN_DTYPE[torch.bfloat16] = ttnn.bfloat16
-        _TORCH_TO_TTNN_DTYPE[torch.float32] = ttnn.float32
-    return ttnn.from_torch(
-        host_tensor,
-        device=mesh_device,
-        dtype=_TORCH_TO_TTNN_DTYPE[host_tensor.dtype],
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(-2, -1)),
-    )
-
-
-def send_activation(
-    runtime: TtPrefillRuntime, activation: ttnn.Tensor, subctx: int, chunk_idx: int, rank: int, meta: dict
-) -> None:
-    """Publish this rank's output activation AND its per-chunk metadata to the downstream rank as one
-    payload, then free the device tensor. The atomic rename makes the file appear whole, so the
-    consumer's polling recv_activation never sees a partial write — that pair is the only cross-rank
-    sync (no barrier). Bundling activation+metadata mirrors what the D2D-socket op will carry in one
-    transfer, so the downstream rank needs no shared schedule."""
-    import torch
-
-    t_to = time.perf_counter()
-    host = _gather_activation_to_host(runtime.mesh_device, activation)  # to_torch: device -> host
-    ms_to_torch = (time.perf_counter() - t_to) * 1000.0
-    t_w = time.perf_counter()
-    final = _act_path(subctx, chunk_idx, rank)
-    tmp = f"{final}.tmp.{rank}"  # same dir -> rename is atomic on the target FS
-    torch.save({"act": host, "meta": meta}, tmp)
-    os.rename(tmp, final)
-    ms_write = (time.perf_counter() - t_w) * 1000.0
-    ttnn.deallocate(activation)
-    nbytes = host.element_size() * host.nelement()
-    logger.info(
-        f"[pp rank {rank}] SEND chunk={chunk_idx} -> {final} "
-        f"shape={tuple(host.shape)} dtype={host.dtype} bytes={nbytes} meta={meta} "
-        f"[xfer] to_torch={ms_to_torch:.2f}ms write={ms_write:.2f}ms"
-    )
-
-
-def recv_activation(runtime: TtPrefillRuntime, subctx: int, chunk_idx: int, producer_rank: int) -> tuple:
-    """Receive the upstream rank's activation + metadata for this chunk and reshard the activation
-    onto this rank's mesh. Returns (device_tensor, meta_dict); runtime.prefill() deallocates the tensor.
-
-    Polls for the file — the producer's atomic rename is the only ordering, no barrier — so block here
-    until it appears: the open fails while the producer is still computing/renaming (and, cross-host
-    over NFS, while a stale negative dentry lingers). Retry up to PREFILL_PP_RECV_RETRIES * 0.1s; size
-    that above the producer's worst-case per-chunk compute time."""
-    import torch
-
-    path = _act_path(subctx, chunk_idx, producer_rank)
-    fname = os.path.basename(path)
-    act_dir = _act_dir()
-    attempts = int(os.environ.get("PREFILL_PP_RECV_RETRIES", "3000"))
-    # Wait (poll) for the producer's atomic-renamed file; time it separately from the transfer cost.
-    # Poll with os.listdir, NOT os.path.exists: a failed name lookup is cached by NFS as a negative
-    # dentry for up to acdirmax (~60s here), so a consumer that polls before the producer writes would
-    # not see the file for ~60s. os.listdir issues a READDIR that revalidates the directory each poll.
-    t_wait = time.perf_counter()
-    waits = 0
-    for attempt in range(attempts):
-        if fname in os.listdir(act_dir):
-            break
-        if attempt == attempts - 1:
-            raise FileNotFoundError(path)
-        waits += 1  # producer hasn't published this chunk yet (still computing)
-        time.sleep(0.1)
-    ms_wait = (time.perf_counter() - t_wait) * 1000.0
-    t_r = time.perf_counter()
-    payload = torch.load(path)
-    ms_read = (time.perf_counter() - t_r) * 1000.0
-    os.unlink(path)
-    host, meta = payload["act"], payload["meta"]
-    t_from = time.perf_counter()
-    out = _reshard_activation_to_device(runtime.mesh_device, host, runtime.config.mesh_shape)  # from_torch
-    ms_from_torch = (time.perf_counter() - t_from) * 1000.0
-    nbytes = host.element_size() * host.nelement()
-    logger.info(
-        f"[pp] RECV chunk={chunk_idx} <- {path} (from rank {producer_rank}) "
-        f"shape={tuple(host.shape)} bytes={nbytes} meta={meta} waits={waits} wait={ms_wait:.1f}ms "
-        f"[xfer] read={ms_read:.2f}ms from_torch={ms_from_torch:.2f}ms"
-    )
-    return out, meta
-
-
-def _subcontext_id() -> int:
-    """0 when not launched under an MPI sub-context — subcontext_id() returns None there."""
-    sub_id = ttnn.distributed_context_subcontext_id()
-    return int(sub_id) if sub_id is not None else 0
-
-
-# ---------------------------------------------------------------------------
 # Input
 # ---------------------------------------------------------------------------
 
@@ -326,12 +187,6 @@ def _socket_next(h2d_service) -> tuple:
     )
     m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
     return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
-
-
-def _transport_mode() -> str:
-    """Cross-rank activation transport: 'host' (file/NFS round-trip, default) or 'd2d' (device-to-device
-    socket over inter-galaxy fabric). d2d needs a connected MGD and FABRIC_2D."""
-    return os.environ.get("PREFILL_PP_TRANSPORT", "host").strip().lower()
 
 
 def _activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
@@ -474,8 +329,7 @@ def run_standalone_loop(
     actual_start / actual_end / is_last) rides with each activation, so downstream ranks need no
     shared schedule and learn the end from is_last. Every rank checks the KV slice it populated."""
     cfg = runtime.config
-    subctx = _subcontext_id()
-    slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % cfg.num_users
+    slot_id = 0  # standalone always fills slot 0 (request mode takes slot_id from the per-push metadata)
 
     token_ids = None
     n_chunks = NUM_CHUNKS if cfg.is_first_rank else None
@@ -536,11 +390,10 @@ def run_standalone_loop(
                     "actual_end": kv_actual + cfg.chunk_size,  # trace drives full chunks
                     "is_last": c == n_chunks - 1,
                 }
-        elif d2d_in is not None:
-            inp, meta = _d2d_recv(d2d_in)
-            slot_id = meta["slot_id"]
         else:
-            inp, meta = recv_activation(runtime, subctx, c, rank - 1)
+            # Non-first rank: the upstream stage's hidden state + metadata arrive over the D2D socket
+            # (the only inter-rank transport).
+            inp, meta = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
 
         # Per-chunk compute START (epoch, comparable across NTP-synced hosts). Always logged with NO
@@ -562,10 +415,7 @@ def run_standalone_loop(
         t_end_epoch = time.time()
 
         if not cfg.is_last_rank:
-            if d2d_out is not None:
-                _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it
-            else:
-                send_activation(runtime, out, subctx, c, rank, meta)  # out is None on the last rank
+            _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
 
         # (4) Grant the outbound sender AFTER the push so it forwards this chunk's output downstream.
         if d2d_out is not None:
@@ -642,16 +492,12 @@ def _print_config() -> None:
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
         ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "<auto: 1d if sp<=8 else 2d>")),
         ("PREFILL_STANDALONE (pipeline/bring-up mode)", os.environ.get("PREFILL_STANDALONE", "0")),
-        ("PREFILL_PP_TRANSPORT", _transport_mode()),
-        ("PREFILL_PP_DIR (host transport)", _act_dir()),
-        ("PREFILL_PP_RECV_RETRIES", os.environ.get("PREFILL_PP_RECV_RETRIES", "3000")),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_PP_H2D", os.environ.get("PREFILL_PP_H2D", "<unset; 0>")),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default)),
         ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<trace default>")),
         ("PREFILL_STANDALONE_PCC", os.environ.get("PREFILL_STANDALONE_PCC", "0")),
-        ("PREFILL_STANDALONE_SLOT", os.environ.get("PREFILL_STANDALONE_SLOT", "0")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         (
             "PREFILL_MIGRATION_TABLE_PATH",
@@ -729,13 +575,12 @@ def main() -> None:
 
 
 def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
-    """Bring-up / benchmark path: trace (or PREFILL_PP_H2D) input on rank 0, file or D2D transport
+    """Bring-up / benchmark path: trace (or PREFILL_PP_H2D) input on rank 0, D2D-socket transport
     between ranks, per-rank KV PCC. Self-contained (no external producer); covers num_ranks 1..N."""
     # Warm-up sync — the ONLY barrier. Every rank finishes compile before any chunk enters the
     # pipeline, so a downstream rank isn't still warming up while an upstream one races ahead. The
     # per-chunk loop takes no barrier. Trade-off: a rank that dies during compile hangs the others here.
     ttnn.distributed_context_barrier()
-    os.makedirs(_act_dir(), exist_ok=True)  # handoff dir must exist before the first file send
 
     # First rank in H2D mode: stand up the socket service so a producer can push token chunks.
     h2d_service = None
@@ -755,10 +600,11 @@ def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int
         descriptor_path = h2d_service.export_descriptor(service_id)
         logger.info(f"[pp rank {rank}] [h2d] service up, descriptor {service_id!r} -> {descriptor_path}")
 
-    # D2D transport: every rank stands up its pipeline endpoints (revert the custom sub-device as
-    # above). The post-compile barrier guarantees all ranks reach the chained create rendezvous.
+    # D2D transport: with >1 rank, every rank stands up its pipeline endpoints (revert the custom
+    # sub-device as above). The post-compile barrier guarantees all ranks reach the chained create
+    # rendezvous. A single rank owns the whole model — no transport.
     d2d_in = d2d_out = None
-    if _transport_mode() == "d2d":
+    if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
 

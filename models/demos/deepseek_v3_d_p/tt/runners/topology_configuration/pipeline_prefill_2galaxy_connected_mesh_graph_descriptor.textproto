@@ -1,7 +1,4 @@
-# CONNECTED 2-galaxy mesh graph descriptor for D2D-socket pipeline prefill.
-#
-# Unlike pipeline_prefill_2galaxy_mesh_graph_descriptor.textproto (two INDEPENDENT 8x4 meshes,
-# no connections — correct for the host/NFS file transport), this declares ONE fabric link between
+# Connected 2-galaxy mesh graph descriptor for D2D-socket pipeline prefill: ONE fabric link between
 # the two galaxies so the D2D MeshSocket has a path: stage 0 (mesh 0) -> stage 1 (mesh 1).
 #
 # Structure adapted from the decode superpod MGD

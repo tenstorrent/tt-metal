@@ -25,7 +25,6 @@ mesh_graph_desc_path: models/demos/deepseek_v3_d_p/tt/runners/topology_configura
 global_env:
   PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
   # Device-to-device socket transport (needs the connected MGD + 2D fabric below).
-  PREFILL_PP_TRANSPORT: "d2d"
   PREFILL_FABRIC_MODE: "2d"
 
   # Per-rank KV-cache PCC gate.
