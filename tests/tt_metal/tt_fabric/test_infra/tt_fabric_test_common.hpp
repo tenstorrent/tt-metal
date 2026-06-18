@@ -381,6 +381,18 @@ public:
         return mesh_graph.get_mesh_ids().size() > 1;
     }
 
+    std::vector<MeshId> get_ordered_mesh_ids() const override {
+        // Derive from the available global nodes so we only enumerate meshes that can actually
+        // source/sink traffic, then sort+unique for a deterministic ordering.
+        std::vector<MeshId> mesh_ids;
+        for (const auto& node : get_global_node_ids()) {
+            mesh_ids.push_back(node.mesh_id);
+        }
+        std::sort(mesh_ids.begin(), mesh_ids.end());
+        mesh_ids.erase(std::unique(mesh_ids.begin(), mesh_ids.end()), mesh_ids.end());
+        return mesh_ids;
+    }
+
     std::unordered_map<MeshId, std::unordered_set<MeshId>> get_mesh_adjacency_map() const override {
         std::unordered_map<MeshId, std::unordered_set<MeshId>> mesh_adjacency_map;
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

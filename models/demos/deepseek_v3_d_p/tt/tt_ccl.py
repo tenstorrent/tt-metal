@@ -75,23 +75,9 @@ class TT_CCL:
         )
 
         self.ring_attention_ccl_core_grid_offset = (full_compute_grid.x - 1, 0)
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
-        )
-        self.worker_sub_device = ttnn.SubDevice(
-            [
-                ccl_sub_device_crs,
-            ]
-        )
-        self.worker_sub_device_id = ttnn.SubDeviceId(0)
-        self.sub_device_stall_group = [self.worker_sub_device_id]
-
-        self.sub_device_manager = self.mesh_device.create_sub_device_manager([self.worker_sub_device], 0)
-        self.mesh_device.load_sub_device_manager(self.sub_device_manager)
-        self.mesh_device.set_sub_device_stall_group(self.sub_device_stall_group)
 
         # create global semaphore handles
-        self.ring_attention_ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
+        self.ring_attention_ccl_semaphore_handles = create_global_semaphores(mesh_device, self.sub_device_crs, 0)
 
         self.barrier_semaphore_idx = [0, 0, 0]
         self.barrier_semaphore_handles = [[], [], []]

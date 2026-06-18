@@ -366,20 +366,33 @@ void emit_formats_array(
         fmt::join(arr, ","));
 }
 
+// Quasar HW DataFormat codes (mirror of the relevant entries in
+// tensix_types.h. A few host DataFormat
+// enumerators use a value that differs from the HW encoding to keep host enum
+// values unique / avoid collisions, so device compilation needs the real HW
+// code. Keep these in sync with tensix_types.h.
+using hw_format_t = std::underlying_type_t<DataFormat>;
+constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
+constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
+constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on host)
+constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
+constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
+
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    // Remap host-only enum values to HW values for device compilation.
-    // Int16 has a unique host value (13) to avoid colliding with UInt16 (9),
-    // but the Quasar HW expects Int16 = 9 in tensix_types.h.
-    auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
-        if (f == DataFormat::Int16) {
-            return 9;  // HW value from tensix_types.h
+    auto as_int = [](DataFormat f) -> hw_format_t {
+        switch (f) {
+            case DataFormat::Int16: return kHwInt16;
+            case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
+            case DataFormat::MxInt8: return kHwMxInt8;
+            case DataFormat::MxInt4: return kHwMxInt4;
+            case DataFormat::MxInt2: return kHwMxInt2;
+            default: return static_cast<hw_format_t>(f);
         }
-        return static_cast<std::underlying_type_t<DataFormat>>(f);
     };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
@@ -389,11 +402,17 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
+    bool enable_2x_src_format,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
-        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, std::move(unpack_to_dest_mode));
+        desc.buf_dataformat_arr,
+        unpack_conditional_dst_format,
+        fp32_dest_acc_en,
+        std::move(unpack_to_dest_mode),
+        /*int_fpu_en=*/false,
+        enable_2x_src_format);
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -523,7 +542,12 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
+        desc,
+        unpack_conditional_dst_format,
+        options.fp32_dest_acc_en,
+        options.unpack_to_dest_mode,
+        options.enable_2x_src_format,
+        max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);

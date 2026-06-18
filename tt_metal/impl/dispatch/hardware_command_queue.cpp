@@ -34,8 +34,8 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
 
     CoreCoord enqueue_program_dispatch_core;
     CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
-        // dispatch_s exists with this configuration. Workers write to dispatch_s
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        // dispatch_s exists with this configuration. Workers write to dispatch_s.
         enqueue_program_dispatch_core =
             MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
     } else {

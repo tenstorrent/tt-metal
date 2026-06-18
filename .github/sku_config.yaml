@@ -24,13 +24,6 @@ skus:
       - pipeline-perf
       - in-service
 
-  wh_llmbox_perf_release:
-    runs_on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-perf
-      - in-release
-
   bh_p100:
     runs_on:
       - cloud-virtual-machine
@@ -51,20 +44,6 @@ skus:
       - topology-6u
       - in-service
 
-  wh_galaxy_release:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-functional
-      - topology-6u
-      - in-release
-
-  wh_galaxy_perf_release:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-perf
-      - topology-6u
-      - in-release
-
   bh_galaxy:
     runs_on:
       - arch-blackhole
@@ -78,20 +57,6 @@ skus:
       - pipeline-perf
       - topology-6u
       - in-service
-
-  bh_galaxy_release:
-    runs_on:
-      - arch-blackhole
-      - pipeline-functional
-      - topology-6u
-      - in-release
-
-  bh_galaxy_perf_release:
-    runs_on:
-      - arch-blackhole
-      - pipeline-perf
-      - topology-6u
-      - in-release
 
   wh_n150:
     runs_on:
@@ -130,6 +95,10 @@ skus:
   bh_p150b_civ2_viommu:
     runs_on:
       - tt-ubuntu-2204-P150b-viommu-stable
+
+  bh_p150b_civ2_viommu_prio:
+    runs_on:
+      - tt-ubuntu-2204-P150b-viommu-prio-stable
 
   bh_p150b_civ2:
     runs_on:

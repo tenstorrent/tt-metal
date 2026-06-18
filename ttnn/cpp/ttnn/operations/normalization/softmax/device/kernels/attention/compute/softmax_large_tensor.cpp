@@ -383,8 +383,8 @@ void kernel_main() {
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
-            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
-            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
+            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cur_cb_length_t, blk);
+            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cur_cb_length_t, blk, do_mask);
             reduce_cb_pass<PoolType::MAX, cb_x, cb_max_scaler, cb_max, cb_prev_max>(
                 cur_pass, use_prev_reduce, cur_cb_length_t);
 #else
@@ -419,8 +419,8 @@ void kernel_main() {
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
-            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
-            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
+            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cur_cb_length_t, blk);
+            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cur_cb_length_t, blk, do_mask);
             exp_cb(cb_x, cb_exps, cb_max_final, cur_cb_length_t, blk);
             reduce_cb_pass<PoolType::SUM, cb_exps, cb_sum_scaler, cb_sumexps, cb_prev_reduce>(
                 cur_pass, use_prev_reduce, cur_cb_length_t);
@@ -482,8 +482,8 @@ void kernel_main() {
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
-            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
-            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
+            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cur_cb_length_t, blk);
+            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cur_cb_length_t, blk, do_mask);
             exp_cb(cb_x, cb_exps, cb_max_final, cur_cb_length_t, blk);
 #else
             if (do_mask && cur_pass == num_cb_passes - 1) {

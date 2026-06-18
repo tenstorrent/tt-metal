@@ -96,6 +96,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
 
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 

@@ -1,0 +1,26 @@
+# Test matrix for perf tests
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+- name: tt-train run models
+  cmd: python tt-train/scripts/run_models.py
+  skus:
+    wh_n150_civ2:
+      timeout: 90
+    wh_n300_civ2:
+      timeout: 90
+    bh_p100:
+      timeout: 90
+    bh_p150b_civ2:
+      timeout: 240
+  owner_id: U07K00A281X # Kevin Wu
+  team: train

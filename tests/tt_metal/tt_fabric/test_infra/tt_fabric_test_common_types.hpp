@@ -134,6 +134,7 @@ enum class HighLevelTrafficPattern {
     NeighborExchange,
     SequentialNeighborExchange,
     SequentialAllToAll,
+    SequentialMeshPassthrough,
 };
 
 // Mesh scope filter for high-level unicast patterns on multi-mesh systems.

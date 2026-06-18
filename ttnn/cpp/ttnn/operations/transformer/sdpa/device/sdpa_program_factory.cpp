@@ -73,11 +73,9 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
     return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
-// Streaming compute v2 eligibility. Sliding-window, causal, chunked, and attention-sink modes are
-// handled downstream. User-provided masks and fp32 dest accumulators still require the legacy path.
-bool can_use_streaming_compute(bool use_provided_mask, bool fp32_dest_acc_en) {
-    return !use_provided_mask && !fp32_dest_acc_en;
-}
+// Streaming compute (v2) handles every SDPA variant; only fp32 dest-accumulate falls back to the
+// legacy compute kernel.
+bool can_use_streaming_compute(bool fp32_dest_acc_en) { return !fp32_dest_acc_en; }
 
 uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
     uint32_t tiles = 1;  // neginf
@@ -360,16 +358,22 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(use_provided_mask, fp32_dest_acc_en);
+    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
+    // A user-provided dense mask on the streaming path takes its own per-chunk apply
+    // (apply_provided_mask_streaming) and must win over the structured lightweight palette: forcing
+    // lightweight_mask false (via !use_provided_mask below) routes cb_mask_in sizing/dtype to the
+    // full Sq×Sk provided-mask branch instead of the 1–4-tile palette.
     const bool lightweight_causal = is_causal && !use_provided_mask && !has_sliding_window;
     const bool lightweight_streaming_mask =
-        use_streaming_compute && (is_causal || has_sliding_window || use_padded_mask);
+        use_streaming_compute && !use_provided_mask && (is_causal || has_sliding_window || use_padded_mask);
     const bool lightweight_mask = lightweight_causal || lightweight_streaming_mask;
     // Non-causal partial-tile K (Sk % TILE != 0) needs a partial-tile mask in cb_mask_in.
+    // Not used for a dense provided mask (the reader neginf-fills padded positions in the mask).
     const uint32_t k_partial_col =
-        (use_streaming_compute && use_padded_mask && (Sk % TILE_HEIGHT != 0)) ? (Sk % TILE_HEIGHT) : 0;
+        (use_streaming_compute && use_padded_mask && !use_provided_mask && (Sk % TILE_HEIGHT != 0)) ? (Sk % TILE_HEIGHT)
+                                                                                                    : 0;
     const bool lw_partial_active = (k_partial_col > 0);
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;

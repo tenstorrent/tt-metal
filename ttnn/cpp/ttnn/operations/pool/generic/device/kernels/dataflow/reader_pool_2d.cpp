@@ -85,7 +85,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 constexpr uint32_t tail_offset_bytes = total_elems_to_reduce * row_stride_elems * BYTES_PER_ELEM;
                 constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
                 fill_with_val(
-                    get_write_ptr(in_cb_id) + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
+                    in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
