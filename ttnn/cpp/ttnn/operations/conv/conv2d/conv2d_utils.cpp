@@ -609,7 +609,6 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     bool is_shard_width_tile_multiple) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
-
     ParallelConfig parallel_config;
     if (input_tensor_parallel_config.has_value()) {
         parallel_config = input_tensor_parallel_config.value();

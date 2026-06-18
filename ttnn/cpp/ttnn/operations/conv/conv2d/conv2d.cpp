@@ -906,7 +906,6 @@ Conv2dResultWithOptions conv2d(
 
     // Execute L1 path
     if (path == Conv2dExecutionPath::L1) {
-        py_log_tensor(input_tensor);
         log_trace(tt::LogOp, "Conv2d L1 {}", slice_config_.has_value() ? "with slice config" : "without slice config");
         return result_to_result_with_options(
             conv2d_L1(
