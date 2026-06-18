@@ -93,8 +93,8 @@ LiDAR (B,1,256,256)                                                      │
 | GPT cross-modal fusion ×4 | PyTorch | `AdaptiveAvgPool2d` + `F.interpolate` interleaved with attention; mixed-mode migration complex |
 | FPN conv layers ×3 | **TTNN** | Plain `nn.Conv2d`, no BN; direct weight cast |
 | FPN bilinear upsample ×2 | **TTNN** | `ttnn.upsample(mode="bilinear")` matches torch `align_corners=False` to PCC ≥ 0.99999 at the ×2/×4 integer scales |
-| `_bev_downscale` 1×1 conv | PyTorch | Deferred to Stage 4 |
-| Perception TransformerDecoder | PyTorch | Deferred to Stage 4 |
+| `_bev_downscale` 1×1 conv | PyTorch | Deferred to Stage 3.4 |
+| Perception TransformerDecoder | PyTorch | Deferred to Stage 3.4 |
 | TrajectoryHead DDIM + grid_sample | PyTorch | denoiser still host; `ttnn.grid_sample` itself is validated (see `tt/ttnn_grid_sample_attention.py`) |
 
 ---
@@ -202,7 +202,7 @@ new full-model tests.
 | 1 | PyTorch wrapper + BN-fold primitives + BasicBlock PCC | 0 | 14/14 | `857671c0aa` |
 | 2 | All 32 ResNet-34 BasicBlock conv layers on TTNN | +70 | 15/15 | `a72716b165` |
 | 3 | FPN 3 conv layers on TTNN (`TtnnFPN`) | +3 | 18/18 | `edd70f9e9f` |
-| 3.1 | Review fixes: 2-ch DDIM noise (upstream match), FPN bilinear upsample on TTNN, `ttnn.grid_sample` validated, conv-weight caching | +0 conv (+2 upsample) | 24/24 | _(uncommitted)_ |
+| 3.1 | Review fixes: 2-ch DDIM noise (upstream match), FPN bilinear upsample on TTNN, `ttnn.grid_sample` validated, conv-weight caching | +0 conv (+2 upsample) | 24/24 | `4b07970` |
 
 **Current total: 24 tests pass** (21 PCC + 3 sanity).  73 `ttnn.conv2d` ops + 2
 `ttnn.upsample` (bilinear) ops run on device per forward pass (each BasicBlock
@@ -299,7 +299,6 @@ ttnn.close_device(device)
 
 ```bash
 # 1. Create and activate the project virtual environment
-./create_venv.sh
 source python_env/bin/activate
 export PYTHONPATH=/root/tt/tt-metal
 
@@ -468,10 +467,10 @@ diffusion_drive/
 
 | Stage | Scope | Key blocker |
 |---|---|---|
-| 4 | Perception stack: `_bev_downscale` (1×1 conv), `bev_proj` (Linear+ReLU+LN), `_tf_decoder` (3-layer SDPA+FFN) | TTNN SDPA API validation at d=256, 8 heads, 31×65 tokens |
-| 5 | TrajectoryHead DDIM denoiser (linear layers and noise schedule) | `ttnn.grid_sample` (bilinear/zeros/align_corners=False) is validated as a drop-in (PCC ≥ 0.99) in `tt/ttnn_grid_sample_attention.py`; remaining work is porting the surrounding Linear/SDPA/Mish layers and the DDIM scheduler arithmetic |
-| 6 | GPT cross-modal fusion (2-layer transformer ×4 scales) | `AdaptiveAvgPool2d` + `F.interpolate` interleaved with attention; complex mixed-mode migration |
-| 7 | Full-stack trace capture | Requires all forward ops on-device to eliminate PCIe round-trips |
+| 3.4 | Perception stack: `_bev_downscale` (1×1 conv), `bev_proj` (Linear+ReLU+LN), `_tf_decoder` (3-layer SDPA+FFN) | TTNN SDPA API validation at d=256, 8 heads, 31×65 tokens |
+| 3.5 | TrajectoryHead DDIM denoiser (linear layers and noise schedule) | `ttnn.grid_sample` (bilinear/zeros/align_corners=False) is validated as a drop-in (PCC ≥ 0.99) in `tt/ttnn_grid_sample_attention.py`; remaining work is porting the surrounding Linear/SDPA/Mish layers and the DDIM scheduler arithmetic |
+| 3.6 | GPT cross-modal fusion (2-layer transformer ×4 scales) | `AdaptiveAvgPool2d` + `F.interpolate` interleaved with attention; complex mixed-mode migration |
+| 3.7 | Full-stack trace capture | Requires all forward ops on-device to eliminate PCIe round-trips |
 
 ---
 
