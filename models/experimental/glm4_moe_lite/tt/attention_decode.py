@@ -283,25 +283,32 @@ def q_projection(
         )
     else:
         q_a = w.q_a_layernorm(q_a, mode="decode")
-    q = attn_linear(q_a, w.w_q_b, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
+    # HEAD_PARALLEL_ATTN: w_q_b is column-parallel, so q_b emits H/tp_size heads per device
+    # (no collective). Everything downstream operates on this local head count.
+    heads_local = int(hparams.num_attention_heads)
+    w_q_b = w.w_q_b
+    if cfg.head_parallel_attn:
+        heads_local = int(hparams.num_attention_heads) // int(cfg.tp_size)
+        w_q_b = w.w_q_b_hp  # column-parallel copy → this device's heads, no collective
+    q = attn_linear(q_a, w_q_b, device=device, cfg=cfg, force_no_tp=cfg.attn_dp or cfg.head_parallel_attn)
     ttnn.deallocate(q_a, force=False)
 
     if _Q_DIRECT_RESHAPE and batch == 1:
-        q = ttnn.reshape(q, (1, int(hparams.num_attention_heads), 1, int(hparams.qk_head_dim)))
+        q = ttnn.reshape(q, (1, heads_local, 1, int(hparams.qk_head_dim)))
     else:
-        q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
-        q = ttnn.permute(q, (0, 2, 1, 3))  # [1,H,B,qk_head_dim]
+        q = ttnn.reshape(q, (1, batch, heads_local, int(hparams.qk_head_dim)))
+        q = ttnn.permute(q, (0, 2, 1, 3))  # [1,heads_local,B,qk_head_dim]
 
     q_nope = _safe_slice(
         q,
         [0, 0, 0, 0],
-        [1, int(hparams.num_attention_heads), batch, int(hparams.qk_nope_head_dim)],
+        [1, heads_local, batch, int(hparams.qk_nope_head_dim)],
         skip_clones=cfg.skip_defensive_clones,
     )
     q_rope = _safe_slice(
         q,
         [0, 0, 0, int(hparams.qk_nope_head_dim)],
-        [1, int(hparams.num_attention_heads), batch, int(hparams.qk_head_dim)],
+        [1, heads_local, batch, int(hparams.qk_head_dim)],
         skip_clones=cfg.skip_defensive_clones,
     )
     if not cfg.skip_defensive_clones:
@@ -311,7 +318,7 @@ def q_projection(
     if not cfg.skip_typecast and q_rope.dtype != ttnn.bfloat16:
         q_rope = ttnn.typecast(q_rope, dtype=ttnn.bfloat16)
     if use_decode_rope and rope_decode_fn is not None:
-        q_rope = rope_decode_fn(q_rope, heads=int(hparams.num_attention_heads))
+        q_rope = rope_decode_fn(q_rope, heads=heads_local)
     else:
         q_rope = ttnn.experimental.rotary_embedding_llama(
             q_rope,
@@ -323,7 +330,10 @@ def q_projection(
 
     # kv_b1: project q_nope into KV latent space (independent of q_rope rotary above).
     # w_kv_b1 stays row-parallel under TP regardless of ATTN_DP.
-    use_tp_kv_b1 = cfg.tp_enabled
+    # Under HEAD_PARALLEL_ATTN, w_kv_b1 is per-head sharded and q_nope already holds this
+    # device's heads — it's a plain per-head matmul with no collective. Otherwise fall back
+    # to row-parallel (when tile-aligned) or replicated.
+    use_tp_kv_b1 = cfg.tp_enabled and not cfg.head_parallel_attn
     if use_tp_kv_b1:
         qk_nope = int(hparams.qk_nope_head_dim)
         qk_nope_per_shard = qk_nope // max(1, cfg.tp_size)
@@ -332,7 +342,8 @@ def q_projection(
     if use_tp_kv_b1:
         q_nope = tp_row_parallel_linear(q_nope, w.w_kv_b1, device=device, cfg=cfg)
     else:
-        q_nope = mlp_linear(q_nope, w.w_kv_b1, device=device, cfg=cfg, memory_config=ttnn.L1_MEMORY_CONFIG)
+        w_kv_b1 = w.w_kv_b1_hp if cfg.head_parallel_attn else w.w_kv_b1
+        q_nope = mlp_linear(q_nope, w_kv_b1, device=device, cfg=cfg, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if q is not None:
         ttnn.deallocate(q, force=False)
@@ -364,6 +375,8 @@ def flash_mla_and_output(
     """
     kvpe_dim = int(hparams.kv_lora_rank + hparams.qk_rope_head_dim)
     num_heads = int(hparams.num_attention_heads)
+    # Under HEAD_PARALLEL_ATTN, q_kvpe already carries only this device's heads.
+    heads_local = num_heads // int(cfg.tp_size) if cfg.head_parallel_attn else num_heads
 
     # Prepare Q for decode: [1,H,B,kvpe_dim] -> [1,B,H,kvpe_dim]
     if cfg.skip_defensive_clones:
@@ -394,7 +407,7 @@ def flash_mla_and_output(
     if cfg.shard_q:
         grid_size = device.compute_with_storage_grid_size()
         num_cores = int(grid_size.x) * int(grid_size.y)
-        height = batch * num_heads
+        height = batch * heads_local
         tiles_h = max(1, (height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
         q_num_cores = min(tiles_h, max(1, num_cores))
         shard_h = (height + q_num_cores - 1) // q_num_cores
@@ -428,7 +441,7 @@ def flash_mla_and_output(
     if cfg.disable_flash_mla_decode:
         is_mesh = device.__class__.__name__ == "MeshDevice"
         mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
-        heads_padded = ((num_heads + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        heads_padded = ((heads_local + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         attn_latent = ttnn.from_torch(
             torch.zeros((1, batch, heads_padded, int(hparams.kv_lora_rank)), dtype=torch.bfloat16),
             device=device,
@@ -486,7 +499,7 @@ def flash_mla_and_output(
     attn_latent = _safe_slice(
         attn_latent_padded,
         [0, 0, 0, 0],
-        [1, batch, num_heads, int(hparams.kv_lora_rank)],
+        [1, batch, heads_local, int(hparams.kv_lora_rank)],
         skip_clones=cfg.skip_defensive_clones,
     )
     if not cfg.skip_defensive_clones:
@@ -501,11 +514,14 @@ def flash_mla_and_output(
     # kv_b2 + output projection
     t0 = time.perf_counter() if profile is not None else 0.0
     if cfg.head_parallel_kvb2:
-        part_mc = ttnn.L1_MEMORY_CONFIG if _KVB2_INPUT_L1 else None
-        if part_mc is not None:
-            attn_latent = ttnn.mesh_partition(attn_latent, dim=1, cluster_axis=cfg.tp_axis, memory_config=part_mc)
-        else:
-            attn_latent = ttnn.mesh_partition(attn_latent, dim=1, cluster_axis=cfg.tp_axis)
+        # HEAD_PARALLEL_ATTN already produced this device's heads upstream (column-parallel q_b),
+        # so FlashMLA output is already head-local — skip the post-SDPA head partition.
+        if not cfg.head_parallel_attn:
+            part_mc = ttnn.L1_MEMORY_CONFIG if _KVB2_INPUT_L1 else None
+            if part_mc is not None:
+                attn_latent = ttnn.mesh_partition(attn_latent, dim=1, cluster_axis=cfg.tp_axis, memory_config=part_mc)
+            else:
+                attn_latent = ttnn.mesh_partition(attn_latent, dim=1, cluster_axis=cfg.tp_axis)
         v = mlp_linear(attn_latent, w.w_kv_b2, device=device, cfg=cfg)
         ttnn.deallocate(attn_latent, force=False)
         if cfg.skip_defensive_clones:
