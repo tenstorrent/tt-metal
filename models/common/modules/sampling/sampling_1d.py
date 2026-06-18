@@ -264,7 +264,6 @@ class Sampling1D(LightweightModule):
             dim=-1,
             output_tensor=tt_out_tok,
             keepdim=False,
-            use_multicore=True,
         )
         # Argmax path never emits logprobs (main's contract: force-argmax is disabled whenever
         # logprobs are requested). Return None unconditionally — do not call the calculator.

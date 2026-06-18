@@ -4,7 +4,7 @@
 
 """Combined DRAM-core prefetch + consuming 1D matmul.
 
-``ttnn.experimental.queue_dram_core_prefetcher_request`` (fills a DRAM-sender
+``ttnn.experimental.queue_tensor_prefetcher_request`` (fills a DRAM-sender
 GlobalCircularBuffer over NOC, off the command queue) and the ``ttnn.linear``
 that drains that GCB are always issued as a pair, against the *same* GCB and the
 *same* gather_in0 program config. As two separate calls the caller has to (a)
@@ -63,7 +63,7 @@ def prefetch_and_linear(
     # wait_front(ring_size) per layer, so this is the only value that balances the
     # page credits, regardless of the weight's shard layout.
     block_count = global_cb.receiver_cores().num_cores()
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(weight, block_count)],
         global_cb=global_cb,

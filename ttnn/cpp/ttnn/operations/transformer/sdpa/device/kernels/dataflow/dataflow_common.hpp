@@ -510,8 +510,9 @@ void fill_diagonal_edge_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
     constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
 
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     constexpr uint32_t face_offsets[4] = {
         0,
@@ -1117,7 +1118,7 @@ inline void issue_block_reads(
 // Zero-fill a (num_rows × cols) tile block in L1. Same dst arithmetic as issue_block_reads.
 // reader is used only to derive the per-tile page size. No periodic barrier: fills source
 // from local L1 (MEM_ZEROS_BASE) and completes fast, so they don't push the NIU outstanding
-// counter the way DRAM reads do. Caller's trailing noc_async_read_barrier() handles visibility.
+// counter the way DRAM reads do. Caller's trailing read barrier handles visibility.
 template <typename ReaderType>
 inline void zero_fill_block(
     const ReaderType& reader,
@@ -1220,8 +1221,8 @@ struct CatAddrGenerator {
         first_seq_padded(first_seq_padded),
         second_seq_padded(second_seq_padded) {}
 
-    // Issue async NoC reads for a slice to L1. No barrier — caller must
-    // noc_async_read_barrier(). Splits [slice.d2_start, slice.d2_end) into up to four segments
+    // Issue async NoC reads for a slice to L1. No barrier — caller must issue a
+    // read barrier. Splits [slice.d2_start, slice.d2_end) into up to four segments
     // (first tensor / gap / second tensor / tail); each valid segment hoists id_of once.
     // end_seq_tile is unused: bounds come from first_shape/second_shape; signature kept for
     // API symmetry with PaddedAddrGenerator (fetch_block dispatches generically).
@@ -1303,8 +1304,8 @@ struct CatAddrGenerator {
         }
     }
 
-    // Issue async NoC writes for a slice from L1. No barrier — caller must
-    // noc_async_write_barrier(). Same segment split as issue_reads; gap and tail produce no
+    // Issue async NoC writes for a slice from L1. No barrier — caller must issue a
+    // write barrier. Same segment split as issue_reads; gap and tail produce no
     // writes (those rows aren't mapped to either tensor). end_seq_tile unused (see issue_reads).
     void issue_writes(
         Noc noc,
@@ -1367,8 +1368,8 @@ struct PaddedAddrGenerator {
     PaddedAddrGenerator(const ReaderType& reader, TensorShapeType tensor_shape) :
         reader(reader), tensor_shape(tensor_shape) {}
 
-    // Issue async NoC reads for a slice to L1. No barrier — caller must
-    // noc_async_read_barrier(). Splits valid rows from the padded tail at loop level (no
+    // Issue async NoC reads for a slice to L1. No barrier — caller must issue a
+    // read barrier. Splits valid rows from the padded tail at loop level (no
     // in_bounds branch in the hot path); valid rows advance tile_id by arithmetic only.
     void issue_reads(
         const Slice& slice,
@@ -1469,7 +1470,7 @@ template <typename ReaderType, typename TensorShapeType>
 PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<ReaderType, TensorShapeType>;
 
 // Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
-// cb_reserve_back / cb_push_back. Used by forwarding paths that mcast before pushing.
+// the reserve/push sequence on the destination CB. Used by forwarding paths that mcast before pushing.
 //
 // Dispatches to the generator's issue_reads. PaddedAddrGenerator's overload hoists id_of
 // (4 muls + 3 adds) and the row-only validity check out of the inner col loop;
@@ -1528,7 +1529,7 @@ void read_block(
 }
 
 // Pop a (rows × cols) tile block out of a CB and write it via NoC. Symmetric to read_block:
-// cb_wait_front + dispatch + barrier + cb_pop_front. Dispatches to the generator's issue_writes
+// wait-front + dispatch + barrier + pop-front. Dispatches to the generator's issue_writes
 // (PaddedAddrGenerator hoists id_of out of the inner col loop; CatAddrGenerator keeps per-tile
 // dispatch). Out-of-bound rows are skipped (no zero-fill on writes).
 template <typename CatAddrGeneratorType>
@@ -1588,10 +1589,10 @@ void write_block(
 }
 
 // Single-chip linear-tile-id drain. Iterates total_rows in groups of sbh rows (last group is
-// a smaller remainder if not divisible); per-group cb_wait_front + flush-before-pop lets
+// a smaller remainder if not divisible); per-group wait-front + flush-before-pop lets
 // cb_out be sized to a few groups instead of the full chunk. Rows in [write_rows, total_rows)
 // are padding — popped but not written. Periodic barrier_threshold flushes guard the NoC ack
-// queue; final noc_async_write_barrier ensures DRAM arrival before return. Single-chip never
+// queue; the final write barrier ensures DRAM arrival before return. Single-chip never
 // sets a non-zero trid → drain flushes trid 0 (the default trid all writes here carry).
 template <typename TensorAccessorType>
 void write_block_row_grouped(

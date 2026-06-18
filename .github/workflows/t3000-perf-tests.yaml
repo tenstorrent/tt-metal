@@ -18,7 +18,6 @@ on:
           - flux1-dev
           - motif
           - qwenimage
-          - gemma-3-27b-it
       platform:
         required: false
         type: choice

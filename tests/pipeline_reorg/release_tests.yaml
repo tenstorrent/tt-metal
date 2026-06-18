@@ -35,15 +35,6 @@
   team: models
   model-name: bert
 
-- name: stable_diffusion N150 functional
-  cmd: run_stable_diffusion_func
-  skus:
-    wh_n150:
-      timeout: 24
-  owner_id: U045U3DEKM4 # Mohamed Bahnas
-  team: models
-  model-name: stable_diffusion
-
 - name: sdxl N150 functional
   cmd: run_sdxl_func
   skus:
