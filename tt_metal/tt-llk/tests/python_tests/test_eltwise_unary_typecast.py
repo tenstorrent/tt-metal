@@ -10,10 +10,15 @@ int<->int and all block-float (Bfp8_b / Bfp4_b) conversions. Same-dtype pairs
 and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 """
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import (
+    BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
+    QUASAR_DATA_FORMAT_ENUM_VALUES,
+    WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+    DataFormat,
+    InputOutputFormat,
+)
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
     TypecastGolden,
@@ -63,12 +68,25 @@ _EXCLUDED_PAIRS = {
 
 _BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
 
-# Every directed pair (54 total) ttnn.typecast exercises end-to-end.
+# Formats the current architecture's data-format enum actually supports. Used to
+# drop unsupported pairs at collection time so we never generate tests we would
+# otherwise have to skip in the test body.
+_ARCH_SUPPORTED_FORMATS = {
+    ChipArchitecture.WORMHOLE: WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+    ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
+    ChipArchitecture.QUASAR: QUASAR_DATA_FORMAT_ENUM_VALUES,
+}[get_chip_architecture()]
+
+# Every directed pair ttnn.typecast exercises end-to-end, restricted to pairs
+# whose input and output formats are both supported on the current architecture.
 TYPECAST_PAIRS = [
     InputOutputFormat(in_fmt, out_fmt)
     for in_fmt in _TYPECAST_FORMATS
     for out_fmt in _TYPECAST_FORMATS
-    if in_fmt != out_fmt and (in_fmt, out_fmt) not in _EXCLUDED_PAIRS
+    if in_fmt != out_fmt
+    and (in_fmt, out_fmt) not in _EXCLUDED_PAIRS
+    and in_fmt in _ARCH_SUPPORTED_FORMATS
+    and out_fmt in _ARCH_SUPPORTED_FORMATS
 ]
 
 
@@ -126,19 +144,6 @@ def test_eltwise_unary_typecast(
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
 ):
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        pytest.skip("Typecast SFPU test targets Blackhole and Wormhole_b0")
-
-    arch_formats = TestConfig.DATA_FORMAT_ENUM
-    if (
-        formats.input_format not in arch_formats
-        or formats.output_format not in arch_formats
-    ):
-        pytest.skip(
-            f"{formats.input_format.name}->{formats.output_format.name} "
-            f"not supported on {get_chip_architecture().name}"
-        )
-
     dest_acc = _required_dest_acc(formats)
 
     # Stimuli selection per input/output dtype:
