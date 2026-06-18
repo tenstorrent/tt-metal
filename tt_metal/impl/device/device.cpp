@@ -225,8 +225,8 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                     // pointers for a serviced device must therefore be written into that device's DRAM, not
                     // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
                     // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
-                    const uint32_t dram_channel = this->allocator_impl()->get_dram_channel_from_bank_id(
-                        this->sysmem_manager_->get_dram_region_bank_id());
+                    const uint32_t dram_channel =
+                        this->allocator_impl()->get_dram_channel_from_bank_id(this->sysmem_manager_->get_dram_region_bank_id());
                     MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
                         pointers.data(),
                         pointers.size() * sizeof(uint32_t),
