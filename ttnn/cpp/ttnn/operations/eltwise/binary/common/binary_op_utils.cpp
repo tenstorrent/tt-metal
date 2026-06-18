@@ -63,8 +63,7 @@ bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType 
         return dtype_policy::is_supported(op, dtype_a);
     }
 
-    if (dtype_policy::is_mixed_bfloat_tile_pair(dtype_a, dtype_b) &&
-        dtype_policy::supports_mixed_bfloat_tile_inputs(op)) {
+    if (dtype_policy::is_mixed_float_pair(dtype_a, dtype_b) && dtype_policy::supports_mixed_float_inputs(op)) {
         return dtype_policy::is_supported(op, dtype_a) && dtype_policy::is_supported(op, dtype_b);
     }
 

@@ -68,16 +68,16 @@ bool is_supported(BinaryOpType op, DataType dtype) {
     return std::ranges::find(supported_dtypes, dtype) != supported_dtypes.end();
 }
 
-bool is_bfloat_tile_dtype(DataType dtype) {
+bool is_mixed_float_dtype(DataType dtype) {
     using namespace dtype_sets;
-    return std::ranges::find(bfloat_tile, dtype) != bfloat_tile.end();
+    return std::ranges::find(mixed_float, dtype) != mixed_float.end();
 }
 
-bool is_mixed_bfloat_tile_pair(DataType dtype_a, DataType dtype_b) {
-    return dtype_a != dtype_b && is_bfloat_tile_dtype(dtype_a) && is_bfloat_tile_dtype(dtype_b);
+bool is_mixed_float_pair(DataType dtype_a, DataType dtype_b) {
+    return dtype_a != dtype_b && is_mixed_float_dtype(dtype_a) && is_mixed_float_dtype(dtype_b);
 }
 
-bool supports_mixed_bfloat_tile_inputs(BinaryOpType op) {
+bool supports_mixed_float_inputs(BinaryOpType op) {
     switch (op) {
         case BinaryOpType::ADD:
         case BinaryOpType::SUB:

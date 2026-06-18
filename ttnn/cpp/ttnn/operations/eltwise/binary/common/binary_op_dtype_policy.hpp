@@ -39,8 +39,14 @@ inline constexpr std::array relational{
 // SFPU where kernel: explicit Int32/UInt32/Float32; other floats use Float16_b tile path.
 inline constexpr std::array where{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::INT32};
 
-// BFLOAT16 plus block-float tile dtypes.
-inline constexpr std::array bfloat_tile{DT::BFLOAT16, DT::BFLOAT8_B, DT::BFLOAT4_B};
+// Floating-point tile dtypes eligible to be paired as mixed operands on the binary_ng
+// compute ops that allow it (see supports_mixed_float_inputs; covers both FPU and SFPU
+// binary paths). fp32 is included even though it is a full 32-bit tile: the program
+// factory turns on fp32 dest accumulation whenever any operand is fp32, so the compute
+// path sees a unified dest format regardless of the per-input dtype mix. Membership
+// happens to match float_only today, but the two answer different questions (per-operand
+// support vs. mix eligibility) and are kept distinct.
+inline constexpr std::array mixed_float{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B};
 
 // Enum values that are not dispatched to binary_ng (e.g. ADDALPHA -> ADD).
 inline constexpr std::array<DT, 0> unsupported{};
@@ -53,11 +59,11 @@ std::span<const tt::tt_metal::DataType> supported_tensor_a_dtypes(BinaryOpType o
 
 bool is_supported(BinaryOpType op, tt::tt_metal::DataType dtype);
 
-bool is_bfloat_tile_dtype(tt::tt_metal::DataType dtype);
+bool is_mixed_float_dtype(tt::tt_metal::DataType dtype);
 
-bool is_mixed_bfloat_tile_pair(tt::tt_metal::DataType dtype_a, tt::tt_metal::DataType dtype_b);
+bool is_mixed_float_pair(tt::tt_metal::DataType dtype_a, tt::tt_metal::DataType dtype_b);
 
-bool supports_mixed_bfloat_tile_inputs(BinaryOpType op);
+bool supports_mixed_float_inputs(BinaryOpType op);
 
 // QUANT: float A × float32 scale B; REQUANT/DEQUANT: int32 A × float32 scale B.
 bool is_quant_operand_pair_supported(BinaryOpType op, tt::tt_metal::DataType dtype_a, tt::tt_metal::DataType dtype_b);

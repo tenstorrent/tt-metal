@@ -42,7 +42,7 @@ def main():
     )
 
     t5 = np.array([[5, 6], [7, 8]], dtype=np.float32).repeat(16, axis=0).repeat(16, axis=1)
-    tt_t5 = to_tt_tile(torch.from_numpy(t5))
+    tt_t5 = ttnn.Tensor(t5, device=device, layout=ttnn.TILE_LAYOUT)
 
     logger.info("\n--- TT-NN Tensor Operations on (32x32) Tiles ---")
     add_result = ttnn.add(tt_t1, tt_t4)

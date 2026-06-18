@@ -112,7 +112,9 @@ def test_binary_unsupported_input_dtype_rejected(device, op, dtype):
         op(tensor_a, tensor_b)
 
 
-# Mixed bfloat_tile dtypes (BFLOAT16 / BFLOAT8_B / BFLOAT4_B): FPU binary_ng path only.
+# Mixed float-family dtypes (BFLOAT16 / BFLOAT8_B / BFLOAT4_B / FLOAT32) on binary_ng compute ops
+# that support mixing (see supports_mixed_float_inputs). fp32 mixes are allowed because the factory
+# enables fp32 dest accumulation when any operand is fp32; SFPU-only ops like POWER still reject mixes.
 @pytest.mark.parametrize(
     "op, dtype_a, dtype_b",
     [
@@ -122,9 +124,17 @@ def test_binary_unsupported_input_dtype_rejected(device, op, dtype):
         pytest.param(ttnn.mul, ttnn.bfloat16, ttnn.bfloat8_b, id="mul_bfloat16_bf8"),
         pytest.param(ttnn.eq, ttnn.bfloat8_b, ttnn.bfloat16, id="eq_bf8_bfloat16"),
         pytest.param(ttnn.div, ttnn.bfloat16, ttnn.bfloat8_b, id="div_bfloat16_bf8"),
+        pytest.param(ttnn.add, ttnn.float32, ttnn.bfloat16, id="add_float32_bfloat16"),
+        pytest.param(ttnn.subtract, ttnn.float32, ttnn.bfloat16, id="subtract_float32_bfloat16"),
+        pytest.param(ttnn.subtract, ttnn.bfloat16, ttnn.float32, id="subtract_bfloat16_float32"),
+        pytest.param(ttnn.mul, ttnn.float32, ttnn.bfloat16, id="mul_float32_bfloat16"),
+        pytest.param(ttnn.mul, ttnn.bfloat16, ttnn.float32, id="mul_bfloat16_float32"),
+        pytest.param(ttnn.add, ttnn.float32, ttnn.bfloat8_b, id="add_float32_bf8"),
+        pytest.param(ttnn.div, ttnn.bfloat16, ttnn.float32, id="div_bfloat16_float32"),
+        pytest.param(ttnn.div, ttnn.float32, ttnn.bfloat16, id="div_float32_bfloat16"),
     ],
 )
-def test_binary_mixed_bfloat_tile_allowed(device, op, dtype_a, dtype_b):
+def test_binary_mixed_float_allowed(device, op, dtype_a, dtype_b):
     tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
     op(tensor_a, tensor_b)
 
@@ -155,11 +165,9 @@ def test_isclose_mixed_float32_bfloat16_allowed(device, dtype_a, dtype_b):
         pytest.param(ttnn.mul, ttnn.uint16, ttnn.int32, id="mul_uint16_int32"),
         # arithmetic_fpu: uint32 + uint16
         pytest.param(ttnn.add, ttnn.uint32, ttnn.uint16, id="add_uint32_uint16"),
-        # arithmetic_fpu: float + int
+        # arithmetic_fpu: float + int (int is outside the float family, so the mix is rejected)
         pytest.param(ttnn.add, ttnn.bfloat16, ttnn.int32, id="add_bfloat16_int32"),
-        pytest.param(ttnn.add, ttnn.float32, ttnn.bfloat16, id="add_float32_bfloat16"),
-        pytest.param(ttnn.mul, ttnn.float32, ttnn.bfloat16, id="mul_float32_bfloat16"),
-        pytest.param(ttnn.mul, ttnn.bfloat16, ttnn.float32, id="mul_bfloat16_float32"),
+        # float_only: POWER is SFPU-only, so even float-family mixes are rejected
         pytest.param(ttnn.pow, ttnn.float32, ttnn.bfloat16, id="pow_float32_bfloat16"),
         pytest.param(ttnn.pow, ttnn.bfloat16, ttnn.float32, id="pow_bfloat16_float32"),
         pytest.param(ttnn.pow, ttnn.bfloat16, ttnn.bfloat8_b, id="pow_bfloat16_bf8"),
@@ -177,7 +185,9 @@ def test_isclose_mixed_float32_bfloat16_allowed(device, dtype_a, dtype_b):
     ],
 )
 def test_binary_mixed_dtype_rejected(device, op, dtype_a, dtype_b):
-    """Operands may each use a supported dtype, but both must match."""
+    """Each operand uses a supported dtype, but the mix is rejected: the pair is not a
+    float-family mix on an op that supports mixing. See binary_op_utils.cpp for the
+    full set of mixed-dtype exceptions."""
     tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
     with pytest.raises(RuntimeError, match=MIXED_DTYPE_ERROR):
         op(tensor_a, tensor_b)
