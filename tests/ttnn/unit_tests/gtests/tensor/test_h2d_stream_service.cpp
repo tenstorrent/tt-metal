@@ -392,8 +392,10 @@ protected:
 };
 
 // Fully-replicated placements sized to this mesh's dimensionality.
-ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    return ttsl::SmallVector<MeshMapperConfig::Placement>(mesh_device.shape().dims(), MeshMapperConfig::Replicate{});
+ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return ttsl::SmallVector<MeshMapperConfig::Placement>(
+        mesh_device.shape().dims(), MeshMapperConfig::Replicate{});
 }
 
 TEST_F(H2DStreamServiceTest, Replicated_Sweep) {
