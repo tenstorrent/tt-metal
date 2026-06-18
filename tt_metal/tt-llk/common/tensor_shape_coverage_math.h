@@ -72,7 +72,7 @@ inline constexpr std::array<TensorShape, 2> covered_shapes_eltwise_binary_config
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-constexpr bool is_tensor_shape_covered(const TensorShapeFunctionCoverage fn, const TensorShape& tensor_shape)
+constexpr bool is_math_tensor_shape_covered(const TensorShapeFunctionCoverage fn, const TensorShape& tensor_shape)
 {
     using Function = TensorShapeFunctionCoverage;
     switch (fn)

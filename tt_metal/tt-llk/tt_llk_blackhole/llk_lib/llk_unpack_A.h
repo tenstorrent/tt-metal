@@ -49,7 +49,7 @@ inline void _llk_unpack_A_mop_config_(
     static_assert(
         !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
-    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_A_mop_config_, tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_A_mop_config_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint8_t num_faces = tensor_shape.total_num_faces();
 
@@ -238,7 +238,7 @@ inline void _llk_unpack_A_init_(
     const std::uint32_t unpack_src_format           = 0,
     const std::uint32_t unpack_dst_format           = 0)
 {
-    LLK_DPRINT_TENSOR_SHAPE(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_A_init_, tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_A_init_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
@@ -296,13 +296,12 @@ inline void _llk_unpack_A_init_(
 }
 
 /**
- * @brief Restore unpacker datum-count state after single-operand (A) unpacking.
+ * @brief No-op teardown after single-operand (A) unpacking.
  *
- * Resets the X-dimension address counter for the unpacker used by this broadcast mode back to
- * a full face worth of datums.
+ * The unpacker X counter is transient and reprogrammed by each operation's init, so there is
+ * nothing to restore here.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
- * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>

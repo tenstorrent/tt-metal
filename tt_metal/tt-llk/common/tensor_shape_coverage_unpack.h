@@ -82,7 +82,7 @@ inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_A_mop_conf
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-constexpr bool is_tensor_shape_covered(const TensorShapeFunctionCoverage fn, const TensorShape& tensor_shape)
+constexpr bool is_unpack_tensor_shape_covered(const TensorShapeFunctionCoverage fn, const TensorShape& tensor_shape)
 {
     using Function = TensorShapeFunctionCoverage;
     switch (fn)
