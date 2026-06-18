@@ -3,13 +3,22 @@
 
 // Compute kernel for Flash-Attention SDPA (online softmax).
 //
-// Per work item (b, h_q, qb): pre-scale Q once, then stream KV blocks updating a
-// running max (m), running exp-sum (l), and running weighted output (O); finally
-// normalize O = O / l. All score-bearing CBs are sized to one B_q x B_kv block
+// Per work item (b, h_q, qb): stream KV blocks updating a running max (m),
+// running exp-sum (l), and running weighted output (O); finally normalize
+// O = O / l. All score-bearing CBs are sized to one B_q x B_kv block
 // (Flash constraint) — the full S_q x S_kv matrix is never materialized.
 //
+// Scale is folded into the SCORES (per KV block, in place on cb_qk) rather than
+// into Q. Folding into Q would require an in-place SFPU transform on the
+// reader-fed cb_q_in, which leaves cb_q_in with zero tiles visible to the QK
+// matmul's unpacker (in-place pop+push on a remote-producer CB nets to zero
+// available for the downstream same-thread cb_wait_front -> UNPACK hang).
+// (Q*scale) . K^T == scale * (Q . K^T), so the score-scale is mathematically
+// identical and the in-place transform on cb_qk (a locally matmul-produced CB)
+// is the legal pattern.
+//
 // Online-softmax recurrence per KV block j:
-//   S_j   = (Q*scale) . K_j^T              (QK matmul, transpose=true)
+//   S_j   = scale * (Q . K_j^T)            (QK matmul transpose=true, then scale)
 //   S_j  += mask_ij                        (if mask present)
 //   m_j   = max(m_{j-1}, rowmax(S_j))
 //   alpha = exp(m_{j-1} - m_j)             (j>0; correction factor)
@@ -39,7 +48,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
-#include "api/debug/device_print.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -85,7 +93,6 @@ void kernel_main() {
     // covers the eltwise/reduce helpers too. Calling BOTH double-issues
     // pack_sync_init and skews the math/pack/unpack semaphores.
     mm_block_init(cb_q_in, cb_k_in, cb_qk, /*transpose*/ 0, /*ct*/ 1, /*rt*/ 1, /*kt*/ DHt);
-    DEVICE_PRINT("DBG BOOT done\n");
 
     CircularBuffer q_buf(cb_q_in);
     CircularBuffer k_buf(cb_k_in);
@@ -99,16 +106,22 @@ void kernel_main() {
     constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(B_q, B_kv, 1);
 
     for (uint32_t w = 0; w < num_work; ++w) {
-        // ---------- Phase 0: pre-scale Q (once per Q-block) ----------
-        ckl::transform_in_place<cb_q_in>(q_tiles, ckl::MulUnary<>{scale_bits});
-        DEVICE_PRINT("DBG P0 prescale done\n");
-
         for (uint32_t j = 0; j < n_kv; ++j) {
             const bool first = (j == 0);
 
-            // ---------- Phase 1: S = (Q*scale) . K^T ----------
+            // ---------- Phase 1: S = Q . K^T ----------
             // transpose=true (within-tile) + reader grid-transpose -> K^T.
             // Q retained across the whole KV loop (WaitAndRetainOnLastBlock).
+            //
+            // NOTE: scale is NOT folded into Q. An in-place SFPU pre-scale on
+            // cb_q_in (the reader-fed input CB) leaves cb_q_in with zero tiles
+            // visible to the matmul's unpacker — the in-place pop+push on a
+            // remote-producer (reader) CB nets to zero available for the
+            // downstream same-thread cb_wait_front, hanging UNPACK. Instead the
+            // scale is folded into the scores below (Phase 1b), in place on
+            // cb_qk (a locally matmul-produced CB), which is the legal in-place
+            // transform pattern. Mathematically identical:
+            //   (Q*scale) . K^T == scale * (Q . K^T).
             ckl::matmul_block<
                 /*transpose*/ true,
                 /*packer_l1_acc*/ false,
@@ -118,7 +131,10 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndRetainOnLastBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
                 q_buf, k_buf, qk_buf, q_buf, ckl::MatmulBlockShape::of(B_q, B_kv, 1, 1, DHt, 1));
-            DEVICE_PRINT("DBG P1 QK done\n");
+
+            // ---------- Phase 1b: S *= scale (fold scale into scores) ----------
+            // In-place on cb_qk (matmul-produced, locally framed) — legal.
+            ckl::transform_in_place<cb_qk>(qk_tiles, ckl::MulUnary<>{scale_bits});
 
             // ---------- Phase 2: S += mask ----------
             if constexpr (has_mask) {
@@ -144,7 +160,6 @@ void kernel_main() {
                 cb_max_scaler,
                 cb_m_blk,
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
-            DEVICE_PRINT("DBG P3a rowmax done\n");
 
             // ---------- Phase 3b: m_run = max(m_prev, m_blk) ----------
             if (first) {
@@ -158,7 +173,6 @@ void kernel_main() {
                     ckl::InputLifecycle::HeldStream,  // m_prev: keep for alpha
                     ckl::InputLifecycle::Streaming>(B_q);
             }
-            DEVICE_PRINT("DBG P3b max done\n");
 
             if (!first) {
                 // ---------- Phase 4: alpha = exp(m_prev - m_run) ----------
@@ -227,7 +241,6 @@ void kernel_main() {
                     ckl::OperandKind::Col>{},
                 ckl::Exp<>{},
                 ckl::PackTile<cb_p, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output, ckl::Dst::D0>{});
-            DEVICE_PRINT("DBG P7 P=exp done\n");
 
             // ---------- Phase 8: commit m_prev = m_run ----------
             ckl::copy<cb_m_run, cb_m_prev>(B_q);
@@ -240,7 +253,6 @@ void kernel_main() {
                 cb_sum_scaler,
                 cb_l_blk,
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
-            DEVICE_PRINT("DBG P9 rowsum done\n");
 
             // ---------- Phase 10: l_run += l_blk ----------
             if (first) {
@@ -270,7 +282,6 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
                 p_buf, v_buf, oblk_buf, p_buf, ckl::MatmulBlockShape::of(B_q, vDHt, 1, 1, B_kv, 1));
-            DEVICE_PRINT("DBG P11 PV done\n");
 
             // ---------- Phase 12: O_run += O_blk ----------
             if (first) {
@@ -289,9 +300,7 @@ void kernel_main() {
                     ckl::OperandKind::Scalar,
                     ckl::OperandKind::Scalar>(o_tiles);
             }
-            DEVICE_PRINT("DBG P12 Oacc done\n");
         }
-        DEVICE_PRINT("DBG LOOP done\n");
 
         // ---------- Phase 10a: recip(l_final) ----------
         ckl::unary<ckl::Recip<>, cb_l_run, cb_l_recip>(B_q);
@@ -314,6 +323,5 @@ void kernel_main() {
         cb_pop_front(cb_q_in, q_tiles);  // retained scaled Q
         cb_wait_front(cb_m_prev, B_q);   // leftover m_final from last commit
         cb_pop_front(cb_m_prev, B_q);
-        DEVICE_PRINT("DBG WORKITEM done\n");
     }
 }
