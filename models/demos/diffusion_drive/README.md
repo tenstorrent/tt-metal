@@ -64,9 +64,9 @@ LiDAR (B,1,256,256)                                                      │
                                                     │         bev_feature│
                                           FPN _top_down                  │
                                   c5_conv 1×1  (TTNN)                   │
-                                  upsample 2×  (PyTorch F.interpolate)  │
+                                  upsample 2×  (TTNN ttnn.upsample)     │
                                   up_conv5 3×3 (TTNN)                   │
-                                  upsample to 64×64 (PyTorch)           │
+                                  upsample to 64×64 (TTNN)              │
                                   up_conv4 3×3 (TTNN)                   │
                                        │                                 │
                                 bev_upscale (B,64,64,64)                │
@@ -86,7 +86,7 @@ LiDAR (B,1,256,256)                                                      │
 
 ### TTNN vs PyTorch per submodule
 
-| Submodule | Stage 3 execution | Reason for placement |
+| Submodule | Stage 3.1 execution | Reason for placement |
 |---|---|---|
 | ResNet-34 stems (conv1+bn1+maxpool) | PyTorch | Small one-time cost; deferred |
 | ResNet-34 BasicBlocks ×32 | **TTNN** | High FLOP density; BN-fold enables weight-only conv |
@@ -474,7 +474,7 @@ diffusion_drive/
 
 ---
 
-## 10. Stage-3.1 review fixes (uncommitted)
+## 10. Stage-3.1 review fixes (commit `4b07970`)
 
 Applied after a line-by-line review against upstream
 (`hustvl/DiffusionDrive`).  All 24 tests pass.
@@ -492,7 +492,7 @@ Applied after a line-by-line review against upstream
 
 3. **`ttnn.grid_sample` validated.**  `tt/ttnn_grid_sample_attention.py` ports
    `GridSampleCrossBEVAttention` with the deformable sampling on-device
-   (PCC ≥ 0.99); `tests/pcc/test_pcc_grid_sample.py`.  Removes the Stage-5
+   (PCC ≥ 0.99); `tests/pcc/test_pcc_grid_sample.py`.  Removes the Stage-3.5
    "no TTNN equivalent" blocker.
 
 4. **Conv-weight caching.**  `ttnn.conv2d` weights are pre-converted to TTNN
