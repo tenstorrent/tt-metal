@@ -729,6 +729,20 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             };
             const auto sbm = pick(true);
             const auto relaxed = pick(false);
+            // TRMGEOM debug instrument (unstaged) — emit geometry for every conv reaching the eligibility block.
+            log_info(
+                tt::LogOp,
+                "TRMGEOM per_core_M={} per_core_N={} sbm={}x{} relaxed={}x{} grew={} divisible={} fp32_acc={}",
+                act_block_h_ntiles,
+                weight_block_w_ntiles,
+                sbm.out_subblock_h,
+                sbm.out_subblock_w,
+                relaxed.out_subblock_h,
+                relaxed.out_subblock_w,
+                (relaxed.out_subblock_h > 1 &&
+                 (relaxed.out_subblock_h * relaxed.out_subblock_w) > (sbm.out_subblock_h * sbm.out_subblock_w)),
+                (act_block_h_ntiles % relaxed.out_subblock_h == 0),
+                fp32_dest_acc_en);
             const bool larger_volume =
                 (relaxed.out_subblock_h * relaxed.out_subblock_w) > (sbm.out_subblock_h * sbm.out_subblock_w);
             // ROI gate (production heuristic): TileRowMajor only earns its keep when the relaxed subblock is
@@ -736,7 +750,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             // correctness requirement on every path (the tuner guarantees it).
             const bool roi_ok = relaxed.out_subblock_h > 1 && larger_volume;
             const bool divisible = act_block_h_ntiles % relaxed.out_subblock_h == 0;
-            if (divisible && roi_ok) {
+            // TRMGEOM debug instrument (unstaged): TT_CONV_TRM_DISABLE forces the SBM path even when the ROI
+            // gate would engage TRM, giving a true SBM-vs-TRM A/B on a single binary for the perf study.
+            const bool trm_disable = std::getenv("TT_CONV_TRM_DISABLE") != nullptr;
+            if (divisible && roi_ok && !trm_disable) {
                 conv_tile_pack_row_major = true;
                 out_subblock_h_ntiles = relaxed.out_subblock_h;
                 out_subblock_w_ntiles = relaxed.out_subblock_w;
