@@ -21,6 +21,9 @@ from models.tt_dit.utils.conv3d import (
     register_conv3d_configs,
 )
 
+# Max im2col elements (in_ch*T*H*W*kernel_vol) before a conv3d chunks over H.
+_CONV3D_CHUNK_ELEMS = 2 * 1024 * 1024 * 1024
+
 register_conv3d_configs(
     {
         (1024, 1024, (3, 3, 3)): (64, 32, 1, 2, 2),
@@ -154,21 +157,67 @@ class HunyuanSymmetricConv3d(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
-        assert (
-            x_bthwc.layout == ttnn.ROW_MAJOR_LAYOUT
-        ), f"HunyuanSymmetricConv3d expects ROW_MAJOR, got {x_bthwc.layout}"
+    def _conv(self, x_bthwc, padding, config):
         return ttnn.experimental.conv3d(
             input_tensor=x_bthwc,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
             device=self.mesh_device,
-            config=self.conv_config,
+            config=config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
-            padding=self.padding,
+            padding=padding,
             padding_mode="zeros",
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+    def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        assert (
+            x_bthwc.layout == ttnn.ROW_MAJOR_LAYOUT
+        ), f"HunyuanSymmetricConv3d expects ROW_MAJOR, got {x_bthwc.layout}"
+
+        b, t, h, w, _ = x_bthwc.shape
+        kT, kH, kW = self.kernel_size
+        pT, pH, pW = self.padding
+        im2col_elems = self.in_channels * t * h * w * kT * kH * kW
+        if im2col_elems <= _CONV3D_CHUNK_ELEMS or h <= 1 or self.stride[1] != 1 or pH == 0:
+            return self._conv(x_bthwc, self.padding, self.conv_config)
+
+        # Chunk over H to bound the conv's ~im2col DRAM buffer. Zero-pad H by pH
+        # (true-boundary padding), then conv overlapping strips with padding_h=0;
+        # interior strips read real neighbor rows from the padded tensor (halo).
+        n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
+        hc = (h + n_chunks - 1) // n_chunks
+        last = x_bthwc.shape[-1]
+        zpad = ttnn.zeros(
+            [b, t, pH, w, last], dtype=x_bthwc.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+        )
+        x_pad = ttnn.concat([zpad, x_bthwc, zpad], dim=2)
+        ttnn.deallocate(zpad)
+        h_pad = x_pad.shape[2]
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        outs = []
+        for o in range(0, h, hc):
+            oe = min(h, o + hc)
+            in_slice = ttnn.slice(x_pad, [0, 0, o, 0, 0], [b, t, min(oe + 2 * pH, h_pad), w, last])
+            cfg = get_conv3d_config(
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                self.dtype,
+                grid_size=grid,
+                h_factor=1,
+                w_factor=1,
+                T=t,
+                H=in_slice.shape[2],
+                W=w,
+            )
+            outs.append(self._conv(in_slice, (pT, 0, pW), cfg))
+            ttnn.deallocate(in_slice)
+        ttnn.deallocate(x_pad)
+        out = ttnn.concat(outs, dim=2)
+        for o_t in outs:
+            ttnn.deallocate(o_t)
+        return out
