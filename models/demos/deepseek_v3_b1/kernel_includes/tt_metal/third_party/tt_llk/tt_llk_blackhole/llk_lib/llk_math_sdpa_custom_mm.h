@@ -52,12 +52,17 @@ using namespace ckernel::math;
 // #43562/3 EXPERIMENT: in the mask branch, use flag-only ZEROACC instead of the coherent MOVB2D, keeping
 // the mask SrcB unpack + STALLWAIT + terminal SETRWC(CLR_B) scaffolding. Isolates bank-switch vs MOVB2D.
 // Requires FIX_FULL_VIA_MASK_43563=1 (route full chunks here). 1 = ZEROACC, 0 = original MOVB2D.
-#define FIX_MASK_ZEROACC_43563 1
+#define FIX_MASK_ZEROACC_43563 0
 
 // #43562/3 EXPERIMENT: ZEROACC (clean DEST) + MOVB2A (SrcB->SrcA, the SrcB-consuming FPU op that does NOT
 // write DEST). Discriminates SrcB-read-via-FPU vs MOVB2D's DEST-write. Requires FIX_FULL_VIA_MASK=1.
 // 1 = ZEROACC+MOVB2A; 0 = off. (Takes precedence over FIX_MASK_ZEROACC.)
 #define FIX_MASK_MOVB2A_43563 0
+
+// #43562/3 EXPERIMENT: N NOPs -> flag-only ZEROACC -> N NOPs in the mask path. Delay around the clear to
+// test whether the ZEROACC flag-clear physically settles (more cores reach exact 0). N = NOPs each side
+// (0 = off). Takes precedence over the other FIX_MASK_* variants.
+#define FIX_MASK_ZEROACC_NOPWRAP_43563 1000
 
 // #43563 SrcB read-bank reset (rmillerTT opt1, #842 family).
 //
@@ -503,7 +508,19 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
         // Zero Dest
         uint32_t dst_face = dst_offset / 16;
-#if defined(FIX_MASK_NOPLOOP_43563) && FIX_MASK_NOPLOOP_43563
+#if defined(FIX_MASK_ZEROACC_NOPWRAP_43563) && FIX_MASK_ZEROACC_NOPWRAP_43563
+        // #43562/3 EXPERIMENT: NOPs -> flag-only ZEROACC -> NOPs. Delay around the clear so it can settle.
+        for (volatile uint32_t _w1 = 0; _w1 < (FIX_MASK_ZEROACC_NOPWRAP_43563); _w1++) {
+            TTI_NOP;
+        }
+        for (uint32_t i = 0; i < ct_dim; i++) {
+            TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);
+            dst_face++;
+        }
+        for (volatile uint32_t _w2 = 0; _w2 < (FIX_MASK_ZEROACC_NOPWRAP_43563); _w2++) {
+            TTI_NOP;
+        }
+#elif defined(FIX_MASK_NOPLOOP_43563) && FIX_MASK_NOPLOOP_43563
         // #43562/3 EXPERIMENT: pure NOP delay instead of the MOVB2D coherent write (no DEST clear).
         for (volatile uint32_t _mnop = 0; _mnop < (FIX_MASK_NOPLOOP_43563); _mnop++) {
             TTI_NOP;
