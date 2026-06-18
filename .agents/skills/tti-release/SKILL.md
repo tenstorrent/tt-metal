@@ -166,16 +166,17 @@ If the workflow fails during server/device initialization with ARC, ERISC, remot
 ssh "$PHYSICAL_HOST" 'tmux kill-session -t tti-release-<run-name> 2>/dev/null || true; docker ps -aq --filter "name=tt-inference-server" | xargs -r docker rm -f'
 ```
 
-2. Reset devices from the reservation container:
+2. Follow `$tt-device-usage` reset recovery from the reservation container. At minimum run the bounded list/reset/list sequence, retry reset once if devices or Ethernet links do not all return, and verify a mesh open/close before relaunching:
 
 ```bash
+timeout 60 tt-smi -ls --local
 timeout 180 tt-smi -r
 timeout 60 tt-smi -ls --local
 ```
 
 3. Relaunch the same TTI workflow. Do not clear a valid completed TT cache after the server has already started and served requests. Only clear a tiny/partial stale TT cache when the failure occurred during first initialization and the cache is clearly incomplete.
 
-If reset hangs or devices do not return, report that host-level reboot/reacquire is needed rather than marking model readiness blocked.
+If recovery fails or requires authority this agent does not have, report that host-level reboot/reacquire is needed rather than marking model readiness blocked.
 
 ## Context And Harness Integrity
 

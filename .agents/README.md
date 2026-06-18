@@ -55,6 +55,9 @@ The `$skill` references inside each prompt attach the matching skill from
 `.agents/skills/` — that is where the engineering knowledge lives (how to
 validate a paged KV cache, how to read a perf report, how to debug a trace
 failure). Prompts say *what done means*; skills say *how to get there*.
+Every hardware-facing stage also loads `$tt-device-usage`, the shared runbook
+for safe TT device access, reset/list recovery, tt-triage hang capture, and
+ARC/ERISC/remote-Ethernet recovery.
 
 ## Context-Length Contract
 

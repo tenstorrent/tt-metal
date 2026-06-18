@@ -1,4 +1,4 @@
-/goal Use $tti-release for the HF_MODEL optimized vLLM model in the current tt-metal checkout.
+/goal Use $tti-release and $tt-device-usage for the HF_MODEL optimized vLLM model in the current tt-metal checkout.
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
@@ -11,11 +11,11 @@ Goal completion requirements:
 - The release spec, server launch, evals, and benchmarks preserve doc/context_contract.json. Do not cap context, LongBench, benchmark request length, or API limits to hide a model context bug. Only reject or adjust mathematically invalid requests whose prompt plus completion exceeds the real supported context, and record that as a harness issue.
 - Use the reservation container for `tt-smi` health/reset and the physical loudbox host for Docker. Use the checkout's own `run.py --help`, matching release tag/image, and required CLI spelling.
 - Run `run.py --workflow release --docker-server --no-auth` for the autoport spec, without printing tokens or copying secrets, caches, weights, Docker layers, persistent TT caches, or large raw eval dumps.
-- Recover ARC/ERISC/remote-Ethernet/reset failures before blocking; use $autofix for release test/spec/API/eval/benchmark harness failures, not pure infra failures.
+- Recover ARC/ERISC/remote-Ethernet/reset failures before stopping; use $autofix for release test/spec/API/eval/benchmark harness failures, not pure infra failures.
 - Copy the final release report and small JSON/CSV/log artifacts to models/autoports/<model>/doc/tti_release/.
 - RUN_NOTES.md records host/context, TTI tag/SHA, Docker image, command, key env, recovery actions, report path, pass/fail summary, and an "Autoport implementation check" naming the matched run spec/report data.
 - The copied TTI run spec or report data proves the evaluated code path is `models/autoports/<model>` and does not identify stock `models/tt_transformers`, `models/demos`, or another packaged implementation.
 - The release report is skimmed; failing accuracy, benchmark target, API conformance, or incomparable metric rows are called out. No leftover TTI tmux session or Docker container remains.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; blockers are fixed and rereviewed.
+- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
 
-Do not mark this goal complete while any completion requirement is unmet.
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
