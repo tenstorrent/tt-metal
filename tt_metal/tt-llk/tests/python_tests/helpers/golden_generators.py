@@ -482,8 +482,13 @@ def quantize_mx_tensor_chunked(
     if tensor_size == 0:
         return tensor
 
-    # Pre-allocate output tensor for better performance
-    quantized = torch.zeros_like(tensor)
+    # MX pack/unpack decodes back to the format-visible unpack dtype
+    # (currently BF16 for Quasar MX formats), not necessarily the input dtype.
+    quantized = torch.empty(
+        tensor.shape,
+        dtype=format_dict[data_format],
+        device=tensor.device,
+    )
     idx = 0
     # FACE_R_DIM support is not implemented yet, so we only support 4 faces for now.
     # Chunk size lookup: (min_size, chunk_size, num_faces)
@@ -514,7 +519,9 @@ def quantize_mx_tensor_chunked(
         quantized_chunk = quantize_mx_stimuli(chunk, data_format, num_faces=num_faces)
 
         # Write directly to output tensor (avoid list append + concat)
-        quantized[idx : idx + actual_chunk_size] = quantized_chunk[:actual_chunk_size]
+        quantized[idx : idx + actual_chunk_size] = quantized_chunk[
+            :actual_chunk_size
+        ].to(dtype=quantized.dtype, device=quantized.device)
         idx += actual_chunk_size
 
     return quantized
@@ -2473,6 +2480,9 @@ class EltwiseBinaryGolden(FidelityMasking):
                 t1, t2 = self._apply_fidelity_masking(
                     math_format_for_fidelity, t1, t2, fidelity_iter
                 )
+                if keep_float32:
+                    t1 = t1.to(torch.float32)
+                    t2 = t2.to(torch.float32)
                 phase_result = self.ops[op](t1, t2)
                 if fidelity_iter == 0:
                     result = phase_result
@@ -2547,6 +2557,7 @@ class EltwiseBinaryGolden(FidelityMasking):
         input_format=None,
         input_format_B=_UNSET,
         acc_to_dest=False,
+        dest_acc=None,
         tile_shape=None,
         num_tiles_per_accumulation=1,
     ):
@@ -2579,10 +2590,15 @@ class EltwiseBinaryGolden(FidelityMasking):
         # For MX-output paths we preserve that precision through the golden
         # so multi-tile accumulation rounds the same way as HW.
         out_is_mx = data_format.is_mx_format()
+        mx_pack_from_fp32_dest = out_is_mx and dest_acc == DestAccumulation.Yes
         hw_dest_dtype = (
-            torch.float16
-            if (out_is_mx and input_format == DataFormat.Float16)
-            else torch.bfloat16
+            torch.float32
+            if mx_pack_from_fp32_dest
+            else (
+                torch.float16
+                if (out_is_mx and input_format == DataFormat.Float16)
+                else torch.bfloat16
+            )
         )
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.
@@ -2658,6 +2674,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                 t2,
                 math_format_for_fidelity,
                 math_fidelity,
+                keep_float32=mx_pack_from_fp32_dest,
             )
 
         # Quantize output to match what hardware packs back into L1.
@@ -3400,7 +3417,9 @@ class UntilizeGolden:
     ):
         from helpers.tilize_untilize import untilize_block
 
-        operand = quantize_input_to_unpack_format(operand, input_format)
+        operand = quantize_input_to_unpack_format(
+            operand, input_format, all_mx_formats=True
+        )
 
         result = untilize_block(
             operand, stimuli_format=data_format, dimensions=dimensions

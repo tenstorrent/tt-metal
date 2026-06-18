@@ -24,6 +24,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "device_fixture.hpp"
+#include "mxfp_dram_page_utils.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
 
@@ -32,6 +33,10 @@ namespace tt::tt_metal {
 using std::vector;
 
 namespace unit_tests::llk::mxfp6_typecast {
+
+using mxfp_typecast_utils::align_up;
+using mxfp_typecast_utils::compact_dram_pages;
+using mxfp_typecast_utils::pad_dram_pages;
 
 // Run a datacopy kernel with different input/output formats. Mirrors the
 // MXFP4 typecast harness — for Quasar, data is moved via DataflowBuffers
@@ -49,18 +54,23 @@ static vector<uint32_t> run_mxfp6_typecast(
 
     uint32_t input_tile_size = tt::tile_size(input_fmt);
     uint32_t output_tile_size = tt::tile_size(output_fmt);
+    uint32_t dram_alignment = dev->allocator()->get_alignment(BufferType::DRAM);
+    uint32_t input_dram_stride = align_up(input_tile_size, dram_alignment);
+    uint32_t output_dram_stride = align_up(output_tile_size, dram_alignment);
+    uint32_t num_dram_banks = dev->allocator()->get_num_banks(BufferType::DRAM);
+    constexpr uint32_t kDramBankId = 0;
 
     InterleavedBufferConfig src_config{
         .device = dev,
-        .size = num_tiles * input_tile_size,
-        .page_size = input_tile_size,
+        .size = num_tiles * num_dram_banks * input_dram_stride,
+        .page_size = input_dram_stride,
         .buffer_type = BufferType::DRAM};
     auto src_buffer = CreateBuffer(src_config);
 
     InterleavedBufferConfig dst_config{
         .device = dev,
-        .size = num_tiles * output_tile_size,
-        .page_size = output_tile_size,
+        .size = num_tiles * num_dram_banks * output_dram_stride,
+        .page_size = output_dram_stride,
         .buffer_type = BufferType::DRAM};
     auto dst_buffer = CreateBuffer(dst_config);
 
@@ -154,7 +164,9 @@ static vector<uint32_t> run_mxfp6_typecast(
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    detail::WriteToBuffer(src_buffer, src_vec);
+    detail::WriteToBuffer(
+        src_buffer,
+        pad_dram_pages(src_vec, num_tiles, input_tile_size, input_dram_stride, num_dram_banks, kDramBankId));
     uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
     uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
@@ -165,7 +177,7 @@ static vector<uint32_t> run_mxfp6_typecast(
             .runtime_arg_values =
                 {{node,
                   {{"src_addr", src_buffer->address()},
-                   {"src_bank_id", 0u},
+                   {"src_bank_id", kDramBankId},
                    {"num_tiles", num_tiles},
                    {"dram_page_stride", src_dram_stride}}}},
         },
@@ -174,7 +186,7 @@ static vector<uint32_t> run_mxfp6_typecast(
             .runtime_arg_values =
                 {{node,
                   {{"dst_addr", dst_buffer->address()},
-                   {"dst_bank_id", 0u},
+                   {"dst_bank_id", kDramBankId},
                    {"num_tiles", num_tiles},
                    {"dram_page_stride", dst_dram_stride}}}},
         },
@@ -186,7 +198,7 @@ static vector<uint32_t> run_mxfp6_typecast(
 
     vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_buffer, result_vec);
-    return result_vec;
+    return compact_dram_pages(result_vec, num_tiles, output_tile_size, dst_dram_stride, num_dram_banks, kDramBankId);
 }
 
 // --- Random data generators ---

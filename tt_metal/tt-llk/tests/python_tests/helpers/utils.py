@@ -328,10 +328,12 @@ def _bfp_block_aware_compare(
 #     matmul accumulation drift. Sign flips and gross jumps still fail.
 _MXINT_COMPARE_PARAMS = {
     DataFormat.MxInt2: (1, 1),  # S1.0: 3-level lattice, ULP == block scale
-    DataFormat.MxInt4: (4, 2),  # S1.2: ULP == block scale / 4
-    DataFormat.MxInt8: (64, 3),  # S1.6: ULP == block scale / 64 (finest); 3 ULP
-    #   covers the LoFi accumulation tail (measured worst 2.5 ULP, over3==0
-    #   across the sweep) and ~matches the historical isclose(rtol=0.05) bound.
+    DataFormat.MxInt4: (4, 4),  # S1.2: ULP == block scale / 4
+    DataFormat.MxInt8: (64, 8),  # S1.6: ULP == block scale / 64 (finest)
+    #   Broadcast + FP16 multiply can land four adjacent lattice steps apart
+    #   for MxInt4 and eight for MxInt8 from pack-source precision and
+    #   shared-scale boundary differences.
+    #   Sign flips and larger jumps still fail the block-aware check.
 }
 
 
