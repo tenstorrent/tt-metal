@@ -11,6 +11,7 @@ import torch
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file as load_safetensors_file
 
+from models.common.utility_functions import is_blackhole
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
 from models.experimental.voxtraltts.tt.text_decoder_layer import (
     permute_voxtral_text_qk_for_hf_rope,
@@ -323,6 +324,79 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                     if x <= cap.x:
                         return ttnn.CoreGrid(y=y, x=x)
             return None
+
+        def _voxtral_worker_shard_cap(self) -> ttnn.CoreGrid:
+            """Worker-only core grid for width-sharded decode activations (excludes BH dispatch cols)."""
+            cap = self.max_grid_size
+            if is_blackhole():
+                # COL dispatch occupies the eastern column(s); ``find_grid``'s 12-wide BH cap can
+                # pick 2×12 for 24 K-tiles and trip writer_unary_sharded on dispatch cores.
+                return ttnn.CoreGrid(y=cap.y, x=min(8, max(1, cap.x - 1)))
+            return cap
+
+        def _voxtral_find_worker_grid(self, k_tiles: int) -> ttnn.CoreGrid:
+            worker_cap = self._voxtral_worker_shard_cap()
+            max_rows = int(worker_cap.y)
+            max_cols = int(worker_cap.x)
+            max_cores = max_rows * max_cols
+            target = min(32, max_cores)
+
+            def divisors_desc(n: int) -> list[int]:
+                out: list[int] = []
+                i = 1
+                while i * i <= n:
+                    if n % i == 0:
+                        out.append(n // i)
+                        if i != n // i:
+                            out.append(i)
+                    i += 1
+                return sorted(out, reverse=True)
+
+            for cores in divisors_desc(k_tiles):
+                if cores > max_cores:
+                    continue
+                for rows in range(min(cores, max_rows), 0, -1):
+                    if cores % rows:
+                        continue
+                    cols = cores // rows
+                    if cols <= max_cols:
+                        return ttnn.CoreGrid(y=rows, x=cols)
+            return ttnn.CoreGrid(y=1, x=1)
+
+        def dram_shard_core_grid_for_k(self, k: int) -> ttnn.CoreGrid:
+            """Worker-safe width-shard grid (BH COL dispatch columns excluded).
+
+            Single-device (P150 / 1×1) keeps the base grid verbatim — 03398dd had no override and
+            its decode activations are not width-sharded, so the worker-grid logic (a QB2 1×N
+            width-shard fix) must not perturb the 1×1 path. Tensor-parallel (num_devices>1) uses it.
+            """
+            if self.num_devices == 1:
+                return super().dram_shard_core_grid_for_k(k)
+            if k % ttnn.TILE_SIZE != 0:
+                return super().dram_shard_core_grid_for_k(k)
+            grid = self._voxtral_find_worker_grid(k // ttnn.TILE_SIZE)
+            cap_cores = self._voxtral_worker_shard_cap().x * self._voxtral_worker_shard_cap().y
+            if grid.num_cores <= cap_cores:
+                return grid
+            return self._dram_shard_core_grid_capped(k, cap_cores)
+
+        def _dram_shard_core_grid_capped(self, k: int, cap_cores: int) -> ttnn.CoreGrid:
+            k_tiles = k // ttnn.TILE_SIZE
+            worker_cap = self._voxtral_worker_shard_cap()
+            cap_cores = min(cap_cores, worker_cap.x * worker_cap.y)
+            divisors = [c for c in range(1, min(cap_cores, k_tiles) + 1) if k_tiles % c == 0]
+            if not divisors:
+                return ttnn.CoreGrid(y=1, x=1)
+            target = min(32, cap_cores)
+            divisors.sort(key=lambda c: abs(c - target))
+            num_cores = divisors[0]
+            for y in range(min(num_cores, worker_cap.y), 0, -1):
+                if num_cores % y:
+                    continue
+                x = num_cores // y
+                if x <= worker_cap.x:
+                    return ttnn.CoreGrid(y=y, x=x)
+            return ttnn.CoreGrid(y=1, x=min(num_cores, worker_cap.x))
 
         def _apply_voxtral_decode_mlp_dram_grid_overrides(self) -> None:
             """Widen decode MLP DRAM matmul grids using **width-only** core counts (see ``_voxtral_decode_width_dram_matmul_grid``).
