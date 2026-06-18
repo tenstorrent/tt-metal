@@ -106,10 +106,11 @@ struct DeviceStorage {
     const MeshTensor& get_mesh_tensor() const;
 
     // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
-    // Please do not move the MeshTensor out of the DeviceStorage using this function.
+    // Please do not move the MeshTensor out of the DeviceStorage using this function,
+    // use release_mesh_tensor instead.
     MeshTensor& get_mesh_tensor();
 
-    // Moves out the MeshTensor this DeviceStorage holds.
+    // Moves out the MeshTensor this DeviceStorage holds, throws if the DeviceStorage is deallocated.
     // post-condition: this DeviceStorage will be equivalent a default constructed DeviceStorage
     MeshTensor release_mesh_tensor();
 
