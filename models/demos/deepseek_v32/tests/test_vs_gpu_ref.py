@@ -37,14 +37,17 @@ the layout DOES matter: pass --ds-kpe-layout vllm to reindex our k_pe to vLLM's
 half-split layout (interleaved_to_halfsplit_perm in tt/mla/mla.py) and assert a hard
 element-wise k_pe PCC (~0.99997) instead of the frame-invariant L2.
 
-Runtime (Blackhole 1x4, layer shard already downloaded — measured layer 0):
-  host_*  (CPU only)            ~25 s for all 3 (shared module fixture: weight load +
-                                one 5120 forward; the 3 asserts are ~0 s each)
-  device indexer                ~45 s  (10 s mesh setup + 30 s device stems/score/topk)
-  device kv                     ~65 s  (forward + sparse_mla host fallback, ~24 GB RAM)
-  device mla                    ~50 s  (forward + sparse_mla host fallback, ~24 GB RAM)
-First run adds one-time JIT kernel compile (~1-2 min) and, if uncached, a multi-GB
-HF shard download. All are correctness gates → marked `gate`; @timeout(0).
+Runtime (8-chip Blackhole, layer shard already downloaded):
+  host_* (CPU only)             ~17 s shared module-fixture setup per layer (cached-weight
+                                load + one 5120 CPU forward); the 3 asserts are ~0-2 s each.
+  test_mla_device_vs_reference  ONE 5120-token device forward per (layer, mesh-shape); the
+                                indexer (logits + top-k), KV-cache and MLA-output checks all
+                                read off that single forward. Sparse attention + indexer run
+                                as device C++ ops (indexer_score / topk_large_indices /
+                                sparse_sdpa) — NOT the old host fallback.
+First run adds one-time JIT kernel compile (~1-2 min, then persisted to the on-disk kernel
+cache) and, if uncached, a multi-GB HF shard download. All are correctness gates → `gate`;
+@timeout(0).
 """
 
 import glob
@@ -234,57 +237,34 @@ def _make_mla(config, layer, mesh_device, is_chunked=False):
     )
 
 
-def _shard_idx_input(t, mesh_device):
-    """Indexer input [1,1,S,hidden]: SP-shard the sequence (dim -2, mesh axis 0) and TP-shard hidden
-    (dim -1, axis 1) — the same SP×TP layout the MLA forward uses. At SP=1 the SP shard is a no-op;
-    at SP>1 each chip holds S/sp tokens, so _indexer_topk's SP all-gather rebuilds the global seq."""
-    return ttnn.from_torch(
-        t,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
-    )
+def _run_device_forward(config, layer, mesh_device, monkeypatch):
+    """One single-shot ttMLA forward over the reference input — the SHARED work behind the
+    indexer / KV-cache / output asserts (the device-side analogue of the host `_host` fixture).
 
+    Because SEQ_LEN (5120) > index_topk, forward takes the DSA path and calls `_indexer_topk`
+    exactly once; we capture its logits (via ops.indexer_logits) and returned top-k indices
+    from that same call, so the indexer check needs no separate device run.
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
-@pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
-@pytest.mark.timeout(0)
-def test_indexer_device_vs_reference(mesh_device, layer, device_params, variant, config_only, monkeypatch):
-    """Device indexer (stems + indexer_score + top-k) vs the official capture. ~2-3 min."""
-    ref = load_reference(layer)
-    mla = _make_mla(config_only, layer, mesh_device)
-    x = ref["mla_in"].reshape(1, 1, SEQ_LEN, -1)  # [1,1,S,hidden]
-
-    captured = {}
-    orig = ops.indexer_logits
-    monkeypatch.setattr(ops, "indexer_logits", lambda *a, **k: captured.setdefault("logits", orig(*a, **k)))
-    # _indexer_topk takes the per-chip (SP-local) sequence; it all-gathers back to the global glob.
-    idx = mla._indexer_topk(_shard_idx_input(x, mesh_device), SEQ_LEN // mesh_device.shape[0])
-
-    logits = ops._to_host(captured["logits"]).float()[0, 0]  # [S, S]; future cols -inf
-    got_topk = ops._to_host(idx).long()[0, 0]  # [S, k]
-    # PCC only over the causal region (device masks future to -inf; ref is pre-mask).
-    tril = torch.tril(torch.ones(SEQ_LEN, SEQ_LEN, dtype=torch.bool))
-    _, pcc = comp_pcc(ref["logits"][tril].float(), logits[tril], 0)
-    logger.info(f"[device] indexer logits PCC (causal region): {pcc}")
-    rows = [0, 1, 100, 1000, 2047, 2048, 2049, 3000, 4096, SEQ_LEN - 1]
-    ov = _topk_overlap(ref["topk"], got_topk, rows)
-    mean = sum(ov.values()) / len(ov)
-    logger.info(f"[device] topk overlap mean={mean:.4f} per-row={ {r: round(v,4) for r,v in ov.items()} }")
-    ttnn.synchronize_device(mesh_device)
-    assert pcc >= LOGITS_PCC, f"indexer logits PCC {pcc} < {LOGITS_PCC}"
-    assert mean >= TOPK_OVERLAP_MEAN, f"topk overlap mean {mean} < {TOPK_OVERLAP_MEAN}"
-    assert min(ov.values()) >= TOPK_OVERLAP_ROW_MIN, f"topk overlap row min {min(ov.values())} < {TOPK_OVERLAP_ROW_MIN}"
-
-
-def _run_device_forward(config, layer, mesh_device):
-    """Single-shot ttMLA forward over the reference input; returns (output[1,S,hidden], kvpe[S,576])."""
+    Returns (ref, output[1,S,hidden], kvpe[S,576], idx_logits[S,S], idx_topk[S,k]).
+    """
     ref = load_reference(layer)
     mla = _make_mla(config, layer, mesh_device)
     sp_axis, tp_axis = 0, 1
+
+    # Capture the indexer intermediates produced INSIDE forward (same monkeypatch idiom the old
+    # standalone indexer test used): indexer_logits' output and _indexer_topk's returned indices.
+    captured = {}
+    orig_logits = ops.indexer_logits
+    monkeypatch.setattr(ops, "indexer_logits", lambda *a, **k: captured.setdefault("logits", orig_logits(*a, **k)))
+    orig_topk = type(mla)._indexer_topk
+
+    def _capture_topk(self, *a, **k):
+        idx = orig_topk(self, *a, **k)
+        captured["topk"] = idx
+        return idx
+
+    monkeypatch.setattr(type(mla), "_indexer_topk", _capture_topk)
+
     kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
         mesh_device=mesh_device,
@@ -317,7 +297,9 @@ def _run_device_forward(config, layer, mesh_device):
     ).to(torch.bfloat16)[
         0, 0, :SEQ_LEN
     ]  # [S, 576]
-    return ref, out_t, kvpe_t
+    idx_logits = ops._to_host(captured["logits"]).float()[0, 0]  # [S, S]; future cols -inf
+    idx_topk = ops._to_host(captured["topk"]).long()[0, 0]  # [S, k]
+    return ref, out_t, kvpe_t, idx_logits, idx_topk
 
 
 @parametrize_mesh_device()
@@ -325,27 +307,36 @@ def _run_device_forward(config, layer, mesh_device):
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
 @pytest.mark.timeout(0)
-def test_kv_cache_device_vs_reference(mesh_device, layer, device_params, variant, config_only, ds_kpe_layout):
-    """Device KV cache vs the official capture: latent PCC + k_pe (--ds-kpe-layout). ~4-7 min."""
-    ref, _, kvpe = _run_device_forward(config_only, layer, mesh_device)
-    _assert_kv(ref["kv"], kvpe, tag="device", kpe_layout=ds_kpe_layout)
-    ttnn.synchronize_device(mesh_device)
+def test_mla_device_vs_reference(mesh_device, layer, device_params, variant, config_only, ds_kpe_layout, monkeypatch):
+    """Device DSA layer vs the official capture — indexer (logits + top-k), KV cache, and MLA
+    output, all checked off ONE shared 5120-token forward per (layer, mesh-shape).
 
+    Was three tests; two of them ran a full forward each (kv + output) and a third re-ran the
+    indexer stems — three device passes per (layer, shape) where one suffices. The indexer
+    intermediates are now captured from the same forward (see `_run_device_forward`)."""
+    ref, out, kvpe, idx_logits, idx_topk = _run_device_forward(config_only, layer, mesh_device, monkeypatch)
+    rows = [0, 1, 100, 1000, 2047, 2048, 2049, 3000, 4096, SEQ_LEN - 1]
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
-@pytest.mark.parametrize("layer", REF_LAYERS, ids=[f"L{l}" for l in REF_LAYERS])
-@pytest.mark.timeout(0)
-def test_mla_output_device_vs_reference(mesh_device, layer, device_params, variant, config_only):
-    """Device MLA output vs the official capture. ~4-7 min (sparse_mla host fallback)."""
-    ref, out, _ = _run_device_forward(config_only, layer, mesh_device)
-    tt = out.unsqueeze(0)  # [1,1,S,hidden] -> compare as [1,S,hidden]
+    # --- indexer: logits PCC over the causal region (device masks future to -inf; ref is pre-mask) ---
+    tril = torch.tril(torch.ones(SEQ_LEN, SEQ_LEN, dtype=torch.bool))
+    _, logits_pcc = comp_pcc(ref["logits"][tril].float(), idx_logits[tril], 0)
+    ov = _topk_overlap(ref["topk"], idx_topk, rows)
+    ov_mean, ov_min = sum(ov.values()) / len(ov), min(ov.values())
+    logger.info(f"[device] indexer logits PCC (causal region): {logits_pcc}")
+    logger.info(f"[device] topk overlap mean={ov_mean:.4f} per-row={ {r: round(v,4) for r,v in ov.items()} }")
+
+    # --- MLA output: dense (<2048) vs sparse (>=2048) band diagnostics + overall PCC ---
     ref_out = ref["mla_out"].reshape(1, SEQ_LEN, -1)
     for nm, sl in [("rows<2048", slice(0, 2048)), ("rows>=2048", slice(2048, SEQ_LEN))]:
         _, m = comp_pcc(ref_out[:, sl].float(), out[:, sl].float(), 0)
         logger.info(f"[device] band {nm}: {m}")
-    _, pcc = comp_pcc(ref_out.float(), out.float(), 0)
-    logger.info(f"[device] MLA output PCC: {pcc}")
+    _, out_pcc = comp_pcc(ref_out.float(), out.float(), 0)
+    logger.info(f"[device] MLA output PCC: {out_pcc}")
     ttnn.synchronize_device(mesh_device)
-    assert pcc >= OUTPUT_PCC, f"MLA output PCC {pcc} < {OUTPUT_PCC}"
+
+    # Assert last so a single run logs every dimension's number even when an earlier one fails.
+    assert logits_pcc >= LOGITS_PCC, f"indexer logits PCC {logits_pcc} < {LOGITS_PCC}"
+    assert ov_mean >= TOPK_OVERLAP_MEAN, f"topk overlap mean {ov_mean} < {TOPK_OVERLAP_MEAN}"
+    assert ov_min >= TOPK_OVERLAP_ROW_MIN, f"topk overlap row min {ov_min} < {TOPK_OVERLAP_ROW_MIN}"
+    _assert_kv(ref["kv"], kvpe, tag="device", kpe_layout=ds_kpe_layout)  # KV latent PCC + k_pe check
+    assert out_pcc >= OUTPUT_PCC, f"MLA output PCC {out_pcc} < {OUTPUT_PCC}"
