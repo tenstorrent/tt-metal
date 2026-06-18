@@ -22,8 +22,8 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
         "Memory layout must be INTERLEAVED, got: {}",
         input.memory_config().memory_layout());
     TT_FATAL(
-        input.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "Error - unsupported data type for prod, expected BFLOAT16 or FLOAT32 but got {}.",
         input.dtype());
 }
 

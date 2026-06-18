@@ -11,10 +11,9 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_prod
 
 
-def get_tensors(input_shape, output_shape, device):
+def get_tensors(input_shape, output_shape, device, npu_dtype=ttnn.bfloat16):
     torch.manual_seed(2023)
-    npu_dtype = ttnn.bfloat16
-    cpu_dtype = torch.bfloat16
+    cpu_dtype = torch.float32 if npu_dtype == ttnn.float32 else torch.bfloat16
     npu_layout = ttnn.TILE_LAYOUT
 
     torch_input = torch.randint(1, 5, input_shape, dtype=cpu_dtype)
@@ -25,6 +24,7 @@ def get_tensors(input_shape, output_shape, device):
     return tt_input, tt_output, torch_input
 
 
+@pytest.mark.parametrize("npu_dtype", (ttnn.bfloat16, ttnn.float32))
 @pytest.mark.parametrize(
     "shapes",
     (
@@ -37,10 +37,10 @@ def get_tensors(input_shape, output_shape, device):
         # ([1, 3, 320, 64]), #Fails : expected result is inf but the result generated in nan
     ),
 )
-def test_prod(shapes, device):
+def test_prod(shapes, npu_dtype, device):
     output_shape = shapes.copy()
 
-    (tt_input, tt_output, torch_input) = get_tensors(shapes, shapes, device)
+    (tt_input, tt_output, torch_input) = get_tensors(shapes, shapes, device, npu_dtype)
 
     torch_output = torch.prod(torch_input)
 

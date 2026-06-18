@@ -87,7 +87,7 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
         1           // per_core_block_size
     };
 
-    bool fp32_dest_acc_en = false;
+    bool fp32_dest_acc_en = input.dtype() == DataType::FLOAT32;
     bool math_approx_mode = true;
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp";
