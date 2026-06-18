@@ -85,72 +85,10 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
             output_shape);
     }
 
-    // Implementation-specific constraints
-    if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT && args.dim == rank - 1) {
-        TT_FATAL(
-            input_tensor.buffer()->page_size() == input_tensor.buffer()->aligned_page_size(),
-            "all-gather requires aligned row-major pages for innermost gather dim");
-    }
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT && args.dim == input_tensor.logical_shape().rank() - 1) {
-        const auto& input_logical_shape = input_tensor.logical_shape();
-        const auto& input_padded_shape = input_tensor.padded_shape();
-        TT_FATAL(
-            input_logical_shape[args.dim] == input_padded_shape[args.dim],
-            "all-gather requires unpadded tiles along gather dim");
-    }
-
-    // Page-size relationship between input and output. Three copy modes (see the
-    // "Page indexing" glossary in all_gather_factory.cpp for full definitions):
-    //   matched (in == out): 1 write per input page, byte offset = 0.
-    //   concat  (out > in) : 1 write per input page, byte offset = (d % concat_factor) * in.
-    //   split   (in > out) : split_factor writes per input page, byte offset = 0.
-    const auto output_spec = compute_output_specs(args, tensor_args);
-    const uint32_t output_page_size = static_cast<uint32_t>(output_spec.compute_page_size_bytes());
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-
-    TT_FATAL(
-        std::max(output_page_size, input_page_size) % std::min(output_page_size, input_page_size) == 0,
-        "all-gather: input/output page sizes ({}, {}) must have an integer ratio.",
-        input_page_size,
-        output_page_size);
-
-    const uint32_t concat_factor = std::max(1u, output_page_size / input_page_size);
-    const uint32_t split_factor = std::max(1u, input_page_size / output_page_size);
-
-    // input_pages_per_row: # input pages along the page-defining dim per device.
-    // >1 only for RM with multiple shards per device.
-    uint32_t input_pages_per_row = 1;
-    if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        const auto& shape = input_tensor.padded_shape();
-        input_pages_per_row = (shape[shape.rank() - 1] * input_tensor.element_size()) / input_page_size;
-    }
-
-    // Concat mode needs concat_factor to divide num_devices (so N/concat_factor
-    // output positions per row is integer).
-    TT_FATAL(
-        concat_factor == 1 || args.num_devices % concat_factor == 0,
-        "all-gather: concat_factor={} must divide num_devices={}.",
-        concat_factor,
-        args.num_devices);
-
-    // Concat mode with multi-shard input would need a different byte offset per
-    // input page. The kernel currently takes a single byte_offset value, so reject.
-    TT_FATAL(
-        !(concat_factor > 1 && input_pages_per_row > 1),
-        "all-gather: concat (concat_factor>1) with multi-shard input (input_pages_per_row>1) is not "
-        "supported. concat_factor={}, input_pages_per_row={}.",
-        concat_factor,
-        input_pages_per_row);
-
-    // Page sizes can only differ for RM last-dim gather (TILE pages are tile-sized;
-    // non-last-dim gather doesn't change the page-defining dim).
-    TT_FATAL(
-        (concat_factor == 1 && split_factor == 1) ||
-            (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT && args.dim == rank - 1),
-        "all-gather: differing page sizes (concat_factor={}, split_factor={}) only valid for RM "
-        "last-dim gather.",
-        concat_factor,
-        split_factor);
+    // NOTE: implementation-specific constraints (row-major page alignment, tile
+    // padding on the gather dim, input/output page-size ratios, concat vs multi-shard,
+    // etc.) are not checked here. use_composite_all_gather() checks those and routes
+    // to composite path if needed.
 }
 
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(

@@ -11,6 +11,35 @@
 
 namespace ttnn::experimental {
 
+// Native implementation only handles cases where every output write is an aligned NoC
+// write into the output buffer, computed with index math alone -- the bytes are never
+// rearranged on-device first. If it needs a transpose, untilize, re-pad, or
+// re-shard ("massaged op"), it goes to composite.
+bool use_composite_all_gather(
+    const ttnn::Tensor& /*input_tensor*/, int32_t /*dim*/, const std::optional<ttnn::MemoryConfig>& /*memory_config*/) {
+    // Route to composite when the native iterator can't place the bytes:
+    //
+    // 1. Row-major, last-dim gather, unaligned pages (page_size != aligned_page_size:
+    //    row/shard width in bytes isn't alignment-divisible). The concat seam lands
+    //    on a sub-aligned address, which can't be DMA'd. (1D unaligned RM is the
+    //    rank-1 form of this.)
+    //
+    // 2. Tiled, padded on the gather dim (logical[dim] != padded[dim]). The seam
+    //    falls inside a 32x32 tile, stranding padding mid-tensor.
+    //
+    // 3. Output memory_config forces an unrelated re-shard -- e.g. an output shard
+    //    width that isn't a whole multiple/divisor of the input's (no integer
+    //    page-size ratio).
+    //
+    // Everything else stays native, including aligned multi-shard concat
+    // (width/block-sharded input -> wider-shard or interleaved output): those writes
+    // are aligned and index-computable, so they're a native enhancement, not a
+    // composite case.
+    //
+    // TODO implement detection; default to native for now.
+    return false;
+}
+
 ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
