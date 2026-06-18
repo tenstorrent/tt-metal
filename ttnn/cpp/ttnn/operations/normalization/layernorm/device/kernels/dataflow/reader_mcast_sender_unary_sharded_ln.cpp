@@ -126,20 +126,27 @@ void kernel_main() {
             // Phase-1 control-flag broadcast (mcast_pipe partial migration, C3 two-phase).
             // The consumed-drain (R->S) wait stays raw — it is the protocol gate that must precede
             // the flag broadcast. The flag set(VALID)+set_multicast(EXCLUDE_SRC) is absorbed by
-            // Pipe::send_signal() (raise_flag + flush). Phase-2 (monotone set(block+2) streaming)
+            // SenderPipe::send_signal() (raise_flag + flush). Phase-2 (monotone set(block+2) streaming)
             // is DEFERRED RAW: it reuses this same reduce_sender_sem cell as a counter, which the
             // Flag/Counter Pipe verbs cannot express per-side without desyncing the receiver base.
             // Sender sits above the receiver rect (which starts one row below) -> EXCLUDE_SRC inferred.
-            dataflow_kernel_lib::Pipe<dataflow_kernel_lib::Staging::Flag, false> phase1_pipe(
-                noc,
-                dataflow_kernel_lib::McastRect{
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y},  // area() = num_blocks - 1 (the receiver rect)
-                num_blocks - 1,             // active-core count (send_signal does not consult it; kept meaningful)
-                reduce_sender_sem,
-                reduce_receiver_sem);
+            // NUM_ACTIVE_RECEIVER_CORES = recipient count = num_blocks - 1 (the receiver rect, sender
+            // excluded). data_ready=reduce_sender_sem (CTA 1), consumed=reduce_receiver_sem (CTA 0),
+            // PRE_HANDSHAKE=false. INITIAL_READY=INVALID: this signal sender's flag cell starts cleared
+            // (phase-2 later reuses it as a monotone counter), folding in the old pre-loop clear.
+            constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
+            constexpr uint32_t reduce_receiver_sem_id = get_compile_time_arg_val(0);
+            dataflow_kernel_lib::SenderPipe<
+                num_blocks - 1,
+                reduce_sender_sem_id,
+                reduce_receiver_sem_id,
+                dataflow_kernel_lib::Staging::Flag,
+                false,
+                INVALID>
+                phase1_pipe(
+                    noc,
+                    dataflow_kernel_lib::McastRect{
+                        mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y});
             reduce_receiver_sem.wait(num_blocks - 1);
             reduce_receiver_sem.set(0);
             phase1_pipe.send_signal(VALID);

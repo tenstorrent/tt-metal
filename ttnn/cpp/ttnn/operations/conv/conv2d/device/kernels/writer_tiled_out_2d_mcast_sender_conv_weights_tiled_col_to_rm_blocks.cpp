@@ -76,6 +76,14 @@ void kernel_main() {
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
+    // mcast_pipe Round 4: weights mcast sem ids + recipient count are now compile-time template params,
+    // appended by the conv factory at the END of writer_compile_time_args (after both TensorAccessorArgs).
+    // Layout: [sender_sem_id, receiver_sem_id, num_active_receiver_cores].
+    constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
+    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(mcast_sem_args_base);
+    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(mcast_sem_args_base + 1);
+    constexpr uint32_t weights_mcast_num_dests_ct = get_compile_time_arg_val(mcast_sem_args_base + 2);
+
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
     // Bias arg. Unused if bias fusion is not enabled.
@@ -91,8 +99,9 @@ void kernel_main() {
 
     // Experimental API objects
     Noc noc;
-    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
+    // Sem ids are now compile-time template params (above); the runtime sem-id args are left in place
+    // by the host, so advance `i` past them without constructing Semaphore<> objects.
+    i += 2;
     MulticastEndpoint mcast_ep;
     experimental::CB cb_weight_obj(cb_id_weight);
     experimental::CB cb_bias_obj(bias_cb_id);
@@ -142,26 +151,20 @@ void kernel_main() {
     const uint32_t act_l1_read_addr = split_reader_enabled ? cb_sharded_act_obj.get_read_ptr() : 0;
 
 #ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    weights_mcast_receiver_sem.set(VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
-
-    // mcast_pipe: the weights (and bias) block data-mcast + handshake is driven by a two-sided Pipe.
-    //   data_ready = receiver_sem (S->R level flag VALID/INVALID), consumed = sender_sem (R->S counter).
-    //   EXCLUDE_SRC, Flag, PRE_HANDSHAKE=true (receivers' reused weights CB slot), LINK=true (orig
-    //   linked data mcast; Pipe adds a flush, a no-op superset of the same-VC FIFO ordering).
-    //   In the 2D block-sharded path mcast_num_dests == mcast_num_cores, so a single num_dests fits.
-    dataflow_kernel_lib::Pipe<> weights_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect{
-            mcast_rect.noc_x_start,
-            mcast_rect.noc_y_start,
-            mcast_rect.noc_x_end,
-            mcast_rect.noc_y_end},   // area() = weights_mcast_num_cores (the full mcast grid)
-        weights_mcast_num_dests,     // active-core ACK count (== num_cores in the 2D block-sharded path)
-        weights_mcast_receiver_sem,  // data ready (S->R level flag)
-        weights_mcast_sender_sem);   // consumed (R->S counter)
+    // mcast_pipe Round 4: the weights (and bias) block data-mcast + handshake is driven by a SenderPipe.
+    //   NUM_ACTIVE_RECEIVER_CORES = weights_mcast_num_dests_ct (the recipient count = the old runtime
+    //   `weights_mcast_num_dests` the Pipe<> ctor got — passed VERBATIM, the helper adds +1 internally
+    //   only for INCLUDE loopback; this sender is OUT of its own rect → EXCLUDE, no +1).
+    //   data_ready = receiver_sem_id (S->R level flag VALID/INVALID), consumed = sender_sem_id (R->S
+    //   counter). Staging::Flag + PRE_HANDSHAKE=true (defaults) match the old Pipe<>. INITIAL_READY
+    //   defaults to VALID, folding in the dropped pre-loop `weights_mcast_receiver_sem.set(VALID)`.
+    //   The McastRect (per-core virtual coords) stays the only runtime ctor arg.
+    dataflow_kernel_lib::
+        SenderPipe<weights_mcast_num_dests_ct, weights_mcast_receiver_sem_id, weights_mcast_sender_sem_id>
+            weights_pipe(
+                noc,
+                dataflow_kernel_lib::McastRect{
+                    mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end});
 #endif
 
     // read in bias if enabled (done only once for all batches)

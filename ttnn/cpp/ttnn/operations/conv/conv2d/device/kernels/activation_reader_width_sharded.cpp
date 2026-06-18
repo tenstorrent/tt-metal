@@ -55,8 +55,10 @@ void kernel_main() {
     constexpr uint32_t num_input_cores = get_compile_time_arg_val(9);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(12));
-    Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(13));
+    constexpr uint32_t act_mcast_sender_sem_id = get_compile_time_arg_val(12);
+    constexpr uint32_t act_mcast_receiver_sem_id = get_compile_time_arg_val(13);
+    Semaphore<> act_mcast_sender_sem(act_mcast_sender_sem_id);
+    Semaphore<> act_mcast_receiver_sem(act_mcast_receiver_sem_id);
     constexpr McastRect mcast_rect = {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
@@ -111,22 +113,25 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
 
-    // Set up remote VALID value
-    act_mcast_receiver_sem.set(VALID);
-
     // mcast_pipe: the round-robin self-mcast SENDER half (data block + S->R VALID flag). The sender
-    // is a recipient of its own broadcast and src (tilized CB) != dst (act CB), so the Pipe infers
-    // INCLUDE_SRC loopback. num_active = num_reader_cores - 1 (the Pipe never counts the sender; it
-    // adds the +1 itself). PRE_HANDSHAKE=false: the R->S readiness counter (act_mcast_sender_sem
-    // wait_min/reset) and the receiver-branch ack stay RAW below — they count num_mcast_cores, not
-    // readers.
-    dataflow_kernel_lib::Pipe<dataflow_kernel_lib::Staging::Flag, /*PRE_HANDSHAKE=*/false> act_mcast_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect{
-            mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end},
+    // is a recipient of its own broadcast and src (tilized CB) != dst (act CB), so the SenderPipe
+    // infers INCLUDE_SRC loopback. NUM_ACTIVE_RECEIVER_CORES = num_reader_cores - 1 (the recipient
+    // count the round-3 ctor passed verbatim; the helper adds the +1 itself for the self-copy under
+    // INCLUDE loopback). data_ready=act_mcast_receiver_sem (the S->R level flag, CTA 13),
+    // consumed=act_mcast_sender_sem (CTA 12). PRE_HANDSHAKE=false: the R->S readiness counter
+    // (act_mcast_sender_sem wait_min/reset) and the receiver-branch ack stay RAW below — they count
+    // num_mcast_cores, not readers. The ctor pre-sets the local data-ready flag VALID (INITIAL_READY
+    // default), folding in the old pre-loop set(VALID); per-iteration raw INVALID resets stay below.
+    dataflow_kernel_lib::SenderPipe<
         num_reader_cores - 1,
-        act_mcast_receiver_sem,  // data ready (S->R level flag)
-        act_mcast_sender_sem);   // consumed (R->S counter, driven raw below)
+        act_mcast_receiver_sem_id,
+        act_mcast_sender_sem_id,
+        dataflow_kernel_lib::Staging::Flag,
+        /*PRE_HANDSHAKE=*/false>
+        act_mcast_pipe(
+            noc,
+            dataflow_kernel_lib::McastRect{
+                mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end});
 
     // Compute is divided along the width to reduce the size of CBs.
     // Only a part of the width on each core is used in one block.

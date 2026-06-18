@@ -32,14 +32,13 @@ void kernel_main() {
     // mcast_pipe: this aggregator broadcasts a readiness flag to the rectangle of local-topk sender
     // cores (a flag-only control signal, R2), then waits a fan-in counter (sender_sem) for all Wt_final
     // tiles to land. Only the readiness broadcast is a Pipe op (send_signal); the fan-in counter wait
-    // is a separate multi-producer channel the (single-sender) Pipe does not own (INV9), kept raw.
+    // is a separate multi-producer channel the (single-sender) SenderPipe does not own (INV9), kept raw.
     // data_ready=receiver_sem (the flag we broadcast); consumed unused on this control path.
-    dataflow_kernel_lib::Pipe<> ready_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect{noc_start_x, noc_start_y, noc_end_x, noc_end_y},  // area() = num_dests
-        num_dests,  // active-core count (send_signal does not consult it; kept meaningful)
-        receiver_sem,
-        sender_sem);
+    // NUM_ACTIVE_RECEIVER_CORES = recipient count = num_dests (the sender sits outside the rect, so
+    // EXCLUDE_SRC mcast_dests == num_dests directly). send_signal sets the flag value each call, so
+    // INITIAL_READY is irrelevant here (defaults to VALID).
+    dataflow_kernel_lib::SenderPipe<num_dests, receiver_sem_id, sender_sem_id> ready_pipe(
+        noc, dataflow_kernel_lib::McastRect{noc_start_x, noc_start_y, noc_end_x, noc_end_y});
 
     // Collect local TopK results from all cores
     for (uint32_t i = 0; i < Ht; ++i) {  // Process each height row
