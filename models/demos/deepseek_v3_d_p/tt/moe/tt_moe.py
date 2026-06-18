@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutin
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class TtMoe(LightweightModule):
@@ -198,8 +199,6 @@ class TtMoe(LightweightModule):
         self.mesh_device = mesh_device
         # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
         # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
-        from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups

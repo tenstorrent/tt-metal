@@ -41,6 +41,9 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
                 * :attr:`num_links`: Number of links for all_gather.
                 * :attr:`experts_per_chip`: Number of experts per chip (for expert region grouping).
                 * :attr:`memory_config`: Memory configuration for intermediate and output tensors.
+                * :attr:`use_l1_small_for_semaphores`: If True, route the internal all_gather's
+                  global semaphores to the reserved L1_SMALL region instead of the main L1 floor.
+                  Defaults to False.
 
         )doc",
         &offset_cumsum,
