@@ -215,15 +215,22 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
 
     config = transformers.ViTConfig.from_pretrained(model_name)
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    model = transformers.models.vit.modeling_vit.ViTIntermediate(config).eval()
+    modeling_vit = transformers.models.vit.modeling_vit
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output = model(torch_hidden_states)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model.to(torch.bfloat16),
-        device=device,
-    )
+    if hasattr(modeling_vit, "ViTIntermediate"):  # transformers < 5
+        model = modeling_vit.ViTIntermediate(config).eval()
+        torch_output = model(torch_hidden_states)
+        parameters = preprocess_model_parameters(initialize_model=lambda: model.to(torch.bfloat16), device=device)
+    else:  # transformers >= 5: ViTIntermediate folded into ViTMLP (fc1 + activation)
+        model = modeling_vit.ViTMLP(config).eval()
+        torch_output = model.activation_fn(model.fc1(torch_hidden_states))
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: model,
+            device=device,
+            custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
+        ).intermediate
 
     hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -245,16 +252,23 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
 
     config = transformers.ViTConfig.from_pretrained(model_name)
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    model = transformers.models.vit.modeling_vit.ViTOutput(config).eval()
+    modeling_vit = transformers.models.vit.modeling_vit
 
     torch_intermediate = torch_random((batch_size, sequence_size, config.intermediate_size), -1, 1, dtype=torch.float32)
     torch_residual = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output = model(torch_intermediate, torch_residual)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        device=device,
-    )
+    if hasattr(modeling_vit, "ViTOutput"):  # transformers < 5
+        model = modeling_vit.ViTOutput(config).eval()
+        torch_output = model(torch_intermediate, torch_residual)
+        parameters = preprocess_model_parameters(initialize_model=lambda: model, device=device)
+    else:  # transformers >= 5: ViTOutput folded into ViTMLP.fc2 (residual now added by ViTLayer)
+        model = modeling_vit.ViTMLP(config).eval()
+        torch_output = model.fc2(torch_intermediate) + torch_residual
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: model,
+            device=device,
+            custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
+        ).output
 
     intermediate = ttnn.from_torch(torch_intermediate, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     residual = ttnn.from_torch(torch_residual, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
@@ -295,7 +309,9 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
     model = (vit.encoder.layer if hasattr(vit, "encoder") else vit.layers)[0]
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    # transformers 5.x ViTLayer.forward returns a Tensor (4.x returned a tuple); unwrap only if a tuple.
+    _layer_out = model(torch_hidden_states)
+    torch_output = _layer_out[0] if isinstance(_layer_out, tuple) else _layer_out
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,

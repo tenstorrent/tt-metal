@@ -166,9 +166,14 @@ def update_model_config(config, batch_size):
             # raise on configs without rope (e.g. ViTConfig); skip them.
             pass
 
+    merged = config.to_dict() | properties
+    # transformers 5.x ViTAttention.__init__ does getattr(config, "head_dim", fallback); the DotAccessDict
+    # raises KeyError (not AttributeError) on a missing key, so the fallback never triggers. Ensure it's present.
+    merged.setdefault("head_dim", config.hidden_size // config.num_attention_heads)
+
     return DotAccessDict(
         dict(
-            **(config.to_dict() | properties),
+            merged,
             core_grid=core_grid,
             core_grid_8x8=core_grid_8x8,
             should_reallocate_in_attention=should_reallocate_in_attention,
@@ -427,11 +432,14 @@ def vit_layer(
         compute_kernel_config=config.program_configs["ln_compute_config"],
     )
 
+    # transformers 5.x nests the FFN linears under `mlp` (ViTMLP); 4.x exposed them at the layer level
+    # (intermediate/output). custom_preprocessor emits {intermediate, output} under that `mlp` key.
+    ffn_parameters = parameters.mlp if hasattr(parameters, "mlp") else parameters
     feedforward_output = vit_feedforward(
         config,
         layernorm_after_output,
         multi_head_attention_output,
-        parameters=parameters,
+        parameters=ffn_parameters,
     )
 
     return feedforward_output
@@ -586,6 +594,52 @@ def custom_preprocessor(torch_model, name):
         parameters = {"query_key_value": {}}
         parameters["query_key_value"]["weight"] = preprocess_linear_weight(qkv_weight, dtype=ttnn.bfloat8_b)
         parameters["query_key_value"]["bias"] = preprocess_linear_bias(qkv_bias, dtype=ttnn.bfloat8_b)
+
+    elif hasattr(torch_model, "q_proj") and hasattr(torch_model, "k_proj") and hasattr(torch_model, "v_proj"):
+        # transformers 5.x: ViTAttention is flat (q_proj/k_proj/v_proj/o_proj) instead of
+        # .attention (ViTSelfAttention{query,key,value}) / .output (ViTSelfOutput{dense}). Rebuild the
+        # 4.x-shaped {attention: {query_key_value}, output: {dense}} tree the forward expects.
+        num_heads = 12
+        head_size = 64
+        hidden_size = num_heads * head_size * 3
+        qkv_weight = torch.cat(
+            [
+                torch_model.q_proj.weight.reshape([num_heads, head_size, -1]),
+                torch_model.k_proj.weight.reshape([num_heads, head_size, -1]),
+                torch_model.v_proj.weight.reshape([num_heads, head_size, -1]),
+            ],
+            dim=1,
+        ).reshape([hidden_size, -1])
+        qkv_bias = torch.cat(
+            [
+                torch_model.q_proj.bias.reshape([num_heads, head_size]),
+                torch_model.k_proj.bias.reshape([num_heads, head_size]),
+                torch_model.v_proj.bias.reshape([num_heads, head_size]),
+            ],
+            dim=1,
+        ).reshape([hidden_size])
+
+        parameters = {"attention": {"query_key_value": {}}, "output": {"dense": {}}}
+        parameters["attention"]["query_key_value"]["weight"] = preprocess_linear_weight(
+            qkv_weight, dtype=ttnn.bfloat8_b
+        )
+        parameters["attention"]["query_key_value"]["bias"] = preprocess_linear_bias(qkv_bias, dtype=ttnn.bfloat8_b)
+        parameters["output"]["dense"]["weight"] = preprocess_linear_weight(
+            torch_model.o_proj.weight, dtype=ttnn.bfloat8_b
+        )
+        parameters["output"]["dense"]["bias"] = preprocess_linear_bias(torch_model.o_proj.bias, dtype=ttnn.bfloat8_b)
+
+    elif hasattr(torch_model, "fc1") and hasattr(torch_model, "fc2"):
+        # transformers 5.x: ViTIntermediate/ViTOutput were merged into ViTMLP{fc1, fc2}. Emit the
+        # 4.x-shaped {intermediate: {dense}, output: {dense}} tree (lands under the layer's `mlp` key;
+        # vit_layer reads it via the `mlp` fallback).
+        parameters = {"intermediate": {"dense": {}}, "output": {"dense": {}}}
+        parameters["intermediate"]["dense"]["weight"] = preprocess_linear_weight(
+            torch_model.fc1.weight, dtype=ttnn.bfloat8_b
+        )
+        parameters["intermediate"]["dense"]["bias"] = preprocess_linear_bias(torch_model.fc1.bias, dtype=ttnn.bfloat8_b)
+        parameters["output"]["dense"]["weight"] = preprocess_linear_weight(torch_model.fc2.weight, dtype=ttnn.bfloat8_b)
+        parameters["output"]["dense"]["bias"] = preprocess_linear_bias(torch_model.fc2.bias, dtype=ttnn.bfloat8_b)
 
     elif isinstance(torch_model, torch.nn.Linear):
         # TODO: better way of detection for the classify linear weights
