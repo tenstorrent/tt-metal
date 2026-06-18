@@ -956,7 +956,7 @@ TEST_F(ProgramSpecTestQuasar, CrossNodeDFBNotYetSupportedAtRuntime) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
-    spec.remote_dataflow_buffers = {CrossNodeDataflowBufferSpec{
+    spec.cross_node_dataflow_buffers = {CrossNodeDataflowBufferSpec{
         .dfb_spec = MakeMinimalDFB("dfb"),
         .producer_consumer_map = {{producer_node, consumer_node}},
     }};
