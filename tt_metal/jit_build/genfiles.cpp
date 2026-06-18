@@ -374,6 +374,9 @@ void emit_formats_array(
 using hw_format_t = std::underlying_type_t<DataFormat>;
 constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
 constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
+constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on host)
+constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
+constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
 
 void emit_formats_array(
     std::ostream& out,
@@ -385,6 +388,9 @@ void emit_formats_array(
         switch (f) {
             case DataFormat::Int16: return kHwInt16;
             case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
+            case DataFormat::MxInt8: return kHwMxInt8;
+            case DataFormat::MxInt4: return kHwMxInt4;
+            case DataFormat::MxInt2: return kHwMxInt2;
             default: return static_cast<hw_format_t>(f);
         }
     };
