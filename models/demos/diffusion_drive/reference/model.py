@@ -803,13 +803,16 @@ class TrajectoryHead(nn.Module):
         roll_timesteps = (np.arange(0, step_num) * step_ratio).round()[::-1].copy().astype(np.int64)
         roll_timesteps = torch.from_numpy(roll_timesteps).to(device)
 
-        # Step 1: add truncated noise to anchor trajectories at t=8
+        # Step 1: add truncated noise to anchor trajectories at t=8.
+        # NOTE: matches upstream forward_test exactly — the diffusion operates on
+        # the 2 (x, y) channels only. `_norm_odo` slices [..., 2:3], which is an
+        # empty slice on a 2-channel anchor, so the heading is never diffused.
+        # Padding a zero heading column here would change `noise = randn(img.shape)`
+        # from (B,K,T,2) to (B,K,T,3); because randn fills row-major, that shifts
+        # the x/y noise relative to upstream and breaks bit-for-bit reproduction.
         plan_anchor = self.plan_anchor.unsqueeze(0).expand(bs, -1, -1, -1)  # B, K, T, 2
-        # Pad with zeros for heading channel to get K×T×3 before norm
-        heading_zero = torch.zeros(*plan_anchor.shape[:-1], 1, device=device)
-        plan_anchor_3 = torch.cat([plan_anchor, heading_zero], dim=-1)  # B, K, T, 3
-        img = self._norm_odo(plan_anchor_3)
-        noise = torch.randn(img.shape, device=device)
+        img = self._norm_odo(plan_anchor)  # B, K, T, 2
+        noise = torch.randn(img.shape, device=device)  # B, K, T, 2
         trunc_t = torch.ones((bs,), device=device, dtype=torch.long) * 8
         img = self.diffusion_scheduler.add_noise(original_samples=img, noise=noise, timesteps=trunc_t)
         ego_fut_mode = img.shape[1]
@@ -817,10 +820,9 @@ class TrajectoryHead(nn.Module):
         # Step 2: iterative denoising
         for k in roll_timesteps:
             x_boxes = torch.clamp(img, min=-1, max=1)
-            noisy_traj_points = self._denorm_odo(x_boxes)  # B, K, T, 3
+            noisy_traj_points = self._denorm_odo(x_boxes)  # B, K, T, 2
 
-            # Only x,y fed into grid-sample attention (first 2 channels)
-            traj_pos_embed = gen_sineembed_for_position(noisy_traj_points[..., :2], hidden_dim=64)  # B, K, T, 128
+            traj_pos_embed = gen_sineembed_for_position(noisy_traj_points, hidden_dim=64)  # B, K, T, 128
             traj_pos_embed = traj_pos_embed.flatten(-2)  # B, K, T*128
             traj_feature = self.plan_anchor_encoder(traj_pos_embed)  # B, K, D
             traj_feature = traj_feature.view(bs, ego_fut_mode, -1)
@@ -834,7 +836,7 @@ class TrajectoryHead(nn.Module):
 
             reg_list, cls_list = self.diff_decoder(
                 traj_feature,
-                noisy_traj_points[..., :2],
+                noisy_traj_points,
                 bev_feature,
                 bev_spatial_shape,
                 agents_query,
@@ -846,7 +848,7 @@ class TrajectoryHead(nn.Module):
             poses_cls = cls_list[-1]  # B, K
 
             x_start = poses_reg[..., :2]
-            x_start = self._norm_odo(torch.cat([x_start, torch.zeros_like(x_start[..., :1])], dim=-1))
+            x_start = self._norm_odo(x_start)  # 2-channel (heading slice empty), matches upstream
             img = self.diffusion_scheduler.step(
                 model_output=x_start,
                 timestep=k[0],
@@ -890,9 +892,11 @@ class DiffusionDriveModel(nn.Module):
         self._config = config
         self._backbone = TransfuserBackbone(config)
 
-        # 65 key-val tokens: 8×8 BEV (64) + 1 status
+        # 65 key-val tokens: 8×8 LiDAR BEV pool (64) + 1 status.
+        # Count is the LiDAR anchor grid, not the image grid; they coincide at 8
+        # here, but the semantically correct formula is lidar_vert × lidar_horz.
         self._keyval_embedding = nn.Embedding(
-            config.img_vert_anchors**2 + 1,  # 64 + 1 = 65  (lidar pool is 8×8)
+            config.lidar_vert_anchors * config.lidar_horz_anchors + 1,  # 8*8 + 1 = 65
             config.tf_d_model,
         )
         self._query_splits = [1, config.num_bounding_boxes]

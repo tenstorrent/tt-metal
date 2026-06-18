@@ -84,16 +84,17 @@ class TtnnTransfuserBackbone:
         self._ref = ref
         self._device = device
 
-        # Pre-fold BN for all BasicBlocks in layers 1-4 of each encoder.
-        # _img_stages[i] and _lidar_stages[i] are lists of (stride, params)
-        # for the i-th ResNet-34 stage (0 = layer1, …, 3 = layer4).
-        self._img_stages: List[List[Tuple[int, dict]]] = []
-        self._lidar_stages: List[List[Tuple[int, dict]]] = []
+        # Pre-fold BN and build TtnnBasicBlock objects ONCE (weights are
+        # converted to TTNN host tensors at construction, not per forward).
+        # _img_stages[i] / _lidar_stages[i] are lists of TtnnBasicBlock for the
+        # i-th ResNet-34 stage (0 = layer1, …, 3 = layer4).
+        self._img_stages: List[List[TtnnBasicBlock]] = []
+        self._lidar_stages: List[List[TtnnBasicBlock]] = []
         for i in range(4):
             img_layer = getattr(ref.image_encoder, f"layer{i + 1}")
             lidar_layer = getattr(ref.lidar_encoder, f"layer{i + 1}")
-            self._img_stages.append(prepare_resnet34_stage_params(img_layer))
-            self._lidar_stages.append(prepare_resnet34_stage_params(lidar_layer))
+            self._img_stages.append(self._build_stage(prepare_resnet34_stage_params(img_layer), device))
+            self._lidar_stages.append(self._build_stage(prepare_resnet34_stage_params(lidar_layer), device))
 
         # Stage 3: optional TTNN FPN (set by build_stage3)
         self._ttnn_fpn = None
@@ -102,17 +103,21 @@ class TtnnTransfuserBackbone:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _build_stage(stage_params: List[Tuple[int, dict]], device: ttnn.Device) -> List[TtnnBasicBlock]:
+        """Instantiate (and pre-convert weights for) every BasicBlock in a stage once."""
+        return [TtnnBasicBlock(params, stride=stride, device=device) for stride, params in stage_params]
+
     def _run_ttnn_stage(
         self,
         x: torch.Tensor,
-        stage_blocks: List[Tuple[int, dict]],
+        stage_blocks: List[TtnnBasicBlock],
     ) -> torch.Tensor:
-        """Convert to TTNN, run all BasicBlocks in one stage, convert back.
+        """Convert to TTNN, run all (pre-built) BasicBlocks in one stage, convert back.
 
         Args:
             x:            (B, C, H, W) float32 PyTorch tensor.
-            stage_blocks: [(stride, params_dict), …] from
-                          prepare_resnet34_stage_params.
+            stage_blocks: list of pre-built TtnnBasicBlock for this stage.
         Returns:
             (B, C_out, H_out, W_out) float32 PyTorch tensor.
         """
@@ -120,8 +125,7 @@ class TtnnTransfuserBackbone:
         x_ttnn = _to_ttnn_tile(x, B, H, W, C, self._device)
         shape = (B, H, W, C)
 
-        for stride, params in stage_blocks:
-            block = TtnnBasicBlock(params, stride=stride, device=self._device)
+        for block in stage_blocks:
             x_ttnn, shape = block(x_ttnn, shape)
 
         B_out, H_out, W_out, C_out = shape
