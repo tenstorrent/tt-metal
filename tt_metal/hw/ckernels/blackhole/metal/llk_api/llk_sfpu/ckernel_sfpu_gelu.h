@@ -368,15 +368,20 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // |scaled| beyond TANH_SAT_THRESHOLD saturates tanh to +/- 1 in FP32:
-    // 1 - tanh(8.66) ~= 2^-24, the FP32 half-ULP at 1.0, so any larger |x|
-    // rounds to exactly +/- 1 in torch's FP32 path. The SFPU's tanh uses a
-    // BF16-precision reciprocal in its internal sigmoid that doesn't round
-    // 2*sigmoid(-2x) - 1 down to exactly -1; instead it lands on the FP32
-    // successor of -1 (= -1 + 2^-24). Without an explicit saturation guard,
-    // 1 + tanh ~= 2^-24 instead of 0, and 0.5 * x * (1 + tanh) leaks a
-    // ~1.5e-7 residual for x ~= -5.x where torch produces +/- 0.
-    constexpr float TANH_SAT_THRESHOLD = 9.0f;
+    // |scaled| beyond TANH_SAT_THRESHOLD saturates tanh to +/- 1: torch's
+    // vectorized CPU tanh (Sleef / VML) collapses to exactly +/- 1 once
+    // |scaled| crosses ~8.67, sooner than a strict IEEE-754 round-to-nearest
+    // analysis would predict (which would put the crossover at ~9.013, where
+    // 1 - tanh(s) < 2^-25). The SFPU's tanh goes through a BF16-precision
+    // reciprocal in its internal sigmoid that doesn't round 2*sigmoid(-2x) - 1
+    // down to exactly -1; it lands on the FP32 successor of -1 (-1 + 2^-24).
+    // Without an explicit saturation guard, 1 + tanh ~= 2^-24 instead of 0,
+    // and 0.5 * x * (1 + tanh) leaks a ~1.5e-7 residual for x in [-5.16, -5.06]
+    // where torch produces +/- 0. The 8.66 threshold is set just below the
+    // lowest observed offender (x = -5.0625 with scaled = -8.671) and is
+    // safely above the next BF16 grid point's scaled magnitude (x = -5.03125,
+    // scaled = -8.56), where torch's tanh does not saturate.
+    constexpr float TANH_SAT_THRESHOLD = 8.66f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
