@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/sub_device_types.hpp>
@@ -100,6 +101,54 @@ struct AllGatherAsyncParams {
         attrs.emplace_back("reverse_order", reverse_order);
         attrs.emplace_back("sub_core_grid", sub_core_grid);
         return attrs;
+    }
+
+    // Compile-time attributes drive the default program-cache reflection hash and the canonical key
+    // (ttsl::hash::hash_objects_with_default_seed + ttsl::hash::canonical_key). They list exactly the
+    // structure-affecting fields, mirroring the set the (now-removed) custom compute_program_hash used:
+    //   - Runtime-only fields are excluded: `semaphore` (vector<GlobalSemaphore>) and the
+    //     `barrier_semaphore` object itself (only its presence is structural, exposed as a bool).
+    //   - `sub_device_id` is excluded: the old hash only used it to compute worker_cores, which is
+    //     per-device-constant (the program cache is per-device). The structural part of that
+    //     computation is `sub_core_grid`, which is included below.
+    //   - `use_all_gather_async_via_broadcast` is included so program-factory selection is a pure
+    //     function of the hashed attributes (the old hash captured it indirectly via
+    //     program_factory.index(), which the default path does not encode).
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "topology",
+        "cluster_axis",
+        "use_all_gather_async_llama_sharded",
+        "use_optimal_ccl_for_llama",
+        "use_all_gather_async_via_broadcast",
+        "barrier_semaphore_present",
+        "using_persistent_buffers",
+        "chunks_per_sync",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
+        "reverse_order",
+        "sub_core_grid");
+    auto attribute_values() const {
+        return std::make_tuple(
+            dim,
+            num_links,
+            ring_size,
+            output_mem_config,
+            topology,
+            cluster_axis,
+            use_all_gather_async_llama_sharded,
+            use_optimal_ccl_for_llama,
+            use_all_gather_async_via_broadcast,
+            barrier_semaphore.has_value(),
+            using_persistent_buffers,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            reverse_order,
+            sub_core_grid);
     }
 };
 
