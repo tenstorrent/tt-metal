@@ -265,10 +265,10 @@ Results from `test_text_decoder.py` on **BH QB-2 (`P150x4`)**. Synthetic random 
 
 ## Vision PCC
 
-Results from vision pipeline tests on **BH QB-2 (`P150x4`)**. Random `vision_chunk_size` image input vs HuggingFace reference.
+Results from vision pipeline tests on **BH QB-2 (`P150x4`)**. `vision_chunk_size` image input from modelarg vs HuggingFace reference.
 
 | Component | Test | PCC |
-|---|---|---:|---:|
+|---|---|---|
 | Vision model | `test_vision_model.py` | 0.990847 |
 | Vision tower | `test_vision_tower.py` | 0.996050 |
 
