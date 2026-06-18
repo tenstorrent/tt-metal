@@ -484,3 +484,81 @@ def test_denoise_expert_chain_pcc():
     pcc = _compute_pcc(ref_out, out)
     print(f"\n✅ Denoise expert-chain PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
     assert pcc >= 0.95, f"PCC {pcc:.6f} < 0.95"
+
+
+@pytest.mark.skipif(
+    not (CHECKPOINT_DIR / "model.safetensors").exists(),
+    reason=f"checkpoint not found at {CHECKPOINT_DIR}",
+)
+def test_vision_tp1_pcc():
+    """TP=1 single-device SigLIP vision tower + mm_projector vs torch reference.
+
+    This is the SigLIP path the production e2e actually runs (ttnn_siglip /
+    backbone.embed_image, single chip, bs=PI0_NUM_CAMERAS) — NOT the 4-chip
+    pipeline-parallel StageVision (test_vision_stage_pcc). Mirrors
+    test_prefill_tp1_pcc: device id from PI0_DEVICE_ID, honors PI0_PERF_ITERS
+    (repeat for profiling) and PI0_SKIP_TORCH_REF. Target PCC ≥ 0.997.
+    """
+    from models.experimental.pi0_5.common.configs import SigLIPConfig
+    from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+    from models.experimental.pi0_5.reference.torch_siglip import SigLIPVisionTower as TorchSigLIPVisionTower
+    from models.experimental.pi0_5.reference.torch_siglip import MultiModalProjector as TorchMMProjector
+    from models.experimental.pi0_5.tt.ttnn_siglip import MultiModalProjectorTTNN, SigLIPVisionTowerTTNN
+
+    cfg = SigLIPConfig(
+        hidden_size=1152,
+        intermediate_size=4304,
+        num_hidden_layers=27,
+        num_attention_heads=16,
+        image_size=224,
+        patch_size=14,
+    )
+    loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
+    vision_w = loader.categorized_weights["vlm_vision"]
+    projector_w = loader.categorized_weights["vlm_projector"]
+
+    bs = int(os.environ.get("PI0_NUM_CAMERAS", "3"))
+    torch.manual_seed(SEED)
+    pixel_values = torch.randn(bs, 3, cfg.image_size, cfg.image_size)
+
+    # Torch reference: SigLIP vision tower + mm_projector → (bs, 256, 2048).
+    # Skipped under PI0_SKIP_TORCH_REF=1 for profiling runs.
+    ref_out = None
+    if not os.environ.get("PI0_SKIP_TORCH_REF"):
+        ref_tower = TorchSigLIPVisionTower(cfg, vision_w)
+        ref_proj = TorchMMProjector(projector_w)
+        with torch.no_grad():
+            ref_out = ref_proj.forward(ref_tower.forward(pixel_values))
+
+    device = ttnn.open_device(device_id=int(os.environ.get("PI0_DEVICE_ID", "0")), l1_small_size=24576)
+    try:
+        tower = SigLIPVisionTowerTTNN(cfg, vision_w, device)
+        proj = MultiModalProjectorTTNN(projector_w, device)
+        # The device-side fold patch-embed (PI0_SIGLIP_USE_FOLD, prod default)
+        # expects a ttnn input — the e2e host-permutes BCHW→NHWC and uploads
+        # before calling. Mirror that so the prod fold path runs self-contained.
+        # (last_dim == in_channels=3 → the device-reshape branch of _forward_fold.)
+        pix_in = ttnn.from_torch(
+            pixel_values.permute(0, 2, 3, 1).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # PI0_PERF_ITERS>1: repeat so the ops CSV holds steady-state op blocks
+        # (read the LAST run; the compile pass has corrupt multi-core durations).
+        iters = int(os.environ.get("PI0_PERF_ITERS", "1"))
+        for _ in range(iters):
+            out_ttnn = proj.forward(tower.forward(pix_in))
+            ttnn.synchronize_device(device)
+        out = ttnn.to_torch(out_ttnn)
+    finally:
+        ttnn.close_device(device)
+
+    if ref_out is None:
+        print(f"\n✅ SigLIP TP=1 stage ran ×{iters} (torch ref skipped)  (shape {tuple(out.shape)})")
+        return
+    assert out.shape == ref_out.shape, f"shape mismatch: {tuple(out.shape)} vs {tuple(ref_out.shape)}"
+    pcc = _compute_pcc(ref_out, out)
+    print(f"\n✅ SigLIP TP=1 stage PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
+    assert pcc >= 0.997, f"PCC {pcc:.6f} < 0.997"

@@ -67,8 +67,19 @@ CSV lands at `generated/profiler/reports/<TS>/ops_perf_results_<TS>.csv`.
 > **Read device 1, not device 0.** On this box, **chip 8 (the mmio chip) has corrupt
 > eager `DEVICE KERNEL DURATION`** (bogus ~3.5e12 ns on multi-core ops). Aggregate from
 > a **sane device** (TP=4 → device 1; TP=8 → device 1/5/6) and **drop rows with
-> `DEVICE KERNEL DURATION ≥ 1e8` ns**. For per-iteration "forward" cost, slice from the
-> first block `MatmulDeviceOperation` (excludes one-time weight-load/RoPE-precompute init).
+> `DEVICE KERNEL DURATION ≥ 1e8` ns**.
+>
+> **Always report the init-EXCLUDED forward.** Slice device-1 ops from the **first
+> `MatmulDeviceOperation`** onward — the ~95 ops before it are one-time init
+> (**~0.54 ms**: 39× `TilizeWithValPadding` + 40× `Typecast` weight-tilization,
+> RoPE-table precompute, embedding setup) that a traced pipeline amortizes. Summing
+> *all* device-1 ops over-counts by that ~0.54 ms (e.g. 12.10 ms all-ops = **11.56 ms
+> forward** + 0.54 ms init). Parse:
+> ```python
+> rows=[d for d in csv.DictReader(open(f)) if d["OP TYPE"].strip()=="tt_dnn_device" and d["DEVICE ID"].strip()=="1"]
+> i0=next(i for i,d in enumerate(rows) if d["OP CODE"].strip()=="MatmulDeviceOperation")
+> fwd=sum(float(d["DEVICE KERNEL DURATION [ns]"] or 0) for d in rows[i0:] if 0<float(d["DEVICE KERNEL DURATION [ns]"] or 0)<1e8)
+> ```
 > Raise `--op-support-count` for >1 iteration to avoid profiler-buffer overflow.
 
 ## Knobs
@@ -82,14 +93,24 @@ CSV lands at `generated/profiler/reports/<TS>/ops_perf_results_<TS>.csv`.
 | `PI0_SKIP_TORCH_REF=1` | skip the CPU torch reference (faster profiling; PCC not checked) |
 | `PI0_TP4_ATTN_HEADPAR=1` | **opt-in** head-parallel attention (default off — regresses on this Linear fabric) |
 
-## Reference numbers (per-chip forward, prod env, bf8 default)
+## Reference numbers (per-chip **forward**, init-excluded, prod env, bf8 default)
 
-| TP | PCC | per-chip forward |
+3-camera (seq=1024, `PI0_VLM_CHUNK_SIZE=1024`):
+
+| TP | PCC | forward (init-excl) | all-ops sum (+~0.54 ms init) |
+|---|---|---|---|
+| TP=1 | 0.9942 | 18.1 ms | — |
+| TP=4 | 0.9939 | **11.56 ms** | 12.10 ms |
+| TP=8 | 0.9935 | 10.60 ms | — |
+
+2-camera (seq=768, `PI0_VLM_CHUNK_SIZE=768`):
+
+| TP | forward (init-excl) | all-ops sum |
 |---|---|---|
-| TP=1 | 0.9942 | 18.1 ms |
-| TP=4 | 0.9939 | **11.56 ms** |
-| TP=8 | 0.9935 | 10.60 ms |
+| TP=4 | ~8.7 ms | 9.22 ms |
 
-(TP=4 baseline before this session's opt was 20.4 ms.) SDPA (~2.16 ms) is at its
-compute floor. Head-parallel attention & fused/async CCL are gated by the fabric
+(TP=4 baseline before this session's opt was 20.4 ms.) Numbers drift ±10–20% run-to-run
+(CCL/matmul timing jitter on this box) — the init-excluded forward is the canonical metric.
+SDPA is the largest single op (~2.16 ms @ seq=1024, O(seq²) → ~0.72 ms @ seq=768) and is
+at its compute floor. Head-parallel attention & fused/async CCL are gated by the fabric
 (4-node Linear, no ring) — see the design spec under `docs/superpowers/specs/`.

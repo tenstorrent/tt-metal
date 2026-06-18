@@ -284,10 +284,16 @@ class GemmaMLPTP4:
             ttnn.deallocate(up)
 
             # Row-parallel down → partial sum [B, 1, padded, hidden] per chip
+            # EXPERIMENT (PI0_DOWN_BF4): bf4 down-proj output halves the all_reduce
+            # payload again vs bf8. Standalone CCL timing is unreliable here, so this
+            # is gated to measure the real-model effect (perf + PCC).
+            import os as _os_bf4
+            _down_dtype = ttnn.bfloat4_b if _os_bf4.environ.get("PI0_DOWN_BF4", "").lower() in ("1", "true", "yes", "on") else ttnn.bfloat8_b
+            down_common = dict(dtype=_down_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
             if down_pcfg is not None:
-                partial = ttnn.linear(hidden, self.down_proj, program_config=down_pcfg, **common)
+                partial = ttnn.linear(hidden, self.down_proj, program_config=down_pcfg, **down_common)
             else:
-                partial = ttnn.linear(hidden, self.down_proj, core_grid=self.core_grid, **common)
+                partial = ttnn.linear(hidden, self.down_proj, core_grid=self.core_grid, **down_common)
             ttnn.deallocate(hidden)
 
             # AllReduce: sum partial outputs across all 4 chips → replicated [B, 1, padded, hidden].
@@ -405,7 +411,14 @@ class _GemmaBlockTP4:
             # Head-parallel: attn_out is a per-chip partial (this chip's Q-heads' contribution
             # to o_proj). Sum across chips → replicated, same as the MLP all_reduce.
             attn_out = ttnn.all_reduce(attn_out, num_links=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # EXPERIMENT (PI0_RESID_BF8): carry the residual stream in bf8 — halves the
+        # residual-add bytes, but accumulates quantization over 18 layers (PCC risk).
+        import os as _os_resid
+        _resid_bf8 = _os_resid.environ.get("PI0_RESID_BF8", "").lower() in ("1", "true", "yes", "on")
+        _add_kw = dict(memory_config=ttnn.L1_MEMORY_CONFIG)
+        if _resid_bf8:
+            _add_kw["dtype"] = ttnn.bfloat8_b
+        hidden_states = ttnn.add(hidden_states, attn_out, **_add_kw)
         ttnn.deallocate(attn_out)
 
         normed = rms_norm_ttnn(
@@ -416,7 +429,7 @@ class _GemmaBlockTP4:
 
         mlp_out = self.mlp.forward(normed)
         ttnn.deallocate(normed)
-        hidden_states = ttnn.add(hidden_states, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.add(hidden_states, mlp_out, **_add_kw)
         ttnn.deallocate(mlp_out)
 
         return hidden_states, new_cache
