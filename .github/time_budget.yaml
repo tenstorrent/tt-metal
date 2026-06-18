@@ -216,6 +216,8 @@ llk:
     bh_p150b_civ2_viommu_prio: 70
 
 models:
+  smoke:
+    wh_galaxy_merge_gate: 5
   sanity:
     wh_galaxy_perf: 10
   stress:

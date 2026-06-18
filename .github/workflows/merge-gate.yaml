@@ -96,6 +96,7 @@ jobs:
       llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
+      models-changed: ${{ steps.find-changes.outputs.models-changed }}
     steps:
       # Use the in-tree action (same as pr-gate.yaml) so the llk-* outputs above are
       # available; the previously-pinned @v0.63.0 predates the llk-unit-tests-changed flag.
@@ -315,6 +316,25 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       test-category: smoke
 
+  models-smoke-tests:
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
+    if: ${{ github.event_name == 'merge_group' &&
+            (github.ref_name == 'main' ||
+             needs.find-changes.outputs.cmake-changed == 'true' ||
+             needs.find-changes.outputs.models-changed == 'true' ||
+             needs.find-changes.outputs.tt-nn-changed == 'true' ||
+             needs.find-changes.outputs.tt-metalium-changed == 'true')
+        }}
+    secrets: inherit
+    uses: ./.github/workflows/models-smoke-tests-impl.yaml
+    with:
+      enabled-skus: wh_galaxy_merge_gate
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      test-category: smoke
+
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
@@ -450,14 +470,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-unit-tests]
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-cnn-unit-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-cnn-unit-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-unit-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

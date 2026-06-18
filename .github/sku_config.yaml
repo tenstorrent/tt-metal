@@ -37,6 +37,13 @@ skus:
       - topology-6u
       - in-service
 
+  wh_galaxy_merge_gate:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-functional
+      - topology-6u
+      - in-service-dedicated-merge-gate
+
   wh_galaxy_perf:
     runs_on:
       - arch-wormhole_b0
