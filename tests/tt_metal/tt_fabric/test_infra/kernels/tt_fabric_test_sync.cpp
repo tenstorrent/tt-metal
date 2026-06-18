@@ -14,7 +14,8 @@ constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(4);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(5);
 constexpr bool USE_UNICAST_SYNC_PACKETS = get_compile_time_arg_val(6);
 
-using SyncKernelConfigType = SyncKernelConfig<NUM_SYNC_FABRIC_CONNECTIONS, IS_2D_FABRIC, NUM_LOCAL_SYNC_CORES, USE_UNICAST_SYNC_PACKETS>;
+using SyncKernelConfigType =
+    SyncKernelConfig<NUM_SYNC_FABRIC_CONNECTIONS, IS_2D_FABRIC, NUM_LOCAL_SYNC_CORES, USE_UNICAST_SYNC_PACKETS>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
 static_assert(

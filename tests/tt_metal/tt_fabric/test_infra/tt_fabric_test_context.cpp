@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp"
 
 #include <filesystem>
 #include <thread>
@@ -423,13 +423,13 @@ void TestContext::compile_programs() {
             std::string eth_info;
             for (const auto& [core, sender] : senders) {
                 for (const auto& [cfg, key] : sender.get_configs()) {
-                    auto eth_chans =
-                        control_plane.get_active_fabric_eth_channels_in_direction(node_id, key.direction);
+                    auto eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(node_id, key.direction);
                     auto ch = key.link_idx < eth_chans.size() ? std::to_string(eth_chans.at(key.link_idx)) : "?";
                     if (!eth_info.empty()) {
                         eth_info += ", ";
                     }
-                    eth_info += std::string(enchantum::to_string(key.direction)) + "[" + std::to_string(key.link_idx) + "]=ch" + ch;
+                    eth_info += std::string(enchantum::to_string(key.direction)) + "[" + std::to_string(key.link_idx) +
+                                "]=ch" + ch;
                 }
             }
 

@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <optional>
 #include <variant>
-#include "routing/tt_fabric_test_common_types.hpp"
+#include "tt_fabric_test_common_types.hpp"
 #include "tt-metalium/core_coord.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
@@ -77,7 +77,6 @@ DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& nod
         "Unsupported device identifier format. Expected scalar chip_id, sequence [mesh_id, chip_id], or sequence "
         "[mesh_id, [row, col]].");
 }
-
 
 ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::Node& dest_yaml) {
     ParsedDestinationConfig config;
@@ -184,16 +183,19 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
 }
 static void validate_latency_test_config(const ParsedTestConfig& test_config) {
     // Special case for sequential high level patterns, which are allowed
-    if(test_config.patterns.has_value()){
-        auto iterator = std::find_if_not(test_config.patterns.value().begin(), test_config.patterns.value().end(), [](const auto& config) { return config.is_sequential; });
+    if (test_config.patterns.has_value()) {
+        auto iterator = std::find_if_not(
+            test_config.patterns.value().begin(), test_config.patterns.value().end(), [](const auto& config) {
+                return config.is_sequential;
+            });
         TT_FATAL(
             // If no config which is NOT sequential was found (all configs were sequential), we can proceed
             // Otherwise, print the first non-sequential high-level pattern returned from std::find_if_not
             iterator == test_config.patterns.value().end(),
             "Test '{}': latency_test_mode does not support non-sequential high-level pattern: {}",
-            test_config.name, iterator->type);
-    }
-    else{
+            test_config.name,
+            iterator->type);
+    } else {
         TT_FATAL(
             test_config.senders.size() == 1,
             "Test '{}': latency_test_mode requires exactly one sender, got {}",
@@ -211,7 +213,7 @@ static void validate_latency_test_config(const ParsedTestConfig& test_config) {
     }
 }
 
-static void validate_core_sweep_config(const ParsedTestConfig& test_config){
+static void validate_core_sweep_config(const ParsedTestConfig& test_config) {
     bool has_sender_sweep =
         std::any_of(test_config.senders.begin(), test_config.senders.end(), [](const ParsedSenderConfig& cfg) {
             return is_core_sweep_config(cfg.core);
@@ -219,7 +221,7 @@ static void validate_core_sweep_config(const ParsedTestConfig& test_config){
 
     // If any destinations are sweeping, make sure its the only one
     bool has_dest_sweep = false;
-    for(const auto& sender: test_config.senders){
+    for (const auto& sender : test_config.senders) {
         if (std::any_of(
                 sender.patterns.begin(), sender.patterns.end(), [](const ParsedTrafficPatternConfig& traffic_pattern) {
                     return (
@@ -231,7 +233,7 @@ static void validate_core_sweep_config(const ParsedTestConfig& test_config){
         }
     }
 
-    if(has_sender_sweep || has_dest_sweep){
+    if (has_sender_sweep || has_dest_sweep) {
         TT_FATAL(
             test_config.senders.size() == 1,
             "Test '{}': core sweep option requires exactly one sender, got {}",
@@ -509,7 +511,7 @@ std::optional<std::string> CmdlineParser::get_yaml_config_path() {
         if (!fpath.is_absolute()) {
             const auto& fname = fpath.filename();
             fpath = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-                    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/" / fname;
+                    "tests/tt_metal/tt_fabric/test_infra/test_yamls/" / fname;
             log_warning(tt::LogTest, "Relative fpath for config provided, using absolute path: {}", fpath);
         }
         return fpath.string();
@@ -994,7 +996,11 @@ CoreConfig YamlConfigParser::parse_core_coord(const YAML::Node& node) {
     }
     if (node.IsScalar()) {
         std::string field = parse_scalar<std::string>(node);
-        TT_FATAL(field == "all", "Core field was not provided as a coordinate, thus must be string option 'all' to indicate core sweep. Instead got string: '{}'", field);
+        TT_FATAL(
+            field == "all",
+            "Core field was not provided as a coordinate, thus must be string option 'all' to indicate core sweep. "
+            "Instead got string: '{}'",
+            field);
         return field;
     }
 
@@ -1044,7 +1050,8 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
         get_supported_high_level_patterns());
 
     // Above ensures the config type is supported before checking if it is sequential
-    config.is_sequential = high_level_pattern_is_sequential(detail::high_level_traffic_pattern_mapper.to_enum.at(config.type));
+    config.is_sequential =
+        high_level_pattern_is_sequential(detail::high_level_traffic_pattern_mapper.to_enum.at(config.type));
 
     if (pattern_yaml["iterations"]) {
         config.iterations = parse_scalar<uint32_t>(pattern_yaml["iterations"]);
@@ -1232,7 +1239,8 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
     // If both are present: sender_iterations × dest_iterations different pairs
     // If only one: all to one/one to all cfg
     // If neither: 1 (point to point)
-    uint32_t core_sweep_iterations = calculate_core_sweep_iterations(p_config, sender_core_sweep_iterations, dest_core_sweep_iterations);
+    uint32_t core_sweep_iterations =
+        calculate_core_sweep_iterations(p_config, sender_core_sweep_iterations, dest_core_sweep_iterations);
     max_iterations = std::max(max_iterations, core_sweep_iterations);
 
     if (p_config.patterns) {
@@ -1268,7 +1276,7 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                     "Auto-detected {} iterations for sequential_all_to_all pattern in test '{}'",
                     num_pairs,
                     p_config.name);
-            } else if (p.type == "sequential_neighbor_exchange"){
+            } else if (p.type == "sequential_neighbor_exchange") {
                 auto neighbor_pairs =
                     this->filter_pairs_by_mesh_scope(this->route_manager_.get_neighbor_exchange_pairs(), p.mesh_scope);
                 uint32_t num_pairs = static_cast<uint32_t>(neighbor_pairs.size());
@@ -1300,14 +1308,14 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
             p_config.name);
     }
 
-
     expanded_tests.reserve(max_iterations);
     for (uint32_t i = 0; i < max_iterations; ++i) {
         ParsedTestConfig iteration_test = p_config;
         iteration_test.patterns.reset();  // Will be expanded into concrete senders.
 
         // Expand core sweep tests
-        const auto [sender_core_idx, dest_core_idx] = calculate_core_indices(sender_core_sweep_iterations, dest_core_sweep_iterations, i);
+        const auto [sender_core_idx, dest_core_idx] =
+            calculate_core_indices(sender_core_sweep_iterations, dest_core_sweep_iterations, i);
 
         // If sender core sweep is active, expand sender to one specific core for this iteration based on calculated idx
         // The check for restriction on one sender/receiver was validated before
@@ -1352,14 +1360,15 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
             }
 
             // If we are in latency test mode, all high-level patterns need to be sequential
-            if(p_config.performance_test_mode == PerformanceTestMode::LATENCY){
+            if (p_config.performance_test_mode == PerformanceTestMode::LATENCY) {
                 // This is a redundant check; also performed in `validate_latency_test_config`
                 bool all_sequential = std::all_of(
-                    p_config.patterns.value().begin(),
-                    p_config.patterns.value().end(),
-                    [](const auto& pattern) { return pattern.is_sequential; });
+                    p_config.patterns.value().begin(), p_config.patterns.value().end(), [](const auto& pattern) {
+                        return pattern.is_sequential;
+                    });
 
-                // Need to remember this field so we can allow multiple iterations on a latency test in the sequential case
+                // Need to remember this field so we can allow multiple iterations on a latency test in the sequential
+                // case
                 iteration_test.from_sequential_pattern = all_sequential;
             }
 
@@ -1434,7 +1443,8 @@ std::vector<ParsedSenderConfig> TestConfigBuilder::expand_dest_core_sweep(
     return {expanded_sender};
 }
 
-std::pair<uint32_t, uint32_t> TestConfigBuilder::calculate_core_indices(uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t test_iteration){
+std::pair<uint32_t, uint32_t> TestConfigBuilder::calculate_core_indices(
+    uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t test_iteration) {
     std::pair<uint32_t, uint32_t> core_indices{0, 0};
     if (sender_core_sweep_iterations > 0 && dest_core_sweep_iterations > 0) {
         // Both sweeps: outer loop is sender, inner loop is destination
@@ -1448,7 +1458,8 @@ std::pair<uint32_t, uint32_t> TestConfigBuilder::calculate_core_indices(uint32_t
     return core_indices;
 }
 
-uint32_t TestConfigBuilder::calculate_sender_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores){
+uint32_t TestConfigBuilder::calculate_sender_core_sweep_iterations(
+    const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores) {
     uint32_t sender_core_sweep_iterations = 0;
     for (const auto& sender : senders) {
         if (is_core_sweep_config(sender.core)) {
@@ -1460,7 +1471,8 @@ uint32_t TestConfigBuilder::calculate_sender_core_sweep_iterations(const std::ve
     return sender_core_sweep_iterations;
 }
 
-uint32_t TestConfigBuilder::calculate_dest_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores){
+uint32_t TestConfigBuilder::calculate_dest_core_sweep_iterations(
+    const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores) {
     uint32_t dest_core_sweep_iterations = 0;
     for (const auto& sender : senders) {
         for (const auto& pattern : sender.patterns) {
@@ -1477,12 +1489,17 @@ uint32_t TestConfigBuilder::calculate_dest_core_sweep_iterations(const std::vect
     return dest_core_sweep_iterations;
 }
 
-uint32_t TestConfigBuilder::calculate_core_sweep_iterations(const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations){
+uint32_t TestConfigBuilder::calculate_core_sweep_iterations(
+    const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations) {
     uint32_t core_sweep_iterations = 1;
 
     bool sender_core_sweep = false, dest_core_sweep = false;
-    if(sender_core_sweep_iterations > 0) { sender_core_sweep = true; }
-    if(dest_core_sweep_iterations > 0) { dest_core_sweep = true; }
+    if (sender_core_sweep_iterations > 0) {
+        sender_core_sweep = true;
+    }
+    if (dest_core_sweep_iterations > 0) {
+        dest_core_sweep = true;
+    }
 
     if (sender_core_sweep && dest_core_sweep) {
         core_sweep_iterations = sender_core_sweep_iterations * dest_core_sweep_iterations;
@@ -2451,7 +2468,6 @@ bool TestConfigBuilder::expand_link_duplicates(ParsedTestConfig& test) {
     }
 
     log_debug(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
-
 
     std::vector<ParsedSenderConfig> new_senders;
     new_senders.reserve(test.senders.size() * num_links);

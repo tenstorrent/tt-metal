@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <tt_stl/reflection.hpp>
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_bandwidth_results.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -15,9 +15,9 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_common.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_config.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_constants.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_constants.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -156,7 +156,7 @@ void BandwidthResultsManager::load_golden_csv() {
     std::string golden_filename = get_golden_csv_filename();
     std::filesystem::path golden_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
+        "tests/tt_metal/tt_fabric/test_infra/golden" / golden_filename;
 
     if (!std::filesystem::exists(golden_path)) {
         log_warning(tt::LogTest, "Golden CSV file not found: {}", golden_path.string());

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_latency_results.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_latency_results.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,8 +14,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_common.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_constants.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_constants.hpp"
 namespace tt::tt_fabric::fabric_tests {
 
 LatencyResultsManager::LatencyResultsManager(TestFixture& fixture, SenderMemoryMap& sender_memory_map) :
@@ -187,7 +187,7 @@ void LatencyResultsManager::setup_latency_test_workers(
 
         // Set latency sender kernel
         sender_test_device.set_sender_kernel_src(
-            sender_core, "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_latency_sender.cpp");
+            sender_core, "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp");
 
         log_debug(
             tt::LogTest, "Created latency sender worker on device {} core {}", sender_device_id.chip_id, sender_core);
@@ -211,8 +211,7 @@ void LatencyResultsManager::setup_latency_test_workers(
 
         // Set latency responder kernel
         receiver_test_device.set_receiver_kernel_src(
-            receiver_core,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_latency_responder.cpp");
+            receiver_core, "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp");
 
         log_debug(
             tt::LogTest,
@@ -608,8 +607,8 @@ void LatencyResultsManager::write_summary_csv_to_file(
 
         csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
                    << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
-                   << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
-                   << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
+                   << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y
+                   << "," << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                    << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
                    << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
                    << result.responder_min_ns << "," << result.responder_max_ns << "," << result.responder_avg_ns << ","
@@ -670,7 +669,7 @@ void LatencyResultsManager::load_golden_csv() {
     std::string golden_filename = get_golden_csv_filename();
     std::filesystem::path golden_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
+        "tests/tt_metal/tt_fabric/test_infra/golden" / golden_filename;
 
     if (!std::filesystem::exists(golden_path)) {
         log_warning(tt::LogTest, "Golden latency CSV file not found: {}", golden_path.string());
