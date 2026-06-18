@@ -309,7 +309,7 @@ struct TestTrafficSenderConfig {
     CoreCoord dst_logical_core;
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
-    uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
+    uint32_t dst_noc_encoding;     // TODO: decide if we should keep it here or not
     uint32_t payload_buffer_size;  // Add payload buffer size field
     uint32_t link_id = 0;          // Link ID for multi-link tests
     std::optional<tt::tt_metal::NOC> noc_id;

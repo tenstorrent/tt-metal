@@ -14,10 +14,10 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_bandwidth_results.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_config.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_constants.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_latency_results.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_constants.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_latency_results.hpp"
 #include "tt_fabric_test_results.hpp"
 
 namespace tt::tt_fabric::fabric_tests {

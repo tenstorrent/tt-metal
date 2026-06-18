@@ -68,7 +68,7 @@ void kernel_main() {
     uint64_t total_packets_sent = 0;
     uint32_t loop_count = 0;
 
-    auto send_packets_stateful = [&](){
+    auto send_packets_stateful = [&]() {
         auto* traffic_config = sender_config->traffic_config_ptrs[0];
         auto* conn = static_cast<EdmSenderType*>(traffic_config->connection_ptr_);
         const uint32_t num_packets = traffic_config->metadata.num_packets;
@@ -77,25 +77,24 @@ void kernel_main() {
         traffic_config->template send_packets_stateful<BENCHMARK_MODE>(num_packets, num_warmup);
     };
 
-    auto send_one_packet =
-        [&](uint8_t idx) {
-            auto* traffic_config = sender_config->traffic_config_ptrs[idx];
-            if (!traffic_config->has_packets_to_send()) {
-                return;
-            }
+    auto send_one_packet = [&](uint8_t idx) {
+        auto* traffic_config = sender_config->traffic_config_ptrs[idx];
+        if (!traffic_config->has_packets_to_send()) {
+            return;
+        }
 
-            // Send one packet (credit management is automatic, inside send_one_packet)
-            bool sent = traffic_config->template send_one_packet<BENCHMARK_MODE>();
+        // Send one packet (credit management is automatic, inside send_one_packet)
+        bool sent = traffic_config->template send_one_packet<BENCHMARK_MODE>();
 
-            if (!sent) {
-                // Packet blocked (no credits) - keep trying
-                packets_left_to_send = true;
-                return;
-            }
+        if (!sent) {
+            // Packet blocked (no credits) - keep trying
+            packets_left_to_send = true;
+            return;
+        }
 
-            // Check if more packets remain
-            packets_left_to_send |= traffic_config->has_packets_to_send();
-        };
+        // Check if more packets remain
+        packets_left_to_send |= traffic_config->has_packets_to_send();
+    };
 
     // Round-robin packet sending: send one packet from each config per iteration
     uint64_t start_timestamp = get_timestamp();

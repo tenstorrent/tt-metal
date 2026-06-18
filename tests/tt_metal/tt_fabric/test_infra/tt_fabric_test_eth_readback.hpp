@@ -48,9 +48,7 @@ public:
      * @param test_devices Reference to the map of test devices
      * @param fixture Reference to the test fixture
      */
-    EthCoreBufferReadback(
-        const std::unordered_map<MeshCoordinate, TestDevice>& test_devices,
-        TestFixture& fixture);
+    EthCoreBufferReadback(const std::unordered_map<MeshCoordinate, TestDevice>& test_devices, TestFixture& fixture);
 
     /**
      * @brief Clear buffer on all active ethernet cores

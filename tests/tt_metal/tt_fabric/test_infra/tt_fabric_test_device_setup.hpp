@@ -24,12 +24,10 @@
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
-const std::string default_sender_kernel_src =
-    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sender.cpp";
+const std::string default_sender_kernel_src = "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp";
 const std::string default_receiver_kernel_src =
-    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_receiver.cpp";
-const std::string default_sync_kernel_src =
-    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sync.cpp";
+    "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp";
+const std::string default_sync_kernel_src = "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp";
 const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -444,8 +442,8 @@ private:
 
     std::unordered_map<CoreCoord, TestSender> senders_;
     std::unordered_map<CoreCoord, TestReceiver> receivers_;
-    std::unordered_map<CoreCoord, TestSync> sync_workers_;    // Separate sync cores
-    std::unordered_map<CoreCoord, TestMux> muxes_;            // Mux workers
+    std::unordered_map<CoreCoord, TestSync> sync_workers_;  // Separate sync cores
+    std::unordered_map<CoreCoord, TestMux> muxes_;          // Mux workers
 
     bool benchmark_mode_ = false;
     bool global_sync_ = false;

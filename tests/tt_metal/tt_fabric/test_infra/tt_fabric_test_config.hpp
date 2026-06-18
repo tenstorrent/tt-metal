@@ -175,25 +175,24 @@ void append_with_separator(std::string& target, std::string_view separator, cons
 
 }  // namespace detail
 
-inline bool high_level_pattern_is_sequential(HighLevelTrafficPattern pattern){
-    switch(pattern){
-    case HighLevelTrafficPattern::SequentialNeighborExchange: [[fallthrough]];
-    case HighLevelTrafficPattern::SequentialAllToAll: [[fallthrough]];
-    case HighLevelTrafficPattern::SequentialMeshPassthrough: return true;
-    case HighLevelTrafficPattern::AllToAll: [[fallthrough]];
-    case HighLevelTrafficPattern::OneToAll: [[fallthrough]];
-    case HighLevelTrafficPattern::AllToOne: [[fallthrough]];
-    case HighLevelTrafficPattern::AllToOneRandom: [[fallthrough]];
-    case HighLevelTrafficPattern::FullDeviceRandomPairing: [[fallthrough]];
-    case HighLevelTrafficPattern::UnidirectionalLinear: [[fallthrough]];
-    case HighLevelTrafficPattern::FullRing: [[fallthrough]];
-    case HighLevelTrafficPattern::HalfRing: [[fallthrough]];
-    case HighLevelTrafficPattern::AllDevicesUniformPattern: [[fallthrough]];
-    case HighLevelTrafficPattern::NeighborExchange: [[fallthrough]];
-    default: return false;
+inline bool high_level_pattern_is_sequential(HighLevelTrafficPattern pattern) {
+    switch (pattern) {
+        case HighLevelTrafficPattern::SequentialNeighborExchange: [[fallthrough]];
+        case HighLevelTrafficPattern::SequentialAllToAll: [[fallthrough]];
+        case HighLevelTrafficPattern::SequentialMeshPassthrough: return true;
+        case HighLevelTrafficPattern::AllToAll: [[fallthrough]];
+        case HighLevelTrafficPattern::OneToAll: [[fallthrough]];
+        case HighLevelTrafficPattern::AllToOne: [[fallthrough]];
+        case HighLevelTrafficPattern::AllToOneRandom: [[fallthrough]];
+        case HighLevelTrafficPattern::FullDeviceRandomPairing: [[fallthrough]];
+        case HighLevelTrafficPattern::UnidirectionalLinear: [[fallthrough]];
+        case HighLevelTrafficPattern::FullRing: [[fallthrough]];
+        case HighLevelTrafficPattern::HalfRing: [[fallthrough]];
+        case HighLevelTrafficPattern::AllDevicesUniformPattern: [[fallthrough]];
+        case HighLevelTrafficPattern::NeighborExchange: [[fallthrough]];
+        default: return false;
     }
 }
-
 
 // Helper function to resolve DeviceIdentifier to FabricNodeId
 inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id, const IDeviceInfoProvider& provider) {
@@ -477,13 +476,16 @@ private:
         const std::vector<tt::tt_metal::CoreCoord>& all_cores,
         uint32_t dest_core_idx);
 
-    std::pair<uint32_t, uint32_t> calculate_core_indices(uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t test_iteration);
+    std::pair<uint32_t, uint32_t> calculate_core_indices(
+        uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t test_iteration);
 
-    uint32_t calculate_sender_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores);
+    uint32_t calculate_sender_core_sweep_iterations(
+        const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores);
 
     uint32_t calculate_dest_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores);
 
-    uint32_t calculate_core_sweep_iterations(const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations);
+    uint32_t calculate_core_sweep_iterations(
+        const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations);
 
     std::vector<ParsedTestConfig> expand_parametrizations(const ParsedTestConfig& raw_config);
 
@@ -581,7 +583,6 @@ private:
     bool expand_link_duplicates(ParsedTestConfig& test);
 
     void resolve_missing_params(ParsedTestConfig& test);
-
 
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;
