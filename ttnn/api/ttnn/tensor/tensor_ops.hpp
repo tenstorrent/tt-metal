@@ -9,15 +9,9 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include <tt_stl/optional_reference.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
+
 namespace tt::tt_metal::distributed {
 class MeshDevice;
-// Forward-declared (used only as a pointer in copy_tensor_over_socket below) rather than
-// including <tt-metalium/experimental/sockets/h2d_socket.hpp>. That header pulls in the
-// `tt::tt_metal::experimental::detail` namespace, and including it from this widely-included
-// public header would make an unqualified `detail::` ambiguous (vs `tt::tt_metal::detail`) in
-// every TU that does `using namespace tt::tt_metal{,::experimental};`. The full definition is
-// included in tensor_ops.cpp instead.
-class H2DSocket;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal {
@@ -43,21 +37,6 @@ void copy_to_device(
     const std::byte* src,
     Tensor& device_tensor,
     const std::optional<BufferRegion>& region = std::nullopt);
-
-// Streams a host tensor to a device tensor via one or more H2D sockets.
-//
-// `scratch_cb_size_bytes` is the maximum L1 scratch CB the receiver core may use to stage one
-// socket page. The function chooses a per-page chunk size that:
-//   - is a multiple of `device_tensor.buffer()->page_size()`
-//   - divides `device_tensor.buffer()->size()` evenly
-//   - satisfies the socket's PCIe alignment requirement
-//   - is <= `scratch_cb_size_bytes`
-// Throws if no such chunk size exists (e.g. the tensor's page size alone exceeds the budget).
-void copy_tensor_over_socket(
-    const Tensor& host_tensor,
-    Tensor& device_tensor,
-    std::vector<distributed::H2DSocket*> sockets,
-    uint32_t scratch_cb_size_bytes);
 
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
