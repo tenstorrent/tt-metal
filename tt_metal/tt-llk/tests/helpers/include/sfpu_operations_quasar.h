@@ -16,6 +16,7 @@
 //    call_unary_sfpu_operation_quasar() (and to init_unary_sfpu_operation_quasar()
 //    if the op needs an init step).
 #include "experimental/ckernel_sfpu_abs.h"
+#include "llk_sfpu/ckernel_sfpu_square.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_recip.h"
@@ -24,7 +25,6 @@
 #include "sfpu/ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
-#include "sfpu/ckernel_sfpu_square.h"
 #include "sfpu/ckernel_sfpu_tanh.h"
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
