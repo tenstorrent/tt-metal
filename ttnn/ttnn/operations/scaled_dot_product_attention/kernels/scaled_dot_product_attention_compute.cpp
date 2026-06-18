@@ -336,7 +336,7 @@ void kernel_main() {
             ckl::OperandKind::Col>(o_grid);
 
         // ---------- Cleanup ----------
-        cb_pop_front(cb_q_in, q_tiles);  // retained scaled Q
+        cb_pop_front(cb_q_in, q_tiles);  // Q retained across KV loop (not popped by matmul)
         cb_wait_front(cb_m_prev, B_q);   // leftover m_final from last commit
         cb_pop_front(cb_m_prev, B_q);
     }

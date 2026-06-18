@@ -7,3 +7,4 @@
 {"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention.py (full)","detail":"32/32 passed in --dev mode","ts":"2026-06-18T22:25:16+00:00"}
 {"event":"test_run","status":"pass","test":"acceptance full","detail":"32/32 in both --dev and production (non-dev) mode — no races","ts":"2026-06-18T22:26:36+00:00"}
 {"event":"fix_applied","detail":"L1-aware block cap (B*DHt<=16) fixes 7/8 large-head-dim OOM cases (D=512 all pass, D=1024 3/4). Remaining: D=1024 explicit-scale rms=0.0505 vs 0.05 precision near-miss (PCC 0.9987 ok). fp32_dest_acc lever risks reduce HiFi4 known-bad -> follow-up refinement.","ts":"2026-06-18T22:32:40+00:00"}
+{"event":"test_run","status":"pass","test":"acceptance full final","detail":"32/32 after comment fix; golden 207/208 supported cells pass","ts":"2026-06-18T22:34:36+00:00"}
