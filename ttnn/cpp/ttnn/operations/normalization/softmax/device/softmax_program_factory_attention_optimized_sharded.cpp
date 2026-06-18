@@ -10,9 +10,129 @@
 
 #include <bit>
 #include <map>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace ttnn::prim {
+
+namespace {
+
+using namespace tt::tt_metal;
+
+// Per-core reader runtime args for the sharded attention-optimized softmax, derived purely from
+// (attributes, tensor_args). This is the SINGLE SOURCE OF TRUTH for both create_descriptor() (cache
+// miss) and get_dynamic_runtime_args() (cache-hit re-apply). The reader kernel is pushed first, so
+// its kernel index is 0. The only address-derived slot is the mask buffer address, recorded in
+// mask_addr_arg_index (consumed by the TensorAccessor NoC read on the FUSED_SCALE_MASK path); the
+// rest (scale, mask_start_tile_id, num_tiles_in_attn_mask) are shape/attr-derived. Cores are emitted
+// in the same grid order create_descriptor() pushes them, so positions match the built program.
+struct SoftmaxShardedPerCoreArgs {
+    std::vector<CoreCoord> cores;
+    std::vector<KernelDescriptor::CoreRuntimeArgs> reader_args;  // indexed by position in `cores`
+    // Address-derived reader arg slot to re-apply on every cache hit; nullopt when there is no mask
+    // (no NoC read occurs and the slot is unused).
+    std::optional<uint32_t> mask_addr_arg_index;
+};
+
+SoftmaxShardedPerCoreArgs compute_softmax_sharded_per_core_args(
+    const SoftmaxDeviceOperation::operation_attributes_t& attributes,
+    const SoftmaxDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& program_config = std::get<SoftmaxShardedMultiCoreProgramConfig>(attributes.program_config);
+
+    const auto shard_orient = tensor_args.input_tensor.shard_spec().value().orientation;
+    const auto& shape = tensor_args.input_tensor.padded_shape();
+    const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_hw = tensor_args.input_tensor.tensor_spec().tile().get_tile_hw();
+    const uint32_t num_cores_per_batch =
+        (shape[1] * shape[2] * shape[3]) / (tensor_args.input_tensor.shard_spec().value().shape[0] *
+                                            tensor_args.input_tensor.shard_spec().value().shape[1]);
+
+    const bool use_row_major_kernel =
+        (tensor_args.mask.has_value() and tensor_args.mask->layout() == tt::tt_metal::Layout::ROW_MAJOR);
+
+    const uint32_t start_core_x = 0;
+    const uint32_t start_core_y = 0;
+    const uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
+    const uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
+
+    const uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask->buffer()->address() : 0;
+    const uint32_t scale_u = std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // fused scale-mask-softmax
+    uint32_t mask_start_tile_id = 0;
+
+    uint32_t num_tiles_in_attn_mask = 0;
+    uint32_t num_tiles_of_attn_mask_needed_per_core = 0;
+    if (attributes.is_scale_causal_mask_hw_dims_softmax) {
+        num_tiles_in_attn_mask =
+            tensor_args.mask.value().padded_shape()[-1] * tensor_args.mask.value().padded_shape()[-2] / tile_hw;
+        num_tiles_of_attn_mask_needed_per_core = program_config.block_h * program_config.block_w;
+    }
+
+    SoftmaxShardedPerCoreArgs result;
+    if (tensor_args.mask.has_value()) {
+        // reader arg layout: [scale, mask_addr, mask_start_tile_id, (num_tiles_in_attn_mask)] -> index 1
+        result.mask_addr_arg_index = 1u;
+    }
+    result.cores.reserve(static_cast<size_t>(num_cores_c) * num_cores_r);
+    result.reader_args.reserve(static_cast<size_t>(num_cores_c) * num_cores_r);
+
+    uint32_t num_cores_per_batch_index = 0;
+    // Emit one (core, reader_args) entry per core in the same grid order create_descriptor() builds.
+    // The outer/inner loop order depends on shard orientation because mask_start_tile_id advances
+    // along the batch-major traversal.
+    const auto emit_core = [&](uint32_t core_idx_x, uint32_t core_idx_y) {
+        const CoreCoord core = {
+            static_cast<std::size_t>(start_core_x) + core_idx_x, static_cast<std::size_t>(start_core_y) + core_idx_y};
+
+        KernelDescriptor::CoreRuntimeArgs reader_args;
+        reader_args.push_back(scale_u);
+        reader_args.push_back(mask_addr);
+        reader_args.push_back(mask_start_tile_id);
+        if (attributes.is_scale_causal_mask_hw_dims_softmax) {
+            reader_args.push_back(num_tiles_in_attn_mask);
+        }
+
+        result.cores.push_back(core);
+        result.reader_args.push_back(std::move(reader_args));
+
+        num_cores_per_batch_index++;
+        if (attributes.is_scale_causal_mask_hw_dims_softmax) {
+            mask_start_tile_id = (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
+        } else {
+            if (num_cores_per_batch_index == num_cores_per_batch) {
+                num_cores_per_batch_index = 0;
+                if (tensor_args.mask.has_value()) {
+                    if (attributes.is_causal_mask) {
+                        mask_start_tile_id += tensor_args.mask->padded_shape()[-1] *
+                                              tensor_args.mask->padded_shape()[-2] / tile_width / tile_height;
+                    } else {
+                        mask_start_tile_id += use_row_major_kernel ? tensor_args.mask->padded_shape()[-2]
+                                                                   : tensor_args.mask->padded_shape()[-1] / tile_width;
+                    }
+                }
+            }
+        }
+    };
+
+    if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+        for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+            for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+                emit_core(core_idx_x, core_idx_y);
+            }
+        }
+    } else {
+        for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+                emit_core(core_idx_x, core_idx_y);
+            }
+        }
+    }
+
+    return result;
+}
+
+}  // namespace
 
 tt::tt_metal::ProgramDescriptor
 SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_descriptor(
@@ -55,14 +175,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
-    const auto shard_orient = tensor_args.input_tensor.shard_spec().value().orientation;
     const auto& shape = tensor_args.input_tensor.padded_shape();
-    const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
-    const uint32_t tile_hw = tensor_args.input_tensor.tensor_spec().tile().get_tile_hw();
-    uint32_t num_cores_per_batch =
-        (shape[1] * shape[2] * shape[3]) / (tensor_args.input_tensor.shard_spec().value().shape[0] *
-                                            tensor_args.input_tensor.shard_spec().value().shape[1]);
 
     uint32_t mask_H = shape[2];
     if (tensor_args.mask.has_value()) {
@@ -350,108 +464,56 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
         });
     }
 
-    // Runtime Args
-    uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask->buffer()->address() : 0;
-    uint32_t scale_u = std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
-    uint32_t mask_start_tile_id = 0;
-
-    uint32_t num_tiles_in_attn_mask = 0;
-    uint32_t num_tiles_of_attn_mask_needed_per_core = 0;
-    if (attributes.is_scale_causal_mask_hw_dims_softmax) {
-        num_tiles_in_attn_mask =
-            tensor_args.mask.value().padded_shape()[-1] * tensor_args.mask.value().padded_shape()[-2] / tile_hw;
-        num_tiles_of_attn_mask_needed_per_core = program_config.block_h * program_config.block_w;
-    }
-    uint32_t num_cores_per_batch_index = 0;
-
-    if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-        for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-                CoreCoord core = {
-                    static_cast<std::size_t>(start_core_x) + core_idx_x,
-                    static_cast<std::size_t>(start_core_y) + core_idx_y};
-
-                // reader args
-                KernelDescriptor::CoreRuntimeArgs reader_args;
-                reader_args.push_back(scale_u);
-                reader_args.push_back(mask_addr);
-                reader_args.push_back(mask_start_tile_id);
-                if (attributes.is_scale_causal_mask_hw_dims_softmax) {
-                    reader_args.push_back(num_tiles_in_attn_mask);
-                }
-
-                reader_desc.runtime_args.emplace_back(core, std::move(reader_args));
-
-                num_cores_per_batch_index++;
-
-                if (attributes.is_scale_causal_mask_hw_dims_softmax) {
-                    uint32_t mask_tile_id_end =
-                        (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
-                    mask_start_tile_id = mask_tile_id_end;
-                } else {
-                    if (num_cores_per_batch_index == num_cores_per_batch) {
-                        num_cores_per_batch_index = 0;
-                        if (tensor_args.mask.has_value()) {
-                            if (attributes.is_causal_mask) {
-                                mask_start_tile_id += tensor_args.mask->padded_shape()[-1] *
-                                                      tensor_args.mask->padded_shape()[-2] / tile_width / tile_height;
-                            } else {
-                                mask_start_tile_id += use_row_major_kernel
-                                                          ? tensor_args.mask->padded_shape()[-2]
-                                                          : tensor_args.mask->padded_shape()[-1] / tile_width;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-            for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-                CoreCoord core = {
-                    static_cast<std::size_t>(start_core_x) + core_idx_x,
-                    static_cast<std::size_t>(start_core_y) + core_idx_y};
-
-                // reader args
-                KernelDescriptor::CoreRuntimeArgs reader_args;
-                reader_args.push_back(scale_u);
-                reader_args.push_back(mask_addr);
-                reader_args.push_back(mask_start_tile_id);
-                if (attributes.is_scale_causal_mask_hw_dims_softmax) {
-                    reader_args.push_back(num_tiles_in_attn_mask);
-                }
-
-                reader_desc.runtime_args.emplace_back(core, std::move(reader_args));
-
-                num_cores_per_batch_index++;
-
-                if (attributes.is_scale_causal_mask_hw_dims_softmax) {
-                    uint32_t mask_tile_id_end =
-                        (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
-                    mask_start_tile_id = mask_tile_id_end;
-                } else {
-                    if (num_cores_per_batch_index == num_cores_per_batch) {
-                        num_cores_per_batch_index = 0;
-                        if (tensor_args.mask.has_value()) {
-                            if (attributes.is_causal_mask) {
-                                mask_start_tile_id += tensor_args.mask->padded_shape()[-1] *
-                                                      tensor_args.mask->padded_shape()[-2] / tile_width / tile_height;
-                            } else {
-                                mask_start_tile_id += use_row_major_kernel
-                                                          ? tensor_args.mask->padded_shape()[-2]
-                                                          : tensor_args.mask->padded_shape()[-1] / tile_width;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // Runtime Args: derived from the single source of truth shared with get_dynamic_runtime_args().
+    auto per_core = compute_softmax_sharded_per_core_args(attributes, tensor_args);
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        reader_desc.runtime_args.emplace_back(per_core.cores[i], std::move(per_core.reader_args[i]));
     }
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> SoftmaxDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*output_tensor*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::tt_metal;
+    std::vector<DynamicRuntimeArg> dynamic_args;
+
+    // Dispatch on the selected program factory. The interleaved attention-optimized factory binds
+    // all per-dispatch addresses as Buffer* rt-args (framework-patched), so it has nothing to
+    // re-apply. Everything else (the general softmax factories) is not yet on the descriptor
+    // fast-path, but those bake no address-derived rt-args here either, so empty is correct for them.
+    const auto factory = select_program_factory(attributes, tensor_args);
+    if (!std::holds_alternative<SoftmaxShardedProgramFactoryAttentionOptimized>(factory)) {
+        return dynamic_args;  // nothing to re-apply
+    }
+
+    // Sharded attention-optimized factory: input/output (and a sharded mask) are CB `.buffer`-bound
+    // and patched by the framework. The only address-derived reader arg is the mask buffer address,
+    // baked at reader arg index 1 and consumed by the TensorAccessor NoC read (FUSED_SCALE_MASK
+    // path). Re-apply it on every cache hit. When there is no mask, no NoC read occurs and arg 1 is
+    // unused, so there is nothing to re-apply.
+    if (!tensor_args.mask.has_value()) {
+        return dynamic_args;
+    }
+
+    // Re-derive per-core reader args from the SAME helper create_descriptor() uses (single source of
+    // truth). The reader kernel is pushed first, so its index is 0; the mask buffer address lives at
+    // mask_addr_arg_index and is re-applied for every core that received reader runtime args.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    const auto per_core = compute_softmax_sharded_per_core_args(attributes, tensor_args);
+    const uint32_t mask_addr_idx = per_core.mask_addr_arg_index.value();
+    dynamic_args.reserve(per_core.cores.size());
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        dynamic_args.push_back(
+            {kReaderKernelIdx, per_core.cores[i], mask_addr_idx, per_core.reader_args[i][mask_addr_idx]});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::prim

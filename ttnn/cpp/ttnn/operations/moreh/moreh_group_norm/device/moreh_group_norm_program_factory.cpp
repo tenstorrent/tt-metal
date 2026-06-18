@@ -307,11 +307,11 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     auto* const input_buf = input.buffer();
     auto* const output_buf = output.buffer();
-    const uint32_t mean_addr = mean_has_value ? mean.value().buffer()->address() : 0u;
-    const uint32_t rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0u;
+    auto* const mean_buf = mean_has_value ? mean.value().buffer() : nullptr;
+    auto* const rstd_buf = rstd_has_value ? rstd.value().buffer() : nullptr;
 
-    const uint32_t gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0u;
-    const uint32_t beta_addr = beta_has_value ? beta.value().buffer()->address() : 0u;
+    auto* const gamma_buf = gamma_has_value ? gamma.value().buffer() : nullptr;
+    auto* const beta_buf = beta_has_value ? beta.value().buffer() : nullptr;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -334,8 +334,8 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         reader_desc.emplace_runtime_args(
             core,
             {input_buf,
-             gamma_addr,
-             beta_addr,
+             gamma_buf,
+             beta_buf,
              std::bit_cast<uint32_t>(scaler),
              std::bit_cast<uint32_t>(eps),
              tile_offset,
@@ -349,14 +349,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         // writer
         writer_desc.emplace_runtime_args(
             core,
-            {output_buf,
-             mean_addr,
-             rstd_addr,
-             tile_offset,
-             num_rows_per_core,
-             num_inner_tiles,
-             num_groups,
-             block_size});
+            {output_buf, mean_buf, rstd_buf, tile_offset, num_rows_per_core, num_inner_tiles, num_groups, block_size});
 
         tile_offset += num_rows_per_core * num_inner_tiles;
     }

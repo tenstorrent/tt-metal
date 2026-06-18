@@ -5,6 +5,8 @@
 #include "nlp_create_qkv_heads_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
@@ -242,6 +244,52 @@ NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperati
         create_device_tensor(std::get<1>(output_specs), input_tensor.device()),
         create_device_tensor(std::get<2>(output_specs), input_tensor.device()),
     };
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> NlpCreateHeadsDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::constants;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    // The Interleaved factory binds q/k/v input/output addresses as patchable Buffer* rt-args, so the
+    // framework re-patches them automatically. Only the Sharded factory bakes raw address scalars.
+    if (!input_tensor.is_sharded()) {
+        return dynamic_args;
+    }
+
+    // Sharded always uses (reader=kernel 0, writer=kernel 1); transpose_k_heads is forbidden for sharded,
+    // so no compute kernels precede them in ProgramDescriptor::kernels.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+
+    // Single source of truth: re-derive the per-core args the same way Sharded::create_descriptor() does,
+    // then re-apply only the address slots (recomputed from the CURRENT buffers — these are what change
+    // across dispatches). The remaining shape/scalar slots are stable across cache hits, so they are left
+    // baked. Behaviour matches the slow-path rebuild, just emitted as dynamic tuples.
+    auto per_core =
+        compute_nlp_create_qkv_heads_sharded_per_core_args(operation_attributes, tensor_args, tensor_return_value);
+
+    dynamic_args.reserve(per_core.cores.size() * per_core.addr_indices.size() * 2);
+    for (uint32_t i = 0; i < per_core.cores.size(); ++i) {
+        if (!per_core.is_work_core[i]) {
+            continue;
+        }
+        const auto& core = per_core.cores[i];
+        const auto& r = per_core.reader_args[i];
+        const auto& w = per_core.writer_args[i];
+        for (uint32_t idx : per_core.addr_indices) {
+            dynamic_args.push_back({kReaderKernelIdx, core, idx, r[idx]});
+        }
+        for (uint32_t idx : per_core.addr_indices) {
+            dynamic_args.push_back({kWriterKernelIdx, core, idx, w[idx]});
+        }
+    }
+
+    return dynamic_args;
 }
 
 NlpCreateHeadsDeviceOperation::program_factory_t NlpCreateHeadsDeviceOperation::select_program_factory(

@@ -402,15 +402,14 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
 
-            // Runtime arguments for sharded reader
-            KernelDescriptor::CoreRuntimeArgs reader_runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                i * grid_nsticks_per_core          // rt_arg[1]: grid_stick_offset
-            };
+            // Runtime arguments for sharded reader; input address as Buffer* (input tensor_arg)
+            KernelDescriptor::RTArgList reader_runtime_args;
+            reader_runtime_args.push_back(input_tensor.buffer());      // rt_arg[0]: input_buffer_address
+            reader_runtime_args.push_back(i * grid_nsticks_per_core);  // rt_arg[1]: grid_stick_offset
 
-            reader0_desc.runtime_args.emplace_back(core, reader_runtime_args);
+            reader0_desc.emplace_runtime_args(core, reader_runtime_args);
             if (enable_split_reader) {
-                reader1_desc.runtime_args.emplace_back(core, reader_runtime_args);
+                reader1_desc.emplace_runtime_args(core, reader_runtime_args);
             }
         }
     } else {
@@ -423,23 +422,20 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
                 core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
             const uint32_t output_sticks = batch_output_channels ? grid_sticks : grid_sticks * grid_batching_factor;
 
-            // Runtime arguments for interleaved reader - expanded row by row
-            KernelDescriptor::CoreRuntimeArgs reader_runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                grid_tensor.buffer()->address(),   // rt_arg[1]: grid_buffer_address
-                grid_sticks,                       // rt_arg[2]: grid_sticks
-                grid_processed                     // rt_arg[3]: grid_processed
-            };
+            // Runtime arguments for interleaved reader; input/grid addresses as Buffer* (tensor_args)
+            reader0_desc.emplace_runtime_args(
+                core,
+                {input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
+                 grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
+                 grid_sticks,            // rt_arg[2]: grid_sticks
+                 grid_processed});       // rt_arg[3]: grid_processed
 
-            // Runtime arguments for interleaved writer - expanded row by row
-            KernelDescriptor::CoreRuntimeArgs writer_runtime_args = {
-                output_tensor.buffer()->address(),  // rt_arg[0]: output_buffer_address
-                output_sticks,                      // rt_arg[1]: output_sticks
-                output_processed                    // rt_arg[2]: output_processed
-            };
-
-            reader0_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
-            writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
+            // Runtime arguments for interleaved writer; output address as Buffer* (output tensor)
+            writer_desc.emplace_runtime_args(
+                core,
+                {output_tensor.buffer(),  // rt_arg[0]: output_buffer_address
+                 output_sticks,           // rt_arg[1]: output_sticks
+                 output_processed});      // rt_arg[2]: output_processed
 
             grid_processed += grid_sticks;
             output_processed += output_sticks;

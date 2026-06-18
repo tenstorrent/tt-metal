@@ -133,21 +133,20 @@ ProgramDescriptor MorehClipGradNormStep3Operation::create_descriptor(
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
     auto cores = grid_to_cores(num_cores_to_be_used, num_cores_x, num_cores_y, false);
-    const auto clip_coef_clamped_addr = clip_coef_clamped.buffer()->address();
+    auto* const clip_coef_clamped_buf = clip_coef_clamped.buffer();
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
 
         const auto& input = inputs.at(i);
-        const auto input_addr = input.buffer()->address();
+        auto* const input_buf = input.buffer();
         const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
 
-        // reader
-        reader_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{input_addr, clip_coef_clamped_addr, num_tiles});
+        // reader: input (in-place output) and clip_coef_clamped addresses bound as Buffer* for cache-hit patching
+        reader_desc.emplace_runtime_args(core, {input_buf, clip_coef_clamped_buf, num_tiles});
 
-        // writer
-        writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{input_addr, num_tiles});
+        // writer: input (in-place output) address bound as Buffer*
+        writer_desc.emplace_runtime_args(core, {input_buf, num_tiles});
 
         // compute
         compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles});

@@ -261,6 +261,11 @@ ProgramDescriptor MorehNormBackwardOperation::create_descriptor(
         reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
 
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+        // args 0/1/2 are input/output/output_grad base addresses (input tensor_args):
+        // bind as Buffer* so the framework patches them on cache hits.
+        reader_desc.buffer_bindings.push_back({core, 0, input.buffer()});
+        reader_desc.buffer_bindings.push_back({core, 1, output.buffer()});
+        reader_desc.buffer_bindings.push_back({core, 2, output_grad.buffer()});
 
         // writer
         writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});

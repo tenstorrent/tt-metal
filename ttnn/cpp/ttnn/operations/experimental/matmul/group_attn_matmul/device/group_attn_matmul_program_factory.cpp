@@ -398,6 +398,8 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         reader_runtime_args.insert(
             reader_runtime_args.end(), in1_mcast_sender_noc_y.begin(), in1_mcast_sender_noc_y.end());
         reader_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
+        // arg 2 is src1_buffer (input b) base address: bind as Buffer* for cache-hit patching.
+        reader_desc.buffer_bindings.push_back({core, 2, src1_buffer});
 
         std::vector<uint32_t> writer_runtime_args = {
             has_work_for_q_heads,
@@ -421,6 +423,10 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
             bfloat16_last_row_bytes_read,
         };
         writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
+        // args 1/2 are src0_buffer (input a) and dst_buffer (output) base addresses:
+        // bind as Buffer* for cache-hit patching.
+        writer_desc.buffer_bindings.push_back({core, 1, src0_buffer});
+        writer_desc.buffer_bindings.push_back({core, 2, dst_buffer});
 
         std::vector<uint32_t> compute_runtime_args = {
             has_work_for_q_heads,

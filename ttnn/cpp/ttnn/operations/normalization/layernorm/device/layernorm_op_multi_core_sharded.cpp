@@ -383,6 +383,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // RMSNorm doesn't use Welford in this kernel path.
     kernel_config.welford_fp32_alias =
         use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
+    // Gamma/beta addresses are baked into writer rt-args (idx 3/4) and read via TensorAccessor; bind
+    // them so the descriptor fast cache-hit path re-patches the live addresses each dispatch.
+    kernel_config.gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
+    kernel_config.beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
 
     add_kernel_descriptors(program_descriptor, core_ranges, workers, grid, std::move(kernel_config));
 

@@ -13,8 +13,12 @@
 #include "bcast_multi_core_hw_program_factory.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <optional>
 #include <variant>
+#include <vector>
 
 namespace ttnn::prim {
 
@@ -46,6 +50,16 @@ struct BcastDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
+
+    // Opts the op into the descriptor fast-path: without this it slow-path rebuilds create_descriptor()
+    // on every cache hit (#46506 host-perf regression). Dispatches to the selected factory's
+    // get_dynamic, which re-derives the per-core args from the live tensors (shared single-source helper);
+    // re-applying every core also covers work-core-set changes across a shared cache entry.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 }  // namespace ttnn::prim

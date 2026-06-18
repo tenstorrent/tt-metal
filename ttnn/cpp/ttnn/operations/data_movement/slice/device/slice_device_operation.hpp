@@ -15,8 +15,11 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -50,6 +53,19 @@ struct SliceDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
+
+    // Opts the (shared) Slice op into the descriptor fast-path: re-apply per-dispatch runtime args that
+    // are not covered by a Buffer*/CB binding. Only the row-major interleaved factory (SliceRmProgramFactory)
+    // bakes ADDRESS-DERIVED rt-args that no binding can patch (reader common arg 0 =
+    // start_addr + begins_bytes - misalignment; writer per-core arg 0 = raw output address), so those are
+    // re-derived from the live buffers here. Every other factory already fast-paths via Buffer* rt-arg
+    // bindings (rm_stride, tile, tile_tensor_args) or CB `.buffer` bindings (rm_sharded) and has no
+    // address-derived rt-arg, so this returns {} for them (the framework patches their bindings).
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& args,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 SliceDeviceOperation::tensor_return_value_t slice(

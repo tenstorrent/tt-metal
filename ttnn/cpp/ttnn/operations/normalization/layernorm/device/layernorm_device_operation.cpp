@@ -465,6 +465,18 @@ Tensor LayerNormDeviceOperation::create_output_tensors(
         operation_attributes.program_config);
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> LayerNormDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Both factories bind every per-dispatch tensor address (input/residual/stats/recip/output via
+    // CB `.buffer`, and gamma/beta via Buffer* rt-args). All remaining runtime args are
+    // shape/attr-derived and covered by the program hash, so nothing needs re-applying. Declaring
+    // this opts the op into the descriptor fast-path (no create_descriptor() rebuild on a cache hit).
+    return {};
+}
+
 Tensor layer_norm(
     const Tensor& input_tensor,
     float epsilon,

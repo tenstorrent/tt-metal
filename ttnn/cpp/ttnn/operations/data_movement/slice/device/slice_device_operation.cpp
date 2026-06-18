@@ -15,6 +15,8 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -303,6 +305,65 @@ SliceDeviceOperation::create_op_performance_model(
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> SliceDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+
+    // Only SliceRmProgramFactory bakes address-derived rt-args. Every other factory already fast-paths
+    // via Buffer*/CB bindings, so return {} and let the framework patch their bindings. Mirror exactly
+    // select_program_factory()'s SliceRmProgramFactory predicate (incl. width/block-sharded RM, which
+    // also routes here) — re-apply iff that factory is selected, return {} otherwise.
+    const auto& input = tensor_args.input;
+    if (args.use_tensor_args || input.layout() != Layout::ROW_MAJOR) {
+        return dynamic_args;  // tensor-args / tile
+    }
+    const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
+    const bool height_sharded_in_out_no_step =
+        input.is_sharded() &&
+        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+        args.output_mem_config.is_sharded() &&
+        args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step;
+    if (height_sharded_in_out_no_step || has_step) {
+        return dynamic_args;  // rm_sharded / rm_stride (all already bound)
+    }
+
+    // SliceRmProgramFactory bakes EVERY per-dispatch value into raw uint32 reader/writer rt-args (it
+    // registers no Buffer*/CB bindings): not only the buffer addresses (reader/writer arg 0) but also
+    // offset-derived values — the reader's per-core start stick id and misalignment, the writer's
+    // per-core cumulative stick offset — all computed from the live slice start. Re-applying only the
+    // address (as before) left those offset args frozen, so a program-cache hit by a slice with a
+    // DIFFERENT start (two starts that hash to the same cached program) kept the previous start's stick
+    // ids and read/wrote the wrong region (PCC garbage; e.g. ttnn::split's slice-based path). Since the
+    // framework patches nothing on its own here (no bindings), re-apply the COMPLETE per-core reader and
+    // writer arg vectors. They are re-derived from the live tensors via the SAME helper
+    // create_descriptor() uses, so this matches a full rebuild exactly. (#46506)
+    Tensor& output = tensor_return_value;
+    const auto per_core = ttnn::operations::data_movement::compute_slice_rm_per_core_args(args, input, output);
+
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    size_t total_args = 0;
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        total_args += per_core.reader_args[i].size() + per_core.writer_args[i].size();
+    }
+    dynamic_args.reserve(total_args);
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        const auto& core = per_core.cores[i];
+        const auto& reader_args = per_core.reader_args[i];
+        const auto& writer_args = per_core.writer_args[i];
+        for (uint32_t idx = 0; idx < reader_args.size(); ++idx) {
+            dynamic_args.push_back({kReaderKernelIdx, core, idx, reader_args[idx]});
+        }
+        for (uint32_t idx = 0; idx < writer_args.size(); ++idx) {
+            dynamic_args.push_back({kWriterKernelIdx, core, idx, writer_args[idx]});
+        }
+    }
+    return dynamic_args;
 }
 
 SliceDeviceOperation::tensor_return_value_t slice(

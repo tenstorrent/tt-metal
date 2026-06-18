@@ -143,23 +143,15 @@ ProgramDescriptor TanhBwProgramFactory::create_descriptor(
             TT_THROW("Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src0_buffer->address(),
-                src1_buffer->address(),
-                num_tiles_per_core,
-                num_tiles_written,
-                0,
-                0,
-                num_cores_y});
+        // Input addresses at args 0,1 as Buffer* for in-place cache-hit patching.
+        reader_desc.emplace_runtime_args(
+            core, {src0_buffer, src1_buffer, num_tiles_per_core, num_tiles_written, 0u, 0u, num_cores_y});
 
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core, 1});
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        // Output address at arg 0 as Buffer*.
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
 
         num_tiles_written += num_tiles_per_core;
     }

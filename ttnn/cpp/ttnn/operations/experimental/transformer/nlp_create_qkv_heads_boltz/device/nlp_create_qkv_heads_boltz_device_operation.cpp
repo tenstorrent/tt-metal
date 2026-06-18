@@ -5,6 +5,8 @@
 #include "nlp_create_qkv_heads_boltz_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
@@ -239,6 +241,45 @@ NlpCreateHeadsBoltzDeviceOperation::tensor_return_value_t NlpCreateHeadsBoltzDev
         create_device_tensor(std::get<1>(output_specs), input_tensor.device()),
         create_device_tensor(std::get<2>(output_specs), input_tensor.device()),
     };
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> NlpCreateHeadsBoltzDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::constants;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    // The Interleaved factory binds q/k/v input/output addresses as patchable Buffer* rt-args, so the
+    // framework re-patches them automatically. Only the Sharded factory bakes raw address scalars.
+    if (!input_tensor.is_sharded()) {
+        return dynamic_args;
+    }
+
+    // Single source of truth: the same helper Sharded::create_descriptor() uses derives every per-core
+    // reader/writer rt-arg vector (including the freshly-recomputed q/k/v base + start addresses, which
+    // are what change across dispatches). Re-apply only the address slots for every work core.
+    auto per_core = compute_sharded_per_core_args(operation_attributes, tensor_args, tensor_return_value);
+
+    // Sharded always uses (reader=kernel 0, writer=kernel 1); transpose_k_heads is forbidden for sharded,
+    // so no compute kernels precede them in ProgramDescriptor::kernels.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+
+    dynamic_args.reserve(per_core.cores.size() * per_core.addr_indices.size() * 2);
+    for (uint32_t i = 0; i < per_core.cores.size(); ++i) {
+        const auto& core = per_core.cores[i];
+        const auto& reader = per_core.reader_args[i];
+        const auto& writer = per_core.writer_args[i];
+        for (uint32_t idx : per_core.addr_indices) {
+            dynamic_args.push_back({kReaderKernelIdx, core, idx, reader[idx]});
+            dynamic_args.push_back({kWriterKernelIdx, core, idx, writer[idx]});
+        }
+    }
+
+    return dynamic_args;
 }
 
 NlpCreateHeadsBoltzDeviceOperation::program_factory_t NlpCreateHeadsBoltzDeviceOperation::select_program_factory(

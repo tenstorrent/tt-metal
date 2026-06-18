@@ -16,7 +16,11 @@
 #include "concat_device_operation_types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <optional>
+#include <vector>
 
 namespace ttnn::prim {
 
@@ -47,6 +51,17 @@ struct ConcatDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors);
+
+    // Opts the (shared) Concat op into the descriptor fast-path. Only ConcatS2IProgramFactory bakes a raw
+    // output address into a per-core runtime arg (writer arg 0) that no binding patches (its input addresses
+    // ARE CB `.buffer`-bound), so that address is re-applied here. Every other factory either fast-paths via
+    // Buffer* rt-arg bindings (ConcatProgramFactory, interleaved) or is fully CB `.buffer`-bound with only
+    // shape/offset-derived rt-args (s2s tiled / rm / multi), so this returns {} for them.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& args,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::prim

@@ -5,9 +5,16 @@
 #include "update_cache_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <algorithm>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+
 namespace ttnn::prim {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
@@ -161,6 +168,52 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> UpdateKVCacheOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Re-apply, on every cache hit, exactly the runtime args that derive from the hash-excluded
+    // attributes (batch_idx / update_idx / batch_offset) or from a raw baked tensor address. The
+    // per-core arg vectors come from the SAME helper the program factory's create_descriptor uses
+    // (single source of truth), and here we re-emit only the address/attribute-derived slots that
+    // the helper flags as dynamic. Kernels: reader = 0, writer = 1; compute kernels carry no
+    // dynamic args.
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+
+    if (args.op_type == UpdateCacheOpType::FILL) {
+        const auto per_core = compute_fill_cache_per_core_args(args, tensor_args);
+        dynamic_args.reserve(
+            per_core.cores.size() * (per_core.reader_dynamic_indices.size() + per_core.writer_dynamic_indices.size()));
+        for (uint32_t i = 0; i < per_core.cores.size(); ++i) {
+            const CoreCoord& core = per_core.cores[i];
+            for (uint32_t idx : per_core.reader_dynamic_indices) {
+                dynamic_args.push_back({kReaderKernelIdx, core, idx, per_core.reader_args[i][idx]});
+            }
+            for (uint32_t idx : per_core.writer_dynamic_indices) {
+                dynamic_args.push_back({kWriterKernelIdx, core, idx, per_core.writer_args[i][idx]});
+            }
+        }
+        return dynamic_args;
+    }
+
+    const auto per_core = compute_update_cache_per_core_args(args, tensor_args);
+    dynamic_args.reserve(
+        per_core.cores.size() * (per_core.reader_dynamic_indices.size() + per_core.writer_dynamic_indices.size()));
+    for (uint32_t i = 0; i < per_core.cores.size(); ++i) {
+        const CoreCoord& core = per_core.cores[i];
+        for (uint32_t idx : per_core.reader_dynamic_indices) {
+            dynamic_args.push_back({kReaderKernelIdx, core, idx, per_core.reader_args[i][idx]});
+        }
+        for (uint32_t idx : per_core.writer_dynamic_indices) {
+            dynamic_args.push_back({kWriterKernelIdx, core, idx, per_core.writer_args[i][idx]});
+        }
+    }
+    return dynamic_args;
 }
 
 Tensor update_cache(

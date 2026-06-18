@@ -121,11 +121,15 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    auto a_addr = a.buffer()->address();
-    auto stats_addr = stats.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto dst_addr = output.buffer()->address();
+    // Buffer* handles for the runtime-arg slots that hold tensor base addresses.
+    // Passing these through emplace_runtime_args() records BufferBindings so the
+    // framework patches the addresses in place on cache hits (no create_descriptor()
+    // re-run).  Absent optional gamma/beta resolve to nullptr -> arg stays 0u, unbound.
+    Buffer* a_buf = a.buffer();
+    Buffer* stats_buf = stats.buffer();
+    Buffer* gamma_buf = gamma.has_value() ? gamma.value().buffer() : nullptr;
+    Buffer* beta_buf = beta.has_value() ? beta.value().buffer() : nullptr;
+    Buffer* dst_buf = output.buffer();
 
     uint32_t cb_length = Wt;
 
@@ -325,9 +329,18 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
-    // Build runtime args per core
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build ProgramDescriptor
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor program_descriptor;
+
+    // Reader/writer kernel descriptors declared before the runtime-arg loop so that
+    // emplace_runtime_args() can record BufferBindings (for the tensor-address slots)
+    // alongside the per-core scalar args.
+    KernelDescriptor reader_kernel_desc;
+    KernelDescriptor writer_kernel_desc;
+
+    // Compute kernel carries no buffer addresses, so its args stay plain scalars.
     KernelDescriptor::RuntimeArgs compute_runtime_args;
 
     if (use_2d_kernel) {
@@ -344,23 +357,23 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
                     core.x,
                     tile_offset,
                     tiles_per_core_y);
-                reader_runtime_args.emplace_back(
+                // Slots 0 (a), 7 (gamma), 8 (beta), 9 (stats) are tensor base addresses.
+                reader_kernel_desc.emplace_runtime_args(
                     core,
-                    std::vector<uint32_t>{
-                        a_addr,
-                        tiles_per_core_x,
-                        tiles_per_core_y,
-                        tile_offset,
-                        stats_offset,
-                        packed_winv_value,
-                        eps,
-                        gamma_dram_addr,
-                        beta_dram_addr,
-                        stats_addr,
-                        y * tiles_per_core_y});
+                    {a_buf,
+                     tiles_per_core_x,
+                     tiles_per_core_y,
+                     tile_offset,
+                     stats_offset,
+                     packed_winv_value,
+                     eps,
+                     gamma_buf,
+                     beta_buf,
+                     stats_buf,
+                     y * tiles_per_core_y});
                 compute_runtime_args.emplace_back(core, std::vector<uint32_t>{tiles_per_core_x});
-                writer_runtime_args.emplace_back(
-                    core, std::vector<uint32_t>{dst_addr, tiles_per_core_x * tiles_per_core_y, tile_offset});
+                writer_kernel_desc.emplace_runtime_args(
+                    core, {dst_buf, tiles_per_core_x * tiles_per_core_y, tile_offset});
             }
         }
     } else {
@@ -381,34 +394,27 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
             uint32_t stats_offset = curr_row * stats_tiles_cols;
             uint32_t y_offset = 0;
 
-            reader_runtime_args.emplace_back(
+            // Slots 0 (a), 7 (gamma), 8 (beta), 9 (stats) are tensor base addresses.
+            reader_kernel_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    a_addr,
-                    num_tile_rows_per_core,
-                    Wt,
-                    tile_offset,
-                    stats_offset,
-                    packed_winv_value,
-                    eps,
-                    gamma_dram_addr,
-                    beta_dram_addr,
-                    stats_addr,
-                    y_offset});
+                {a_buf,
+                 num_tile_rows_per_core,
+                 Wt,
+                 tile_offset,
+                 stats_offset,
+                 packed_winv_value,
+                 eps,
+                 gamma_buf,
+                 beta_buf,
+                 stats_buf,
+                 y_offset});
             compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
-            writer_runtime_args.emplace_back(
-                core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core * Wt, tile_offset});
+            writer_kernel_desc.emplace_runtime_args(core, {dst_buf, num_tile_rows_per_core * Wt, tile_offset});
             curr_row += num_tile_rows_per_core;
         }
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build ProgramDescriptor
-    ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor program_descriptor;
-
     // Reader kernel
-    KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp";
@@ -416,19 +422,16 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherWelfordProgramFactory::cre
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
     // Writer kernel
-    KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked.cpp";
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 

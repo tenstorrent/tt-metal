@@ -302,6 +302,19 @@ TensorSpec GroupNormDeviceOperation::compute_output_specs(
         args.program_config);
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> GroupNormDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Shared by all three groupnorm factories (sharded / no_mcast / mcast). Every address-derived
+    // runtime arg is patched by the framework via CB `.buffer` bindings or Buffer* runtime-arg
+    // bindings; all other runtime args are hash- or shape/grid-derived and therefore stable across
+    // cache hits. Nothing needs manual re-application, so return {} for every factory. The empty
+    // declaration is what opts the op into the cache-hit fast path.
+    return {};
+}
+
 Tensor GroupNormDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;

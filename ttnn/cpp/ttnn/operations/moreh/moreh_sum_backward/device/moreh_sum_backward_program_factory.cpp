@@ -255,6 +255,9 @@ ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
         reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
 
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+        // output_grad address is baked at reader arg index 0; record a BufferBinding so the
+        // fast cache-hit path patches it (output_grad is an input tensor_arg).
+        reader_desc.buffer_bindings.push_back({core, 0u, output_grad.buffer()});
 
         writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});
 

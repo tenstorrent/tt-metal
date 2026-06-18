@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
 
@@ -106,6 +107,37 @@ MoveDeviceOperation::create_op_performance_model(
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> MoveDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    // Only the sharded in-place move bakes address-derived reader args. The other strategies bind
+    // tensor addresses as patchable Buffer* rt-args (or via Copy), so nothing needs re-applying.
+    if (operation_attributes.move_op_parallelization_strategy != MoveOpParallelizationStrategy::MULTI_CORE_SHARDED) {
+        return dynamic_args;
+    }
+    const Tensor& input = tensor_args.input_tensor;
+    Tensor& output = tensor_return_value;
+    // Same derivation the factory uses at build time (single source of truth), recomputed from the
+    // CURRENT buffers since their addresses change across dispatches.
+    const auto reader_args = compute_move_sharded_reader_args(input, output);
+
+    // Reader is kernel 0; its args are [0]=total_size_bytes (stable, shape-derived), [1]=num_chunks,
+    // [2]=move_chunk_size_bytes, [3]=remainder_chunk_size_bytes. Re-apply the three address-derived
+    // slots on every cache hit; the src/dst CB `.buffer` bindings are patched by the framework.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    const auto cores = tt::tt_metal::corerange_to_cores(input.shard_spec().value().grid, std::nullopt, true);
+    dynamic_args.reserve(cores.size() * 3);
+    for (const auto& core : cores) {
+        dynamic_args.push_back({kReaderKernelIdx, core, 1, reader_args.num_chunks});
+        dynamic_args.push_back({kReaderKernelIdx, core, 2, reader_args.move_chunk_size_bytes});
+        dynamic_args.push_back({kReaderKernelIdx, core, 3, reader_args.remainder_chunk_size_bytes});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::prim

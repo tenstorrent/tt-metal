@@ -213,8 +213,12 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             };
 
             writer_desc.runtime_args.emplace_back(core, runtime_args);
+            // Bind the input buffer base address (rt_arg[0]) so the descriptor takes the fast
+            // cache-hit path with the address re-patched each dispatch.
+            writer_desc.buffer_bindings.push_back({core, 0, input_tensor.buffer()});
             if (enable_split_reader) {
                 writer1_desc.runtime_args.emplace_back(core, runtime_args);
+                writer1_desc.buffer_bindings.push_back({core, 0, input_tensor.buffer()});
             }
         }
     } else {
@@ -234,10 +238,16 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             };
 
             writer_desc.runtime_args.emplace_back(core, runtime_args);
+            // Bind the input and grid buffer base addresses (rt_arg[0], rt_arg[1]) so the descriptor
+            // takes the fast cache-hit path with the addresses re-patched each dispatch.
+            writer_desc.buffer_bindings.push_back({core, 0, input_tensor.buffer()});
+            writer_desc.buffer_bindings.push_back({core, 1, grid_tensor.buffer()});
             if (enable_split_reader) {
                 // For split reader in nearest mode, second writer needs same runtime args
                 // The kernel logic handles the split internally via reader_id
                 writer1_desc.runtime_args.emplace_back(core, runtime_args);
+                writer1_desc.buffer_bindings.push_back({core, 0, input_tensor.buffer()});
+                writer1_desc.buffer_bindings.push_back({core, 1, grid_tensor.buffer()});
             }
 
             grid_processed += grid_sticks;

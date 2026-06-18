@@ -5,6 +5,7 @@
 #include "concat_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "concat_program_factory.hpp"
+#include "concat_s2i_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -233,6 +234,39 @@ ConcatDeviceOperation::create_op_performance_model(
     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
         input_tensors, output_tensors, ideal_dev_clock_cycles);
     return result;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> ConcatDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+
+    // Mirror select_program_factory: only the sharded-input -> interleaved-output factory
+    // (ConcatS2IProgramFactory) bakes a raw output address into a per-core rt-arg. Its input addresses are
+    // CB `.buffer`-bound; every other factory is Buffer*-bound or fully CB-bound with stable rt-args, so
+    // return {} for them and let the framework patch their bindings.
+    const auto& input_tensors = tensor_args.input_tensors;
+    if (input_tensors.empty() || !input_tensors[0].is_sharded() || args.output_mem_config.is_sharded()) {
+        return dynamic_args;
+    }
+
+    // ConcatS2IProgramFactory: re-apply the writer's raw output address on every core, recomputed from the
+    // live output buffer. Derive cores and per-core args from the SAME helper create_descriptor() uses
+    // (single source of truth); emit the live output address into each core's writer address slot(s).
+    Tensor& output = tensor_return_value;
+    const uint32_t output_addr = output.buffer()->address();
+    const ConcatS2IPerCoreArgs per_core = compute_concat_s2i_per_core_args(tensor_args, output);
+
+    constexpr uint32_t kWriterKernelIdx = 1;
+    dynamic_args.reserve(per_core.cores.size() * per_core.writer_addr_indices.size());
+    for (const auto& core : per_core.cores) {
+        for (const uint32_t addr_idx : per_core.writer_addr_indices) {
+            dynamic_args.push_back({kWriterKernelIdx, core, addr_idx, output_addr});
+        }
+    }
+    return dynamic_args;
 }
 }  // namespace ttnn::prim
 

@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -33,6 +34,13 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::device_operation {
+
+// Read ONCE at startup, not per dispatch. Off by default (zero behavioral change); CI sets the env
+// to make a descriptor slow-path rebuild on a cache hit fail loudly (see the TT_FATAL below). A
+// namespace-scope inline variable avoids the function-local-static init guard that would otherwise
+// run on every slow-path dispatch.
+inline const bool g_forbid_descriptor_rebuild_on_cache_hit =
+    std::getenv("TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT") != nullptr;
 
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
@@ -579,23 +587,61 @@ public:
                     apply_dynamic_runtime_args_if_declared(
                         program, attrs, tensor_args, tensor_return_value, coordinate_range);
                 } else {
-                    // ProgramDescriptor variant — simple per-coord factory.  Fast-path only
-                    // when the factory declared rt-arg buffer bindings via
-                    // emplace_runtime_args().  Without those, the factory may be
-                    // mixing `.buffer = ...` CBs with OLD-style raw uint32 rt-args
-                    // that are not registered as bindings; patching CBs alone
-                    // would leave those rt-args pointing at stale addresses.  Fall
-                    // through to the slow-path rebuild instead.
-                    if (!sv.resolved_bindings.rt_args.empty()) {
+                    // ProgramDescriptor variant — simple per-coord factory.  Fast-path (no
+                    // create_descriptor() rebuild) when EITHER:
+                    //   (a) the factory declared Buffer* rt-arg bindings via emplace_runtime_args() —
+                    //       the framework patches those base addresses in place; OR
+                    //   (b) the op OPTS IN by declaring get_dynamic_runtime_args() — by doing so the
+                    //       author contracts to re-apply *every* per-dispatch runtime-arg value
+                    //       (address-derived args, frozen-by-custom-hash scalars) on each hit. The
+                    //       framework additionally patches any registered CB (`.buffer=`) bindings.
+                    //       This covers CB-bound / address-derived ops (sharded move, pool, sliced or
+                    //       sharded norms, kv-cache) that have no patchable Buffer* rt-arg yet must
+                    //       still avoid the per-dispatch rebuild.
+                    //
+                    // With neither, there is nothing safe to patch — a `.buffer=` CB mixed with
+                    // OLD-style raw uint32 rt-args would leave those rt-args stale — so we rebuild,
+                    // and (env-gated) TT_FATAL to catch the perf regression. (#46506)
+                    // Compute the op's dynamic runtime args (empty if it doesn't declare the hook). An op
+                    // returns its per-dispatch args when it can fast-path; it returns empty to request a
+                    // create_descriptor rebuild for configs it can't safely re-apply (shape-frozen CBs /
+                    // compile-time args, e.g. sharded eltwise).
+                    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+                    if constexpr (requires {
+                                      DeviceOperation::get_dynamic_runtime_args(
+                                          attrs, tensor_args, tensor_return_value, std::optional<ttnn::MeshCoordinate>{});
+                                  }) {
+                        const std::optional<ttnn::MeshCoordinate> coord(coordinate_range.start_coord());
+                        dynamic_args =
+                            DeviceOperation::get_dynamic_runtime_args(attrs, tensor_args, tensor_return_value, coord);
+                    }
+                    if (!sv.resolved_bindings.rt_args.empty() || !dynamic_args.empty()) {
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                        // Patches Buffer* rt-arg bindings (if any) AND CB bindings from the current dispatch.
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
-                        // Fast path doesn't rebuild the descriptor, so re-apply any declared dynamic
-                        // non-Buffer runtime args (the slow-path else-branch below rebuilds
-                        // create_descriptor() and so already re-derives them).
-                        apply_dynamic_runtime_args_if_declared(
-                            program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                        tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
                     } else {
+                        // SLOW PATH: no Buffer* rt-arg bindings and no get_dynamic_runtime_args opt-in,
+                        // so there is nothing to patch in place and create_descriptor() must be re-run on
+                        // EVERY cache hit — a per-dispatch host-perf regression that is invisible to
+                        // trace (which captures the program once). The cure is to pass tensor base
+                        // addresses through emplace_runtime_args(core, {buffer, ...}) (raw-address ops),
+                        // or declare get_dynamic_runtime_args() (address-derived / CB-bound ops).
+                        //
+                        // This can't be detected at compile time, so enforcement is a runtime guard: off
+                        // by default (zero behavioral change), flipped on in CI via
+                        // TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT to fail loudly and name the
+                        // offending op. Mirrors set_program_cache_misses_allowed.
+                        TT_FATAL(
+                            !g_forbid_descriptor_rebuild_on_cache_hit,
+                            "DeviceOperation '{}' fell to the descriptor slow-path rebuild on a "
+                            "program-cache hit: it declared neither Buffer* runtime-arg bindings nor "
+                            "get_dynamic_runtime_args(), so create_descriptor() is re-run every dispatch "
+                            "(a per-dispatch host-perf regression, invisible to trace). Register tensor "
+                            "base addresses via emplace_runtime_args(core, {{buffer, ...}}), or declare "
+                            "get_dynamic_runtime_args() for address-derived / CB-bound ops.",
+                            ttsl::get_type_name<DeviceOperation>());
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
                         const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);
                         auto desc = invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);

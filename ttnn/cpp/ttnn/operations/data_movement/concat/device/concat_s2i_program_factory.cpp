@@ -13,6 +13,52 @@
 
 namespace ttnn::prim {
 
+ConcatS2IPerCoreArgs compute_concat_s2i_per_core_args(const ConcatInputs& tensor_args, const Tensor& output) {
+    using namespace tt::tt_metal;
+
+    const std::vector<Tensor>& input_tensors = tensor_args.input_tensors;
+    const uint32_t num_input_tensors = input_tensors.size();
+    const uint32_t num_output_rows = output.padded_shape()[-1];
+
+    const ShardSpec& input_shard_spec = input_tensors[0].shard_spec().value();
+    const CoreRangeSet all_cores = input_shard_spec.grid;
+    const bool row_wise = input_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+
+    ConcatS2IPerCoreArgs result;
+    result.cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
+    // Writer arg 0 is the (raw) output address slot.
+    result.writer_addr_indices = {0u};
+
+    const auto& input_cores = all_cores;
+    const uint32_t num_output_rows_per_core = tt::div_up(num_output_rows, input_cores.num_cores());
+    const uint32_t output_addr = output.buffer()->address();
+
+    result.reader_args.reserve(result.cores.size());
+    result.writer_args.reserve(result.cores.size());
+    uint32_t core_id = 0;
+    for (const CoreCoord& core : result.cores) {
+        const uint32_t curr_num_output_rows = (input_cores.contains(core)) ? num_output_rows_per_core : 0;
+
+        std::vector<uint32_t> reader_runtime_args;
+        reader_runtime_args.reserve(num_input_tensors * 2);
+        std::vector<uint32_t> writer_runtime_args = {
+            output_addr,
+            core_id,
+            curr_num_output_rows,
+            num_input_tensors * input_shard_spec.shape[0],
+            input_shard_spec.shape[0]};
+        for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+            reader_runtime_args.push_back(input_id);
+            reader_runtime_args.push_back(input_shard_spec.shape[0]);
+            writer_runtime_args.push_back(input_id);
+        }
+        result.reader_args.push_back(std::move(reader_runtime_args));
+        result.writer_args.push_back(std::move(writer_runtime_args));
+        core_id++;
+    }
+    return result;
+}
+
 tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
     const ConcatParams& /*operation_attributes*/, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
@@ -22,7 +68,6 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
     Tensor& output = tensor_return_value;
     ProgramDescriptor desc;
 
-    const uint32_t num_output_rows = output.padded_shape()[-1];
     const uint32_t num_input_tensors = input_tensors.size();
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const CoreRangeSet all_cores = input_tensors[0].shard_spec().value().grid;
@@ -66,32 +111,12 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    const bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
-    const auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
-    const auto input_cores = input_tensors[0].shard_spec().value().grid;
-    const uint32_t num_output_rows_per_core = tt::div_up(num_output_rows, input_cores.num_cores());
-
-    uint32_t core_id = 0;
-    for (const CoreCoord& core : cores) {
-        const ShardSpec& input_shard_spec = input_tensors[0].shard_spec().value();
-        uint32_t curr_num_output_rows = (input_cores.contains(core)) ? num_output_rows_per_core : 0;
-
-        std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(num_input_tensors * 2);
-        std::vector<uint32_t> writer_runtime_args = {
-            output.buffer()->address(),
-            core_id,
-            curr_num_output_rows,
-            num_input_tensors * input_shard_spec.shape[0],
-            input_shard_spec.shape[0]};
-        for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-            reader_runtime_args.push_back(input_id);
-            reader_runtime_args.push_back(input_shard_spec.shape[0]);
-            writer_runtime_args.push_back(input_id);
-        }
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
-        core_id++;
+    // Single source of truth: derive the per-core core ordering and reader/writer args the same way
+    // get_dynamic_runtime_args() does on a cache hit.
+    ConcatS2IPerCoreArgs per_core = compute_concat_s2i_per_core_args(tensor_args, output);
+    for (uint32_t i = 0; i < per_core.cores.size(); ++i) {
+        reader_desc.runtime_args.emplace_back(per_core.cores[i], std::move(per_core.reader_args[i]));
+        writer_desc.runtime_args.emplace_back(per_core.cores[i], std::move(per_core.writer_args[i]));
     }
 
     desc.kernels.push_back(std::move(reader_desc));
