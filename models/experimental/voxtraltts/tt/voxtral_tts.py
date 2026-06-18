@@ -48,6 +48,7 @@ from models.experimental.voxtraltts.utils.mesh import (
     voxtral_to_torch_replicated,
     voxtral_tp_shard_dim3_mapper,
 )
+from models.experimental.voxtraltts.utils.debug_trace import VoxtralTTSDebugTrace
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
