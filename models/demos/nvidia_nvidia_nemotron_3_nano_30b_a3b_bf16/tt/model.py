@@ -28,6 +28,7 @@ from .layer_norm import layer_norm_forward
 from .lm_head import lm_head_forward, lm_head_forward_device
 from .mamba2_layer import mamba2_layer_forward_dispatch
 from .moe_experts import moe_experts_forward
+from .moe_experts_prefill import moe_experts_prefill_forward
 from .moe_gate import moe_gate_forward, moe_gate_forward_cpu
 from .shared_expert import shared_expert_forward
 from .tp import _rep_keyed
@@ -247,8 +248,14 @@ def _moe_layer_forward(
     # Lazily build and cache pre-stacked expert weight tensors on device.
     up_tt, down_tt = _get_stacked_expert_weights(mesh_device, layer_idx, wc)
 
-    # Routed experts via sparse_matmul (returns [B*S, 2688] on device).
-    expert_out_tt = moe_experts_forward(mesh_device, flat_tt, routing_weights_tt, up_tt, down_tt)
+    if S > 1:
+        # Bulk prefill: gpt_oss-style dense sparse_matmul over all S tokens.
+        # flat_tt is a reshape view of normed_tt — do not deallocate separately.
+        expert_out_reshaped = moe_experts_prefill_forward(mesh_device, normed_tt, routing_weights_tt, up_tt, down_tt)
+    else:
+        # Decode (S=1): sparse_matmul with nnz=6 active experts only.
+        expert_out_tt = moe_experts_forward(mesh_device, flat_tt, routing_weights_tt, up_tt, down_tt)
+        expert_out_reshaped = ttnn.reshape(expert_out_tt, [B, S, H])
 
     # Shared expert
     shared_out_tt = shared_expert_forward(
@@ -258,7 +265,6 @@ def _moe_layer_forward(
         w_down=wc[f"{p}.mixer.shared_experts.down_proj.weight"],
     )
 
-    expert_out_reshaped = ttnn.reshape(expert_out_tt, [B, S, H])
     moe_out_tt = ttnn.add(expert_out_reshaped, shared_out_tt)
     return ttnn.add(residual, moe_out_tt)
 
@@ -328,53 +334,7 @@ def _layer_stack_forward(
                 hBC_out.deallocate(True)
             m_idx += 1
         elif layer_type == "E":
-            _S = hidden_states.shape[1]
-            if _S > 1:
-                # sparse_matmul kernel only supports tokens=1 (m=1 program config).
-                # For chunked prefill (S>1): process each token independently and concat.
-                # Mamba2 and dense-attention layers still benefit from bulk processing.
-                _B = hidden_states.shape[0]
-                _H = hidden_states.shape[2]
-                _tok_outs = []
-                _t0_e = _time.perf_counter()
-                for _t in range(_S):
-                    _ts = _time.perf_counter()
-                    _h_t = ttnn.slice(hidden_states, [0, _t, 0], [_B, _t + 1, _H])
-                    _t_slice = _time.perf_counter()
-                    _tok_outs.append(_moe_layer_forward(mesh_device, _h_t, li, wc, cpu_gate=cpu_gate))
-                    _t_moe = _time.perf_counter()
-                    if _t < 3 or _t == _S - 1:
-                        print(
-                            f"  [E-layer li={li} t={_t}] slice={(_t_slice-_ts)*1000:.1f}ms moe={(_t_moe-_t_slice)*1000:.1f}ms total={(_t_moe-_ts)*1000:.1f}ms",
-                            flush=True,
-                        )
-                _t_concat = _time.perf_counter()
-                # Hierarchical concat: split into ≤128-token chunks, concat each chunk
-                # (same as ISL=128 which is proven safe), then concat the tile-aligned
-                # chunk results.  Direct 256+-token TILE concat triggers
-                # UntilizeWithUnpaddingMultiCoreBlockInterleaved which fails for S ≥ 256
-                # because the block can't fit in L1.  Chunk results ([B,128,H]) are tile-
-                # aligned (no padding), so the second-level concat avoids UntilizeWithUnpadding.
-                _CHUNK = 128
-                if len(_tok_outs) <= _CHUNK:
-                    hidden_states = ttnn.concat(_tok_outs, dim=1)
-                else:
-                    _chunks = [
-                        ttnn.concat(_tok_outs[_i : _i + _CHUNK], dim=1) for _i in range(0, len(_tok_outs), _CHUNK)
-                    ]
-                    hidden_states = ttnn.concat(_chunks, dim=1)
-                print(
-                    f"  [E-layer li={li}] loop={(_t_concat-_t0_e)*1000:.0f}ms concat={(_time.perf_counter()-_t_concat)*1000:.0f}ms",
-                    flush=True,
-                )
-            else:
-                hidden_states = _moe_layer_forward(
-                    mesh_device,
-                    hidden_states,
-                    li,
-                    wc,
-                    cpu_gate=cpu_gate,
-                )
+            hidden_states = _moe_layer_forward(mesh_device, hidden_states, li, wc, cpu_gate=cpu_gate)
         else:
             kv_cache = decoder_state.kv_caches[d_idx] if decoder_state else None
             page_table = decoder_state.page_tables[d_idx] if decoder_state else None
