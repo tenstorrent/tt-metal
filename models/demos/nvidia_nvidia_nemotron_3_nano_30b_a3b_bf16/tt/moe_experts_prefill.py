@@ -2,16 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """MoEExperts bulk prefill — TP=4 on QB 4-chip Blackhole.
 
-Follows gpt_oss/tt/experts/prefill.py _process_prefill_chunk pattern:
+Follows gpt_oss/tt/experts/prefill.py _process_prefill_chunk pattern, extended
+with an outer sequence chunk loop for long-context (S > S_OUTER_CHUNK):
 
-1. Reshape [1, S, H] → [1, G, 32, H]  (G = S // 32 tile groups)
-2. Up: all-ones sparsity [1,1,G,128] → dense sparse_matmul, nnz=128*G
-3. transpose(1,3) + reshape → [1, 128, S, I];  relu²
-4. Routing weights: [1,1,S,128] → [1,128,S,1] via permute
-5. Down (chunked, S_CHUNK=128): sparse_matmul is_input_a_sparse=True,
-   sparsity=[1,1,1,128] all-ones, nnz=128;  reshape → [1,128,S_chunk,H];
-   mul routing weights;  fast_reduce_nc(dims=[1]) → [1,1,S_chunk,H];  concat
-6. all_reduce across TP devices;  reshape → [1, S, H]
+Outer loop (S_OUTER_CHUNK = 4096 tokens per iteration):
+  bounds `act [1, 128, S_outer, I]` at 484 MB/device — safe with 14 GB expert weights.
+
+Per outer chunk:
+  1. Reshape [1, S_outer, H] → [1, G, 32, H]  (G = S_outer // 32)
+  2. Up: all-ones sparsity [1,1,G,128] → dense sparse_matmul, nnz=128*G
+  3. transpose(1,3) + reshape → [1, 128, S_outer, I];  relu²
+  4. Routing weights: [1,1,S_outer,128] → [1,128,S_outer,1] via permute
+  5. Down (S_CHUNK=128 inner chunks): is_input_a_sparse=True, sparsity=[1,1,1,128],
+     nnz=128 → reshape [1,128,chunk,H] → mul routing → fast_reduce_nc → concat
+  6. Outer concat → [1, 1, S, H] partial (all outer chunks, no all_reduce yet)
+
+Single all_reduce at the end (one CCL op regardless of sequence length).
 """
 
 import math
@@ -31,6 +37,14 @@ _UP_CORES = (3, 5)
 _DOWN_CORES = (7, 6)
 _UP_IN0_BLOCK_W = 7
 _DOWN_IN0_BLOCK_W = 3
+
+# Outer sequence chunk: max tokens processed through up→act→down in one shot.
+# act [1, 128, S_OUTER, I] = 128 * 4096 * 464 * 2 = 484 MB/device at S_OUTER=4096.
+# Must be a multiple of TILE=32 (for the UP reshape) and ≥ S_CHUNK=128 (DOWN inner).
+S_OUTER_CHUNK = 4096
+
+# Inner DOWN chunk (bounds per_core_M = S_CHUNK//32 = 4).
+S_CHUNK = 128
 
 # Sparsity tensors cached per (G, id(mesh)).  All-ones = every expert active.
 # ROW_MAJOR layout required by sparse_matmul.
@@ -111,41 +125,23 @@ def _get_down_cfg(chunk_S: int, local_inter: int) -> ttnn.MatmulMultiCoreReuseMu
     return _DOWN_CFG_CACHE[key]
 
 
-def moe_experts_prefill_forward(
+def _moe_experts_bulk_one_outer_chunk(
     mesh_device: MeshDevice,
-    hidden_states: ttnn.Tensor,  # [1, S, 2688] bf16 on device — S must be divisible by 32
-    routing_weights: ttnn.Tensor,  # [1, 1, S, 128] bf16 on device — dense routing mask
-    up_weights_tt: ttnn.Tensor,  # [1, 128, 2688, 464] bfloat16, col-sharded
-    down_weights_tt: ttnn.Tensor,  # [1, 128, 464, 2688] bfloat16, col-sharded
+    h_chunk: ttnn.Tensor,  # [1, S_outer, H] — S_outer divisible by 32; may be a view
+    rw_chunk: ttnn.Tensor,  # [1, 1, S_outer, 128] — gate output for this chunk
+    up_weights_tt: ttnn.Tensor,
+    down_weights_tt: ttnn.Tensor,
 ) -> ttnn.Tensor:
-    """Bulk prefill MoE routed experts following gpt_oss experts/prefill.py.
-
-    Dense UP sparse_matmul (all 128 experts active per tile group), relu²,
-    chunked DOWN sparse_matmul, routing-weight scaling, fast_reduce_nc,
-    all_reduce for TP.
-
-    Returns [1, S, 2688] bfloat16 on device (replicated).
-    """
-    S = hidden_states.shape[1]
-    local_inter = up_weights_tt.shape[-1]  # 464 at TP=4
-    G = S // TILE
+    """Process one outer sequence chunk.  Returns [1, 1, S_outer, H] partial (before all_reduce)."""
+    S_outer = h_chunk.shape[1]
+    local_inter = up_weights_tt.shape[-1]
+    G = S_outer // TILE
     output_tile = ttnn.Tile([32, 32])
 
-    # --- Up projection ---
-    # [1, S, H] → [1, G, 32, H]: group tokens into 32-row tile batches
-    # reshape returns a VIEW of hidden_states — do not deallocate (caller still needs it)
-    h4d = ttnn.reshape(hidden_states, [1, G, TILE, HIDDEN_SIZE])
-
-    # All-ones sparsity: every expert active for every tile group → dense matmul
+    # UP: [1, S_outer, H] → [1, G, 32, H] (reshape is a view — do not deallocate h_chunk)
+    h4d = ttnn.reshape(h_chunk, [1, G, TILE, HIDDEN_SIZE])
     sparsity_up = _get_up_sparsity(G, mesh_device)
-    up_cfg = _mm_cfg(
-        *_UP_CORES,
-        m=TILE,
-        n=local_inter,
-        k=HIDDEN_SIZE,
-        in0_block_w=_UP_IN0_BLOCK_W,
-    )
-    # [1, G, 32, H] × [1, 128, H, I] → output reshaped below
+    up_cfg = _mm_cfg(*_UP_CORES, m=TILE, n=local_inter, k=HIDDEN_SIZE, in0_block_w=_UP_IN0_BLOCK_W)
     up = ttnn.sparse_matmul(
         h4d,
         up_weights_tt,
@@ -156,23 +152,19 @@ def moe_experts_prefill_forward(
         program_config=up_cfg,
         dtype=ttnn.bfloat16,
     )
-    # h4d is a reshape view of hidden_states; caller still needs hidden_states for shared expert
+    # h4d is a reshape view of h_chunk — not deallocated here
 
-    # Reorder from sparse_matmul layout → [1, 128, S, I]
-    # (gpt_oss: transpose(1,3) then reshape — same raw layout)
+    # Reorder → [1, 128, S_outer, I] then relu²
     up = ttnn.transpose(up, 1, 3)
-    up = ttnn.reshape(up, [1, N_EXPERTS, S, local_inter])
-
-    act = ttnn.pow(ttnn.relu(up), 2)  # relu² activation, [1, 128, S, I]
+    up = ttnn.reshape(up, [1, N_EXPERTS, S_outer, local_inter])
+    act = ttnn.pow(ttnn.relu(up), 2)
     up.deallocate(True)
 
-    # Routing weights: [1, 1, S, 128] → [1, 128, S, 1] for per-expert broadcast scaling
-    rw = ttnn.permute(routing_weights, [0, 3, 2, 1])
+    # Routing weights: [1, 1, S_outer, 128] → [1, 128, S_outer, 1]
+    rw = ttnn.permute(rw_chunk, [0, 3, 2, 1])
 
-    # --- Down projection (chunked over S to bound per_core_M) ---
-    # S_CHUNK=128 → per_core_M=4; same chunk size for all ISLs (128, 256, 512, 1024)
-    S_CHUNK = 128
-    if S > S_CHUNK:
+    # DOWN inner chunks (S_CHUNK=128 → per_core_M=4)
+    if S_outer > S_CHUNK:
         act_chunks = ttnn.split(act, S_CHUNK, dim=2)
         act.deallocate(True)
         rw_chunks = ttnn.split(rw, S_CHUNK, dim=2)
@@ -181,39 +173,27 @@ def moe_experts_prefill_forward(
         act_chunks = [act]
         rw_chunks = [rw]
 
-    # All-ones down sparsity: all 128 expert input blocks are active
     sparsity_down = _get_down_sparsity(mesh_device)
-
     acc = None
-    for act_chunk, rw_chunk in zip(act_chunks, rw_chunks):
-        chunk_S = act_chunk.shape[2]
-        down_cfg = _get_down_cfg(chunk_S, local_inter)
-
-        # [1, 128, chunk_S, I] × [1, 128, I, H] — sparse over expert dim
+    for act_c, rw_c in zip(act_chunks, rw_chunks):
+        c_S = act_c.shape[2]
         down = ttnn.sparse_matmul(
-            act_chunk,
+            act_c,
             down_weights_tt,
             sparsity=sparsity_down,
             nnz=N_EXPERTS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
-            program_config=down_cfg,
+            program_config=_get_down_cfg(c_S, local_inter),
             is_input_a_sparse=True,
             dtype=ttnn.bfloat16,
         )
-        act_chunk.deallocate(True)
-
-        # Reshape sparse_matmul output → [1, 128, chunk_S, H]
-        down = ttnn.reshape(down, [1, N_EXPERTS, chunk_S, HIDDEN_SIZE])
-
-        # Scale by routing weights and zero out inactive experts
-        down = ttnn.mul(down, rw_chunk, output_tensor=down)
-        rw_chunk.deallocate(True)
-
-        # Sum over expert dim: [1, 128, chunk_S, H] → [1, 1, chunk_S, H]
+        act_c.deallocate(True)
+        down = ttnn.reshape(down, [1, N_EXPERTS, c_S, HIDDEN_SIZE])
+        down = ttnn.mul(down, rw_c, output_tensor=down)
+        rw_c.deallocate(True)
         chunk_out = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(down, dims=[1]))
         down.deallocate(True)
-
         if acc is None:
             acc = chunk_out
         else:
@@ -222,7 +202,51 @@ def moe_experts_prefill_forward(
             chunk_out.deallocate(True)
             acc = new_acc
 
-    # TP all-reduce: sum partial intermediate-column results across 4 devices
-    acc = all_reduce(acc)  # [1, 1, S, H]
+    return acc  # [1, 1, S_outer, H] partial (no all_reduce yet)
 
-    return ttnn.reshape(acc, [1, S, HIDDEN_SIZE])
+
+def moe_experts_prefill_forward(
+    mesh_device: MeshDevice,
+    hidden_states: ttnn.Tensor,  # [1, S, 2688] bf16 on device — S divisible by 32
+    routing_weights: ttnn.Tensor,  # [1, 1, S, 128] bf16 on device — dense routing mask
+    up_weights_tt: ttnn.Tensor,  # [1, 128, 2688, 464] bfloat16, col-sharded
+    down_weights_tt: ttnn.Tensor,  # [1, 128, 464, 2688] bfloat16, col-sharded
+) -> ttnn.Tensor:
+    """Bulk prefill MoE routed experts following gpt_oss experts/prefill.py.
+
+    For S ≤ S_OUTER_CHUNK (4096): single outer chunk, matches the previous behaviour.
+    For S > S_OUTER_CHUNK: processes 4K-token outer chunks sequentially, accumulates
+    partial [1,1,S,H] before a single all_reduce — one CCL op per E-layer regardless
+    of sequence length.
+
+    Returns [1, S, 2688] bfloat16 on device (replicated).
+    """
+    S = hidden_states.shape[1]
+
+    if S <= S_OUTER_CHUNK:
+        # Single outer chunk — hidden_states is a view of normed_tt; do NOT slice or deallocate
+        partial = _moe_experts_bulk_one_outer_chunk(
+            mesh_device, hidden_states, routing_weights, up_weights_tt, down_weights_tt
+        )
+    else:
+        # Multiple outer chunks — ttnn.slice creates independent copies
+        acc = None
+        for start in range(0, S, S_OUTER_CHUNK):
+            end = min(start + S_OUTER_CHUNK, S)
+            h_c = ttnn.slice(hidden_states, [0, start, 0], [1, end, HIDDEN_SIZE])
+            rw_c = ttnn.slice(routing_weights, [0, 0, start, 0], [1, 1, end, N_EXPERTS])
+            chunk_partial = _moe_experts_bulk_one_outer_chunk(mesh_device, h_c, rw_c, up_weights_tt, down_weights_tt)
+            h_c.deallocate(True)
+            rw_c.deallocate(True)
+            if acc is None:
+                acc = chunk_partial
+            else:
+                new_acc = ttnn.concat([acc, chunk_partial], dim=2)
+                acc.deallocate(True)
+                chunk_partial.deallocate(True)
+                acc = new_acc
+        partial = acc
+
+    # Single all_reduce per E-layer: sums partial intermediate-column contributions across TP=4
+    partial = all_reduce(partial)  # [1, 1, S, H]
+    return ttnn.reshape(partial, [1, S, HIDDEN_SIZE])

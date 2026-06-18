@@ -470,3 +470,129 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
             f"{r['decode_toks_s']:>7.1f}  {r['gen_tokens']:>9}"
         )
     print("=" * 78)
+
+
+@pytest.mark.timeout(0)
+def test_isl_sweep_long_context(mesh_device, weight_cache):
+    """Long-context ISL sweep up to 256K tokens.
+
+    Uses the gpt_oss-style bulk E-layer prefill (moe_experts_prefill.py) with
+    an outer-chunk loop (S_OUTER=4096) that keeps peak `act` at 484 MB/device
+    regardless of sequence length.
+
+    ISL_LIST extends to 262112 (≈256K) in doubling steps.
+    max_seq_len=MODEL_MAX_SEQ_LEN=262144 in both allocate_decoder_state and
+    generate() calls.  At each ISL, decode count is capped so prompt+decode
+    never exceeds the model's positional-encoding limit.
+    """
+    from transformers import AutoTokenizer
+
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import SNAP as _SNAP
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import generate
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.kv_cache import (
+        DEFAULT_BLOCK_SIZE,
+        MODEL_MAX_SEQ_LEN,
+        allocate_decoder_state,
+    )
+
+    # 262112 = 262144 - 32: leaves at least 31 decode tokens of headroom at max ISL.
+    # n_decode is clamped per-ISL so prompt + decode < MODEL_MAX_SEQ_LEN.
+    ISL_LIST = [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262112]
+    N_DECODE = 30
+
+    tokenizer = AutoTokenizer.from_pretrained(_SNAP)
+
+    # Build a long token list by repeating a short seed; avoids re-tokenizing a huge string.
+    _seed = (
+        "Tenstorrent Blackhole is an AI accelerator for hybrid SSM and MoE models. "
+        "NemotronH-30B combines Mamba2 and dense-attention layers. "
+        "The tensor-parallel TP=4 configuration runs on a four-chip QuietBox. "
+    )
+    _seed_ids_short = tokenizer.encode(_seed, add_special_tokens=False)
+    needed = max(ISL_LIST) + 200
+    repeats = (needed + len(_seed_ids_short) - 1) // len(_seed_ids_short)
+    _seed_ids = (_seed_ids_short * repeats)[:needed]
+
+    # Allocate KV cache for the full 256K context once; reuse across all ISLs.
+    print("[state] Allocating decoder state (max_seq_len=262144)...", flush=True)
+    _persistent_state = allocate_decoder_state(
+        mesh_device, B=1, max_seq_len=MODEL_MAX_SEQ_LEN, block_size=DEFAULT_BLOCK_SIZE
+    )
+    print("[state] Done.", flush=True)
+
+    # Warmup: compile prefill kernels at a short ISL before the sweep.
+    print("\n[warmup] Running warmup generate (ISL=64, 3 decode tokens)...", flush=True)
+    _warmup_prompt = tokenizer.decode(_seed_ids[:64], skip_special_tokens=False)
+    generate(
+        prompt=_warmup_prompt,
+        mesh_device=mesh_device,
+        wc=weight_cache,
+        max_new_tokens=3,
+        max_seq_len=MODEL_MAX_SEQ_LEN,
+        verbose=False,
+        cpu_gate=False,
+        decoder_state=_persistent_state,
+    )
+    print("[warmup] Done.", flush=True)
+
+    results = []
+
+    for isl in ISL_LIST:
+        prompt_ids = _seed_ids[:isl]
+        prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
+
+        # Cap decode tokens so actual_prompt_len + n_decode < MODEL_MAX_SEQ_LEN.
+        # Tokenizer round-trip may give ±a few tokens; subtract 10 for safety.
+        n_decode = max(1, min(N_DECODE, MODEL_MAX_SEQ_LEN - isl - 10))
+
+        print(f"\n{'='*70}")
+        print(f"Long-context sweep: target ISL={isl}, n_decode={n_decode}")
+        print(f"{'='*70}")
+
+        text, metrics = generate(
+            prompt=prompt,
+            mesh_device=mesh_device,
+            wc=weight_cache,
+            max_new_tokens=n_decode,
+            max_seq_len=MODEL_MAX_SEQ_LEN,
+            verbose=True,
+            cpu_gate=False,
+            return_metrics=True,
+            decoder_state=_persistent_state,
+        )
+
+        metrics.print_summary()
+
+        actual_isl = metrics.prompt_tokens
+        prefill_s = metrics.prefill_compile_s + metrics.prefill_inference_s
+        prefill_ms_per_tok = prefill_s * 1000.0 / max(actual_isl, 1)
+
+        assert len(text) > 0, f"ISL={isl}: generate() returned empty text"
+        assert metrics.generated_tokens > 0, f"ISL={isl}: no tokens were generated"
+        printable_ratio = sum(1 for c in text if c.isprintable()) / max(len(text), 1)
+        assert (
+            printable_ratio > 0.9
+        ), f"ISL={isl}: text has low printable ratio {printable_ratio:.2f} — possible NaN/garbage output"
+
+        results.append(
+            {
+                "isl": actual_isl,
+                "ttft_ms": metrics.ttft_s * 1000.0,
+                "prefill_ms_per_tok": prefill_ms_per_tok,
+                "decode_toks_s": metrics.decode_toks_s,
+                "gen_tokens": metrics.generated_tokens,
+                "text_preview": text[-120:],
+            }
+        )
+        print(f"\n[ISL={isl}] tail: {repr(text[-120:])}")
+
+    print("\n" + "=" * 78)
+    print("Long-Context Sweep — NemotronH-30B QB TP=4 (gpt_oss bulk prefill, outer-chunk 4K)")
+    print(f"{'ISL':>8}  {'TTFT(ms)':>10}  {'prefill ms/tok':>15}  {'tok/s':>7}  {'gen_toks':>9}")
+    print(f"{'-'*8}  {'-'*10}  {'-'*15}  {'-'*7}  {'-'*9}")
+    for r in results:
+        print(
+            f"{r['isl']:>8}  {r['ttft_ms']:>10.0f}  {r['prefill_ms_per_tok']:>15.1f}  "
+            f"{r['decode_toks_s']:>7.1f}  {r['gen_tokens']:>9}"
+        )
+    print("=" * 78)
