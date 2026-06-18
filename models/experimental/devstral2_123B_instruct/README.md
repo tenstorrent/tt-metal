@@ -243,7 +243,12 @@ pytest models/experimental/devstral2_123B_instruct/tests/perf/test_isl_sweep_per
 pytest models/experimental/devstral2_123B_instruct/tests/perf/test_isl_sweep_perf.py -k sweep -v
 ```
 
-Results table is logged and saved under ``tests/isl_sweep_perf_outputs/``.
+Results are logged incrementally and saved under ``tests/isl_sweep_perf_outputs/``:
+
+- ``isl_perf_{label}.json`` — rolling aggregate (updated after each ISL; ``complete: true`` at end)
+- ``isl_perf_{label}_isl_{N}.json`` — one file per completed ISL point
+
+Prefill chunk progress logs every 32 chunks by default (``DEVSTRAL2_ISL_PERF_CHUNK_LOG_EVERY``).
 
 | Column | Meaning |
 |--------|---------|
