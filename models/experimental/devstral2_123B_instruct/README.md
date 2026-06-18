@@ -75,8 +75,10 @@ Full 88-layer comparisons vs HuggingFace at varying prefill lengths (powers of t
 Both use **128-token chunked prefill**, Tale of Two Cities tokens (tiled as needed), and a shared
 on-disk weight cache at **`seq_262144`** (`DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN`).
 
-**CI evaluates short prefill lengths only** (`-k sanity`). Long prefills take hours per point on BH
-Loudbox and are available via `-k sweep` for extended validation.
+> **Prefill length coverage:** For logit PCC and token match, **only short prefill lengths are
+> evaluated in the e2e pipeline** (see `-k sanity` column below). Larger prefill lengths (2048 …
+> 262144) each take **hours** on BH Loudbox and are **not** evaluated in CI; run `-k sweep` locally
+> for extended validation.
 
 | Test | `-k sanity` | `-k sweep` |
 |------|-------------|------------|
@@ -271,5 +273,5 @@ devstral2_123B_instruct/
 | Logit PCC (88 layers) | **0.90** |
 | Token match | top-1 ≥ **96%**, top-5 ≥ **99%** |
 
-On-device sampling pads decode logits to a **32-row tile** internally — only row 0 is the active user.
-Multi-user / `batch_size > 1` is not validated on this mesh configuration.
+- On-device sampling pads decode logits to a **32-row tile** internally — only row 0 is the active user.
+- Multi-user / `batch_size > 1` is not supported on this mesh configuration.
