@@ -482,6 +482,22 @@ public:
     }
 
     /**
+     * @brief Read ClientL valid bits [11:8] from remapper hardware for a specific pair.
+     *
+     * Used by remapped DFB producers to wait until DM1 has programmed this pair's ClientL
+     * register (valid mask non-zero) before resetting the producer TC and publishing ready.
+     *
+     * @param pair_idx Pair index (0-63)
+     * @return Valid bits value (0-15), read from live hardware
+     */
+    static uint32_t get_clientL_valid_hw(uint32_t pair_idx) {
+        if (pair_idx >= REMAP_NUM_PAIRS) {
+            return 0;
+        }
+        return (READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx)) >> 8u) & 0xFu;
+    }
+
+    /**
      * @brief Set ClientL producer/consumer mode (uses current pair)
      *
      * @param is_producer 1 if ClientL is producer, 0 if consumer

@@ -556,6 +556,9 @@ size_t serialize_dfb_config_for_core(
                 }
             }
             entry.producer_signal_bit = producer_signal_bit[di][h];
+            entry.remapper_pair_index = (dfb->use_remapper && rc.is_producer)
+                ? rc.config.remapper_pair_index
+                : 0xFFu;
 
             // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
             std::memset(out.data() + offset, 0, entry_sz);
@@ -663,9 +666,8 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
             const auto* slot =
                 reinterpret_cast<const dfb_dm0_remapper_slot_t*>(config_bytes.data() + dm1_off);
             log_info(tt::LogMetal,
-                     "    slot[{}] @{}: pair_index={} ptc=0x{:02x} cap={} sig_bit={} clientR=0x{:08x} clientL=0x{:08x}",
-                     s, dm1_off, slot->pair_index, slot->packed_tile_counter, slot->capacity,
-                     slot->producer_signal_bit, slot->clientR_val, slot->clientL_val);
+                     "    slot[{}] @{}: pair_index={} clientR=0x{:08x} clientL=0x{:08x}",
+                     s, dm1_off, slot->pair_index, slot->clientR_val, slot->clientL_val);
             dm1_off += sizeof(dfb_dm0_remapper_slot_t);
         }
     }
@@ -1270,10 +1272,6 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm1_remapper_blob_for_core(co
     data.insert(data.end(), hdr_bytes, hdr_bytes + sizeof(hdr));
 
     // Remapper slots: one per producer RISC that uses the remapper, in risc_mask bit order.
-    // producer_signal_bit assignment MUST match serialize_dfb_config_for_core (per-DFB, ascending
-    // hartid order) so that, under DFB_DM1_TC_INIT_OPTION != 0, DM1 publishes exactly the bits the
-    // consumer expects in dfb_expected_signal[logical_dfb_id].
-    uint8_t next_producer_bit = 0;
     if (this->use_remapper) {
         for (int bit = 0; bit < 16; bit++) {
             if (!(this->risc_mask & (1 << bit))) continue;
@@ -1282,16 +1280,6 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm1_remapper_blob_for_core(co
                 if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
             }
             if (!rc->is_producer) continue;
-
-            // Signal bit for this producer (Approach A: only the primary producer gets bit 0,
-            // others 0xFF; Approach B: each producer gets a sequential bit).
-            uint8_t producer_signal_bit;
-            if (this->config.primary_producer_sync) {
-                producer_signal_bit = (next_producer_bit == 0) ? 0u : 0xFFu;
-                if (next_producer_bit == 0) next_producer_bit = 1;
-            } else {
-                producer_signal_bit = next_producer_bit++;
-            }
 
             uint8_t num_clientRs =
                 static_cast<uint8_t>(__builtin_popcount(rc->config.remapper_consumer_ids_mask));
@@ -1319,10 +1307,6 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm1_remapper_blob_for_core(co
             slot.pair_index  = rc->config.remapper_pair_index;
             slot.clientR_val = clientR_val;
             slot.clientL_val = clientL_val;
-            // Consumed only when DFB_DM1_TC_INIT_OPTION != 0 (DM1 resets/sets-cap + publishes).
-            slot.packed_tile_counter = rc->config.packed_tile_counter[0];
-            slot.capacity            = static_cast<uint8_t>(this->capacity);
-            slot.producer_signal_bit = producer_signal_bit;
             const auto* slot_bytes = reinterpret_cast<const uint8_t*>(&slot);
             data.insert(data.end(), slot_bytes, slot_bytes + sizeof(slot));
         }

@@ -128,17 +128,6 @@ inline uint8_t dfb_hart_participation_count(uint32_t participation_mask) {
     return static_cast<uint8_t>(__builtin_popcount(participation_mask));
 }
 
-// DM1 tile-counter init option (device firmware only):
-//   0 = baseline (default): each remapped producer spins on remapper-enable, then resets its own
-//       tile counter, sets capacity, and publishes its readiness from setup_local_dfb_interfaces.
-//   2 = DM1 enables the remapper first, then resets each remapped producer's tile counter, sets
-//       capacity, and publishes readiness on the producer's behalf (setup_dfb_remapper). The
-//       producer skips its own remapper spin / TC init / publish and waits on the published
-//       signal in DataflowBuffer's ctor (dfb_ensure_ready).
-#ifndef DFB_DM1_TC_INIT_OPTION
-#define DFB_DM1_TC_INIT_OPTION 2
-#endif
-
 // Flag bits for dfb_hart_init_entry_t::flags
 constexpr uint8_t DFB_HART_FLAG_IS_PRODUCER  = (1u << 7);
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_EN  = (1u << 6);
@@ -165,7 +154,8 @@ struct dfb_hart_init_entry_t {
     uint8_t  num_entries_per_txn_id_per_tc;  // DM only
     uint8_t  producer_signal_bit;            // index into this DFB's producer slot row (0-based); 0xFF if consumer
     uint8_t  txn_ids[dfb::NUM_TXN_IDS];     // DM only; unused slots zero
-    uint8_t  _pad[2];                        // pad header to 24B → 4B-aligned TC arrays follow
+    uint8_t  remapper_pair_index;            // remapper pair for this producer; 0xFF if not remapped
+    uint8_t  _pad;                           // pad header to 24B → 4B-aligned TC arrays follow
 } __attribute__((packed));
 static_assert(sizeof(dfb_hart_init_entry_t) == 24, "dfb_hart_init_entry_t must be 24B");
 
@@ -280,7 +270,7 @@ struct dfb_dm0_txn_descriptor_image_t {
 };
 
 // One entry per producer RISC that uses the remapper.
-// 16 bytes (power of 2): array index compiles to i << 4 (shift, not multiply).
+// 12 bytes: pair_index + pre-computed clientR/clientL register values.
 //
 // clientR_val / clientL_val are pre-computed on the host using the same bitfield layout
 // as tClientR_Config_Reg_u / tClientL_Config_Reg_u in remapper_common.hpp:
@@ -300,18 +290,12 @@ struct dfb_dm0_txn_descriptor_image_t {
 // Device side: setup_dfb_remapper() writes clientR_val/clientL_val directly to remapper HW
 // registers (no staging through g_remapper_configurator arrays).
 struct dfb_dm0_remapper_slot_t {
-    uint8_t  pair_index;          // remapper pair index for this producer
-    // The following three are only consumed when DFB_DM1_TC_INIT_OPTION != 0, where DM1 resets/
-    // sets-capacity for the producer's tile counter and publishes readiness on its behalf after
-    // enabling the remapper. They occupy former padding bytes (struct stays 16 bytes).
-    uint8_t  packed_tile_counter; // producer's tile counter (tensix_id<<5 | tc_id)
-    uint8_t  capacity;            // producer TC capacity in entries
-    uint8_t  producer_signal_bit; // bit in dfb_signal[logical_dfb_id]; 0xFF = no slot / skip
+    uint8_t  pair_index;   // remapper pair index for this producer
+    uint8_t  _pad[3];      // pad to 8 bytes
     uint32_t clientR_val;  // pre-computed ClientR config register value
     uint32_t clientL_val;  // pre-computed ClientL config register value
-    uint32_t _pad2;        // pad to 16 bytes
 } __attribute__((packed));
-static_assert(sizeof(dfb_dm0_remapper_slot_t) == 16, "dfb_dm0_remapper_slot_t must be 16 bytes");
+static_assert(sizeof(dfb_dm0_remapper_slot_t) == 12, "dfb_dm0_remapper_slot_t must be 12 bytes");
 
 static_assert(sizeof(dfb_dm0_isr_blob_core_header_t) == 8, "dfb_dm0_isr_blob_core_header_t must be 8 bytes");
 static_assert(sizeof(dfb_dm0_txn_descriptor_image_t) == 32, "dfb_dm0_txn_descriptor_image_t must be 32 bytes");
