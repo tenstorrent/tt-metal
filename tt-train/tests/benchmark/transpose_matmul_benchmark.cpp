@@ -82,18 +82,16 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
     const uint32_t M_tiles = M / 32U;
 
     auto run_once = [&]() {
-        ttml::metal::variable_matmul(
+        ttml::metal::variable_matmul_into_rows(
             /*input_tensor=*/input,
             /*weight_tensor=*/weight,
             /*config=*/cfg,
             /*offsets_tensor=*/offsets,
-            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
-            /*transpose_a=*/transpose_a,
-            /*transpose_b=*/transpose_b,
-            /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/output,
             /*offsets_start_index=*/0,
-            /*expected_M_tiles=*/M_tiles);
+            /*expected_M_tiles=*/M_tiles,
+            /*transpose_a=*/transpose_a,
+            /*transpose_b=*/transpose_b);
     };
 
     for (int i = 0; i < kWarmupIterations; ++i) {

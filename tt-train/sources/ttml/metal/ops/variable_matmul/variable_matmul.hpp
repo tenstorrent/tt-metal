@@ -35,31 +35,41 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 // dispatch counts live on the device, a host scalar would require an all-gather of offsets
 // across the EP dim. This is the motivation; the contract works the same on a single device.
 //
-// Roles:
-//   - InputAndOutputRow: read in0 row-range [offsets[start], offsets[start+1]) and write
-//     output rows in the same range. Requires a caller-provided output_tensor (the parent
-//     buffer that the matmul writes into). matmul-N must equal output_tensor's N.
-//   - InputAndWeightK: K-slice both in0 and in1 to [offsets[start], offsets[start+1]).
-//     Output is freshly allocated.
-using OffsetsRole = ttml::metal::ops::variable_matmul::device::OffsetsRole;
+// Two entry points, one per offset interpretation (the output contract is encoded in the
+// signature rather than a role enum + optional, so illegal combinations can't be expressed):
+//
+//   variable_matmul_into_rows — read in0 row-range [offsets[start], offsets[start+1]) and write
+//     the result into the SAME rows of the caller-provided output_tensor (a shared parent buffer
+//     that successive calls fill in place). matmul-N must equal output_tensor's N.
+//   variable_matmul_k_sliced — K-slice BOTH operands to [offsets[start], offsets[start+1]) and
+//     reduce only over that range; returns a freshly allocated [M, N].
 
-ttnn::Tensor variable_matmul(
-    // Required.
+// Write-at-offset matmul; result lands in output_tensor rows [offsets[start], offsets[start+1]).
+// Returns output_tensor.
+ttnn::Tensor variable_matmul_into_rows(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const VariableMatmulConfig& config,
     const ttnn::Tensor& offsets_tensor,
-    OffsetsRole offsets_role,
-    // Optional from here on.
+    const ttnn::Tensor& output_tensor,
+    uint32_t offsets_start_index = 0,
+    // Per-call matmul-M extent in tiles: grid-orientation hint + output-bounds check. See the
+    // expected_M_tiles doc in the device types header.
+    uint32_t expected_M_tiles = 0,
     bool transpose_a = false,
     bool transpose_b = false,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    // Required when offsets_role == InputAndOutputRow (caller-provided parent buffer that
-    // the matmul writes into); must be nullopt for InputAndWeightK (output is freshly allocated).
-    std::optional<ttnn::Tensor> output_tensor = std::nullopt,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+// K-sliced matmul; reduces over the offsets[start..start+2] K-range of both operands and returns
+// a freshly allocated [M, N].
+ttnn::Tensor variable_matmul_k_sliced(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const VariableMatmulConfig& config,
+    const ttnn::Tensor& offsets_tensor,
     uint32_t offsets_start_index = 0,
-    // Bounds the host-side output_tensor validation on the EP path (matters when
-    // token_capacity is non-tile-aligned). Also hints the transpose_core_grid heuristic.
-    uint32_t expected_M_tiles = 0);
+    bool transpose_a = false,
+    bool transpose_b = false,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttml::metal

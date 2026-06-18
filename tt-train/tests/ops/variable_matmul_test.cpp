@@ -133,17 +133,14 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     constexpr uint32_t K_active = 128;
 
     auto cfg = kConfig;
-    auto result = ttml::metal::variable_matmul(
+    auto result = ttml::metal::variable_matmul_k_sliced(
         /*input_tensor=*/in0_km,
         /*weight_tensor=*/in1,
         /*config=*/cfg,
         /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+        /*offsets_start_index=*/kStart,
         /*transpose_a=*/true,
-        /*transpose_b=*/false,
-        /*compute_kernel_config=*/std::nullopt,
-        /*output_tensor=*/std::nullopt,
-        /*offsets_start_index=*/kStart);
+        /*transpose_b=*/false);
 
     auto ref = expert_k_reference(in0_km, in1, k_lo, K_active, M, N, kConfig);
 
@@ -168,17 +165,14 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
     constexpr uint32_t K_active = 128;
 
     auto cfg = kConfig;
-    auto result = ttml::metal::variable_matmul(
+    auto result = ttml::metal::variable_matmul_k_sliced(
         /*input_tensor=*/in0_km,
         /*weight_tensor=*/in1,
         /*config=*/cfg,
         /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+        /*offsets_start_index=*/kStart,
         /*transpose_a=*/true,
-        /*transpose_b=*/false,
-        /*compute_kernel_config=*/std::nullopt,
-        /*output_tensor=*/std::nullopt,
-        /*offsets_start_index=*/kStart);
+        /*transpose_b=*/false);
 
     auto ref = expert_k_reference(in0_km, in1, k_lo, K_active, M, N, cfg);
 
@@ -232,18 +226,16 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     constexpr uint32_t m_hi = 160U;
     constexpr uint32_t actual_M = m_hi - m_lo;
 
-    ttml::metal::variable_matmul(
+    ttml::metal::variable_matmul_into_rows(
         /*input_tensor=*/input,
         /*weight_tensor=*/weight,
         /*config=*/kConfig,
         /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/parent_out,
         /*offsets_start_index=*/kStart,
-        /*expected_M_tiles=*/M_parent / 32U);  // upper bound = parent_M
+        /*expected_M_tiles=*/M_parent / 32U,  // upper bound = parent_M
+        /*transpose_a=*/false,
+        /*transpose_b=*/false);
 
     auto input_slice = ttnn::slice(
         input,
@@ -290,18 +282,16 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow_TransposeB) {
     constexpr uint32_t m_hi = 160U;
     constexpr uint32_t actual_M = m_hi - m_lo;
 
-    ttml::metal::variable_matmul(
+    ttml::metal::variable_matmul_into_rows(
         /*input_tensor=*/input,
         /*weight_tensor=*/weight_nk,
         /*config=*/kConfig,
         /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
-        /*transpose_a=*/false,
-        /*transpose_b=*/true,
-        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/parent_out,
         /*offsets_start_index=*/kStart,
-        /*expected_M_tiles=*/M_parent / 32U);
+        /*expected_M_tiles=*/M_parent / 32U,
+        /*transpose_a=*/false,
+        /*transpose_b=*/true);
 
     auto input_slice = ttnn::slice(
         input,
@@ -356,17 +346,14 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
     std::vector<uint32_t> offsets_host = {0U, 128U, 128U, 256U};
     auto offsets = make_offsets(offsets_host, device);
 
-    auto result = ttml::metal::variable_matmul(
+    auto result = ttml::metal::variable_matmul_k_sliced(
         /*input_tensor=*/dY,
         /*weight_tensor=*/act,
         /*config=*/cfg,
         /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+        /*offsets_start_index=*/1U,
         /*transpose_a=*/true,
-        /*transpose_b=*/false,
-        /*compute_kernel_config=*/std::nullopt,
-        /*output_tensor=*/std::nullopt,
-        /*offsets_start_index=*/1U);
+        /*transpose_b=*/false);
 
     const auto vec = ttml::core::to_vector<float>(result);
     float max_abs = 0.0F;
@@ -411,17 +398,14 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndWeightK_VaryingK) {
         const uint32_t K_active = offsets_host[s + 1U] - offsets_host[s];
 
         const auto entries_before = device->num_program_cache_entries();
-        auto result = ttml::metal::variable_matmul(
+        auto result = ttml::metal::variable_matmul_k_sliced(
             /*input_tensor=*/in0_km,
             /*weight_tensor=*/in1,
             /*config=*/cfg,
             /*offsets_tensor=*/offsets,
-            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+            /*offsets_start_index=*/s,
             /*transpose_a=*/true,
-            /*transpose_b=*/false,
-            /*compute_kernel_config=*/std::nullopt,
-            /*output_tensor=*/std::nullopt,
-            /*offsets_start_index=*/s);
+            /*transpose_b=*/false);
         const auto entries_after = device->num_program_cache_entries();
 
         if (s == 0U) {
@@ -462,18 +446,16 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndOutputRow_VaryingM) {
         const uint32_t actual_M = m_hi - m_lo;
 
         const auto entries_before = device->num_program_cache_entries();
-        ttml::metal::variable_matmul(
+        ttml::metal::variable_matmul_into_rows(
             /*input_tensor=*/input,
             /*weight_tensor=*/weight,
             /*config=*/kConfig,
             /*offsets_tensor=*/offsets,
-            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
-            /*transpose_a=*/false,
-            /*transpose_b=*/false,
-            /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/parent_out,
             /*offsets_start_index=*/s,
-            /*expected_M_tiles=*/M_parent / 32U);
+            /*expected_M_tiles=*/M_parent / 32U,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false);
         const auto entries_after = device->num_program_cache_entries();
 
         if (s == 0U) {
