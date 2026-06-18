@@ -36,6 +36,7 @@ from helpers.llk_params import (
     MathOperation,
     format_dict,
 )
+from helpers.logger import logger
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand
 from helpers.stimuli_config import StimuliConfig
@@ -1238,9 +1239,8 @@ def _plot_and_print(
     plt.savefig(plot_path, dpi=150)
     plt.close()
 
-    print(f"\nPlot saved to: {os.path.abspath(plot_path)}")
-    for line in summary_lines + nf_detail_lines:
-        print(line)
+    logger.info("Plot saved to: {}", os.path.abspath(plot_path))
+    logger.info("\n{}", "\n".join(summary_lines + nf_detail_lines))
 
 
 # ---------------------------------------------------------------------------
@@ -1444,7 +1444,7 @@ def run_case(case: Case) -> bool:
     )
 
     test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
-    print(f"passed_test: {test_passed}")
+    logger.info("passed_test: {}", test_passed)
 
     # Bit-distance ULP measurement — reinterpret the fp32-promoted results as
     # int32 and take |golden_bits - hw_bits|; the max across finite samples is
@@ -1456,11 +1456,14 @@ def run_case(case: Case) -> bool:
         gb = golden_fp32.view(np.int32)[finite_mask]
         rb = hw_fp32.view(np.int32)[finite_mask]
         max_ulp = int(np.abs(gb.astype(np.int64) - rb.astype(np.int64)).max())
-        print(
-            f"[{mathop.name}] max ULP across {int(finite_mask.sum())} finite samples: {max_ulp}"
+        logger.info(
+            "[{}] max ULP across {} finite samples: {}",
+            mathop.name,
+            int(finite_mask.sum()),
+            max_ulp,
         )
     else:
-        print(f"[{mathop.name}] no finite samples for ULP measurement")
+        logger.warning("[{}] no finite samples for ULP measurement", mathop.name)
 
     return test_passed
 
