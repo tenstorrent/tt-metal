@@ -91,8 +91,11 @@ def tilize_8x32_kernel(input_tensor, output_tensor):
     # Circular Buffer Descriptors
     # ========================================================================
 
-    # CB 0: Input (sharded tensor, row-major format)
+    # CB 0: Input (sharded tensor, row-major format).
+    # The row-major input carries no tile (see #18536); this kernel always tilizes into
+    # 8x32 tiles, so the CB tile geometry is set explicitly here rather than read off the tensor.
     input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in_cb, input_tensor)
+    input_cb_descriptor.format_descriptors[0].tile = ttnn.TileDescriptor(ttnn.Tile((8, 32)))
 
     # CB 16: Output (sharded tensor, tiled format)
     output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
