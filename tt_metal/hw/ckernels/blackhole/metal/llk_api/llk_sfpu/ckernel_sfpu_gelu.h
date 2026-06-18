@@ -398,8 +398,13 @@ inline void calculate_gelu_tanh() {
 
         sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
 
-        // Default: result = 0 (saturated negative tail, scaled <= -TANH_SAT_THRESHOLD).
-        sfpi::vFloat result = sfpi::vConst0;
+        // Default: ±0 with the sign of x (saturated negative tail, scaled <=
+        // -TANH_SAT_THRESHOLD). Sign-of-zero matters here: torch computes
+        // 0.5 * x * (1 + tanh) = 0.5 * (negative_x) * 0 and IEEE 754 propagates
+        // the sign of the non-zero factor through the multiplication, giving -0.
+        // Hard-coding vConst0 (= +0) would land 1 BF16 ULP off (the monotonic-int
+        // ULP mapping treats +0 and -0 as adjacent).
+        sfpi::vFloat result = sfpi::copysgn(sfpi::vConst0, x);
 
         v_if(scaled >= TANH_SAT_THRESHOLD) {
             // Saturated positive tail: gelu_tanh(x) = 0.5 * x * 2 = x.
