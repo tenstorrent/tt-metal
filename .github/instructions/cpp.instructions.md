@@ -20,14 +20,11 @@ excludeAgent: "cloud-agent"
 - **Data Races**: shared mutable state modified without explicit synchronization
 
 ### 🟡 IMPORTANT
-- **Rule-of-5/0 violations**: class manages a resource but is missing copy/move/destructor — or has them when rule-of-0 would suffice
-- **Unsafe casts**: `reinterpret_cast`, C-style casts on non-trivial types, `const_cast` removing logical constness
 - **Include hygiene**: unnecessary `#include` directives; missing forward declaration; `impl/` header included from `api/` header (Abstraction boundary violations).
 - **Compile-time impact**: header fanout increase or new template instantiation depth in a widely-included header
 
 ### 🟢 SUGGESTION
 - **Template complexity**: prefer `if constexpr` / concepts over `enable_if` / SFINAE / recursive instantiation
-- **Macro vs. constexpr/template**: flag macros that can be replaced
 
 ## Language Standard
 
@@ -46,24 +43,16 @@ C++20. Use modern facilities over legacy patterns:
 
 - RAII for all resources. `std::unique_ptr` / `std::shared_ptr` over raw owning pointers.
 - **Rule-of-0 first**: if a class needs rule-of-5, it almost always means a missing RAII wrapper.
-- Virtual destructors required on any base class with virtual functions (or make it non-copyable/non-movable by design).
 - **`const` data members and reference members**: flag in classes that need to be movable — they silently delete move assignment.
 
 ## Template & Metaprogramming Policy
 
 - No `enable_if`, SFINAE, or recursive template instantiation unless the author demonstrates concepts cannot express the constraint.
-- No new macros unless there is a concrete reason `constexpr` or templates cannot work.
 - Flag recursive template instantiation depth > 3 levels.
 
 ## clang-tidy
 
-Active profiles: `bugprone-*`, `performance-*`, `modernize-*`, `readability-*`, `cppcoreguidelines-*`.
-
-When a finding maps to a clang-tidy rule, cite it:
-
-```
-🟡 cppcoreguidelines-pro-type-reinterpret-cast: ...
-```
+Active profiles: `bugprone-*`, `performance-*`, `modernize-*`, `readability-*`, `cppcoreguidelines-*`. Do not flag issues these profiles already report.
 
 ## Include Hygiene
 
@@ -101,8 +90,7 @@ Apply the same principle to array bounds, vector indexing, and any lookup that c
 
 - **No dynamic allocation in hot paths**: if the size is known at compile time, use `std::array`. If bounded, use a small-buffer-optimized container. Flag `std::vector` construction inside frequently-called op dispatch functions.
 - **Don't `std::move` on return**: it prevents Return Value Optimization. Just `return obj;`.
-- **Never `const T&&`** or return `const` values from functions — both block move semantics silently.
-- **Move constructors must be `noexcept`**: STL containers will fall back to copying if the move constructor can throw. Flag any move constructor without `noexcept`.
+- **Never `const T&&`**: blocks move semantics silently.
 
 ## Static Storage & Globals
 
@@ -112,7 +100,6 @@ Apply the same principle to array bounds, vector indexing, and any lookup that c
 
 ## Initialization & Control Flow
 
-- **Initialize all primitive members on declaration** (`size_t count = 0;`, not `size_t count;`). Uninitialized primitives in structs are latent UB.
 - **Early exit for preconditions**: validate inputs at the top and return/fatal immediately. Avoid wrapping the entire function body in an `if (valid)` block.
 - **Exhaustive `switch` on enums**: list every enumerator explicitly. Do not use `default:` — it silently swallows new values added later. Follow the switch with `TT_THROW("Unreachable");` to satisfy compilers that warn about missing returns.
 
@@ -122,10 +109,6 @@ Apply the same principle to array bounds, vector indexing, and any lookup that c
 
 ## Unsafe Constructs — Flag Unconditionally
 
-- `reinterpret_cast` on non-trivial types
-- C-style casts on anything other than arithmetic primitives
-- `const_cast` removing logical constness
 - `volatile` on non-hardware-register variables
-- `goto`
 - `.at()` without a preceding bounds check (use `TT_FATAL` instead)
 - `using namespace` in any header file
