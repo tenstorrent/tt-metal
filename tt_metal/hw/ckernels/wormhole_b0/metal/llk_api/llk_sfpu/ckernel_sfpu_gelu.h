@@ -404,10 +404,13 @@ inline void calculate_gelu_tanh() {
 
 template <bool is_fp32_dest_acc_en>
 inline void gelu_tanh_init() {
-    // _sfpu_tanh_fp32_accurate_ internally calls _sfpu_sigmoid_, which needs
-    // its programmable-constants init. tanh_init<false, fp32> does exactly
-    // that (see ckernel_sfpu_tanh.h:178-196).
-    tanh_init<false, is_fp32_dest_acc_en>();
+    // _sfpu_tanh_fp32_accurate_ calls _sfpu_sigmoid_ -> _sfpu_reciprocal_
+    // regardless of is_fp32_dest_acc_en, so we always need reciprocal init.
+    // Calling tanh_init<false, is_fp32_dest_acc_en>() does NOT work when
+    // is_fp32_dest_acc_en=false: it loads polynomial constants for the
+    // BF16 polynomial tanh path that this kernel doesn't take, and skips
+    // reciprocal init — sigmoid then returns garbage.
+    sigmoid_init<false>();
 }
 
 // =============================================================================
