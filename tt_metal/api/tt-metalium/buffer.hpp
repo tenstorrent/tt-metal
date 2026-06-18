@@ -238,13 +238,10 @@ public:
     DeviceAddr page_size() const;
     void set_page_size(DeviceAddr page_size);
 
-    // Declare that only the first `logical_size` bytes of this buffer hold
-    // logical tensor data; bytes in [logical_size, size()) are hardware
-    // padding (e.g. tile/alignment rounding) and must never be read or
-    // written by kernels. Under the emule sanitizer (TT_METAL_EMULE_ASAN
-    // env var) any kernel access into that padded region aborts with a
-    // "Tensor Padding Violation" message. Passing logical_size == size()
-    // clears the declaration. Only meaningful for L1/L1_SMALL buffers today.
+    // Mark only the first `logical_size` bytes as live tensor data; the rest,
+    // [logical_size, size()), is padding the emule Tensor-Padding sanitizer aborts
+    // on if a kernel touches it (no-op without emule). size() clears it; L1/L1_SMALL
+    // only today. See SANITIZER_CHECKS.md §5.
     void set_logical_size(DeviceAddr logical_size);
 
     uint32_t num_pages() const;

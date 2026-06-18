@@ -1,7 +1,8 @@
 # =============================================================================
 # emule_setup.sh — tt-emule + ASAN environment for emulated test runs
 #
-#   USAGE:  source emule_setup.sh        (NOT ./emule_setup.sh — exports must persist)
+#   USAGE:  source tt_metal/impl/emulation/emule_setup.sh   (from the tt-metal repo
+#           root; source it — do NOT execute — so the exports persist)
 #
 # Routes tt-metal at the tt-emule software emulator (instead of a physical WH
 # card) and arms the host-side ASAN sanitizers. After sourcing, emule_preflight
@@ -13,7 +14,7 @@
 
 # Refuse to be executed instead of sourced (exports would be lost).
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    echo "ERROR: source this file, do not execute it:  source emule_setup.sh"
+    echo "ERROR: source this file, do not execute it:  source tt_metal/impl/emulation/emule_setup.sh"
     exit 1
 fi
 

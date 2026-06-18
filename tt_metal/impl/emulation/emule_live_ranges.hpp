@@ -6,7 +6,7 @@
 
 // Per-device live-buffer registries consumed by the emule sanitizers.
 // snapshot() returns packed (low << 32) | high pairs — flat uint64_t scan
-// in JIT translation units, no std::vector layout dependency. See SANITIZERS.md.
+// in JIT translation units, no std::vector layout dependency. See SANITIZER_CHECKS.md.
 
 #include <cstdint>
 #include <vector>

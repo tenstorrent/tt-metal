@@ -215,6 +215,12 @@ extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
 
 // C-linkage bridge functions for JIT kernels.
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
+    // Range-test in 32 bits to match the live-range registry, whose addresses are
+    // uint32_t (LiveDramRanges stores uint32_t start/end). The full 64-bit offset
+    // is used only for the backing-store address (returned below). This assumes
+    // DRAM addresses fit in 32 bits — true for every emulated WH/BH config today;
+    // a Blackhole >4 GB per-bank view would need the registry + this test widened
+    // to 64 bit to avoid 4 GB-boundary aliasing.
     if (__emule_dram_tensor_ranges != nullptr &&
         static_cast<uint32_t>(offset) >= __emule_dram_unreserved_base) {
         uint32_t addr = static_cast<uint32_t>(offset);
@@ -568,26 +574,10 @@ static std::string get_jit_cache_dir() {
     if (const char* dir = std::getenv("TT_EMULE_JIT_CACHE_DIR")) {
         return dir;
     }
-    // Bake a fingerprint of all JIT headers into the directory name. Any header
-    // change produces a new directory, automatically invalidating the entire
-    // cache without relying on per-file mtime comparisons at lookup time.
-    static const std::string dir_path = [] {
-        uint64_t max_ns = 0;
-        std::error_code ec;
-        for (auto& e : std::filesystem::recursive_directory_iterator(TT_EMULE_JIT_INCLUDE_DIR, ec)) {
-            if (!e.is_regular_file()) {
-                continue;
-            }
-            auto t = static_cast<uint64_t>(e.last_write_time().time_since_epoch().count());
-            if (t > max_ns) {
-                max_ns = t;
-            }
-        }
-        char hex[17];
-        std::snprintf(hex, sizeof(hex), "%016lx", max_ns);
-        return "/tmp/tt_emule_jit_cache_" + std::to_string(getuid()) + "_" + hex;
-    }();
-    return dir_path;
+    // Fixed per-user path. Staleness is handled at lookup time —
+    // disk_cache_lookup() invalidates a cached .so when the kernel source or any
+    // JIT header is newer than it — so the directory name needs no fingerprint.
+    return "/tmp/tt_emule_jit_cache_" + std::to_string(getuid());
 }
 
 // dlopen a previously cached .so and return the kernel entry function.
@@ -1512,11 +1502,6 @@ static void collect_kernels(
                     key += ":" + k + "=" + v;
                 }
                 key += metal2_key_suffix;
-                // Codegen version: bump whenever preprocess_kernel_source_for_x86 /
-                // the emitted wrapper changes, so stale cached .so files (whose DWARF
-                // or generated source predate the change) are recompiled. pp1->pp2:
-                // line-preserving rewrites + #line directive pointing at the real kernel.
-                key += ":pp2";
                 // ASAN builds add -g/-fno-omit-frame-pointer; keep their cached
                 // .so distinct from the lean non-ASAN build of the same kernel.
                 if (emule_asan_enabled()) {
@@ -1823,10 +1808,8 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
     core->reset_dfb_sync();
     if (dfb_impls.empty()) {
-        // No DFBs to allocate (always the case on WH/BH; DFBs are Quasar-only),
-        // so the L1 bump allocator never grows and there's nothing to reset.
-        // Skipping reset also leaves the mmap-init zeros at MEM_ZEROS_BASE
-        // undisturbed for kernels that NOC-read the region.
+        // No DFBs on WH/BH (Quasar-only): nothing to allocate or reset, and not
+        // resetting the bump allocator keeps MEM_ZEROS_BASE's mmap-init zeros intact.
         return {};
     }
     // DFB fallback path (Quasar): start the bump allocator at 0.  When Quasar

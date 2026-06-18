@@ -24,6 +24,9 @@ uint64_t pack(uint32_t start, uint32_t end) {
 
 uint32_t unpack_start(uint64_t r) { return static_cast<uint32_t>(r >> 32); }
 
+// add never de-dups and remove is a linear find/erase, so each op is O(n).
+// Intentional: a device's live-range set stays small (a handful of buffers) and
+// this is a debug-only build, so the simplicity beats an index.
 void add_to(RangeRegistry& reg, int device_id, uint32_t start, uint32_t end) {
     std::lock_guard<std::mutex> g(reg.mu);
     reg.per_device[device_id].push_back(pack(start, end));

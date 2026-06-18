@@ -36,9 +36,12 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 ## Diagnostic trace
 
 Every `[ASAN ERROR]` is followed by a unified trace, emitted by
-`__emule_asan_panic()` in **`[emule] include/jit_hw/emule_asan.h`** (a
-self-contained, libc/POSIX-only header included by both the kernel-side JIT
-headers and libtt_metal). It prints:
+`__emule_asan_panic()`. libtt_metal carries its own libc/POSIX-only definition in
+**`[metal] tt_metal/impl/emulation/emule_asan_panic.cpp`** — a faithful mirror of
+the tt-emule runtime's copy (declared, with the standalone-runtime definition, in
+`[emule] include/jit_hw/emule_asan.h`). The host-API checks call it directly and
+JIT kernel `.so` files resolve it at dlopen, so metal pulls nothing from `jit_hw`.
+It prints:
 
 - **Which kernel + where:** when a kernel is on the stack, the kernel source
   path (`__emule_kernel_name`, threaded in per launch by the runner) plus the

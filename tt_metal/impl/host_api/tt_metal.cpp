@@ -1178,15 +1178,13 @@ ChipId GetPCIeDeviceID(ChipId device_id) {
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
 
 std::string SerializeClusterDescriptor() {
-    // In mock/emule mode, serialize the mock cluster descriptor YAML instead of running real UMD
-    // topology discovery, which would open the physical card (reads firmware bundle version etc.)
-    // and bypass the emulator. Mirrors the gated path in tt_cluster.cpp.
-    const auto& rtoptions = MetalContext::instance().rtoptions();
-    std::filesystem::path path =
-        rtoptions.get_mock_enabled()
-            ? tt::umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path())->serialize_to_file()
-            : tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
-    return path.string();
+    // Serialize the descriptor the cluster already holds. The cluster makes the
+    // mock-vs-real (emule) decision once when it builds the descriptor at init
+    // (see tt_cluster.cpp, gated on rtoptions.get_mock_enabled()), so this layer
+    // must not re-create it: a fresh real-UMD create here would open the physical
+    // card and bypass the emulator. Assumes the cluster is initialized (this API's
+    // only caller, ttnn serialize_cluster_descriptor, runs in an active session).
+    return MetalContext::instance().get_cluster().get_cluster_desc()->serialize_to_file().string();
 }
 
 // This function is used to set a default root directory for the tt_metal library.
