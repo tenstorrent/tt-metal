@@ -1210,11 +1210,16 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     const auto layout =
         (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
 
+    tt::tt_metal::PageConfig page_config(layout);
+    if (input_tensor.layout() == Layout::TILE) {
+        page_config = tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile());
+    }
+
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype,
-            tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile()),
+            page_config,
             input_tensor.tensor_spec().memory_config(),
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
