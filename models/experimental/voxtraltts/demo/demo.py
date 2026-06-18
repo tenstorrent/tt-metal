@@ -350,9 +350,37 @@ def load_prompt_items(path: str, default_voice: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _output_highpass_hz() -> float:
+    """Sub-speech high-pass cutoff (Hz) for the final waveform; ``0`` disables.
+
+    The Voxtral codec/vocoder emits a low-frequency rumble (~−23 dB, almost entirely
+    below ~150 Hz) that is present even in the pure-torch CPU reference rollout — i.e.
+    it is inherent to the model, not a TT/trace artifact. A gentle high-pass below the
+    speech band removes the audible "feeble noise" in the gaps while leaving speech
+    (male fundamental ≳85 Hz) and all device/trace numerics untouched.
+    """
+    try:
+        return max(0.0, float(os.environ.get("VOXTRAL_OUTPUT_HPF_HZ", "60")))
+    except ValueError:
+        return 60.0
+
+
+def _apply_output_highpass(w: np.ndarray, sample_rate: int) -> np.ndarray:
+    fc = _output_highpass_hz()
+    if fc <= 0.0 or w.size == 0 or fc >= sample_rate / 2:
+        return w
+    try:
+        from scipy import signal as _sig
+    except Exception:
+        return w  # SciPy unavailable — skip cleanup rather than fail the demo
+    sos = _sig.butter(2, fc, btype="highpass", fs=sample_rate, output="sos")
+    return _sig.sosfilt(sos, w).astype(np.float32)
+
+
 def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     w = waveform_f32.detach().float().cpu().numpy().reshape(-1)
+    w = _apply_output_highpass(w, sample_rate)
     peak = float(np.abs(w).max())
     if peak > 0.95:
         w = w * (0.95 / peak)
