@@ -126,6 +126,14 @@ From `MiniMaxAI/MiniMax-M3` HF config (`text_config`). Full multimodal class is
 `sparse_index_dim=128`, `sparse_score_type="max"`, `sparse_init_block=0` (sink),
 `sparse_local_block=1` (recent block), `sparse_attention_freq=[0,0,0,1,…]`.
 
+**VERIFIED projection shapes** (real M3 checkpoint, layer 3 `self_attn`, bf16):
+- main attn: `q_proj 6144→8192` (64h×128), `k_proj 6144→512` (4h×128), `v_proj 6144→512`
+  (4h×128), `o_proj 8192→6144`; `q_norm`/`k_norm` `[128]` (per-head). GQA group = 64/4 = 16.
+  K and V both head_dim 128 — **plain GQA, no latent split**.
+- indexer (MQA-style): `index_q_proj 6144→512` (**4** heads×128), `index_k_proj 6144→128`
+  (**1** head×128), `index_q_norm`/`index_k_norm` `[128]`. Matches `indexer_score`'s
+  `q[B,4,Sq,128] / k[B,1,T,128]` signature exactly.
+
 ### 3.2 Block scheme (one sparse layer's attention)
 ```
  h [S, 6144]
@@ -133,7 +141,8 @@ From `MiniMaxAI/MiniMax-M3` HF config (`text_config`). Full multimodal class is
    ├─ Wk ─► K [S,  4, 128] ─┤ per_head QK-norm ─► partial RoPE (dims 0..63)
    ├─ Wv ─► V [S,  4, 128] ─┘
    │
-   │   INDEXER (cheap, "lightning indexer"): Wiq/Wik ─► iQ,iK [S, 4, 128]
+   │   INDEXER ("lightning indexer", MQA-style): iQ [S,4,128] (index_q_proj→512),
+   │                                              iK [S,1,128] (index_k_proj→128) + own qk-norms
    │     STEP 1  per-key score   s[s,t] = Σ_h relu(iQ·iKᵀ)·w          (indexer_score op — §4)
    │     STEP 1b block-pool      block_score[s,b] = max over 128 keys in b   ← M3-specific glue
    │     STEP 2  top-k blocks    keep top-16 blocks (+ always block 0 + local)  (topk op — §4)
@@ -147,8 +156,9 @@ From `MiniMaxAI/MiniMax-M3` HF config (`text_config`). Full multimodal class is
 ```
 DSA selects per-**key** (top-N keys); MSA selects per-**block** (top-16 of 128-token blocks,
 score = max over the block) → STEP 1b/2b (block-pool + expand) is the M3-specific glue around
-the reusable ops. Indexer weight wiring (shared vs separate iK, RoPE on index heads) **to
-confirm** against the modeling code / paper before implementing.
+the reusable ops. Indexer wiring now **verified** from the checkpoint: separate `index_{q,k}_proj`
+(4 q-heads / 1 k-head, MQA-style) each with their own `[128]` qk-norm. Still to confirm vs modeling
+code: the `w` gating term in STEP 1, whether RoPE applies to the index heads, and where block-pool lives.
 
 ---
 
@@ -161,7 +171,7 @@ They map 1:1 onto §3's steps.
 |---|---|---|---|
 | `ttnn.experimental.topk_large_indices` | ② top-k select | **MERGED** (#46833, pavlejosipovic) | **as-is** (K≤2048; M3 top-16) |
 | `ttnn.experimental.indexer_score` | ① block/key scoring | **open PR** #47223 (skrsticTT); GLM=8-head, DS-V3.2=16/64-head | M3 = **4-head/dim-128** config + **block-max-pool** glue (§3.2) |
-| `sparse_sdpa` | ③ sparse attention | **WIP branch** `pjosipovic/sparse_mla_prefill_ref` (torch ref + plan; no PR) | ⚠️ **MLA-shaped** (latent, single-kv MQA, K=576/V=512). M3 is **GQA** → we build a **GQA variant** (reuse kernel skeleton: per-token cores, flash streaming over gathered index list + sentinels, online softmax) |
+| `sparse_sdpa` | ③ sparse attention | **WIP branch** `pjosipovic/sparse_mla_prefill_ref`; **pavle is ADDING GQA support** (confirmed) | **He owns the kernel**; we provide M3 GQA **shapes + a torch test case** (golden). Our Phase 3c shrinks from "build a variant" to "spec + golden + integrate". |
 
 **Consume (reuse):** `topk_large_indices`, `indexer_score`, EP dispatch/combine, full GQA
 SDPA (layers 0–2), DeepSeek chunked-KV substrate (§5), the `deepseek_v32` demo + its torch
@@ -169,8 +179,15 @@ reference `reference_cpu/sparse_sdpa_prefill.py` as a golden template.
 **Own (build):** M3 re-dim/config, dense+MoE deltas, the **block-max-pool adapter** (§3.2),
 the **GQA `sparse_sdpa` variant**, full-model assembly.
 **Coordinate:** skrsticTT (indexer + ring/MLA SDPA area), pavlejosipovic (topk + sparse_sdpa).
-**Ask first:** is a **GQA** sparse_sdpa already planned (vs MLA-only)? If yes, Phase 3c becomes
-pure integration.
+**ANSWERED (pavle):** GQA is required and he'll add it to `sparse_sdpa` — *"give me the shapes + a
+torch test case."* So Phase 3c is now: we deliver the verified GQA shapes (§3.1) + a torch golden,
+he builds the kernel. Open Q for him: index format — key-level `[1,S,2048]` (like his MLA op) or
+block-level `[1,S,16]`?
+
+**M3 GQA `sparse_sdpa` op tensors** (per chip, mirroring his MLA op; deltas vs MLA = GQA grouping +
+plain head_dim 128, no latent split): `Q [1,64,S,128]` bf16 · `K/V [1,4,T,128]` bf16 · `Indices
+[1,S,TOPK]` uint32 (per-query, shared across q heads, `0xFFFFFFFF`=masked) · `Out [1,64,S,128]` bf16
+· `TOPK=16×128=2048`, `scale=128**-0.5`, S/T/TOPK parametric.
 
 ---
 
@@ -223,15 +240,22 @@ replicate galaxies** (one TP=4×SP=8 replica per galaxy, add galaxies for more u
 DP"), **NOT** PP and **NOT** DP-on-one-box. PP would only help if M3 didn't fit on one galaxy — it
 does, so PP buys nothing on capacity.
 
-### 6.4 MSA-specific hard part under SP
-With SP, a query's top-16 blocks can live on **any** SP shard → the indexer scores blocks across
-SP-sharded KV and the sparse gather pulls rows from other shards' chunked-KV buffers. This is the
-DeepSeek chunked-prefill + ring pattern (`chunk_start_idx`, ring over chunked KV), sparse instead
-of dense. **This cross-SP block-selection+gather is where the MSA+SP integration effort lives.**
+### 6.4 The attention runs SP, body stays TP — via a CCL bracket (team's design, confirmed)
+The indexer score is a **sum over heads** (`Σ_h relu(iQ·iKᵀ)`), and TP shards heads — so under TP
+you'd need a cross-head all-reduce just to score blocks. The team's plan (pavle): **TP doesn't make
+sense for the sparse path** (even on GLM). Instead:
+1. **CCL converts TP→SP across the 4 chips** for *both* Q tensors (indexer Q + main Q).
+2. **indexer → topk → sparse_sdpa run fully SP** (each chip owns query tokens with ALL heads → the
+   head-sum is local; clean per-query block selection).
+3. **CCL converts SP→TP back** for the rest of the layer.
+
+The **model body stays TP=4** purely to minimize churn for the rest of the system; *long-term TP
+probably goes away* (full SP). So we don't design the cross-SP selection ourselves — the op pipeline
+(indexer/topk/sparse_sdpa) consumes the SP layout, and the CCL bracket is the integration seam.
 
 ### 6.5 Open decision (blocking Phase 0 configs)
-Precise TP=4 × SP × EP layout on 4×8 (which physical axis is SP vs EP). Reference DeepSeek's
-`(8,4)` SP8/TP4 layout as a starting point.
+The attention-internal layout is settled (TP→SP CCL bracket, §6.4). Still open: the body's precise
+TP=4 × SP × EP physical mapping on 4×8 (which axis is SP vs EP). Reference DeepSeek `(8,4)` SP8/TP4.
 
 ---
 
@@ -289,8 +313,10 @@ from-scratch kernel.
   from already-merged ops to UNBLOCK TESTING.** Then optimize.
   - 3a. consume `topk_large_indices` (merged) — top-16 select.
   - 3b. drive `indexer_score` (#47223) at M3 4-head/dim-128 + add block-max-pool glue.
-  - 3c. **GQA `sparse_sdpa` variant** (our kernel item; MLA op is the template).
-  - 3d. wire indexer→pool→topk→sparse_sdpa on the chunked-KV substrate (layers 0–2 stay full).
+  - 3c. **GQA `sparse_sdpa`** — pavle builds the kernel; **we deliver the verified GQA shapes
+    (§3.1/§4) + a torch test case (golden)**, then integrate. (No longer our kernel item.)
+  - 3d. wire indexer→pool→topk→sparse_sdpa on the chunked-KV substrate, inside the TP→SP CCL
+    bracket (§6.4); layers 0–2 stay full attention.
   - **Leave `# M3-TODO:` comments at each seam** describing the intended final shape + deps,
     and keep §3/§4/§5 of this doc extended as we learn.
 - **Phase 4 — Full 60-layer integration + Galaxy bring-up.** Assemble, re-tune TP/EP/SP, real-
@@ -311,7 +337,8 @@ TP/SP/EP decision ─► Phase 0 ─► Phase 1 (dense) ─► Phase 2 (MoE) ─
    (Config A: DP=1/TP=4/SP=8), multi-user via galaxy replication, not DP=4 (§6.3/§6b).* Confirm
    the program's priority (1M-context latency vs 4-user throughput) and validate w/ the batch=1-vs-4
    MFU experiment (§6b).
-2. Is a **GQA** `sparse_sdpa` already planned (vs MLA-only)? (pavlejosipovic) — reshapes Phase 3c.
+2. ~~Is a GQA `sparse_sdpa` planned?~~ **CLOSED** — pavle is adding GQA; we owe shapes (§3.1, done)
+   + a torch golden. Remaining sub-question for him: index format (key-level `[1,S,2048]` vs block-level).
 3. Does `indexer_score`'s `chunk_start_idx` causality compose with our block-pool, or should
    pooling live inside the indexer op? (skrsticTT)
 4. Exact MSA indexer wiring (shared vs separate iK, RoPE on index heads) — confirm vs modeling code.
