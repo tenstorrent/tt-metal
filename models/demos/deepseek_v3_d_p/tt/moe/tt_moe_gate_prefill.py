@@ -54,8 +54,8 @@ class TtMoEGateConfig:
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=56,
-                    out_subblock_h=2,
-                    out_subblock_w=2,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
                     out_block_h=2,
                     out_block_w=4,
                     per_core_M=2,
