@@ -95,14 +95,15 @@ void kernel_main() {
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(27);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(28);
 
-    constexpr auto input_args = TensorAccessorArgs<29>();
+    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(29);
+
+    constexpr auto input_args = TensorAccessorArgs<30>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto dispatch_table_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t tiles_per_row = hidden_size / 32;
-    constexpr uint32_t block_ct_dim = 8;
     constexpr uint32_t num_tile_blocks = tiles_per_row / block_ct_dim;
 
 #ifdef AXIS
@@ -206,7 +207,7 @@ void kernel_main() {
         signal_ptr[0] = 0x00000000;
         cb_push_back(cb_signal_id, 1);
 
-        // 2. Stream tiled input stripe from DRAM in blocks of 8 tiles
+        // 2. Stream tiled input stripe from DRAM in blocks of block_ct_dim tiles
         for (uint32_t blk = 0; blk < num_tile_blocks; blk++) {
             cb_reserve_back(cb_input_id, block_ct_dim);
             uint32_t blk_write_ptr = get_write_ptr(cb_input_id);

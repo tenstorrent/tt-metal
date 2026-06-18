@@ -136,9 +136,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
@@ -649,9 +649,10 @@ void bind_sdpa(nb::module_& mod) {
             input_tensor_k (ttnn.Tensor): Original keys     [b x nh x N/num_devices x dh].
             input_tensor_v (ttnn.Tensor): Original values   [b x nh x N/num_devices x dh].
 
-            joint_tensor_q (ttnn.Tensor): Joint queries     [b x nh x L x dh].
-            joint_tensor_k (ttnn.Tensor): Joint keys        [b x nh x L x dh].
-            joint_tensor_v (ttnn.Tensor): Joint values      [b x nh x L x dh].
+            joint_tensor_q (ttnn.Tensor, optional): Joint queries [b x nh x L x dh]. Defaults to None (self-attention).
+            joint_tensor_k (ttnn.Tensor, optional): Joint keys    [b x nh x L x dh]. Defaults to None (self-attention).
+            joint_tensor_v (ttnn.Tensor, optional): Joint values  [b x nh x L x dh]. Defaults to None (self-attention).
+            Pass all three joints together or omit all; an empty (zero-length) joint is treated as None.
 
         Keyword args:
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
@@ -683,9 +684,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v").noconvert(),
-        nb::arg("joint_tensor_q").noconvert(),
-        nb::arg("joint_tensor_k").noconvert(),
-        nb::arg("joint_tensor_v").noconvert(),
+        nb::arg("joint_tensor_q") = nb::none(),
+        nb::arg("joint_tensor_k") = nb::none(),
+        nb::arg("joint_tensor_v") = nb::none(),
         nb::kw_only(),
         nb::arg("persistent_output_buffer_k").noconvert(),
         nb::arg("persistent_output_buffer_v").noconvert(),

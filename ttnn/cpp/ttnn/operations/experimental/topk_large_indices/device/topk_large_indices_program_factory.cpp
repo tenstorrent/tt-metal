@@ -9,7 +9,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <limits>
 #include <optional>
 #include <tuple>
 
@@ -32,19 +31,6 @@ enum class LlkTargetK : uint32_t {
 };
 
 constexpr uint32_t to_uint32(LlkTargetK target_k) { return static_cast<uint32_t>(target_k); }
-
-uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
-    uint64_t rows = 1;
-    for (uint32_t i = 0; i + 1 < shape.rank(); ++i) {
-        const auto dim = shape[i];
-        TT_FATAL(
-            dim == 0 || rows <= std::numeric_limits<uint32_t>::max() / dim,
-            "topk_large_indices flattened leading dimensions must fit in uint32_t rows; got shape {}",
-            shape);
-        rows *= shape[i];
-    }
-    return static_cast<uint32_t>(rows);
-}
 
 LlkTargetK snap_to_llk_target_k(uint32_t k) {
     if (k <= to_uint32(LlkTargetK::K512)) {

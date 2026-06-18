@@ -21,7 +21,8 @@ void core_agnostic_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_math_wait_for_dest_available();
-        llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
+        llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
+            0 /* dst_index */, 0 /* operand */);
         llk_math_dest_section_done<DST_ACCUM_MODE>();
     }
 }

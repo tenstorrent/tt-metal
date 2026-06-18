@@ -20,16 +20,17 @@
 //
 // Data layout
 // -----------
-// Every operated-on word is FP32 in DST. In the "fused" mode used by the
-// distributed top-k op, each FP32 word actually carries two pieces of data:
+// Every operated-on word is 32 bits in DST. In the "fused" mode used by the
+// distributed top-k op, each word carries two pieces of data:
 //
 //      [ bf16 value (high 16) | u16 index (low 16) ]
 //
 // Because the bf16 value sits in the high bits of the 32-bit DST word, the
 // fused compare acts as a value compare with the index as a deterministic
-// tie-breaker. This is what lets the sort use SFP register intrinsics on a
-// single 32-bit datum. (`fused=false` keeps values and indices in two distinct
-// DST regions.)
+// tie-breaker. Since that fused word is an opaque sort key, fused load/store
+// paths move it with INT32 modes so FP32 store denormal flushing cannot erase
+// low index bits. (`fused=false` keeps values and indices in two distinct DST
+// regions.)
 //
 // Bitonic sort, briefly
 // ---------------------
@@ -302,7 +303,7 @@ inline void _topk_xl_init_()
 //
 // The fused / unfused split:
 //   * `load16_rows_x2 / store16_rows_x2` — fused path. All 8 LREGs hold the
-//     packed [value | index] FP32 word.
+//     packed [value | index] INT32 payload.
 //   * `load8_rows_x2_unfused / store8_rows_x2_unfused` — unfused path. The
 //     first 4 LREGs hold FP32 values; the last 4 hold the matching INT32
 //     indices read from a parallel DST region at `indices_offset`.
@@ -326,14 +327,14 @@ inline void set_dst_write_addr_offset(std::uint32_t addr)
 template <int group_2_offset = 16>
 inline void load16_rows_x2()
 {
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, 8);
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, 12);
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 8);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 12);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 8);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 12);
 }
 
 // Store LREG0..LREG7 back to Dst (fused path), mirror of `load16_rows_x2`.
@@ -347,28 +348,28 @@ inline void load16_rows_x2()
 template <int group_2_offset = 16, int inc_dst_addr = 0>
 inline void store16_rows_x2()
 {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, 8);
-    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, 12);
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 8);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 8);
     if constexpr (inc_dst_addr == 48)
     {
-        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_1, group_2_offset + 12);
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_1, group_2_offset + 12);
     }
     else if constexpr (inc_dst_addr == 32)
     {
-        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_6, group_2_offset + 12);
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_6, group_2_offset + 12);
     }
     else if constexpr (inc_dst_addr == 16)
     {
-        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_5, group_2_offset + 12);
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_5, group_2_offset + 12);
     }
     else if constexpr (inc_dst_addr == 0)
     {
-        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 12);
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 12);
     }
     else
     {
@@ -395,16 +396,16 @@ inline void store16_rows_x2()
 template <int inc_dst_addr = 0>
 inline void store4_rows_top_only()
 {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, 8);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
     if constexpr (inc_dst_addr == 16)
     {
-        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_5, 12);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_5, 12);
     }
     else if constexpr (inc_dst_addr == 0)
     {
-        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, 12);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
     }
     else
     {
@@ -420,13 +421,13 @@ inline void store4_rows_top_only()
 template <int group_2_offset = 16>
 inline void store_first_7_rows_x2()
 {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, 8);
-    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, 12);
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 8);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 8);
 }
 
 // Unfused-path load: LREG0..3 carry 4 rows of FP32 values, LREG4..7 carry
@@ -2237,22 +2238,8 @@ inline void _topk_xl_add_lsb_indices_init_()
         .set(ADDR_MOD_4);
 }
 
-template <std::uint32_t reg>
-inline void _topk_xl_promote_positive_zero_for_fused_index_()
-{
-    // The fused representation stores the BF16 value in bits [31:16] and
-    // the tie-breaking index in bits [15:0]. For +0.0, this creates an FP32
-    // subnormal. SFPSWAP can canonicalize that back to +0.0, erasing the
-    // index payload. Use a tiny negative normal surrogate for +0.0 while the
-    // value is internal to topk_large_indices; the op returns indices only.
-    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_LOWER, 0);
-    TTI_SFPSETCC(0, reg, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_UPPER, 0x8080);
-    TTI_SFPENCC(0, 0, 0, 0);
-}
-
 // Builds the per-element global index in LREG0..LREG3 and ORs it into the
-// low 16 bits of each FP32 word in the first two DST tiles.
+// low 16 bits of each fused payload in the first two DST tiles.
 //
 // The 16-bit index layout is:
 //
@@ -2299,18 +2286,14 @@ inline void _topk_xl_add_lsb_indices_()
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // ── OR the precomputed indices into the low 16 bits of every DST word.
-    // The body is recorded into replay slots [0..31] once and replayed for the
+    // The body (12 instructions: 4 loads + 4 ORs + 4 stores + 4 IADDs) is
+    // recorded into replay slots [0..15] once and replayed for the
     // remaining iters.
-    lltt::record<lltt::Exec>(0, 32);
+    lltt::record<lltt::Exec>(0, 16);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 2);
-
-    _topk_xl_promote_positive_zero_for_fused_index_<p_sfpu::LREG4>();
-    _topk_xl_promote_positive_zero_for_fused_index_<p_sfpu::LREG5>();
-    _topk_xl_promote_positive_zero_for_fused_index_<p_sfpu::LREG6>();
-    _topk_xl_promote_positive_zero_for_fused_index_<p_sfpu::LREG7>();
 
     TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
     TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
@@ -2329,7 +2312,7 @@ inline void _topk_xl_add_lsb_indices_()
 
     for (int i = 1; i < 4; i++)
     {
-        lltt::replay(0, 32);
+        lltt::replay(0, 16);
     }
 
     // Outer loop over the remaining face-pairs. We hoist the
@@ -2353,7 +2336,7 @@ inline void _topk_xl_add_lsb_indices_()
 
         for (int i = 0; i < 4; i++)
         {
-            lltt::replay(0, 32);
+            lltt::replay(0, 16);
         }
     }
 }

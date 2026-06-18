@@ -75,7 +75,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     const ttnn::Tensor& routed_w2,
     const ttnn::Tensor& shared_w0,
     const ttnn::Tensor& shared_w1,
-    const ttnn::Tensor& shared_w2);
+    const ttnn::Tensor& shared_w2,
+    uint32_t cluster_axis,
+    uint32_t bh_ring_size = 12);
 
 // Pack W0/W1 into the interleaved, padded, per-core layout the MoE kernel reads.
 // Output local shape: ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE)``.

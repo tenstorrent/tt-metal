@@ -16,19 +16,6 @@ namespace {
 constexpr uint32_t max_supported_k = 2048;
 constexpr uint32_t max_row_elements = 1u << 30;
 
-uint64_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
-    uint64_t rows = 1;
-    for (uint32_t i = 0; i + 1 < shape.rank(); ++i) {
-        const auto dim = shape[i];
-        TT_FATAL(
-            dim == 0 || rows <= std::numeric_limits<uint32_t>::max() / dim,
-            "topk_large_indices flattened leading dimensions must fit in uint32_t rows; got shape {}",
-            shape);
-        rows *= dim;
-    }
-    return rows;
-}
-
 void validate_static_args(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
 
