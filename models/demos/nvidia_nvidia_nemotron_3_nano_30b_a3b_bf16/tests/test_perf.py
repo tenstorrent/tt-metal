@@ -481,7 +481,8 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         print(f"\n[ISL={isl}] tail: {repr(text[-120:])}")
 
         if isl > _SMALL_ISL_MAX:
-            del _state  # free the per-ISL KV cache before the next allocation
+            _state.free()  # explicitly free DRAM; del alone is non-deterministic (GC fragmentation)
+            del _state
 
     # --- Summary table ---
     print("\n" + "=" * 78)

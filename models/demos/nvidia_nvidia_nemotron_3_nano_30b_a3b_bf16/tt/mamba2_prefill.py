@@ -367,6 +367,7 @@ def mamba2_prefill_layer_forward(
     _proj_partial = ttnn.linear(normed, ip_tt, transpose_b=True)  # [B, S, 2576]/device
     projected = all_gather(_proj_partial, dim=2)  # [B, S, 10304]
     _proj_partial.deallocate(True)
+    normed.deallocate(True)  # no longer needed; frees [B, S, 2688] (0.7 GB at ISL=131K)
 
     # ---- 3. Split projected ----------------------------------------
     gate = ttnn.slice(projected, [0, 0, 0], [B, S, INTERMEDIATE_SIZE])
@@ -409,22 +410,18 @@ def mamba2_prefill_layer_forward(
     # decay: [B, S, H],  x_dt: [B, S, H, D]
     dt_slice.deallocate(True)
 
-    # ---- 9. Expand B / C from N_GROUPS to NUM_HEADS ------------------
-    B_exp = _expand_groups(B_4d)  # [B, S, H, N]
-    B_4d.deallocate(True)
-    C_exp = _expand_groups(C_4d)  # [B, S, H, N]
-    C_4d.deallocate(True)
-
-    # ---- 10. D skip scalar -------------------------------------------
+    # ---- 9. D skip scalar -------------------------------------------
     D_tt = _rep_keyed(("pf_D", id(D)), D.float().bfloat16().view(1, 1, NUM_HEADS, 1), mesh_device)
     D_tt = _rr(D_tt, [1, NUM_HEADS, 1, 1])  # [1, H, 1, 1]
 
-    # ---- 11. Chunked SSD scan ----------------------------------------
+    # ---- 10. Chunked SSD scan ----------------------------------------
+    # B/C are kept in N_GROUPS shape ([B, S, N_GROUPS, N]) and expanded to NUM_HEADS
+    # per chunk inside the scan loop.  This avoids ever materialising full-sequence
+    # B_exp/C_exp tensors ([B, S, NUM_HEADS, N]) which are 4.3 GB each at ISL=262K.
+    # Per-chunk expansion cost: N_GROUPS slices + 1 concat over CHUNK_SIZE=64 tokens → trivial.
+    #
     # Pad S to a multiple of CHUNK_SIZE.
-    # When pad_S > 0 at large ISL (e.g. 262112→pad_S=32), B_exp/C_exp are each 4.29 GB.
-    # Creating all padded copies before freeing originals would briefly total ~36 GB (OOM).
-    # Fix: create each padded tensor and immediately free the original, capping the peak
-    # at ~25 GB (one pair of orig+pad at a time).
+    # B_4d/C_4d are padded at N_GROUPS width (8x smaller than the old B_exp/C_exp padding).
     pad_S = (-S) % CHUNK_SIZE
     if pad_S > 0:
         _z_hd = ttnn.zeros(
@@ -434,8 +431,8 @@ def mamba2_prefill_layer_forward(
             layout=_TL,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        _z_hn = ttnn.zeros(
-            [B, pad_S, NUM_HEADS, SSM_STATE_SIZE],
+        _z_gn = ttnn.zeros(
+            [B, pad_S, N_GROUPS, SSM_STATE_SIZE],
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=_TL,
@@ -455,12 +452,12 @@ def mamba2_prefill_layer_forward(
         x_dt_pad = ttnn.concat([x_dt, _z_hd], dim=1)
         x_dt.deallocate(True)
 
-        B_pad = ttnn.concat([B_exp, _z_hn], dim=1)
-        B_exp.deallocate(True)
+        B_pad = ttnn.concat([B_4d, _z_gn], dim=1)  # [B, S_pad, N_GROUPS, N]
+        B_4d.deallocate(True)
 
-        C_pad = ttnn.concat([C_exp, _z_hn], dim=1)
-        C_exp.deallocate(True)
-        _z_hn.deallocate(True)
+        C_pad = ttnn.concat([C_4d, _z_gn], dim=1)  # [B, S_pad, N_GROUPS, N]
+        C_4d.deallocate(True)
+        _z_gn.deallocate(True)
 
         x_pad = ttnn.concat([x_4d, _z_hd], dim=1)
         x_4d.deallocate(True)
@@ -468,8 +465,8 @@ def mamba2_prefill_layer_forward(
     else:
         decay_pad = decay
         x_dt_pad = x_dt
-        B_pad = B_exp
-        C_pad = C_exp
+        B_pad = B_4d  # [B, S, N_GROUPS, N] — no full-sequence expand needed
+        C_pad = C_4d
         x_pad = x_4d
 
     S_pad = S + pad_S
@@ -484,8 +481,10 @@ def mamba2_prefill_layer_forward(
 
         decay_c = ttnn.slice(decay_pad, [0, t0, 0], [B, t1, NUM_HEADS])
         x_dt_c = ttnn.slice(x_dt_pad, [0, t0, 0, 0], [B, t1, NUM_HEADS, HEAD_DIM])
-        B_c = ttnn.slice(B_pad, [0, t0, 0, 0], [B, t1, NUM_HEADS, SSM_STATE_SIZE])
-        C_c = ttnn.slice(C_pad, [0, t0, 0, 0], [B, t1, NUM_HEADS, SSM_STATE_SIZE])
+        _B_g_c = ttnn.slice(B_pad, [0, t0, 0, 0], [B, t1, N_GROUPS, SSM_STATE_SIZE])
+        B_c = _expand_groups(_B_g_c)  # [B, C, NUM_HEADS, N] — 64-token expand, ~1 MB
+        _C_g_c = ttnn.slice(C_pad, [0, t0, 0, 0], [B, t1, N_GROUPS, SSM_STATE_SIZE])
+        C_c = _expand_groups(_C_g_c)  # [B, C, NUM_HEADS, N]
         x_c = ttnn.slice(x_pad, [0, t0, 0, 0], [B, t1, NUM_HEADS, HEAD_DIM])
 
         y_c, h_prev = _mamba2_ssd_chunk(decay_c, x_dt_c, B_c, C_c, D_tt, x_c, h_prev, mesh_device)
@@ -493,12 +492,10 @@ def mamba2_prefill_layer_forward(
 
     ssm_state_new = h_prev  # [B, H, D, N]
 
-    # Free large SSM input arrays — no longer needed after the scan loop.
-    # When pad_S==0, B_pad IS B_exp (same Python object) so freeing B_pad also frees B_exp.
-    # When pad_S>0, originals were already freed during pad creation above — only
-    # the _pad tensors remain and need cleanup here.
-    # At ISL=262K these sum to ~12.7 GB; releasing them before _rr(y_full)
-    # drops peak DRAM from ~25 GB to ~12 GB (34.2 GB budget on each BH device).
+    # Free SSM input arrays — no longer needed after the scan loop.
+    # B_pad/C_pad are now [B, S_pad, N_GROUPS, N] (8x smaller than the old B_exp/C_exp).
+    # When pad_S==0 they alias B_4d/C_4d directly; when pad_S>0 originals were freed
+    # during pad creation above — only the _pad tensors remain here.
     for _t in [B_pad, C_pad, x_dt_pad, x_pad, decay_pad]:
         _t.deallocate(True)
 

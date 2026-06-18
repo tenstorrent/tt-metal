@@ -152,6 +152,29 @@ class DecoderState:
             )
             ttnn.copy_host_to_device_tensor(zeros_pos, self.current_pos)
 
+    def free(self) -> None:
+        """Explicitly deallocate all device-side DRAM buffers.
+
+        Call before `del state` when the state is no longer needed — Python's
+        GC is non-deterministic and may leave large KV-cache blocks allocated
+        long enough to fragment DRAM and block subsequent state allocations.
+        """
+        for t in self.ssm_states + self.ssm_state_outs:
+            t.deallocate(True)
+        for tup in list(self.conv_states) + list(self.conv_state_outs):
+            for t in tup:
+                t.deallocate(True)
+        for k_tt, v_tt in self.kv_caches:
+            k_tt.deallocate(True)
+            v_tt.deallocate(True)
+        for t in self.page_tables:
+            t.deallocate(True)
+        if self.current_pos is not None:
+            self.current_pos.deallocate(True)
+        for t in self.routing_tts:
+            if t is not None:
+                t.deallocate(True)
+
     def advance_routing(self, mesh_device) -> None:
         """D2H gate scores → CPU topk → H2D routing tensors for the next decode step.
 
