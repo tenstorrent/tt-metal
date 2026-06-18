@@ -144,6 +144,7 @@ scaleout:
     bh_galaxy: 60
     bh_spsg: 20 # single galaxy
     bh_sp1: 90
+    bh_sp1-blitz: 90
     bh_sp1-mgd: 90
     bh_sp4: 150
     bh_loudbox: 80

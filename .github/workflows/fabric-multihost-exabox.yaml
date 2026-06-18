@@ -34,8 +34,6 @@ jobs:
     name: Create Allocation for 32x4 RINGxRING
     needs: build-artifact
     timeout-minutes: 30
-    outputs:
-      mgd: ${{ steps.mgd.outputs.mgd }}
     runs-on:
       group: exabox
       labels: exabox-multihost
@@ -44,22 +42,15 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
 
-      - name: MGD
-        id: mgd
+      - name: Extract allocation spec from SKU
+        id: extract-spec
         run: |
-          MGD_CONFIG='
-            mesh_descriptors {
-              name: \"M0\"
-              arch: BLACKHOLE
-              device_topology { dims: [ 32,4 ] dim_types: [ RING,RING ] }
-              host_topology   { dims: [ 4,1 ] }
-              channels { count: 2 policy: RELAXED }
-            }
-            top_level_instance { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } }
-          '
-          echo "mgd<<EOF" >> $GITHUB_OUTPUT
-          echo "$MGD_CONFIG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          pip3 install PyYAML
+          {
+            echo "allocation_spec<<EOF"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sp1-mgd"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Create allocation
         id: allocation
@@ -67,12 +58,7 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-metal
           namespace: ttop-ci
-          spec: |
-            allocationType: Count
-            count: 4
-            matchLabels:
-              exabox.tenstorrent.com/purpose: ci-metal
-              exabox.tenstorrent.com/superpod: A29
+          spec: ${{ steps.extract-spec.outputs.allocation_spec }}
 
   run:
     name: Run test
@@ -127,15 +113,6 @@ jobs:
           useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
           path: /etc/ttop
-
-      - name: Setup tt-run
-        uses: ./.github/actions/ttop-configure-tt-run
-        timeout-minutes: 5
-        with:
-          directory: /ci/ttrun
-          allocationConfigPath: /etc/ttop
-          mgd: ${{ needs.create-allocation.outputs.mgd }}
-          copyToWorkers: false
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -288,7 +265,12 @@ jobs:
         timeout-minutes: 20
         working-directory: /home/user/tt-metal
         run: |
-          tt-run --skip-mgd-check --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /etc/ttop/hostfile)" \
+          TTRUN_DIR=/etc/ttop
+          PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+          tt-run --skip-mgd-check --skip-executable-check \
+            --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+            --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
             /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
 
   cleanup:
