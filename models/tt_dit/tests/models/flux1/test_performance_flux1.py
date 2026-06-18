@@ -370,7 +370,6 @@ def test_flux1_pipeline_performance_speed(
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     PERF_TEST_MESH_PARAMS,
-    ids=PERF_TEST_MESH_IDS,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -449,7 +448,6 @@ def test_flux1_pipeline_performance_accuracy(
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     PERF_TEST_MESH_PARAMS,
-    ids=PERF_TEST_MESH_IDS,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
