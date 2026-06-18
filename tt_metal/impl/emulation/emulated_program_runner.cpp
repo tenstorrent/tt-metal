@@ -2151,9 +2151,22 @@ static void launch_cores(
     std::vector<std::thread> core_threads;
     std::vector<std::exception_ptr> core_exceptions(core_setups.size());
 
+    // Startup barrier modeling silicon's simultaneous multi-core dispatch. emule
+    // spawns kernel threads sequentially, so without it an early thread can run its
+    // whole kernel (including cross-core semaphore increments) before a later peer
+    // has executed its prologue — e.g. racing ahead of an argmax reducer's k=0
+    // done_sem reset. Releasing all threads from one barrier restores "all cores
+    // start together".
+    size_t total_kernel_threads = 0;
+    for (const auto& cs : core_setups) {
+        total_kernel_threads += cs.ki_list->size();
+    }
+    std::atomic<uint32_t> kernel_start_barrier{0};
+
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         core_threads.emplace_back(
-            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx]]() {
+            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx],
+             &kernel_start_barrier, total_kernel_threads]() {
                 try {
                     auto* core = cs.core;
                     uint8_t* l1_data = core->l1_data();
@@ -2188,6 +2201,8 @@ static void launch_cores(
                                               lx,
                                               ly,
                                               kidx,
+                                              &kernel_start_barrier,
+                                              total_kernel_threads,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
@@ -2219,6 +2234,13 @@ static void launch_cores(
                             __emule_trisc_id = 0;
                             __emule_num_threads = ki.num_threads;
                             __emule_my_thread_id = ki.thread_idx;
+
+                            // Startup barrier (declared in launch_cores): all
+                            // kernel threads start together.
+                            kernel_start_barrier.fetch_add(1, std::memory_order_acq_rel);
+                            while (kernel_start_barrier.load(std::memory_order_acquire) < total_kernel_threads) {
+                                std::this_thread::yield();
+                            }
 
                             log_debug(
                                 tt::LogMetal,
