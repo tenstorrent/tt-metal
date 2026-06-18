@@ -204,7 +204,7 @@ models:
     wh_llmbox: 198
     bh_p150b_civ2: 63
     bh_p300: 20
-    bh_loudbox: 190 # +30 for mistral-small-4-119b text correctness + serving tests
+    bh_loudbox: 160
     bh_quietbox_2: 40
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
@@ -227,6 +227,7 @@ models:
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
+    bh_loudbox: 20 # mistral-small-4-119b e2e (trace + generate), P150x8
   unit:
     wh_llmbox: 100
     wh_galaxy_perf: 10
@@ -253,6 +254,7 @@ models:
     bh_p150: 20
     bh_p300: 30
     bh_quietbox_2: 21
+    bh_loudbox: 20 # mistral-small-4-119b unit (MLA + MoE + decoder PCC), P150x8
   integration:
     wh_llmbox: 422
   perf:

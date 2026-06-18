@@ -181,6 +181,23 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Mistral-Small-4-119B unit tests
+  cmd: |
+    set -e
+    uv pip install -r models/demos/mistral4/requirements.txt
+    export HF_MODEL=mistralai/Mistral-Small-4-119B-2603 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-Small-4-119B-2603
+    pytest --timeout 900 \
+      models/demos/mistral4/tests/test_m4_mla.py \
+      models/demos/mistral4/tests/test_m4_moe_sharded.py \
+      models/demos/mistral4/tests/test_m4_decoder_layer.py
+  model: mistral-small-4-119b
+  skus:
+    bh_loudbox: # P150x8 — shards the 128 experts across the 8 devices
+      timeout: 20
+      tier: 3
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng)
+  team: models
+
 - name: Gemma-3-4B unit tests
   cmd: |
     pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "4b"
