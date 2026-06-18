@@ -22,6 +22,7 @@ from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
     decoder_up_level_specs,
 )
 from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import HunyuanSymmetricConv3d
+from models.experimental.hunyuan_image_3_0.tt.vae.spatial import gather_hw, partition_hw, norm_sharded
 from models.experimental.hunyuan_image_3_0.tt.vae.decoder_weights import (
     init_conv_in as init_conv_in_weights,
     init_decoder_tail as init_decoder_tail_weights,
@@ -292,14 +293,22 @@ class ResnetBlockTTNN(Module):
         if prefix:
             self._prefix = prefix
 
+    def _gn(self, norm, x):
+        # Spatial-parallel: gather H/W -> GroupNorm -> re-shard (per-group stats need
+        # full spatial). Replicated path (no _sp_ccl) runs the norm directly.
+        ccl = getattr(self, "_sp_ccl", None)
+        if ccl is None:
+            return norm(x)
+        return norm_sharded(norm, x, ccl, h_mesh_axis=self._sp_h, w_mesh_axis=self._sp_w)
+
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         residual = self.nin_shortcut(x_bthwc) if self.nin_shortcut is not None else x_bthwc
 
-        h = self.norm1(x_bthwc)
+        h = self._gn(self.norm1, x_bthwc)
         h = ttnn.silu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = self.conv1(h)
 
-        h = self.norm2(h)
+        h = self._gn(self.norm2, h)
         h = ttnn.silu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = self.conv2(h)
 
@@ -360,6 +369,18 @@ class AttnBlockTTNN(Module):
         return ttnn.reshape(x_btsc, (b, t, h, w, c))
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        # Attention is global over T*H*W, so under spatial sharding gather the whole
+        # block to full spatial (cheap — attn only runs at 64x64), then re-shard. The
+        # 1x1 convs inside run correctly on the full tensor (padding 0 -> no halo).
+        ccl = getattr(self, "_sp_ccl", None)
+        if ccl is not None:
+            x_full = gather_hw(ccl, x_bthwc, h_mesh_axis=self._sp_h, w_mesh_axis=self._sp_w)
+            out_full = self._forward_impl(x_full)
+            ttnn.deallocate(x_full, force=False)
+            return partition_hw(out_full, h_mesh_axis=self._sp_h, w_mesh_axis=self._sp_w)
+        return self._forward_impl(x_bthwc)
+
+    def _forward_impl(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         residual = x_bthwc
         b, t, h, w, c = x_bthwc.shape
 
@@ -547,7 +568,11 @@ class NormOutTTNN(Module):
         )
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
-        h = self.norm(x_bthwc)
+        ccl = getattr(self, "_sp_ccl", None)
+        if ccl is None:
+            h = self.norm(x_bthwc)
+        else:
+            h = norm_sharded(self.norm, x_bthwc, ccl, h_mesh_axis=self._sp_h, w_mesh_axis=self._sp_w)
         return ttnn.mul(
             h, ttnn.sigmoid(h, memory_config=ttnn.DRAM_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
