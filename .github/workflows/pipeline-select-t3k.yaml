@@ -77,7 +77,6 @@ on:
           - wan22
           - flux1-dev
           - motif
-          - gemma-3-27b-it
       t3000-integration:
         description: "Integration tests: Select 'all', specific model or 'disabled'"
         type: choice
