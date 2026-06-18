@@ -888,6 +888,10 @@ patch = {
     "refinement_count": int(os.environ.get("REFINEMENT_COUNT", "0")),
     "cycles_attempted": int(os.environ.get("CYCLE", "1")),
     "cycles_cap": int(os.environ.get("MAX_CYCLES", "3")),
+    # Base commit the worktree branch was cut from (origin/main at Step 0). The
+    # `generated.patch` archived in Step 5d applies cleanly on top of this commit.
+    "base_commit": os.environ.get("GIT_COMMIT", "unknown"),
+    "artifact_patch": "generated.patch",
 }
 print(json.dumps(patch))
 PY
@@ -941,6 +945,43 @@ cp tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py   "$LOG_DIR/
 cp tests/python_tests/{target_arch}/emu_*_.log      "$LOG_DIR/" 2>/dev/null || true
 cp tests/python_tests/{target_arch}/tt-exalens.log  "$LOG_DIR/" 2>/dev/null || true
 ```
+
+The copies above snapshot the **new** files (kernel + tests) for easy reading,
+but they do **not** capture changes to files the run *modified in place* —
+shared helpers like `tests/python_tests/helpers/golden_generators.py`,
+`tests/python_tests/helpers/llk_params.py`, and `tt_llk_{target_arch}/llk_lib/llk_defs.h`.
+Copying those whole is wrong: it duplicates a large shared file and, on re-apply
+over a newer `origin/main`, would clobber unrelated upstream edits.
+
+Instead capture the **entire change set as one apply-able patch**. Do **not**
+enumerate expected filenames — that misses anything the run touched that you did
+not predict. The worktree is dedicated to this single run and was branched from
+`origin/main`, so *every* uncommitted change under `tt_llk_{target_arch}/` and
+`tests/` is, by definition, this run's output. Let git enumerate it:
+
+```bash
+# CWD is $WORKTREE_DIR/tt_metal/tt-llk.
+# `git add -AN` records intent-to-add for every NEW (untracked) file so it shows
+# in the diff as a new-file diff; modified tracked files already diff as hunks.
+# The :(exclude) pathspecs drop env junk that is untracked but not part of the
+# run's output (the venv, the SFPI toolchain symlink, bytecode caches).
+# `git reset` reverses the intent-to-add — this only ever touches the throwaway
+# per-run worktree index (never committed, never pushed), so the
+# read-only-source-branch policy is not violated.
+PATHSPEC="tt_llk_{target_arch} tests :(exclude)tests/.venv :(exclude)tests/sfpi :(exclude)**/__pycache__/**"
+git add -AN -- $PATHSPEC 2>/dev/null || true
+git diff --binary HEAD -- $PATHSPEC > "$LOG_DIR/generated.patch"
+git reset -q -- $PATHSPEC 2>/dev/null || true
+```
+
+New files land as full `new file` diffs (there is no base to dedup against);
+modified shared files (`golden_generators.py`, `llk_params.py`, `llk_defs.h`,
+and anything else the run edited) land as **hunks only** — the precise delta to
+re-apply, never a full copy.
+
+Reapply later from the tt-metal repo root with:
+`git checkout <base_commit> && git apply <LOG_DIR>/generated.patch`
+where `<base_commit>` is the `base_commit` field written into `run.json` (Step 5b).
 
 ### 5e: Verify agent logs exist
 
