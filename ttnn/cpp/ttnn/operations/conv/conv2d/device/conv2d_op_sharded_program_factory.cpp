@@ -909,32 +909,46 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
 
-    // ── caller_owns class (DEFAULT — replaces SBM+pin for the deep-K pin class) ───────────────────────
-    // The compute kernel pins (pin_interm_to_captured_base) exactly when:
+    // ── caller_owns class (DEFAULT — replaces SBM+pin for the deep-K INTERM-target pin class) ─────────
+    // The compute kernel used to pin (pin_interm_to_captured_base) exactly when:
     //     packer_l1_acc && SubblockMajor && (fuse_bias || untilize_out || !partials_cb_uses_output)
-    // (see conv_pin in conv_bmm_tilize.cpp). Step (a) of dropping pin: that same class now routes through
-    // the matmul-helper caller_owns_pack_target + TileRowMajor path instead. caller_owns requires
-    // TileRowMajor layout + DEDICATED (non-aliased) partials, which get_cb_info now guarantees for the
-    // bias members of this class (caller_owns_class_forces_dedicated there). For these convs
-    // out_subblock_w == per_core_N (in1_num_subblocks == 1), so TileRowMajor is BYTE-IDENTICAL to
-    // SubblockMajor — we KEEP the SBM-derived subblock (no relaxed re-derive) and only flip the layout
-    // flag + emit CONV_CALLER_OWNS_PACK_TARGET. The kernel then computes conv_pin == false (it requires
-    // SubblockMajor; caller_owns forces TileRowMajor) — caller_owns and pin stay mutually exclusive.
+    // (see conv_pin in conv_bmm_tilize.cpp). Dropping pin routes that class through the matmul-helper
+    // caller_owns_pack_target + TileRowMajor path instead. caller_owns requires TileRowMajor layout +
+    // DEDICATED (non-aliased) partials. For the engaged convs out_subblock_w == per_core_N
+    // (in1_num_subblocks == 1), so TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the
+    // SBM-derived subblock (no relaxed re-derive) and only flip the layout flag + emit
+    // CONV_CALLER_OWNS_PACK_TARGET. The kernel then computes conv_pin == false (it requires SubblockMajor;
+    // caller_owns forces TileRowMajor) — caller_owns and pin stay mutually exclusive.
     //
     // Engage only when the production no-bias TRM-relaxed path above did NOT already claim this conv
     // (conv_tile_pack_row_major still false): that path re-derives a taller subblock, which is incompatible
     // with the byte-identical SBM-subblock requirement here. TT_CONV_TRM_DISABLE forces the SBM+pin path
     // back (get_cb_info also re-aliases partials under that flag) for a true caller_owns-vs-pin A/B.
     //
-    // Scope: the fuse_bias members of the pin class — (packer_l1_acc && has_bias). The kernel's
-    // caller_owns reserve/push is on matmul_partials_cb (the bias-add reads partials and writes a DISTINCT
-    // out_cb), which is the validated PoC path (rn50 DS2/DS3/L3a/L3b/L4a/L4b, bit-identical to SBM+pin).
-    // Other pin-class members stay SBM+pin for now (pin is NOT deleted — a later step extends caller_owns):
-    //   • OUT-target (no bias, no untilize, dedicated partials — e.g. vu_512_30x40_BS): the matmul packs
-    //     straight to out_cb, so the caller_owns-on-partials reserve/push contract does not apply.
-    //   • untilize_out Interm target: the untilize phase's partials consume + ptr-rewind is not yet
-    //     validated against the caller-owned single reserve/push.
-    const bool pin_class_caller_owns = packer_l1_acc_en && has_bias;
+    // Scope: the INTERM-target members of the pin class — the matmul packs its last K-block to the
+    // DEDICATED matmul_partials_cb (LastBlockTarget::Interm), and the kernel's caller_owns reserve/push
+    // is on matmul_partials_cb. The downstream consumer reads partials and writes a DISTINCT out_cb:
+    //   • fuse_bias  (step a): bias-add reads partials → out_cb. Validated on rn50 DS2/DS3/L3a/L3b/L4a/L4b
+    //     (bit-identical to SBM+pin).
+    //   • untilize_out, no bias (step a′): the untilize phase reads the row-major partials via plain
+    //     `untilize` (WaitMode::WaitBlock) → out_cb — the SAME helper instantiation CCL all_gather and the
+    //     bias path use (LastBlockTarget::Interm + TileRowMajor + caller_owns_pack_target). The +12.7%
+    //     pin win on these (vu_512_30x40_BS ROW_MAJOR) is preserved without pin.
+    // The OUT target (no bias, no untilize, dedicated multi-output-block partials) is NOT migrated to
+    // caller_owns and is taken off pin via the dropped !partials_cb_uses_output trigger in conv_pin (it
+    // runs the helper's NON-pin FIFO). Rationale: it has no production-trace vehicle (every real no-bias
+    // TILE conv is single-output-block → partials aliased onto OUT → already non-pin; multi-output-block
+    // OUT pin is only reachable via a synthetic act_block_h override), and caller_owns + the Out-target
+    // software-reload would need new shared-helper logic untested by any shipped caller (CCL/bias/untilize
+    // all use the Interm target). The synthetic-only non-pin perf delta is accepted.
+    //
+    // caller_owns keeps the SBM-derived subblock (no relaxed re-derive). For in1_num_subblocks == 1
+    // (out_subblock_w == per_core_N) TileRowMajor is BYTE-IDENTICAL to SBM; for in1_num_subblocks > 1
+    // TileRowMajor is a different-but-valid layout (the helper's row-strided pack + the consumer's
+    // row-major read agree), proven correct by the step-(a) bias convs (SD per_core_N=10, in1=2) and the
+    // d7b9fb1ad1c absolute-offset fix for in0_num_subblocks > 1. So NO in1-subblock guard — every
+    // packer_l1_acc INTERM-target conv (fuse_bias OR untilize_out) routes to caller_owns.
+    const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out);
     const bool trm_disable = std::getenv("TT_CONV_TRM_DISABLE") != nullptr;
     if (!conv_tile_pack_row_major && pin_class_caller_owns && !trm_disable) {
         conv_tile_pack_row_major = true;
@@ -1132,6 +1146,33 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         if (conv_caller_owns) {
             compute_defines["CONV_CALLER_OWNS_PACK_TARGET"] = "1";
         }
+    }
+
+    // CONV_PIN_AUDIT: mirror the kernel's conv_pin constexpr from the host flags so the drop-pin
+    // invariant is log-confirmable per conv without device-side logging. After step a′ the kernel is
+    //   conv_pin = packer_l1_acc && (output_layout==SubblockMajor) && (fuse_bias || untilize_out)
+    // and the kernel forces TileRowMajor (→ SubblockMajor false) whenever conv_tile_pack_row_major is set
+    // (caller_owns OR the no-bias TRM-relaxed path), so the host mirror is
+    // SubblockMajor == !conv_tile_pack_row_major. In the default (non-TT_CONV_TRM_DISABLE) path this
+    // resolves to conv_pin == false for every conv: fuse_bias/untilize_out go caller_owns (TileRowMajor),
+    // and the OUT target no longer triggers pin.
+    {
+        const bool host_subblock_major = !conv_tile_pack_row_major;
+        const bool host_conv_pin = packer_l1_acc_en && host_subblock_major && (has_bias || untilize_out);
+        log_debug(
+            tt::LogOp,
+            "CONV_PIN_AUDIT conv_pin={} | packer_l1_acc={} subblock_major={} has_bias={} untilize_out={} "
+            "dedicated_partials={} | trm={} caller_owns={} per_core_M={} per_core_N={}",
+            host_conv_pin,
+            packer_l1_acc_en,
+            host_subblock_major,
+            has_bias,
+            untilize_out,
+            !partials_cb_uses_output,
+            conv_tile_pack_row_major,
+            conv_caller_owns,
+            act_block_h_ntiles,
+            weight_block_w_ntiles);
     }
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
