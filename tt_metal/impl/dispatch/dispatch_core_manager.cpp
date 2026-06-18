@@ -261,12 +261,15 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         //   - chip is not MMIO-capable (RT profiler is gated to MMIO chips upstream);
         //   - dispatch core type is ETH (pool holds ethernet cores, not tensixes);
         //   - fabric tensix datamover (MUX or UDM) is enabled (it claims dispatch-pool slots
-        //     at fabric-init time and shrinking the pool further can starve fabric_mux_core).
+        //     at fabric-init time and shrinking the pool further can starve fabric_mux_core);
+        //   - chip is Quasar (FD kernels are placed on the same core, a significant architectural
+        //     change from WH/BH, so the RT profiler isn't currently supported on Quasar).
         const bool is_mmio = env.get_cluster().get_associated_mmio_device(device_id) == device_id;
         const bool fabric_tensix_datamover_enabled =
             env.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED;
+        const bool is_quasar = env.get_cluster().arch() == tt::ARCH::QUASAR;
         if (is_mmio && get_core_type_from_config(dispatch_core_config) == CoreType::WORKER &&
-            !fabric_tensix_datamover_enabled && !logical_dispatch_cores.empty()) {
+            !fabric_tensix_datamover_enabled && !is_quasar && !logical_dispatch_cores.empty()) {
             CoreCoord rt_core = logical_dispatch_cores.back();
             logical_dispatch_cores.pop_back();
             this->reserved_realtime_profiler_core_by_device_.emplace(
