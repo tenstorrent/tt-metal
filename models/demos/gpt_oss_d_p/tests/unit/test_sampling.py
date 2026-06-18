@@ -22,9 +22,10 @@ from loguru import logger
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.sampling.tt_sampling import TTSampling
+from models.common.utility_functions import is_blackhole
 from models.demos.gpt_oss.tt.model import compute_per_device_vocab
 
-# Every test in this module is pinned to a 4×8 Galaxy mesh with FABRIC_1D_RING
+# Every test in this module is pinned to a 4×8 Galaxy mesh (FABRIC_1D on BH, FABRIC_1D_RING on WH)
 # (see GPT_OSS_DEVICE_PARAMS below). On systems with fewer devices — e.g. the
 # 1×1 Blackhole P150 dev box — pytest's mesh_device fixture would TT_FATAL when
 # trying to open a 4×8 mesh; skip the whole module instead so the rest of the
@@ -88,10 +89,10 @@ VOCAB_SIZE = 201088
 MAX_TOP_K = 32
 BATCH_SIZE = 32
 
-# GPT-OSS device params: FABRIC_1D_RING + large trace region.
+# GPT-OSS device params: BH Galaxy uses FABRIC_1D (no torus links); WH uses FABRIC_1D_RING.
 # NOT Llama Galaxy's dispatch_core_axis/worker_l1_size/small trace.
 GPT_OSS_DEVICE_PARAMS = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D if is_blackhole() else ttnn.FabricConfig.FABRIC_1D_RING,
     "trace_region_size": 30000000,
 }
 

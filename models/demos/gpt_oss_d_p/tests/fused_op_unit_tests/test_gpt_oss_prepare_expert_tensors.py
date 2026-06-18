@@ -25,9 +25,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, profiler
+from models.common.utility_functions import comp_pcc, is_blackhole, profiler
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
+
+_GALAXY_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D if is_blackhole() else ttnn.FabricConfig.FABRIC_1D_RING
 
 DEVICE_PERF_ENV_VAR = "GPT_OSS_PREPARE_EXPERT_TENSORS_DEVICE_PERF"
 PERF_WARMUP_ITERS = 10
@@ -606,7 +608,7 @@ def _skip_single_device_no_ccl():
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": _GALAXY_FABRIC_CONFIG,
             "trace_region_size": 30000000,
         }
     ],
@@ -690,7 +692,7 @@ def test_gpt_oss_prepare_expert_tensors(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": _GALAXY_FABRIC_CONFIG,
             "trace_region_size": 30000000,
         }
     ],

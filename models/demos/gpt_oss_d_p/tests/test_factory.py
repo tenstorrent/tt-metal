@@ -178,10 +178,12 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         def _fabric_for_shape(shape):
             if shape == (1, 1):
                 return None
-            # Single-row BH (e.g. 1×8 T3K): TP chips are connected in a line, not a ring.
-            if is_blackhole() and shape[0] == 1:
+            # All BH shapes (1×8 T3K, 4×8 Galaxy): TP chips use a linear fabric.
+            # BH Galaxy plain-mesh MGD has LINE topology on both axes; ring fabric
+            # requires torus links that don't exist on BH.
+            if is_blackhole():
                 return ttnn.FabricConfig.FABRIC_1D
-            # Multi-row BH Galaxy (e.g. 4×8) or non-BH: TP axis is a ring.
+            # Non-BH (WH): TP axis is a ring.
             return ttnn.FabricConfig.FABRIC_1D_RING
 
         params = [
