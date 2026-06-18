@@ -452,24 +452,6 @@ MatmulProgramConfig create_matmul_program_config(
     uint32_t k_tiles_per_core;
     if (input_b_is_batched) {
         TT_FATAL(!fused_activation.has_value(), "Cannot use activation with batched input b");
-        // When A batch=1 and B batch>1, route to 1D mcast config so the in0_reuse
-        // optimization fires: A is loaded into L1 once and reused across all B batches.
-        if (batch_size_a == 1 && !a_is_sharded && !input_tensor_b.is_sharded()) {
-            return get_mcast_1d_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                /*fuse_batch=*/false,
-                fused_activation,
-                /*mcast_in0=*/false,
-                /*out_sharded=*/false,
-                core_coord,
-                compute_kernel_config,
-                output_dtype,
-                /*all_dram_interleaved=*/false);
-        }
         if (!a_is_sharded && !input_tensor_b.is_sharded()) {
             m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
             n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
