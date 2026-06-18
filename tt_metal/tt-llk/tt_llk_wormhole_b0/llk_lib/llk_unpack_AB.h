@@ -6,7 +6,6 @@
 
 #include <cstdint>
 
-#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -17,6 +16,8 @@
 #include "llk_defs.h"
 #include "llk_unpack_common.h"
 #include "lltt.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -37,6 +38,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_AB_mop_config_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     if (transpose_of_faces)
@@ -149,6 +151,7 @@ template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_AB_init_, tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
