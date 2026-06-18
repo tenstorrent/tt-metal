@@ -109,6 +109,10 @@ struct DeviceStorage {
     // Please do not move the MeshTensor out of the DeviceStorage using this function.
     MeshTensor& get_mesh_tensor();
 
+    // Moves out the MeshTensor this DeviceStorage holds.
+    // post-condition: this DeviceStorage will be equivalent a default constructed DeviceStorage
+    MeshTensor release_mesh_tensor();
+
     // Returns the MeshDevice associated with the underlying device memory.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
     //
