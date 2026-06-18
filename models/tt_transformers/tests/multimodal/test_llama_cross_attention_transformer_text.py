@@ -253,7 +253,8 @@ def test_cross_attention_transformer_text_inference(
                 inputs_embeds=h,
                 past_key_values=T.past_key_values,
                 use_cache=True,  # to also get past_key_values
-                cache_position=torch.tensor([T.past_key_values[0][0].shape[-2]]),
+                # transformers 5.x Cache dropped __getitem__; use the version-tolerant accessor.
+                cache_position=torch.tensor([hf_cache_layer_kv(T.past_key_values, 0)[0].shape[-2]]),
                 output_hidden_states=False,
                 output_attentions=False,
                 return_dict=True,
