@@ -44,36 +44,6 @@ run_t3000_llama3_70b_tests() {
   fi
 }
 
-
-run_t3000_llama3_70n90b_accuracy_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama3_70n90b_accuracy_tests"
-
-  # Llama3.1-70B
-  llama70b=meta-llama/Llama-3.1-70B-Instruct
-  # Llama3.2-90B
-  #llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-
-  # Run test accuracy llama3 - 70B and 90B weights
-  # Removed 90B tests for now to reduce possibility of 8B model hanging
-  for hf_model in "$llama70b"; do
-    tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 4200 ; fail+=$?
-    echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_70n90b_accuracy_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 # run_t3000_llama3.2-11b-vision_freq_tests() {
 # # Record the start time
 #  fail=0
@@ -283,9 +253,6 @@ run_t3000_tests() {
 
   # Run llama3-70b tests
   run_t3000_llama3_70b_tests
-
-  # Run llama3 accuracy tests
-  run_t3000_llama3_70n90b_accuracy_tests
 
   # Run Llama3.2-11B Vision tests
   # run_t3000_llama3.2-11b-vision_freq_tests

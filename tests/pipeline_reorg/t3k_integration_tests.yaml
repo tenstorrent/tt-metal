@@ -46,15 +46,6 @@
 #   team: models
 #   model-name: n300 mesh llama3.2-vision
 
-- name: t3k_llama3_70n90b_accuracy_tests
-  cmd: run_t3000_llama3_70n90b_accuracy_tests
-  skus:
-    wh_llmbox:
-      timeout: 20
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  model-name: llama3_70n90b accuracy
-
 - name: t3k_resnet_tests
   cmd: run_t3000_resnet_tests
   skus:

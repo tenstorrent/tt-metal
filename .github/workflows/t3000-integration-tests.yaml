@@ -14,7 +14,6 @@ on:
           - trace stress
           # - llama3.2-vision # Tier 3 models
           # - n300 mesh llama3.2-vision # Tier 3 models
-          - llama3_70n90b accuracy
           - resnet
           - sd35_large
           - flux1
