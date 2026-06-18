@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// One-shot worker-side handshake for H2DStreamService, C++-op variant.
+// One-shot worker-side handshake for H2DStreamService.
 //
-// Adapted from models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/h2d_socket_sync.cpp.
-// The ONLY behavioural change vs. that kernel is the arg plumbing: the backing,
-// output and metadata-output BASE ADDRESSES move from compile-time args to
-// runtime args. The host registers them as Buffer* BufferBindings
+// The backing output and metadata-output base addresses to are runtime args.
+// The host registers them as Buffer* BufferBindings
 // (KernelDescriptor::emplace_runtime_args), so the device-operation program
 // cache can patch the freshly-allocated output address on every dispatch
 // without recompiling the program. Everything stable for the service's
@@ -29,15 +27,13 @@
 #include "api/tensor/tensor_accessor.h"
 
 // CT-arg layout (must stay in sync with h2d_socket_sync_program_factory.cpp).
-// NOTE vs. the original kernel: backing/output/metadata-output addresses are no
-// longer here — they are runtime args (see below).
 constexpr uint32_t data_ready_sem_addr = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
 constexpr uint32_t num_pages = get_compile_time_arg_val(2);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(3);
 // Optional metadata path. When `metadata_size_bytes == 0` the metadata read is
 // compiled out entirely and the trailing metadata TensorAccessorArgs are not
-// consumed; the kernel behaves byte-identically to the no-metadata case.
+// consumed
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(5);
 

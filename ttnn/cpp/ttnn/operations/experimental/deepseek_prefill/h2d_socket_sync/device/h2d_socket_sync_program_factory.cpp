@@ -67,7 +67,7 @@ ProgramDescriptor H2DSocketSyncProgramFactory::create_descriptor(
     });
 
     // CT args (uniform across workers). Base addresses are NOT here — they are
-    // runtime BufferBindings (below). Layout must match h2d_socket_sync_writer.cpp.
+    // runtime BufferBindings.
     KernelDescriptor::CompileTimeArgs ct_args = {
         static_cast<uint32_t>(args.data_ready_sem_addr),
         page_size,
@@ -91,8 +91,7 @@ ProgramDescriptor H2DSocketSyncProgramFactory::create_descriptor(
     writer.compile_time_args = ct_args;
     writer.config = WriterConfigDescriptor{};
 
-    // Distribute pages across workers: contiguous chunks, first `remainder`
-    // workers take one extra so no page is dropped (mirrors the Python op).
+    // Distribute pages across workers
     const uint32_t base = num_pages / num_workers;
     const uint32_t remainder = num_pages % num_workers;
     uint32_t cursor = 0;

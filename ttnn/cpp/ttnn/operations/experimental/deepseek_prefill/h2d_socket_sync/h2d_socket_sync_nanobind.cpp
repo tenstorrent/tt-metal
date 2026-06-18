@@ -19,9 +19,7 @@ void bind_h2d_socket_sync(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Wait for the next H2DStreamService transfer, copy it into a freshly-allocated
-        device tensor, and ack the service core. Native C++ replacement for the Python
-        ``h2d_socket_sync`` op factory; the program is built once and cached, so repeated
-        calls only patch the output address (no per-call program build/dispatch).
+        device tensor, and ack the service core.
 
         Args:
             service (ttnn.H2DStreamService): A persistent service constructed with

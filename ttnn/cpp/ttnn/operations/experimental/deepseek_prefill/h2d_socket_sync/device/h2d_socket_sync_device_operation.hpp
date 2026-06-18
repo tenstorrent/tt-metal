@@ -18,11 +18,6 @@
 
 namespace ttnn::experimental::prim {
 
-// Native C++ port of models/demos/deepseek_v3_d_p/tt/runners/h2d_socket_sync_op.py.
-// One transfer's worker-side handshake against an H2DStreamService, expressed as a
-// program-cached device operation so the per-call MeshProgramDescriptor build +
-// generic_op dispatch (the ~1.2s/chunk prefill tax) is paid once and later calls
-// only patch the fresh output address via BufferBindings.
 struct H2DSocketSyncOperation {
     using operation_attributes_t = H2DSocketSyncParams;
     using tensor_args_t = H2DSocketSyncInputs;

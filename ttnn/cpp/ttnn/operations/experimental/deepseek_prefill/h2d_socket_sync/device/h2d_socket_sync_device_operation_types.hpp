@@ -14,10 +14,6 @@
 
 namespace ttnn::experimental::prim {
 
-// Operation attributes. Deliberately POD / value-typed (no H2DStreamService
-// pointer) so the default reflection + our compute_program_hash stay simple and
-// the per-(service,config) program identity is stable across calls. The launch
-// site snapshots everything the program factory needs out of the service.
 struct H2DSocketSyncParams {
     // Uniform across the mesh (the backing tensor shares one address/page-config
     // on every device; the data-ready semaphore is a mesh-wide GlobalSemaphore).

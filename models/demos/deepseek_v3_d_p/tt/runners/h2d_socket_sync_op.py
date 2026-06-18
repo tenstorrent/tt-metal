@@ -2,17 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Thin wrapper around the native C++ ``ttnn.experimental.deepseek_prefill.h2d_socket_sync`` op.
-
-This module used to build a ``MeshProgramDescriptor`` and dispatch it via
-``ttnn.generic_op`` on every call. Rebuilding + dispatching that program per
-iteration dominated prefill runtime (~1.2 s/chunk; see RUNNER_PERF_INVESTIGATION).
-The logic now lives in C++ as a program-cached device operation at
-``ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/h2d_socket_sync/`` — the program is built
-once and later calls only patch the fresh output address via BufferBindings.
-
-This wrapper preserves the original Python call contract so callers
-(``prefill_runner.py``) are unchanged.
+"""
+Wrapper around the C++ ``ttnn.experimental.deepseek_prefill.h2d_socket_sync`` op.
 """
 
 import ttnn
@@ -28,16 +19,27 @@ def h2d_socket_sync(
     copy it into a fresh device tensor, and ack the service core.
 
     Args:
-        service: A persistent ``H2DStreamService`` constructed with ``worker_cores``
-            set (and ``metadata_size_bytes`` if the metadata path is used).
-        worker_cores: Accepted for backwards-compatibility only. The worker grid is
-            now read from the service itself (``service.get_worker_cores()``); when
-            provided it must match.
-        metadata_size_bytes: When > 0, must match the value the service was
-            constructed with; the op then also returns the inline metadata tensor.
+        service: A persistent H2DStreamService constructed with `worker_cores` set
+            to the same CoreRange passed here. Provides the data-ready semaphore,
+            per-coord consumed counter, and per-coord service-core coordinates.
+        worker_cores: Worker CoreRange — must match the `worker_cores` the service
+            was constructed with. Each core runs one iteration of the
+            wait → copy slice → ack protocol.
+        metadata_size_bytes: When > 0, must match the value passed to the service
+            constructor. The kernel additionally copies the inline metadata
+            multicast by the service core (lives at `service.get_metadata_addr()`
+            in worker L1) into a fresh DRAM tensor; this function then returns
+            `(tokens_tensor, metadata_tensor)` instead of just the tokens tensor.
+            Must be a multiple of 4 bytes (we expose the metadata buffer as a
+            uint32 tensor).
 
     Returns:
-        The tokens tensor, or ``(tokens, metadata)`` when ``metadata_size_bytes > 0``.
+        When `metadata_size_bytes == 0`: a single ttnn.Tensor with the same
+        per-shard spec as `service.get_backing_tensor()`.
+        When `metadata_size_bytes > 0`: a tuple `(tokens_tensor, metadata_tensor)`
+        where the metadata tensor has shape `[1, 1, 1, metadata_size_bytes // 4]`
+        uint32 ROW_MAJOR DRAM, replicated across the mesh (each coord's worker
+        writes the same metadata it received from its service core multicast).
     """
     outputs = ttnn.experimental.deepseek_prefill.h2d_socket_sync(service, metadata_size_bytes=metadata_size_bytes)
     if metadata_size_bytes > 0:
