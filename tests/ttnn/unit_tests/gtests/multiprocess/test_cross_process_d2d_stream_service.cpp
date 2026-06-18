@@ -354,6 +354,9 @@ MeshWorkload make_relay_like_workload(
             /*num_iters=*/1u,
             static_cast<uint32_t>(kScratchCb),
             produce ? 1u : 0u,
+            0,  // metadata_enabled == false
+            0,  // metadata_size_bytes == 0
+            0,  // inbound_metadata_l1_addr == 0
         };
         ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -384,6 +387,8 @@ MeshWorkload make_relay_like_workload(
                 down_counter_addr,
                 static_cast<uint32_t>(down_svc_phys.x),
                 static_cast<uint32_t>(down_svc_phys.y),
+                0,  // is_metadata_writer == 0
+                0,  // downstream_metadata_l1_addr == 0
             };
             SetRuntimeArgs(program, kernel, wc, rt_args);
         }
