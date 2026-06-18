@@ -70,6 +70,9 @@ class OperandDefinition(BaseModel):
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
     const_value: Optional[float] = None
+    tile_dimensions: Optional[
+        Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
+    ] = None
 
     @field_validator("dims")
     @classmethod
@@ -79,6 +82,20 @@ class OperandDefinition(BaseModel):
                 raise ValueError(f"must be positive, got {dim}")
             if dim % 32 != 0:
                 raise ValueError(f"must be multiple of 32, got {dim}")
+        return tuple(v)
+
+    @field_validator("tile_dimensions")
+    @classmethod
+    def validate_tile_dimensions(
+        cls, v: Optional[Tuple[int, int]]
+    ) -> Optional[Tuple[int, int]]:
+        if v is None:
+            return v
+        # Defer the supported-shape check to helpers.tile_constants so the YAML
+        # schema stays the single source of truth for the (rows, cols) contract.
+        from helpers.tile_constants import validate_tile_dimensions
+
+        validate_tile_dimensions(list(v))
         return tuple(v)
 
     @field_validator("format", mode="before")
@@ -155,6 +172,7 @@ class FuserConfigSchema(BaseModel):
                 dimensions=op_def.dims,
                 data_format=op_def.format,
                 const_value=op_def.const_value,
+                tile_dimensions=op_def.tile_dimensions,
             )
 
         pipeline = [op.to_fused_operation(operands) for op in self.operations]
