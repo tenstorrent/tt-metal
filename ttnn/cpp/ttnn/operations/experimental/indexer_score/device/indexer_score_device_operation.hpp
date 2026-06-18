@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"

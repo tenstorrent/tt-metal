@@ -17,6 +17,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"  // Device 2.0 CircularBuffer wrapper (cb ops)
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
@@ -78,12 +79,13 @@ inline void emit_qk_matmul_block(uint32_t head_in_group, uint32_t r, uint32_t c)
 /** One matmul-phase DEST pass: relu(q row r @ k col c^T) block-packed into cb_qk front (tile-major). */
 template <uint32_t q_cb, uint32_t k_cb, uint32_t qk_cb>
 void matmul_relu_pass(uint32_t head_in_group, uint32_t r, uint32_t c) {
+    CircularBuffer qk(qk_cb);
     emit_qk_matmul_block<q_cb, k_cb>(head_in_group, r, c);
-    cb_reserve_back(qk_cb, heads_per_dest_pass);
+    qk.reserve_back(heads_per_dest_pass);
     tile_regs_wait();
     pack_tile_block(0, qk_cb, heads_per_dest_pass);
     tile_regs_release();
-    cb_push_back(qk_cb, heads_per_dest_pass);
+    qk.push_back(heads_per_dest_pass);
 }
 
 /** srcA<-qk, srcB<-w + pack format for a mul+accumulate phase (shared by the standard and
@@ -112,7 +114,8 @@ inline void set_mul_mode() {
  *  slot (l1_acc off); later chunks L1-accumulate. Caller owns acc_cb and the l1_acc reset. */
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
 void mul_accum_chunk(uint32_t w_base, uint32_t chunk_heads, bool first, uint32_t acc_slot) {
-    cb_wait_front(qk_cb, chunk_heads);
+    CircularBuffer qk(qk_cb);
+    qk.wait_front(chunk_heads);
     tile_regs_acquire();
     for (uint32_t h = 0; h < chunk_heads; ++h) {
         mul_tiles_bcast_cols(qk_cb, w_cb, h, w_base + h, 0);
@@ -122,7 +125,7 @@ void mul_accum_chunk(uint32_t w_base, uint32_t chunk_heads, bool first, uint32_t
     pack_reconfig_l1_acc(first ? 0 : 1);  // first chunk seeds (overwrite), later chunks accumulate
     pack_tile<true>(0, acc_cb, acc_slot);
     tile_regs_release();
-    cb_pop_front(qk_cb, chunk_heads);
+    qk.pop_front(chunk_heads);
 }
 
 /** Matmul DEST pass packed HEAD-MAJOR: head h's `cols` columns land contiguous in cb_qk (slot
@@ -152,10 +155,11 @@ inline void set_mul_mode_custom() {
  *  owns acc_cb. */
 template <uint32_t acc_cb>
 inline void accumulate_heads(uint32_t r, uint32_t c, uint32_t acc_slot) {
+    CircularBuffer q(cb_q);
     bool first = true;
     for (uint32_t group_start = 0; group_start < num_heads; group_start += heads_per_group) {
         if constexpr (stream_heads) {
-            cb_wait_front(cb_q, q_group_tiles);
+            q.wait_front(q_group_tiles);
         }
         // per chunk (cb_qk capacity): run its matmuls, then MAC the chunk's head sum into DEST once,
         // so the matmul<->eltwise reinit and the acc pack happen per chunk, not per head
@@ -172,7 +176,7 @@ inline void accumulate_heads(uint32_t r, uint32_t c, uint32_t acc_slot) {
             first = false;
         }
         if constexpr (stream_heads) {
-            cb_pop_front(cb_q, q_group_tiles);
+            q.pop_front(q_group_tiles);
         }
     }
     pack_reconfig_l1_acc(0);  // done accumulating; downstream packs (mask, untilize) overwrite
@@ -212,14 +216,15 @@ inline void stamp_mask_tile(uint32_t slot, uint32_t k_tile, uint32_t diag_tile) 
  *  One set_matmul_mode for the batch (reinit hoisted out of the col loop), one cb_qk reserve/push. */
 inline void matmul_phase(uint32_t r, uint32_t col_base, uint32_t cols) {
     const uint32_t batch_tiles = cols * num_heads;
+    CircularBuffer qk(cb_qk);
     set_matmul_mode<cb_q, cb_k, cb_qk>();
-    cb_reserve_back(cb_qk, batch_tiles);
+    qk.reserve_back(batch_tiles);
     for (uint32_t col_in_batch = 0; col_in_batch < cols; ++col_in_batch) {
         for (uint32_t head = 0; head < num_heads; head += heads_per_dest_pass) {
             matmul_relu_pass_headmajor<cb_q, cb_k, cb_qk>(head, r, col_base + col_in_batch, col_in_batch, cols);
         }
     }
-    cb_push_back(cb_qk, batch_tiles);
+    qk.push_back(batch_tiles);
 }
 
 /** PHASE 2 -- gate-multiply the batch's cb_qk by w and head-reduce into cb_acc_strip via the blocked
@@ -232,9 +237,10 @@ inline void mul_phase(uint32_t r, uint32_t slot_base, uint32_t col_base, uint32_
     const uint32_t w_base = r * num_heads;  // single chunk (group_start = 0); gate per (head, row)
     // gates consumed only here: wait now (after this batch's matmuls) so the reader reads w behind the
     // latency-critical q/k. Cumulative wait -> no-op once the resident group is in.
-    cb_wait_front(cb_w, w_group_tiles);
+    CircularBuffer qk(cb_qk);
+    CircularBuffer(cb_w).wait_front(w_group_tiles);  // single use here; gates popped in kernel_main
     set_mul_mode_custom<cb_qk, cb_w, cb_acc_strip>();
-    cb_wait_front(cb_qk, batch_tiles);
+    qk.wait_front(batch_tiles);
     for (uint32_t sub_base = 0; sub_base < cols; sub_base += mul_ct_dim) {
         const uint32_t n_cols = (sub_base + mul_ct_dim <= cols) ? mul_ct_dim : (cols - sub_base);
         tile_regs_acquire();
@@ -248,14 +254,14 @@ inline void mul_phase(uint32_t r, uint32_t slot_base, uint32_t col_base, uint32_
         }
         tile_regs_release();
     }
-    cb_pop_front(cb_qk, batch_tiles);
+    qk.pop_front(batch_tiles);
 }
 
 /** PHASE 1+2 fallback for head-streaming / KC==1 (qk_col_batch == 1): each k-col runs accumulate_heads
  *  (matmul + STANDARD bcast-mul interleaved per head group). It reads cb_w by index, so wait the gates
  *  here (k already waited in kernel_main). */
 inline void accumulate_row_streaming(uint32_t r, uint32_t slot_base) {
-    cb_wait_front(cb_w, w_group_tiles);
+    CircularBuffer(cb_w).wait_front(w_group_tiles);
     for (uint32_t c = 0; c < k_tiles_per_unit; ++c) {
         accumulate_heads<cb_acc_strip>(r, c, slot_base + c);  // head reduction -> cb_acc_strip slot
     }
@@ -281,7 +287,12 @@ void kernel_main() {
 
     mm_block_init(
         cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
-    cb_wait_front(cb_mask, num_mask_tiles);
+    CircularBuffer(cb_mask).wait_front(num_mask_tiles);  // single use; the mask CB is never popped
+
+    // CBs touched twice below (wait/pop, reserve/push) get one instance each.
+    CircularBuffer k(cb_k);
+    CircularBuffer acc(cb_acc_strip);
+    CircularBuffer q(cb_q);
 
     WorkUnitSpan span;
     span.start(flat_start);
@@ -295,15 +306,15 @@ void kernel_main() {
     // No whole-block q/w wait here: resident q is waited PER ROW below (reader pushes a row at a time, so
     // row 0 runs while row 1 drains); w is waited in the mul phase. Only k is waited up front.
     for (uint32_t i = 0; i < flat_count; ++i) {
-        cb_wait_front(cb_k, k_chunk_tiles);
+        k.wait_front(k_chunk_tiles);
         const uint32_t k_tiles_in_unit = span.k_tiles();
 
-        cb_reserve_back(cb_acc_strip, unit_strip);
+        acc.reserve_back(unit_strip);
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
             // wait q rows 0..r only (reader pushes per row): row r reads only its row, so row 0 runs
             // while row 1 arrives. Cumulative + non-consuming -> immediate once q is resident.
             if constexpr (!stream_heads) {
-                cb_wait_front(cb_q, (r + 1) * q_row_tiles);
+                q.wait_front((r + 1) * q_row_tiles);
             }
             const uint32_t slot_base = r * k_tiles_per_unit;
 
@@ -322,16 +333,16 @@ void kernel_main() {
 
             stamp_masked_suffix(span, r, slot_base, k_tiles_in_unit);  // causal -inf on the row's masked suffix
         }
-        cb_push_back(cb_acc_strip, unit_strip);
+        acc.push_back(unit_strip);
 
         // PHASE 3 -- untilize all QC strips in ONE pack_untilize bracket (cost amortizes over QC*KC).
         compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
 
-        cb_pop_front(cb_k, k_chunk_tiles);
+        k.pop_front(k_chunk_tiles);
         if (span.advance()) {
-            cb_pop_front(cb_w, w_group_tiles);
+            CircularBuffer(cb_w).pop_front(w_group_tiles);  // single use; gates waited in the mul phase
             if constexpr (!stream_heads) {
-                cb_pop_front(cb_q, q_group_tiles);
+                q.pop_front(q_group_tiles);
             }
         }
     }

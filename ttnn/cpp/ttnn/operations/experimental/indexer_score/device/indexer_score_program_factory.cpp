@@ -212,7 +212,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const uint32_t q_tile = tt::tile_size(q_fmt);
     const uint32_t k_tile = tt::tile_size(k_fmt);
 
-    auto make_cb = [&](uint32_t idx, uint32_t ntiles, tt::DataFormat fmt, uint32_t tile_bytes) {
+    // Continuous CB indices, allocated on demand: each make_cb claims the next free index (c_0, c_1, ...)
+    // and records it under its CbArg slot. The whole array is forwarded to the kernels as compile-time
+    // args (CbArg is the shared slot order; see indexer_score_cb.hpp), so every buffer is resolved through
+    // this one allocation and indices can never drift host<->device.
+    std::array<uint32_t, num_cb_args> cb_id{};
+    uint32_t next_cb_index = tt::CBIndex::c_0;
+    auto make_cb = [&](uint32_t slot, uint32_t ntiles, tt::DataFormat fmt, uint32_t tile_bytes) {
+        const uint32_t idx = next_cb_index++;
+        cb_id[slot] = idx;
         tt::tt_metal::CreateCircularBuffer(
             program,
             core_ranges,
@@ -221,24 +229,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
 
     const bool stream_heads = HB < Hi;
 
-    // Continuous CB indices c_0..c_7, allocated here and forwarded to the kernels as compile-time args
-    // (CbArg is the shared slot order; see indexer_score_cb.hpp). Indexed by CbArg so the make_cb
-    // sizing below and the kernels resolve every buffer through this one allocation.
-    constexpr std::array<uint32_t, num_cb_args> cb_id = {
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_1,
-        tt::CBIndex::c_2,
-        tt::CBIndex::c_3,
-        tt::CBIndex::c_4,
-        tt::CBIndex::c_5,
-        tt::CBIndex::c_6,
-        tt::CBIndex::c_7};
-
-    // Sizes are set here; the indices come from cb_id above.
-    make_cb(cb_id[cb_q_arg], (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
-    make_cb(cb_id[cb_k_arg], 2 * KC * Dt, k_fmt, k_tile);
-    make_cb(cb_id[cb_w_arg], Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_id[cb_mask_arg], num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
+    // Allocate each CB by its CbArg slot; make_cb assigns the next continuous index.
+    make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
+    make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
+    make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
     // cb_qk buffers a batch of the group's relu(q.kT) tiles so compute runs that batch's matmuls then
@@ -261,15 +256,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // caller's k_chunk_size is too large for L1 (the caller owns the knob trade-off).
     const bool single_chunk = (qk_batch_heads == Hi) && !stream_heads;
     const uint32_t qk_col_batch = (KC >= 2 && single_chunk) ? KC : 1u;
-    make_cb(cb_id[cb_qk_arg], qk_col_batch * qk_batch_heads, acc_fmt, acc_tile);
-    make_cb(cb_id[cb_scratch_arg], 1, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_qk_arg, qk_col_batch * qk_batch_heads, acc_fmt, acc_tile);
     // cb_out_strip holds a unit's untilized output. Uniform KC push/pop keeps the packer's KC-tile
     // reads contiguous (a non-uniform push would wrap the ring mid-strip).
-    make_cb(cb_id[cb_out_strip_arg], 2 * KC, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_out_strip_arg, 2 * KC, tt::DataFormat::Float16_b, bf16_tile);
     // cb_acc_strip accumulates a whole unit's QC*KC strip, then all QC strips untilize under ONE
     // pack_untilize bracket (per-strip cost amortizes over QC*KC, not KC). max(2*KC, .) keeps the
     // QC<=2 double buffer and a whole multiple of the QC*KC batch so a uniform push never wraps mid-unit.
-    make_cb(cb_id[cb_acc_strip_arg], std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
+    make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
     // No up-front L1-fit guard: an oversized QC/KC/head_group config fails at CB allocation. The caller
     // owns the knob trade-off (see glx_config() in the test).
@@ -329,8 +323,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
         const uint32_t count = base + (i < rem ? 1 : 0);
         std::vector<uint32_t> reader_rt = {
             q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), flat, count};
-        // Per-core mcast args: K column (8) then Q/W row (8). role 0=none(DRAM read), 1=sender,
-        // 2=receiver. rect (xs,ys,xe,ye) + sender (sx,sy) are physical NoC; ndst=#receivers.
+        // Per-core mcast args: K column (8) then Q/W row (8). role is a McastRole (none = per-core DRAM
+        // read); rect (xs,ys,xe,ye) + sender (sx,sy) are physical NoC; ndst = #receivers.
         const auto u32 = [](auto v) { return static_cast<uint32_t>(v); };
         const auto push_mcast_dir =
             [&](uint32_t role, uint32_t xs, uint32_t ys, uint32_t xe, uint32_t ye, const CoreCoord& s, uint32_t ndst) {
@@ -345,30 +339,33 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
             };
         if (grid_aligned) {
             const uint32_t x = i % grid.x, y = i / grid.x;
-            // K column x: sender (x,0), receivers (x,1..); vertical rect spanning the column.
+            // K column x: sender on row 0, receivers down the column; vertical rect spanning the column.
             const auto [kys, kye] = phys_col_y_range(x);
             push_mcast_dir(
-                k_mcast_on ? (y == 0 ? 1u : 2u) : 0u,
+                k_mcast_on ? (y == 0 ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
                 u32(phys[cidx(x, 0)].x),
                 kys,
                 u32(phys[cidx(x, 0)].x),
                 kye,
                 phys[cidx(x, 0)],
                 u32(grid.y) - 1);
-            // Q/W row y: ONE sender per row on the grid DIAGONAL (logical x == y), mcasting the WHOLE
-            // row in one rect (its bbox [min x, max x] x py). Any core in the row can send (all share
-            // q-rows + w); the diagonal fans senders across distinct columns vs stacking in column 0.
-            // Receivers = rest of the row (ndst = grid.x - 1); hardware excludes the in-rect source.
-            // Guard the diagonal lookup phys[cidx(y, y)] behind q_mcast_on: it is only a valid index
-            // when q_rows_ok held (which requires grid.x >= grid.y). With q-mcast off every core just
-            // DRAM-reads q/w (role 0), so the rect/sender fields are unused -- push a zeroed tuple.
-            if (q_mcast_on) {
-                const auto [qxs, qxe] = phys_row_x_range(y);
-                const uint32_t py = u32(phys[cidx(y, y)].y);  // diagonal sender's row (== every core's py)
-                push_mcast_dir(x == y ? 1u : 2u, qxs, py, qxe, py, phys[cidx(y, y)], u32(grid.x) - 1);
-            } else {
-                push_mcast_dir(0u, 0, 0, 0, 0, phys[i], 0);
-            }
+            // Q/W row y: same shape as the K column; the ONLY difference is the sender sits on the grid
+            // DIAGONAL (logical x == y) instead of row 0 -- any core in the row can send (all share q/w),
+            // and the diagonal fans senders across distinct columns rather than stacking in one. The
+            // diagonal lookup phys[cidx(y, y)] is in-bounds only when q_mcast_on held (q_rows_ok requires
+            // grid.x >= grid.y); with q-mcast off the role is none and the rect/sender are unused, so fall
+            // back to this core's own coord to keep the index valid.
+            const auto [qxs, qxe] = phys_row_x_range(y);
+            const CoreCoord q_sender = q_mcast_on ? phys[cidx(y, y)] : phys[i];
+            const uint32_t qpy = u32(q_sender.y);  // sender's row == every core's py in this grid row
+            push_mcast_dir(
+                q_mcast_on ? (x == y ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
+                qxs,
+                qpy,
+                qxe,
+                qpy,
+                q_sender,
+                u32(grid.x) - 1);
         } else {
             for (uint32_t z = 0; z < reader_mcast_args; ++z) {
                 reader_rt.push_back(0);

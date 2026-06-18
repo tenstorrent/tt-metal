@@ -199,7 +199,12 @@ def test_indexer_score_knobs(device, q_chunk, k_chunk, head_group, chunk_start):
         (64, 128, 64, 192, 128, 32, 128, 0),  # KC does not divide Tt (Tt=6, KC=4 -> 2-tile last unit)
         (64, 128, 64, 160, 96, 32, 128, 0),  # KC does not divide Tt (Tt=5, KC=4 -> 1-tile last unit)
         (64, 128, 64, 160, 96, 32, 64, 0),  # KC does not divide Tt (Tt=5, KC=2 -> 1-tile last unit)
-        (16, 128, 128, 2048, 512, 64, 32, 0),  # multicore: QC=2 group split across cores (writer tail fill)
+        # head streaming (HB<Hi) AND KC not dividing Tt together: the reader must push a q block for
+        # every padded column compute walks, else compute hangs on the partial last unit (regression
+        # guard for the streaming/partial-KC deadlock).
+        (64, 128, 64, 192, 128, 32, 128, 8),  # stream HB=8 + Tt=6, KC=4 -> 2-tile last unit
+        (64, 128, 64, 160, 96, 32, 64, 8),  # stream HB=8 + Tt=5, KC=2 -> 1-tile last unit
+        (16, 128, 128, 2048, 512, 64, 32, 0),  # multicore: QC=2 group split across cores (per-core strip writes)
     ],
     ids=[
         "prefill_square",
@@ -211,14 +216,62 @@ def test_indexer_score_knobs(device, q_chunk, k_chunk, head_group, chunk_start):
         "kc_partial_tt6",
         "kc_partial_tt5_kc4",
         "kc_partial_tt5_kc2",
+        "stream_kc_partial_tt6",
+        "stream_kc_partial_tt5",
         "multicore_qc2",
     ],
 )
 def test_indexer_score_shapes(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group):
     """Shape/geometry coverage: prefill corners, single/partial k-tiles, narrow/wide head dims, KC not
-    dividing Tt (partial last unit clipped by the writer), and a multicore QC=2 split that exercises the
-    writer's group -inf tail fill across cores."""
+    dividing Tt (partial last unit clipped by the writer), and a multicore QC=2 split where a single
+    q-row-group is dealt across cores."""
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
+
+
+@pytest.mark.parametrize("case_id, heads", GLX_CASES, ids=GLX_IDS)
+def test_indexer_score_determinism(device, case_id, heads):
+    """Determinism on the production deployments (GLM5.1 8h, DSv32 16h, GLX chunked-prefill knobs at
+    sp_rank 7, deployed bf16 q + bfp8 k). The op feeds a downstream top-k key selection, so any
+    nondeterminism (reduction order, an unstable -inf boundary) would silently change which keys are kept.
+
+    Follows the ring-joint-SDPA determinism rule: upload the device inputs once and reuse them for every
+    iteration (this tests device-side determinism, not host re-generation), then require each output to be
+    bit-identical to the first run.
+    """
+    num_iterations = 10
+    chunk_start = GLX_HISTORY + 7 * GLX_SQ  # sp_rank 7: fullest causal case
+    cfg = glx_config(heads)
+    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
+    # Upload once; the same device tensors are reused across all iterations.
+    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
+    w_dev = to_device(w, device)
+
+    reference = None
+    for i in range(num_iterations):
+        out = ttnn.to_torch(
+            ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
+        )
+        if reference is None:
+            reference = out
+        elif not torch.equal(reference, out):
+            diff_mask = reference != out
+            num_diffs = int(diff_mask.sum().item())
+            both_finite = torch.isfinite(reference) & torch.isfinite(out)
+            max_diff = (
+                (reference[both_finite] - out[both_finite]).abs().max().item() if both_finite.any() else float("nan")
+            )
+            pytest.fail(
+                f"indexer_score {case_id} output at iteration {i} differs from iteration 0: "
+                f"{num_diffs} differing elements, max finite diff = {max_diff}"
+            )
+    logger.info(f"indexer_score {case_id} determinism verified: all {num_iterations} outputs identical")
+
+
+# Blackhole post-commit / sanity coverage reuses test_indexer_score_accuracy above: the CI entry in
+# tests/pipeline_reorg/ttnn-tests.yaml selects its sp_rank-7 GLM5.1/DSv32 cases via `-k "accuracy and
+# rank7"`. No separate post-commit test (that would re-run the same cases under nightly); post-commit just
+# runs a subset of the nightly accuracy parametrization.
 
 
 # ---------------------------------------------------------------------------

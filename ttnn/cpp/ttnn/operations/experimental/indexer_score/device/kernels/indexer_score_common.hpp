@@ -13,7 +13,6 @@
 #include "indexer_score_cb.hpp"          // shared host/device CB-index argument layout (CbArg)
 #include "indexer_score_work_split.hpp"  // shared host/device causal work-split formula
 
-using ttnn::operations::experimental::indexer_score::num_mask_tiles;
 namespace iscore = ttnn::operations::experimental::indexer_score;
 
 // Common dim args 0..7 (same in every kernel).
@@ -36,10 +35,12 @@ constexpr uint32_t cb_mask = get_compile_time_arg_val(num_dim_args + iscore::cb_
 constexpr uint32_t cb_qk = get_compile_time_arg_val(num_dim_args + iscore::cb_qk_arg);
 constexpr uint32_t cb_acc_strip = get_compile_time_arg_val(num_dim_args + iscore::cb_acc_strip_arg);
 constexpr uint32_t cb_out_strip = get_compile_time_arg_val(num_dim_args + iscore::cb_out_strip_arg);
-constexpr uint32_t cb_scratch = get_compile_time_arg_val(num_dim_args + iscore::cb_scratch_arg);
 
 // Dim args + CB indices are common to all kernels; per-kernel compile-time args start here.
 constexpr uint32_t num_common_ct_args = num_dim_args + iscore::num_cb_args;
+
+// Mask tile count, as a bare name for the kernels (defined in indexer_score_cb.hpp).
+constexpr uint32_t num_mask_tiles = iscore::num_mask_tiles;
 
 // True when heads don't all fit L1 resident, so they stream in groups.
 constexpr bool stream_heads = heads_per_group < num_heads;
@@ -88,7 +89,4 @@ struct WorkUnitSpan {
         uint32_t left = k_len_tiles - k_tile_start();
         return left < k_tiles_per_unit ? left : k_tiles_per_unit;
     }
-    // compute fills [0, this) for every group row -- the whole k rectangle under the dense schedule
-    uint32_t valid_k_tiles() const { return k_len_tiles; }
-    bool last_in_group() const { return unit == units_per_group - 1; }
 };

@@ -43,7 +43,7 @@ constexpr uint32_t q_valid_sem = get_compile_time_arg_val(mc_ct_base + 7);
 
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
-    uint32_t role;            // 0 none (DRAM read), 1 sender (read + mcast), 2 receiver (wait for mcast)
+    uint32_t role;            // McastRole: none (DRAM read), sender (read + mcast), receiver (wait for mcast)
     uint32_t xs, ys, xe, ye;  // receiver rectangle (sender excluded by default mcast opts)
     uint32_t sx, sy;          // sender physical coord (receivers signal it ready)
     uint32_t ndst;            // number of receivers
@@ -101,7 +101,7 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     cb.reserve_back(ntiles);
     const uint32_t addr = cb.get_write_ptr();
     if constexpr (mcast_on) {
-        if (dir.role == 2) {  // receiver: wait the sender's mcast into this slot
+        if (dir.role == iscore::mcast_role_receiver) {  // wait the sender's mcast into this slot
             mcast_recv<send_sem, recv_sem>(noc, dir);
             cb.push_back(ntiles);
             return;
@@ -110,7 +110,7 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     read_into(addr);
     noc.async_read_barrier();
     if constexpr (mcast_on) {
-        if (dir.role == 1) {  // sender: broadcast the block to the rest of the rect
+        if (dir.role == iscore::mcast_role_sender) {  // broadcast the block to the rest of the rect
             mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, addr, bytes);
         }
     }
@@ -167,7 +167,7 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
         const uint32_t row_addr = base + r * row_tiles * q_tile_bytes;
         if constexpr (q_mcast_on) {
-            if (q_dir.role == 2) {  // receiver: one mcast handshake per row -> row_addr
+            if (q_dir.role == iscore::mcast_role_receiver) {  // one mcast handshake per row -> row_addr
                 mcast_recv<q_send_sem, q_recv_sem>(noc, q_dir);
                 cb.push_back(row_tiles);
                 continue;
@@ -176,7 +176,7 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
         read_q_row_into(noc, q_acc, row_addr, q_row_start + r, /*first_head=*/0);
         noc.async_read_barrier();
         if constexpr (q_mcast_on) {
-            if (q_dir.role == 1) {  // sender: broadcast this row to the rest of the grid row
+            if (q_dir.role == iscore::mcast_role_sender) {  // broadcast this row to the rest of the grid row
                 mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, row_addr, row_tiles * q_tile_bytes);
             }
         }
@@ -264,8 +264,11 @@ void kernel_main() {
             read_q_rows(noc, q_acc, span.q_tile_start(), q_dir);  // per-row: compute starts on row 0
         }
         if constexpr (stream_heads) {
-            // one q-block per (r, c) output tile per head group; must match compute's tile order
-            for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * span.k_tiles(); ++tile_idx) {
+            // one q-block per (r, c) output tile per head group; must match compute's tile order, which
+            // walks the FULL k_tiles_per_unit columns (compute masks the padded tail of a partial last
+            // unit). Using span.k_tiles() here would under-produce q blocks on a partial unit and hang
+            // compute, which still waits/pops a q block for every padded column.
+            for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
                 for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
                     read_q_block(noc, q_acc, span.q_tile_start(), first_head, q_dir);
                 }

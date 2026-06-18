@@ -23,11 +23,18 @@ enum CbArg : uint32_t {
     cb_qk_arg,         // relu(q.kT) for a whole head group
     cb_acc_strip_arg,  // unit accumulator: QC x KC strip (untilize input)
     cb_out_strip_arg,  // untilized row-major strip output
-    cb_scratch_arg,    // writer-only -inf scratch tile
     num_cb_args
 };
 
 // Two mask tiles in cb_mask: index 0 = diagonal strict-upper -inf, index 1 = full -inf.
 constexpr uint32_t num_mask_tiles = 2;
+
+// Per-direction multicast role, written by the factory into the reader's runtime args and switched on by
+// the reader. Single-sourced here so the host writer and device reader can't drift on the encoding.
+enum McastRole : uint32_t {
+    mcast_role_none = 0,      // no multicast: plain per-core DRAM read
+    mcast_role_sender = 1,    // reads DRAM, then multicasts the block to the rect
+    mcast_role_receiver = 2,  // waits for the sender's multicast into its slot
+};
 
 }  // namespace ttnn::operations::experimental::indexer_score

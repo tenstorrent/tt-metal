@@ -19,9 +19,6 @@ IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::sele
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    using tt::constants::TILE_HEIGHT;
-    using tt::constants::TILE_WIDTH;
-
     const auto& q = tensor_args.q;
     const auto& k = tensor_args.k;
     const auto& w = tensor_args.weights;
@@ -87,12 +84,16 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     const uint32_t D = q_shape[3];
     const uint32_t T = k_shape[2];
     TT_FATAL(
-        Sq % TILE_HEIGHT == 0 && T % TILE_WIDTH == 0 && D % TILE_WIDTH == 0,
+        Sq % tt::constants::TILE_HEIGHT == 0 && T % tt::constants::TILE_WIDTH == 0 &&
+            D % tt::constants::TILE_WIDTH == 0,
         "Sq {}, T {}, D {} must be tile-aligned",
         Sq,
         T,
         D);
-    TT_FATAL(attrs.chunk_start_idx % TILE_WIDTH == 0, "chunk_start_idx {} must be tile-aligned", attrs.chunk_start_idx);
+    TT_FATAL(
+        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
+        "chunk_start_idx {} must be tile-aligned",
+        attrs.chunk_start_idx);
     TT_FATAL(
         attrs.chunk_start_idx + Sq <= T,
         "chunk window [{}, {}+{}) exceeds T={}",
@@ -104,15 +105,19 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     // Work-unit knobs (elements, tile-aligned); see IndexerScoreProgramConfig.
     const auto& cfg = attrs.program_config;
     TT_FATAL(
-        cfg.q_chunk_size % TILE_HEIGHT == 0 && cfg.k_chunk_size % TILE_WIDTH == 0,
+        cfg.q_chunk_size % tt::constants::TILE_HEIGHT == 0 && cfg.k_chunk_size % tt::constants::TILE_WIDTH == 0,
         "q_chunk_size {} / k_chunk_size {} must be tile-aligned",
         cfg.q_chunk_size,
         cfg.k_chunk_size);
-    const uint32_t QC = cfg.q_chunk_size / TILE_HEIGHT;
-    const uint32_t KC = cfg.k_chunk_size / TILE_WIDTH;
+    const uint32_t QC = cfg.q_chunk_size / tt::constants::TILE_HEIGHT;
+    const uint32_t KC = cfg.k_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t HB = resolve_head_group(cfg, Hi);
-    TT_FATAL(QC > 0 && (Sq / TILE_HEIGHT) % QC == 0, "q_chunk_size {} must divide Sq {}", cfg.q_chunk_size, Sq);
-    TT_FATAL(KC > 0 && KC <= T / TILE_WIDTH, "k_chunk_size {} out of range (T={})", cfg.k_chunk_size, T);
+    TT_FATAL(
+        QC > 0 && (Sq / tt::constants::TILE_HEIGHT) % QC == 0,
+        "q_chunk_size {} must divide Sq {}",
+        cfg.q_chunk_size,
+        Sq);
+    TT_FATAL(KC > 0 && KC <= T / tt::constants::TILE_WIDTH, "k_chunk_size {} out of range (T={})", cfg.k_chunk_size, T);
     // KC need not divide Tt: the last unit is then partial. Compute still runs a full KC-wide strip
     // (pad cols matmul stale k, overwritten with full -inf) and the writer clips to the valid width.
     TT_FATAL(HB > 0 && Hi % HB == 0, "head_group_size {} must divide Hi {}", HB, Hi);
@@ -143,9 +148,6 @@ IndexerScoreDeviceOperation::tensor_return_value_t IndexerScoreDeviceOperation::
 tt::tt_metal::operation::OpPerformanceModelGeneral<IndexerScoreDeviceOperation::tensor_return_value_t>
 IndexerScoreDeviceOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
-    using tt::constants::TILE_HEIGHT;
-    using tt::constants::TILE_WIDTH;
-
     const auto& q = tensor_args.q;
     const auto& k = tensor_args.k;
     const tt::tt_metal::operation::Tensors input_tensors = {q, k, tensor_args.weights};
@@ -161,9 +163,9 @@ IndexerScoreDeviceOperation::create_op_performance_model(
     const uint32_t B = q_shape[0];
     const uint32_t Hi = q_shape[1];
     const uint32_t D = q_shape[3];
-    const uint32_t Sqt = q_shape[2] / TILE_HEIGHT;
-    const uint32_t Tt = k_shape[2] / TILE_WIDTH;
-    const uint32_t chunk_t = attrs.chunk_start_idx / TILE_WIDTH;
+    const uint32_t Sqt = q_shape[2] / tt::constants::TILE_HEIGHT;
+    const uint32_t Tt = k_shape[2] / tt::constants::TILE_WIDTH;
+    const uint32_t chunk_t = attrs.chunk_start_idx / tt::constants::TILE_WIDTH;
 
     // Causal-valid output tiles V = sum over q-tile-rows of min(Tt, chunk_t + row + 1) -- the useful
     // matmul work, masked future tiles excluded (matches the test's sp7_valid_tiles()).
@@ -174,12 +176,13 @@ IndexerScoreDeviceOperation::create_op_performance_model(
 
     // Per valid 32x32 output tile, per head: a 32x32 x D matmul = (32*32) outputs x 2*D FLOPs (2/FMA);
     // summed over heads, valid tiles, and batch (matches the test's indexer_mm_flops()).
-    const uint64_t num_mul_adds = 2ull * valid_tiles * Hi * B * static_cast<uint64_t>(TILE_HEIGHT * TILE_WIDTH) * D;
+    const uint64_t num_mul_adds =
+        2ull * valid_tiles * Hi * B * static_cast<uint64_t>(tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH) * D;
 
     // Actual cores used: total_units = groups x ceil(Tt/KC), clamped to the grid (matches the factory),
     // so the perf model's core count equals tracy's CORE COUNT and the utilization ratio lines up.
-    const uint32_t QC = attrs.program_config.q_chunk_size / TILE_HEIGHT;
-    const uint32_t KC = attrs.program_config.k_chunk_size / TILE_WIDTH;
+    const uint32_t QC = attrs.program_config.q_chunk_size / tt::constants::TILE_HEIGHT;
+    const uint32_t KC = attrs.program_config.k_chunk_size / tt::constants::TILE_WIDTH;
     const uint64_t total_units = static_cast<uint64_t>(Sqt / QC) * ((Tt + KC - 1) / KC);
     const auto grid = q.device()->compute_with_storage_grid_size();
     const uint64_t num_cores = std::min<uint64_t>(total_units, static_cast<uint64_t>(grid.x) * grid.y);
