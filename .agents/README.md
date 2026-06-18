@@ -8,7 +8,7 @@ It has three parts:
 
 ```text
 .agents/
-  prompts/model_bringup_multigoal/   # the eleven stage goals, one prompt file each
+  prompts/model_bringup_multigoal/   # the ten stage goals, one prompt file each
   skills/                            # the knowledge the agent works from
   scripts/multigoal                  # the runner that chains the stages together
 ```
