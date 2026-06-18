@@ -519,7 +519,7 @@ def _run_chunked_prefill(
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
                    (rotation) allowed; any prefix is preloaded from the CPU reference KV.
       * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
-                   ONLY: requires MLA_CHUNKED_TRACE_DIR (skips if unset); supports partial iters.
+                    ONLY: requires MLA_CHUNKED_TRACE_DIR or MLA_CHUNKED_TRACE_PATH (skips if both unset); supports partial iters.
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
@@ -841,7 +841,7 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
     and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
-    MLA_CHUNKED_TRACE_DIR), or run with no reference ('func'). Select with e.g.
+    MLA_CHUNKED_TRACE_DIR/PATH), or run with no reference ('func'). Select with e.g.
     -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
     Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
