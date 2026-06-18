@@ -561,6 +561,7 @@ class SrcFormatModel:
             DataFormat.Bfp2_b: SrcFormatModel._bfp8b_to_tf32,
             DataFormat.Float16_b: SrcFormatModel._fp16b_to_tf32,
             DataFormat.Float16: SrcFormatModel._fp16_to_tf32,
+            DataFormat.Tf32: SrcFormatModel._fp32_to_tf32,
             DataFormat.Float32: SrcFormatModel._fp32_to_tf32,
             DataFormat.MxFp8R: SrcFormatModel._mxfp8r_to_tf32,
             DataFormat.MxFp8P: SrcFormatModel._mxfp8p_to_tf32,
@@ -1212,8 +1213,15 @@ class MatmulGolden(FidelityMasking):
         t1 = to_tensor(operand1, fidelity_format)
         t2 = to_tensor(operand2, fidelity_format)
         if fidelity_iter is not None:
-            t1, t2 = self._apply_fidelity_masking(
-                fidelity_format, t1, t2, fidelity_iter
+            # The Tensix matmul swaps its operands through the source registers:
+            # the lhs is unpacked into SrcB and the rhs into SrcA. The fidelity
+            # masks are per-source (mask_a -> SrcA, mask_b -> SrcB) and asymmetric
+            # (e.g. LoFi keeps the top 4 of SrcA's mantissa but the top 6 of
+            # SrcB's), so the lhs must take the SrcB mask and the rhs the SrcA mask.
+            # Feed (rhs, lhs) into the masking and unswap the result so each operand
+            # is masked as the source register it actually lands in.
+            t2, t1 = self._apply_fidelity_masking(
+                fidelity_format, t2, t1, fidelity_iter
             )
         return t1, t2
 
@@ -1250,6 +1258,18 @@ class MatmulGolden(FidelityMasking):
                 dest_acc,
             )
 
+        if data_format.is_integer():
+            return self._matmul_integer(
+                operand1,
+                operand2,
+                data_format,
+                input_A_dimensions,
+                input_B_dimensions,
+                tilize,
+                input_A_format,
+                input_B_format,
+            )
+
         return self._matmul_default(
             operand1,
             operand2,
@@ -1261,6 +1281,41 @@ class MatmulGolden(FidelityMasking):
             input_A_format,
             input_B_format,
         )
+
+    # Integer matmul is LoFi-only on Quasar.
+    def _matmul_integer(
+        self,
+        operand1,
+        operand2,
+        data_format,
+        input_A_dimensions,
+        input_B_dimensions,
+        tilize: bool,
+        input_A_format: DataFormat = None,
+        input_B_format: DataFormat = None,
+    ):
+        torch_format = format_dict[data_format]
+
+        M, K1, K2, N, _ = self._resolve_matmul_dimensions(
+            input_A_dimensions, input_B_dimensions
+        )
+
+        t1 = to_tensor(operand1, input_A_format).view(M, K1)
+        t2 = to_tensor(operand2, input_B_format).view(K2, N)
+
+        res = saturate_integer(
+            torch.matmul(t1.to(torch.int64), t2.to(torch.int64)).view(M * N),
+            data_format,
+            torch_format,
+        )
+
+        if tilize:
+            res = tilize_block(
+                res,
+                dimensions=(input_A_dimensions[0], input_B_dimensions[1]),
+                stimuli_format=data_format,
+            ).flatten()
+        return res
 
     def _matmul_default(
         self,
@@ -1565,7 +1620,7 @@ class DataCopyGolden:
         input_dimensions: list[int] = [32, 32],
         face_r_dim: int = 16,  # Default to 16 for backward compatibility
         input_format=None,
-        tile_dimensions: list[int] = None,
+        tile_shape=None,
     ):
         torch_format = format_dict[data_format]
 
@@ -1577,14 +1632,15 @@ class DataCopyGolden:
         height, width = input_dimensions[0], input_dimensions[1]
 
         # Tile count selection:
-        # - tile_dimensions given: derive directly from the real tile geometry. This
+        # - tile_shape given: derive directly from the real tile geometry. This
         #   is required for full-width tiny tiles (e.g. 16x32, num_faces=2) where
         #   face_r_dim is still 16 but a tensor packs into more, smaller tiles than
         #   the 32x32 assumption below would compute.
         # - face_r_dim < 16: legacy partial-face path treats the input as one tile.
         # - otherwise: assume standard 32x32 tiles (backward compatible).
-        if tile_dimensions is not None:
-            tile_rows, tile_cols = tile_dimensions
+        if tile_shape is not None:
+            tile_rows = tile_shape.total_row_dim()
+            tile_cols = tile_shape.total_col_dim()
             tile_cnt = (height // tile_rows) * (width // tile_cols)
         elif face_r_dim < 16:
             tile_cnt = 1
@@ -2375,29 +2431,19 @@ class EltwiseBinaryGolden(FidelityMasking):
             MathOperation.Elwmul: self._mul,
         }
 
-    def _quantize_input(
-        self, operand, fmt, data_format, preserve_input_precision=False
-    ):
-        """Quantize a single operand to match what hardware sees after unpack.
-
-        Args:
-            preserve_input_precision: When True, plain FP inputs are cast to
-                their own format's dtype rather than the output's. Set this for
-                MX-output paths on Quasar with implied math format — the dest
-                register holds values in the input's precision (fp16 for
-                Float16, bf16 for Float16_b).
-        """
-        if fmt is None:
-            return to_tensor(operand, data_format)
-        if fmt == DataFormat.Bfp2_b:
+    def _quantize_input(self, operand, input_fmt, output_fmt):
+        """Quantize a single operand to match what hardware sees after unpack."""
+        if input_fmt is None:
+            return to_tensor(operand, output_fmt)
+        if input_fmt == DataFormat.Bfp2_b:
             return _bfp2b_to_float16b(operand)
-        if fmt == DataFormat.Bfp4_b:
+        if input_fmt == DataFormat.Bfp4_b:
             return _bfp4b_to_float16b(operand)
-        if fmt == DataFormat.Bfp8_b:
+        if input_fmt == DataFormat.Bfp8_b:
             return _bfp8b_to_float16b(operand)
-        if fmt.is_mx_format():
-            return quantize_mx_tensor_chunked(operand, fmt)
-        return to_tensor(operand, fmt if preserve_input_precision else data_format)
+        if input_fmt.is_mx_format():
+            return quantize_mx_tensor_chunked(operand, input_fmt)
+        return to_tensor(operand, input_fmt)
 
     _UNSET = object()
 
@@ -2437,6 +2483,60 @@ class EltwiseBinaryGolden(FidelityMasking):
 
         return result
 
+    def _binary_int_op(self, op, t1, t2, data_format):
+        """Integer eltwise op in int32. Int8 operands cannot overflow int32."""
+        torch_format = format_dict[data_format]
+        t1_int32 = t1.to(torch.int32)
+        t2_int32 = t2.to(torch.int32)
+        if op == MathOperation.Elwadd:
+            res = t1_int32 + t2_int32
+        elif op == MathOperation.Elwsub:
+            res = t1_int32 - t2_int32
+        elif op == MathOperation.Elwmul:
+            res = t1_int32 * t2_int32
+        else:
+            raise ValueError(f"Unsupported integer eltwise operation: {op}")
+        return res.to(torch_format)
+
+    def _eltwise_integer(
+        self,
+        op,
+        operand1,
+        operand2,
+        data_format,
+        input_format,
+        acc_to_dest,
+        tile_shape,
+        num_tiles_per_accumulation,
+    ):
+
+        t1 = to_tensor(operand1, input_format)
+        t2 = to_tensor(operand2, input_format)
+
+        if acc_to_dest:
+            tile_size = tile_shape.total_tile_size()
+            num_total_tiles = t1.numel() // tile_size
+            num_blocks = num_total_tiles // num_tiles_per_accumulation
+
+            t1_tiles = t1.view(num_total_tiles, tile_size)
+            t2_tiles = t2.view(num_total_tiles, tile_size)
+
+            accumulated = []
+            for block in range(num_blocks):
+                partials = [
+                    self._binary_int_op(
+                        op,
+                        t1_tiles[block * num_tiles_per_accumulation + tile],
+                        t2_tiles[block * num_tiles_per_accumulation + tile],
+                        data_format,
+                    )
+                    for tile in range(num_tiles_per_accumulation)
+                ]
+                accumulated.append(apply_l1_accumulation(partials, data_format))
+            return torch.cat(accumulated)
+
+        return self._binary_int_op(op, t1, t2, data_format)
+
     def __call__(
         self,
         op,
@@ -2461,6 +2561,18 @@ class EltwiseBinaryGolden(FidelityMasking):
         if input_format_B is EltwiseBinaryGolden._UNSET:
             input_format_B = input_format
 
+        if input_format is not None and input_format.is_integer():
+            return self._eltwise_integer(
+                op,
+                operand1,
+                operand2,
+                data_format,
+                input_format,
+                acc_to_dest,
+                tile_shape,
+                num_tiles_per_accumulation,
+            )
+
         # On Quasar with IMPLIED_MATH_FORMAT=Yes, the HW dest register's
         # physical storage is implied from the SrcA tag: Float16 input →
         # FP16A (S1E5M10); Float16_b and plain MX inputs → BF16 (S1E8M7).
@@ -2474,12 +2586,8 @@ class EltwiseBinaryGolden(FidelityMasking):
         )
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.
-        operand1 = self._quantize_input(
-            operand1, input_format, data_format, preserve_input_precision=out_is_mx
-        )
-        operand2 = self._quantize_input(
-            operand2, input_format_B, data_format, preserve_input_precision=out_is_mx
-        )
+        operand1 = self._quantize_input(operand1, input_format, data_format)
+        operand2 = self._quantize_input(operand2, input_format_B, data_format)
 
         # Fidelity masking models the source register decomposition, so use
         # the *input* format, not the output format.  Block-float / MX formats
@@ -2566,7 +2674,11 @@ class EltwiseBinaryGolden(FidelityMasking):
             # closely.
             result = quantize_mx_tensor_chunked(result, data_format)
         else:
-            result = to_tensor(result, data_format)
+            if data_format.is_integer():
+                torch_format = format_dict[data_format]
+                result = saturate_integer(result, data_format, torch_format)
+            else:
+                result = to_tensor(result, data_format)
 
         # Final FTZ pass: hardware always flushes subnormals to zero. Do this
         # after all quantization so it covers every output format (including

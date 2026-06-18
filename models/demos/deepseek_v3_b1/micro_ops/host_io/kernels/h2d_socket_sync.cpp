@@ -29,6 +29,12 @@ constexpr uint32_t output_tensor_addr = get_compile_time_arg_val(2);
 constexpr uint32_t page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_pages = get_compile_time_arg_val(4);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(5);
+// Optional metadata path. When `metadata_size_bytes == 0`, the metadata read
+// is compiled out entirely and the trailing metadata TensorAccessorArgs are
+// not consumed; the kernel behaves byte-identically to the no-metadata case.
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(6);
+constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(7);
+constexpr uint32_t metadata_output_addr = get_compile_time_arg_val(8);
 
 void kernel_main() {
     // RT args (per coord, per worker).
@@ -38,9 +44,10 @@ void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(3);
     const uint32_t end_page = get_arg_val<uint32_t>(4);
 
-    // TensorAccessorArgs blocks: backing first, then output. The host packs
-    // them back-to-back starting at CT-arg index 6.
-    constexpr auto backing_accessor_args = TensorAccessorArgs<6>();
+    // TensorAccessorArgs blocks: backing, output, then (when metadata is
+    // enabled) metadata output. The host packs them back-to-back starting at
+    // CT-arg index 9.
+    constexpr auto backing_accessor_args = TensorAccessorArgs<9>();
     constexpr auto output_accessor_args = TensorAccessorArgs<backing_accessor_args.next_compile_time_args_offset()>();
 
     auto backing = TensorAccessor(backing_accessor_args, backing_tensor_addr);
@@ -51,13 +58,32 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* data_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_sem_addr);
 
     // 1. Wait for the service core to signal a fresh transfer, then reset.
-    //    The next service-core multicast-inc will set this back to 1.
+    //    The next service-core multicast-inc will set this back to 1. The
+    //    service core multicasts metadata into L1 BEFORE flipping this sem,
+    //    so by the time we observe data_ready_sem > 0 the metadata bytes at
+    //    `metadata_l1_addr` are already valid.
     while (*data_ready == 0) {
         invalidate_l1_cache();
     }
     *data_ready = 0;
 
-    // 2. Copy this worker's slice of the backing tensor into the output. Use
+    // 2. (Optional) Snapshot metadata from this worker's local L1 into the
+    //    metadata output tensor on DRAM. Gated on `start_page == 0` so a
+    //    multi-worker run only emits one write per coord — every worker's L1
+    //    holds the same metadata (multicast), so picking one is fine.
+    if constexpr (metadata_size_bytes > 0) {
+        if (start_page == 0) {
+            constexpr auto metadata_accessor_args =
+                TensorAccessorArgs<output_accessor_args.next_compile_time_args_offset()>();
+            auto metadata_out = TensorAccessor(metadata_accessor_args, metadata_output_addr);
+            // Single-page write: the metadata tensor is sized to exactly one
+            // page of `metadata_size_bytes` bytes (see h2d_socket_sync_op.py).
+            noc_async_write(metadata_l1_addr, metadata_out.get_noc_addr(0), metadata_size_bytes);
+            noc_async_write_barrier();
+        }
+    }
+
+    // 3. Copy this worker's slice of the backing tensor into the output. Use
     //    the scratch CB as a per-page staging area. read_barrier before write
     //    so we don't issue a write off an unwritten L1 region; write_barrier
     //    before reusing the slot for the next page.
@@ -70,7 +96,7 @@ void kernel_main() {
         noc_async_write_barrier();
     }
 
-    // 3. Ack the service core. Exactly one inc per worker per transfer; the
+    // 4. Ack the service core. Exactly one inc per worker per transfer; the
     //    service core's poll checks (cur - last_consumed) == num_workers.
     const uint64_t consumed_noc = get_noc_addr(service_noc_x, service_noc_y, consumed_counter_addr);
     noc_semaphore_inc(consumed_noc, 1);

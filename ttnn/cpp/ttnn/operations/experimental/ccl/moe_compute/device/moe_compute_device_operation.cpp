@@ -186,6 +186,13 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;
     TT_FATAL(
         tiles_per_step >= 2 && tiles_per_step % 2 == 0, "tiles_per_step ({}) must be even and >= 2", tiles_per_step);
+
+    const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
+    TT_FATAL(
+        args.num_shared_experts_per_device <= experts_per_device,
+        "num_shared_experts_per_device ({}) must be <= experts_per_device ({})",
+        args.num_shared_experts_per_device,
+        experts_per_device);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -395,7 +402,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
-    const std::optional<uint32_t>& bh_ring_size) {
+    const std::optional<uint32_t>& bh_ring_size,
+    const std::optional<uint32_t>& num_shared_experts_per_device) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -408,13 +416,22 @@ std::vector<ttnn::Tensor> moe_compute(
 
     auto* mesh_device = tilize_input_tensor.device();
 
-    // Auto-compute num_data_parallel_cores: largest divisor of hidden_tiles <= 4.
-    // This replaces the prior hand-rolled per-config (DeepSeek/GPT) lookup. Works for both
-    // WH (N=12) and BH (N in {8, 12, 16}) -- the formula does not depend on ring N.
+    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
+    // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
+    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
+    TT_FATAL(
+        ring_n == 8 || ring_n == 12 || ring_n == 16,
+        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
+        ring_n);
+
+    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
+    // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
+    // RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim, so both must divide evenly.
+    // E.g. GPT-OSS (Ht=90) picks d=3 at N=12 but falls back to d=2 at N=8 or N=16.
     const uint32_t hidden_tiles = hidden_size / 32;
     uint32_t num_data_parallel_cores = 1;
     for (uint32_t d = 4; d >= 1; --d) {
-        if (hidden_tiles % d == 0) {
+        if (hidden_tiles % d == 0 && ring_n % d == 0) {
             num_data_parallel_cores = d;
             break;
         }
@@ -422,14 +439,11 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
-    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
-    // Validate at the API boundary for a clear "moe_compute:" error; get_cores() re-validates
-    // before kernel build as a structural invariant.
-    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
     TT_FATAL(
-        ring_n == 8 || ring_n == 12 || ring_n == 16,
-        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
-        ring_n);
+        !(compute_only && cluster_axis.has_value()),
+        "moe_compute: compute_only=True is incompatible with cluster_axis (got cluster_axis={}). "
+        "compute_only skips the combine path, so cluster_axis has no meaning.",
+        cluster_axis.value_or(0));
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
@@ -479,6 +493,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .intermediate_size = intermediate_size,
+            .num_shared_experts_per_device = num_shared_experts_per_device,
             .has_bias = has_bias,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,

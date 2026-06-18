@@ -5,6 +5,7 @@
 #     - filter: <glob>  GTest filter pattern
 #       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
 #       env:            (optional) Extra environment variables as key: value pairs
+#       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
 #
 # Example test entry
 #
@@ -17,6 +18,15 @@
 unit_tests_legacy:
   - filter: "*SingleDmL1Write*"
     config: 1x3, 2x3, 2x3_DISPATCH
+
+  - filter: "*SingleDmL1Write*"
+    config: 1x3
+    env:
+      TT_METAL_DPRINT_CORES: all
+
+  - filter: "*SingleDmL1Write*"
+    config: 1x3
+    gtest_repeat: 5
 
   - filter: "*DmLoopback*"
     config: 1x3
@@ -38,17 +48,17 @@ unit_tests_legacy:
     env:
       TT_METAL_LOGGER_LEVEL: warning
 
-  - filter: "*LegacyVsNonLegacyTest.GlobalsAndTLS/Threaded"
+  - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
     config: 1x3
 
 unit_tests_debug_tools:
-  - filter: "*WatcherAssertTests*Brisc"
+  - filter: "*WatcherAssertTests*DM2"
     config: 1x3
 
   - filter: "*WatcherAssertTests*DM7"
     config: 1x3
 
-  - filter: "*WatcherNonDefaultAssertTests*HWFault7"
+  - filter: "*WatcherNonDefaultAssertTests*DMHWFaultStoreAccessFault"
     config: 1x3
 
   - filter: "*TensixTestWatcherSanitizeNOCAlignmentL1Write*"
@@ -66,11 +76,13 @@ unit_tests_debug_tools:
   - filter: "*TestWatcherWaypoints"
     config: 1x3
 
-  - filter: "*TestWatcherTileCounterLogRemapper*"
-    config: 1x3
+# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
+#  - filter: "*TestWatcherTileCounterLogRemapper*"
+#    config: 1x3
 
-  - filter: "*TestWatcherTileCounterLogBypass*"
-    config: 1x3
+# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
+#  - filter: "*TestWatcherTileCounterLogBypass*"
+#    config: 1x3
 
   - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
     config: 1x3
@@ -82,6 +94,9 @@ unit_tests_api:
   - filter: "*QuasarCRTAUniqueL1Addresses*"
     config: 1x3
 
-unit_tests_llk:
-  - filter: "*Datacopy"
+  - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
+    config: 1x3
+
+unit_tests_device:
+  - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
     config: 1x3

@@ -46,19 +46,40 @@ TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, 3200)]
 
 TEST_PARAM_IDS = ["minimal", "just_over_one_tile", "four_tiles", "realistic"]
 
+# (n_groups, total_experts, summed_experts_per_group, topk_groups, n_activated_experts, route_scale)
+ROUTING_CONFIGS = [
+    (8, 256, 2, 4, 8, 0.5),  # DeepSeek grouped routing
+    (1, 384, 1, 1, 8, 2.827),  # Kimi single expert group -> collapses to a plain top-k
+]
+ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e"]
 
+
+@pytest.mark.parametrize(
+    "n_groups,total_experts,summed_experts_per_group,topk_groups,n_activated_experts,route_scale",
+    ROUTING_CONFIGS,
+    ids=ROUTING_CONFIG_IDS,
+)
 @pytest.mark.parametrize("num_batches,batch_size,seq_len", TEST_PARAMS, ids=TEST_PARAM_IDS)
-def test_moe_grouped_topk(device, num_batches, batch_size, seq_len):
-    """Verify moe_grouped_topk matches the PyTorch golden reference using recall and PCC."""
+def test_moe_grouped_topk(
+    device,
+    num_batches,
+    batch_size,
+    seq_len,
+    n_groups,
+    total_experts,
+    summed_experts_per_group,
+    topk_groups,
+    n_activated_experts,
+    route_scale,
+):
+    """Verify moe_grouped_topk matches the PyTorch golden reference using recall and PCC.
+
+    Covers both DeepSeek grouped routing and the single-group (n_groups == 1) path that
+    collapses to a plain top-k over a variable expert count (e.g. Kimi's 384 experts).
+    """
     torch.manual_seed(42)
 
-    total_experts = 256
-    n_groups = 8
-    summed_experts_per_group = 2
-    topk_groups = 4
-    n_activated_experts = 8
     epsilon = 1e-20
-    route_scale = 0.5
 
     config = DeepseekV3Config(
         hidden_size=64,

@@ -34,26 +34,11 @@
     export MESH_DEVICE=T3K
     pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
   skus:
-    bh_loudbox:
+    bh_quietbox_2:
       timeout: 10
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: mistral-small-3.1-24b
-
-# ─── Mochi ──────────────────────────────────────────────────────────────────
-
-- name: Mochi pipeline performance
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    pytest --timeout=1500 models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0"
-  skus:
-    bh_loudbox:
-      timeout: 20
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: models
-  model-name: mochi
 
 # ─── stable_diffusion_xl ────────────────────────────────────────────────────
 
@@ -97,18 +82,6 @@
   team: models
   model-name: flux.1-dev
 
-- name: Flux.1-dev BH LoudBox performance (bh_2x4sp0tp1)
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "bh_2x4sp0tp1" --timeout=600
-  skus:
-    bh_loudbox:
-      timeout: 10
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: models
-  model-name: flux.1-dev
-
 # ─── Mochi (BH QuietBox 2) ──────────────────────────────────────────────────
 
 - name: Mochi BH QuietBox 2 performance (2x2sp0tp1)
@@ -136,18 +109,6 @@
     bh_quietbox_2:
       timeout: 20
   owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: wan2.2-t2v-a14b
-
-- name: Wan2.2-T2V-A14B BH LoudBox performance
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_2x4_sp1tp0 and resolution_480p and t2v" --timeout=1200
-  skus:
-    bh_loudbox:
-      timeout: 20
-  owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
 

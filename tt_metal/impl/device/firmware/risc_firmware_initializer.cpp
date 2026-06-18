@@ -611,6 +611,13 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .y);
     }
+
+    // Pad to a multiple of 4 bytes so these vectors can be multicast via noc_multicast_write without a
+    // sub-word tail. UMD's WC memcpy_to_device handles a misaligned tail with a device read-modify-write,
+    // which on a multicast window issues a broadcast read — undefined per the NoC spec. The firmware reader
+    // indexes by logical col/row only, so the trailing zero bytes are never read.
+    worker_logical_col_to_virtual_col.resize(tt::round_up(tensix_grid_size.x, 4), 0);
+    worker_logical_row_to_virtual_row.resize(tt::round_up(tensix_grid_size.y, 4), 0);
 }
 
 void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
@@ -1073,6 +1080,23 @@ void RiscFirmwareInitializer::initialize_firmware(
                 &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), launch_msg_buffer_read_ptr_addr);
             cluster_.noc_multicast_write(
                 &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), go_message_index_addr);
+        }
+
+        // Initialize fw_shared_globals_ready_addr Quasar DM0 to WAIT
+        if (cluster_.arch() == ARCH::QUASAR) {
+            auto factory = hal_.get_dev_msgs_factory(programmable_core_type);
+            const DeviceAddr mailbox_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
+            const DeviceAddr fw_shared_globals_ready_addr =
+                mailbox_addr +
+                factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::fw_shared_globals_ready);
+            const uint8_t zero = 0;
+            if (core_type != HalProgrammableCoreType::TENSIX) {
+                cluster_.write_core(
+                    &zero, sizeof(zero), tt_cxy_pair(device_id, virtual_core), fw_shared_globals_ready_addr);
+            } else {
+                cluster_.noc_multicast_write(
+                    &zero, sizeof(zero), device_id, start_core, end_core.value(), fw_shared_globals_ready_addr);
+            }
         }
     };
 

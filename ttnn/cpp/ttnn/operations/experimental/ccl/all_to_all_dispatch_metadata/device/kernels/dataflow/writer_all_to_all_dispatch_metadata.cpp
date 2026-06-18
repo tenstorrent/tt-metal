@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -31,17 +32,16 @@ inline void dispatch_metadata_local_device(
     noc_async_atomic_barrier();
 }
 
-void zero_buffer_async(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
+void zero_buffer_async(uint32_t cb_id, uint32_t bytes) {
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    noc.async_write_zeros(cb, bytes);
 }
 
-void zero_buffer_barrier() { noc_async_read_barrier(); }
+void zero_buffer_barrier() {
+    Noc noc;
+    noc.write_zeros_l1_barrier();
+}
 
 // Bidirectional multicast write - sends same payload to all devices on ring via multicast in both directions
 // Handles payloads larger than max packet size by splitting into multiple packets
@@ -60,7 +60,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
     uint32_t src_addr,
     uint64_t noc_addr,
     int32_t size_bytes,
-    uint32_t alignment) {
+    [[maybe_unused]] uint32_t alignment) {
     using ttnn::operations::ccl::common::ReplicateGroup;
 
     // Split the ring: positive direction gets half, negative direction gets the other half
@@ -783,21 +783,21 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t send_preparation_buffer_cb_id = get_compile_time_arg_val(4);
 
-    constexpr uint32_t input_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
+    [[maybe_unused]] constexpr uint32_t input_pages = get_compile_time_arg_val(5);
+    [[maybe_unused]] constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
     constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
-    constexpr uint32_t output_pages = get_compile_time_arg_val(8);
-    constexpr uint32_t metadata_pages = get_compile_time_arg_val(9);
+    [[maybe_unused]] constexpr uint32_t output_pages = get_compile_time_arg_val(8);
+    [[maybe_unused]] constexpr uint32_t metadata_pages = get_compile_time_arg_val(9);
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
+    [[maybe_unused]] constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
+    [[maybe_unused]] constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(13);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(15);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(16);
-    constexpr uint32_t batch_size = get_compile_time_arg_val(17);
+    [[maybe_unused]] constexpr uint32_t hidden_size = get_compile_time_arg_val(16);
+    [[maybe_unused]] constexpr uint32_t batch_size = get_compile_time_arg_val(17);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
     constexpr uint32_t experts = get_compile_time_arg_val(19);
     constexpr uint32_t num_shared_experts = get_compile_time_arg_val(20);
@@ -805,30 +805,30 @@ void kernel_main() {
 
     constexpr uint32_t shared_and_selected_experts = selected_experts_k + num_shared_experts;
 
-    constexpr uint32_t num_links = get_compile_time_arg_val(22);
+    [[maybe_unused]] constexpr uint32_t num_links = get_compile_time_arg_val(22);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(23);
 
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
+    [[maybe_unused]] constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
+    [[maybe_unused]] constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);  // ew_dim
-    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(28);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(31);
+    [[maybe_unused]] constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(28);
+    [[maybe_unused]] constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
+    [[maybe_unused]] constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
+    [[maybe_unused]] constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(31);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(32);
 
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(33);
     constexpr uint32_t alignment = get_compile_time_arg_val(34);
     constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(35);
-    constexpr uint32_t write_page_by_page = get_compile_time_arg_val(36);
+    [[maybe_unused]] constexpr uint32_t write_page_by_page = get_compile_time_arg_val(36);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(37);
 
     constexpr uint32_t dispatch_devices = get_compile_time_arg_val(38);
 
     // scores tensor compile time args
     constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
-    constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    [[maybe_unused]] constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
     constexpr uint32_t output_scores_page_size = get_compile_time_arg_val(43);
     constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
@@ -851,10 +851,10 @@ void kernel_main() {
 #endif
 
     size_t rt_args_idx = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t scores_out_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -873,8 +873,8 @@ void kernel_main() {
     uint32_t payload_size = get_arg_val<uint32_t>(rt_args_idx++);
     bool is_primary_payload_worker = get_arg_val<uint32_t>(rt_args_idx++) == 1;
 
-    constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
-    constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
+    [[maybe_unused]] constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
+    [[maybe_unused]] constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 
     constexpr uint32_t num_directions = 4;
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
@@ -964,7 +964,7 @@ void kernel_main() {
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
     detail::zero_buffer_async(
-        send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
+        send_preparation_buffer_cb_id, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
@@ -984,8 +984,9 @@ void kernel_main() {
     constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
-    const auto output_scores_addr_gen =
+    [[maybe_unused]] const auto metadata_addr_gen =
+        TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    [[maybe_unused]] const auto output_scores_addr_gen =
         TensorAccessor(scores_out_args, scores_out_tensor_address, output_scores_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
@@ -1002,8 +1003,8 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 5 * sizeof(PACKET_HEADER_TYPE));
     // packet headers at +6 and +7 are currently unused (reserved for future split sends)
 
-    uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
-    uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
+    [[maybe_unused]] uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+    [[maybe_unused]] uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
 
     detail::zero_buffer_barrier();
 
@@ -1030,7 +1031,7 @@ void kernel_main() {
     // - The cross_device_semaphore is double-buffered externally to avoid races between iterations
 #ifndef SKIP_INIT_SEMAPHORE
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    detail::fabric_multicast_bidirectional_atomic_inc_1d<linearized_mesh_coord, topology mesh_rows, mesh_cols, axis>(
+    fabric_multicast_bidirectional_atomic_inc_1d<linearized_mesh_coord, topology, mesh_rows, mesh_cols, axis>(
         fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
     noc_async_writes_flushed();
 

@@ -9,6 +9,7 @@ import torch
 from .format_config import DataFormat
 
 format_dict = {
+    DataFormat.Tf32: torch.float32,
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,
@@ -557,6 +558,16 @@ class UnpackerEngine(Enum):
     UnpB = "UNP_B"
     UnpS = "UNP_S"
     UnpDest = "UNP_DEST"
+
+
+class TilizeUnpackerSel(Enum):
+    """
+    Enum for selecting which unpacker(s) perform tilization.
+    """
+
+    UnpA = "UnpA"
+    UnpB = "UnpB"
+    UnpAB = "UnpAB"
 
 
 class ReluConfig(Enum):
