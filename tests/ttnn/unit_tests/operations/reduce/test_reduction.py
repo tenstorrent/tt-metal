@@ -114,16 +114,11 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 @pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     correction = True
-    # do_scale path (scalar != 1.0) routes inputs through mul_tiles_bcast_scalar, whose FPU
-    # SrcA reads cb_in at TF32 (10-bit mantissa) regardless of any precision-preservation
-    # plumbing downstream. At offset=1e6 the TF32 ULP is ~512, so all 32 consecutive integers
-    # in cb_in collapse to a single TF32 value before the mul fires -- the variance is
-    # structurally pinned to zero on all three reduction kernels (W, H, HW) and there is no
-    # kernel-side workaround. Mark these combinations xfail to document the hardware floor.
-    if scalar != 1.0 and abs(offset) >= 1024:
-        pytest.xfail(
-            "FPU SrcA TF32 floor on do_scale path: cb_in collapses to a constant before the mul. Issue #45222."
-        )
+    # a non-unity scalar used to route inputs through mul_tiles_bcast_scalar,
+    # whose FPU SrcA read truncated cb_in to TF32 (10-bit mantissa); at offset=1e6 the TF32
+    # ULP is ~512 so all 32 consecutive integers collapsed to a constant and the variance was
+    # pinned to zero. The scalar is now applied after the (unscaled, precise) Welford reduction
+    # as var(s*x) = s^2 * var(x), so this case is accurate regardless of offset.
     N = 32
     seq = torch.arange(N, dtype=torch.float32) + offset
     # Lay out the input so the reduction axis is the integer sequence.
