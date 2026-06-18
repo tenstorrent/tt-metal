@@ -14,8 +14,10 @@ Usage:
 """
 
 import os
+import pathlib
 import sys
 import time
+import urllib.request
 
 os.environ.setdefault("TT_METAL_HOME", "/home/ttuser/ssinghal/tt-metal")
 _root = os.environ["TT_METAL_HOME"]
@@ -373,21 +375,53 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
     )
 
     ISL_LIST = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262112]
-    N_DECODE = 30
+    N_DECODE = 50
 
     tokenizer = AutoTokenizer.from_pretrained(_SNAP)
 
-    # Build seed token list by repeating a short phrase.
-    # Avoids tokenizing a huge string; round-trip-stable for BPE tokenizers.
-    _seed = (
-        "Tenstorrent Blackhole is an AI accelerator for hybrid SSM and MoE models. "
-        "NemotronH-30B combines Mamba2 and dense-attention layers. "
-        "The tensor-parallel TP=4 configuration runs on a four-chip QuietBox. "
+    # Use Frankenstein (Project Gutenberg) as the long-context document — same
+    # source as gpt_oss's input_data_long_128k.json.  Each ISL prompt is:
+    #   [book text clipped to isl - len(question)] + question
+    # For ISLs longer than the book (~105K tokens), the book is repeated.
+    # The question asks for 3 quotes with AI metaphors — a real recall task that
+    # produces structured, verifiable output rather than repetition collapse.
+    _GUTENBERG_URL = "https://www.gutenberg.org/cache/epub/84/pg84.txt"
+    _QUESTION = (
+        "Based on the text above, explicitly state three quotes directly taken "
+        "from the book inside double quotes, each followed by a metaphor relating "
+        "to artificial intelligence:\n"
+        'A. "<quote>"\nMetaphor: <metaphor>\n'
+        'B. "<quote>"\nMetaphor: <metaphor>\n'
+        'C. "<quote>"\nMetaphor: <metaphor>\n'
     )
-    _seed_ids_short = tokenizer.encode(_seed, add_special_tokens=False)
-    needed = max(ISL_LIST) + 200
-    repeats = (needed + len(_seed_ids_short) - 1) // len(_seed_ids_short)
-    _seed_ids = (_seed_ids_short * repeats)[:needed]
+    _cache_dir = pathlib.Path("/tmp/nemotron_context_cache")
+    _cache_dir.mkdir(exist_ok=True)
+    _book_cache = _cache_dir / "frankenstein_pg84.txt"
+    if _book_cache.exists():
+        _book_text = _book_cache.read_text(encoding="utf-8", errors="replace")
+    else:
+        print(f"[context] Downloading Frankenstein from {_GUTENBERG_URL}...", flush=True)
+        with urllib.request.urlopen(_GUTENBERG_URL, timeout=30) as _resp:
+            _book_text = _resp.read().decode("utf-8", errors="replace")
+        _book_cache.write_text(_book_text, encoding="utf-8")
+        print(f"[context] Cached to {_book_cache} ({len(_book_text):,} chars).", flush=True)
+
+    _book_ids = tokenizer.encode(_book_text, add_special_tokens=False)
+    _question_ids = tokenizer.encode(_QUESTION, add_special_tokens=False)
+    print(
+        f"[context] Book: {len(_book_ids):,} tokens  Question: {len(_question_ids)} tokens",
+        flush=True,
+    )
+
+    def _build_prompt_ids(isl: int) -> list:
+        """Return token list of length ~isl: [book[:isl-Q]] + question."""
+        n_book = max(0, isl - len(_question_ids))
+        if n_book == 0:
+            return _question_ids[:isl]
+        # Repeat book if ISL exceeds its length.
+        reps = (n_book + len(_book_ids) - 1) // len(_book_ids)
+        book_pool = (_book_ids * reps)[:n_book]
+        return book_pool + _question_ids
 
     # KV-cache budget strategy:
     # ISLs ≤ 32K share one persistent state (96 MB KV per device); ISLs > 32K get a
@@ -403,7 +437,7 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
 
     # Warmup: compile prefill kernels and decode trace at a short ISL.
     print("\n[warmup] Running warmup generate (ISL=32, 5 decode tokens)...", flush=True)
-    _warmup_prompt = tokenizer.decode(_seed_ids[:32], skip_special_tokens=False)
+    _warmup_prompt = tokenizer.decode(_book_ids[:32], skip_special_tokens=False)
     generate(
         prompt=_warmup_prompt,
         mesh_device=mesh_device,
@@ -419,7 +453,7 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
     results = []
 
     for isl in ISL_LIST:
-        prompt_ids = _seed_ids[:isl]
+        prompt_ids = _build_prompt_ids(isl)
         prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
         # Clamp decode count: tokenizer round-trip may shift token count by ±few.
