@@ -891,6 +891,61 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
 
 }  // namespace
 
+namespace detail {
+
+std::optional<std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>>>
+assign_non_colliding_hops(
+    const std::vector<std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>>>& candidates) {
+    using HopPair = std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>;
+    const std::size_t num_hops = candidates.size();
+
+    // Visit the most-constrained hops first (fewest candidates) so the search prunes quickly.
+    std::vector<std::size_t> visit_order(num_hops);
+    for (std::size_t i = 0; i < num_hops; i++) {
+        visit_order[i] = i;
+    }
+    std::stable_sort(visit_order.begin(), visit_order.end(), [&](std::size_t a, std::size_t b) {
+        return candidates[a].size() < candidates[b].size();
+    });
+
+    // selected_hop[i] = chosen (exit, peer) pair for ring position i.
+    std::vector<std::optional<HopPair>> selected_hop(num_hops);
+    std::set<tt::tt_fabric::FabricNodeId> used_nodes;
+    std::function<bool(std::size_t)> assign = [&](std::size_t k) -> bool {
+        if (k == num_hops) {
+            return true;
+        }
+        const std::size_t hop = visit_order[k];
+        for (const auto& pair : candidates[hop]) {
+            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
+                continue;
+            }
+            selected_hop[hop] = pair;
+            used_nodes.insert(pair.first);
+            used_nodes.insert(pair.second);
+            if (assign(k + 1)) {
+                return true;
+            }
+            used_nodes.erase(pair.first);
+            used_nodes.erase(pair.second);
+            selected_hop[hop].reset();
+        }
+        return false;
+    };
+    if (!assign(0)) {
+        return std::nullopt;
+    }
+
+    std::vector<HopPair> hops;
+    hops.reserve(num_hops);
+    for (auto& hop : selected_hop) {
+        hops.push_back(*hop);
+    }
+    return hops;
+}
+
+}  // namespace detail
+
 ResolvedBlitzDecodePipelineAllocation resolve_blitz_decode_pipeline_allocation(bool initialize_loopback) {
     auto allocation = build_pipeline_allocation_from_topology(initialize_loopback);
     validate_pipeline_allocation(allocation);
