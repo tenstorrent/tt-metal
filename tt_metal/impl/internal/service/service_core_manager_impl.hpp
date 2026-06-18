@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stddef.h>
@@ -74,9 +75,15 @@ public:
     // Called on every EnqueueMeshWorkload - common case is no claims, in which case routing is skipped.
     // has_any_claims() includes isolated cores (used by program placement / CB validation).
     bool has_any_claims() const;
+
     // Excludes isolated cores. Used at the EnqueueMeshWorkload routing gate so an isolated (self-launched)
     // service does NOT force every model op through the no-mixing validation loop.
     bool has_any_non_isolated_claims() const;
+
+    // Monotonic version of the claimed-core set (bumped on claim()/release()). EnqueueMeshWorkload
+    // stamps its cached classification with this and reclassifies on change to stay correct.
+    uint64_t generation() const;
+
     // True if `core` is claimed as a service core on `device_id`. Used at enqueue time to route
     // programs to the SD path and to device-scope placement/CB validation.
     bool is_service_core(ChipId device_id, CoreCoord core) const;
@@ -101,6 +108,7 @@ private:
 
     MetalEnvImpl& env_;
     std::unordered_map<ChipId, DeviceServiceState> devices_;
+    uint64_t generation_ = 0;  // bumped whenever claim()/release() changes the claimed-core set
 };
 
 }  // namespace tt::tt_metal::internal

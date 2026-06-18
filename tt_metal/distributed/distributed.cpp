@@ -35,49 +35,57 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     // cores) or entirely a normal one.
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto& programs = mesh_workload.impl().get_programs();
-    // Use has_any_non_isolated_claims(): an ISOLATED service (e.g. the H2D stream service, which launches
-    // its own program via direct slow-dispatch) must NOT push every model op through this per-op
-    // no-mixing validation loop. Non-isolated claims still route here normally.
-    if (svc.impl().has_any_non_isolated_claims()) {
-        bool saw_service = false;
-        bool saw_normal = false;
-        for (auto& [device_range, program] : programs) {
-            size_t service_cores = 0;
-            size_t total_cores = 0;
-            for (const auto& coord : device_range) {
-                auto* device = mesh_cq.device()->impl().get_device(coord);
-                if (device == nullptr) {
-                    continue;
-                }
-                for (const auto& per_type : program.impl().logical_cores()) {
-                    for (const auto& core : per_type) {
-                        ++total_cores;
-                        if (svc.impl().is_service_core(device->id(), core)) {
-                            ++service_cores;
+    if (svc.impl().has_any_claims()) {
+        // Classify the workload as service vs normal and cache it on the workload, stamped with the
+        // ServiceCoreManager generation. Reclassify only when the generation changes (a claim/release
+        // happened since), so steady-state enqueues skip the O(programs*coords*cores) scan.
+        auto& is_service_workload = mesh_workload.impl().is_service_workload_;
+        auto& classified_at_gen = mesh_workload.impl().classified_at_gen_;
+        const uint64_t svc_gen = svc.impl().generation();
+        if (!is_service_workload.has_value() || classified_at_gen != svc_gen) {
+            bool saw_service = false;
+            bool saw_normal = false;
+            for (auto& [device_range, program] : programs) {
+                const auto logical_cores = program.impl().logical_cores();
+                size_t service_cores = 0;
+                size_t total_cores = 0;
+                for (const auto& coord : device_range) {
+                    auto* device = mesh_cq.device()->impl().get_device(coord);
+                    if (device == nullptr) {
+                        continue;
+                    }
+                    for (const auto& per_type : logical_cores) {
+                        for (const auto& core : per_type) {
+                            ++total_cores;
+                            if (svc.impl().is_service_core(device->id(), core)) {
+                                ++service_cores;
+                            }
                         }
                     }
                 }
+                // Level 1: a program targets only claimed service cores or only worker-grid cores, never a
+                // mix. This also catches a core claimed on some devices in the range but not others.
+                TT_FATAL(
+                    service_cores == 0 || service_cores == total_cores,
+                    "MeshWorkload program spans both service and worker-grid cores ({}/{} placements are claimed "
+                    "service cores). A program must target only claimed service cores (on every device in its "
+                    "range) or only worker-grid cores.",
+                    service_cores,
+                    total_cores);
+                const bool program_is_service = service_cores > 0;
+                // Level 2: the workload is all-service or all-normal, not a mix of the two.
+                saw_service |= program_is_service;
+                saw_normal |= !program_is_service;
+                TT_FATAL(
+                    !(saw_service && saw_normal),
+                    "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
+                    "programs on claimed service cores) or entirely normal (all on the worker grid).");
             }
-            // Level 1: a program targets only claimed service cores or only worker-grid cores, never a
-            // mix. This also catches a core claimed on some devices in the range but not others.
-            TT_FATAL(
-                service_cores == 0 || service_cores == total_cores,
-                "MeshWorkload program spans both service and worker-grid cores ({}/{} placements are claimed "
-                "service cores). A program must target only claimed service cores (on every device in its "
-                "range) or only worker-grid cores.",
-                service_cores,
-                total_cores);
-            const bool program_is_service = service_cores > 0;
-            // Level 2: the workload is all-service or all-normal, not a mix of the two.
-            saw_service |= program_is_service;
-            saw_normal |= !program_is_service;
-            TT_FATAL(
-                !(saw_service && saw_normal),
-                "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
-                "programs on claimed service cores) or entirely normal (all on the worker grid).");
+            is_service_workload = saw_service;
+            classified_at_gen = svc_gen;
         }
 
-        if (saw_service) {
+        if (is_service_workload.value()) {
             // Service workload: every core is claimed (checked above), so mark launch-once and
             // dispatch each program via SD, bypassing FD. Re-enqueue TT_FATALs in mark_launched.
             for (auto& [device_range, program] : programs) {

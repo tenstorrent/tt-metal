@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -66,6 +68,15 @@ private:
     bool finalized_ = false;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
+
+    // Cached service-vs-normal classification (see EnqueueMeshWorkload), used to skip the per-op
+    // O(programs*coords*cores) no-mixing validation scan. classified_at_gen_ stamps the
+    // ServiceCoreManager generation the classification was computed at; a claim()/release() bumps that
+    // generation, so a stamp mismatch on a later enqueue forces reclassification against current state.
+    // Steady state (no claim/release between enqueues) hits the cache and stays O(1).
+    // nullopt = not yet classified (no service cores claimed at any prior enqueue).
+    std::optional<bool> is_service_workload_;
+    uint64_t classified_at_gen_ = 0;
 
     friend uint32_t program_dispatch::program_base_addr_on_core(
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);

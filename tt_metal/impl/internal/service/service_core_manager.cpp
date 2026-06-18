@@ -71,6 +71,7 @@ void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>
         slot.alloc->init();
         slot.isolated = isolated;
     }
+    ++generation_;
 }
 
 void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoord>& cores) {
@@ -83,6 +84,7 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
             device->id());
         return;
     }
+    bool changed = false;
     for (const auto& core : cores) {
         if (it->second.cores.erase(core) == 0) {
             log_warning(
@@ -90,7 +92,12 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
                 "internal::ServiceCoreManager::release: core {} was not claimed on device {}; skipped.",
                 core,
                 device->id());
+        } else {
+            changed = true;
         }
+    }
+    if (changed) {
+        ++generation_;
     }
 }
 
@@ -161,6 +168,8 @@ bool ServiceCoreManagerImpl::has_any_non_isolated_claims() const {
     }
     return false;
 }
+
+uint64_t ServiceCoreManagerImpl::generation() const { return generation_; }
 
 void ServiceCoreManagerImpl::mark_launched(ChipId device_id, CoreCoord core) {
     auto dit = devices_.find(device_id);
