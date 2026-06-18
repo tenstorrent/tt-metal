@@ -72,7 +72,15 @@ def _format_report(
     actual_bf16: torch.Tensor,
     ulps: torch.Tensor,
     valid: torch.Tensor,
+    offender_mask: torch.Tensor | None = None,
 ) -> tuple[str, int, float]:
+    """`valid` drives the histogram (full distribution). `offender_mask`, if
+    provided, scopes the worst-offenders table to a subset (e.g. excluding
+    FTZ-band inputs that are visible in the histogram but unfixable in
+    software). Defaults to `valid` if not provided."""
+    if offender_mask is None:
+        offender_mask = valid
+
     valid_ulps = ulps[valid]
     max_ulp = int(valid_ulps.max().item()) if valid.any() else 0
     mean_ulp = float(valid_ulps.float().mean().item()) if valid.any() else 0.0
@@ -86,21 +94,23 @@ def _format_report(
     for thr, count, pct in _cumulative_histogram(valid_ulps):
         lines.append(f"    >= {thr:5d} ULP : {count:6d}  ({pct:7.4f}%)")
 
-    if valid.any() and max_ulp > 0:
-        # Top-10 worst offenders by ULP.
+    offender_ulps = ulps[offender_mask]
+    if offender_mask.any() and offender_ulps.max().item() > 0:
+        # Top-10 worst offenders by ULP, scoped to the offender mask so the
+        # table surfaces actionable issues only.
         flat_in = input_bf16.flatten()
         flat_exp = expected_bf16.flatten()
         flat_act = actual_bf16.flatten()
         flat_ulp = ulps.flatten()
-        flat_valid = valid.flatten()
-        valid_idx = torch.nonzero(flat_valid, as_tuple=False).flatten()
-        sub_ulp = flat_ulp[valid_idx]
-        k = min(10, valid_idx.numel())
+        flat_offender = offender_mask.flatten()
+        offender_idx = torch.nonzero(flat_offender, as_tuple=False).flatten()
+        sub_ulp = flat_ulp[offender_idx]
+        k = min(10, offender_idx.numel())
         top_vals, top_local = torch.topk(sub_ulp, k)
         lines.append("  top-10 worst offenders:")
         lines.append(f"    {'input':>14}  {'expected':>14}  {'actual':>14}  {'ulp':>6}")
         for ul, li in zip(top_vals.tolist(), top_local.tolist()):
-            i = int(valid_idx[li].item())
+            i = int(offender_idx[li].item())
             lines.append(
                 f"    {flat_in[i].item():>14.6g}  {flat_exp[i].item():>14.6g}  "
                 f"{flat_act[i].item():>14.6g}  {int(ul):>6d}"
@@ -145,7 +155,14 @@ def test_gelu_variant_accuracy(device, variant_name, capsys):
     assertable = valid & ftz_safe
 
     report, max_ulp, _mean_ulp = _format_report(
-        variant_name, torch_approximate, input_bf16, expected_bf16, actual_bf16, ulps, valid
+        variant_name,
+        torch_approximate,
+        input_bf16,
+        expected_bf16,
+        actual_bf16,
+        ulps,
+        valid,
+        offender_mask=assertable,
     )
 
     # Always show the report — even on pass — so the user can see how tight
