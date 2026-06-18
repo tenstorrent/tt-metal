@@ -404,7 +404,10 @@ inline void calculate_gelu_tanh() {
         // the sign of the non-zero factor through the multiplication, giving -0.
         // Hard-coding vConst0 (= +0) would land 1 BF16 ULP off (the monotonic-int
         // ULP mapping treats +0 and -0 as adjacent).
-        sfpi::vFloat result = sfpi::copysgn(sfpi::vConst0, x);
+        // (Note: vConst0 is type vCReg<vFloat>, not vFloat itself, so we assign
+        // it to a vFloat first to satisfy copysgn's template constraint.)
+        sfpi::vFloat zero = sfpi::vConst0;
+        sfpi::vFloat result = sfpi::copysgn(zero, x);
 
         v_if(scaled >= TANH_SAT_THRESHOLD) {
             // Saturated positive tail: gelu_tanh(x) = 0.5 * x * 2 = x.
