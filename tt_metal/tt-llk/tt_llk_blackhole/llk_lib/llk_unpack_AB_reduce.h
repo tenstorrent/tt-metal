@@ -125,26 +125,16 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
     constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type != PoolType::MAX);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>((reduce_dim == ReduceDim::REDUCE_ROW));
 
-    // Swapped REDUCE_ROW: SrcA holds the scaler (always a full 16x16 face for MVMUL).
-    // Non-swapped: SrcA holds the data tile, respects face_r_dim.
+    config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape.face_r_dim);
+
+    // UNP_B reads data faces (face_r_dim rows) in swapped mode, or a single
+    // scaler row in the non-swapped (MAX / COL / SCALAR) mode.
     if constexpr (swap_operands)
     {
-        config_unpacker_x_end<p_setadc::UNP_A>(FACE_R_DIM);
         config_unpacker_x_end<p_setadc::UNP_B>(tensor_shape.face_r_dim);
-
-        // Override UNP_A's per-context L1 face size (Tile_x_dim) to read a full 16-row
-        // scaler face. hw_configure sets this to data's face_r_dim, but with operand swap
-        // UNP_A reads the scaler which always has FACE_R_DIM rows.
-        if (tensor_shape.face_r_dim < FACE_R_DIM)
-        {
-            volatile std::uint32_t tt_reg_ptr *cfg       = get_cfg_pointer();
-            constexpr std::uint32_t full_face_dim        = FACE_R_DIM * FACE_C_DIM;
-            cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = full_face_dim | (full_face_dim << 16);
-        }
     }
     else
     {
-        config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape.face_r_dim);
         config_unpacker_x_end<p_setadc::UNP_B>(1);
     }
 
