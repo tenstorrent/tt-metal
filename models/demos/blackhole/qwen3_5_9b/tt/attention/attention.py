@@ -198,7 +198,6 @@ class Qwen35Attention(LightweightModule):
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
-        # TODO This is not trace compatible
         k = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
         v = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
 
