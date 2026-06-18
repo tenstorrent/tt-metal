@@ -502,8 +502,6 @@ inline void _llk_pack_init_(
 
     llk::san::pack_operand_check(llk::san::IGNORE, pack_src_format, llk::san::IGNORE, face_r_dim, tile_c_dim, num_faces, llk::san::IGNORE, llk::san::IGNORE);
     llk::san::operation_init<llk::san::Operation::Pack>();
-    // sstanisic todo: implement
-    // llk_san_extended_state_mask(llk_san_cfg::Addrmod, llk_san_cfg::Mop, llk_san_cfg::CH0Strides, llk_san_cfg::CH1Strides, llk_san_cfg::AdcXX);
 
     // 8bit datums in the unpack src format are not affected by the blackhole issue,
     // so we can skip the workaround which involves unswizzling rows in the tile.

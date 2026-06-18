@@ -11,7 +11,6 @@
 
 #if defined(LLK_SAN_ENABLE)
 
-#include "sanitizer/extended.h"
 #include "sanitizer/impl.h"
 
 namespace llk::san

@@ -481,8 +481,6 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
         llk::san::math_operand_check(llk::san::IGNORE, dst_format);
     }
     llk::san::operation_init<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
-    // sstanisic todo: implement
-    // llk_san_extended_state_mask(llk_san_cfg::Addrmod, llk_san_cfg::Mop, llk_san_cfg::DvalidDisable); // Counters are not tracked here for now
 
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
