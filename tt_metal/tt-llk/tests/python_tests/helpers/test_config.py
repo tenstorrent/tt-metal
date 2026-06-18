@@ -367,7 +367,15 @@ class TestConfig:
 
     @staticmethod
     def setup_paths(sources_path: Path):
-        TestConfig.ARTEFACTS_DIR = TestConfig.DEFAULT_ARTEFACTS_PATH
+        # TT_LLK_ARTEFACTS_DIR lets a build use an isolated artefact cache so it
+        # cannot collide with the default cache (useful when an external build
+        # flag changes the ELF but not the variant hash).
+        artefacts_override = os.environ.get("TT_LLK_ARTEFACTS_DIR")
+        TestConfig.ARTEFACTS_DIR = (
+            Path(artefacts_override)
+            if artefacts_override
+            else TestConfig.DEFAULT_ARTEFACTS_PATH
+        )
 
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"

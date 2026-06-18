@@ -779,3 +779,95 @@ skip_for_coverage = pytest.mark.skipif(
     "config.coverage_enabled",
     reason="Coverage shouldn't be ran with this test",
 )
+
+
+# ---------------------------------------------------------------------------
+# Hardware-determinism harness (opt-in via TT_LLK_DETERMINISM_RUNS).
+#
+# When TT_LLK_DETERMINISM_RUNS=N (N>1) is set in the environment, every
+# TestConfig.run() is executed N times against the already-loaded ELF — no
+# recompile, no device reset between iterations — and the raw bytes of each
+# result tensor are SHA-256'd. This isolates run-to-run hardware
+# nondeterminism (sync races, set-but-not-reset state) from compiler/reset
+# variance. The comparison is exact (bytewise over .tobytes(), NaN-bit-safe).
+#
+# A per-variant record is appended to the JSONL report at
+# TT_LLK_DETERMINISM_REPORT (default: <ARTEFACTS_DIR>/determinism_report.jsonl).
+# Nondeterminism is RECORDED, never raised, so a full sweep runs to completion
+# and the triage script can pull out flaky variants afterward. The first
+# outcome is returned unchanged so each test's own correctness assertion still
+# proceeds (orthogonal to determinism — captured even if correctness fails).
+# ---------------------------------------------------------------------------
+import hashlib as _det_hashlib
+
+_DET_ORIG_RUN = TestConfig.run
+
+
+def _det_hash_result(result):
+    if result is None:
+        return None
+    parts = result if isinstance(result, (list, tuple)) else [result]
+    h = _det_hashlib.sha256()
+    for p in parts:
+        if p is None:
+            h.update(b"\x00<none>")
+        elif isinstance(p, torch.Tensor):
+            h.update(p.detach().cpu().contiguous().numpy().tobytes())
+        else:
+            h.update(repr(p).encode())
+    return h.hexdigest()
+
+
+def _det_run(self, poll_callback=None):
+    try:
+        runs = int(os.environ.get("TT_LLK_DETERMINISM_RUNS", "1"))
+    except ValueError:
+        runs = 1
+
+    if runs <= 1 or TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        return _DET_ORIG_RUN(self, poll_callback)
+
+    hashes = []
+    first_outcome = None
+    for i in range(runs):
+        outcome = _DET_ORIG_RUN(self, poll_callback)
+        if i == 0:
+            first_outcome = outcome
+        hashes.append(_det_hash_result(outcome.result))
+
+    distinct = sorted({h for h in hashes if h is not None})
+    nodeid = os.environ.get("PYTEST_CURRENT_TEST", "").split(" (")[0]
+    record = {
+        "nodeid": nodeid,
+        "test_name": getattr(self, "test_name", None),
+        "variant_id": getattr(self, "variant_id", None),
+        "arch": str(getattr(TestConfig, "ARCH", "")),
+        "runs": runs,
+        "n_distinct": len(distinct),
+        "deterministic": len(distinct) <= 1,
+        "first_hash": hashes[0] if hashes else None,
+        "distinct_hashes": distinct,
+    }
+    report_path = os.environ.get(
+        "TT_LLK_DETERMINISM_REPORT",
+        str(Path(TestConfig.ARTEFACTS_DIR) / "determinism_report.jsonl"),
+    )
+    try:
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+        with open(report_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except OSError as e:
+        logger.warning("determinism: failed to write report {}: {}", report_path, e)
+
+    if not record["deterministic"]:
+        logger.warning(
+            "determinism: NONDETERMINISTIC nodeid={} variant={} distinct={}/{}",
+            nodeid,
+            (record["variant_id"] or "?")[:12],
+            record["n_distinct"],
+            runs,
+        )
+    return first_outcome
+
+
+TestConfig.run = _det_run
