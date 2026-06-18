@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     discover_traces,
     load_trace,
     partition_iters,
+    single_trace,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
@@ -475,10 +476,15 @@ def test_kimi_mla(
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
 # ---------------------------------------------------------------------------------------------------
-# Set DEEPSEEK_MLA_TRACE_DIR to the ROOT dir holding one subdir per layer-0 GPU trace (each with
+# Set MLA_CHUNKED_TRACE_DIR to the ROOT dir holding one subdir per layer-0 GPU trace (each with
 # mla_io/ + kv_cache/). It enables the prefill>0 scenarios (load the prior KV + reference from the
 # real GPU run); multi-user pulls one trace per user, cycling if there are fewer traces than users.
-DEEPSEEK_MLA_TRACE_DIR = os.environ.get("DEEPSEEK_MLA_TRACE_DIR")
+# The root may mix kimi and deepseek traces as siblings; discover_traces filters by variant name.
+MLA_CHUNKED_TRACE_DIR = os.environ.get("MLA_CHUNKED_TRACE_DIR")
+# MLA_CHUNKED_TRACE_PATH points straight at ONE specific trace dir (the leaf holding mla_io/ +
+# kv_cache/, not the root). It takes precedence over MLA_CHUNKED_TRACE_DIR and skips the root
+# scan/variant-filter entirely; the single trace is shared (cycled) across all users.
+MLA_CHUNKED_TRACE_PATH = os.environ.get("MLA_CHUNKED_TRACE_PATH")
 
 # Per-iteration VALID token counts for the rotation/padding edge cases, tuned for the TARGET 8x4 mesh
 # (sp=8, chunk_local=640, chunk=5120). Each cumulative kv_actual lands on a distinct rotation edge:
@@ -513,7 +519,7 @@ def _run_chunked_prefill(
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
                    (rotation) allowed; any prefix is preloaded from the CPU reference KV.
       * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
-                   ONLY: requires DEEPSEEK_MLA_TRACE_DIR (skips if unset); supports partial iters.
+                    ONLY: requires MLA_CHUNKED_TRACE_DIR or MLA_CHUNKED_TRACE_PATH (skips if both unset); supports partial iters.
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
@@ -532,8 +538,11 @@ def _run_chunked_prefill(
 
     use_trace = reference == "trace"
     if use_trace:
-        if DEEPSEEK_MLA_TRACE_DIR is None:
-            pytest.skip("reference='trace' requires DEEPSEEK_MLA_TRACE_DIR (trace-only scenario)")
+        if MLA_CHUNKED_TRACE_DIR is None and MLA_CHUNKED_TRACE_PATH is None:
+            pytest.skip(
+                "reference='trace' requires MLA_CHUNKED_TRACE_DIR (root) or "
+                "MLA_CHUNKED_TRACE_PATH (single trace) -- trace-only scenario"
+            )
         # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
         # the device's fixed-width chunk (masked by causality) -- they are not pad in the sequence --
         # so any iters_isl / prefill works exactly like the CPU ref. The only trace constraint is
@@ -541,7 +550,15 @@ def _run_chunked_prefill(
         use_pretrained = True  # the GPU trace was generated with the real checkpoint
 
     groups = partition_iters(iters_isl, num_users)
-    traces = discover_traces(DEEPSEEK_MLA_TRACE_DIR, num_users) if use_trace else None
+    # Resolve trace dirs: a single explicit trace (MLA_CHUNKED_TRACE_PATH) wins; otherwise scan the
+    # root (MLA_CHUNKED_TRACE_DIR) and filter the kimi/deepseek siblings by variant name.
+    if not use_trace:
+        traces = None
+    elif MLA_CHUNKED_TRACE_PATH is not None:
+        traces = single_trace(MLA_CHUNKED_TRACE_PATH, num_users)
+    else:
+        variant_name = request.getfixturevalue("variant").name
+        traces = discover_traces(MLA_CHUNKED_TRACE_DIR, num_users, variant_name)
 
     # Cache holds the max (kv_actual + chunk) window across all users/iters, slab-aligned, >= 2 slabs.
     max_window = chunk_size_global * 2
@@ -639,9 +656,20 @@ def _run_chunked_prefill(
         logger.info(f"Preloading {prefill_len}-token prefix into {num_users} slot(s) (block-cyclic host->device)...")
         cache_host = torch.zeros(num_users, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
         for u in range(num_users):
-            cache_host[u, 0] = blockcyclic_cache_host(
-                users[u]["kv_prior"], sp, chunk_size_global, seq_len_cache, kvpe_dim
-            )[0, 0]
+            kv_prior = users[u]["kv_prior"]
+            if use_trace:
+                # The GPU trace stores k_pe in the HF half-split basis; the device cache is the Meta
+                # interleaved basis. Re-interleave the k_pe block before preload (k_nope is basis-
+                # agnostic) -- same transform the post-run cache comparison applies. Without this the
+                # 50k preloaded prefix attends in the wrong basis and only the output PCC (not the
+                # cache PCC, which checks just the new region) shows the ~0.92 drop.
+                kv_prior = kv_prior.clone()
+                d = kvpe_dim - config.kv_lora_rank
+                pe = kv_prior[:, config.kv_lora_rank :]
+                kv_prior[:, config.kv_lora_rank :] = torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(
+                    pe.shape[0], d
+                )
+            cache_host[u, 0] = blockcyclic_cache_host(kv_prior, sp, chunk_size_global, seq_len_cache, kvpe_dim)[0, 0]
         cache_host_tt = ttnn.from_torch(
             cache_host,
             dtype=ttnn.bfloat8_b,
@@ -813,7 +841,7 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
     and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
-    DEEPSEEK_MLA_TRACE_DIR), or run with no reference ('func'). Select with e.g.
+    MLA_CHUNKED_TRACE_DIR/PATH), or run with no reference ('func'). Select with e.g.
     -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
     Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
@@ -823,10 +851,9 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
     scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 has no trace path (traces are deepseek-only) but otherwise runs the same
+    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic; needs kimi
+    GPU traces in MLA_CHUNKED_TRACE_DIR). It otherwise runs the same
     config-driven driver on any arch/mesh."""
-    if variant.name == "kimi_k2_6" and reference == "trace":
-        pytest.skip("kimi_k2_6: GPU traces are deepseek-only (no Kimi traces)")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.

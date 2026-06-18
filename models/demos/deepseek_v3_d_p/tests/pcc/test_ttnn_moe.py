@@ -599,6 +599,20 @@ def run_model(
             id="mesh-4x2",
         ),
         pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,

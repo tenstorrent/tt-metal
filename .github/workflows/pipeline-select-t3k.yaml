@@ -30,7 +30,6 @@ on:
           - llama3.2-11b-vision
           - n300 mesh llama3.2-11b-vision
           - llama3.2-90b-vision
-          # - llama3.1-70b
           - llama3.2-90b
           - mistral
           - mixtral
@@ -77,7 +76,6 @@ on:
           - wan22
           - flux1-dev
           - motif
-          - gemma-3-27b-it
       t3000-integration:
         description: "Integration tests: Select 'all', specific model or 'disabled'"
         type: choice
@@ -88,20 +86,10 @@ on:
           - tteager
           - ethernet
           - trace stress
-          # - llama3.2-vision #Tier 3 models
-          # - n300 mesh llama3.2-vision #Tier 3 models
-          # - llama3.2-90b-vision #Tier 3 model
-          - llama3
-          - llama3 accuracy
-          - llama3_70n90b accuracy
-          - llama3_90b
-          # - llama3_70b # disabled in -impl file
-          # - mixtral # disabled in -impl file
           - resnet
           - sd35_large
           - flux1
           - motif
-          - mistral
           - wan2.2
           - mochi
           - deepseek-modules
