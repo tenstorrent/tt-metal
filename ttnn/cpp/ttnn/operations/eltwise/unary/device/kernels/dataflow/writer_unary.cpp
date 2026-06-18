@@ -18,7 +18,10 @@ void kernel_main() {
     CircularBuffer cb_dst(cb_id_dst);
 
 #if DST_SHARDED
+    // Output is sharded in place; the wait is only a readiness handshake. Pop to
+    // leave the CB balanced.
     cb_dst.wait_front(num_pages);
+    cb_dst.pop_front(num_pages);
 #else
     constexpr uint32_t onepage = 1;
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();

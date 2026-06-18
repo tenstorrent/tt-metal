@@ -239,6 +239,11 @@ void kernel_main() {
             reduce_sender_sem.wait_min(block + 2);
             cb_ex_global_obj.push_back(num_tiles * num_tiles_scaler);
         }
+
+        // The partial-reduction buffer is waited up front and read (locally and by remote cores)
+        // during the combine; by here all those reads have completed, so pop it to leave the CB
+        // balanced.
+        cb_partial_obj.pop_front(block_h * num_tiles_scaler);
     };
 
     if constexpr (!rms_norm) {

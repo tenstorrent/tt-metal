@@ -38,10 +38,6 @@ void kernel_main() {
         uint32_t input_base_addr, previous_input_page_idx = std::numeric_limits<uint32_t>::max();
         for (uint32_t seg_idx = 0; seg_idx < Max_Map_Entries; ++seg_idx) {
             if (map_ptr[seg_idx].num_elements == 0) {
-                if (output_page_idx == end_output_page - 1 && seg_idx == Max_Map_Entries - 1) {
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_id_input, 1);
-                }
                 continue;
             }
 
@@ -71,6 +67,13 @@ void kernel_main() {
         noc_async_write_barrier();
 
         cb_pop_front(cb_id_mapping, 1);
+    }
+    // The per-transition pop only releases the previous input page's tile, so the final input
+    // tile waited inside the loop is still held here. Pop it once to leave the input CB balanced.
+    // Gated on `first` so a core that processed no segments does not pop a tile it never waited.
+    if (!first) {
+        noc_async_write_barrier();
+        cb_pop_front(cb_id_input, 1);
     }
     cb_push_back(cb_id_working, 1);
 }

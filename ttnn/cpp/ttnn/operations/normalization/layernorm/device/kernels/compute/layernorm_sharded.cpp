@@ -463,4 +463,7 @@ void kernel_main() {
         cb_fusion_obj.pop_front(num_tiles_per_block);
         cb_out_obj.wait_front(num_tiles_per_block);
     }
+    // The single scaler tile is waited by both reductions (E[x] and Var[x]) but never popped;
+    // pop it once at the end so the CB is left balanced.
+    cb_scaler_obj.pop_front(1);
 }

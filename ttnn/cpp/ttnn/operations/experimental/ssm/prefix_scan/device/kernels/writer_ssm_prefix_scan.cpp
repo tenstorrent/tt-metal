@@ -26,4 +26,8 @@ void kernel_main() {
     uint64_t dst_addr = get_noc_addr(h_shard_l1_addr);
     noc_async_write(src_addr, dst_addr, hidden_state_len_bytes);
     noc_async_write_barrier();
+
+    // cb_out is waited only as an output-ready handshake (the write above sources from cb_h_acc);
+    // pop it so the CB is left balanced.
+    cb_pop_front(cb_out, num_tiles_per_core);
 }

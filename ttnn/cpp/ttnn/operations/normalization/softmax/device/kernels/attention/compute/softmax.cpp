@@ -318,6 +318,11 @@ void kernel_main() {
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(Wt);
     }  // NCHt loop
-    // cb_pop_front(cb_max_scaler, 1); // we don't actually have to do this
-    // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
+    // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
+    // the end so the CBs are left balanced.
+    cb_max_scaler_obj.pop_front(1);
+    cb_sum_scaler_obj.pop_front(1);
+#if FUSED_SCALE_MASK
+    cb_fused_scale_obj.pop_front(1);
+#endif
 }

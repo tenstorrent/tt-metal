@@ -124,6 +124,9 @@ void kernel_main() {
             }
         }
 
+        // cb_in1 is reserved once as an alignment scratchpad (no downstream consumer);
+        // commit the reservation so the CB is left balanced.
+        cb_in1.push_back(num_trids);
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads.
     // No Device 2.0 wrapper exists for this config-only register write; this is

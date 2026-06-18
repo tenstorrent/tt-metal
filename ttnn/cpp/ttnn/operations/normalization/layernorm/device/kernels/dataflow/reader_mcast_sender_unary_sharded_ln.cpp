@@ -284,6 +284,10 @@ void kernel_main() {
                 noc.async_write_barrier();
             }
         }
+
+        // The partial-reduction buffer is waited up front and read during the combine; by here
+        // all those reads have completed, so pop it to leave the CB balanced.
+        cb_partial_obj.pop_front(block_h * num_tiles_scaler);
     };
 
     if constexpr (!rms_norm) {
