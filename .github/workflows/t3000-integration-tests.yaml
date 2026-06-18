@@ -12,8 +12,6 @@ on:
           - all
           - tteager
           - trace stress
-          # - llama3.2-vision # Tier 3 models
-          # - n300 mesh llama3.2-vision # Tier 3 models
           - resnet
           - sd35_large
           - flux1
