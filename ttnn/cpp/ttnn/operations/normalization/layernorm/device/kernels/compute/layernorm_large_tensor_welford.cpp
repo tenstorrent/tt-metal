@@ -698,4 +698,7 @@ void kernel_main() {
         cb_ex2pe_obj.pop_front(onetile);
         cb_ex_obj.pop_front(onetile);
     }  // NCHt loop
+    // The single eps tile is waited once and reused across all NCHt iterations; pop it at the end
+    // so the CB is left balanced.
+    cb_eps_obj.pop_front(onetile);
 }

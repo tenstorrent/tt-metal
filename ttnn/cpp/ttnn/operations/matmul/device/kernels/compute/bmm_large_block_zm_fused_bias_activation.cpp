@@ -581,4 +581,13 @@ void kernel_main() {
             }
         }
     }
+#ifdef FUSE_BIAS
+    // For num_blocks_w_dim == 1 the reader pushes bias once and the kernel holds it resident,
+    // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
+    // last use, so the CB is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
+    // balances each re-pushed bias block.)
+    if constexpr (num_blocks_w_dim == 1) {
+        bias_cb.pop_front(bias_ntiles);
+    }
+#endif
 }
