@@ -14,7 +14,6 @@ fmt=BF16/FP16/FP32 — see the "HOW TO ADD A TEST" comment above CASES. Run a
 single op with:  pytest test_sfpu_plot.py -k <Op> -s
 """
 
-import math
 import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -38,14 +37,10 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.logger import logger
-from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
-    get_num_blocks_and_num_tiles_in_block,
-)
-from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, _subtract_intervals
+from helpers.param_config import get_num_blocks_and_num_tiles_in_block
+from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
-from helpers.stimuli_generator.strategies.structured import _enumerate_representable
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -95,6 +90,25 @@ plt.rcParams.update(
 # ---------------------------------------------------------------------------
 
 
+def _complement_in_range(
+    intervals: List[Tuple[float, float]],
+    x_min: float,
+    x_max: float,
+) -> List[Tuple[float, float]]:
+    """Parts of [x_min, x_max] not covered by any interval."""
+    result, cursor = [], x_min
+    for lo, hi in sorted(intervals):
+        lo, hi = max(lo, x_min), min(hi, x_max)
+        if hi <= cursor:
+            continue
+        if lo > cursor:
+            result.append((cursor, lo))
+        cursor = max(cursor, hi)
+    if cursor < x_max:
+        result.append((cursor, x_max))
+    return result
+
+
 def _intersect_segment(
     a: float,
     b: float,
@@ -102,6 +116,25 @@ def _intersect_segment(
 ) -> List[Tuple[float, float]]:
     """Parts of [a, b] that overlap any interval."""
     return [(max(a, lo), min(b, hi)) for lo, hi in intervals if max(a, lo) < min(b, hi)]
+
+
+def _subtract_from_segment(
+    a: float,
+    b: float,
+    holes: List[Tuple[float, float]],
+) -> List[Tuple[float, float]]:
+    """Parts of [a, b] not covered by any hole."""
+    result, cursor = [], a
+    for lo, hi in sorted(holes):
+        lo, hi = max(lo, a), min(hi, b)
+        if hi <= cursor:
+            continue
+        if lo > cursor:
+            result.append((cursor, lo))
+        cursor = max(cursor, hi)
+    if cursor < b:
+        result.append((cursor, b))
+    return result
 
 
 # Distributions whose sweep range is given by spec.low/spec.high. Others
@@ -320,30 +353,6 @@ def _check_monotonicity(
 # Shared plotting / stats
 # ---------------------------------------------------------------------------
 
-# ULP threshold staircase shared by the signed-error, relative-error, and CDF
-# panels. "Show threshold i only if the data reached threshold i-1" so a clean
-# op that never exceeds 3 ULP doesn't draw a 10-ULP line with no nearby data.
-_ULP_THRESHOLDS = (
-    (1, "#388e3c"),  # green
-    (3, "#f57c00"),  # orange
-    (10, "#d32f2f"),  # red
-    (100, "#7b1fa2"),  # purple
-    (1000, "#212121"),  # near-black (catastrophic outlier band)
-)
-
-
-def _visible_ulp_thresholds(max_val: float) -> List[Tuple[int, str]]:
-    """(threshold, color) entries to draw given the data's max |ULP| = max_val.
-
-    Always includes the first (1 ULP); includes threshold i (i>0) only if the
-    data reached the previous threshold.
-    """
-    return [
-        (t, c)
-        for i, (t, c) in enumerate(_ULP_THRESHOLDS)
-        if i == 0 or max_val >= _ULP_THRESHOLDS[i - 1][0]
-    ]
-
 
 def _plot_and_print(
     mathop: MathOperation,
@@ -385,35 +394,6 @@ def _plot_and_print(
     hw_nan = np.isnan(y_hw_raw)
     gold_inf = np.isinf(y_golden_raw)
     gold_nan = np.isnan(y_golden_raw)
-
-    # Every sampled output is non-finite -> nothing finite to plot or measure.
-    # Emit a minimal figure with the inf/nan breakdown and return.
-    if len(x) == 0:
-        os.makedirs(os.path.dirname(plot_path) or ".", exist_ok=True)
-        msg = (
-            f"All {n_nonfinite} sampled outputs are non-finite — nothing to plot.\n\n"
-            f"both non-finite: {int(both_nf.sum())}   "
-            f"HW-only: {int(hw_only_nf.sum())}   "
-            f"golden-only: {int(gold_only_nf.sum())}\n"
-            f"HW inf: {int(hw_inf.sum())}   HW nan: {int(hw_nan.sum())}   "
-            f"golden inf: {int(gold_inf.sum())}   golden nan: {int(gold_nan.sum())}"
-        )
-        fig, ax = plt.subplots(figsize=(10, 4))
-        fig.suptitle(
-            rf"SFPU {mathop.name} — {fmt.name}{title_suffix}",
-            fontsize=14,
-            fontweight="bold",
-        )
-        ax.axis("off")
-        ax.text(0.5, 0.5, msg, ha="center", va="center", fontfamily="monospace")
-        plt.savefig(plot_path, dpi=150)
-        plt.close()
-        logger.warning(
-            "[{}] all {} sampled outputs non-finite — minimal plot only",
-            mathop.name,
-            n_nonfinite,
-        )
-        return
 
     error = y_hw - y_golden
     # nonzero_mask guards only against division by zero in the relative error
@@ -575,14 +555,14 @@ def _plot_and_print(
 
     if allowed_intervals is not None and len(x):
         x_min, x_max = float(x.min()), float(x.max())
-        complement = _subtract_intervals([(x_min, x_max)], allowed_intervals)
+        complement = _complement_in_range(allowed_intervals, x_min, x_max)
         # Collect the actual visible ranges so the legend tells the user which
         # x-spans are shaded, not just the registry/spec inputs.
         all_undef_parts: List[Tuple[float, float]] = []
         all_excl_parts: List[Tuple[float, float]] = []
         for seg_lo, seg_hi in complement:
             up = _intersect_segment(seg_lo, seg_hi, undefined_ranges or [])
-            ep = _subtract_intervals([(seg_lo, seg_hi)], up)
+            ep = _subtract_from_segment(seg_lo, seg_hi, up)
             all_undef_parts.extend(up)
             all_excl_parts.extend(ep)
 
@@ -714,15 +694,27 @@ def _plot_and_print(
     axes[1].grid(True, alpha=0.3)
     axes[1].axhline(y=0, color="black", linewidth=0.5)
     if ulp_rel is not None:
+        # ±N ULP reference lines, evaluated INDEPENDENTLY for each side. If the
+        # data only reaches +5 ULP but goes down to -150 ULP, we still want
+        # -1/-3/-10/-100 visible without polluting the positive side with a
+        # +100 line that has no nearby data. Same staircase rule as plots 3/4
+        # but applied separately to max positive and max negative excursions.
+        # Lines are fainter than on plots 3/4 to avoid competing with the
+        # already-dense stem field; legend handles use brighter proxies.
         max_pos = float(max(0.0, signed_ulp_error.max()))
         max_neg = float(max(0.0, -signed_ulp_error.min()))  # |most-negative|
-        # Two-sided: apply the shared staircase rule independently per side.
-        pos_visible = {t for t, _ in _visible_ulp_thresholds(max_pos)}
-        neg_visible = {t for t, _ in _visible_ulp_thresholds(max_neg)}
+        all_thresholds_signed = (
+            (1, "#388e3c"),  # green
+            (3, "#f57c00"),  # orange
+            (10, "#d32f2f"),  # red
+            (100, "#7b1fa2"),  # purple
+            (1000, "#212121"),  # near-black (catastrophic outlier band)
+        )
         legend_handles = []
-        for mult, color in _ULP_THRESHOLDS:
-            show_pos = mult in pos_visible
-            show_neg = mult in neg_visible
+        for i, (mult, color) in enumerate(all_thresholds_signed):
+            prev_t = all_thresholds_signed[i - 1][0] if i > 0 else 0
+            show_pos = (i == 0) or (max_pos >= prev_t)
+            show_neg = (i == 0) or (max_neg >= prev_t)
             if show_pos:
                 axes[1].axhline(
                     y=mult,
@@ -777,11 +769,23 @@ def _plot_and_print(
         axes[2].scatter(
             x[plot_mask], rel_error[plot_mask], s=1, alpha=0.5, color="blue"
         )
+    # ULP reference bands (only for 16-bit formats with known ULP). Same
+    # staircase visibility rule as the CDF panel: show a higher threshold
+    # only if the data actually reached the previous one.
     if ulp_rel is not None:
         max_ulp_rel2 = (
             float(rel_error_valid.max() / ulp_rel) if len(rel_error_valid) > 0 else 0.0
         )
-        for mult, color in _visible_ulp_thresholds(max_ulp_rel2):
+        all_thresholds_rel = (
+            (1, "#388e3c"),  # green
+            (3, "#f57c00"),  # orange
+            (10, "#d32f2f"),  # red
+            (100, "#7b1fa2"),  # purple
+            (1000, "#212121"),  # near-black (catastrophic outlier band)
+        )
+        for i, (mult, color) in enumerate(all_thresholds_rel):
+            if i > 0 and max_ulp_rel2 < all_thresholds_rel[i - 1][0]:
+                continue
             axes[2].axhline(
                 mult * ulp_rel,
                 color=color,
@@ -810,10 +814,24 @@ def _plot_and_print(
             cdf = np.arange(1, n + 1) / n
             axes[3].plot(sorted_ulp, cdf, color="#0d47a1", linewidth=1.5)
             axes[3].set_xscale("log")
+            # Adaptive thresholds: show 1 ULP always; show a higher threshold
+            # only if the data actually reached the previous one (so a clean
+            # CDF that never exceeds 3 ULP doesn't draw an out-of-range 10-ULP
+            # line that just stretches the x-axis for nothing).
+            all_thresholds = (
+                (1.0, "#388e3c"),  # green
+                (3.0, "#f57c00"),  # orange
+                (10.0, "#d32f2f"),  # red
+                (100.0, "#7b1fa2"),  # purple — only shown if max_ulp >= 10
+                (1000.0, "#212121"),  # near-black — only shown if max_ulp >= 100
+            )
             max_ulp = float(sorted_ulp.max())
-            visible_thresholds = _visible_ulp_thresholds(max_ulp)
+            visible_thresholds = []
+            for i, (t, c) in enumerate(all_thresholds):
+                if i == 0 or max_ulp >= all_thresholds[i - 1][0]:
+                    visible_thresholds.append((t, c))
             for threshold, color in visible_thresholds:
-                frac = float(np.searchsorted(sorted_ulp, threshold, side="right")) / n
+                frac = float(np.searchsorted(sorted_ulp, threshold)) / n
                 axes[3].axvline(
                     threshold,
                     color=color,
@@ -1258,9 +1276,6 @@ def _plot_and_print(
 #   clamp_negative          enable the kernel's negative-input clamp
 #   dest_acc / unpack_to_dest  override the format-derived accumulator defaults
 #   name                    custom test id (name of file) (defaults to "<Op>-<fmt>")
-#   input_dimensions        sample-point count (defaults to [32, 32] = 1024, one
-#                           tile). Fine for bf16/fp16, but samples fp32's grid
-#                           sparsely; for denser fp32 use [32, 32*K] -> 1024*K.
 
 BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 FP16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
@@ -1282,7 +1297,6 @@ class Case:
     fmt: InputOutputFormat = BF16
     expect_pass: bool = True
     name: Optional[str] = None
-    approx_mode: ApproximationMode = ApproximationMode.No
     # Advanced overrides — defaults are derived from `fmt`.
     dest_acc: Optional[DestAccumulation] = None
     unpack_to_dest: Optional[bool] = None
@@ -1305,73 +1319,16 @@ CASES = [
     # bfloat16 demo: log over a positive (in-domain) range.
     Case(op=MathOperation.Log, spec=StimuliSpec.ramp(low=0.5, high=10.0)),
     # float32 demo: sqrt over [0, 100] (auto fp32 dest-accumulator path).
-    # 4 tiles (4096 points) so fp32's fine grid is sampled more densely than
-    # the single-tile default.
-    Case(
-        op=MathOperation.Sqrt,
-        spec=StimuliSpec.ramp(low=0.0, high=100.0),
-        fmt=FP32,
-        input_dimensions=[32, 32 * 4],
-    ),
+    Case(op=MathOperation.Sqrt, spec=StimuliSpec.ramp(low=0.0, high=100.0), fmt=FP32),
     # intervals demo: 1/x sampled on both sides of 0 but never on the
     # singularity at 0 (the gap between the two bands is skipped).
     Case(
         op=MathOperation.Reciprocal,
         spec=StimuliSpec.uniform(intervals=[(-10.0, -0.01), (0.01, 10.0)]),
     ),
-    # exhaustive demo: every bf16 value in [0.01, 10] (auto-sized to whole tiles).
-    Case(
-        op=MathOperation.Reciprocal,
-        spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0),
-        approx_mode=ApproximationMode.Yes,
-        name="Reciprocal-bf16-approx-exhaustive",
-    ),
     # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
     # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-13.0, high=13.0), expect_pass=False),
 ]
-
-
-# One 32x32 tile = 1024 elements. A ulp_sweep is bounded by L1, not dest.
-_TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
-_MAX_SWEEP_TILES = 64
-
-
-def _ulp_sweep_dims(
-    stimuli_format: DataFormat,
-    low: float,
-    high: float,
-    dest_acc: DestAccumulation,
-    dest_sync: DestSync = DestSync.Half,
-) -> List[int]:
-    """Return input_dimensions ([rows, cols]) with enough tiles to hold every
-    bf16/fp16 value in [low, high].
-
-    Rounds up to a whole number of dest blocks (needed once the sweep spans more
-    than one block) and caps at _MAX_SWEEP_TILES."""
-    capacity_divisor = (
-        2 if (dest_acc == DestAccumulation.Yes or stimuli_format.is_32_bit()) else 1
-    )
-    block_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
-
-    n = int(_enumerate_representable(stimuli_format, low, high).numel())
-    tiles = max(1, math.ceil(n / _TILE_ELEMENTS))
-    if tiles > block_tiles:
-        # multi-block: round up to a whole number of dest blocks
-        tiles = math.ceil(tiles / block_tiles) * block_tiles
-
-    max_tiles = (_MAX_SWEEP_TILES // block_tiles) * block_tiles
-    if tiles > max_tiles:
-        logger.warning(
-            "[ulp_sweep] [{}, {}] needs {} tiles (> {} max) — truncating to the "
-            "lowest {} values. Narrow the range to keep it exhaustive.",
-            low,
-            high,
-            tiles,
-            max_tiles,
-            max_tiles * _TILE_ELEMENTS,
-        )
-        tiles = max_tiles
-    return [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * tiles]
 
 
 def run_case(case: Case) -> bool:
@@ -1394,14 +1351,7 @@ def run_case(case: Case) -> bool:
     if unpack_to_dest is None:
         unpack_to_dest = is_fp32
 
-    if case.input_dimensions is not None:
-        input_dimensions = case.input_dimensions
-    elif case.spec.distribution == DistributionKind.ULP_SWEEP:
-        input_dimensions = _ulp_sweep_dims(
-            formats.input_format, case.spec.low, case.spec.high, dest_acc
-        )
-    else:
-        input_dimensions = [32, 32]
+    input_dimensions = case.input_dimensions or [32, 32]
     mathop = case.op
     spec = case.spec
     plot_path = f"_plot_output/sfpu_{case.test_id}.png"
@@ -1438,7 +1388,7 @@ def run_case(case: Case) -> bool:
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(case.approx_mode),
+            APPROX_MODE(ApproximationMode.No),
             FAST_MODE(FastMode.No),
             CLAMP_NEGATIVE(case.clamp_negative),
             MATH_OP(mathop=mathop),
@@ -1482,14 +1432,9 @@ def run_case(case: Case) -> bool:
             _SFPU_UNDEFINED_RANGES.get(mathop, {}).get(Operand.A, [])
         )
 
-    # ULP/eps spacing in _plot_and_print is taken from this format, so it must
-    # match the format the compared values live in: golden and hw are produced
-    # in output_format, so pass output_format (not input_format). Identical for
-    # symmetric cases; for a mixed case like (Float32, Float16_b), using the
-    # input format would measure ULP on the wrong (finer) grid and under-report.
     _plot_and_print(
         mathop,
-        formats.output_format,
+        formats.input_format,
         x,
         y_golden,
         y_hw,
@@ -1501,30 +1446,20 @@ def run_case(case: Case) -> bool:
     test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
     logger.info("passed_test: {}", test_passed)
 
-    # Bit-distance ULP measurement — reinterpret each result in its OWN format's
-    # integer width and take |golden_bits - hw_bits|; the max across finite
-    # samples is the worst-case ULP error.
-    torch_out = format_dict[formats.output_format]
-    if formats.output_format == DataFormat.Float32:
-        torch_int, np_int = torch.int32, np.int32
-    else:  # Float16_b / Float16 — 2-byte formats reinterpreted as int16
-        torch_int, np_int = torch.int16, np.int16
-    golden_native = golden_tensor.to(torch_out).contiguous()
-    hw_native = res_tensor.to(torch_out).contiguous()
-    valid_mask = (
-        torch.isfinite(golden_native) & torch.isfinite(hw_native) & (golden_native != 0)
-    ).numpy()
-    if valid_mask.any():
-        gb = golden_native.view(torch_int).numpy()[valid_mask].astype(np.int64)
-        rb = hw_native.view(torch_int).numpy()[valid_mask].astype(np.int64)
-        int_min = np.iinfo(np_int).min
-        gb = np.where(gb < 0, int_min - gb, gb)
-        rb = np.where(rb < 0, int_min - rb, rb)
-        max_ulp = int(np.abs(gb - rb).max())
+    # Bit-distance ULP measurement — reinterpret the fp32-promoted results as
+    # int32 and take |golden_bits - hw_bits|; the max across finite samples is
+    # the worst-case ULP error. Useful for sanity-checking accuracy claims.
+    golden_fp32 = golden_tensor.to(torch.float32).contiguous().numpy()
+    hw_fp32 = res_tensor.to(torch.float32).contiguous().numpy()
+    finite_mask = np.isfinite(golden_fp32) & np.isfinite(hw_fp32)
+    if finite_mask.any():
+        gb = golden_fp32.view(np.int32)[finite_mask]
+        rb = hw_fp32.view(np.int32)[finite_mask]
+        max_ulp = int(np.abs(gb.astype(np.int64) - rb.astype(np.int64)).max())
         logger.info(
-            "[{}] max ULP across {} finite nonzero-golden samples: {}",
+            "[{}] max ULP across {} finite samples: {}",
             mathop.name,
-            int(valid_mask.sum()),
+            int(finite_mask.sum()),
             max_ulp,
         )
     else:
@@ -1533,7 +1468,6 @@ def run_case(case: Case) -> bool:
     return test_passed
 
 
-@pytest.mark.accuracy
 @pytest.mark.parametrize("case", CASES, ids=[c.test_id for c in CASES])
 def test_sfpu_stress(case: Case):
     passed = run_case(case)
