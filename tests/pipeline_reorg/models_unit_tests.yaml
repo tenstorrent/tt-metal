@@ -22,8 +22,8 @@
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
-    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model.py -k full
-    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
+    # pytest models/tt_transformers/tests/test_model.py -k full
+    # pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: llama3.1-8b
   skus:
     wh_n150:
@@ -88,12 +88,8 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
-    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model.py -k quick
-    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
-    # GAP from t3k integration: pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400
-    # GAP from t3k integration: pytest models/tt_transformers/tests/multimodal/test_llama_image_transformer.py
-    # GAP from t3k integration: pytest models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py
-    # GAP from t3k integration: pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py
+    # pytest models/tt_transformers/tests/test_model.py -k quick
+    # pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
   model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
@@ -181,8 +177,8 @@
     pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
-    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model.py -k full
-    # GAP from t3k integration: pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
+    #pytest models/tt_transformers/tests/test_model.py -k full
+    #pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: mistral-7b
   skus:
     wh_n150:
