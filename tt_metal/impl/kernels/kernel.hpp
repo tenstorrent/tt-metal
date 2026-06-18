@@ -105,11 +105,17 @@ struct TensorBindingHandle {
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
     uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
     // Count of runtime accessor field words that immediately follow the address slot
-    // in this binding's CRTA section. Non-zero only when the TensorParameter has
-    // dynamic_tensor_shape=true and is sharded: the runtime tensor's shape-in-pages
-    // is written here at enqueue time. The first runtime field word lives at byte
-    // offset addr_crta_offset + sizeof(uint32_t).
+    // in this binding's CRTA section. Non-zero when the TensorParameter opts into a
+    // CRTA-resident dynamic field: sharded + dynamic_tensor_shape (the runtime tensor's
+    // shape-in-pages, `rank` words) or interleaved + dynamic_page_size (one page-size word).
+    // The first runtime field word lives at byte offset addr_crta_offset + sizeof(uint32_t).
     uint32_t num_runtime_field_crta_words = 0;
+    // Which runtime field the words above hold: the interleaved dynamic_page_size page-size word
+    // (true) or the sharded dynamic_tensor_shape shape words (false). The two are mutually
+    // exclusive per binding (page size is interleaved-only, shape is sharded-only); the
+    // enqueue-time emitter branches on this because an interleaved tensor has no
+    // BufferDistributionSpec to source a shape from.
+    bool runtime_field_is_page_size = false;
 };
 
 class Kernel : public JitBuildSettings {
