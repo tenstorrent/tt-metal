@@ -1,0 +1,304 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for Flash-Attention SDPA (online softmax).
+//
+// Per work item (b, h_q, qb): pre-scale Q once, then stream KV blocks updating a
+// running max (m), running exp-sum (l), and running weighted output (O); finally
+// normalize O = O / l. All score-bearing CBs are sized to one B_q x B_kv block
+// (Flash constraint) — the full S_q x S_kv matrix is never materialized.
+//
+// Online-softmax recurrence per KV block j:
+//   S_j   = (Q*scale) . K_j^T              (QK matmul, transpose=true)
+//   S_j  += mask_ij                        (if mask present)
+//   m_j   = max(m_{j-1}, rowmax(S_j))
+//   alpha = exp(m_{j-1} - m_j)             (j>0; correction factor)
+//   l_j   = alpha*l_{j-1} + rowsum(exp(S_j - m_j))
+//   O_j   = alpha*O_{j-1} + exp(S_j - m_j) . V_j
+// After last block: O = O / l.
+//
+// Helper notes / advisory deviations from op_design.md:
+//   * Running max uses a separate rowmax (reduce<MAX>) + binary_sfpu<BinaryMax>
+//     against cb_m_prev, instead of reduce<MAX>+Accumulate. The reduce helper's
+//     Accumulate path POPS its accumulator CB during reload, which would destroy
+//     m_{j-1} before alpha (phase 4) can read it. op_design.md documents this
+//     exact separate-op alternative in its gotchas (the Quasar fallback note).
+//   * Per-row vector ops use Scalar+Streaming (front-relative, in-place 1x) and
+//     broadcast operands use Col + held lifecycles, mirroring the proven
+//     softmax sub<COL> pattern in toy_variance's compute kernel.
+
+#include <cstdint>
+
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+
+namespace ckl = compute_kernel_lib;
+
+namespace {
+constexpr uint32_t cb_q_in = 0;
+constexpr uint32_t cb_k_in = 1;
+constexpr uint32_t cb_v_in = 2;
+constexpr uint32_t cb_mask_in = 3;
+constexpr uint32_t cb_max_scaler = 8;
+constexpr uint32_t cb_sum_scaler = 9;
+constexpr uint32_t cb_alpha = 10;
+constexpr uint32_t cb_l_recip = 11;
+constexpr uint32_t cb_m_blk = 12;
+constexpr uint32_t cb_out = 16;
+constexpr uint32_t cb_qk = 24;
+constexpr uint32_t cb_p = 25;
+constexpr uint32_t cb_o_blk = 26;
+constexpr uint32_t cb_o_run = 27;
+constexpr uint32_t cb_m_prev = 28;
+constexpr uint32_t cb_m_run = 29;
+constexpr uint32_t cb_l_run = 30;
+constexpr uint32_t cb_l_blk = 31;
+}  // namespace
+
+void kernel_main() {
+    constexpr uint32_t B_q = get_compile_time_arg_val(0);
+    constexpr uint32_t B_kv = get_compile_time_arg_val(1);
+    constexpr uint32_t DHt = get_compile_time_arg_val(2);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(3);
+    constexpr uint32_t n_kv = get_compile_time_arg_val(4);
+    constexpr bool has_mask = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t scale_bits = get_compile_time_arg_val(6);
+
+    const uint32_t num_work = get_arg_val<uint32_t>(0);
+
+    constexpr uint32_t q_tiles = B_q * DHt;
+    constexpr uint32_t qk_tiles = B_q * B_kv;
+    constexpr uint32_t o_tiles = B_q * vDHt;
+
+    // Boot: one hw_configure-bearing init pair (the only ones in the kernel).
+    compute_kernel_hw_startup(cb_q_in, cb_k_in, cb_qk);
+    mm_block_init(cb_q_in, cb_k_in, cb_qk, /*transpose*/ 0, /*ct*/ 1, /*rt*/ 1, /*kt*/ DHt);
+
+    CircularBuffer q_buf(cb_q_in);
+    CircularBuffer k_buf(cb_k_in);
+    CircularBuffer v_buf(cb_v_in);
+    CircularBuffer qk_buf(cb_qk);
+    CircularBuffer p_buf(cb_p);
+    CircularBuffer oblk_buf(cb_o_blk);
+
+    constexpr auto qk_grid = ckl::EltwiseShape::grid(B_q, B_kv);
+    constexpr auto o_grid = ckl::EltwiseShape::grid(B_q, vDHt);
+    constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(B_q, B_kv, 1);
+
+    for (uint32_t w = 0; w < num_work; ++w) {
+        // ---------- Phase 0: pre-scale Q (once per Q-block) ----------
+        ckl::transform_in_place<cb_q_in>(q_tiles, ckl::MulUnary<>{scale_bits});
+
+        for (uint32_t j = 0; j < n_kv; ++j) {
+            const bool first = (j == 0);
+
+            // ---------- Phase 1: S = (Q*scale) . K^T ----------
+            // transpose=true (within-tile) + reader grid-transpose -> K^T.
+            // Q retained across the whole KV loop (WaitAndRetainOnLastBlock).
+            ckl::matmul_block<
+                /*transpose*/ true,
+                /*packer_l1_acc*/ false,
+                ckl::LastBlockTarget::Out,
+                ckl::OutputCBLayout::TileRowMajor,
+                ckl::matmul_config::InitMode::Short,
+                ckl::InputPolicy::WaitAndRetainOnLastBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock>(
+                q_buf, k_buf, qk_buf, q_buf, ckl::MatmulBlockShape::of(B_q, B_kv, 1, 1, DHt, 1));
+
+            // ---------- Phase 2: S += mask ----------
+            if constexpr (has_mask) {
+                ckl::add<
+                    cb_qk,
+                    cb_mask_in,
+                    cb_qk,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Scalar,
+                    ckl::OperandKind::Scalar>(qk_tiles);
+            }
+
+            // ---------- Phase 3a: m_blk = rowmax(S) ----------
+            ckl::reduce<
+                ckernel::PoolType::MAX,
+                ckernel::ReduceDim::REDUCE_ROW,
+                cb_qk,
+                cb_max_scaler,
+                cb_m_blk,
+                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
+
+            // ---------- Phase 3b: m_run = max(m_prev, m_blk) ----------
+            if (first) {
+                ckl::copy<cb_m_blk, cb_m_run>(B_q);
+            } else {
+                ckl::binary_sfpu<
+                    ckl::BinaryMax<>,
+                    cb_m_prev,
+                    cb_m_blk,
+                    cb_m_run,
+                    ckl::InputLifecycle::HeldStream,  // m_prev: keep for alpha
+                    ckl::InputLifecycle::Streaming>(B_q);
+            }
+
+            if (!first) {
+                // ---------- Phase 4: alpha = exp(m_prev - m_run) ----------
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape(B_q),
+                    ckl::BinaryFpu<
+                        cb_m_prev,
+                        cb_m_run,
+                        ckl::BinaryFpuOp::Sub,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::Streaming,   // m_prev: pop (last use)
+                        ckl::InputLifecycle::HeldStream,  // m_run: keep
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::Dst::D0,
+                        ckl::OperandKind::Scalar,
+                        ckl::OperandKind::Scalar>{},
+                    ckl::Exp<>{},
+                    ckl::PackTile<
+                        cb_alpha,
+                        ckl::OutputLifecycle::Streaming,
+                        ckl::PackTileReconfig::Output,
+                        ckl::Dst::D0>{});
+
+                // ---------- Phase 5: l_run = alpha * l_run ----------
+                ckl::mul<
+                    cb_l_run,
+                    cb_alpha,
+                    cb_l_run,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::HeldStream,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Scalar,
+                    ckl::OperandKind::Scalar>(B_q);
+
+                // ---------- Phase 6: O_run = alpha * O_run (Col bcast) ----------
+                ckl::mul<
+                    cb_o_run,
+                    cb_alpha,
+                    cb_o_run,
+                    ckl::BroadcastDim::Col,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::Bulk,  // alpha: Col, pop at end
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Scalar,
+                    ckl::OperandKind::Col>(o_grid);
+            }
+
+            // ---------- Phase 7: P = exp(S - m_run) (Col bcast) ----------
+            ckl::eltwise_chain(
+                qk_grid,
+                ckl::BinaryFpu<
+                    cb_qk,
+                    cb_m_run,
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::BroadcastDim::Col,
+                    ckl::InputLifecycle::Streaming,  // scores: pop (only popper)
+                    ckl::InputLifecycle::HeldBulk,   // m_run: keep for commit
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::Dst::D0,
+                    ckl::OperandKind::Scalar,
+                    ckl::OperandKind::Col>{},
+                ckl::Exp<>{},
+                ckl::PackTile<cb_p, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output, ckl::Dst::D0>{});
+
+            // ---------- Phase 8: commit m_prev = m_run ----------
+            ckl::copy<cb_m_run, cb_m_prev>(B_q);
+
+            // ---------- Phase 9: l_blk = rowsum(P) ----------
+            ckl::reduce<
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                cb_p,
+                cb_sum_scaler,
+                cb_l_blk,
+                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
+
+            // ---------- Phase 10: l_run += l_blk ----------
+            if (first) {
+                ckl::copy<cb_l_blk, cb_l_run>(B_q);
+            } else {
+                ckl::add<
+                    cb_l_run,
+                    cb_l_blk,
+                    cb_l_run,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Scalar,
+                    ckl::OperandKind::Scalar>(B_q);
+            }
+
+            // ---------- Phase 11: O_blk = P . V ----------
+            ckl::matmul_block<
+                /*transpose*/ false,
+                /*packer_l1_acc*/ false,
+                ckl::LastBlockTarget::Out,
+                ckl::OutputCBLayout::TileRowMajor,
+                ckl::matmul_config::InitMode::Short,
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock>(
+                p_buf, v_buf, oblk_buf, p_buf, ckl::MatmulBlockShape::of(B_q, vDHt, 1, 1, B_kv, 1));
+
+            // ---------- Phase 12: O_run += O_blk ----------
+            if (first) {
+                ckl::copy<cb_o_blk, cb_o_run>(o_tiles);
+            } else {
+                ckl::add<
+                    cb_o_run,
+                    cb_o_blk,
+                    cb_o_run,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Scalar,
+                    ckl::OperandKind::Scalar>(o_tiles);
+            }
+        }
+
+        // ---------- Phase 10a: recip(l_final) ----------
+        ckl::unary<ckl::Recip<>, cb_l_run, cb_l_recip>(B_q);
+
+        // ---------- Phase 10b: O = O_run * recip (Col bcast) ----------
+        ckl::mul<
+            cb_o_run,
+            cb_l_recip,
+            cb_out,
+            ckl::BroadcastDim::Col,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::Bulk,  // recip: Col, pop at end
+            ckl::OutputLifecycle::Streaming,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Scalar,
+            ckl::OperandKind::Col>(o_grid);
+
+        // ---------- Cleanup ----------
+        cb_pop_front(cb_q_in, q_tiles);  // retained scaled Q
+        cb_wait_front(cb_m_prev, B_q);   // leftover m_final from last commit
+        cb_pop_front(cb_m_prev, B_q);
+    }
+}

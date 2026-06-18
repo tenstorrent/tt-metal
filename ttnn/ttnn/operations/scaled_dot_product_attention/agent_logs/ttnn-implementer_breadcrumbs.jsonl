@@ -1,0 +1,1 @@
+{"event":"test_run","status":"hang","test":"test_scaled_dot_product_attention[scale_mode=auto-mask_mode=none-single_tile]","exit":2,"detail":"all RISCs waiting (W); CB counts audited balanced; triage callstack dump failed (ElfFile import error). Suspect boot init or matmul helper deadlock.","ts":"2026-06-18T21:07:31+00:00"}
