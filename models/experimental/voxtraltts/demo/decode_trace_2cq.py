@@ -59,15 +59,26 @@ def _env_flag_enabled(name: str, *, default: str = "1") -> bool:
 
 
 def decode_trace_enabled() -> bool:
-    """True when ``VOXTRAL_DECODE_TRACE`` is truthy. Default OFF during bring-up; flip to "1"
-    (or set the env var) once validated on-device."""
-    return _env_flag_enabled("VOXTRAL_DECODE_TRACE", default="0")
+    """True when ``VOXTRAL_DECODE_TRACE`` is truthy.
+
+    Default ON for multi-device compute (1×4 TP). Default OFF on 1×1 BH submesh — text-decode
+    trace replay diverges there (noisy codes); direct decode matches P150-quality audio. Set
+    ``VOXTRAL_DECODE_TRACE=1`` to force trace on 1×1 for experiments.
+    """
+    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+
+    default = "0" if voxtral_requested_compute_mesh_shape() == (1, 1) else "1"
+    return _env_flag_enabled("VOXTRAL_DECODE_TRACE", default=default)
 
 
 def decode_trace_2cq_enabled() -> bool:
     """True when 2CQ input staging is on. Independent of ``VOXTRAL_DECODE_TRACE`` — production
     decode always trace-replays; this flag only toggles CQ1 overlap vs single-CQ staging."""
-    return _env_flag_enabled("VOXTRAL_DECODE_TRACE_2CQ", default="1")
+    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+
+    # 1×1 submesh: single CQ avoids CQ1/CQ0 handoff races seen on BH QB2 (noise / early END).
+    default_2cq = "0" if voxtral_requested_compute_mesh_shape() == (1, 1) else "1"
+    return _env_flag_enabled("VOXTRAL_DECODE_TRACE_2CQ", default=default_2cq)
 
 
 def num_command_queues_for_decode() -> int:
@@ -78,13 +89,23 @@ def num_command_queues_for_decode() -> int:
 # ---------------------------------------------------------------------------
 # Host staging tensors (no device=) — ready for copy_host_to_device_tensor
 # ---------------------------------------------------------------------------
-def embed_host(x_embed_4d: torch.Tensor, mesh_device) -> ttnn.Tensor:
-    """Host ttnn.Tensor for the MM embedding ``[1, 1, 1, dim]`` (bf16, replicated)."""
+def embed_host(x_embed_4d: torch.Tensor, mesh_device, cluster_shape=None) -> ttnn.Tensor:
+    """Host ttnn.Tensor for decode embed ``[1, 1, 1, dim]`` (bf16; TP column-shards last dim)."""
+    from models.experimental.voxtraltts.utils.mesh import (
+        voxtral_replicate_mesh_mapper,
+        voxtral_tp_shard_last_dim_mapper,
+    )
+
+    mapper = (
+        voxtral_tp_shard_last_dim_mapper(mesh_device, cluster_shape)
+        if cluster_shape is not None
+        else voxtral_replicate_mesh_mapper(mesh_device)
+    )
     return ttnn.from_torch(
         x_embed_4d.reshape(1, 1, 1, -1).to(torch.bfloat16).contiguous(),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mapper,
     )
 
 
@@ -119,7 +140,9 @@ class VoxtralDecodeBuffers:
     @classmethod
     def create(cls, mesh_device, dim: int, cluster_shape, rope_setup, start_pos: int, init_embed_4d: torch.Tensor):
         """Allocate the persistent buffers once, seeded with the first step's inputs."""
-        x_embed_dev = ttnn.to_device(embed_host(init_embed_4d, mesh_device), mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+        x_embed_dev = ttnn.to_device(
+            embed_host(init_embed_4d, mesh_device, cluster_shape), mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
         pos_dev = ttnn.to_device(pos_host(start_pos, mesh_device, cluster_shape), mesh_device, ttnn.DRAM_MEMORY_CONFIG)
         rot_idxs_dev = ttnn.to_device(rot_idxs_host(start_pos, rope_setup), mesh_device, ttnn.DRAM_MEMORY_CONFIG)
         return cls(x_embed_dev, pos_dev, rot_idxs_dev, rope_setup)
@@ -159,9 +182,17 @@ class VoxtralDecodeTrace2CQ:
     def write_inputs_cq1(self, x_embed_4d: torch.Tensor, pos: int) -> None:
         """Stage the next step's (embed, pos, rot_idxs) on CQ1 once CQ0 has released the buffers."""
         ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(embed_host(x_embed_4d, self.mesh_device), self.bufs.x_embed_dev, 1)
-        ttnn.copy_host_to_device_tensor(pos_host(pos, self.mesh_device, self.cluster_shape), self.bufs.pos_dev, 1)
-        ttnn.copy_host_to_device_tensor(rot_idxs_host(pos, self.bufs.rope_setup), self.bufs.rot_idxs_dev, 1)
+        ttnn.copy_host_to_device_tensor(
+            embed_host(x_embed_4d, self.mesh_device, self.cluster_shape), self.bufs.x_embed_dev, 1
+        )
+        _stage_pos_rot_tt(self, self.bufs, self.mesh_device, self.cluster_shape, pos, cq_id=1)
+        self.write_event = ttnn.record_event(self.mesh_device, 1)
+
+    def write_inputs_cq1_tt(self, x_embed_tt: ttnn.Tensor, pos: int) -> None:
+        """CQ1 device embed staging (no host torch tensor)."""
+        ttnn.wait_for_event(1, self.op_event)
+        ttnn.copy(x_embed_tt, self.bufs.x_embed_dev)
+        _stage_pos_rot_tt(self, self.bufs, self.mesh_device, self.cluster_shape, pos, cq_id=1)
         self.write_event = ttnn.record_event(self.mesh_device, 1)
 
     def wait_inputs_ready_cq0(self) -> None:
@@ -177,6 +208,70 @@ class VoxtralDecodeTrace2CQ:
 DecodeTrace2CQ = VoxtralDecodeTrace2CQ
 
 
+def embed_row_tile_tt(embeds_tt: ttnn.Tensor, index: int, dim: int) -> ttnn.Tensor:
+    """One prompt/MM row ``[1, 1, 1, local_dim]`` TILE DRAM from ``[S, 1, 1, local_dim]`` device embeds."""
+    local_dim = int(embeds_tt.shape[-1])
+    row = ttnn.slice(embeds_tt, [index, 0, 0, 0], [index + 1, 1, 1, local_dim])
+    row_4d = ttnn.reshape(row, (1, 1, 1, local_dim))
+    if row_4d.layout != ttnn.TILE_LAYOUT:
+        row_tile = ttnn.to_layout(row_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if row_4d.is_allocated():
+            ttnn.deallocate(row_4d)
+        return row_tile
+    return ttnn.to_memory_config(row_4d, ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _stage_pos_rot_tt(
+    pipe: Optional["VoxtralDecodeTrace2CQ"],
+    bufs: VoxtralDecodeBuffers,
+    mesh_device,
+    cluster_shape,
+    pos: int,
+    *,
+    cq_id: int,
+) -> None:
+    if pipe is not None:
+        ttnn.copy_host_to_device_tensor(pos_host(pos, mesh_device, cluster_shape), bufs.pos_dev, cq_id)
+        ttnn.copy_host_to_device_tensor(rot_idxs_host(pos, bufs.rope_setup), bufs.rot_idxs_dev, cq_id)
+        return
+    ttnn.copy_host_to_device_tensor(pos_host(pos, mesh_device, cluster_shape), bufs.pos_dev)
+    ttnn.copy_host_to_device_tensor(rot_idxs_host(pos, bufs.rope_setup), bufs.rot_idxs_dev)
+
+
+def stage_decode_inputs_tt(
+    pipe: Optional["VoxtralDecodeTrace2CQ"],
+    bufs: VoxtralDecodeBuffers,
+    mesh_device,
+    cluster_shape,
+    x_embed_tt: ttnn.Tensor,
+    pos: int,
+) -> None:
+    """Device→persistent-buffer staging for one decode step (no torch compute)."""
+    if pipe is not None:
+        pipe.write_inputs_cq1_tt(x_embed_tt, pos)
+        pipe.wait_inputs_ready_cq0()
+        return
+    ttnn.copy(x_embed_tt, bufs.x_embed_dev)
+    _stage_pos_rot_tt(pipe, bufs, mesh_device, cluster_shape, pos, cq_id=0)
+
+
+def stage_prompt_embed_tt(
+    pipe: Optional["VoxtralDecodeTrace2CQ"],
+    bufs: VoxtralDecodeBuffers,
+    mesh_device,
+    cluster_shape,
+    embeds_tt: ttnn.Tensor,
+    token_index: int,
+    pos: int,
+    dim: int,
+) -> None:
+    """Slice one prompt embedding row on device and stage it into the decode trace buffers."""
+    x_tile = embed_row_tile_tt(embeds_tt, token_index, dim)
+    stage_decode_inputs_tt(pipe, bufs, mesh_device, cluster_shape, x_tile, pos)
+    if x_tile.is_allocated():
+        ttnn.deallocate(x_tile)
+
+
 def stage_decode_inputs(
     pipe: Optional[VoxtralDecodeTrace2CQ],
     bufs: VoxtralDecodeBuffers,
@@ -190,9 +285,8 @@ def stage_decode_inputs(
         pipe.write_inputs_cq1(x_embed_4d, pos)
         pipe.wait_inputs_ready_cq0()
         return
-    ttnn.copy_host_to_device_tensor(embed_host(x_embed_4d, mesh_device), bufs.x_embed_dev)
-    ttnn.copy_host_to_device_tensor(pos_host(pos, mesh_device, cluster_shape), bufs.pos_dev)
-    ttnn.copy_host_to_device_tensor(rot_idxs_host(pos, bufs.rope_setup), bufs.rot_idxs_dev)
+    ttnn.copy_host_to_device_tensor(embed_host(x_embed_4d, mesh_device, cluster_shape), bufs.x_embed_dev)
+    _stage_pos_rot_tt(pipe, bufs, mesh_device, cluster_shape, pos, cq_id=0)
 
 
 def signal_decode_step_done(pipe: Optional[VoxtralDecodeTrace2CQ]) -> None:
@@ -272,11 +366,24 @@ class AcousticFMBuffers:
 
     @classmethod
     def create(cls, mesh_device, acoustic, bsz: int, dim: int) -> "AcousticFMBuffers":
-        llm0 = ttnn.from_torch(
-            torch.zeros(bsz, 1, dim, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
+
+        # Persistent buffers must match the replicated topology of the acoustic activations
+        # they are ``ttnn.copy``-written from each step (single shard on 1x1, replicated on a mesh).
+        llm_dev = voxtral_from_torch(
+            torch.zeros(bsz, 1, dim, dtype=torch.bfloat16),
+            mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        llm_dev = ttnn.to_device(llm0, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
-        noise_dev = ttnn.to_device(acoustic.fm_noise_host_tt(bsz, 0), mesh_device, acoustic._fm_dram_mem_config)
+        noise_dev = voxtral_from_torch(
+            acoustic.fm_noise_host_torch(bsz, 0),
+            mesh_device,
+            dtype=acoustic.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=acoustic._fm_dram_mem_config,
+        )
         return cls(llm_dev, noise_dev)
 
     def deallocate(self) -> None:
@@ -323,10 +430,27 @@ class TracedAcousticFM:
             self.trace_id = None
 
 
-def stage_acoustic_inputs(pipe, acoustic, bufs: AcousticFMBuffers, last_hidden_tt, seed: int) -> None:
-    """Host→device staging for the acoustic FM trace (CQ0): hidden tile + seeded FM noise."""
+def stage_acoustic_inputs(
+    pipe, acoustic, bufs: AcousticFMBuffers, last_hidden_tt, seed: int, *, noise_rng: str = "ttnn"
+) -> None:
+    """Stage acoustic FM trace inputs (CQ0): hidden tile + FM noise.
+
+    1×1 (P150) keeps the proven host round-trip staging (host hidden + ``fm_noise_host_tt``) so the
+    frame count / audio stay bit-for-bit identical to the reference path. Multi-device (1×4 TP) uses
+    the device-resident copy (no host round-trip) which is required for the gathered TP hidden.
+    """
+    from models.experimental.voxtraltts.utils.mesh import voxtral_is_multi_device_mesh
+
     bsz = int(bufs.llm_dev.shape[0])
-    llm_host = pipe._acoustic_hidden_host_torch(last_hidden_tt)  # [bsz, 1, dim] bf16
+    if voxtral_is_multi_device_mesh(pipe.mesh_device):
+        pipe._stage_acoustic_hidden_to_fm_buffer(last_hidden_tt, bufs.llm_dev)
+        noise_tt = acoustic.fm_noise_tt(bsz, seed, rng=noise_rng)
+        ttnn.copy(noise_tt, bufs.noise_dev)
+        if noise_tt.is_allocated():
+            ttnn.deallocate(noise_tt)
+        return
+    # 1×1 P150 path — host-staged hidden + host FM noise (matches the 392-frame reference numerics).
+    llm_host = pipe._acoustic_hidden_host_torch(last_hidden_tt)
     ttnn.copy_host_to_device_tensor(
         ttnn.from_torch(llm_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), bufs.llm_dev
     )
