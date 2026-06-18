@@ -9,15 +9,25 @@ per prompt: the token ids, the last-position argmax + top-5 (decoded), and the f
 last-position logit vector (fp32 .npy). Compare a TT device run's logits against these
 for argmax-match + logit PCC.
 
+With --save-layers, also captures the hidden-state output of each decoder layer (the
+post-residual tensor after attention + MLP) as float32 .npy files.  These are used by
+layer_activations_prefill.py to do per-layer PCC comparisons against the TT model.
+
 CPU forward of the full 120B model is I/O-bound — expect several minutes per prompt.
 Run once; results persist in --out.
 
-Run:
+Run (logits only):
   cd /path/to/tt-metal
   export HF_MODEL=/data/jmalone/.cache/huggingface/hub/models--openai--gpt-oss-120b/gpt-oss-120b
   python3 models/demos/gpt_oss_d_p/tests/accuracy/hf_reference_oracle.py \\
       --out /data/jmalone/gpt_oss_ref \\
       --prompt "What are the prime factors of 1?"
+
+Run (logits + per-layer activations for first 5 layers):
+  python3 models/demos/gpt_oss_d_p/tests/accuracy/hf_reference_oracle.py \\
+      --out /data/jmalone/gpt_oss_ref \\
+      --prompt "What are the prime factors of 1?" \\
+      --save-layers --max-layers 5
 """
 
 import argparse
@@ -40,6 +50,17 @@ def main():
         action="store_true",
         help="apply chat template (off by default; GPT-OSS demos use plain tokenization)",
     )
+    ap.add_argument(
+        "--save-layers",
+        action="store_true",
+        help="also save per-layer hidden-state activations for layer_activations_prefill.py",
+    )
+    ap.add_argument(
+        "--max-layers",
+        type=int,
+        default=None,
+        help="limit layer capture to first N layers (default: all layers)",
+    )
     args = ap.parse_args()
     prompts = args.prompt or ["What are the prime factors of 1?"]
 
@@ -57,7 +78,23 @@ def main():
     ).eval()
     print("[oracle] model loaded", flush=True)
 
-    results = []
+    num_model_layers = len(model.model.layers)
+    if args.save_layers:
+        num_capture = args.max_layers if args.max_layers is not None else num_model_layers
+        num_capture = min(num_capture, num_model_layers)
+        print(f"[oracle] will capture hidden states for layers 0..{num_capture - 1}", flush=True)
+
+    # Load any existing results so we can append without overwriting.
+    results_path = outdir / "ref_results.json"
+    if results_path.exists():
+        with results_path.open() as f:
+            existing = json.load(f)
+        existing_by_key = {hashlib.sha256(r["prompt"].encode()).hexdigest()[:12]: r for r in existing}
+    else:
+        existing = []
+        existing_by_key = {}
+
+    results = list(existing)
     for prompt in prompts:
         if args.chat_template:
             ids = tok.apply_chat_template(
@@ -68,16 +105,45 @@ def main():
 
         input_ids = torch.tensor(ids, dtype=torch.long).unsqueeze(0)
         last = len(ids) - 1
-        print(f"[oracle] prompt={prompt!r} n_tokens={len(ids)} -> forward (slow) ...", flush=True)
+        key = hashlib.sha256(prompt.encode()).hexdigest()[:12]
+        print(f"[oracle] prompt={prompt!r} n_tokens={len(ids)} key={key} -> forward (slow) ...", flush=True)
+
+        layer_outputs: dict[int, np.ndarray] = {}
+        hooks = []
+        if args.save_layers:
+
+            def make_hook(idx):
+                def hook(module, inp, out):
+                    hs = out[0] if isinstance(out, tuple) else out
+                    # Save as float32; shape [1, seq_len, hidden_size]
+                    layer_outputs[idx] = hs.detach().float().numpy()
+
+                return hook
+
+            for i in range(num_capture):
+                hooks.append(model.model.layers[i].register_forward_hook(make_hook(i)))
+
         with torch.no_grad():
             out = model(input_ids=input_ids)
+
+        for h in hooks:
+            h.remove()
+
         logits = out.logits[0, last, :].float()  # [vocab]
         top = torch.topk(logits, 5)
         top5 = [(int(i), tok.decode([int(i)]), float(logits[int(i)])) for i in top.indices]
         argmax = int(top.indices[0])
 
-        key = hashlib.sha256(prompt.encode()).hexdigest()[:12]
         np.save(outdir / f"logits_{key}.npy", logits.numpy())
+
+        layer_files: dict[str, str] = {}
+        for i, hs in layer_outputs.items():
+            fname = f"layer_{i}_{key}.npy"
+            np.save(outdir / fname, hs)
+            layer_files[str(i)] = fname
+        if layer_files:
+            print(f"[oracle] saved {len(layer_files)} layer activation file(s)", flush=True)
+
         rec = {
             "prompt": prompt,
             "chat_template": args.chat_template,
@@ -90,12 +156,20 @@ def main():
             "logits_file": f"logits_{key}.npy",
             "vocab_size": int(logits.shape[0]),
         }
-        results.append(rec)
+        if layer_files:
+            rec["layer_files"] = layer_files
+
+        # Replace existing record for the same prompt, or append.
+        if key in existing_by_key:
+            results = [rec if hashlib.sha256(r["prompt"].encode()).hexdigest()[:12] == key else r for r in results]
+        else:
+            results.append(rec)
+
         print(f"[oracle] argmax={argmax} {tok.decode([argmax])!r}  top5={[(i, t) for i, t, _ in top5]}", flush=True)
 
-    with (outdir / "ref_results.json").open("w") as f:
+    with results_path.open("w") as f:
         json.dump(results, f, indent=2)
-    print(f"[oracle] saved {len(results)} record(s) to {outdir}/ref_results.json", flush=True)
+    print(f"[oracle] saved {len(results)} record(s) to {results_path}", flush=True)
 
 
 if __name__ == "__main__":
