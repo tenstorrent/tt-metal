@@ -526,7 +526,7 @@ If your op uses something not listed here and you are unsure of its support stat
 
 ### GlobalCircularBuffer — UNSUPPORTED
 
-**Status**: Not yet supported in Metal 2.0. No equivalent of `experimental::GlobalCircularBuffer` on `KernelSpec` or `DataflowBufferSpec`.
+**Status**: Not yet supported in Metal 2.0. No equivalent of `experimental::GlobalCircularBuffer` on `KernelSpec` or `DataflowBufferSpec`. GlobalCircularBuffer is a *user-managed* buffer; its eventual analog is the (unimplemented) user-managed `GlobalDataflowBuffer` — the mapping is by *lifetime*. It has **no DataflowBuffer destination of any kind today**: not the local `DataflowBuffer`, and **not** the cross-node DFB stub in `dataflow_buffer_spec.hpp` — despite the legacy *"remote CB"* nickname for GlobalCircularBuffer, that cross-node DFB is a separate *ephemeral* construct with no legacy analog. Do not map a GlobalCircularBuffer onto any DFB variant.
 
 **Recognition — definitely this feature** (refuse and report):
 
@@ -536,12 +536,14 @@ If your op uses something not listed here and you are unsure of its support stat
 - **Descriptor-API attachment**: a `CBDescriptor` literal or struct with its `.global_circular_buffer` field set to a non-null pointer. The type token does not appear at the assignment site — look for the **field name** `global_circular_buffer` on a `CBDescriptor`. This is the arcane signal; an AI scanning a `CBDescriptor` setup can easily miss it.
 - **Imperative-API attachment**: the `UpdateDynamicCircularBufferAddress(program, cb_handle, const GlobalCircularBuffer&)` overload (the three-arg form taking a `GlobalCircularBuffer`). The two-arg form taking a `Buffer&` is unrelated.
 - Op factory function signatures with parameter type `std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>&` (commonly named `global_cb`).
+- **Construction-by-consumption** (the common in-op shape): ops rarely call `CreateGlobalCircularBuffer` themselves — they receive a *pre-built* `GlobalCircularBuffer` and wrap it into a CB via the experimental overload `experimental::CreateCircularBuffer(program, core_spec, cb_config, global_cb)` (the 4-arg form whose last argument is a `GlobalCircularBuffer`), with a `CircularBufferConfig` (often named `remote_cb_config`) configured via `.remote_index(...)`. The "remote CB" idiom — `remote_cb_*` identifiers, `CircularBufferConfig::remote_index()`, the `remote_circular_buffer.h` device header — is itself a strong cue: **in this codebase, "remote CB" means GlobalCircularBuffer.**
+- **Both include spellings** resolve to the same type — match either: `#include <tt-metalium/global_circular_buffer.hpp>` and `#include <tt-metalium/experimental/global_circular_buffer.hpp>`.
 
 **Recognition — false-positive guard**:
 
-Plain `CircularBuffer`, `CBHandle`, `CBDescriptor`, or `CBFormatDescriptor` *without* the GCB attachment field set are the regular path → supported in Metal 2.0 as `DataflowBufferSpec`. Do not refuse these. The disambiguator is either the literal token `Global` in the type name **or** the `global_circular_buffer` field on a `CBDescriptor` being non-null.
+Plain `CircularBuffer`, `CBHandle`, `CBDescriptor`, or `CBFormatDescriptor` *without* the GCB attachment field set are the regular path → supported in Metal 2.0 as `DataflowBufferSpec`. Do not refuse these. The disambiguator is either the literal token `Global` in the type name **or** the `global_circular_buffer` field on a `CBDescriptor` being non-null. Also do **not** flag the config scalar `num_global_cb_receivers` (or its pybind arg): it is an `int` count, not a buffer — key on the *type* `GlobalCircularBuffer` or the `CreateCircularBuffer(..., global_cb)` / `.remote_index(` construction, not on the `global_cb` substring alone.
 
-**Action**: STOP. Report to the user that this op uses `GlobalCircularBuffer`, which is not yet supported in Metal 2.0. Do not invent a workaround.
+**Action**: STOP — at **ProgramFactory** granularity, not necessarily the whole op. Report *which factory* uses `GlobalCircularBuffer` (not yet supported in Metal 2.0); do not invent a workaround. GlobalCircularBuffer is usually confined to a single factory (matmul is the canonical case: only `matmul_multicore_reuse_mcast_1d` uses it, while the op's other factories are clean), so apply **Code-path scope** — RED the offending factory and name the clean factories as a subset port (`RED at op level; subset <X> is clear`) rather than over-blocking the whole op.
 
 **Examples in the wild** (for ground-truthing your match):
 - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp`
