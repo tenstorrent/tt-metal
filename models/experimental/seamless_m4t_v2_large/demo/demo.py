@@ -37,6 +37,7 @@ Optional: ``SEAMLESS_M4T_V2_WEIGHTS=/path/to/seamless-m4t-v2-large`` if not usin
 
 from __future__ import annotations
 
+import io
 import os
 import re
 import sys
@@ -78,6 +79,8 @@ T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
 PREAMBLE_WAV_URL = "https://www.cs.kzoo.edu/cs107/MediaSources/preamble10.wav"
 PREAMBLE_WAV = OUTPUT_DIR / "preamble10.wav"
+_MIN_DEMO_WAV_BYTES = 1024
+_MIN_DEMO_WAV_DURATION_S = 0.5
 
 # Untimed warmups before timed runs; min() over measure_iters drops host jitter.
 _DEMO_WARMUP_ITERS = 1
@@ -255,30 +258,86 @@ def _load_mono_wav_resampled(path: Path, target_rate: int) -> tuple[np.ndarray, 
     return pcm, int(target_rate)
 
 
+def _format_demo_wav_summary(data: bytes) -> str:
+    """Human-readable WAV metadata for logging after a successful download."""
+    with wave.open(io.BytesIO(data), "rb") as wf:
+        nch = wf.getnchannels()
+        sw = wf.getsampwidth()
+        rate = wf.getframerate()
+        nframes = wf.getnframes()
+    duration = nframes / float(rate) if rate > 0 else 0.0
+    pcm_bits = 8 * sw
+    return f"{len(data)} bytes, {nch} ch, {pcm_bits}-bit PCM @ {rate} Hz, {duration:.2f}s"
+
+
+def _validate_demo_wav_bytes(data: bytes) -> None:
+    """Reject empty, truncated, or non-WAV downloads before they are cached."""
+    if len(data) < _MIN_DEMO_WAV_BYTES:
+        raise ValueError(f"WAV too small ({len(data)} bytes, min {_MIN_DEMO_WAV_BYTES})")
+    if not data.startswith(b"RIFF") or data[8:12] != b"WAVE":
+        raise ValueError("Not a RIFF/WAVE file")
+
+    with wave.open(io.BytesIO(data), "rb") as wf:
+        nch = wf.getnchannels()
+        sw = wf.getsampwidth()
+        rate = wf.getframerate()
+        nframes = wf.getnframes()
+
+    if nch < 1:
+        raise ValueError(f"Invalid channel count {nch}")
+    if sw not in (2, 4):
+        raise ValueError(f"Unsupported sample width {sw} (expected 16- or 32-bit PCM)")
+    if rate <= 0 or nframes <= 0:
+        raise ValueError(f"Invalid WAV rate/frames: {rate} Hz, {nframes} frames")
+
+    duration = nframes / float(rate)
+    if duration < _MIN_DEMO_WAV_DURATION_S:
+        raise ValueError(f"WAV too short ({duration:.2f}s, min {_MIN_DEMO_WAV_DURATION_S}s)")
+
+
+def _validate_demo_wav_file(path: Path) -> None:
+    _validate_demo_wav_bytes(path.read_bytes())
+
+
 def ensure_demo_audio(
     url: str = PREAMBLE_WAV_URL,
     dest: Path = PREAMBLE_WAV,
 ) -> Path:
-    """Download demo input audio to ``dest`` if missing; raise on failure."""
+    """Download demo input audio to ``dest`` if missing or invalid; raise on failure."""
     dest = dest.expanduser().resolve()
     if dest.is_file() and dest.stat().st_size > 0:
-        return dest
+        try:
+            _validate_demo_wav_file(dest)
+            return dest
+        except ValueError:
+            dest.unlink(missing_ok=True)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     try:
         with urllib.request.urlopen(url, timeout=60) as resp:
+            status = getattr(resp, "status", None) or getattr(resp, "code", None)
+            if status is not None and int(status) >= 400:
+                raise RuntimeError(f"HTTP {status}")
             data = resp.read()
         if not data:
             raise RuntimeError("response body was empty")
+        _validate_demo_wav_bytes(data)
         tmp.write_bytes(data)
         tmp.replace(dest)
-    except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, RuntimeError, ValueError) as exc:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"Failed to download demo audio from {url}: {exc}") from exc
 
     if not dest.is_file() or dest.stat().st_size == 0:
         raise RuntimeError(f"Failed to download demo audio from {url}: file missing or empty")
+    try:
+        _validate_demo_wav_file(dest)
+    except ValueError as exc:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(f"Downloaded demo audio failed validation: {exc}") from exc
+
+    print(f"  Downloaded demo audio: {_format_demo_wav_summary(dest.read_bytes())} -> {dest}")
     return dest
 
 

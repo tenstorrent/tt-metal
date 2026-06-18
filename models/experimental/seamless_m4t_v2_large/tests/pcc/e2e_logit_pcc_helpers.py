@@ -81,13 +81,10 @@ _SPEECH_ENC_SEQ_BUCKET = 256
 
 
 def resolve_preamble_wav_for_tests() -> Path:
-    """Demo preamble WAV used for S2ST token-accuracy reference (download if missing)."""
+    """Demo preamble WAV for S2ST token-matching reference (download + validate if missing)."""
     from models.experimental.seamless_m4t_v2_large.demo.demo import PREAMBLE_WAV, ensure_demo_audio
 
-    path = PREAMBLE_WAV.expanduser().resolve()
-    if path.is_file() and path.stat().st_size > 0:
-        return path
-    return ensure_demo_audio(dest=path)
+    return ensure_demo_audio(dest=PREAMBLE_WAV.expanduser().resolve())
 
 
 @dataclass(frozen=True)
