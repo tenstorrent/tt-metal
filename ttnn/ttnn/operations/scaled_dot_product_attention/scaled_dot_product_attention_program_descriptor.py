@@ -27,6 +27,16 @@ TILE_DIM = 32
 MAX_B_Q = 4
 MAX_B_KV = 4
 
+# L1-aware cap on the input-block tile count. cb_q_in / cb_k_in / cb_v_in are
+# sized ~2 * B_{q,kv} * DHt tiles, so the per-core L1 footprint grows with
+# B * DHt. For large head_dim (DHt = D/32) this overflows L1 (program.cpp CB
+# allocation throw) at B_q = B_kv = 4. Cap B_{q,kv} so B_{q,kv} * DHt does not
+# exceed MAX_INPUT_BLOCK_TILES; for small DHt (the common case, D<=128) this is
+# inert and B stays at MAX_B_*; for D>=512 it pushes B down (to 1 at D=1024),
+# keeping the footprint bounded. This is block sizing, not a feature gate — the
+# kernel is identical; only the per-core work granularity shrinks.
+MAX_INPUT_BLOCK_TILES = 16
+
 
 def _largest_divisor_leq(n: int, cap: int) -> int:
     for c in range(min(cap, n), 0, -1):
@@ -60,8 +70,10 @@ def create_program_descriptor(
     Sq_t = S_q // TILE_DIM
     Sk_t = S_kv // TILE_DIM
 
-    B_q = _largest_divisor_leq(Sq_t, MAX_B_Q)
-    B_kv = _largest_divisor_leq(Sk_t, MAX_B_KV)
+    # L1-aware block cap: keep B * DHt <= MAX_INPUT_BLOCK_TILES (>=1).
+    dht_cap = max(1, MAX_INPUT_BLOCK_TILES // DHt)
+    B_q = _largest_divisor_leq(Sq_t, min(MAX_B_Q, dht_cap))
+    B_kv = _largest_divisor_leq(Sk_t, min(MAX_B_KV, dht_cap))
     n_q = Sq_t // B_q
     n_kv = Sk_t // B_kv
 
