@@ -77,15 +77,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-        params.in0_tile_r_dim,
-        params.in0_tile_c_dim,
-        params.in1_tile_r_dim,
-        params.in1_tile_c_dim,
-        params.PARTIAL_FACE_MATH,
-        params.UNPACK_TRANSPOSE_FACES,
-        params.CT_DIM,
-        params.RT_DIM);
+    const ckernel::TensorShape in0_tensor_shape = make_matmul_tensor_shape(params.in0_tile_r_dim, params.in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = make_matmul_tensor_shape(params.in1_tile_r_dim, params.in1_tile_c_dim);
+    _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(in0_tensor_shape, in1_tensor_shape, params.UNPACK_TRANSPOSE_FACES, params.CT_DIM, params.RT_DIM);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<dest_sync>();

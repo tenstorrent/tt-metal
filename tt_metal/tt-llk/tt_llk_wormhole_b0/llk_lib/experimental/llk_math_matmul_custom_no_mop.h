@@ -49,7 +49,9 @@ inline void matmul_configure_addrmod_no_mop(
     // The no-mop-specific part below only fixes up the dvalid contract for
     // reentry. Unlike BH, this WH path has to make the A/B reuse policy explicit
     // so repeated replays keep the right source valid across ct/rt shapes.
-    matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    const ckernel::TensorShape in0_tensor_shape = make_matmul_tensor_shape(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = make_matmul_tensor_shape(in1_tile_r_dim, in1_tile_c_dim);
+    matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tensor_shape, in1_tensor_shape);
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;

@@ -4,8 +4,7 @@
 //
 // Common TensorShape coverage definitions shared by TRISC-specific coverage tables.
 //
-// Regenerate by running the functional pytests with --logging-level=DEBUG
-// and feeding the per-worker test_run_gw*.log files through /tmp/ts-coverage/parse.py.
+// Regenerate by running the functional pytests with --logging-level=DEBUG.
 //
 
 #pragma once
@@ -38,6 +37,16 @@ enum class TensorShapeFunctionCoverage
     _llk_unpack_A_mop_config_,
     eltwise_binary_configure_mop_standard,
     eltwise_binary_configure_mop_with_dest_reuse,
+    matmul_configure_addrmod,
+    matmul_configure_mop,
+    matmul_configure_mop_throttled,
+    _llk_math_matmul_init_,
+};
+
+struct TensorShapePair
+{
+    TensorShape in0;
+    TensorShape in1;
 };
 
 constexpr const char* tensor_shape_function_name(const TensorShapeFunctionCoverage fn)
@@ -75,6 +84,14 @@ constexpr const char* tensor_shape_function_name(const TensorShapeFunctionCovera
             return "eltwise_binary_configure_mop_standard";
         case Function::eltwise_binary_configure_mop_with_dest_reuse:
             return "eltwise_binary_configure_mop_with_dest_reuse";
+        case Function::matmul_configure_addrmod:
+            return "matmul_configure_addrmod";
+        case Function::matmul_configure_mop:
+            return "matmul_configure_mop";
+        case Function::matmul_configure_mop_throttled:
+            return "matmul_configure_mop_throttled";
+        case Function::_llk_math_matmul_init_:
+            return "_llk_math_matmul_init_";
     }
     return "unknown";
 }
@@ -91,6 +108,25 @@ constexpr bool contains_tensor_shape(const std::array<TensorShape, N>& covered_s
     for (const TensorShape& covered_shape : covered_shapes)
     {
         if (tensor_shape_eq(covered_shape, tensor_shape))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+constexpr bool tensor_shape_pair_eq(const TensorShapePair& lhs, const TensorShapePair& rhs)
+{
+    return tensor_shape_eq(lhs.in0, rhs.in0) && tensor_shape_eq(lhs.in1, rhs.in1);
+}
+
+template <std::size_t N>
+constexpr bool contains_tensor_shape_pair(const std::array<TensorShapePair, N>& covered_pairs, const TensorShape& in0, const TensorShape& in1)
+{
+    const TensorShapePair candidate {in0, in1};
+    for (const TensorShapePair& covered_pair : covered_pairs)
+    {
+        if (tensor_shape_pair_eq(covered_pair, candidate))
         {
             return true;
         }

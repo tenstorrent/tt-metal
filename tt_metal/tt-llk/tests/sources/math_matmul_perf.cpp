@@ -134,8 +134,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t in1_tile_r_dim = params.in1_tile_r_dim;
     const std::uint32_t in1_tile_c_dim = params.in1_tile_c_dim;
 
-    const bool PARTIAL_FACE_MATH = params.PARTIAL_FACE_MATH;
-
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const int DST_INDEX             = params.DST_INDEX;
 
@@ -149,8 +147,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
+        const ckernel::TensorShape in0_tensor_shape = make_matmul_tensor_shape(in0_tile_r_dim, in0_tile_c_dim);
+        const ckernel::TensorShape in1_tensor_shape = make_matmul_tensor_shape(in1_tile_r_dim, in1_tile_c_dim);
+        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(in0_tensor_shape, in1_tensor_shape, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
 
         PROFILER_SYNC();
     }

@@ -186,7 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync3, false>();
 
     // Operation 3: Matmul FPU - Using experimental custom no-mop API
-    // _llk_math_matmul_init_<0, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
+    // _llk_math_matmul_init_<ckernel::MathFidelity::LoFi, 0>(ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE, false, 1, 1);
 
     matmul_configure_addrmod_reinit();
 
