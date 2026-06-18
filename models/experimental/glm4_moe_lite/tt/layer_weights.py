@@ -403,6 +403,11 @@ class DecoderLayerTTWeights:
     # Optional fused attention projection (q_a + kv_a) for one matmul.
     w_q_kv_a: Optional[ttnn.Tensor] = None
 
+    # Optional decode-only head-parallel copies (HEAD_PARALLEL_ATTN): w_q_b column-parallel,
+    # w_kv_b1 per-head sharded. Used only by the decode forward; prefill uses w_q_b/w_kv_b1.
+    w_q_b_hp: Optional[ttnn.Tensor] = None
+    w_kv_b1_hp: Optional[ttnn.Tensor] = None
+
     # Optional fused gate+up projection for shared expert MLP (one matmul instead of two).
     w_mlp_gate_up: Optional[ttnn.Tensor] = None
 
@@ -663,6 +668,22 @@ def convert_decoder_layer_weights(
     attn_proj_mapper = None if attn_dp else attn_row_mapper
     attn_proj_variant = f"{attn_variant}_attndp" if attn_dp and attn_variant else attn_variant
 
+    # HEAD_PARALLEL_ATTN: shard the whole MLA core over heads (H/tp_size per device).
+    # w_q_b becomes column-parallel (shard output heads → no collective) and w_kv_b1
+    # becomes per-head sharded; q-path/FlashMLA/kv_b2/o_proj then run on H/tp_size heads
+    # with the single existing post-o_proj all_reduce. Builds on HEAD_PARALLEL_KVB2.
+    head_parallel_attn = (
+        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", "").strip() == "1"
+        and os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1"
+        and tp_enabled
+        and tp_size > 1
+    )
+    if head_parallel_attn and int(hparams.num_attention_heads) % int(tp_size) != 0:
+        raise ValueError(
+            f"HEAD_PARALLEL_ATTN requires num_attention_heads={hparams.num_attention_heads} "
+            f"divisible by tp_size={tp_size}"
+        )
+
     # MLA linears (w_q_a, w_kv_a, w_o): BFP8 — medium matmuls; BFP4 unpack hurts latency.
     attn_proj_dtype = _ATTN_PROJ_DTYPE
     attn_proj_tag = _dtype_cache_tag(attn_proj_dtype)
@@ -693,6 +714,17 @@ def convert_decoder_layer_weights(
         dtype=wqb_dtype,
         mesh_mapper=attn_proj_mapper,
     )
+    # Decode-only head-parallel copy: column-parallel (shard output heads) so decode emits
+    # H/tp_size heads/device with no collective. Prefill keeps the replicated w_q_b above.
+    w_q_b_hp: Optional[ttnn.Tensor] = None
+    if head_parallel_attn:
+        w_q_b_hp = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_b_proj.weight"],
+            cache_file=c("w_q_b", f"{attn_variant}_headpar_{wqb_tag}"),
+            dtype=wqb_dtype,
+            mesh_mapper=_tp_mesh_mapper(device, shard_dim=3),
+        )
     w_kv_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight"],
@@ -750,6 +782,18 @@ def convert_decoder_layer_weights(
         dtype=kvb_dtype,
         mesh_mapper=w_kv_b1_mapper,
     )
+    # Decode-only head-parallel copy: shard heads (dim=1) so each device owns H/tp_size heads.
+    # Sidesteps the qk_nope row-parallel tile-align limit (shards heads, not the 192 contraction).
+    # Prefill keeps the replicated w_kv_b1 above.
+    w_kv_b1_hp: Optional[ttnn.Tensor] = None
+    if head_parallel_attn:
+        w_kv_b1_hp = _per_head_weight_tt(
+            device=device,
+            torch_weight=w_kv_b1_torch,
+            cache_file=c("w_kv_b1", f"{attn_variant}_headpar_{kvb_tag}"),
+            dtype=kvb_dtype,
+            mesh_mapper=_tp_mesh_mapper(device, shard_dim=1),
+        )
     # w_kv_b2: when HEAD_PARALLEL_KVB2=1, shard along the head dimension (dim=1)
     # so each TP device gets H/tp_size heads (e.g. 32/8=4).  This lets the forward
     # pass partition attn_latent by heads before the w_kv_b2 matmul, avoiding
@@ -999,7 +1043,9 @@ def convert_decoder_layer_weights(
         w_q_b=w_q_b,
         w_kv_a=w_kv_a,
         w_q_kv_a=w_q_kv_a,
+        w_q_b_hp=w_q_b_hp,
         w_kv_b1=w_kv_b1,
+        w_kv_b1_hp=w_kv_b1_hp,
         w_kv_b2=w_kv_b2,
         w_o=w_o,
         w_mlp_gate=w_mlp_gate,
