@@ -60,23 +60,24 @@ Weights, config, tokenizer, and image processor are pulled from `HF_MODEL_ID` au
 
 [demo/demo_multimodal.py](demo/demo_multimodal.py) drives the full vision → projector → prefill → decode pipeline. Loading is unified: vision + projector + text are lazy-loaded together on the first `encode_image` call.
 
+The input image is fixed to a built-in sample (a battle scene) and is not user-supplied; only the prompt is configurable.
+
 ```bash
 export MESH_DEVICE=P150x8
 
-# Full model (36 text + 24 vision layers) on the default sample image + prompt
+# Full model (36 text + 24 vision layers) on the built-in sample image
 python models/experimental/mistral_small_4_119b/demo/demo_multimodal.py \
     --image-max-side 512 \
     --n-text-layers 36 \
     --n-vision-layers 24 \
     --max-new-tokens 512
 
-# Custom image (URL or local path) and prompt
+# Change the prompt
 python models/experimental/mistral_small_4_119b/demo/demo_multimodal.py \
     --image-max-side 512 \
     --n-text-layers 36 \
     --n-vision-layers 24 \
     --max-new-tokens 512 \
-    --image /path/to/image.jpg \
     --prompt "Describe the scene."
 ```
 
@@ -86,7 +87,7 @@ Key flags:
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `--image` | sample battle scene | Image path or URL; `""` → random tensor (pipeline-only) |
+| `--random-image` | off | Use a random pixel_values tensor instead of the built-in sample (pipeline-only) |
 | `--prompt` | (built-in) | Text prompt accompanying the image |
 | `--max-new-tokens` | 16 | Tokens to generate after prefill |
 | `--n-text-layers` | 2 | Text decoder layers (1–36) |

@@ -15,18 +15,19 @@ Defaults run a real image (a sample battle scene) and prompt at 2 text + 2
 vision layers — fast (~minutes) but for plumbing only, so the output is
 gibberish. Pass ``--n-text-layers 36 --n-vision-layers 24`` for the full model.
 
-Run::
+The input image is fixed to the built-in ``DEFAULT_IMAGE_URL`` sample (a battle
+scene); it is not user-supplied. Only the prompt is configurable::
 
     export MESH_DEVICE=P150x8
     python models/experimental/mistral_small_4_119b/demo_multimodal.py
 
-    # Override the default image (URL or local path) and prompt:
+    # Change the prompt:
     python models/experimental/mistral_small_4_119b/demo_multimodal.py \
-        --image /path/to/image.jpg \
         --prompt "Describe the scene."
 
-Pass ``--image ""`` to fall back to a random pixel_values tensor — the pipeline
-still runs end to end, but the model can't see anything real.
+Pass ``--random-image`` to use a random pixel_values tensor instead of the
+sample image — the pipeline still runs end to end, but the model can't see
+anything real.
 """
 
 from __future__ import annotations
@@ -72,10 +73,10 @@ DEFAULT_PROMPT = (
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Mistral-Small-4-119B multimodal demo")
     p.add_argument(
-        "--image",
-        type=str,
-        default=DEFAULT_IMAGE_URL,
-        help="Image file path or URL (defaults to a sample battle scene; pass an empty string to use a random image)",
+        "--random-image",
+        action="store_true",
+        help="Skip the real sample image and use a random pixel_values tensor (plumbing only — "
+        "the pipeline runs end to end but the model can't see anything real).",
     )
     p.add_argument("--prompt", type=str, default=DEFAULT_PROMPT, help="Text prompt accompanying the image")
     p.add_argument("--max-new-tokens", type=int, default=16, help="Tokens to generate after prefill")
@@ -102,7 +103,7 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=224,
         help="Max H/W of the input image, in pixels, before the HF processor sees it. "
-        "Used only with --image. Larger = better understanding, slower vision forward.",
+        "Ignored with --random-image. Larger = better understanding, slower vision forward.",
     )
     p.add_argument(
         "--no-chat-template",
@@ -479,13 +480,14 @@ def main() -> None:
         sys.exit(f"Tokenizer load failed: {e}")
 
     # Build pixel_values + input_ids.
-    #  - --image set (the default): HF chat template + image processor (the trained format).
-    #  - --image "" or --no-chat-template: random/raw fallback (plumbing only).
-    if args.image and not args.no_chat_template:
-        logger.info(f"Building chat-template inputs via HF AutoProcessor for {args.image!r}…")
-        pixel_values, input_ids, _ = _build_chat_inputs(args.image, args.prompt, args.image_max_side)
+    #  - default: fetch the built-in DEFAULT_IMAGE_URL sample, then HF chat template
+    #    + image processor (the trained format).
+    #  - --random-image or --no-chat-template: random/raw fallback (plumbing only).
+    if not args.random_image and not args.no_chat_template:
+        logger.info(f"Building chat-template inputs via HF AutoProcessor for {DEFAULT_IMAGE_URL!r}…")
+        pixel_values, input_ids, _ = _build_chat_inputs(DEFAULT_IMAGE_URL, args.prompt, args.image_max_side)
     else:
-        if args.image and args.no_chat_template:
+        if args.no_chat_template:
             logger.warning("--no-chat-template set: skipping HF chat template, expect EOS-only output.")
         pixel_values, input_ids = _build_random_inputs(args.img_patches, args.prompt, tokenizer, image_token_id)
     logger.info(f"pixel_values: {tuple(pixel_values.shape)} bf16, input_ids: {tuple(input_ids.shape)} long")
