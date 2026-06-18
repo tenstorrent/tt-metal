@@ -124,7 +124,16 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     residual_input_tensor = ttnn.fill_implicit_tile_padding(residual_input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
     weight = ttnn.fill_implicit_tile_padding(weight, TEST_PADDING_VALUE)
-    output_tensor = ttnn.rms_norm(input_tensor, residual_input_tensor=residual_input_tensor, weight=weight)
+    # Data is unpacked as Tf32, fp32 dest accumulation is required
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        math_approx_mode=False,
+    )
+    output_tensor = ttnn.rms_norm(
+        input_tensor, residual_input_tensor=residual_input_tensor, weight=weight, compute_kernel_config=compute_config
+    )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
