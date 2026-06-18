@@ -1556,17 +1556,33 @@ def test_bitwise_left_shift_subcore_grid_tensor_scalar(device, shape, sub_core_g
 
 # Mixed float x 32-bit-integer arithmetic used to bit-reinterpret the integer operand as float
 # (e.g. div(bf16, uint32) -> inf). The integer operand is now promoted to the floating compute dtype.
+# The promotion goes through typecast, so it is also exercised on ROW_MAJOR and sharded inputs whose
+# layout/sharding flags are derived from the promoted tensors.
 @pytest.mark.parametrize("ttnn_op", [ttnn.div, ttnn.mul])
 @pytest.mark.parametrize("float_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("int_dtype", [ttnn.uint32, ttnn.int32])
 @pytest.mark.parametrize("int_on_lhs", [False, True])
-def test_mixed_float_int_promotion(device, ttnn_op, float_dtype, int_dtype, int_on_lhs):
+@pytest.mark.parametrize("mem_layout", ["tile_interleaved", "row_major", "sharded"])
+def test_mixed_float_int_promotion(device, ttnn_op, float_dtype, int_dtype, int_on_lhs, mem_layout):
     torch.manual_seed(0)
     float_torch = torch.rand((1, 1, 32, 32), dtype=torch.float32) * 4.0 + 1.0  # [1, 5]
     int_torch = torch.randint(1, 50, (1, 1, 32, 32)).to(torch.int32)  # non-negative
 
-    float_tt = ttnn.from_torch(float_torch, dtype=float_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    int_tt = ttnn.from_torch(int_torch, dtype=int_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if mem_layout == "row_major":
+        layout, mem_config = ttnn.ROW_MAJOR_LAYOUT, None
+    elif mem_layout == "sharded":
+        layout = ttnn.TILE_LAYOUT
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(32, 32),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        layout, mem_config = ttnn.TILE_LAYOUT, None
+
+    float_tt = ttnn.from_torch(float_torch, dtype=float_dtype, layout=layout, device=device, memory_config=mem_config)
+    int_tt = ttnn.from_torch(int_torch, dtype=int_dtype, layout=layout, device=device, memory_config=mem_config)
 
     if int_on_lhs:
         lhs_torch, rhs_torch, lhs_tt, rhs_tt = int_torch.float(), float_torch, int_tt, float_tt
