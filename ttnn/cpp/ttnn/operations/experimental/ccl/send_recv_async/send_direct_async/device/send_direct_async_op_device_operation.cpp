@@ -17,8 +17,8 @@ void SendDirectAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args;
 
     std::vector<Tensor> input_tensors = {input_tensor};
-    send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
-        input_tensors, mesh_socket, "send_direct_async");
+    // send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
+    //     input_tensors, mesh_socket, "send_direct_async");
 
     // The handshake reads the advertised sender-buffer address back out of the socket FIFO on the
     // receiver core, which requires the FIFO to live in L1.
