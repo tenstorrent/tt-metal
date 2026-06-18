@@ -328,13 +328,53 @@ def _layer_stack_forward(
                 hBC_out.deallocate(True)
             m_idx += 1
         elif layer_type == "E":
-            hidden_states = _moe_layer_forward(
-                mesh_device,
-                hidden_states,
-                li,
-                wc,
-                cpu_gate=cpu_gate,
-            )
+            _S = hidden_states.shape[1]
+            if _S > 1:
+                # sparse_matmul kernel only supports tokens=1 (m=1 program config).
+                # For chunked prefill (S>1): process each token independently and concat.
+                # Mamba2 and dense-attention layers still benefit from bulk processing.
+                _B = hidden_states.shape[0]
+                _H = hidden_states.shape[2]
+                _tok_outs = []
+                _t0_e = _time.perf_counter()
+                for _t in range(_S):
+                    _ts = _time.perf_counter()
+                    _h_t = ttnn.slice(hidden_states, [0, _t, 0], [_B, _t + 1, _H])
+                    _t_slice = _time.perf_counter()
+                    _tok_outs.append(_moe_layer_forward(mesh_device, _h_t, li, wc, cpu_gate=cpu_gate))
+                    _t_moe = _time.perf_counter()
+                    if _t < 3 or _t == _S - 1:
+                        print(
+                            f"  [E-layer li={li} t={_t}] slice={(_t_slice-_ts)*1000:.1f}ms moe={(_t_moe-_t_slice)*1000:.1f}ms total={(_t_moe-_ts)*1000:.1f}ms",
+                            flush=True,
+                        )
+                _t_concat = _time.perf_counter()
+                # Hierarchical concat: split into ≤128-token chunks, concat each chunk
+                # (same as ISL=128 which is proven safe), then concat the tile-aligned
+                # chunk results.  Direct 256+-token TILE concat triggers
+                # UntilizeWithUnpaddingMultiCoreBlockInterleaved which fails for S ≥ 256
+                # because the block can't fit in L1.  Chunk results ([B,128,H]) are tile-
+                # aligned (no padding), so the second-level concat avoids UntilizeWithUnpadding.
+                _CHUNK = 128
+                if len(_tok_outs) <= _CHUNK:
+                    hidden_states = ttnn.concat(_tok_outs, dim=1)
+                else:
+                    _chunks = [
+                        ttnn.concat(_tok_outs[_i : _i + _CHUNK], dim=1) for _i in range(0, len(_tok_outs), _CHUNK)
+                    ]
+                    hidden_states = ttnn.concat(_chunks, dim=1)
+                print(
+                    f"  [E-layer li={li}] loop={(_t_concat-_t0_e)*1000:.0f}ms concat={(_time.perf_counter()-_t_concat)*1000:.0f}ms",
+                    flush=True,
+                )
+            else:
+                hidden_states = _moe_layer_forward(
+                    mesh_device,
+                    hidden_states,
+                    li,
+                    wc,
+                    cpu_gate=cpu_gate,
+                )
         else:
             kv_cache = decoder_state.kv_caches[d_idx] if decoder_state else None
             page_table = decoder_state.page_tables[d_idx] if decoder_state else None
@@ -414,6 +454,53 @@ def nemotron_h_forward_device(
     return lm_head_forward_device(
         mesh_device,
         hidden_states,
+        norm_f_weight=wc["backbone.norm_f.weight"],
+        lm_head_weight=wc["lm_head.weight"],
+    )
+
+
+def nemotron_h_prefill_stateful(
+    mesh_device,
+    input_ids: "torch.Tensor",  # [B, S] int64/int32 on CPU — all prompt tokens
+    wc: WeightCache,
+    decoder_state: DecoderState,
+    num_layers: int = N_LAYERS,
+) -> ttnn.Tensor:
+    """Chunked prefill: process all S prompt tokens in a single forward pass.
+
+    Mamba2 layers use the chunked SSD scan (fast); dense-attention layers use
+    causal SDPA + paged_fill_cache (no per-position loop).  MoE (E) layers fall
+    back to a per-token loop — sparse_matmul kernel only supports m=1.
+
+    Returns logits [B, 1, vocab_size] for the LAST prompt position only.
+
+    Side-effects:
+      - decoder_state.ssm_state_outs  updated with final Mamba2 states
+      - decoder_state.conv_state_outs updated with last-3 conv activations
+      - decoder_state.kv_caches       filled for positions 0..S-1
+
+    Call decoder_state.advance() after this call, then set current_pos = S,
+    and proceed with the normal S=1 traced decode loop.
+    """
+    if id(mesh_device) not in _MAMBA_PREWARM_DONE:
+        prewarm_mamba2_weights(wc, mesh_device)
+        _MAMBA_PREWARM_DONE.add(id(mesh_device))
+
+    hidden_states = embedding_forward(mesh_device, input_ids, wc["backbone.embeddings.weight"])
+    hidden_states = _layer_stack_forward(
+        mesh_device, hidden_states, wc, num_layers, decoder_state, cpu_gate=True, debug_sync=False
+    )
+
+    # Slice to last position before LM head — avoids computing vocab projection
+    # for S-1 positions that will never be sampled.
+    B = hidden_states.shape[0]
+    S = hidden_states.shape[1]
+    H = hidden_states.shape[2]
+    last_hidden = ttnn.slice(hidden_states, [0, S - 1, 0], [B, S, H])  # [B, 1, H]
+
+    return lm_head_forward_device(
+        mesh_device,
+        last_hidden,
         norm_f_weight=wc["backbone.norm_f.weight"],
         lm_head_weight=wc["lm_head.weight"],
     )

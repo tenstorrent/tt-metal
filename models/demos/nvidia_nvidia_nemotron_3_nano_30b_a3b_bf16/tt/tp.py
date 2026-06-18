@@ -100,24 +100,49 @@ def _rep(t, mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     return _upload(t, mesh, None, layout, dtype)
 
 
-def _rep_keyed(stable_key, derived_cpu, mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+def _rep_keyed(stable_key, derived_cpu, mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=None):
     """Replicate derived_cpu; cached under stable_key, NOT id(derived_cpu).
 
     Use when derived_cpu is re-computed each forward (e.g. t.unsqueeze(0),
     t.bfloat16().unsqueeze(0)) so its id() is unstable.  stable_key must be
     a hashable value that uniquely identifies this particular derived tensor
     for the lifetime of the model (e.g. (id(parent_weight), 'tag')).
+
+    memory_config: pass ttnn.L1_MEMORY_CONFIG for tiny scalar weights (e.g.
+    dt_bias, A_log, D — [1,64] shapes) to keep them in on-chip SRAM and avoid
+    a hardware DRAM defect on device 2 that silently corrupts writes at certain
+    low DRAM addresses.  Do NOT use L1 for weights consumed by rms_norm — that
+    kernel's static circular buffers conflict with persistent L1 user tensors.
     """
-    key = (stable_key, layout, dtype, id(mesh))
+    mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    key = (stable_key, layout, dtype, id(mesh), mc)
     if key in _DERIVED_CACHE:
         return _DERIVED_CACHE[key]
-    dev = ttnn.from_torch(
-        derived_cpu.bfloat16() if dtype == ttnn.bfloat16 and derived_cpu.dtype != torch.bfloat16 else derived_cpu,
-        dtype=dtype,
-        layout=layout,
-        device=mesh,
-        mesh_mapper=_R(mesh),
-    )
+
+    cpu_data = derived_cpu.bfloat16() if dtype == ttnn.bfloat16 and derived_cpu.dtype != torch.bfloat16 else derived_cpu
+    dev = ttnn.from_torch(cpu_data, dtype=dtype, layout=layout, device=mesh, mesh_mapper=_R(mesh), memory_config=mc)
+
+    # Detect silent DRAM write failures (hardware defect at certain low DRAM pages).
+    # Small tensors (≤32768 elements) are most vulnerable; large weight matrices land
+    # at higher DRAM addresses that are typically fault-free.
+    if mc == ttnn.DRAM_MEMORY_CONFIG and derived_cpu.numel() <= 32768:
+        expected_norm = cpu_data.float().norm().item()
+        if expected_norm > 1e-4:
+            readback = ttnn.to_torch(dev, mesh_composer=_C(mesh, dim=0))
+            if any(abs(readback[i].float().norm().item() - expected_norm) / expected_norm > 0.02 for i in range(TP)):
+                # Corrupt — heal by writing to L1 RowMajor (on-chip SRAM immune to the defect).
+                # RM keeps the L1 footprint tiny (8-12KB) compared to TILE (~256-384KB),
+                # preventing conflicts with kernels that need L1 for circular buffers.
+                dev.deallocate(True)
+                dev = ttnn.from_torch(
+                    cpu_data,
+                    dtype=dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=mesh,
+                    mesh_mapper=_R(mesh),
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+
     _DERIVED_CACHE[key] = dev
     return dev
 

@@ -156,7 +156,7 @@ def test_generation_first_6_layers_pcc(mesh_device, weight_cache):
         lt = PATTERN[li]
         p = f"backbone.layers.{li}"
         if lt == "M":
-            h, _ = mamba2_layer_forward(
+            h, _, _ = mamba2_layer_forward(
                 mesh_device,
                 h,
                 norm_weight=wc[f"{p}.norm.weight"],
@@ -313,7 +313,7 @@ def test_generation_all_layers_pcc(weight_cache):
         lt = PATTERN[li]
         p = f"backbone.layers.{li}"
         if lt == "M":
-            h, _ = mamba2_layer_forward(
+            h, _, _ = mamba2_layer_forward(
                 mesh_device,
                 h,
                 norm_weight=wc[f"{p}.norm.weight"],

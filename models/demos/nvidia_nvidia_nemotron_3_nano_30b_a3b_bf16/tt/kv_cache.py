@@ -119,6 +119,39 @@ class DecoderState:
             for out_t, in_t in zip(out_tuple, in_tuple):
                 ttnn.assign(out_t, in_t)
 
+    def reset_inplace(self, mesh_device) -> None:
+        """Zero SSM/conv states and reset current_pos in-place for a new sequence.
+
+        Does NOT zero the KV caches — paged_fill_cache overwrites all positions
+        used by each new prefill.  Leaves KV caches at their original DRAM
+        allocation so the same safe pages are reused across runs.
+        """
+        import torch as _torch
+
+        def _zero_host(t_dev):
+            shape = list(t_dev.shape)
+            dtype = t_dev.dtype
+            layout = t_dev.get_layout()
+            zeros = ttnn.from_torch(
+                _torch.zeros(shape, dtype=_torch.bfloat16),
+                dtype=dtype,
+                layout=layout,
+            )
+            ttnn.copy_host_to_device_tensor(zeros, t_dev)
+
+        for s in self.ssm_states + self.ssm_state_outs:
+            _zero_host(s)
+        for tup in list(self.conv_states) + list(self.conv_state_outs):
+            for t in tup:
+                _zero_host(t)
+        if self.current_pos is not None:
+            zeros_pos = ttnn.from_torch(
+                _torch.zeros(list(self.current_pos.shape), dtype=_torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(zeros_pos, self.current_pos)
+
     def advance_routing(self, mesh_device) -> None:
         """D2H gate scores → CPU topk → H2D routing tensors for the next decode step.
 
@@ -217,8 +250,12 @@ def allocate_decoder_state(
         for _ in range(N_E_LAYERS)
     ]
 
-    # Paged KV caches: [num_blocks, n_kv_heads, block_size, head_dim]
-    kv_shape = [num_blocks, N_KV_HEADS, block_size, HEAD_DIM]
+    # Paged KV caches: [num_blocks + 1, n_kv_heads, block_size, head_dim]
+    # Allocate one extra "guard" block at physical index 0.  A hardware defect
+    # on device-2 makes certain DRAM pages unwriteable; physical block 0 of each
+    # cache tensor reliably lands in that range.  The page table (below) maps
+    # logical block 0 → physical block 1, so the guard block is never written.
+    kv_shape = [num_blocks + 1, N_KV_HEADS, block_size, HEAD_DIM]
     kv_caches = [
         (
             _zeros_on_device(kv_shape, mesh_device),
@@ -227,8 +264,8 @@ def allocate_decoder_state(
         for _ in range(N_D_LAYERS)
     ]
 
-    # Page tables: sequential mapping block_i → physical_block_i
-    pt_cpu = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0).expand(B, -1).contiguous()
+    # Page tables: logical block i → physical block i+1 (skip guard block 0)
+    pt_cpu = torch.arange(1, num_blocks + 1, dtype=torch.int32).unsqueeze(0).expand(B, -1).contiguous()
     page_tables = [
         ttnn.from_torch(
             pt_cpu,

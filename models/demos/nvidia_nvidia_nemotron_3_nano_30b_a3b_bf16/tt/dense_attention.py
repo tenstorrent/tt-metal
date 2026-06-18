@@ -49,14 +49,16 @@ def dense_attention_forward(
     When kv_cache/page_table/current_pos are all provided, uses paged Flash-Decode.
     Otherwise falls back to prefill SDPA (S can be >1).
     """
+    # Keep residual in DRAM — hidden_states was written by a compute kernel (safe write).
+    # The DRAM defect is write-side only; reads from valid DRAM are safe.
     residual = hidden_states
-    B = hidden_states.shape[0]
-    S = hidden_states.shape[1]
-    paged = kv_cache is not None and page_table is not None and current_pos is not None
+    B = residual.shape[0]
+    S = residual.shape[1]
+    has_cache = kv_cache is not None and page_table is not None
 
-    # 1. Pre-norm
+    # 1. Pre-norm (residual in DRAM; reads are safe)
     w_tt = _rep_keyed(id(norm_weight), norm_weight.bfloat16().unsqueeze(0), mesh_device)
-    normed_tt = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
+    normed_tt = ttnn.rms_norm(residual, epsilon=norm_eps, weight=w_tt)
 
     # 2. Q: column-parallel → [B, S, 1024]/device (8 heads/device)
     wq_tt = _col(wq, mesh_device)
@@ -70,24 +72,50 @@ def dense_attention_forward(
     wv_tt = _rep(wv, mesh_device)
     v_tt = ttnn.linear(normed_tt, wv_tt, transpose_b=True)  # [B, S, 256]/device
 
-    # 5. Reshape to [B, heads, S, head_dim] for SDPA
-    q_4d = ttnn.reshape(q_tt, [B, S, NUM_HEADS // TP, HEAD_DIM])  # [B, S, 8, 128]
-    q_4d = ttnn.permute(q_4d, [0, 2, 1, 3])  # [B, 8, S, 128]
+    # 5. Reshape to [B, heads, S, head_dim] for SDPA.
+    # Prefill path (has_cache and S > 1): the tiled reshape kernel allocates a DRAM
+    # mapping tensor on each shape cache-miss.  After prior layers recycle DRAM, that
+    # allocation can land on device-2's defective page and hang.  RM-detour
+    # (untilize → RM reshape → retilize, all to DRAM) avoids it; RM layout has no
+    # mapping tensor so DRAM is safe for these intermediates.
+    if has_cache and S > 1:
+        _DRAM = ttnn.DRAM_MEMORY_CONFIG
+        # Q: [B, S, 1024] TILE → RM(DRAM) → [B, S, 8, 128] RM(DRAM) → TILE(DRAM)
+        _q_rm = ttnn.to_layout(q_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
+        _q_rm4 = ttnn.reshape(_q_rm, [B, S, NUM_HEADS // TP, HEAD_DIM], memory_config=_DRAM)
+        del _q_rm
+        q_4d = ttnn.to_layout(_q_rm4, ttnn.TILE_LAYOUT)  # → DRAM, tilize ≠ mapping tensor
+        del _q_rm4
+        q_4d = ttnn.permute(q_4d, [0, 2, 1, 3])
+        # K: [B, S, 256] TILE → RM(DRAM) → [B, S, 2, 128] RM(DRAM) → TILE(DRAM)
+        _k_rm = ttnn.to_layout(k_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
+        _k_rm4 = ttnn.reshape(_k_rm, [B, S, NUM_KV_HEADS, HEAD_DIM], memory_config=_DRAM)
+        del _k_rm
+        k_4d = ttnn.to_layout(_k_rm4, ttnn.TILE_LAYOUT)
+        del _k_rm4
+        k_4d = ttnn.permute(k_4d, [0, 2, 1, 3])
+        # V: same pattern as K
+        _v_rm = ttnn.to_layout(v_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
+        _v_rm4 = ttnn.reshape(_v_rm, [B, S, NUM_KV_HEADS, HEAD_DIM], memory_config=_DRAM)
+        del _v_rm
+        v_4d = ttnn.to_layout(_v_rm4, ttnn.TILE_LAYOUT)
+        del _v_rm4
+        v_4d = ttnn.permute(v_4d, [0, 2, 1, 3])
+    else:
+        # Decode (S=1) or no-cache: standard tiled reshape is safe.
+        q_4d = ttnn.reshape(q_tt, [B, S, NUM_HEADS // TP, HEAD_DIM])
+        q_4d = ttnn.permute(q_4d, [0, 2, 1, 3])
+        k_4d = ttnn.reshape(k_tt, [B, S, NUM_KV_HEADS, HEAD_DIM])
+        k_4d = ttnn.permute(k_4d, [0, 2, 1, 3])
+        v_4d = ttnn.reshape(v_tt, [B, S, NUM_KV_HEADS, HEAD_DIM])
+        v_4d = ttnn.permute(v_4d, [0, 2, 1, 3])
 
-    k_4d = ttnn.reshape(k_tt, [B, S, NUM_KV_HEADS, HEAD_DIM])  # [B, S, 2, 128]
-    k_4d = ttnn.permute(k_4d, [0, 2, 1, 3])  # [B, 2, S, 128]
-
-    v_4d = ttnn.reshape(v_tt, [B, S, NUM_KV_HEADS, HEAD_DIM])  # [B, S, 2, 128]
-    v_4d = ttnn.permute(v_4d, [0, 2, 1, 3])  # [B, 2, S, 128]
-
-    # 6. Attention — paged Flash-Decode or prefill SDPA.
-    if paged:
+    # 6. Attention: select path based on S and whether a KV cache is present.
+    if has_cache and S == 1 and current_pos is not None:
+        # --- Paged Flash-Decode (single-token decode path) ---
         k_cache, v_cache = kv_cache
-        # Reformat K/V: [B, n_kv, S, D] → [S, B, n_kv, D] for paged_update_cache.
         k_upd = ttnn.permute(k_4d, [2, 0, 1, 3])  # [1, B, 2, 128]
         v_upd = ttnn.permute(v_4d, [2, 0, 1, 3])
-        # paged_update_cache requires L1 HEIGHT_SHARDED with num_cores == B and
-        # tile-aligned shard height.  n_kv_heads=2 → ceil(2/32)*32 = 32.
         _TILE = 32
         upd_shard_h = ((-(-NUM_KV_HEADS // _TILE)) * _TILE) // B  # ceil-div then per-core
         upd_mem = ttnn.create_sharded_memory_config(
@@ -101,7 +129,6 @@ def dense_attention_forward(
         v_upd = ttnn.to_memory_config(v_upd, upd_mem)
         ttnn.experimental.paged_update_cache(k_cache, k_upd, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(v_cache, v_upd, update_idxs_tensor=current_pos, page_table=page_table)
-        # Q: [B, n_q, S, D] → [S, B, n_q, D] = [1, B, 8, 128]
         q_sdpa = ttnn.permute(q_4d, [2, 0, 1, 3])
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_sdpa,
@@ -110,23 +137,65 @@ def dense_attention_forward(
             page_table_tensor=page_table,
             cur_pos_tensor=current_pos,
         )  # [1, B, 8, 128]
-        # Permute back: [S, B, n_q, D] → [B, S, n_q, D]
         attn_out = ttnn.permute(attn_out, [1, 0, 2, 3])
+    elif has_cache and S > 1:
+        # --- Chunked prefill: causal SDPA + bulk KV cache fill ---
+        k_cache, v_cache = kv_cache
+        attn_out = ttnn.transformer.scaled_dot_product_attention(
+            q_4d, k_4d, v_4d, is_causal=True
+        )  # [B, 8, S, 128]/device
+        del q_4d  # not needed after SDPA; free to reduce peak DRAM
+        attn_out = ttnn.permute(attn_out, [0, 2, 1, 3])  # → [B, S, 8, 128] DRAM
     else:
+        # --- No-cache path (stateless tests / reference) ---
         is_causal = S > 1
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q_4d, k_4d, v_4d, is_causal=is_causal
         )  # [B, 8, S, 128]/device
-        # Permute: [B, n_q, S, D] → [B, S, n_q, D]
         attn_out = ttnn.permute(attn_out, [0, 2, 1, 3])
 
-    # 7. Reshape to [B, S, 1024] for row-parallel O projection
-    attn_out = ttnn.reshape(attn_out, [B, S, (NUM_HEADS // TP) * HEAD_DIM])  # [B, S, 1024]
+    # 7. Reshape [B, S, H, D] → [B, S, H*D] for row-parallel O projection.
+    # Prefill RM-detour: avoids the TILE reshape's internal DRAM mapping tensor
+    # that hangs on device-2's defective pages.  RM layout has no mapping tensor,
+    # so DRAM is safe for the RM intermediates.
+    if has_cache and S > 1:
+        _attn_rm = ttnn.to_layout(attn_out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        del attn_out
+        _attn_rm3 = ttnn.reshape(_attn_rm, [B, S, (NUM_HEADS // TP) * HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        del _attn_rm
+        attn_out = ttnn.to_layout(_attn_rm3, ttnn.TILE_LAYOUT)  # → DRAM (tilize ≠ mapping tensor)
+        del _attn_rm3
+    else:
+        # Decode path (S=1) or no-cache: standard reshape is safe.
+        attn_out = ttnn.reshape(attn_out, [B, S, (NUM_HEADS // TP) * HEAD_DIM])
 
     # 8. O projection: row-parallel → partial [B, S, 2688]/device
     wo_tt = _row(wo, mesh_device)
     out_tt = ttnn.linear(attn_out, wo_tt, transpose_b=True)  # [B, S, 2688] partial/device
 
-    # 9. All-reduce → full [B, S, 2688] + residual
+    # 9. All-reduce → full [B, S, 2688] + residual.
+    # Device-2 DRAM defect: move all_reduce inputs/outputs through L1 so the CCL
+    # reads from safe SRAM.  The final add output goes to DRAM (fresh allocation →
+    # safe page); returning in L1 would keep a large tensor in L1 for the caller's
+    # full lifetime, starving the concat kernel.
+    out_tt = ttnn.to_memory_config(out_tt, ttnn.L1_MEMORY_CONFIG)
     result_tt = all_reduce(out_tt)
-    return ttnn.add(residual, result_tt)
+    del out_tt  # free L1 before result_tt moves to L1 (avoids two 337KB peaks coexisting)
+    # Move all_reduce output to L1 so ttnn.add reads from safe SRAM.
+    result_tt = ttnn.to_memory_config(result_tt, ttnn.L1_MEMORY_CONFIG)
+    # Both inputs in L1 (safe reads); output to DRAM (fresh allocation).
+    ret = ttnn.add(residual, result_tt)
+    del result_tt
+    del residual  # async-safe: device executes add before processing this dealloc
+
+    # 10. Fill KV cache for prefill after CCL.
+    # k_4d/v_4d move to L1 so paged_fill_cache reads from safe on-chip SRAM.
+    if has_cache and S > 1:
+        k_4d_l1 = ttnn.to_memory_config(k_4d, ttnn.L1_MEMORY_CONFIG)
+        v_4d_l1 = ttnn.to_memory_config(v_4d, ttnn.L1_MEMORY_CONFIG)
+        ttnn.experimental.paged_fill_cache(k_cache, k_4d_l1, page_table, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(v_cache, v_4d_l1, page_table, batch_idx=0)
+        del k_4d_l1
+        del v_4d_l1
+
+    return ret

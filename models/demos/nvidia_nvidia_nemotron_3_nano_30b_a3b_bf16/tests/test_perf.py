@@ -276,3 +276,197 @@ def test_decode_traced(mesh_device, weight_cache):
     min_ms = min(latencies)
     print(f"\nTraced decode B=1 S=1 (52 layers + LM head, TP=4):")
     print(f"  avg: {avg_ms:.1f} ms  min: {min_ms:.1f} ms  throughput: {1000 / avg_ms:.2f} tok/s")
+
+
+@pytest.mark.timeout(0)
+def test_prefill_mamba2_latency(mesh_device, weight_cache):
+    """Mamba2 chunked SSD prefill latency sweep across sequence lengths.
+
+    Tests one Mamba2 layer (layer 0, 'M' in PATTERN) for S in SEQ_LENGTHS.
+    Reports: total ms, ms/tok, projected 23-layer time, speedup vs S * 45 ms sequential.
+
+    Sequential decode baseline: ~45 ms/tok/layer measured on QB TP=4.
+    Prefill wins because S parallel tokens → one kernel launch instead of S launches.
+    """
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_layer import mamba2_layer_forward_dispatch
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _upload
+
+    SEQUENTIAL_MS_PER_TOK = 45.0  # per-layer decode baseline, QB TP=4
+    N_MAMBA_LAYERS = 23
+    SEQ_LENGTHS = [128, 256, 512, 1024, 4096]
+
+    wc = weight_cache
+    li = 0  # layer 0 is 'M' (first Mamba2 layer)
+    prefix = f"backbone.layers.{li}.mixer"
+
+    nw = wc[f"backbone.layers.{li}.norm.weight"]
+    ipw = wc[f"{prefix}.in_proj.weight"]
+    cw = wc[f"{prefix}.conv1d.weight"]
+    cb = wc[f"{prefix}.conv1d.bias"]
+    dtb = wc[f"{prefix}.dt_bias"]
+    alog = wc[f"{prefix}.A_log"]
+    nmw = wc[f"{prefix}.norm.weight"]
+    D = wc[f"{prefix}.D"]
+    opw = wc[f"{prefix}.out_proj.weight"]
+
+    print(f"\nMamba2 chunked SSD prefill — single layer, TP=4 QB")
+    print(f"{'S':>8}  {'total_ms':>10}  {'ms/tok':>8}  {'speedup vs seq':>16}")
+    print(f"{'-'*8}  {'-'*10}  {'-'*8}  {'-'*16}")
+
+    results = {}
+    for S in SEQ_LENGTHS:
+        torch.manual_seed(42)
+        x_cpu = torch.randn(1, S, 2688, dtype=torch.bfloat16)
+        x_tt = _upload(x_cpu, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+        # 2 warm-up runs (compile kernels, fill caches)
+        for _ in range(2):
+            _out, _, _ = mamba2_layer_forward_dispatch(mesh_device, x_tt, nw, ipw, cw, cb, dtb, alog, nmw, D, opw)
+            ttnn.synchronize_device(mesh_device)
+
+        # 3 timed runs, average
+        t0 = time.perf_counter()
+        for _ in range(3):
+            _out, _, _ = mamba2_layer_forward_dispatch(mesh_device, x_tt, nw, ipw, cw, cb, dtb, alog, nmw, D, opw)
+        ttnn.synchronize_device(mesh_device)
+        t1 = time.perf_counter()
+
+        total_ms = (t1 - t0) * 1000.0 / 3.0
+        ms_per_tok = total_ms / S
+        seq_ms = S * SEQUENTIAL_MS_PER_TOK
+        speedup = seq_ms / total_ms
+
+        results[S] = total_ms
+        print(f"{S:>8}  {total_ms:>10.1f}  {ms_per_tok:>8.3f}  {speedup:>15.1f}x")
+
+    # Project to all 23 Mamba2 layers (linear scaling assumption)
+    print(f"\n  Projected 23-layer prefill (1-layer × 23):")
+    print(f"{'S':>8}  {'prefill_s':>10}  {'seq_s':>10}  {'speedup':>10}")
+    for S in SEQ_LENGTHS:
+        proj_ms = results[S] * N_MAMBA_LAYERS
+        seq_s = S * SEQUENTIAL_MS_PER_TOK * N_MAMBA_LAYERS / 1000.0
+        print(f"{S:>8}  {proj_ms/1000:>10.2f}  {seq_s:>10.1f}  {seq_s/(proj_ms/1000):>9.1f}x")
+
+
+@pytest.mark.timeout(0)
+def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
+    """Full ISL sweep: end-to-end TTFT and tok/s at multiple input sequence lengths.
+
+    Runs generate() with return_metrics=True at ISL in [128, 256, 512, 1024].
+    Each ISL is an independent call with fresh decoder state allocation.
+    Checks output coherency (non-empty, printable text) and prints a summary table.
+
+    Note: JIT compilation happens on the first prefill token of the first call;
+    subsequent ISL runs benefit from cached kernels.  Run test_decode_traced or
+    test_prefill_mamba2_latency first to pre-warm the kernel cache if you want
+    clean per-ISL prefill numbers.
+    """
+    from transformers import AutoTokenizer
+
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import SNAP as _SNAP
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import generate
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.kv_cache import (
+        DEFAULT_BLOCK_SIZE,
+        DEFAULT_MAX_SEQ_LEN,
+        allocate_decoder_state,
+    )
+
+    ISL_LIST = [128, 256, 512, 1024]
+    N_DECODE = 30
+
+    tokenizer = AutoTokenizer.from_pretrained(_SNAP)
+
+    # Build a long token list from a repeating seed; slice to target ISL.
+    _seed = (
+        "Tenstorrent Blackhole is an AI accelerator for hybrid SSM and MoE models. "
+        "NemotronH-30B combines Mamba2 and dense-attention layers. "
+        "The tensor-parallel TP=4 configuration runs on a four-chip QuietBox. "
+    )
+    _seed_ids = tokenizer.encode(_seed * 30, add_special_tokens=True)
+    assert len(_seed_ids) >= max(ISL_LIST), "seed too short; increase repetition factor"
+
+    # Pre-allocate decoder state ONCE before warmup while DRAM is clean.
+    # Reusing it across warmup + ISL sweep keeps the KV cache pages at their
+    # original safe DRAM addresses, avoiding the device-2 defect that causes
+    # paged_fill_cache to hang when recycled bad pages are reallocated.
+    print("[state] Pre-allocating decoder state (before warmup)...", flush=True)
+    _persistent_state = allocate_decoder_state(
+        mesh_device, B=1, max_seq_len=DEFAULT_MAX_SEQ_LEN, block_size=DEFAULT_BLOCK_SIZE
+    )
+    print("[state] Done.", flush=True)
+
+    # Warmup: compile all JIT kernels and capture the decode trace once before
+    # the sweep so TTFT numbers reflect inference time, not compilation overhead.
+    print("\n[warmup] Running warmup generate (ISL=32, 5 decode tokens)...", flush=True)
+    _warmup_prompt = tokenizer.decode(_seed_ids[:32], skip_special_tokens=False)
+    generate(
+        prompt=_warmup_prompt,
+        mesh_device=mesh_device,
+        wc=weight_cache,
+        max_new_tokens=5,
+        verbose=False,
+        cpu_gate=False,
+        decoder_state=_persistent_state,
+    )
+    print("[warmup] Done.", flush=True)
+
+    results = []
+
+    for isl in ISL_LIST:
+        prompt_ids = _seed_ids[:isl]
+        # Decode back so generate() re-tokenizes to a near-identical length.
+        prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
+
+        print(f"\n{'='*70}")
+        print(f"ISL sweep: target ISL={isl}, N_DECODE={N_DECODE}")
+        print(f"{'='*70}")
+
+        text, metrics = generate(
+            prompt=prompt,
+            mesh_device=mesh_device,
+            wc=weight_cache,
+            max_new_tokens=N_DECODE,
+            verbose=True,
+            cpu_gate=False,
+            return_metrics=True,
+            decoder_state=_persistent_state,
+        )
+
+        metrics.print_summary()
+
+        actual_isl = metrics.prompt_tokens
+        prefill_s = metrics.prefill_compile_s + metrics.prefill_inference_s
+        prefill_ms_per_tok = prefill_s * 1000.0 / max(actual_isl, 1)
+
+        # Coherency: the returned text must be non-empty and printable.
+        assert len(text) > 0, f"ISL={isl}: generate() returned empty text"
+        assert metrics.generated_tokens > 0, f"ISL={isl}: no tokens were generated"
+        printable_ratio = sum(1 for c in text if c.isprintable()) / max(len(text), 1)
+        assert printable_ratio > 0.9, (
+            f"ISL={isl}: text has low printable ratio {printable_ratio:.2f} — " f"possible NaN/garbage output"
+        )
+
+        results.append(
+            {
+                "isl": actual_isl,
+                "ttft_ms": metrics.ttft_s * 1000.0,
+                "prefill_ms_per_tok": prefill_ms_per_tok,
+                "decode_toks_s": metrics.decode_toks_s,
+                "gen_tokens": metrics.generated_tokens,
+                "text_preview": text[-120:],  # tail of generated output
+            }
+        )
+
+        print(f"\n[ISL={isl}] tail: {repr(text[-120:])}")
+
+    # --- Summary table ---
+    print("\n" + "=" * 78)
+    print("ISL Sweep — NemotronH-30B QB TP=4 (chunked prefill, traced decode)")
+    print(f"{'ISL':>6}  {'TTFT(ms)':>10}  {'prefill ms/tok':>15}  {'tok/s':>7}  {'gen_toks':>9}")
+    print(f"{'-'*6}  {'-'*10}  {'-'*15}  {'-'*7}  {'-'*9}")
+    for r in results:
+        print(
+            f"{r['isl']:>6}  {r['ttft_ms']:>10.0f}  {r['prefill_ms_per_tok']:>15.1f}  "
+            f"{r['decode_toks_s']:>7.1f}  {r['gen_tokens']:>9}"
+        )
+    print("=" * 78)

@@ -159,14 +159,16 @@ def mamba2_layer_forward(
     dt_tt = ttnn.reshape(dt_slice_tt, [B, NUM_HEADS])
 
     # 8. SSM scalar weights — upload as [1, N] for tile compatibility.
-    #    Use L1 (on-chip SRAM) to avoid a hardware DRAM defect on device 2 that
-    #    silently corrupts small tensor writes at low DRAM addresses.  These
-    #    [1,64] tensors are ~4KB each; element-wise ops (add/exp/mul) have
-    #    negligible CB requirements, so no kernel L1 conflict arises.
-    _L1 = ttnn.L1_MEMORY_CONFIG
-    dt_bias_tt = _rep_keyed(id(dt_bias), dt_bias.bfloat16().unsqueeze(0), mesh_device, memory_config=_L1)
-    A_log_tt = _rep_keyed(id(A_log), A_log.float().bfloat16().unsqueeze(0), mesh_device, memory_config=_L1)
-    D_tt = _rep_keyed(id(D), D.float().bfloat16().unsqueeze(0), mesh_device, memory_config=_L1)
+    #    Previously these used explicit memory_config=L1, but 23 layers × 3 weights
+    #    × 4KB (TILE) = 276KB of PERSISTENT L1 (cached in _DERIVED_CACHE forever).
+    #    At ISL=512 the ttnn.slice([1,512,2688]) kernel compiles with a larger CB
+    #    region [0,746240] that extends over those tensors, causing a CB clash.
+    #    _rep_keyed already has DRAM-corruption detection + RM-L1 fallback: weights
+    #    uploaded during warmup (before heavy DRAM recycling) land in safe DRAM TILE;
+    #    if corruption is ever detected, _rep_keyed heals to RM-L1 = 128 B each.
+    dt_bias_tt = _rep_keyed(id(dt_bias), dt_bias.bfloat16().unsqueeze(0), mesh_device)
+    A_log_tt = _rep_keyed(id(A_log), A_log.float().bfloat16().unsqueeze(0), mesh_device)
+    D_tt = _rep_keyed(id(D), D.float().bfloat16().unsqueeze(0), mesh_device)
 
     # 9–10. S=1 SSM decode using standard TTNN ops.
     #

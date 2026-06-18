@@ -48,7 +48,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import sample_top_p
 
 from .kv_cache import DEFAULT_BLOCK_SIZE, DEFAULT_MAX_SEQ_LEN, MODEL_MAX_SEQ_LEN, SNAP, allocate_decoder_state
-from .model import WeightCache, nemotron_h_forward_stateful
+from .model import WeightCache, nemotron_h_forward_stateful, nemotron_h_prefill_stateful
 from .tp import _R, _host_rep
 
 
@@ -230,6 +230,8 @@ def generate(
     strip_thinking: bool = True,
     sampling_params: SamplingParams | None = None,
     return_metrics: bool = False,
+    chunked_prefill: bool = True,
+    decoder_state=None,
 ) -> str | tuple[str, GenerationMetrics]:
     """Generate text from a raw prompt string or a list of chat messages.
 
@@ -346,40 +348,66 @@ def generate(
     profiler = BenchmarkProfiler()
     metrics = GenerationMetrics(prompt_tokens=prompt_len)
 
-    state = allocate_decoder_state(mesh_device, B=1, max_seq_len=max_seq_len, block_size=block_size)
+    if decoder_state is not None:
+        # Caller supplies a pre-allocated state (keeps KV cache at safe DRAM pages).
+        # Reset SSM/conv/pos in place; KV cache pages are overwritten by prefill.
+        decoder_state.reset_inplace(mesh_device)
+        state = decoder_state
+    else:
+        state = allocate_decoder_state(mesh_device, B=1, max_seq_len=max_seq_len, block_size=block_size)
 
     # Pre-allocate persistent device token tensor (updated between trace replays).
     ids_tt = _to_device_token(input_ids[0], mesh_device)
 
-    # --- Prefill: process prompt tokens one at a time (S=1 decode steps) ---
-    # Token 0 includes kernel JIT compilation (compile step); tokens 1+ are cache hits.
-    if verbose:
-        print("Prefilling...")
-    for pos, tok in enumerate(input_ids):
-        step_name = "prefill_compile" if pos == 0 else f"prefill_{pos}"
+    # --- Prefill ---
+    if chunked_prefill and len(input_ids) > 1:
+        # Chunked prefill: all S tokens in one forward pass.
+        # Mamba2 layers: bulk chunked SSD scan; dense-attention: causal SDPA +
+        # paged_fill_cache; MoE: per-token fallback (sparse_matmul is m=1 only).
         if verbose:
-            print(f"  prefill token {pos + 1}/{len(input_ids)}...", flush=True)
-        _update_ids(ids_tt, tok)
-        _update_pos(state.current_pos, pos)
-        with profiler(step_name):
-            logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=True)
+            print(f"Chunked prefill: {len(input_ids)} tokens in one pass...")
+        import torch as _torch
+
+        input_ids_tensor = _torch.tensor([input_ids], dtype=_torch.int64)  # [1, S]
+        with profiler("prefill_compile"):
+            logits_tt = nemotron_h_prefill_stateful(mesh_device, input_ids_tensor, wc, state)
             ttnn.synchronize_device(mesh_device)
         state.advance()
+        metrics.prefill_compile_s = profiler.get_duration("prefill_compile")
+        metrics.prefill_inference_s = 0.0
+        elapsed_prefill = metrics.prefill_compile_s
         if verbose:
-            elapsed = profiler.get_duration("prefill_compile" if pos == 0 else f"prefill_{pos}")
-            print(f"  prefill token {pos + 1}/{len(input_ids)} done ({elapsed:.1f}s)", flush=True)
-
-    metrics.prefill_compile_s = profiler.get_duration("prefill_compile")
-    metrics.prefill_inference_s = sum(
-        profiler.get_duration(f"prefill_{i}")
-        for i in range(1, len(input_ids))
-        if profiler.contains_step(f"prefill_{i}")
-    )
-    elapsed_prefill = metrics.prefill_compile_s + metrics.prefill_inference_s
-    if verbose:
-        print(f"Prefill done: {len(input_ids)} tokens in {elapsed_prefill:.1f}s")
+            ms_per_tok = elapsed_prefill * 1000 / len(input_ids)
+            print(f"Chunked prefill done: {len(input_ids)} tokens in {elapsed_prefill:.1f}s ({ms_per_tok:.1f} ms/tok)")
+    else:
+        # Sequential S=1 prefill (legacy / single-token prompts).
+        if verbose:
+            print("Prefilling...")
+        for pos, tok in enumerate(input_ids):
+            step_name = "prefill_compile" if pos == 0 else f"prefill_{pos}"
+            if verbose:
+                print(f"  prefill token {pos + 1}/{len(input_ids)}...", flush=True)
+            _update_ids(ids_tt, tok)
+            _update_pos(state.current_pos, pos)
+            with profiler(step_name):
+                logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=True)
+                ttnn.synchronize_device(mesh_device)
+            state.advance()
+            if verbose:
+                elapsed = profiler.get_duration("prefill_compile" if pos == 0 else f"prefill_{pos}")
+                print(f"  prefill token {pos + 1}/{len(input_ids)} done ({elapsed:.1f}s)", flush=True)
+        metrics.prefill_compile_s = profiler.get_duration("prefill_compile")
+        metrics.prefill_inference_s = sum(
+            profiler.get_duration(f"prefill_{i}")
+            for i in range(1, len(input_ids))
+            if profiler.contains_step(f"prefill_{i}")
+        )
+        elapsed_prefill = metrics.prefill_compile_s + metrics.prefill_inference_s
+        if verbose:
+            print(f"Prefill done: {len(input_ids)} tokens in {elapsed_prefill:.1f}s")
 
     # Sample first decode token from prefill logits.
+    # logits_tt is [B, 1, vocab] for both chunked and sequential paths.
     logits_cpu = _host_rep(logits_tt, mesh_device, 1)
     generated = []
     next_token = _sample_token(logits_cpu, sampling_params, generated)

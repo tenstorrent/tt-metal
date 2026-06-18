@@ -94,12 +94,13 @@ def moe_experts_forward(
     h4d = ttnn.unsqueeze_to_4D(hidden_states)  # [1, 1, tokens, 2688]
 
     # Up: [1, 1, tokens, 2688] × [1, 128, 2688, 464] → [1, tokens, 128, 464]
+    # DRAM output: compute kernel writes are safe (only DMA writes hang on device-2).
     up = ttnn.sparse_matmul(
         h4d,
         up_weights_tt,
         sparsity=sparsity,
         nnz=None,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=up_cfg,
         dtype=ttnn.bfloat16,
@@ -107,6 +108,7 @@ def moe_experts_forward(
     up = ttnn.reshape(up, (tokens, N_EXPERTS, local_inter))
 
     act = ttnn.pow(ttnn.relu(up), 2)
+    up.deallocate(True)  # up no longer needed after relu²; free before down matmul
 
     act = ttnn.transpose(act, 0, 1)
     act = ttnn.reshape(act, (1, N_EXPERTS, tokens, local_inter))
@@ -116,12 +118,13 @@ def moe_experts_forward(
     )
 
     # Down: [1, 128, tokens, 464] × [1, 128, 464, 2688] → [1, 128, tokens, 2688]
+    # DRAM output: compute kernel writes are safe.
     down = ttnn.sparse_matmul(
         act,
         down_weights_tt,
         sparsity=sparsity,
         nnz=None,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=down_cfg,
         is_input_a_sparse=True,

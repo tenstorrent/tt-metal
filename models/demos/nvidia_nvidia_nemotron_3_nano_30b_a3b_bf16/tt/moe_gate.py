@@ -87,15 +87,15 @@ def moe_gate_forward_cpu(
     """
     import torch.nn.functional as F
 
-    # D2H: take shard 0 (all shards identical — hidden is replicated).
+    # D2H: take first T rows from shard 0 (all shards are identical replicas).
+    # ConcatMeshToTensor(dim=0) gives [num_devices * T, 2688]; slice to [T, 2688].
+    T = hidden_states.shape[0]
     h_cpu = ttnn.to_torch(
         hidden_states,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )[
-        0:1
-    ].float()  # [1, 2688]
-
-    T = h_cpu.shape[0]
+        0:T
+    ].float()  # [T, 2688]
     w_f32 = weight.float()
     b_f32 = e_score_correction_bias.float()
 

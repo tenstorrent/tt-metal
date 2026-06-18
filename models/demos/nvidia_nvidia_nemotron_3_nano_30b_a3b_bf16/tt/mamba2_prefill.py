@@ -146,11 +146,14 @@ def _causal_conv1d_prefill(
     padded = ttnn.concat([hist, hBC], dim=1)
 
     # Depthwise conv1d: out[s] = Σ_k w[:,k] * padded[:,s+k]   for k in [0..3]
-    # Upload per-tap weights to device (replicated)
+    # Upload per-tap weights to device (replicated).
+    # Keys match the decode path in mamba2_layer.py so prefill gets cache hits
+    # instead of re-uploading the same weights — duplicate uploads risk landing
+    # on device-2's defective DRAM pages and accumulating persistent L1 RM fallbacks.
     out = None
     for k in range(CONV_KERNEL):
         w_k = _rep_keyed(
-            ("pf_conv_w", id(conv_weight), k),
+            ("conv_w", id(conv_weight), k),  # same key as decode path
             conv_weight[:, 0, k].bfloat16().unsqueeze(0).unsqueeze(0).contiguous(),
             mesh_device,
         )
@@ -159,7 +162,7 @@ def _causal_conv1d_prefill(
         out = contribution if out is None else ttnn.add(out, contribution)
 
     bias_tt = _rep_keyed(
-        ("pf_conv_b", id(conv_bias)),
+        id(conv_bias),  # same key as decode path
         conv_bias.bfloat16().unsqueeze(0).unsqueeze(0).contiguous(),
         mesh_device,
     )
@@ -356,7 +359,7 @@ def mamba2_prefill_layer_forward(
     S = hidden_states.shape[1]
 
     # ---- 1. Pre-block RMSNorm ----------------------------------------
-    w_tt = _rep_keyed(("pf_norm", id(norm_weight)), norm_weight.bfloat16().unsqueeze(0), mesh_device)
+    w_tt = _rep_keyed(id(norm_weight), norm_weight.bfloat16().unsqueeze(0), mesh_device)  # same key as decode path
     normed = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
 
     # ---- 2. in_proj [B, S, 2688] → [B, S, 10304] -------------------
@@ -504,7 +507,9 @@ def mamba2_prefill_layer_forward(
     xg_normed_flat = _rr(xg_normed, [B, S, INTERMEDIATE_SIZE])
 
     nw_tt = _rep_keyed(
-        ("pf_nmw", id(norm_mixer_weight)), norm_mixer_weight.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device
+        id(norm_mixer_weight),
+        norm_mixer_weight.bfloat16().unsqueeze(0).unsqueeze(0),
+        mesh_device,  # same key as decode path
     )
     scan_out = ttnn.mul(xg_normed_flat, nw_tt)  # [B, S, 4096]
 
