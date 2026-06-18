@@ -82,7 +82,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # 64k. Don't cache (tiny tensors, read-only ckpt dir).
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
-    # Flat (raw) twins — the DEFAULT decode scale (hybrid): flat decode attention averages over
+    # Flat (raw, no +1) twins — the decode scale (hybrid): flat decode attention averages over
     # keys so per-step decode noise can't flip retrieval (loops/junk). Negligible cost.
     tw["q_norm_flat"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32), mesh, None)
     tw["k_norm_flat"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32), mesh, None)
@@ -173,104 +173,6 @@ class TPAttention:
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             k8 = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
             v8 = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
-            ttnn.deallocate(q)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
-        else:
-            q8, k8, v8 = q, k, v
-        padded = max(32, ((S + 31) // 32) * 32)
-        ch = min(256 if S >= 2048 else 64, padded)
-        sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
-        )
-        attn = ttnn.transformer.scaled_dot_product_attention(
-            q8, k8, v8, is_causal=True, scale=self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=sdpa_cfg
-        )
-        ttnn.deallocate(q8)
-        ttnn.deallocate(k8)
-        ttnn.deallocate(v8)
-
-        gated = ttnn.multiply(attn, ttnn.sigmoid(gate))  # [1,NH,S,HD]
-        ttnn.deallocate(attn)
-        ttnn.deallocate(gate)
-        # [1,NH,S,HD] -> [1,S,NH,HD] -> [1,1,S,NH*HD]
-        gated = ttnn.transpose(gated, 1, 2)
-        gated = ttnn.reshape(gated, (1, 1, S, NH * HD))
-        partial = ttnn.linear(
-            gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(gated)
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
-        tw, B, NH, NKV, HD = self.tw, self.B, self.NH, self.NKV, self.HD
-        use_paged = self.use_paged and page_table is not None
-        if not use_paged and self.k_caches is None:
-            self.reset_state()
-
-        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2))
-        ttnn.deallocate(qg)
-        q = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD))
-        gate = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, HD * 2))
-        ttnn.deallocate(qg_r)
-        k = ttnn.reshape(kp, (1, B, NKV, HD))
-        ttnn.deallocate(kp)
-        v = ttnn.reshape(vp, (1, B, NKV, HD))
-        ttnn.deallocate(vp)
-
-        # QK RMSNorm — raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill retrieves the
-        # long context; flat decode averages over keys so the per-step decode noise cannot flip
-        # retrieval (the loop/junk failure mode). Validated 64k on 3.5-FP8 AND 3.6 (coherent
-        # Frankenstein summaries; sharp decode loops/junks both).
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm_flat"])
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm_flat"])
-
-        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
-        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
-
-        # Cap the SDPA-decode grid to 64 cores (tree-reduction limit); auto-grid
-        # grabs all 110 P150 cores for a single user (B=1) and overflows.
-        sdpa_dec_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0
-        )
-        if use_paged:
-            # External paged KV cache (vLLM/contract path): update at cur_pos via the
-            # page_table, then paged SDPA-decode. Mirrors qwen35_27b attention.py:188-218.
-            keys, values = self.paged_k, self.paged_v
-            k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-            v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
-            k_sh = ttnn.to_memory_config(k_p, self.args.kv_update_shard_cfg)
-            v_sh = ttnn.to_memory_config(v_p, self.args.kv_update_shard_cfg)
-            ttnn.deallocate(k_p)
-            ttnn.deallocate(v_p)
-            ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-            ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-            ttnn.deallocate(k_sh)
-            ttnn.deallocate(v_sh)
-            attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q,
-                keys,
-                values,
-                page_table_tensor=page_table,
-                cur_pos_tensor=cur_pos_tt,
-                scale=self.scale,
-                program_config=sdpa_dec_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
             ttnn.deallocate(q)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
@@ -498,13 +400,9 @@ class TPAttention:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Chunked SDPA over the paged cache (attends to prior chunks via page_table).
-        # Keep Q in bf16 (matching the 9B's working chunked-SDPA path, ttnn_gated_attention.py:277
-        # "Q/K/V stay bfloat16"). Casting Q to bf8 was the long-context degeneration cause: at 64k
-        # the bf8-Q output collapsed (looping/gibberish) while bf16-Q produced a coherent themed
-        # summary — confirmed by A/B on bf16 Qwen3.5-27B (thinking-off, greedy). Q is per-chunk
-        # (small), so bf16 costs negligible L1/DRAM and showed no perf delta. QWEN_SDPA_BF8_Q=1
-        # restores the old bf8 cast for comparison. When bf16, q IS q8 (freed once at deallocate(q8)).
+        # Chunked SDPA over the paged cache (attends to prior chunks via page_table). Keep Q in bf16
+        # (see the module docstring: bf8-Q was the long-context degeneration cause). QWEN_SDPA_BF8_Q=1
+        # restores the old bf8 cast. When bf16, q IS q8 (freed once at deallocate(q8)).
         if os.environ.get("QWEN_SDPA_BF8_Q") == "1":
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             ttnn.deallocate(q)

@@ -946,7 +946,7 @@ class Qwen35Model:
                     chunk_page_table=chunk_pt,
                     chunk_start_idx=chunk_start,
                     chunk_start_idx_tensor=csi_tensor,
-                    valid_len=valid_len,  # unused by full attention; keys the dbg capture row
+                    valid_len=valid_len,  # unused by full attention
                 )
             else:
                 x_new = layer.forward(x, mode="prefill", chunk_size=self.args.gdn_chunk_size, valid_len=valid_len)

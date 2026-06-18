@@ -7,8 +7,8 @@ The experimental gated_deltanet module uses `from tt.ttnn_delta_rule_ops import 
 which requires its parent directory on sys.path so `tt` resolves as a package.
 Importing this module (as the FIRST import, before any experimental
 `ttnn_gated_deltanet` / `ttnn_delta_rule_*` import) installs that path. This
-mirrors the shim that lived at the top of the original
-`tt/qwen35_gated_deltanet.py` (lines 10-20).
+mirrors the shim that lived at the top of the original single-file GDN module
+(since split into tt/gdn/).
 """
 import os
 import sys

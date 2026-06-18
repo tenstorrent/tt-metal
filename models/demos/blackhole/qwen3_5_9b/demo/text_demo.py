@@ -446,15 +446,12 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     # Decode token selection: greedy by default; QWEN35_TEMP>0 enables temperature sampling.
     _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
-    # Anti-repetition (default off). Greedy decoding on soft long-context (>=64k, esp. 256k) logits
-    # falls into phrase loops ("you have been here for a long time..."). These break it: a
-    # repetition penalty (HF-style, ~1.3) discourages already-emitted tokens, and a no-repeat-ngram
-    # (~3) hard-blocks completing an n-gram that already occurred. Both are decoding-only; the
-    # forward pass / retrieval is correct (the q_norm fix). Set QWEN35_REP_PENALTY / QWEN35_NO_REPEAT_NGRAM.
+    # Anti-repetition (both default OFF, decoding-only). On soft long-context logits (>=64k) greedy
+    # decode can loop; QWEN35_REP_PENALTY (HF-style, ~1.3) discounts emitted tokens and
+    # QWEN35_NO_REPEAT_NGRAM (~3) blocks repeating n-grams. Off by default because over long runs
+    # (~100+ tok) the cumulative penalty poisons common tokens and no-repeat-ngram cascades at high
+    # entropy; the loops are a decode-drift symptom (forward/retrieval are correct) and vLLM samples.
     _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
-    # Anti-repetition default OFF: a cumulative rep-penalty poisons long generations (~100+ tok:
-    # common syntax tokens get penalized into junk vocab) and no-repeat-ngram cascades at high
-    # entropy. Loops on softened long-ctx logits are a decode-kernel-drift symptom; vLLM samples.
     _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
     generated = []
 
