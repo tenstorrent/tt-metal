@@ -51,7 +51,11 @@ progress) — DSA == MSA's NSA family, so M3 attention is largely **integration,
   `minimax_m3` mesh-config to the deepseek hub, doc/README prose. Deferred (need semantic decisions).
 
 ### 0.3 ⚠️ GAPS — what is NOT done (read before assuming "it works")
-- **Nothing M3 yet** — no re-dim, no rename, no M3 config wired.
+- **Phase 0 partial:** folder rename + M3 `config.json` re-dim DONE (§0.2); `ModelArgs` + consumers
+  (nested `text_config`, `language_model.` prefix, layer schedule, gemma/per-head norms, clamped
+  SwiGLU, shared expert) NOT done. No M3 weights/modeling code on the box yet.
+- **MSA sparse attention:** GQA torch golden delivered (`reference/sparse_gqa_prefill.py`, verified);
+  the on-device GQA `sparse_sdpa` kernel + indexer/topk wiring are NOT done (external dep).
 - **KV cache:** current M2.7 code runs **full non-cached SDPA on fresh Q/K/V** (the
   `kv_cache`/`page_table` args are dead). Target is **chunked KV** (DeepSeek-style, §5),
   NOT vLLM paged attention. Chunked KV is not wired here yet.
@@ -141,24 +145,31 @@ From `MiniMaxAI/MiniMax-M3` HF config (`text_config`). Full multimodal class is
    ├─ Wk ─► K [S,  4, 128] ─┤ per_head QK-norm ─► partial RoPE (dims 0..63)
    ├─ Wv ─► V [S,  4, 128] ─┘
    │
-   │   INDEXER ("lightning indexer", MQA-style): iQ [S,4,128] (index_q_proj→512),
-   │                                              iK [S,1,128] (index_k_proj→128) + own qk-norms
-   │     STEP 1  per-key score   s[s,t] = Σ_h relu(iQ·iKᵀ)·w          (indexer_score op — §4)
-   │     STEP 1b block-pool      block_score[s,b] = max over 128 keys in b   ← M3-specific glue
-   │     STEP 2  top-k blocks    keep top-16 blocks (+ always block 0 + local)  (topk op — §4)
-   │     STEP 2b expand          chosen blocks → key-index list (into the KV buffer)
+   │   INDEXER ("lightning indexer"): ONE index q-head PER GQA GROUP (4 groups) + one
+   │                       SHARED index k-head. iQ [S,4,128] (index_q_proj→512), iK [S,1,128]
+   │                       (index_k_proj→128) + own qk-norms.
+   │     STEP 1  per-(group,key) score  s[g,s,t] = relu(iQ_g·iKᵀ)·w   PER GROUP g — NO sum
+   │                       across groups (this is the M3/MSA delta vs DeepSeek-DSA's Σ_h single
+   │                       list). (indexer_score op — §4)
+   │     STEP 1b block-pool      block_score[g,s,b] = max over 128 keys in b   ← M3-specific glue
+   │     STEP 2  top-k blocks    keep top-16 blocks PER GROUP (+ block 0 + local)  (topk op — §4)
+   │     STEP 2b expand          chosen blocks → per-group key-index list [4,S,topk] into the KV buffer
    │
-   ▼   STEP 3  SPARSE SDPA       softmax(Q·Kᵀ/√d)·V  over ONLY the gathered keys
-   │           ~16×128 = 2048 keys/query regardless of S  → O(S·2048), not O(S²)
-   │           (sparse_sdpa op — §4; we need a GQA variant)
+   ▼   STEP 3  SPARSE SDPA       softmax(Q·Kᵀ/√d)·V over ONLY each group's gathered keys (GQA)
+   │           ~16×128 = 2048 keys/query/group regardless of S  → O(S·2048), not O(S²)
+   │           (sparse_sdpa op — §4; GQA variant: 4 KV heads, per-group index list)
    ▼
    concat heads ─► Wo ─► reduce-scatter ─► out [S, 6144]
 ```
 DSA selects per-**key** (top-N keys); MSA selects per-**block** (top-16 of 128-token blocks,
 score = max over the block) → STEP 1b/2b (block-pool + expand) is the M3-specific glue around
-the reusable ops. Indexer wiring now **verified** from the checkpoint: separate `index_{q,k}_proj`
-(4 q-heads / 1 k-head, MQA-style) each with their own `[128]` qk-norm. Still to confirm vs modeling
-code: the `w` gating term in STEP 1, whether RoPE applies to the index heads, and where block-pool lives.
+the reusable ops. **Selection is PER GQA GROUP, not one shared list** — VERIFIED (2026-06-18):
+HF config `sparse_num_index_heads=4 == num_key_value_heads=4` (one index head/group); MSA paper
+(arXiv:2606.13392) "independently selects a Top-k subset **for each GQA group**"; MSA reference
+(`MiniMax-AI/MSA` `api.py`) `sparse_topk_select → [total_qo_len, num_qo_heads, topk]` and
+`kv_block_indexes [.., num_kv_heads|num_qo_heads, ..]` (per-head axis). So the earlier `Σ_h`
+single-list formula (DeepSeek-DSA convention) was WRONG for M3; index list is **[4, S, topk]**.
+Still to confirm vs modeling code: the `w` gating term, whether RoPE applies to the index heads.
 
 ---
 
@@ -184,10 +195,13 @@ torch test case."* So Phase 3c is now: we deliver the verified GQA shapes (§3.1
 he builds the kernel. Open Q for him: index format — key-level `[1,S,2048]` (like his MLA op) or
 block-level `[1,S,16]`?
 
-**M3 GQA `sparse_sdpa` op tensors** (per chip, mirroring his MLA op; deltas vs MLA = GQA grouping +
-plain head_dim 128, no latent split): `Q [1,64,S,128]` bf16 · `K/V [1,4,T,128]` bf16 · `Indices
-[1,S,TOPK]` uint32 (per-query, shared across q heads, `0xFFFFFFFF`=masked) · `Out [1,64,S,128]` bf16
-· `TOPK=16×128=2048`, `scale=128**-0.5`, S/T/TOPK parametric.
+**M3 GQA `sparse_sdpa` op tensors** (per chip; deltas vs MLA = GQA grouping + plain head_dim 128,
+no latent split, **per-GQA-group index lists**): `Q [1,64,S,128]` bf16 · `K [1,4,T,128]` + `V
+[1,4,T,128]` bf16 (disjoint, NOT V⊂K) · `Indices [1,4,S,TOPK]` uint32 (**one list per GQA group**;
+`0xFFFFFFFF`=masked tail) · `Out [1,64,S,128]` bf16 · `TOPK=16×128=2048`, `scale=128**-0.5`,
+S/T parametric. **Torch golden + selfcheck: `reference/sparse_gqa_prefill.py`** (verified gather ==
+dense-mask on real head geometry). Open for the kernel owner: K/V as two tensors vs packed
+`[1,4,T,256]`; index head-axis per-group `[1,4,..]` vs per-q-head `[1,64,..]`.
 
 ---
 
@@ -337,11 +351,15 @@ TP/SP/EP decision ─► Phase 0 ─► Phase 1 (dense) ─► Phase 2 (MoE) ─
    (Config A: DP=1/TP=4/SP=8), multi-user via galaxy replication, not DP=4 (§6.3/§6b).* Confirm
    the program's priority (1M-context latency vs 4-user throughput) and validate w/ the batch=1-vs-4
    MFU experiment (§6b).
-2. ~~Is a GQA `sparse_sdpa` planned?~~ **CLOSED** — pavle is adding GQA; we owe shapes (§3.1, done)
-   + a torch golden. Remaining sub-question for him: index format (key-level `[1,S,2048]` vs block-level).
+2. ~~Is a GQA `sparse_sdpa` planned?~~ **CLOSED** — GQA is being added; shapes (§3.1) + torch golden
+   (`reference/sparse_gqa_prefill.py`) delivered. Remaining for the kernel owner: K/V packing (two
+   tensors vs packed `[1,4,T,256]`) and the index head-axis the op consumes (per-group `[1,4,..]` vs
+   per-q-head `[1,64,..]`).
 3. Does `indexer_score`'s `chunk_start_idx` causality compose with our block-pool, or should
-   pooling live inside the indexer op? (skrsticTT)
-4. Exact MSA indexer wiring (shared vs separate iK, RoPE on index heads) — confirm vs modeling code.
+   pooling live inside the indexer op?
+4. ~~shared vs per-group selection?~~ **RESOLVED — per GQA group** (4 lists; §3.2, verified vs config +
+   paper + MSA reference). Still open: the `w` gating term in STEP 1, and whether RoPE applies to the
+   index heads — confirm vs modeling code.
 5. Chunked-KV chunk size + SP shard order for 1M context (reference DeepSeek `_chunked_attn`).
 
 ---
