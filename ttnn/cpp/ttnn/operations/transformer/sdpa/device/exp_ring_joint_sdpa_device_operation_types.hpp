@@ -69,24 +69,35 @@ struct ExpRingJointSDPAParams {
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel) {}
 
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("joint_strategy", joint_strategy);
-        attrs.emplace_back("logical_n", logical_n);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_memory_config", output_memory_config);
-        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        if (scale.has_value()) {
-            attrs.emplace_back("scale", scale);
-        }
-        if (program_config.has_value()) {
-            attrs.emplace_back("program_config", program_config);
-        }
-        return attrs;
+    // Program-cache hash / canonical-key fields. Reproduces exactly the scalar field set the former
+    // custom compute_program_hash encoded (see exp_ring_joint_sdpa_device_operation.cpp, removed
+    // definition): {joint_strategy, scale, logical_n, ring_size, compute_kernel_config,
+    // program_config, dim, num_links, cluster_axis}. The conditional input_tensors list the old hash
+    // built is subsumed by the default full ExpRingJointSDPAInputs tensor_args walk (a collision-safe
+    // structural superset). Runtime-only / non-structural fields are intentionally EXCLUDED:
+    // output_memory_config, topology, semaphore (GlobalSemaphore, runtime-only), sub_device_id,
+    // num_workers_per_link, num_buffers_per_channel.
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "joint_strategy",
+        "scale",
+        "logical_n",
+        "ring_size",
+        "compute_kernel_config",
+        "program_config",
+        "dim",
+        "num_links",
+        "cluster_axis");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            joint_strategy,
+            scale,
+            logical_n,
+            ring_size,
+            compute_kernel_config,
+            program_config,
+            dim,
+            num_links,
+            cluster_axis);
     }
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
