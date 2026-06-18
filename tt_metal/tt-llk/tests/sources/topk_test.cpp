@@ -448,11 +448,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             pack_src_format,
                             pack_dst_format,
                             16 * 16 * 4 /* tile_size */,
-                            FACE_R_DIM,
-                            TILE_C_DIM,
-                            4 /* num_faces */,
+                            ckernel::DEFAULT_TENSOR_SHAPE,
                             false /* partial_face */,
-                            false /* narrow_tile */,
                             1 /* num_tiles */);
                     }
 

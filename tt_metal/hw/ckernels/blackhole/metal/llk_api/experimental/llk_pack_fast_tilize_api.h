@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "experimental/llk_pack_fast_tilize.h"
 
@@ -15,8 +16,8 @@ inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const uint32_t use_32bit_dest =
-        pack_src_format[output_id] == (uint)DataFormat::Float32 || pack_src_format[output_id] == (uint)DataFormat::Tf32;
+    const std::uint32_t use_32bit_dest = pack_src_format[output_id] == (std::uint32_t)DataFormat::Float32 ||
+                                         pack_src_format[output_id] == (std::uint32_t)DataFormat::Tf32;
     _llk_pack_fast_tilize_init_<DST_SYNC_MODE, DST_ACCUM_MODE>(
         use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id]);
 }
@@ -24,10 +25,9 @@ inline void llk_pack_fast_tilize_init(
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
-        pack_dst_format[output_id], face_r_dim, num_faces, pack_src_format[output_id]);
+        pack_dst_format[output_id], tensor_shape, pack_src_format[output_id]);
 }
 
 inline void llk_pack_fast_tilize_reinit_unit_dim(const std::uint32_t pack_output, const std::uint32_t new_unit_dim) {

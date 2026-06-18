@@ -207,17 +207,16 @@ constexpr const char* tensor_shape_dim_name(const std::uint8_t dim)
 #include "api/debug/dprint.h"
 #endif
 
-// Concatenate fn_name into the literal instead of using CTSTR(fn_name); CTSTR's
-// COMDAT string object conflicts with DEVICE_PRINT's own string-section metadata
-// at inline template call sites.
+// DEVICE_PRINT cannot resolve arbitrary const char* (e.g. switch-returned literals) on
+// device; emit the coverage enum and shape dims as integers for log harvesters.
 #define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn, ts)                                                   \
     DEVICE_PRINT(                                                                                 \
         "[{}] tensor_shape: face_r_dim={} face_c_dim={} num_faces_r_dim={} num_faces_c_dim={}\n", \
-        ::ckernel::coverage::tensor_shape_function_name(fn),                                      \
-        ::ckernel::tensor_shape_dim_name((ts).face_r_dim),                                        \
-        ::ckernel::tensor_shape_dim_name((ts).face_c_dim),                                        \
-        ::ckernel::tensor_shape_dim_name((ts).num_faces_r_dim),                                   \
-        ::ckernel::tensor_shape_dim_name((ts).num_faces_c_dim))
+        static_cast<std::uint32_t>(fn),                                                           \
+        static_cast<std::uint32_t>((ts).face_r_dim),                                              \
+        static_cast<std::uint32_t>((ts).face_c_dim),                                              \
+        static_cast<std::uint32_t>((ts).num_faces_r_dim),                                         \
+        static_cast<std::uint32_t>((ts).num_faces_c_dim))
 #else
 #define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn_name, ts) ((void)0)
 #endif

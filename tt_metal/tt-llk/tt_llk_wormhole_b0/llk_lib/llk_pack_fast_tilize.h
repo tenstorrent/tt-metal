@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "llk_pack.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -217,22 +218,16 @@ inline void _llk_pack_fast_tilize_init_(
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @param pack_dst_format: Destination (L1) data format used to re-run the default packer init.
- * @param face_r_dim: Number of rows per face.
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile face geometry and face-grid layout.
  * @param partial_face: True if packing a partial (sub-face-row) face.
- * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @note Call @ref _llk_pack_fast_tilize_init_ before this function.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_uninit_(
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false,
-    const bool narrow_tile         = false)
+    const std::uint32_t pack_dst_format, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const bool partial_face = false)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     // restore PCK_DEST_RD_CTRL_Read_32b_data to the original value
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(is_fp32_dest_acc_en);
 
@@ -245,7 +240,7 @@ inline void _llk_pack_fast_tilize_uninit_(
     // for some reason short inits avoid the packer init (probably since it is usually the same)
     // but that means calling it here with reasonable defaults is needed
     // it just initializes the address mods and mop
-    _llk_pack_init_<PackMode::Default, false /* zero_output */>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */>(pack_dst_format, tensor_shape, partial_face, 1 /* num_tiles */);
 }
 
 /**

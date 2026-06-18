@@ -13,6 +13,8 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_pack.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -85,20 +87,18 @@ inline void _llk_pack_configure_addrmod_()
  *
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  * @tparam zero_output: When true, packer emits zeros instead of dest data.
- * @param face_r_dim: Number of rows per face.
- * @param tile_c_dim: Tile column dimension (datums).
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile face geometry and face-grid layout.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
  */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
-inline void _llk_pack_mop_config_(
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const std::uint32_t num_tiles  = 1)
+inline void _llk_pack_mop_config_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t num_tiles = 1)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_VALIDATE_TENSOR_SHAPE_PACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_pack_mop_config_, tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint8_t tile_c_dim = tensor_shape.total_col_dim();
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
 
     constexpr std::uint32_t MEGAROW          = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
@@ -346,29 +346,22 @@ namespace llk_pack_internal_bh
  * @tparam skip_addrmod_config: When true, leave the ADDR_MOD slots untouched.
  * @tparam skip_packer_strides: When true, do not re-program the packer strides.
  * @param pack_src_format: Source (dest register) data format; only used when programming strides.
- * @param face_r_dim: Number of rows per face.
- * @param tile_c_dim: Tile column dimension (datums).
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile face geometry and face-grid layout.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note Init owns the packer X (datum) counter (SETADCXX): every init programs its own value, mirroring
  *       the Wormhole contract. On Blackhole the value is always a single row (FACE_C_DIM - 1).
  */
 template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides>
-inline void pack_init_apply(
-    const std::uint32_t pack_src_format,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t tile_c_dim,
-    const std::uint32_t num_faces,
-    const std::uint32_t num_tiles)
+inline void pack_init_apply(const std::uint32_t pack_src_format, const ckernel::TensorShape& tensor_shape, const std::uint32_t num_tiles)
 {
     if constexpr (!skip_addrmod_config)
     {
         _llk_pack_configure_addrmod_<pack_mode>();
     }
-    _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+    _llk_pack_mop_config_<pack_mode, zero_output>(tensor_shape, num_tiles);
     if constexpr (!skip_packer_strides)
     {
-        set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+        set_packer_strides<pack_mode>(pack_src_format, tensor_shape.total_col_dim());
     }
 
     // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
@@ -386,9 +379,7 @@ inline void pack_init_apply(
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param tile_size: Size of one output tile in bytes.
- * @param face_r_dim: Number of rows per face.
- * @param tile_c_dim: Tile column dimension (datums).
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile face geometry and face-grid layout.
  * @param partial_face: True if packing a partial (sub-face-row) face.
  */
 template <bool is_fp32_dest_acc_en>
@@ -396,12 +387,13 @@ inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool partial_face                  = false)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    LLK_VALIDATE_TENSOR_SHAPE_PACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_pack_reconfig_data_format_, tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(
+        pack_src_format, pack_dst_format, tile_size, tensor_shape.total_col_dim(), tensor_shape.total_num_faces(), partial_face);
 }
 
 /**
@@ -427,9 +419,7 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param tile_size: Size of one output tile in bytes.
- * @param face_r_dim: Number of rows per face.
- * @param tile_c_dim: Tile column dimension (datums).
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile face geometry and face-grid layout.
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
@@ -440,14 +430,21 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t tile_c_dim  = TILE_C_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
-    const std::uint32_t relu_config = 0)
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool partial_face                  = false,
+    const std::uint32_t relu_config          = 0)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+    LLK_VALIDATE_TENSOR_SHAPE_PACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_pack_hw_configure_, tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    configure_pack<is_fp32_dest_acc_en, pack_mode>(
+        pack_src_format,
+        pack_dst_format,
+        tile_size,
+        tensor_shape.face_r_dim,
+        tensor_shape.total_col_dim(),
+        tensor_shape.total_num_faces(),
+        partial_face,
+        relu_config);
 }
 
 /**
@@ -464,23 +461,17 @@ inline void _llk_pack_hw_configure_(
  * @tparam skip_packer_strides: When true, do not re-program the packer strides (e.g. when a prior
  *         hw-configure / reconfig already established them, or the caller programs them itself).
  * @param pack_src_format: Source (dest register) data format. Only consulted when programming strides.
- * @param face_r_dim: Number of rows per face.
- * @param tile_c_dim: Tile column dimension (datums).
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile face geometry and face-grid layout.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
-    const std::uint32_t pack_src_format,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t tile_c_dim,
-    const std::uint32_t num_faces,
-    const std::uint32_t num_tiles,
-    const bool skip_bh_tilize_workaround)
+    const std::uint32_t pack_src_format, const ckernel::TensorShape& tensor_shape, const std::uint32_t num_tiles, const bool skip_bh_tilize_workaround)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_VALIDATE_TENSOR_SHAPE_PACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_pack_init_, tensor_shape);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
     if (src_format == DataFormat::Float32)
     {
@@ -496,12 +487,11 @@ inline void _llk_pack_init_(
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
     {
         llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides>(
-            pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
+            pack_src_format, tensor_shape, num_tiles);
     }
     else
     {
-        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-            pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
+        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(pack_src_format, tensor_shape, num_tiles);
     }
 }
 

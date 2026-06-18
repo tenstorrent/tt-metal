@@ -91,7 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-// copy srca to dest
+    // copy srca to dest
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
@@ -133,15 +133,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_blocks         = params.NUM_BLOCKS;
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces));
     _llk_pack_init_with_src_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false /* zero_output */>(
         formats.pack_src,
         formats.pack_dst,
-        FACE_R_DIM,
-        TILE_C_DIM,
-        params.num_faces,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
         false /* partial_face */,
-        false /* narrow_tile */,
         num_tiles_in_block /* num_tiles */);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     reconfigure_packer_l1_acc(params.L1_ACC);

@@ -197,7 +197,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The hw-configure above re-established the packer strides, so skip strides here. The X (datum)
     // counter is not touched by configure_pack; this init programs it (init owns SETADCXX).
     _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
-        formats_array[run].pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+        formats_array[run].pack_src, ckernel::DEFAULT_TENSOR_SHAPE, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 #endif
 
     _llk_packer_wait_for_math_done_();

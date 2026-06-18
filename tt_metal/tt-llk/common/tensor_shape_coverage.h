@@ -5,7 +5,6 @@
 // Common TensorShape coverage definitions shared by TRISC-specific coverage tables.
 //
 // Regenerate by running the functional pytests with --logging-level=DEBUG
-// and feeding the per-worker test_run_gw*.log files through /tmp/ts-coverage/parse.py.
 //
 
 #pragma once
@@ -36,6 +35,10 @@ enum class TensorShapeFunctionCoverage
     _llk_unpack_AB_reduce_mop_config_,
     _llk_unpack_A_init_,
     _llk_unpack_A_mop_config_,
+    _llk_pack_hw_configure_,
+    _llk_pack_init_,
+    _llk_pack_mop_config_,
+    _llk_pack_reconfig_data_format_,
     eltwise_binary_configure_mop_standard,
     eltwise_binary_configure_mop_with_dest_reuse,
 };
@@ -71,6 +74,14 @@ constexpr const char* tensor_shape_function_name(const TensorShapeFunctionCovera
             return "_llk_unpack_A_init_";
         case Function::_llk_unpack_A_mop_config_:
             return "_llk_unpack_A_mop_config_";
+        case Function::_llk_pack_hw_configure_:
+            return "_llk_pack_hw_configure_";
+        case Function::_llk_pack_init_:
+            return "_llk_pack_init_";
+        case Function::_llk_pack_mop_config_:
+            return "_llk_pack_mop_config_";
+        case Function::_llk_pack_reconfig_data_format_:
+            return "_llk_pack_reconfig_data_format_";
         case Function::eltwise_binary_configure_mop_standard:
             return "eltwise_binary_configure_mop_standard";
         case Function::eltwise_binary_configure_mop_with_dest_reuse:

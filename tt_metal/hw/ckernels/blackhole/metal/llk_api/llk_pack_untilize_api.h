@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
 #include "llk_param_structs.h"
@@ -27,9 +28,7 @@
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     const bool partial_face = get_output_partial_face(output_id);
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
@@ -38,9 +37,7 @@ inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params)
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
+        tensor_shape,
         partial_face,
         pack_params->relu_config.val);
 }
@@ -63,7 +60,6 @@ template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 llk_pack_untilize_hw_configure(
     const llk_pack_params_t* pack_params, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const bool partial_face = get_output_partial_face(output_id);
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
@@ -72,9 +68,8 @@ llk_pack_untilize_hw_configure(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
+        ckernel::make_tensor_shape_from_legacy(
+            static_cast<std::uint8_t>(face_r_dim), static_cast<std::uint8_t>(num_faces)),
         partial_face,
         pack_params->relu_config.val);
 }
@@ -220,7 +215,7 @@ template <
     bool diagonal = false /* unused */,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM /* unused */,
-    uint32_t tile_dst_ct_offset = 0,
+    std::uint32_t tile_dst_ct_offset = 0,
     bool dense = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
@@ -274,7 +269,7 @@ template <
     bool diagonal = false /* unused */,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM /* unused */,
-    uint32_t tile_dst_ct_offset = 0,
+    std::uint32_t tile_dst_ct_offset = 0,
     bool dense = false>
 [[deprecated(
     "Face geometry is now derived from the output CB metadata; use the "

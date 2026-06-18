@@ -103,10 +103,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // DEST datums without a numeric (FP32) conversion.
     constexpr std::uint32_t int32_fmt = static_cast<std::uint32_t>(DataFormat::Int32);
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
-        int32_fmt, int32_fmt, 32 * 32 * 4 /* INT32 tile size in bytes */, FACE_R_DIM, 4 /* num_faces */);
+        int32_fmt, int32_fmt, 32 * 32 * 4 /* INT32 tile size in bytes */, ckernel::DEFAULT_TENSOR_SHAPE);
     // The hw-configure above established the packer strides, so the wrapper skips re-programming them;
     // it still programs the X (datum) counter, which configure_pack does not touch.
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(int32_fmt, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(int32_fmt, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, 4 /* num_faces */));
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_packer_wait_for_math_done_();
