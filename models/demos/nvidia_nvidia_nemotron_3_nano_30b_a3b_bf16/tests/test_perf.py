@@ -372,8 +372,8 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         allocate_decoder_state,
     )
 
-    # 262112 = MODEL_MAX_SEQ_LEN - 32; leaves ≥31 decode tokens of headroom at max ISL.
-    ISL_LIST = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262112]
+    # sweep4: only the two ISLs that OOM'd in sweep3 (data for 128-65536 already collected).
+    ISL_LIST = [131072, 262112]
     N_DECODE = 30
 
     tokenizer = AutoTokenizer.from_pretrained(_SNAP)
@@ -431,9 +431,10 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
             _state = _persistent_state
             _state_max = _SMALL_ISL_MAX
         else:
-            # Allocate just enough KV cache (isl + decode headroom, rounded up to block).
+            # Allocate just enough KV cache for this ISL (rounded to block boundary).
+            # actual_tokens < isl always (BPE compression); actual + N_DECODE << isl.
             _isl_max = min(
-                ((isl + N_DECODE + 50 + DEFAULT_BLOCK_SIZE - 1) // DEFAULT_BLOCK_SIZE) * DEFAULT_BLOCK_SIZE,
+                ((isl + DEFAULT_BLOCK_SIZE - 1) // DEFAULT_BLOCK_SIZE) * DEFAULT_BLOCK_SIZE,
                 MODEL_MAX_SEQ_LEN,
             )
             print(f"[state] Allocating per-ISL decoder state (max_seq_len={_isl_max})...", flush=True)

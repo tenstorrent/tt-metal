@@ -512,15 +512,25 @@ def mamba2_prefill_layer_forward(
     y_full.deallocate(True)
 
     # ---- 13. MambaRMSNormGated ----------------------------------------
+    # Eagerly deallocate each large intermediate (~1 GB at ISL=131K) as soon as it
+    # is consumed — without these frees, 7 × 1 GB tensors pile up simultaneously and
+    # fragment the remaining DRAM enough to block the final reshape at line 523.
     gate_silu = ttnn.silu(gate)  # [B, S, 4096]
+    gate.deallocate(True)
     xg = ttnn.mul(y_flat, gate_silu)  # [B, S, 4096]
+    y_flat.deallocate(True)
+    gate_silu.deallocate(True)
 
     GROUP_SIZE = INTERMEDIATE_SIZE // N_GROUPS  # 512
     xg_grouped = _rr(xg, [B, S, N_GROUPS, GROUP_SIZE])  # [B, S, 8, 512]
+    xg.deallocate(True)
     xg_sq = ttnn.pow(xg_grouped, 2)
     var = ttnn.mean(xg_sq, dim=3, keepdim=True)  # [B, S, 8, 1]
+    xg_sq.deallocate(True)
     xg_normed = ttnn.mul(xg_grouped, ttnn.rsqrt(ttnn.add(var, norm_eps)))
+    xg_grouped.deallocate(True)
     xg_normed_flat = _rr(xg_normed, [B, S, INTERMEDIATE_SIZE])
+    xg_normed.deallocate(True)
 
     nw_tt = _rep_keyed(
         id(norm_mixer_weight),
@@ -528,6 +538,7 @@ def mamba2_prefill_layer_forward(
         mesh_device,  # same key as decode path
     )
     scan_out = ttnn.mul(xg_normed_flat, nw_tt)  # [B, S, 4096]
+    xg_normed_flat.deallocate(True)
 
     # ---- 14. out_proj: column-parallel → partial [B, S, 672]/device → full via all_gather ----
     # scan_out is replicated (SSM used the gathered in_proj output), so column-parallel
