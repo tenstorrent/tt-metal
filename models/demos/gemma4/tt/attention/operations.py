@@ -144,33 +144,6 @@ def apply_rope(tensor, cos_cache, sin_cache, token_index=None):
     return result
 
 
-def apply_rope_qk_fused(tt_q, tt_k, cos_cache, sin_cache):
-    """Apply prefill RoPE to Q and K in a SINGLE rotary_embedding call.
-
-    Q and K share the same cos/sin and head_dim within a layer, so concatenate
-    them along the heads dim (dim 1 of prefill's [B, heads, seq, head_dim]
-    layout), rotate once, then split back. cos/sin broadcast over the heads dim,
-    so the result is identical to rotating Q and K separately — but it halves the
-    rotary_embedding ops per layer (one per layer, visible in the tracy signpost).
-
-    The pre-rotation Q/K buffers are freed (the concat copies their data); the
-    returned slices are independent tensors for the downstream KV fill / SDPA.
-
-    Decode fuses inline in decode_forward instead (it also needs the per-user
-    batched variant and the single-position token_index path).
-    """
-    nq = tt_q.shape[1]
-    qk = ttnn.concat([tt_q, tt_k], dim=1)
-    tt_q.deallocate(True)
-    tt_k.deallocate(True)
-    qk_roped = apply_rope(qk, cos_cache, sin_cache)
-    qk.deallocate(True)
-    out_q = qk_roped[:, :nq, :, :]
-    out_k = qk_roped[:, nq:, :, :]
-    qk_roped.deallocate(True)
-    return out_q, out_k
-
-
 def _rotate_half(x):
     """NeoX-style rotate_half: cat(-x[..., d/2:], x[..., :d/2])."""
     hd = x.shape[-1]
