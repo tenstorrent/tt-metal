@@ -1,6 +1,0 @@
-# Quad BH Galaxy mock cluster: four MPI ranks (one per galaxy host), 32 ASICs each (128 total).
-rank_to_cluster_mock_cluster_desc:
-  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/quad_galaxy_4x32_subtorus/quad_galaxy_4x32_subtorus_rank_0.yaml"
-  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/quad_galaxy_4x32_subtorus/quad_galaxy_4x32_subtorus_rank_1.yaml"
-  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/quad_galaxy_4x32_subtorus/quad_galaxy_4x32_subtorus_rank_2.yaml"
-  3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/quad_galaxy_4x32_subtorus/quad_galaxy_4x32_subtorus_rank_3.yaml"
