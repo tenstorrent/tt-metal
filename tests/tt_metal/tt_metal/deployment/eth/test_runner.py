@@ -659,6 +659,8 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun], logf: TextIO):
 
             rows.append(row)
 
+        rows.sort(key=lambda x: x[1])
+
         print_table(table(f"{t} per chip test summary", headers, rows), logf)
 
 
