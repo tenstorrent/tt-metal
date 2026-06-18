@@ -399,39 +399,16 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  ops-unit-tests:
+  ops-sanity-tests:
     needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    uses: ./.github/workflows/ops-post-commit.yaml
+    uses: ./.github/workflows/ops-sanity-impl.yaml
     with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  # TT-CNN Unit Tests
-  tt-cnn-unit-tests:
-    needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-tt-cnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    secrets: inherit
-    uses: ./.github/workflows/tt-cnn-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      enabled-skus: "bh_p150b_civ2_viommu"
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 

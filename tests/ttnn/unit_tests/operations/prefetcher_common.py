@@ -86,17 +86,17 @@ def make_recv_contig_weight(device, pt_weight, num_dram_banks: int, ring_size: i
 
 
 @contextlib.contextmanager
-def dram_core_prefetcher_session(device, dual_senders_per_bank: bool = False):
-    """Open a DRAM-core prefetcher Start/Stop window. Stop (and a device sync)
+def tensor_prefetcher_session(device, dual_senders_per_bank: bool = False):
+    """Open a Tensor prefetcher Start/Stop window. Stop (and a device sync)
     runs even on test failure so the next test sees a clean device, replacing the
     explicit ``start -> ... -> stop -> synchronize`` callers used to spell out at
     every test site.
     """
-    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders_per_bank)
+    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders_per_bank)
     try:
         yield
     finally:
-        ttnn.experimental.stop_dram_core_prefetcher(device)
+        ttnn.experimental.stop_tensor_prefetcher(device)
         ttnn.synchronize_device(device)
 
 
