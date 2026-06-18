@@ -126,6 +126,14 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RXQ2_PKT_DROP)] =
         MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
         offsetof(eth_live_status_t, rxq2_pkt_drop);
+    // Cumulative TX/RX byte counters also live in boot_results.eth_live_status (see eth_fw_api.h) and have no
+    // fixed MEM_*_ADDR macro, so derive their addresses from the struct layout.
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BYTES_TXD)] = MEM_SYSENG_BOOT_RESULTS_BASE +
+                                                                           offsetof(boot_results_t, eth_live_status) +
+                                                                           offsetof(eth_live_status_t, bytes_txd);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BYTES_RXD)] = MEM_SYSENG_BOOT_RESULTS_BASE +
+                                                                           offsetof(boot_results_t, eth_live_status) +
+                                                                           offsetof(eth_live_status_t, bytes_rxd);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_AERISC_FABRIC_ROUTER_STATE_BASE;

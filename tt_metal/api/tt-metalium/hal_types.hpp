@@ -48,6 +48,8 @@ enum class HalL1MemAddrType : uint8_t {
     RXQ0_PKT_DROP,    // Link status - RX queue 0 packet drop count (Blackhole only)
     RXQ1_PKT_DROP,    // Link status - RX queue 1 packet drop count (Blackhole only)
     RXQ2_PKT_DROP,    // Link status - RX queue 2 packet drop count (Blackhole only)
+    BYTES_TXD,        // Link status - Cumulative TX bytes transmitted count (Blackhole only)
+    BYTES_RXD,        // Link status - Cumulative RX bytes received count (Blackhole only)
     LINK_UP,          // Link status - Link up status
     FABRIC_TELEMETRY,
     ROUTING_TABLE,
