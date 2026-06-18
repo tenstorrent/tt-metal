@@ -27,29 +27,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Lab Exercises" href="../labs/index.html" />
-    <link rel="prev" title="Vector addition using SFPI" href="custom_sfpi_add.html" />
- 
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        // Add noindex to keep old versions out of search results
-        var noindex = document.createElement('meta');
-        noindex.name = 'robots';
-        noindex.content = 'noindex';
-        document.head.appendChild(noindex);
-        // Add canonical pointing to latest (clean URL, no query/fragment)
-        var canonical = document.createElement('link');
-        canonical.rel = 'canonical';
-        canonical.href = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        document.head.appendChild(canonical);
-    }
-})();
-</script>
+    <link rel="prev" title="Vector addition using SFPI" href="custom_sfpi_add.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -127,32 +105,6 @@
       </nav>
 
       <div class="wy-nav-content">
-<div id="tt-version-warning" style="display:none"></div>
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        var latestUrl = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        var banner = document.getElementById('tt-version-warning');
-        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
-        banner.textContent = 'You are viewing documentation for an older version (';
-        var versionEl = document.createElement('strong');
-        versionEl.textContent = version;
-        banner.appendChild(versionEl);
-        banner.appendChild(document.createTextNode('). '));
-        var link = document.createElement('a');
-        link.href = latestUrl;
-        link.textContent = 'Click here for the latest version.';
-        banner.appendChild(link);
-        banner.style.display = 'block';
-    }
-})();
-</script>
-
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -332,34 +284,29 @@
 </h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">my_smoothstep_tiles</span></code> function uses the layered abstraction pattern shown in previous examples. This section focuses on the new concepts introduced in this kernel.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="c1">// tt_metal/hw/ckernels/{blackhole,wormhole_b0}/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_smoothstep.h</span>
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp</span>
 
 <span class="cp">#ifdef TRISC_MATH</span>
-<span class="k">namespace</span><span class="w"> </span><span class="nn">ckernel</span><span class="o">::</span><span class="nn">sfpu</span><span class="w"> </span><span class="p">{</span>
 
 <span class="c1">// Low-level function operating on a tile face</span>
-<span class="kt">void</span><span class="w"> </span><span class="nf">smoothstep_tile_face</span><span class="p">(</span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="p">[[</span><span class="n">maybe_unused</span><span class="p">]]</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">my_smoothstep_tile_face</span><span class="p">(</span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">size_t</span><span class="w"> </span><span class="n">vectors_per_face</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
 <span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">vectors_per_face</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">dst_reg</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
-<span class="w">        </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vFloat</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">edge0</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">;</span>
+<span class="w">        </span><span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+<span class="w">        </span><span class="n">vFloat</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">edge0</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">;</span>
 <span class="w">        </span><span class="n">v_if</span><span class="p">(</span><span class="n">t</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst0</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
 <span class="w">        </span><span class="n">v_elseif</span><span class="p">(</span><span class="n">t</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst1</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
 <span class="w">        </span><span class="n">v_endif</span><span class="p">;</span>
-<span class="w">        </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vFloat</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="mf">3.0f</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">2.0f</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">t</span><span class="p">);</span>
-<span class="w">        </span><span class="n">sfpi</span><span class="o">::</span><span class="n">dst_reg</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
+<span class="w">        </span><span class="n">vFloat</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="mf">3.0f</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">2.0f</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">t</span><span class="p">);</span>
+<span class="w">        </span><span class="n">dst_reg</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
-
-<span class="p">}</span><span class="w">  </span><span class="c1">// namespace ckernel::sfpu</span>
 <span class="cp">#endif </span><span class="c1">// TRISC_MATH</span>
 
 <span class="c1">// High-level API function</span>
 <span class="c1">// Accepts `edge0`, `edge1` and `inv_delta` as parameters</span>
-<span class="kr">inline</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">my_smoothstep_tiles</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">MATH</span><span class="p">(</span><span class="n">SFPU_UNARY_CALL_NO_TEMPLATE_ARGS</span><span class="p">(</span>
-<span class="w">        </span><span class="n">DST_SYNC_MODE</span><span class="p">,</span>
-<span class="w">        </span><span class="n">DST_ACCUM_MODE</span><span class="p">,</span>
+<span class="kr">inline</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">my_smoothstep_tile</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">MATH</span><span class="p">(</span><span class="n">_llk_math_eltwise_unary_sfpu_params_</span><span class="p">(</span>
 <span class="w">        </span><span class="n">smoothstep_tile_face</span><span class="p">,</span>
 <span class="w">        </span><span class="n">idx_dst0</span><span class="p">,</span>
 <span class="w">        </span><span class="n">VectorMode</span><span class="o">::</span><span class="n">RC</span><span class="p">,</span><span class="w"> </span><span class="c1">// Apply on all 4 faces of the tile</span>
@@ -372,16 +319,16 @@
 <section id="parameter-passing">
 <h3>Parameter Passing<a class="headerlink" href="#parameter-passing" title="Permalink to this heading"></a>
 </h3>
-<p>The <cite>smoothstep</cite> function needs two scalar parameters: <code class="docutils literal notranslate"><span class="pre">edge0</span></code> and <code class="docutils literal notranslate"><span class="pre">edge1</span></code>. These are passed to the SFPI kernel through the <code class="docutils literal notranslate"><span class="pre">SFPU_UNARY_CALL_NO_TEMPLATE_ARGS</span></code> macro wrapper.</p>
+<p>The <cite>smoothstep</cite> function needs two scalar parameters: <code class="docutils literal notranslate"><span class="pre">edge0</span></code> and <code class="docutils literal notranslate"><span class="pre">edge1</span></code>. These are passed to the SFPI kernel using the <code class="docutils literal notranslate"><span class="pre">_llk_math_eltwise_unary_sfpu_params_</span></code> helper function.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// Passes edge0 and edge1 as arguments to the SFPI kernel</span>
-<span class="n">my_smoothstep_tiles</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">);</span>
+<span class="n">my_smoothstep_tile</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">);</span>
 <span class="c1">// ↓</span>
 <span class="c1">// Use the parameters for all elements in the tile face</span>
-<span class="n">smoothstep_tile_face</span><span class="p">(</span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="p">[[</span><span class="n">maybe_unused</span><span class="p">]]</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">);</span>
+<span class="n">my_smoothstep_tile_face</span><span class="p">(</span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>The macro wrapper takes the low-level face function, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.</p>
+<p>The helper function is a template that takes the low-level face function as its first argument, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.</p>
 </section>
 <section id="vector-predicates">
 <h3>Vector Predicates<a class="headerlink" href="#vector-predicates" title="Permalink to this heading"></a>
@@ -452,7 +399,7 @@
 </h2>
 <p>This example demonstrates the implementation of a custom SFPI kernel with parameter passing and conditional logic. Key takeaways are:</p>
 <ul class="simple">
-<li><p><strong>Parameter Passing:</strong> The <code class="docutils literal notranslate"><span class="pre">SFPU_UNARY_CALL_NO_TEMPLATE_ARGS</span></code> macro wrapper is used to pass scalar arguments to a custom SFPI kernel.</p></li>
+<li><p><strong>Parameter Passing:</strong> The <code class="docutils literal notranslate"><span class="pre">_llk_math_eltwise_*_sfpu_params_</span></code> family of functions is used to pass scalar arguments to a custom SFPI kernel.</p></li>
 <li><p><strong>Vector Predicates:</strong> The <code class="docutils literal notranslate"><span class="pre">v_if</span></code>, <code class="docutils literal notranslate"><span class="pre">v_elseif</span></code>, and <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> instructions provide a mechanism for element-wise conditional logic within an SFPI kernel.</p></li>
 <li><p><strong>Unary Operations:</strong> Unary SFPI kernels can be implemented efficiently by performing the computation in-place in the destination registers.</p></li>
 </ul>
@@ -506,9 +453,7 @@ async function loadVersions() {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const pathParts = location.pathname.split('/');
-        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
-        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
+        const projectCode = location.pathname.split('/')[3];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -526,9 +471,7 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    const parts = window.location.pathname.split('/');
-    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
-    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
+    return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 
