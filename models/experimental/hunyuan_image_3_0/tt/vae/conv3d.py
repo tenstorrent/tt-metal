@@ -80,6 +80,9 @@ class HunyuanSymmetricConv3d(Module):
         t: int = LATENT_T,
         h: int = LATENT_H,
         w: int = LATENT_W,
+        ccl_manager=None,
+        h_mesh_axis: int | None = None,
+        w_mesh_axis: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -92,6 +95,15 @@ class HunyuanSymmetricConv3d(Module):
         self.stride = _ntuple(stride, 3)
         self.padding = _ntuple(padding, 3)
         self.mesh_device = mesh_device
+
+        # Spatial (H/W) parallel: when a CCLManager + mesh axes are given, the input
+        # arrives sharded on H (h_mesh_axis) and/or W (w_mesh_axis). The conv then
+        # neighbor-pads the shard boundary (halo = padding) across the mesh and runs
+        # with internal H/W padding disabled — see _forward_sharded.
+        self.ccl = ccl_manager
+        self.h_mesh_axis = h_mesh_axis
+        self.w_mesh_axis = w_mesh_axis
+        self.spatial_sharded = ccl_manager is not None and (h_mesh_axis is not None or w_mesh_axis is not None)
         self.dtype = dtype
 
         promote_conv3d_fallback_to_exact(
@@ -173,10 +185,67 @@ class HunyuanSymmetricConv3d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
+    def _forward_sharded(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        """Spatially-sharded conv: neighbor-pad the H/W shard boundary (cross-mesh
+        halo) then conv with internal H/W padding disabled. Output stays sharded.
+
+        Each device holds [b, t, h_local, w_local, c]. neighbor_pad adds `padding`
+        rows/cols on each side — true zeros at the global image edge, real neighbor
+        data at interior shard boundaries — so the kernel sees the same receptive
+        field it would in the replicated conv. With padding=(kH-1)/2 etc., conv with
+        H/W padding 0 returns the original local spatial size.
+        """
+        from models.tt_dit.parallel.config import vae_neighbor_pad
+
+        pT, pH, pW = self.padding
+        x = x_bthwc
+        if self.w_mesh_axis is not None and pW > 0:
+            x = vae_neighbor_pad(
+                self.ccl,
+                x,
+                cluster_axis=self.w_mesh_axis,
+                dim=3,
+                padding_left=pW,
+                padding_right=pW,
+                padding_mode="zeros",
+            )
+        if self.h_mesh_axis is not None and pH > 0:
+            xp = vae_neighbor_pad(
+                self.ccl,
+                x,
+                cluster_axis=self.h_mesh_axis,
+                dim=2,
+                padding_left=pH,
+                padding_right=pH,
+                padding_mode="zeros",
+            )
+            if x is not x_bthwc:
+                ttnn.deallocate(x)
+            x = xp
+        cfg = get_conv3d_config(
+            self.in_channels,
+            self.out_channels,
+            self.kernel_size,
+            self.dtype,
+            grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            h_factor=1,
+            w_factor=1,
+            T=x.shape[1],
+            H=x.shape[2],
+            W=x.shape[3],
+        )
+        out = self._conv(x, (pT, 0, 0), cfg)
+        if x is not x_bthwc:
+            ttnn.deallocate(x)
+        return out
+
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         assert (
             x_bthwc.layout == ttnn.ROW_MAJOR_LAYOUT
         ), f"HunyuanSymmetricConv3d expects ROW_MAJOR, got {x_bthwc.layout}"
+
+        if self.spatial_sharded:
+            return self._forward_sharded(x_bthwc)
 
         b, t, h, w, _ = x_bthwc.shape
         kT, kH, kW = self.kernel_size

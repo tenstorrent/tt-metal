@@ -52,7 +52,7 @@ class _IdentityDecoder:
         return ttnn.slice(x_bthwc, [0, 0, 0, 0, 0], [b, t, h, w, 3])
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_decode_latent_glue(mesh_device):
     """decode_latent's scaling / temporal-dim / denorm wiring, identity decoder."""
     mesh_device.enable_program_cache()
@@ -76,7 +76,7 @@ def test_decode_latent_glue(mesh_device):
 @pytest.mark.xfail(
     reason="Full-res VAE decode OOMs on a single Blackhole device (pre-existing); ~16GB intermediate", strict=False
 )
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_full_res_decode_oom(mesh_device):
     """Documents the real-decoder full-res OOM. Expected to xfail until the VAE
     decode gets chunked/sharded upsample memory work."""

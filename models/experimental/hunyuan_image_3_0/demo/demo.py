@@ -6,7 +6,7 @@
 #   prompt --HunyuanTokenizer--> input_ids
 #          --wte--> text embeddings (cond / uncond rows for CFG)
 #   noise latent --[ patch_embed -> RESIDENT bf8 sharded backbone -> final_layer ]
-#                  x N scheduler steps with CFG (denoise_loop on the (1,4) mesh)
+#                  x N scheduler steps with CFG (denoise_loop on the 2x2 sp0tp1 mesh)
 #          --> denoised latent
 #          --VAE decode (PyTorch reference, CPU)--> RGB image  [*]
 #
@@ -221,14 +221,23 @@ def main():
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
-    # VAE decode on device (TTNN). Fresh mesh context so the backbone DRAM is
-    # freed first; the decoder's full-res convs/depth-to-space are H-chunked.
-    print("[demo] VAE decode (TTNN, on device) ...")
+    # VAE decode on device (TTNN), H/W-spatial-parallel on the 2x2 mesh: H->axis0,
+    # W->axis1. Convs keep a neighbor-pad halo; GroupNorm/attention gather to full
+    # spatial. Shrinks the conv im2col 4x vs the replicated path.
+    print("[demo] VAE decode (TTNN, on device, 2x2 H/W-spatial-parallel) ...")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    vae_mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
+    vae_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
     try:
         vae_mesh.enable_program_cache()
-        img = decode_latent(vae_mesh, latent, scaling_factor=SCALING)  # [1, 3, 1024, 1024] in [0,1]
+        vae_ccl = CCLManager(vae_mesh, num_links=1, topology=ttnn.Topology.Linear)
+        img = decode_latent(
+            vae_mesh,
+            latent,
+            scaling_factor=SCALING,
+            ccl_manager=vae_ccl,
+            h_mesh_axis=0,
+            w_mesh_axis=1,
+        )  # [1, 3, 1024, 1024] in [0,1]
     finally:
         ttnn.close_mesh_device(vae_mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

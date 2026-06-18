@@ -64,7 +64,8 @@ def device_params(request):
     return {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+# 2x2 mesh: 4-way EP (16 experts/device across both axes), the recommended layout.
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_moe_parallel_vs_dense(mesh_device):
     mesh_device.enable_program_cache()
     c = _cfg()
