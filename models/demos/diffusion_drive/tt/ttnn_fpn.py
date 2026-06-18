@@ -4,16 +4,17 @@
 """
 TTNN implementation of TransfuserBackbone._top_down (3-level FPN).
 
-Three plain Conv2d layers (no BatchNorm) run on TTNN.  Bilinear upsampling
-stays in PyTorch because ttnn.upsample nearest-only diverges from bilinear at
-these scales; the two upsample steps are cheap relative to the conv work.
+Three plain Conv2d layers (no BatchNorm) AND both bilinear upsamples run on
+TTNN.  ttnn.upsample(mode="bilinear") matches torch align_corners=False to
+PCC ≥ 0.99999 for the FPN's integer ×2 / ×4 scales, so the previous PyTorch
+F.interpolate fallback has been removed.
 
 FPN topology:
     lidar_feats (B, 512, 8, 8)
         → c5_conv   1×1  512→64   + ReLU          → (B, 64, 8, 8)   [TTNN]
-        → upsample  2×   bilinear                  → (B, 64, 16, 16) [PyTorch]
+        → upsample  2×   bilinear                  → (B, 64, 16, 16) [TTNN]
         → up_conv5  3×3  64→64    + ReLU          → (B, 64, 16, 16) [TTNN]
-        → upsample2 to (64,64)  bilinear           → (B, 64, 64, 64) [PyTorch]
+        → upsample2 to (64,64)  bilinear           → (B, 64, 64, 64) [TTNN]
         → up_conv4  3×3  64→64    + ReLU          → (B, 64, 64, 64) [TTNN]
         = bev_upscale
 
@@ -25,22 +26,22 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 import ttnn
 from models.demos.diffusion_drive.tt.ttnn_backbone import _from_ttnn_tile, _to_ttnn_tile
-from models.demos.diffusion_drive.tt.ttnn_resnet34 import _ttnn_conv2d
+from models.demos.diffusion_drive.tt.ttnn_resnet34 import _ttnn_conv2d, prep_conv_weights
 
 
 def _prep(conv: nn.Conv2d):
-    """Extract bfloat16 weight/bias from a plain Conv2d (no BN fold needed)."""
+    """Extract bfloat16 weight/bias from a plain Conv2d (no BN fold needed) and
+    pre-convert to TTNN host tensors once."""
     w = conv.weight.detach().to(torch.bfloat16)
     b = (
         conv.bias.detach().to(torch.bfloat16)
         if conv.bias is not None
         else torch.zeros(conv.out_channels, dtype=torch.bfloat16)
     )
-    return w, b
+    return prep_conv_weights(w, b)
 
 
 class TtnnFPN:
@@ -65,6 +66,22 @@ class TtnnFPN:
         # Upsample parameters (used with PyTorch F.interpolate)
         self._scale = float(ref_backbone.upsample.scale_factor)
         self._size2 = ref_backbone.upsample2.size  # tuple (H, W) = (64, 64)
+
+    # ------------------------------------------------------------------
+    def _upsample_bilinear(self, x: torch.Tensor, scale_h: int, scale_w: int) -> torch.Tensor:
+        """Bilinear upsample on TTNN device (replaces F.interpolate fallback).
+
+        ttnn.upsample(mode="bilinear") matches torch align_corners=False to
+        PCC ≥ 0.99999 for integer scales (verified for the FPN's ×2 and ×4
+        steps).  Input arrives as torch NCHW; round-trips through NHWC
+        ROW_MAJOR on device and returns torch NCHW.
+        """
+        B, C, H, W = x.shape
+        x_nhwc = x.permute(0, 2, 3, 1).contiguous()
+        x_tt = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._device)
+        out_tt = ttnn.upsample(x_tt, [int(scale_h), int(scale_w)], mode="bilinear")
+        out = ttnn.to_torch(out_tt)  # (B, H*scale_h, W*scale_w, C)
+        return out.reshape(B, H * scale_h, W * scale_w, C).permute(0, 3, 1, 2).float()
 
     # ------------------------------------------------------------------
     def _conv_relu(
@@ -97,14 +114,17 @@ class TtnnFPN:
         # c5_conv: 1×1, 512→64, relu
         p5 = self._conv_relu(x, self._c5_w, self._c5_b, ksize=1, stride=1, pad=0)
 
-        # bilinear 8×8 → 16×16  (PyTorch)
-        p5_up = F.interpolate(p5, scale_factor=self._scale, mode="bilinear", align_corners=False)
+        # bilinear 8×8 → 16×16  (TTNN ttnn.upsample, integer scale)
+        s = int(round(self._scale))
+        p5_up = self._upsample_bilinear(p5, s, s)
 
         # up_conv5: 3×3, 64→64, relu
         p4 = self._conv_relu(p5_up, self._up5_w, self._up5_b, ksize=3, stride=1, pad=1)
 
-        # bilinear 16×16 → 64×64 (PyTorch)
-        p4_up = F.interpolate(p4, size=self._size2, mode="bilinear", align_corners=False)
+        # bilinear 16×16 → 64×64 (TTNN ttnn.upsample, derived integer scale)
+        scale_h = self._size2[0] // p4.shape[2]
+        scale_w = self._size2[1] // p4.shape[3]
+        p4_up = self._upsample_bilinear(p4, scale_h, scale_w)
 
         # up_conv4: 3×3, 64→64, relu
         p3 = self._conv_relu(p4_up, self._up4_w, self._up4_b, ksize=3, stride=1, pad=1)

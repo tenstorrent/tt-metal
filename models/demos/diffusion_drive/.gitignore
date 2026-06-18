@@ -5,3 +5,5 @@ reference/golden/
 __pycache__/
 *.pyc
 *.pyo
+01_plan.md
+02_plan.md
