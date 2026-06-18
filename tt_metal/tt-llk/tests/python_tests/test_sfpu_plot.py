@@ -11,7 +11,7 @@ percentiles, monotonicity).
 
 To add a test, append a Case(...) to CASES and pick a format with
 fmt=BF16/FP16/FP32 — see the "HOW TO ADD A TEST" comment above CASES. Run a
-single op with:  pytest test_sfpu_plot_old.py -k <Op> -s
+single op with:  pytest test_sfpu_plot.py -k <Op> -s
 """
 
 import os
@@ -1262,8 +1262,8 @@ def _plot_and_print(
 #                                     is not meaningful, see the notes inside
 #                                     _plot_and_print)
 #
-#   Run one op:   pytest test_sfpu_plot_old.py -k Exp -s
-#   Run all:      pytest test_sfpu_plot_old.py -s
+#   Run one op:   pytest test_sfpu_plot.py -k Exp -s
+#   Run all:      pytest test_sfpu_plot.py -s
 #
 #   Each case writes _plot_output/sfpu_<id>.png and prints a stats summary, then
 #   asserts the hardware result matches golden.
