@@ -11,7 +11,7 @@ import torch
 import transformers
 from datasets import load_dataset, load_from_disk
 from loguru import logger
-from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
+from transformers import AutoFeatureExtractor, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
