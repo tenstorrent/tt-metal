@@ -136,6 +136,7 @@ jobs:
             {
               "name": "[WH-N150] Gemma4-E2B",
               "model": "google/gemma-4-E2B-it",
+              "coherence-test": true,
               "server-timeout": 10,
               "benchmark-timeout": 5,
               "runner-label": "N150",
@@ -148,6 +149,7 @@ jobs:
             {
               "name": "[WH-T3K] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
+              "coherence-test": true,
               "server-timeout": 30,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
@@ -161,6 +163,7 @@ jobs:
             {
               "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
+              "coherence-test": true,
               "server-timeout": 30,
               "benchmark-timeout": 5,
               "runner-label": "BH-Quietbox-2",
@@ -410,6 +413,7 @@ jobs:
         FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
         FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
+        FILE_COHERENCE_TEST_LOG: "./output/vllm_coherence_test.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -631,6 +635,45 @@ jobs:
             exit 1
           fi
           echo "✅ All $expected requests completed successfully"
+
+      - name: 🧠 Run coherence guard (verbatim echo)
+        if: ${{ matrix.test-group.coherence-test }}
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        run: |
+          # Coherence guard: the other CI steps only check structural/throughput
+          # properties (request completion, structured-output schema). A backend
+          # regression that corrupts the forward pass (e.g. a broken on-device
+          # decode trace) still returns deterministic, well-formed-but-garbage
+          # tokens, so those checks pass while the model emits gibberish. Requiring
+          # a verbatim echo of a simple sentence catches that class of bug directly.
+          SENTENCE="The quick brown fox jumps over the lazy dog."
+          curl http://localhost:8000/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "X-User-ID: vllm_test" \
+            -d "{
+              \"model\": \"${{ matrix.test-group.model }}\",
+              \"messages\": [
+                {
+                  \"role\": \"user\",
+                  \"content\": \"Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: $SENTENCE\"
+                }
+              ],
+              \"max_tokens\": 32,
+              \"temperature\": 0.0,
+              \"stream\": false,
+              \"ignore_eos\": false
+          }" \
+          2>&1 | tee ${FILE_COHERENCE_TEST_LOG}
+
+          # A model that cannot reproduce a simple sentence verbatim is not
+          # generating coherent text.
+          if ! grep -qF "$SENTENCE" "${FILE_COHERENCE_TEST_LOG}"; then
+            echo "❌ Coherence guard failed: model did not echo the sentence verbatim (likely gibberish from a corrupted forward pass)."
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
+          echo "✅ Coherence guard passed: verbatim echo found"
+
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
