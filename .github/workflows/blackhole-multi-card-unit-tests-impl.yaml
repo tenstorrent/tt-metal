@@ -73,6 +73,13 @@ jobs:
             cmd: pytest tests/nightly/blackhole/sdpa/ -svv
             timeout: 20
             test-type: fast-qb2
+          - name: ring sdpa PERF tests (QB2 only)
+            cmd: |
+              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
+              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
+              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
+            timeout: 10
+            test-type: fast-qb2
           # NOTE: All slow / loudbox / qb multi-card BH tests have been migrated
           # into tests/pipeline_reorg/blackhole_e2e_tests.yaml and are now run by
           # the blackhole-e2e-tests workflow. This file only carries the

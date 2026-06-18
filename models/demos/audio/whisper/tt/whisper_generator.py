@@ -499,7 +499,7 @@ class WhisperGenerator:
             logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
 
             # Argmax -> separate tensor, then copy to feedback buffer
-            argmax_result = ttnn.argmax(logits_rm, dim=-1, use_multicore=True)
+            argmax_result = ttnn.argmax(logits_rm, dim=-1)
             ttnn.copy(argmax_result, self.token_id_device[trace_key])
 
             # Increment both position tensors for next iteration

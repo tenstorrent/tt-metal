@@ -38,10 +38,18 @@ class TtPrefillPipelineConfig:
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
+    # Route the MoE routing all-gather's global semaphores to L1_SMALL (instead of pinning the main-L1
+    # floor and clashing with the next layer's MLA static CBs). Requires the mesh opened with
+    # l1_small_size > 0. Enable for Kimi (single expert group, device gate). See TtMoERoutingSetup.
+    routing_use_l1_small_for_semaphores: bool = False
     # Static model-dimension constants for the variant being built
     # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
     # count, route groups, etc. in the TT layer code.
     model_cfg: type = DeepSeekV3Config
+    # When True, the last transformer layer runs kv-only: it fills the KV cache
+    # (which migration needs) and skips its Q/SDPA/output projection, FFN/MoE,
+    # the final RMSNorm, and the LM head. `prefill()` then returns None.
+    kv_only_last_layer: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -123,6 +131,8 @@ class TtDeepSeekPrefillPipeline:
             lm_head_is_column_parallel=True,
             is_chunked=True,
             slot_num=self.config.num_users,
+            kv_only_last_layer=self.config.kv_only_last_layer,
+            routing_use_l1_small_for_semaphores=self.config.routing_use_l1_small_for_semaphores,
         )
         self.model_built = True
 
@@ -185,6 +195,10 @@ class TtDeepSeekPrefillPipeline:
         boundary, passed straight through to MLA. The caller drives chunked prefill by
         calling this once per chunk, in order; a chunk's KV must be populated before the next reads
         it. If a LayerAck channel is registered (set_layer_ack_channel), the model bumps it per layer.
+
+        Always returns None: no token is sampled. (When `kv_only_last_layer` is set on the config the
+        last layer's compute is stripped down to the KV cache fill, which migration consumes, and the
+        final RMSNorm / LM head / sample are skipped entirely.)
 
         Args:
             input_tensor: one chunk's tokens, SP-sharded uint32 ROW_MAJOR DRAM tensor as produced by

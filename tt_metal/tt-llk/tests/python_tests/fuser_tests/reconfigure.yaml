@@ -1,3 +1,7 @@
+# Three stages that each use different data formats, forcing the unpack, math,
+# and pack pipelines to reconfigure between every stage. Goes from Float16_b
+# through Bfp8_b to Float32.
+
 dest_acc: true
 
 operands:
@@ -58,10 +62,11 @@ operations:
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCB"
         math_fidelity: "LoFi"
-    packer: "Packer"
-    output: "output_A"
     block_size: [32, 32]
 
+    pack:
+      - output: "output_A"
+        packer: "Packer"
   - math:
       - type: "Fpu"
         src_a: "input_D"
@@ -77,10 +82,11 @@ operations:
         reuse_dest: "DEST_TO_SRCA"
         acc_to_dest: true
         math_fidelity: "LoFi"
-    packer: "Packer"
-    output: "output_B"
     block_size: [32, 32]
 
+    pack:
+      - output: "output_B"
+        packer: "Packer"
   - math:
       - type: "Fpu"
         src_a: "input_E"
@@ -88,6 +94,7 @@ operations:
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "LoFi"
-    packer: "Packer"
-    output: "output_C"
     block_size: [32, 32]
+    pack:
+      - output: "output_C"
+        packer: "Packer"

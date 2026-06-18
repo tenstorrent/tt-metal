@@ -23,7 +23,13 @@ if "TT_METAL_PROFILER_DIR" in ENVS.keys():
     PROFILER_ARTIFACTS_DIR = Path(ENVS["TT_METAL_PROFILER_DIR"])
 
 
-PROFILER_BIN_DIR = TT_METAL_HOME / "build/tools/profiler/bin"
+PROFILER_BIN_DIR = TT_METAL_HOME / "build" / "tools" / "profiler" / "bin"
+PROFILER_WASM_DIR = TT_METAL_HOME / "build/profiler/build_wasm"
+
+PROFILER_WASM_TRACE_FILE_NAME = "embed.tracy"
+
+PROFILER_WASM_TRACES_DIR = PROFILER_WASM_DIR / "traces"
+PROFILER_WASM_TRACES_DIR.mkdir(parents=True, exist_ok=True)
 
 PROFILER_DEFAULT_OP_SUPPORT_COUNT = 1000
 
@@ -32,8 +38,16 @@ TRACY_OPS_DATA_FILE_NAME = "tracy_ops_data.csv"
 TRACY_MODULE_PATH = TT_METAL_HOME / "tt_metal/third_party/tracy"
 TRACY_FILE_NAME = "tracy_profile_log_host.tracy"
 
-TRACY_CAPTURE_TOOL = "capture-release"
-TRACY_CSVEXPROT_TOOL = "csvexport-release"
+TRACY_CAPTURE_TOOL = "tracy-capture"
+TRACY_CSVEXPROT_TOOL = "tracy-csvexport"
+
+
+def resolve_tracy_tool_path(bin_folder: Path, tool_name: str) -> Path | None:
+    """Find tracy-capture or tracy-csvexport under build/tools/profiler/bin."""
+    candidate = Path(bin_folder) / tool_name
+    if candidate.is_file():
+        return candidate
+    return None
 
 
 def generate_logs_folder(outFolder):

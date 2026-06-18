@@ -828,7 +828,6 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
             g_nonfinite, d_nonfinite, msg="Non-finite positions differ between golden and device"
         )
     else:
-        # ulp_threshold=3 for bfloat16 scalar ops; bump to 4 if CI flakes on edge shapes.
         assert_with_ulp(
             torch_output_tensor,
             tt_output_tensor,
@@ -946,7 +945,10 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     golden_fn = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+    if ttnn_fn == "divide":
+        assert_with_ulp(torch_output_tensor, tt_output_tensor, ulp_threshold=0)
+    else:
+        assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
 @pytest.mark.parametrize(
@@ -1055,5 +1057,4 @@ def test_binary_div(
         torch_input_b, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
     )
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, dtype=output_dtype)
-    # bf16/fp32 divide has up to 2 ULP from the reciprocal approximation; inputs are in [1, 2).
-    assert_with_ulp(torch_output, ttnn.to_torch(output_tensor), ulp_threshold=2)
+    assert_with_ulp(torch_output, ttnn.to_torch(output_tensor), ulp_threshold=0)
