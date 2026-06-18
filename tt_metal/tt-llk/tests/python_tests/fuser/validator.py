@@ -77,73 +77,6 @@ def _has_transpose(schema) -> bool:
     )
 
 
-def _validate_eltwise_tile(schema, dims: Tuple[int, int]) -> None:
-    if _has_transpose(schema) and dims != (32, 32):
-        raise ValueError(
-            f"Tile shape {dims} is not supported for eltwise with transpose. "
-            f"Only (32, 32) is supported."
-        )
-    if schema.broadcast_type in (BroadcastType.Column, BroadcastType.Row):
-        if dims == (32, 16):
-            raise ValueError(
-                f"Tile shape {dims} is not supported for eltwise with "
-                f"{schema.broadcast_type.name} broadcast. 32x16 requires no broadcast or scalar."
-            )
-
-
-def _validate_datacopy_tile(schema, dims: Tuple[int, int]) -> None:
-    has_transpose = _has_transpose(schema)
-    has_bcast_col_or_row = schema.broadcast_type in (
-        BroadcastType.Column,
-        BroadcastType.Row,
-    )
-    has_utd = schema.unpack_to_dest == UnpackToDest.Yes
-
-    only_32x32 = (
-        has_transpose
-        or has_bcast_col_or_row
-        or (has_utd and schema.broadcast_type != BroadcastType.None_)
-    )
-    if only_32x32 and dims != (32, 32):
-        raise ValueError(
-            f"Tile shape {dims} is not supported for Datacopy with the current "
-            f"configuration. Only (32, 32) is supported."
-        )
-
-
-def _validate_matmul_tiles(schema, src_a_ts: TileShape, src_b_ts: TileShape) -> None:
-    a = _tile_dims(src_a_ts)
-    b = _tile_dims(src_b_ts)
-
-    if a == (16, 16):
-        raise ValueError(f"Matmul in0 tile shape (16, 16) is not supported.")
-    if b not in ((32, 32), (32, 16), (16, 32)):
-        raise ValueError(f"Matmul in1 tile shape {b} is not supported.")
-    if a[1] != b[0]:
-        raise ValueError(
-            f"Matmul tile inner dimensions must match: "
-            f"in0 cols ({a[1]}) != in1 rows ({b[0]})"
-        )
-
-
-_TILE_VALIDATORS = {
-    "Elwadd": _validate_eltwise_tile,
-    "Elwmul": _validate_eltwise_tile,
-    "Elwsub": _validate_eltwise_tile,
-    "Datacopy": _validate_datacopy_tile,
-}
-
-
-def _validate_tile_shape_for_op(operation: str, schema, tile_shape: TileShape) -> None:
-    dims = _tile_dims(tile_shape)
-    if not _is_valid_tile(dims):
-        raise ValueError(f"Tile shape {dims} is not a supported tile size.")
-
-    validator = _TILE_VALIDATORS.get(operation)
-    if validator is not None:
-        validator(schema, dims)
-
-
 class UnarySfpuMathSchema(BaseModel):
     """Base schema for unary SFPU math nodes (type="UnarySfpu").
 
@@ -312,11 +245,6 @@ class FpuMathSchemaBase(BaseModel):
                 for check, error_msg in checks:
                     if check(self, src_a, src_b):
                         raise ValueError(error_msg)
-
-        if self.operation in ("Matmul", "MatmulNoMop"):
-            _validate_matmul_tiles(self, src_a.tile_shape, src_b.tile_shape)
-        else:
-            _validate_tile_shape_for_op(self.operation, self, src_a.tile_shape)
 
         fpu = factory(self)
 
