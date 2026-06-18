@@ -2757,7 +2757,7 @@ class Glm4MoeLiteDenseOnlyTT:
     def _resolve_main_token_ids(self, state: _DecodeTraceSamplingState) -> torch.Tensor:
         """Resolve global token IDs from main trace output (handles vocab-sharded)."""
         batch = int(state.batch)
-        if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
+        if (not (self.lm_head_sharded_vocab and _is_mesh_device(self.device))) or self._sampling_allgather_enabled():
             return (
                 _tt_to_torch_for_vllm_output(tensor=state.top1_indices_tt, device=self.device)
                 .reshape(-1)
@@ -2803,9 +2803,49 @@ class Glm4MoeLiteDenseOnlyTT:
             main_ids[b] = int(best_global)
         return main_ids
 
+    def _sampling_allgather_enabled(self) -> bool:
+        """All-gather sharded logits then a single argmax, instead of the slow
+        per-shard ttnn.max (~490us). Greedy-equivalent. Default off."""
+        return (
+            os.environ.get("GLM4_MOE_LITE_DECODE_SAMPLING_ALLGATHER", "0").strip() == "1"
+            and self.lm_head_sharded_vocab
+            and _is_mesh_device(self.device)
+        )
+
+    def _trace_sample_reduce(self, logits_rm: ttnn.Tensor, batch: int):
+        """Greedy top-1 reduction. Returns (top1_values_tt_or_None, top1_indices_tt).
+
+        - Non-sharded vocab: single argmax over full vocab (global index, values=None).
+        - Sharded vocab + SAMPLING_ALLGATHER: all_gather per-shard logits to full vocab,
+          then one argmax (global index, values=None) — replaces the ~490us per-shard
+          ttnn.max with an ~40-60us gather+argmax (validated greedy-equivalent).
+        - Sharded vocab (default): per-shard max+argmax (host picks winning shard).
+        """
+        vocab = int(self.hparams.vocab_size)
+        if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
+            view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
+            return None, ttnn.argmax(view, dim=3, keepdim=False, use_multicore=True)
+        vps = int(self.lm_head_vocab_per_shard)
+        if self._sampling_allgather_enabled():
+            mesh_cols = int(self.device.shape[1])
+            tp_axis = self.lm_head_tp_axis
+            cluster_axis = int(tp_axis) if tp_axis is not None else (1 if mesh_cols > 1 else 0)
+            view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vps])
+            gathered = ttnn.all_gather(view, dim=3, cluster_axis=cluster_axis, num_links=1)
+            full = ttnn.slice(gathered, [0, 0, 0, 0], [1, 1, batch, vocab])
+            idx = ttnn.argmax(full, dim=3, keepdim=False, use_multicore=True)
+            ttnn.deallocate(gathered, force=False)
+            ttnn.deallocate(full, force=False)
+            return None, idx
+        view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vps])
+        max_out = ttnn.max(view, dim=3, keepdim=True)
+        if isinstance(max_out, tuple):
+            return max_out
+        return max_out, ttnn.argmax(view, dim=3, keepdim=False, use_multicore=True)
+
     def _resolve_token_ids_from_trace_output(self, *, top1_values_tt, top1_indices_tt, batch: int) -> torch.Tensor:
         """Resolve global token IDs from trace output tensors (reusable for MTP)."""
-        if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
+        if (not (self.lm_head_sharded_vocab and _is_mesh_device(self.device))) or self._sampling_allgather_enabled():
             return (
                 _tt_to_torch_for_vllm_output(tensor=top1_indices_tt, device=self.device)
                 .reshape(-1)
@@ -3077,24 +3117,10 @@ class Glm4MoeLiteDenseOnlyTT:
         # capture, allocating device buffers becomes unsafe, so sampling must be
         # fully trace-contained.
         logits_rm_warm = ttnn.to_layout(logits_warm, ttnn.ROW_MAJOR_LAYOUT)
-        vocab = int(self.hparams.vocab_size)
-        if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
-            logits_rm_warm_view = ttnn.slice(logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab])
-            next_ids_warm = ttnn.argmax(logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
-            ttnn.deallocate(next_ids_warm, force=False)
-        else:
-            vocab_per_shard = int(self.lm_head_vocab_per_shard)
-            logits_rm_warm_view = ttnn.slice(logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab_per_shard])
-            max_out_warm = ttnn.max(logits_rm_warm_view, dim=3, keepdim=True)
-            if isinstance(max_out_warm, tuple):
-                local_max_warm, local_argmax_warm = max_out_warm
-                ttnn.deallocate(local_max_warm, force=False)
-                ttnn.deallocate(local_argmax_warm, force=False)
-            else:
-                local_max_warm = max_out_warm
-                local_argmax_warm = ttnn.argmax(logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
-                ttnn.deallocate(local_max_warm, force=False)
-                ttnn.deallocate(local_argmax_warm, force=False)
+        vals_warm, ids_warm = self._trace_sample_reduce(logits_rm_warm, batch)
+        if vals_warm is not None:
+            ttnn.deallocate(vals_warm, force=False)
+        ttnn.deallocate(ids_warm, force=False)
         ttnn.deallocate(logits_rm_warm, force=False)
         ttnn.synchronize_device(self.device)
         ttnn.deallocate(logits_warm, force=False)
@@ -3109,20 +3135,7 @@ class Glm4MoeLiteDenseOnlyTT:
         # Capture greedy sampling inside the trace to avoid allocating any
         # device buffers while an active trace exists.
         logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
-        vocab = int(self.hparams.vocab_size)
-        if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
-            top1_values_tt = None
-            logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
-            top1_indices_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
-        else:
-            vocab_per_shard = int(self.lm_head_vocab_per_shard)
-            logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab_per_shard])
-            max_out = ttnn.max(logits_rm_view, dim=3, keepdim=True)
-            if isinstance(max_out, tuple):
-                top1_values_tt, top1_indices_tt = max_out
-            else:
-                top1_values_tt = max_out
-                top1_indices_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+        top1_values_tt, top1_indices_tt = self._trace_sample_reduce(logits_rm, batch)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
 
@@ -3291,7 +3304,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 logger.warning("MTP forward (trace path) failed (non-fatal): {}", e)
                 self._last_draft_token_ids = None
 
-        if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
+        if (not (self.lm_head_sharded_vocab and _is_mesh_device(self.device))) or self._sampling_allgather_enabled():
             return state.top1_indices_tt
 
         assert state.top1_values_tt is not None
