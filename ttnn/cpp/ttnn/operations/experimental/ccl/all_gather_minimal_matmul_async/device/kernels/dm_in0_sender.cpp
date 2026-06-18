@@ -322,7 +322,7 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                DeviceZoneScopedN("IN0-KBLOCK");
+                DeviceZoneScopedN("AVAILABLE");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_out.wait_front(out_block_num_tiles);
@@ -447,20 +447,22 @@ void kernel_main() {
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
 
-                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                        uint64_t in0_unicast_data_addr =
+                            get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
-                    /**
-                     * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
-                     * padded tiles. Use `current_block_bytes`.
-                     */
-                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                        /**
+                         * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
+                         * padded tiles. Use `current_block_bytes`.
+                         */
+                        noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
                     noc_obj.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
-                }
+                        noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    }
+                }  // end of IN0-SNF-CHAIN
 #if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
