@@ -599,18 +599,29 @@ void kernel_main() {
                             (blk + B > t_block_count) ? (t_block_count - blk) * t_page_bytes_per_recv : bytes_per_recv;
                     };
 
-                    // Total chunks this round, summed per receiver (ragged: a wrapping receiver
-                    // contributes ceil(tail) + ceil(head) chunks, others ceil(bytes_per_recv)).
+                    // streaming_split mode 2: keep uniform max-chunk geometry and let the one
+                    // straddling chunk per wrapping receiver issue two DMA reads, instead of
+                    // breaking the visit into ragged tail/head chunks (mode 1).
+                    const bool two_read = (streaming_split == 2u);
+
+                    // Total chunks this round. Mode 2 (and batched / clamp, which never wrap) use the
+                    // uniform count num_receivers * ceil(bytes_per_recv / max_chunk_bytes); mode 1 adds
+                    // an extra chunk for each wrapping receiver (ceil(tail) + ceil(head)).
+                    const uint32_t uniform_chunks_per_visit = (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
                     uint32_t total_chunks_round = 0;
-                    for (uint32_t r = 0; r < num_receivers; ++r) {
-                        uint32_t blk_r, wrap_boff_r;
-                        recv_wrap(r, blk_r, wrap_boff_r);
-                        if (wrap_boff_r >= bytes_per_recv) {
-                            total_chunks_round += (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
-                        } else {
-                            const uint32_t head = bytes_per_recv - wrap_boff_r;
-                            total_chunks_round += (wrap_boff_r + max_chunk_bytes - 1) / max_chunk_bytes +
-                                                  (head + max_chunk_bytes - 1) / max_chunk_bytes;
+                    if (two_read) {
+                        total_chunks_round = num_receivers * uniform_chunks_per_visit;
+                    } else {
+                        for (uint32_t r = 0; r < num_receivers; ++r) {
+                            uint32_t blk_r, wrap_boff_r;
+                            recv_wrap(r, blk_r, wrap_boff_r);
+                            if (wrap_boff_r >= bytes_per_recv) {
+                                total_chunks_round += uniform_chunks_per_visit;
+                            } else {
+                                const uint32_t head = bytes_per_recv - wrap_boff_r;
+                                total_chunks_round += (wrap_boff_r + max_chunk_bytes - 1) / max_chunk_bytes +
+                                                      (head + max_chunk_bytes - 1) / max_chunk_bytes;
+                            }
                         }
                     }
 
@@ -635,6 +646,7 @@ void kernel_main() {
                     uint32_t desc_dst_off[3] = {0, 0, 0};
                     uint32_t desc_cb[3] = {0, 0, 0};
                     uint32_t desc_r[3] = {0, 0, 0};
+                    uint32_t desc_reads[3] = {1, 1, 1};  // DMA reads issued for this slot's chunk (mode 2: 1 or 2)
 
                     // Generator state: walk receivers in order; within a receiver, walk its visit
                     // in max_chunk_bytes steps, breaking at the source wrap so each chunk is one
@@ -654,18 +666,41 @@ void kernel_main() {
                         if (cb > max_chunk_bytes) {
                             cb = max_chunk_bytes;
                         }
-                        if (gen_boff < gen_wrap_boff && gen_boff + cb > gen_wrap_boff) {
-                            cb = gen_wrap_boff - gen_boff;  // clip to the wrap boundary
-                        }
-                        const uint32_t slab = tensor_base + (recv_index_base + gen_r) * t_recv_stride;
-                        const uint32_t src = (gen_boff < gen_wrap_boff)
-                                                 ? slab + gen_blk * t_page_bytes_per_recv + gen_boff
-                                                 : slab + (gen_boff - gen_wrap_boff);
                         const uint32_t idx = c % 3u;
+                        const uint32_t slab = tensor_base + (recv_index_base + gen_r) * t_recv_stride;
+                        const bool straddles = (gen_boff < gen_wrap_boff && gen_boff + cb > gen_wrap_boff);
+                        if (two_read) {
+                            // Uniform max-chunk: a chunk that straddles the source wrap is read as two
+                            // contiguous DMAs into the same slot (tail then head); the slot stays one
+                            // contiguous run for the writer. Otherwise a single read.
+                            if (straddles) {
+                                const uint32_t cb1 = gen_wrap_boff - gen_boff;  // tail [blk..N)
+                                const uint32_t src1 = slab + gen_blk * t_page_bytes_per_recv + gen_boff;
+                                const uint32_t src2 = slab;  // head resumes at physical block 0
+                                experimental::dma_async_read(/*stream=*/0, src1, slot_addrs[idx], cb1);
+                                experimental::dma_async_read(/*stream=*/0, src2, slot_addrs[idx] + cb1, cb - cb1);
+                                desc_reads[idx] = 2;
+                            } else {
+                                const uint32_t src = (gen_boff < gen_wrap_boff)
+                                                         ? slab + gen_blk * t_page_bytes_per_recv + gen_boff
+                                                         : slab + (gen_boff - gen_wrap_boff);
+                                experimental::dma_async_read(/*stream=*/0, src, slot_addrs[idx], cb);
+                                desc_reads[idx] = 1;
+                            }
+                        } else {
+                            // Ragged: clip the chunk at the wrap boundary so it is one contiguous read.
+                            if (straddles) {
+                                cb = gen_wrap_boff - gen_boff;
+                            }
+                            const uint32_t src = (gen_boff < gen_wrap_boff)
+                                                     ? slab + gen_blk * t_page_bytes_per_recv + gen_boff
+                                                     : slab + (gen_boff - gen_wrap_boff);
+                            experimental::dma_async_read(/*stream=*/0, src, slot_addrs[idx], cb);
+                            desc_reads[idx] = 1;
+                        }
                         desc_dst_off[idx] = gen_boff;
                         desc_cb[idx] = cb;
                         desc_r[idx] = gen_r;
-                        experimental::dma_async_read(/*stream=*/0, src, slot_addrs[idx], cb);
                         gen_boff += cb;
                         if (gen_boff >= bytes_per_recv) {
                             gen_r += 1;
@@ -701,7 +736,10 @@ void kernel_main() {
                         PROF_DECL_TS(t_dw0);
                         PROF_DECL_TS(t_dw1);
                         PROF_TICK(t_dw0);
-                        experimental::dma_async_read_wait_n(/*stream=*/0, keep_one ? 1u : 0u);
+                        // Keep chunk gc+1 in flight: wait until outstanding reads drop to that chunk's
+                        // read count (1 in ragged/clamp mode; 1 or 2 in two-read mode), or 0 if gc is last.
+                        const uint32_t keep_reads = keep_one ? desc_reads[(gc + 1u) % 3u] : 0u;
+                        experimental::dma_async_read_wait_n(/*stream=*/0, keep_reads);
                         PROF_TICK(t_dw1);
                         PROF_ACC(prof_dma_wait, t_dw1, t_dw0);
 

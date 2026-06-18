@@ -443,11 +443,22 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
 
-            // Streaming-split A/B toggle: set TT_TENSOR_PREFETCHER_STREAMING_SPLIT=0 to fall back
-            // to the legacy per-round physical-wrap clamp. Default on (per-receiver source split).
+            // Streaming-split A/B mode (TT_TENSOR_PREFETCHER_STREAMING_SPLIT):
+            //   0 = legacy per-round physical-wrap clamp
+            //   1 = per-receiver ragged split — a wrapping receiver gets extra chunks, 1 DMA/chunk (default)
+            //   2 = two-DMA-reads split — uniform max-chunk geometry, the straddling chunk does 2 reads
             static const uint32_t streaming_split = [] {
                 const char* env = std::getenv("TT_TENSOR_PREFETCHER_STREAMING_SPLIT");
-                return (env != nullptr && env[0] == '0') ? 0u : 1u;
+                if (env == nullptr) {
+                    return 1u;
+                }
+                if (env[0] == '0') {
+                    return 0u;
+                }
+                if (env[0] == '2') {
+                    return 2u;
+                }
+                return 1u;
             }();
 
             std::vector<uint32_t> compile_args = {
