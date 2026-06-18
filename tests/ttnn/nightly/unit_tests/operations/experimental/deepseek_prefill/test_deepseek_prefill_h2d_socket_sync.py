@@ -12,8 +12,9 @@ service, run the C++ h2d_socket_sync op, and check that
   * the inline 3xuint32 metadata round-trips, and
   * the op is program-cached (built once on the first call, pure cache hits after).
 
-H2DStreamService claims FD dispatch-column service cores and DMA-pins host memory, so it
-is Blackhole-Galaxy-only and requires fast dispatch; this module is skipped elsewhere.
+H2DStreamService claims an FD dispatch-column service core and DMA-pins host memory, so it
+requires Blackhole (any single card or Galaxy; see service_core_manager.cpp) plus fast
+dispatch. This module is skipped on Wormhole and under slow dispatch.
 """
 
 import struct
@@ -22,13 +23,13 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import skip_for_slow_dispatch
+from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
 
 pytestmark = [
     skip_for_slow_dispatch(),
     pytest.mark.skipif(
-        ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
-        reason="H2DStreamService is only supported on Blackhole Galaxy",
+        not is_blackhole(),
+        reason="H2DStreamService requires Blackhole (service-core claims); see service_core_manager.cpp",
     ),
 ]
 
