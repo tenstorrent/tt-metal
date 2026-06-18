@@ -77,6 +77,31 @@ struct SliceReshardAsyncParams {
         attrs.emplace_back("ring_size", ring_size);
         return attrs;
     }
+
+    // Program-cache hash / canonical-key fields. Lists exactly the structural fields the former
+    // custom compute_program_hash included; `devices` (raw IDevice* pointers) and the two
+    // GlobalSemaphore members are runtime-only and intentionally excluded.
+    static constexpr auto attribute_names = std::make_tuple(
+        "dim",
+        "output_dim_offset",
+        "output_dim_shape",
+        "cluster_axis",
+        "num_links",
+        "output_mem_config",
+        "topology",
+        "ring_size");
+
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->dim,
+            this->output_dim_offset,
+            this->output_dim_shape,
+            this->cluster_axis,
+            this->num_links,
+            this->output_mem_config,
+            this->topology,
+            this->ring_size);
+    }
 };
 
 }  // namespace ttnn::experimental::prim
