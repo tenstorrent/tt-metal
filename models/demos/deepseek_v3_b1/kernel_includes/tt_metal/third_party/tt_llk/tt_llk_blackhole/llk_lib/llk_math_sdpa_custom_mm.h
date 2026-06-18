@@ -52,7 +52,7 @@ using namespace ckernel::math;
 // #43562/3 EXPERIMENT: in the mask branch, use flag-only ZEROACC instead of the coherent MOVB2D, keeping
 // the mask SrcB unpack + STALLWAIT + terminal SETRWC(CLR_B) scaffolding. Isolates bank-switch vs MOVB2D.
 // Requires FIX_FULL_VIA_MASK_43563=1 (route full chunks here). 1 = ZEROACC, 0 = original MOVB2D.
-#define FIX_MASK_ZEROACC_43563 0
+#define FIX_MASK_ZEROACC_43563 1
 
 // #43562/3 EXPERIMENT: ZEROACC (clean DEST) + MOVB2A (SrcB->SrcA, the SrcB-consuming FPU op that does NOT
 // write DEST). Discriminates SrcB-read-via-FPU vs MOVB2D's DEST-write. Requires FIX_FULL_VIA_MASK=1.
