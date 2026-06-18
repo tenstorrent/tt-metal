@@ -111,7 +111,7 @@ struct DeviceStorage {
     MeshTensor& get_mesh_tensor();
 
     // Moves out the MeshTensor this DeviceStorage holds, throws if the DeviceStorage is deallocated.
-    // post-condition: this DeviceStorage will be equivalent a default constructed DeviceStorage
+    // post-condition: this DeviceStorage will be equivalent to a default constructed DeviceStorage.
     MeshTensor release_mesh_tensor();
 
     // Returns the MeshDevice associated with the underlying device memory.
