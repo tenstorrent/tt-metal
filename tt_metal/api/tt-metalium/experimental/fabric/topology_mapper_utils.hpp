@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -477,6 +478,17 @@ TopologyMappingResult map_multi_mesh_to_physical(
 /** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
 void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph);
 void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph);
+
+// Choose one (exit, peer) FabricNodeId pair per candidate set ("hop") such that no FabricNodeId is
+// reused across sets. `candidates[i]` are the candidate pairs for position i; returns the chosen pairs
+// in order, or std::nullopt if no collision-free assignment exists (any set empty, or overconstrained).
+//
+// A backtracking solver for a system of distinct representatives (most-constrained set first). The blitz
+// decode pipeline builder uses it to lay out inter-mesh ring hops, where per-hop greedy first-fit can
+// strand a mid-chain hop on tight rings; kept here so it is reusable and unit-testable without a control
+// plane.
+std::optional<std::vector<std::pair<FabricNodeId, FabricNodeId>>> assign_non_colliding_hops(
+    const std::vector<std::vector<std::pair<FabricNodeId, FabricNodeId>>>& candidates);
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
 

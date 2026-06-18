@@ -2634,4 +2634,53 @@ TopologyMappingResult map_multi_mesh_to_physical(
     return result;
 }
 
+std::optional<std::vector<std::pair<FabricNodeId, FabricNodeId>>> assign_non_colliding_hops(
+    const std::vector<std::vector<std::pair<FabricNodeId, FabricNodeId>>>& candidates) {
+    using HopPair = std::pair<FabricNodeId, FabricNodeId>;
+    const std::size_t num_hops = candidates.size();
+
+    // Visit the most-constrained sets first (fewest candidates) so the search prunes quickly.
+    std::vector<std::size_t> visit_order(num_hops);
+    for (std::size_t i = 0; i < num_hops; i++) {
+        visit_order[i] = i;
+    }
+    std::stable_sort(visit_order.begin(), visit_order.end(), [&](std::size_t a, std::size_t b) {
+        return candidates[a].size() < candidates[b].size();
+    });
+
+    std::vector<std::optional<HopPair>> selected(num_hops);
+    std::set<FabricNodeId> used_nodes;
+    std::function<bool(std::size_t)> assign = [&](std::size_t k) -> bool {
+        if (k == num_hops) {
+            return true;
+        }
+        const std::size_t hop = visit_order[k];
+        for (const auto& pair : candidates[hop]) {
+            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
+                continue;
+            }
+            selected[hop] = pair;
+            used_nodes.insert(pair.first);
+            used_nodes.insert(pair.second);
+            if (assign(k + 1)) {
+                return true;
+            }
+            used_nodes.erase(pair.first);
+            used_nodes.erase(pair.second);
+            selected[hop].reset();
+        }
+        return false;
+    };
+    if (!assign(0)) {
+        return std::nullopt;
+    }
+
+    std::vector<HopPair> hops;
+    hops.reserve(num_hops);
+    for (auto& hop : selected) {
+        hops.push_back(*hop);
+    }
+    return hops;
+}
+
 }  // namespace tt::tt_metal::experimental::tt_fabric
