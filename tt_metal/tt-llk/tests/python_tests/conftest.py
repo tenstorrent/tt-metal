@@ -827,16 +827,42 @@ def _det_run(self, poll_callback=None):
     if runs <= 1 or TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return _DET_ORIG_RUN(self, poll_callback)
 
+    dump_dir = os.environ.get("TT_LLK_DETERMINISM_DUMP")
+    representatives = {}  # hash -> result tensor (first seen), only when dumping
+
     hashes = []
     first_outcome = None
     for i in range(runs):
         outcome = _DET_ORIG_RUN(self, poll_callback)
         if i == 0:
             first_outcome = outcome
-        hashes.append(_det_hash_result(outcome.result))
+        h = _det_hash_result(outcome.result)
+        hashes.append(h)
+        if dump_dir and h is not None and h not in representatives:
+            representatives[h] = outcome.result
 
     distinct = sorted({h for h in hashes if h is not None})
     nodeid = os.environ.get("PYTEST_CURRENT_TEST", "").split(" (")[0]
+
+    # When dumping is on and the variant is non-deterministic, save one
+    # representative result tensor per distinct hash so the differing
+    # elements/magnitude can be inspected offline.
+    if dump_dir and len(distinct) > 1:
+        try:
+            import numpy as np
+
+            safe = "".join(c if c.isalnum() else "_" for c in nodeid)[-120:]
+            os.makedirs(dump_dir, exist_ok=True)
+            for idx, h in enumerate(distinct):
+                t = representatives.get(h)
+                arr = (
+                    t.detach().cpu().contiguous().numpy()
+                    if isinstance(t, torch.Tensor)
+                    else np.asarray(t)
+                )
+                np.save(os.path.join(dump_dir, f"{safe}__v{idx}_{h[:8]}.npy"), arr)
+        except Exception as e:  # dump is best-effort, never fail the test
+            logger.warning("determinism: tensor dump failed: {}", e)
     record = {
         "nodeid": nodeid,
         "test_name": getattr(self, "test_name", None),
