@@ -79,10 +79,9 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # Per-head QK norms, replicated. HF Qwen3_5RMSNorm computes output*(1+weight) and the ckpts
     # store raw zero-centered weights (means ~0.32-0.58), so +1 is the correct scale. Without it
     # Q·K logits are ~14x too small and long-context attention is UNIFORM -> zero retrieval at
-    # 64k. QWEN35_QKNORM_NO_PLUS1=1 reverts. Don't cache (tiny tensors, read-only ckpt dir).
-    _plus1 = 0.0 if os.environ.get("QWEN35_QKNORM_NO_PLUS1") else 1.0
-    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + _plus1, mesh, None)
-    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + _plus1, mesh, None)
+    # 64k. Don't cache (tiny tensors, read-only ckpt dir).
+    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     # Flat (raw) twins — the DEFAULT decode scale (hybrid): flat decode attention averages over
     # keys so per-step decode noise can't flip retrieval (loops/junk). Negligible cost.
     tw["q_norm_flat"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32), mesh, None)
@@ -231,14 +230,12 @@ class TPAttention:
         v = ttnn.reshape(vp, (1, B, NKV, HD))
         ttnn.deallocate(vp)
 
-        # QK RMSNorm — DEFAULT raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill
-        # retrieves the long context; flat decode averages over keys so the per-step decode noise
-        # cannot flip retrieval (the loop/junk failure mode). Validated 64k on 3.5-FP8 AND 3.6
-        # (coherent Frankenstein summaries; sharp decode loops/junks both). QWEN35_QKNORM_DECODE_SHARP=1
-        # reverts decode to +1.
-        _sharp = os.environ.get("QWEN35_QKNORM_DECODE_SHARP") == "1"
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm" if _sharp else "q_norm_flat"])
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm" if _sharp else "k_norm_flat"])
+        # QK RMSNorm — raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill retrieves the
+        # long context; flat decode averages over keys so the per-step decode noise cannot flip
+        # retrieval (the loop/junk failure mode). Validated 64k on 3.5-FP8 AND 3.6 (coherent
+        # Frankenstein summaries; sharp decode loops/junks both).
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm_flat"])
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm_flat"])
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
@@ -331,14 +328,12 @@ class TPAttention:
         v = ttnn.reshape(vp, (1, B, NKV, HD))
         ttnn.deallocate(vp)
 
-        # QK RMSNorm — DEFAULT raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill
-        # retrieves the long context; flat decode averages over keys so the per-step decode noise
-        # cannot flip retrieval (the loop/junk failure mode). Validated 64k on 3.5-FP8 AND 3.6
-        # (coherent Frankenstein summaries; sharp decode loops/junks both). QWEN35_QKNORM_DECODE_SHARP=1
-        # reverts decode to +1.
-        _sharp = os.environ.get("QWEN35_QKNORM_DECODE_SHARP") == "1"
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm" if _sharp else "q_norm_flat"])
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm" if _sharp else "k_norm_flat"])
+        # QK RMSNorm — raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill retrieves the
+        # long context; flat decode averages over keys so the per-step decode noise cannot flip
+        # retrieval (the loop/junk failure mode). Validated 64k on 3.5-FP8 AND 3.6 (coherent
+        # Frankenstein summaries; sharp decode loops/junks both).
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm_flat"])
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm_flat"])
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)

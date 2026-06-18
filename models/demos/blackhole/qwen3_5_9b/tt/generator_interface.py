@@ -47,17 +47,14 @@ def prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace):
 
 
 def prime_decode_trace(generator, model, tokens, current_pos, page_table):
-    """DORMANT FALLBACK — only reached under QWEN35_DECODE_PRIME=1 (see qwen35_vllm.decode_forward).
+    """Capture the Generator decode trace WITHOUT corrupting GDN recurrent state.
 
-    By default Qwen35 decode conforms to the standard path: the decode trace is captured at
-    position 0 during warmup by the inherited WarmupForwardMixin and replayed at serving. That is
-    safe because the model re-zeros the GDN state at the start of every sequence
-    (model._reset_gdn_state_for_new_sequence), so the warmup capture's residue never leaks into a
-    real request. This helper exists so that, if the pos-0 warmup capture ever proves insufficient
-    for GDN, the post-prefill capture can be re-enabled by flipping one env flag rather than
-    re-deriving the workaround.
+    Used by the text_demo decode loop to capture the decode trace at the real post-prefill
+    position/state. (The vLLM serving path instead uses the standard pos-0 warmup capture from the
+    inherited WarmupForwardMixin, which is position-general because the model re-zeros GDN state at
+    the start of every sequence via model._reset_gdn_state_for_new_sequence.)
 
-    Capture the Generator decode trace WITHOUT corrupting GDN recurrent state. The stock Generator
+    The stock Generator
     decode-trace capture runs the forward twice (a compile run + the capture run) on this first
     token before any real replay. For ordinary models that's harmless (re-writing the same paged KV
     slot is idempotent), but GDN's recurrent state is a running accumulation, so those extra passes

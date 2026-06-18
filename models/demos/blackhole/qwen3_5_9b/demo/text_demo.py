@@ -445,12 +445,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     ttft = time.time() - t0
 
     # Decode token selection: greedy by default; QWEN35_TEMP>0 enables temperature sampling.
-    # QWEN35_DEBUG_LOGITS=1 logs logit sharpness (max prob + entropy + top-5) per step — a
-    # confident (max_p~1) repeat means the logits are genuinely bad (temperature won't help);
-    # an uncertain (low max_p, close competitors) repeat means greedy is just unlucky and
-    # sampling will break the loop. Directly answers "is this a temperature/decoding problem?".
     _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
-    _dbg_logits = bool(os.environ.get("QWEN35_DEBUG_LOGITS"))
     # Anti-repetition (default off). Greedy decoding on soft long-context (>=64k, esp. 256k) logits
     # falls into phrase loops ("you have been here for a long time..."). These break it: a
     # repetition penalty (HF-style, ~1.3) discourages already-emitted tokens, and a no-repeat-ngram
@@ -461,7 +456,6 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # common syntax tokens get penalized into junk vocab) and no-repeat-ngram cascades at high
     # entropy. Loops on softened long-ctx logits are a decode-kernel-drift symptom; vLLM samples.
     _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
-    _pick_step = [0]
     generated = []
 
     def _pick(vec):
@@ -476,15 +470,6 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             for i in range(len(generated) - n + 1):
                 if tuple(generated[i : i + n - 1]) == prefix:
                     v[generated[i + n - 1]] = float("-inf")
-        if _dbg_logits:
-            p = torch.softmax(v, dim=-1)
-            topp, topi = p.topk(5)
-            ent = float(-(p * torch.clamp(p, min=1e-12).log()).sum())
-            logger.info(
-                f"[LOGITDBG step={_pick_step[0]}] max_p={float(topp[0]):.3f} ent={ent:.2f} "
-                f"top5={[(int(i), round(float(pp), 3)) for pp, i in zip(topp, topi)]}"
-            )
-        _pick_step[0] += 1
         if _temp > 0:
             return int(torch.multinomial(torch.softmax(v / _temp, dim=-1), 1).item())
         return int(torch.argmax(v).item())
@@ -493,8 +478,6 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
     nxt = _pick(lt.reshape(-1, vocab)[0])
     generated.append(nxt)
-    # Systematic probe: full per-layer GDN state right after prefill (QWEN35_DEBUG_LAYERS=1).
-    model._dbg_gdn_stats(f"post-prefill T={T} first_tok={nxt}", layers="all")
 
     # ---- Traced paged single-token decode, continuing from the carried GDN + KV state. ----
     # Decode is captured ONCE as a trace and replayed with ttnn.execute_trace, so each step costs
@@ -592,8 +575,6 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         decode_times.append(time.time() - t_step)
         nxt = _read(tt_logits)
         generated.append(nxt)
-        if os.environ.get("QWEN35_DEBUG_LAYERS"):
-            model._dbg_gdn_stats(f"decode step={len(generated) - 1} pos={pos} tok={nxt} {tokenizer.decode([nxt])!r}")
         pos += 1
     if trace_id is not None:
         ttnn.release_trace(mesh, trace_id)

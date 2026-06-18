@@ -157,23 +157,6 @@ class Qwen35ForCausalLM(Generator):
         # inherited WarmupForwardMixin, then replayed here by Generator.decode_forward — identical
         # to Llama/DeepSeek/Qwen-VL. current_pos and page_table are device input tensors the
         # standard replay updates per step, so a pos-0 capture is position-general.
-        #
-        # Dormant fallback (QWEN35_DECODE_PRIME=1, paired with the warmup_model_decode no-op): if
-        # the pos-0 warmup capture ever proves insufficient for GDN, lazily capture the decode
-        # trace on the FIRST decode, at the REAL post-prefill position and recurrent state, via
-        # prime_decode_trace (GDN-state snapshot/restore around the stock two-pass capture). This
-        # should not be needed — every new sequence re-zeros the GDN state at prefill
-        # (model._reset_gdn_state_for_new_sequence), so the warmup capture's residue can't leak in.
-        if os.environ.get("QWEN35_DECODE_PRIME") == "1" and not getattr(self, "_decode_trace_primed", False):
-            from models.demos.blackhole.qwen3_5_9b.tt.generator_interface import prime_decode_trace
-
-            # Set the guard BEFORE calling so the re-entrant decode_forward it triggers skips
-            # priming and just performs the capture.
-            self._decode_trace_primed = True
-            tokens = args[0] if args else kwargs.get("tokens")
-            start_pos = args[1] if len(args) > 1 else kwargs.get("start_pos")
-            prime_decode_trace(self, self.model[0], tokens, start_pos, kwargs.get("page_table"))
-
         if not getattr(self, "_decode_logged", False):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen)")
@@ -225,9 +208,4 @@ class Qwen35ForCausalLM(Generator):
         # paged-SDPA + GDN decode trace at position 0 during warmup. Qwen sets
         # _supports_on_device_sampling=False, so the orchestrator passes can_sample_on_device=False
         # and exactly one greedy trace is captured; serving replays it with per-step input updates.
-        #
-        # Dormant fallback (QWEN35_DECODE_PRIME=1): skip the warmup capture entirely; decode_forward
-        # primes the trace lazily at the real post-prefill position instead. See decode_forward.
-        if os.environ.get("QWEN35_DECODE_PRIME") == "1":
-            return
         return super().warmup_model_decode(*args, **kwargs)

@@ -4,10 +4,6 @@
 Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
-import os
-
-from loguru import logger
-
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen3_5_9b.tt.attention import AttentionConfig, Qwen35GatedAttention
@@ -15,42 +11,6 @@ from models.demos.blackhole.qwen3_5_9b.tt.gdn import GDNConfig, Qwen35GatedDelta
 from models.demos.blackhole.qwen3_5_9b.tt.mlp import Qwen35MLP
 from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
-
-# Env-gated (QWEN35_DEBUG_HIDDEN) per-layer residual-stream probe. Logs the norm/abs-max/NaN
-# of the attention output, post-attn residual, MLP output and final hidden during DECODE for
-# the first few calls per layer (bounded cost; requires eager decode to read inside forward).
-# Comparing a coherent short run vs the degenerate 64k run by layer pinpoints where they diverge.
-_DBG_HIDDEN_COUNTS = {}
-# Env-gated (QWEN35_DBG_PREFILL_HIDDEN) per-layer LAST-POSITION hidden capture during PREFILL.
-# Overwritten per call, so after a chunk-outer run it holds the LAST chunk's last position
-# (= global position T-1), directly comparable to the single-pass oracle's position T-1.
-# Used to find the first layer where chunk-outer diverges from the oracle at long context.
-_DBG_PREFILL_LAST = {}
-# Decode twin (QWEN35_DBG_DECODE_HIDDEN): per-layer hidden of the single decode position.
-_DBG_DECODE_LAST = {}
-# Component captures (QWEN35_DBG_COMPONENT): per-layer attention / MLP output rows, keyed
-# ("prefill"|"decode", layer). Splits decode-vs-prefill drift into per-component PCC.
-_DBG_ATTN_ROW = {}
-_DBG_FF_ROW = {}
-
-
-def _capture_row(t, valid_len, mode, device, num_devices, store, layer_num):
-    key = "prefill" if mode == "prefill" else "decode"
-    if mode == "prefill":
-        r = (valid_len - 1) if valid_len else (t.shape[-2] - 1)
-        sl = ttnn.slice(t, (0, 0, r, 0), (1, 1, r + 1, t.shape[-1]))
-    else:
-        sl = t
-    comp = ttnn.ConcatMeshToTensor(device, dim=3) if num_devices > 1 else None
-    store[(key, layer_num)] = ttnn.to_torch(sl, mesh_composer=comp).float().reshape(-1)
-    if mode == "prefill":
-        ttnn.deallocate(sl)
-
-
-def _dbg_norm(t, mesh, num_devices):
-    comp = ttnn.ConcatMeshToTensor(mesh, dim=0) if num_devices > 1 else None
-    x = ttnn.to_torch(t, mesh_composer=comp).float()
-    return x.norm().item(), x.abs().max().item(), int(x.isnan().sum())
 
 
 class Qwen35DecoderLayer:
@@ -162,11 +122,6 @@ class Qwen35DecoderLayer:
         chunk_start_idx_tensor=None,
         valid_len=None,
     ):
-        _dbg = (
-            mode != "prefill"
-            and bool(os.environ.get("QWEN35_DEBUG_HIDDEN"))
-            and _DBG_HIDDEN_COUNTS.get(self.layer_num, 0) < 2
-        )
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
@@ -231,9 +186,6 @@ class Qwen35DecoderLayer:
         ttnn.deallocate(attn_input)
 
         h = ttnn.add(x, attn_output)
-        _a = _dbg_norm(attn_output, self.device, self.num_devices) if _dbg else None
-        if os.environ.get("QWEN35_DBG_COMPONENT"):
-            _capture_row(attn_output, valid_len, mode, self.device, self.num_devices, _DBG_ATTN_ROW, self.layer_num)
         ttnn.deallocate(attn_output)
 
         ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
@@ -241,35 +193,7 @@ class Qwen35DecoderLayer:
         ff_output = self.feed_forward.forward(ff_input)
         ttnn.deallocate(ff_input)
 
-        if os.environ.get("QWEN35_DBG_COMPONENT"):
-            _capture_row(ff_output, valid_len, mode, self.device, self.num_devices, _DBG_FF_ROW, self.layer_num)
         output = ttnn.add(h, ff_output)
-        if _dbg:
-            _hh = _dbg_norm(h, self.device, self.num_devices)
-            _f = _dbg_norm(ff_output, self.device, self.num_devices)
-            _o = _dbg_norm(output, self.device, self.num_devices)
-            kind = "FULL" if self.is_full_attention else "gdn "
-            logger.info(
-                f"[HIDDBG L{self.layer_num:2d} {kind}] "
-                f"attn|{_a[0]:8.2f} amax{_a[1]:7.2f} nan{_a[2]} || "
-                f"res|{_hh[0]:8.2f} || ff|{_f[0]:8.2f} amax{_f[1]:7.2f} nan{_f[2]} || "
-                f"out|{_o[0]:8.2f} amax{_o[1]:7.2f} nan{_o[2]}"
-            )
-            _DBG_HIDDEN_COUNTS[self.layer_num] = _DBG_HIDDEN_COUNTS.get(self.layer_num, 0) + 1
-        if mode == "prefill" and os.environ.get("QWEN35_DBG_PREFILL_HIDDEN"):
-            S = output.shape[-2]
-            # Capture the last REAL position (valid_len-1 in a padded masked bucket), not the
-            # padded row S-1, so the capture is comparable to a decode step at the same position.
-            r = (valid_len - 1) if valid_len else (S - 1)
-            last_t = ttnn.slice(output, (0, 0, r, 0), (1, 1, r + 1, output.shape[-1]))
-            comp = ttnn.ConcatMeshToTensor(self.device, dim=3) if self.num_devices > 1 else None
-            _DBG_PREFILL_LAST[self.layer_num] = ttnn.to_torch(last_t, mesh_composer=comp).float().reshape(-1)
-            ttnn.deallocate(last_t)
-        if mode != "prefill" and os.environ.get("QWEN35_DBG_DECODE_HIDDEN"):
-            # Decode twin of _DBG_PREFILL_LAST: per-layer hidden for the single decode position,
-            # directly comparable layer-by-layer to the prefill capture at the same position.
-            comp = ttnn.ConcatMeshToTensor(self.device, dim=3) if self.num_devices > 1 else None
-            _DBG_DECODE_LAST[self.layer_num] = ttnn.to_torch(output, mesh_composer=comp).float().reshape(-1)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)
 

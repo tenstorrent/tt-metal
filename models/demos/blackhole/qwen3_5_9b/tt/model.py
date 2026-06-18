@@ -5,7 +5,6 @@ Assembly: tok_embeddings → 32 × Qwen35DecoderLayer → RMSNorm → LM Head
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
 import math
-import os
 
 import torch
 from loguru import logger
@@ -733,17 +732,6 @@ class Qwen35Model:
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
 
-        # QWEN35_TP_PREFILL_EAGER=1: do NOT park the chunk trace, so prefill_traced_chunked falls
-        # back to the EAGER chunk loop (_prefill_chunked_eager_tp). This A/Bs the traced-chunk-outer
-        # vs eager prefill hypothesis for the 64k long-context degeneration — the reference 27B
-        # prefills eagerly and retrieves verbatim, while this codebase's traced chunk-outer path
-        # degenerates. Warmup + GDN _stable_state binding above already ran, so the eager fallback
-        # has its programs compiled and state bound; _chunked_trace_id stays None (set False above).
-        if os.environ.get("QWEN35_TP_PREFILL_EAGER") == "1":
-            self._reset_gdn_state_for_new_sequence()
-            logger.info("Chunked prefill trace (TP) SKIPPED — eager prefill (QWEN35_TP_PREFILL_EAGER=1)")
-            return
-
         # ---- Capture the trace. ----
         self._reset_gdn_state_for_new_sequence()
         self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
@@ -1131,15 +1119,10 @@ class Qwen35Model:
                 return self._prefill_traced_chunked_tp(
                     token_ids, page_table, actual_len, num_full, chunk_size, tail_real
                 )
-            # Eager fallback (also reached when QWEN35_TP_PREFILL_EAGER=1 skips parking the trace).
-            # Default eager = flexible qk=64 — identical SDPA to the traced path, so eager-vs-traced
-            # isolates the trace replay ALONE. QWEN35_TP_PREFILL_INT_SDPA=1 switches the eager chunks
-            # (and tail) to the reference 27B's INT chunk_start qk=256 SDPA for a full reference match
-            # (slower: a host-int chunk_start compiles a fresh SDPA program per chunk, but no trace is
-            # parked during prefill so the recompiles are safe).
-            flex = os.environ.get("QWEN35_TP_PREFILL_INT_SDPA") != "1"
+            # Eager fallback when no chunk trace is parked. Eager = flexible qk=64, identical SDPA to
+            # the traced path, so the eager result matches the traced chunk-outer path.
             return self._prefill_chunked_eager_tp(
-                token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=flex
+                token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=True
             )
 
         # >= 1 full chunk: re-zero GDN state once (the warmup-dirty-state guard); it then carries
@@ -1343,10 +1326,8 @@ class Qwen35Model:
             ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
-            self._dbg_gdn_stats(f"prefill chunk={c} endpos={cs + chunk_size}")
 
         ttnn.synchronize_device(self.device)
-        self._dbg_gdn_stats("prefill after-full-chunks")
 
         # ---- Final partial chunk via the masked fixed-bucket path (rounds the tail to a warmed
         #      bucket + masks the GDN; chunk_start = cs skips the state reset so the carried
@@ -1372,44 +1353,6 @@ class Qwen35Model:
                 layer.attention.reset_cache()
             else:
                 layer.attention.reset_state(batch_size)
-
-    def _dbg_gdn_stats(self, tag, layers="sample"):
-        """Env-gated (QWEN35_DEBUG_LAYERS) systematic probe of GDN recurrent-state health.
-
-        Logs |rec_state|, abs-max, NaN count (and the last conv-state norm) for sampled GDN
-        layers so we can SEE where a long-context run goes wrong instead of guessing:
-          * across prefill chunks, a CORRECT carry accumulates then plateaus; a BROKEN carry
-            (each chunk rebuilt from zero) is roughly flat from chunk 0;
-          * a NaN / abs-max explosion pinpoints the exact chunk/step and layer that breaks.
-        Does a device sync + small host readback only when enabled (debug-only cost).
-        """
-        import os
-
-        if not os.environ.get("QWEN35_DEBUG_LAYERS"):
-            return
-        gdn = [(i, l.attention) for i, l in enumerate(self.layers) if not l.is_full_attention]
-        if not gdn:
-            return
-        if layers == "all":
-            sel = list(range(len(gdn)))
-        else:
-            sel = sorted(set([0, len(gdn) // 2, len(gdn) - 1]))
-        ttnn.synchronize_device(self.device)
-        comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if self.num_devices > 1 else None
-        msgs = []
-        for si in sel:
-            lnum, dn = gdn[si]
-            if getattr(dn, "rec_state", None) is None:
-                continue
-            rec = ttnn.to_torch(dn.rec_state, mesh_composer=comp).float()
-            conv_n = ""
-            if getattr(dn, "conv_states", None):
-                c = ttnn.to_torch(dn.conv_states[-1], mesh_composer=comp).float()
-                conv_n = f" |conv|={c.norm():.2f}"
-            msgs.append(
-                f"L{lnum} |rec|={rec.norm():.3f} amax={rec.abs().max():.3f} nan={int(rec.isnan().sum())}{conv_n}"
-            )
-        logger.info(f"[GDNDBG {tag}] " + " || ".join(msgs))
 
     def _reset_gdn_state_for_new_sequence(self):
         """Zero the GDN recurrent + conv state at the start of every new sequence.
