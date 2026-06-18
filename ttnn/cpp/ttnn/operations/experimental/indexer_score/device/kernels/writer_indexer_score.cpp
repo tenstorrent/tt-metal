@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writer for indexer_score. Pops untilized 32x32 bf16 tiles and scatters
-// their 32 rows as 64 B fragments into the row-major output (page = row,
-// fragments are 64 B aligned). The owner of a group's last unit fills every
-// row tail [group_valid_k_tiles*32, T) with -inf so skipped columns never
-// read junk; compute already covers [0, group_valid_k_tiles) for every row.
+// Writer for indexer_score. Pops untilized bf16 strips and scatters each strip's
+// 32 rows into the row-major output (page = row, one contiguous run per row).
+// The owner of a group's last unit fills row tails [valid_k_tiles*32, T)
+// with -inf; compute already covers [0, valid_k_tiles) for every row.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -15,12 +14,9 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 
-#include "indexer_score_common.hpp"
+#include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 
 constexpr uint32_t page_bytes = get_compile_time_arg_val(num_common_ct_args);  // row-major page = T*2 bytes
-
-constexpr uint32_t cb_out = tt::CBIndex::c_16;
-constexpr uint32_t cb_scratch = tt::CBIndex::c_17;  // writer-only -inf scratch tile
 
 constexpr uint32_t frag_bytes = tt::constants::TILE_WIDTH * sizeof(uint16_t);  // one bf16 tile row
 constexpr uint32_t scratch_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
@@ -31,31 +27,34 @@ inline uint32_t fill_inf_scratch_and_get_addr() {
     return CircularBuffer(cb_scratch).get_write_ptr();
 }
 
-/** Scatter one untilized tile's rows into output rows of q-tile-row q_row, column tile k_tile. */
+/** Scatter one strip into the 32 output rows of q-tile-row q_row at column tile k_tile_start. Strip is
+ *  always KC tiles wide; each row written as ONE contiguous run (1 async_write/row, not KC fragments).
+ *  `valid_w` = KC tiles inside T (< KC on a partial last unit; KC need not divide Tt). CB always pops
+ *  full KC; only the in-bounds prefix is written. */
 template <typename OutAcc>
-inline void write_tile(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t k_tile) {
-    CircularBuffer cb(cb_out);
-    cb.wait_front(1);
+inline void write_strip(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t k_tile_start, uint32_t valid_w) {
+    CircularBuffer cb(cb_out_strip);
+    cb.wait_front(k_tiles_per_unit);
     uint32_t src = cb.get_read_ptr();
-    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+    const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;  // strip row stride (full KC)
+    const uint32_t write_bytes = valid_w * frag_bytes;         // only the in-bounds columns
+    for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
         noc.async_write(
             CoreLocalMem<uint32_t>(src),
             out_acc,
-            frag_bytes,
+            write_bytes,
             {},
-            {.page_id = q_row * tt::constants::TILE_HEIGHT + r, .offset_bytes = k_tile * frag_bytes});
-        src += frag_bytes;
+            {.page_id = q_row * tt::constants::TILE_HEIGHT + rr, .offset_bytes = k_tile_start * frag_bytes});
+        src += row_pitch;
     }
     noc.async_write_barrier();
-    cb.pop_front(1);
+    cb.pop_front(k_tiles_per_unit);
 }
 
 /** Fill the group's row tails [tail_start_tiles*32, T) with -inf from the L1 scratch tile.
- *  compute emits the full [0, group_valid) rectangle for every row in the group (a future cell
- *  of an upper row is a full -inf masked tile), so the tail the writer owns starts at the
- *  group's valid width, the same column for every row. Starting here (rather than each row's
- *  own valid length) keeps the writer's fill disjoint from compute's output, so when a group's
- *  units split across cores no two cores write the same output bytes. */
+ *  Tail starts at the group's valid width (same column for every row), NOT each row's own valid
+ *  length -- this keeps the fill disjoint from compute's output, so cores sharing a group never
+ *  double-write the same bytes. */
 template <typename OutAcc>
 inline void fill_group_tails(
     Noc noc, const OutAcc& out_acc, uint32_t scratch, uint32_t q_tile_start, uint32_t tail_start_tiles) {
@@ -69,6 +68,8 @@ inline void fill_group_tails(
             uint32_t off = base_off;
             uint32_t left = tail_bytes_total;
             while (left > 0) {
+                // chunk == scratch tile size: the -inf source is exactly one tile, so each write
+                // copies at most a tile-worth of bytes before reusing the same source.
                 const uint32_t n = left < scratch_bytes ? left : scratch_bytes;
                 noc.async_write(
                     CoreLocalMem<uint32_t>(scratch),
@@ -100,11 +101,11 @@ void kernel_main() {
     span.start(flat_start);
 
     for (uint32_t i = 0; i < flat_count; ++i) {
-        // compute emits unit tiles in (r, c) row-major order
+        const uint32_t k_tile0 = span.k_tile_start();
+        const uint32_t valid_w = span.k_tiles();  // == KC for interior units, < KC for a partial last unit
+        // One KC-wide strip per row; masked suffix already stamped by compute. Write only valid_w columns.
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-            for (uint32_t c = 0; c < span.k_tiles(); ++c) {
-                write_tile(noc, out_acc, span.q_tile_start() + r, span.k_tile_start() + c);
-            }
+            write_strip(noc, out_acc, span.q_tile_start() + r, k_tile0, valid_w);
         }
         if (span.last_in_group()) {
             fill_group_tails(noc, out_acc, scratch, span.q_tile_start(), span.valid_k_tiles());

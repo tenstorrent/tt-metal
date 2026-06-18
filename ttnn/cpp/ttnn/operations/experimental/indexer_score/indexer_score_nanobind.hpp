@@ -6,9 +6,9 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::deepseek::indexer::detail {
+namespace ttnn::operations::experimental::indexer_score::detail {
 
 namespace nb = nanobind;
 void bind_indexer_score(nb::module_& mod);
 
-}  // namespace ttnn::operations::experimental::deepseek::indexer::detail
+}  // namespace ttnn::operations::experimental::indexer_score::detail

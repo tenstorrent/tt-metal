@@ -21,7 +21,7 @@ negative). After the score, top-k(2048) indices feed the sparse MLA.
 ## The op
 
 ```
-ttnn.experimental.deepseek.indexer_score(q, k, weights, is_causal, chunk_start_idx) -> score
+ttnn.experimental.indexer_score(q, k, weights, chunk_start_idx) -> score
 ```
 
 Weighted-ReLU MQA scoring with head-sum accumulation (analogue of DeepGEMM's
@@ -148,7 +148,7 @@ top-k to skip the fill entirely.
 
 ## Implementation (functional, in tree)
 
-Files under `ttnn/cpp/ttnn/operations/experimental/deepseek/indexer_score/device/`:
+Files under `ttnn/cpp/ttnn/operations/experimental/indexer_score/device/`:
 factory `indexer_score_program_factory.cpp`, kernels
 `kernels/{reader,compute,writer}_indexer_score.cpp`.
 

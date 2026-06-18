@@ -157,7 +157,7 @@ original report:</b> <code>tp=4 &lt; sp=8</code>, 50k cached prefix, 5k chunk. N
 <code>glob=5120</code>.</p>
 <div class="good"><b>The DSA path is now fully on device</b> (status.md Step 6 + Step 7). The three ops in <code>tt/ops.py</code>
 that were host/composed workarounds are thin wrappers over <b>C++ device ops</b>:
-<code>indexer_logits</code>→<code>ttnn.experimental.deepseek.indexer_score</code>,
+<code>indexer_logits</code>→<code>ttnn.experimental.indexer_score</code>,
 <code>topk_indices</code>→<code>ttnn.experimental.topk_large_indices</code>,
 <code>sparse_mla</code>→<code>ttnn.transformer.sparse_sdpa</code>. <b>Step 7</b> removed the last host hop: the latent prefix
 feeding <code>sparse_mla</code> is gathered on device (<code>to_memory_config</code> ND→interleaved → SP <code>all_gather</code>
@@ -239,7 +239,7 @@ flowchart TD
   H --> QA
   H --> WP
 
-  LOG["ops.indexer_logits (device)<br/>deepseek.indexer_score<br/>relu(q·kᵀ), head-reduce, causal -inf FUSED"]:::rep
+  LOG["ops.indexer_logits (device)<br/>indexer_score<br/>relu(q·kᵀ), head-reduce, causal -inf FUSED"]:::rep
   TK["ops.topk_indices (device)<br/>topk_large_indices<br/>masked slots → 0xFFFFFFFF sentinel"]:::rep
   IDX["indices 🟫<br/>[1,1,glob,k] uint32 RM replicated<br/>↳ [1,1,5120,2048]"]:::io
 
@@ -269,7 +269,7 @@ flowchart TD
 <div class="note"><b>The score math</b> (<code>ops.indexer_logits</code>):
 $$ \text{logits}[s,t] = \sum_{h} w[s,h]\cdot \mathrm{relu}\big(\langle q[s,h],\,k[t]\rangle\big) $$
 The reference fuses this as DeepGEMM <code>fp8_mqa_logits</code>; the port now calls the merged
-<code>ttnn.experimental.deepseek.indexer_score</code> C++ op (bf16, no fp8/Hadamard yet) — <b>causality is fused inside the
+<code>ttnn.experimental.indexer_score</code> C++ op (bf16, no fp8/Hadamard yet) — <b>causality is fused inside the
 op</b> from <code>chunk_start_idx</code> (future/pad columns set to <code>-inf</code>), so the caller no longer adds a triu
 mask. Output is <code>[1,1,Sq,Skv]</code> bf16 <b>ROW_MAJOR</b>, chaining straight into <code>topk_large_indices</code>; the
 <code>-inf</code> columns survive there as the <code>0xFFFFFFFF</code> sentinel (contiguous descending tail), which

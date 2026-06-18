@@ -29,7 +29,7 @@ def indexer_logits(q: ttnn.Tensor, k: ttnn.Tensor, w: ttnn.Tensor, chunk_start_i
       logits[s, t] = sum_h w[s, h] * relu(q[s, h] . k[t])  for t <= chunk_start_idx + s,
       logits[s, t] = -inf                                   for future/pad columns.
 
-    Backed by the merged ``ttnn.experimental.deepseek.indexer_score`` C++ op
+    Backed by the merged ``ttnn.experimental.indexer_score`` C++ op
     (replaces the composed matmul+relu+head-sum workaround). The op applies the
     causal -inf mask itself from ``chunk_start_idx`` — the caller no longer adds a
     triu mask (status.md missing-op (11)).
@@ -44,7 +44,7 @@ def indexer_logits(q: ttnn.Tensor, k: ttnn.Tensor, w: ttnn.Tensor, chunk_start_i
     """
     # The op takes per-head weights as [1, H_idx, Sq, 1]; weights_proj gives [1, 1, Sq, H_idx].
     weights = ttnn.permute(w, (0, 3, 2, 1))  # [1, H_idx, Sq, 1]
-    return ttnn.experimental.deepseek.indexer_score(q, k, weights, is_causal=True, chunk_start_idx=chunk_start_idx)
+    return ttnn.experimental.indexer_score(q, k, weights, chunk_start_idx=chunk_start_idx)
 
 
 def topk_indices(logits: ttnn.Tensor, k: int) -> ttnn.Tensor:
