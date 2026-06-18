@@ -84,7 +84,7 @@ reference uses) avoids the overlap but yields a 7x10 worker grid (x=7 reserved).
 using moe_compute on this build must run COL dispatch, which then perturbs the core/ring
 geometry that the all_gather_async barrier-sync depends on.
 
-## NOT reproducible in isolation (important)
+## NOT reproducible in isolation (important — bisection)
 
 `repro_moe_compute_axis0_deadlock.py` (this dir; random GLM-shaped weights, no HF load) was
 used to bisect. ALL of these **pass cleanly** (no hang/assert):
@@ -92,13 +92,24 @@ used to bisect. ALL of these **pass cleanly** (no hang/assert):
 - `--probe axis0` : ... + `all_gather(dim=0, cluster_axis=0)` on the combine output.
 - `--probe model_seq` : ... + axis-1 reduce_scatter/all_gather epilogue + a lm_head-shaped
   `all_gather(dim=0, cluster_axis=0)` on a `[16,1,18944]` tensor.
+- `--probe model_seq --warmup 3` : prepend 3 rounds of cluster_axis=0 all_gather +
+  cluster_axis=1 reduce_scatter/all_gather (mimicking the 3 dense layers + router axis-0
+  traffic) before the moe_compute + axis-0 all_gather. **Still passes.**
 
-So moe_compute + a cluster_axis=0 all_gather is fine on its own. The assert only fires in the
-**full GLM model**, which additionally runs (before the failing all_gather): 3 dense decoder
-layers (attention + dense MLP, with cluster_axis=1 CCLs), the attention's cluster_axis=0
-KV-cache point-to-point, and the MoE router's own cluster_axis=0 `all_gather`s (×3) — i.e.,
-accumulated fabric/core state + a specific all_gather instance. The trigger is an emergent
-full-model interaction, not the standalone op.
+So moe_compute + cluster_axis=0/1 CCLs (even with warmup traffic) is fine on its own. The
+assert only fires in the **full GLM model**. Since the warmup CCL traffic did NOT reproduce
+it, the trigger is **not** the moe_compute↔CCL ordering per se. The remaining differences the
+harness does not model are the prime suspects:
+- the **attention KV-cache point-to-point** (`PointToPointOp`, cluster_axis=0) run 4× before
+  the MoE layer (a different op family than all_gather), and
+- the **large persistent per-layer KV-cache tensors** (multi-GB) the model allocates, i.e.
+  **DRAM/L1/core-allocation pressure** that can shift the internal all_gather's auto-assigned
+  worker cores onto an invalid coordinate under the 7x10 COL grid.
+
+i.e. the trigger is an emergent full-model interaction (most likely allocation/placement
+pressure), not the standalone op sequence. Reducing further would essentially require
+rebuilding the attention + KV-cache path, so **the full GLM model is the practical repro**
+(below).
 
 The full-model repro is the GLM-4.7 graph in the ttnn-models repo
 (`mvasiljevic/glm-4.7-perf-tuning`, commit f220417): `GLM_CHECK_PCC=1 python main.py` hangs;

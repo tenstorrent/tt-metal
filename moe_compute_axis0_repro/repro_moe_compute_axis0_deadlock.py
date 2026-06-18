@@ -116,6 +116,10 @@ def build_dispatch_prealloc(device):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--probe", choices=["sync", "axis0", "axis1", "model_seq"], default="sync")
+    ap.add_argument("--warmup", type=int, default=0,
+                    help="rounds of prior cluster_axis=0 all_gather + cluster_axis=1 "
+                         "reduce_scatter/all_gather BEFORE dispatch+moe_compute, to mimic the "
+                         "dense layers + router axis-0 traffic that precede the MoE in the model")
     args = ap.parse_args()
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
@@ -146,6 +150,32 @@ def main():
         x = to_dev(x_t, ttnn.bfloat16)
         idx = to_dev(idx_t, ttnn.uint16)
         scr = to_dev(scr_t, ttnn.bfloat16)
+
+        # Warmup: mimic the dense layers + router axis-0/axis-1 CCL traffic that runs
+        # before the MoE layer in the full model (accumulated fabric/core state).
+        for r in range(args.warmup):
+            w0 = ttnn.from_torch(torch.randn(NUM_DISPATCH, TOKENS_PER_DEV, H) * 0.05,
+                                 device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+                                 memory_config=dram, mesh_mapper=ttnn.ShardTensor2dMesh(device, MESH_SHAPE, (0, None)))
+            # cluster_axis=0 all_gather (router-like)
+            g0 = ttnn.all_gather(input_tensor=w0, dim=0, cluster_axis=0, subdevice_id=None,
+                                 memory_config=dram, num_links=None, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(w0, False)
+            ttnn.deallocate(g0, False)
+            # cluster_axis=1 reduce_scatter + all_gather (dense-MLP-like)
+            w1 = ttnn.from_torch(torch.randn(1, 1, TOKENS_PER_DEV, H) * 0.05,
+                                 device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+                                 memory_config=dram, mesh_mapper=ttnn.ReplicateTensorToMesh(device))
+            rs = ttnn.reduce_scatter(input_tensor=w1, dim=3, cluster_axis=1, subdevice_id=None,
+                                     memory_config=dram, num_links=None, topology=ttnn.Topology.Linear)
+            rs = ttnn.reshape(rs, [TOKENS_PER_DEV, H // NUM_REPLICATED], memory_config=dram)
+            ag = ttnn.all_gather(input_tensor=rs, dim=1, cluster_axis=1, subdevice_id=None,
+                                 memory_config=dram, num_links=None, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(w1, False)
+            ttnn.deallocate(rs, False)
+            ttnn.deallocate(ag, False)
+        if args.warmup:
+            print(f">>> warmup ({args.warmup} rounds) done", flush=True)
 
         sparse, d_idx, d_scr = ttnn.experimental.all_to_all_dispatch_metadata(
             x, idx, scr, lin, cluster_axis=CLUSTER_AXIS, num_links=4,

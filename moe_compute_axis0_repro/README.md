@@ -20,7 +20,12 @@ cd $TT_METAL_RUNTIME_ROOT/moe_compute_axis0_repro
 python repro_moe_compute_axis0_deadlock.py --probe sync       # passes
 python repro_moe_compute_axis0_deadlock.py --probe axis0      # passes
 python repro_moe_compute_axis0_deadlock.py --probe model_seq  # passes
+python repro_moe_compute_axis0_deadlock.py --probe model_seq --warmup 3  # passes (prior axis-0/1 CCL traffic)
 ```
+All probes pass — the standalone harness does NOT reproduce the assert. See FINDINGS.md
+("NOT reproducible in isolation"): the trigger needs the full forward (attention KV-cache
+point-to-point + large persistent KV allocations / core-allocation pressure), not the
+moe_compute↔CCL sequence the harness models.
 Reset the galaxy between runs if anything hangs: `tt-smi -glx_reset_auto` (host).
 
 ## Full-model repro (the one that actually hangs)
