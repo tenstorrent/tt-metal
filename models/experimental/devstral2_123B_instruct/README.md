@@ -16,6 +16,50 @@ Experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral-2-123B-Instruct-25
 **Traced prefill/decode** with **2CQ** decode staging is on by default
 (`DEVSTRAL2_TRACE_PREFILL=1`, `DEVSTRAL2_DECODE_TRACE_2CQ=1`). Set either to `0` to disable.
 
+## Architecture
+
+Devstral-2-123B-Instruct is a dense decoder-only transformer (Ministral3 text stack). The TT
+implementation maps the HuggingFace graph to `ttnn` modules on a **1×8 Blackhole mesh** (Loudbox),
+with **tensor parallelism (TP=8)** along the mesh cluster axis.
+
+### Model stack
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    TtMinistral3ForCausalLM  (88 layers)                     │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  input_ids ──► TtEmbedTokens ──► ┌──────────────────────────────────────┐  │
+│                                  │  TtDecoderLayer  × 88                │  │
+│                                  │  (residual transformer block)        │  │
+│                                  └──────────────────┬───────────────────┘  │
+│                                                     ▼                      │
+│                                            TtRMSNorm (final)                 │
+│                                                     ▼                      │
+│                                            lm_head (column-parallel)         │
+│                                                     ▼                      │
+│                                              logits [B, S, vocab]          │
+│                                                     │                      │
+│                                                     ▼                      │
+│                              OnDeviceSampler (ttnn.argmax, optional)       │
+│                                                     ▼                      │
+│                                              next token id                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Component | TT module | Notes |
+|-----------|-----------|-------|
+| Token embedding | `TtEmbedTokens` | `ttnn.embedding`, replicated on mesh |
+| RoPE tables | `TtRotaryEmbedding` | YaRN (262K context); DRAM when tables exceed L1 |
+| Decoder block | `TtDecoderLayer` | Pre-norm + GQA attention + SwiGLU MLP |
+| Final norm | `TtRMSNorm` | RMSNorm on `hidden_size` (12 288) |
+| LM head | sharded matmul | Column-parallel vocab projection |
+| Sampling | `OnDeviceSampler` | Greedy `ttnn.argmax` on device (default) |
+
+**Key shapes (HF `Ministral3Config`):** `hidden_size=12288`, `num_hidden_layers=88`,
+`num_attention_heads=96`, `num_key_value_heads=8` (GQA), `head_dim=128`,
+`intermediate_size=28672`, `vocab_size=131072`, `max_position_embeddings=262144`.
+
 ## Prerequisites
 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -188,6 +232,27 @@ hidden states after 128-token prefill + one decode step (no `lm_head`).
 pytest models/experimental/devstral2_123B_instruct/tests/perf/test_e2e_performant.py -k L88
 ```
 
+**ISL sweep** — traced chunked prefill + decode trace (same path as
+``text_demo.py`` defaults). KV uses ``padded_ISL + DEVSTRAL2_MAX_NEW_TOKENS`` (default
+100) with trace-safe alignment. Decode replay count uses the same ``max_new_tokens``,
+capped by ``DEVSTRAL2_ISL_PERF_DECODE_REPLAY_CAP`` (default 32). Set
+``DEVSTRAL2_HF_LOCAL_ONLY=1`` when weights are already cached.
+
+```sh
+pytest models/experimental/devstral2_123B_instruct/tests/perf/test_isl_sweep_perf.py -k sanity -v
+pytest models/experimental/devstral2_123B_instruct/tests/perf/test_isl_sweep_perf.py -k sweep -v
+```
+
+Results table is logged and saved under ``tests/isl_sweep_perf_outputs/``.
+
+| Column | Meaning |
+|--------|---------|
+| ISL | Input sequence length (tokens) |
+| TTFT (s) | Prefill trace replay after capture (device time) |
+| Prefill tok/s | ``ISL / prefill_replay_time`` |
+| Decode tok/s/u | Steady-state decode trace replay throughput |
+
+
 **Single-layer wall-clock perf:**
 
 ```sh
@@ -246,6 +311,8 @@ devstral2_123B_instruct/
 │   ├── test_model_token_match.py
 │   └── perf/
 │       ├── test_e2e_performant.py
+│       ├── test_isl_sweep_perf.py
+│       ├── isl_perf_common.py
 │       ├── test_perf.py
 │       ├── test_device_perf_single_layer_prefill_decode.py
 │       └── test_profile_single_layer_prefill_decode.py

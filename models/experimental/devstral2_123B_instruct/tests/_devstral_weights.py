@@ -91,6 +91,47 @@ def devstral2_e2e_sweep_model_max_seq_len(*, max_post_prefill_tokens: int | None
     return _round_up(need, kv_block)
 
 
+def devstral2_max_new_tokens() -> int:
+    """Decode budget for tests — same as ``text_demo`` (``DEVSTRAL2_MAX_NEW_TOKENS``, default 100)."""
+    return int(os.environ.get("DEVSTRAL2_MAX_NEW_TOKENS") or "100")
+
+
+def devstral2_isl_perf_decode_replay_iters() -> int:
+    """Decode trace replays to time (``max_new_tokens``, wall-clock capped)."""
+    budget = devstral2_max_new_tokens()
+    if budget <= 0:
+        return 0
+    cap = int(os.getenv("DEVSTRAL2_ISL_PERF_DECODE_REPLAY_CAP", "32"))
+    if cap <= 0:
+        return budget
+    return min(budget, cap)
+
+
+def devstral2_isl_perf_kv_max_seq_len(isl_lengths: list[int]) -> int:
+    """Single KV/RoPE budget for an ISL sweep (``text_demo``-style, trace-safe alignment).
+
+    For each sweep point: ``padded_ISL + max_new_tokens``, take the maximum, apply
+    ``DEVSTRAL2_MIN_MAX_SEQ_LEN`` floor (default 262144), then round with
+    ``_round_up_max_seq_len`` so logical KV blocks are a multiple of 8 (prefill trace safe).
+    """
+    from models.experimental.devstral2_123B_instruct.demo.text_demo import (
+        _min_max_seq_len,
+        _round_up,
+        _round_up_max_seq_len,
+    )
+    from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
+
+    max_new = devstral2_max_new_tokens()
+    kv_block = Devstral2Args.kv_block_size
+    need = 0
+    for isl in isl_lengths:
+        num_chunks = max(1, (isl + kv_block - 1) // kv_block)
+        padded_len = num_chunks * kv_block
+        need = max(need, _round_up(padded_len + max_new, kv_block))
+    floor = _min_max_seq_len()
+    return _round_up_max_seq_len(max(need, floor), kv_block)
+
+
 def devstral2_tt_weight_cache_dir(mesh_device, text_cfg: Ministral3Config) -> str:
     """Shared on-disk TT weight cache for all Devstral-2 large tests.
 
