@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
-    GTEST_SKIP() << "Temporarily disabled.";
+    GTEST_SKIP() << "Temporarily disabled. See SANITIZER_CHECKS.md for details.";
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];

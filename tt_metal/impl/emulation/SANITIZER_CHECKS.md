@@ -28,7 +28,7 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
   `__emule_local_l1_to_ptr` (duplicated in `dataflow_api.h` and the stub; the JIT
   wrapper includes the stub first, so the **stub's copy is the one that runs** —
   kernel-side edits must be made in both).
-- **Runner / post-launch** — `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`
+- **Runner / post-launch** — `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp` (+ `emule_sanitizers.cpp` for Dirty CB / Object Intent)
   (runs after all kernel threads join). The live-buffer extents it relies on are
   registered in `[metal] tt_metal/impl/emulation/emule_live_ranges.{hpp,cpp}`,
   wired in from `[metal] tt_metal/impl/buffers/buffer.cpp`.
@@ -74,8 +74,8 @@ the offending kernel line.
 | CB Reservation Overflow | kernel | `[emule] include/jit_hw/api/cb_api.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
 | NoC-read-pending on pop | kernel | `[emule] api/cb_api.h` (pop) + `api/dataflow/dataflow_api.h` (read counter) | `cb_pop_front` while a `noc_async_read` is unbarriered |
 | NOC Transfer Alignment | kernel | `[emule] include/jit_hw/api/dataflow/dataflow_api.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
-| Dirty CB Detected | runner | `[metal] emulated_program_runner.cpp` (counters in `[emule] api/cb_api.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
-| Object Intent Violation | runner | `[metal] emulated_program_runner.cpp` | a kernel changed a buffer it never resolved a pointer into |
+| Dirty CB Detected | runner | `[metal] emule_sanitizers.cpp` (counters in `[emule] api/cb_api.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
+| Object Intent Violation | runner | `[metal] emule_sanitizers.cpp` | a kernel changed a buffer it never resolved a pointer into |
 
 ---
 
@@ -261,14 +261,14 @@ their low bits differ.
 ## Runner / post-launch checks
 
 > These live in the runner
-> (`[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`) and catch
+> (`[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`, with the Dirty-CB / Object-Intent logic in `emule_sanitizers.cpp`) and catch
 > program-structure invariants that no single per-access check can see. Most run
 > after all kernel threads join; **Dirty CB** runs at each kernel's exit (it reads
 > per-kernel thread-locals that are cleared on teardown).
 
 ### 11. Dirty CB Detected
 **Lives in:** `sweep_per_kernel_dirty_cbs` (abort in `abort_if_dirty_cb`) in
-`[metal] emulated_program_runner.cpp`. Reads the per-kernel thread-local
+`[metal] emule_sanitizers.cpp`. Reads the per-kernel thread-local
 *trailing-dangling* flags `__emule_cb_reserve_dangling[]` /
 `__emule_cb_wait_dangling[]` (maintained by `cb_reserve_back`/`cb_push_back` and
 `cb_wait_front`/`cb_pop_front` in `[emule] include/jit_hw/api/cb_api.h`).
@@ -312,12 +312,21 @@ master switch. `sweep_per_kernel_dirty_cbs` returns early when
 regression past a kernel with a known un-flushed-CB bug without losing OOB /
 Padding / Object-Intent / CB-Boundary coverage. The `test_cb_leak.cpp` death tests
 `unsetenv` it so they still validate the check even when it is exported globally.
+**Why this is the only check with its own switch:** un-flushed/leaked CBs are by
+far the most common *known-but-not-yet-fixed* violation surfaced when sweeping the
+whole op suite (real kernels are routinely mid-fix for a CB-handoff bug), so a
+dedicated escape hatch lets the rest of the suite keep running at full coverage.
+The other checks rarely need blanket suppression — the master switch
+(`TT_METAL_EMULE_ASAN`) already covers the all-off case. The env var is re-read on
+every call (not cached) for the same reason as the master switch: a static cache
+would stick to the first value observed across a combined gtest binary that toggles
+it between test cases.
 *Exercised by:* `test_cb_leak.cpp` (reserve-without-push, wait-without-pop, a
 lookahead-reserve no-violation control that pins the false-positive fix, a balanced
 no-violation control, and the per-check opt-out env test).
 
 ### 12. Object Intent Violation
-**Lives in:** `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp` (the
+**Lives in:** `[metal] tt_metal/impl/emulation/emule_sanitizers.cpp` (the
 pre-launch byte snapshot + post-join `memcmp`); the per-kernel "resolved set"
 (`__emule_l1_resolved_ranges`) is recorded inside `__emule_local_l1_to_ptr`
 (`[emule] jit_kernel_stubs.hpp` & `dataflow_api.h`).
@@ -362,5 +371,5 @@ the violation.
 | CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
 | NoC pending on pop | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
 | NOC Transfer Alignment | `[emule] api/dataflow/dataflow_api.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
-| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] api/cb_api.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; opt out with `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` |
-| Object Intent | `[metal] emulated_program_runner.cpp` | post-launch `memcmp` of buffers never resolved into |
+| Dirty CB | `[metal] emule_sanitizers.cpp` (+ `[emule] api/cb_api.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; opt out with `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` |
+| Object Intent | `[metal] emule_sanitizers.cpp` | post-launch `memcmp` of buffers never resolved into |

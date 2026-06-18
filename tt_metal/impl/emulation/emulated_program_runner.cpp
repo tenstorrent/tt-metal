@@ -5,6 +5,7 @@
 #include "emulated_program_runner.hpp"
 #include "emule_live_ranges.hpp"
 #include "host_sanitizers.hpp"
+#include "emule_sanitizers.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
@@ -62,10 +63,7 @@
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/tile_counter.hpp"
-// Emit the single definition of __emule_asan_panic into libtt_metal here (this
-// TU has the tt-emule include path and is built with GNU features available).
-#define EMULE_ASAN_IMPLEMENTATION
-#include "jit_hw/emule_asan.h"
+
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <tt-logger/tt-logger.hpp>
@@ -190,8 +188,6 @@ static constexpr uint32_t NUM_NOCS = 2;
 // match the array size declared by the JIT side in
 // `include/jit_hw/internal/dataflow/dataflow_api_addrgen.h`.
 static constexpr uint32_t MAX_NUM_BANKS = 256;
-// Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
-static constexpr uint32_t EMULE_NUM_CBS = 32;
 // Semaphore alignment in L1 (must match firmware layout).
 static constexpr uint32_t EMULE_SEM_ALIGN = 16;
 
@@ -212,6 +208,10 @@ static constexpr uint32_t NOC_LOCAL_BITS = 36;
 static constexpr uint32_t NOC_NODE_ID_BITS = 6;
 static constexpr uint64_t NOC_LOCAL_MASK = (1ULL << NOC_LOCAL_BITS) - 1;
 static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
+
+// __emule_asan_panic is defined in emule_asan_panic.cpp (same libtt_metal); the
+// checks below and the JIT kernel .so files resolve it at link/dlopen.
+extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
 
 // C-linkage bridge functions for JIT kernels.
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
@@ -2080,343 +2080,9 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
     return per_thread_dfbs;
 }
 
-// Sanitizer state threaded into each kernel thread. See SANITIZERS.md.
-struct EmuleOobTensorState {
-    bool asan_enabled = false;
-    uint32_t l1_unreserved_base = 0;
-    const uint64_t* tensor_ranges = nullptr;
-    uint32_t tensor_ranges_count = 0;
-    uint32_t dram_unreserved_base = 0;
-    const uint64_t* dram_tensor_ranges = nullptr;
-    uint32_t dram_tensor_ranges_count = 0;
-    bool cb_boundary_strict = false;
-    const uint64_t* l1_padding_ranges = nullptr;
-    uint32_t l1_padding_ranges_count = 0;
-    bool object_intent_strict = false;
-};
-
-// ===========================================================================
-// Sanitizer helpers. Every entry point is a no-op when ASAN is disabled, so
-// launch_cores / execute_program_emulated can call them unconditionally and
-// stay free of `if (asan_enabled)` clutter. See SANITIZERS.md.
-// ===========================================================================
-
-class ObjectIntentTracker {
-public:
-    void pre_launch_snapshot(
-        const EmuleOobTensorState& oob,
-        const std::vector<KernelInfo>& ki_list,
-        const uint8_t* l1_data,
-        const std::vector<uint32_t>& persistent_cb_starts,
-        [[maybe_unused]] uint32_t lx,
-        [[maybe_unused]] uint32_t ly) {
-        if (!oob.object_intent_strict || oob.tensor_ranges == nullptr) {
-            return;
-        }
-        if (ki_list.size() != 1) {
-            // Per-kernel provenance relies on memcmp-after-exit to attribute byte changes to a
-            // single kernel; with multiple kernels sharing a core in one launch (the normal ttnn
-            // reader+compute+writer pattern) we can't tell which kernel wrote which bytes. The
-            // check is simply not applicable here, so skip it without snapshotting — leaving
-            // snapshots_ empty makes verify_post_launch a no-op — rather than aborting the whole
-            // workload. Other sanitizers continue to run.
-            return;
-        }
-        // I/O tensors from other kernels: a tensor whose L1 address was handed to
-        // this kernel as a runtime arg is one the kernel was explicitly given to
-        // operate on — even if it "belongs" to another kernel's context, this
-        // kernel is allowed to write to it (in-place ops, fused producers). The
-        // base address passed as a runtime arg equals the buffer's start offset,
-        // so any live-tensor start that appears in the kernel's runtime args is an
-        // I/O tensor and must be exempt from the snapshot. (Same space, no
-        // normalization: runtime-arg buffer addresses and the live-range starts are
-        // both direct offsets into the core's L1 backing.)
-        std::unordered_set<uint32_t> io_arg_starts(ki_list[0].rt_arg_values.begin(), ki_list[0].rt_arg_values.end());
-        snapshots_.reserve(oob.tensor_ranges_count);
-        for (uint32_t i = 0; i < oob.tensor_ranges_count; ++i) {
-            uint64_t packed = oob.tensor_ranges[i];
-            uint32_t r_start = static_cast<uint32_t>(packed >> 32);
-            uint32_t r_end = static_cast<uint32_t>(packed);
-            if (r_end <= r_start) {
-                continue;
-            }
-            // Skip persistent (globally-allocated CB) buffers: the kernel is
-            // allowed to write to them, so they must not
-            // be compared. Their address() == the buffer's start offset.
-            if (std::find(persistent_cb_starts.begin(), persistent_cb_starts.end(), r_start) !=
-                persistent_cb_starts.end()) {
-                continue;
-            }
-            // Skip I/O tensors this kernel was handed (see above).
-            if (io_arg_starts.count(r_start) != 0) {
-                continue;
-            }
-            Snap snap;
-            snap.packed = packed;
-            snap.bytes.resize(r_end - r_start);
-            std::memcpy(snap.bytes.data(), l1_data + r_start, r_end - r_start);
-            snapshots_.push_back(std::move(snap));
-        }
-    }
-
-    void setup_kernel_tls(
-        const EmuleOobTensorState& oob,
-        uint64_t* local_log,
-        uint32_t cap,
-        uint32_t* count) {
-        if (!oob.object_intent_strict) {
-            __emule_l1_resolved_ranges = nullptr;
-            __emule_l1_resolved_ranges_count = nullptr;
-            __emule_l1_resolved_ranges_capacity = 0;
-            return;
-        }
-        __emule_l1_resolved_ranges = local_log;
-        __emule_l1_resolved_ranges_count = count;
-        __emule_l1_resolved_ranges_capacity = cap;
-    }
-
-    void teardown_kernel_tls(
-        const EmuleOobTensorState& oob,
-        const uint64_t* local_log,
-        uint32_t local_count) {
-        __emule_l1_resolved_ranges = nullptr;
-        __emule_l1_resolved_ranges_count = nullptr;
-        __emule_l1_resolved_ranges_capacity = 0;
-        if (!oob.object_intent_strict || local_count == 0) {
-            return;
-        }
-        resolved_acc_.insert(resolved_acc_.end(), local_log, local_log + local_count);
-    }
-
-    void verify_post_launch(const uint8_t* l1_data, uint32_t lx, uint32_t ly, const char* kernel_name) const {
-        if (snapshots_.empty()) {
-            return;
-        }
-        std::unordered_set<uint64_t> resolved_set(resolved_acc_.begin(), resolved_acc_.end());
-        for (const auto& snap : snapshots_) {
-            if (resolved_set.count(snap.packed)) {
-                continue;
-            }
-            uint32_t r_start = static_cast<uint32_t>(snap.packed >> 32);
-            uint32_t r_end = static_cast<uint32_t>(snap.packed);
-            if (std::memcmp(snap.bytes.data(), l1_data + r_start, r_end - r_start) != 0) {
-                // No source line: this is detected post-exit by memcmp (the stray
-                // write bypassed __emule_local_l1_to_ptr, so there is no captured
-                // call site). The kernel name + core + the clobbered buffer range
-                // are the actionable info; the cause is typically an overrun from
-                // an adjacent buffer this kernel *did* resolve.
-                __emule_asan_panic(
-                    "[ASAN ERROR] Object Intent Violation: Attempted to modify memory belonging to an "
-                    "adjacent object context — kernel %s on core (%u, %u) changed L1 buffer [0x%x, 0x%x) "
-                    "without ever resolving a pointer into it via __emule_local_l1_to_ptr (likely an overrun "
-                    "from an adjacent buffer). No source line: detected post-exit by memory comparison, after "
-                    "the kernel returned.\n",
-                    kernel_name ? kernel_name : "(unknown)",
-                    lx,
-                    ly,
-                    r_start,
-                    r_end);
-            }
-        }
-    }
-
-private:
-    struct Snap {
-        uint64_t packed;
-        std::vector<uint8_t> bytes;
-    };
-    std::vector<Snap> snapshots_;
-    std::vector<uint64_t> resolved_acc_;
-};
-
-inline void set_sanitizer_thread_locals(
-    const EmuleOobTensorState& oob, uint32_t sem_base, uint32_t sem_size) {
-    __emule_sem_l1_range_start = oob.asan_enabled ? sem_base : 0;
-    __emule_sem_l1_range_end = oob.asan_enabled ? (sem_base + sem_size) : 0;
-    __emule_l1_unreserved_base = oob.l1_unreserved_base;
-    __emule_l1_tensor_ranges = oob.tensor_ranges;
-    __emule_l1_tensor_ranges_count = oob.tensor_ranges_count;
-    __emule_dram_unreserved_base = oob.dram_unreserved_base;
-    __emule_dram_tensor_ranges = oob.dram_tensor_ranges;
-    __emule_dram_tensor_ranges_count = oob.dram_tensor_ranges_count;
-    __emule_l1_padding_ranges = oob.l1_padding_ranges;
-    __emule_l1_padding_ranges_count = oob.l1_padding_ranges_count;
-    __emule_cb_boundary_strict = oob.cb_boundary_strict;
-}
-
-inline void clear_sanitizer_thread_locals() {
-    __emule_sem_l1_range_start = 0;
-    __emule_sem_l1_range_end = 0;
-    __emule_l1_unreserved_base = 0;
-    __emule_l1_tensor_ranges = nullptr;
-    __emule_l1_tensor_ranges_count = 0;
-    __emule_dram_unreserved_base = 0;
-    __emule_dram_tensor_ranges = nullptr;
-    __emule_dram_tensor_ranges_count = 0;
-    __emule_l1_padding_ranges = nullptr;
-    __emule_l1_padding_ranges_count = 0;
-    for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
-        __emule_cb_reserved_pages[i] = 0;
-        __emule_cb_waited_pages[i] = 0;
-        __emule_cb_reserve_dangling[i] = false;
-        __emule_cb_wait_dangling[i] = false;
-        __emule_cb_reserve_file[i] = nullptr;
-        __emule_cb_reserve_line[i] = 0;
-        __emule_cb_wait_file[i] = nullptr;
-        __emule_cb_wait_line[i] = 0;
-    }
-    __emule_cb_boundary_strict = false;
-}
-
-inline void abort_if_dirty_cb(
-    uint32_t cb_id,
-    uint32_t unpushed,
-    uint32_t unpopped,
-    uint32_t lx,
-    uint32_t ly,
-    uint32_t processor_id,
-    const char* reserve_file,
-    uint32_t reserve_line,
-    const char* wait_file,
-    uint32_t wait_line) {
-    // The kernel has already returned, so there is no kernel frame to backtrace;
-    // the offending file:line comes from the call site captured at reserve/wait
-    // time (__emule_cb_reserve_file / __emule_cb_wait_file). Only the imbalanced
-    // side(s) are reported.
-    char reserve_clause[512] = "";
-    if (unpushed > 0) {
-        std::snprintf(
-            reserve_clause,
-            sizeof(reserve_clause),
-            " %u page(s) reserved via cb_reserve_back at %s:%u were never committed with cb_push_back.",
-            unpushed,
-            reserve_file ? reserve_file : "?",
-            reserve_line);
-    }
-    char wait_clause[512] = "";
-    if (unpopped > 0) {
-        std::snprintf(
-            wait_clause,
-            sizeof(wait_clause),
-            " %u page(s) waited via cb_wait_front at %s:%u were never released with cb_pop_front.",
-            unpopped,
-            wait_file ? wait_file : "?",
-            wait_line);
-    }
-    __emule_asan_panic(
-        "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! Kernel (processor %u):%s%s "
-        "A cb_reserve_back with no following cb_push_back (or cb_wait_front with no following cb_pop_front) "
-        "before the kernel exits leaves data the consumer is never signaled for; on silicon its matching "
-        "cb_wait_front then hangs. (Lookahead producers that reserve more than they push but always push "
-        "after their last reserve are not flagged.)\n",
-        lx,
-        ly,
-        cb_id,
-        processor_id,
-        reserve_clause,
-        wait_clause);
-}
-
-// A CB is "dirty" when the kernel exits with a cb_reserve_back that no
-// cb_push_back ever followed, or a cb_wait_front that no cb_pop_front ever
-// followed — a producer/consumer that claimed the handshake but never handed off.
-//
-// Detection is a per-CB *trailing-dangling* flag, NOT a net page count:
-// __emule_cb_reserve_dangling[cb] is set by reserve_back and cleared by ANY
-// following push_back; __emule_cb_wait_dangling[cb] is set by wait_front and
-// cleared by ANY following pop_front (see cb_api.h). A flag still set at exit is
-// the leak. This is deliberately decoupled from the window counters
-// (__emule_cb_reserved_pages / __emule_cb_waited_pages, which the CB Boundary
-// check uses): on silicon cb_reserve_back is a non-cumulative free-space wait
-// that creates no obligation to push exactly n, so a net "reserved − pushed"
-// count false-positives on legitimate lookahead/double-buffer producers (e.g. the
-// DRAM-sharded matmul in1 reader reserves 2 blocks of headroom but pushes 1 per
-// iteration, pushing every block it produces). Those always have a push after
-// their last reserve, so the flag is clear and they are correctly NOT flagged;
-// only a genuinely un-followed reserve/wait trips it. The reported page count is
-// the window counter at exit, which for a true dangling reserve is the unpushed
-// amount. Trade-off: a reserve;reserve;push (one intermediate push forgotten)
-// clears the flag and is missed here — that pattern corrupts data and surfaces via
-// the Object-Intent / OOB checks (or a PCC mismatch) instead. This is a per-kernel
-// property (reserve pairs with push within the producer, wait with pop within the
-// consumer), so it is checked at each kernel's exit, before the thread-locals are
-// cleared.
-inline void sweep_per_kernel_dirty_cbs(
-    const EmuleOobTensorState& oob, tt_emule::CBSyncState* cb_array, uint32_t processor_id, uint32_t lx, uint32_t ly) {
-    if (!oob.asan_enabled || cb_array == nullptr) {
-        return;
-    }
-    // Per-check opt-out: TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB suppresses only this
-    // check so a regression run can proceed past a known un-flushed-CB bug while
-    // every other sanitizer stays active. See host_sanitizers.hpp.
-    if (dirty_cb_check_skipped()) {
-        return;
-    }
-    for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
-        if (cb_array[cb_id].num_pages == 0) {
-            continue;
-        }
-        // Fire only on a trailing dangling reserve/wait (one that no push/pop
-        // followed). The page count reported is the window counter, which for a
-        // genuine dangling reserve is the unpushed amount.
-        uint32_t unpushed = __emule_cb_reserve_dangling[cb_id] ? __emule_cb_reserved_pages[cb_id] : 0;
-        uint32_t unpopped = __emule_cb_wait_dangling[cb_id] ? __emule_cb_waited_pages[cb_id] : 0;
-        if (unpushed > 0 || unpopped > 0) {
-            abort_if_dirty_cb(
-                cb_id,
-                unpushed,
-                unpopped,
-                lx,
-                ly,
-                processor_id,
-                __emule_cb_reserve_file[cb_id],
-                __emule_cb_reserve_line[cb_id],
-                __emule_cb_wait_file[cb_id],
-                __emule_cb_wait_line[cb_id]);
-        }
-    }
-}
-
-// Owns the snapshot vectors that EmuleOobTensorState's pointers reference.
-struct OobStateOwner {
-    EmuleOobTensorState state;
-    std::vector<uint64_t> live_ranges;
-    std::vector<uint64_t> dram_live_ranges;
-    std::vector<uint64_t> padding_ranges;
-};
-
-inline OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
-    OobStateOwner owner;
-    const bool asan = emule_asan_enabled();
-    owner.state.asan_enabled = asan;
-    owner.state.cb_boundary_strict = asan;
-    if (!asan) {
-        return owner;
-    }
-    static const uint64_t kEmptyRange = 0;
-
-    owner.live_ranges = tt::tt_metal::emule::LiveL1Ranges::snapshot(device_id);
-    owner.state.l1_unreserved_base = static_cast<uint32_t>(
-        device->allocator()->get_base_allocator_addr(HalMemType::L1));
-    owner.state.tensor_ranges =
-        owner.live_ranges.empty() ? &kEmptyRange : owner.live_ranges.data();
-    owner.state.tensor_ranges_count = static_cast<uint32_t>(owner.live_ranges.size());
-
-    owner.dram_live_ranges = tt::tt_metal::emule::LiveDramRanges::snapshot(device_id);
-    owner.state.dram_unreserved_base = static_cast<uint32_t>(
-        device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
-    owner.state.dram_tensor_ranges =
-        owner.dram_live_ranges.empty() ? &kEmptyRange : owner.dram_live_ranges.data();
-    owner.state.dram_tensor_ranges_count = static_cast<uint32_t>(owner.dram_live_ranges.size());
-    owner.state.object_intent_strict = true;
-
-    owner.padding_ranges = tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id);
-    if (!owner.padding_ranges.empty()) {
-        owner.state.l1_padding_ranges = owner.padding_ranges.data();
-        owner.state.l1_padding_ranges_count = static_cast<uint32_t>(owner.padding_ranges.size());
-    }
-    return owner;
-}
+// EmuleOobTensorState, the Object-Intent tracker, the per-kernel sanitizer
+// thread-local set/clear, the Dirty-CB sweep, and build_oob_tensor_state now
+// live in emule_sanitizers.{hpp,cpp}. See SANITIZER_CHECKS.md.
 
 // ---------------------------------------------------------------------------
 // launch_cores: Spawn concurrent threads per core, each runs its kernels.
@@ -2592,9 +2258,12 @@ static void launch_cores(
                     }
 
                     ObjectIntentTracker intent_tracker;
+                    const auto& kil_for_oi = *cs.ki_list;
+                    static const std::vector<uint32_t> kEmptyRtArgs;
                     intent_tracker.pre_launch_snapshot(
                         oob_state,
-                        *cs.ki_list,
+                        kil_for_oi.size(),
+                        kil_for_oi.size() == 1 ? kil_for_oi[0].rt_arg_values : kEmptyRtArgs,
                         l1_data,
                         cs.persistent_cb_starts,
                         static_cast<uint32_t>(cs.logical_core.x),

@@ -538,12 +538,8 @@ void Buffer::set_page_size(DeviceAddr page_size) {
 }
 
 void Buffer::set_logical_size(DeviceAddr logical_size) {
-    TT_FATAL(
-        logical_size <= size_,
-        "logical_size ({}) must not exceed buffer size ({})",
-        logical_size,
-        size_);
 #ifdef TT_METAL_USE_EMULE
+    TT_FATAL(logical_size <= size_, "logical_size ({}) must not exceed buffer size ({})", logical_size, size_);
     if (allocation_status_ != AllocationStatus::ALLOCATED) {
         return;
     }

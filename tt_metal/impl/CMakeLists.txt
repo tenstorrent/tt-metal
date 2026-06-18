@@ -90,6 +90,9 @@ list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_
 if(TT_METAL_USE_EMULE)
     list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp)
     list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp)
+    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp)
+    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp)
+    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp)
 endif()
 
 add_library(impl OBJECT ${IMPL_SRC})

@@ -220,10 +220,7 @@ namespace detail {
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
     emule::check_host_dram_alignment(
-        address,
-        MetalContext::instance().get_cluster().get_alignment_requirements(
-            device->id(), static_cast<uint32_t>(host_buffer.size())),
-        "WriteToDeviceDRAMChannel");
+        device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceDRAMChannel");
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
@@ -243,10 +240,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
     emule::check_host_dram_alignment(
-        address,
-        MetalContext::instance().get_cluster().get_alignment_requirements(
-            device->id(), static_cast<uint32_t>(host_buffer.size())),
-        "ReadFromDeviceDRAMChannel");
+        device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceDRAMChannel");
     bool pass = true;
     MetalContext::instance().get_cluster().dram_barrier(device->id());
     MetalContext::instance().get_cluster().read_dram_vec(
@@ -268,11 +262,7 @@ bool WriteToDeviceL1(
     std::span<const std::uint8_t> host_buffer,
     CoreType core_type) {
     ZoneScoped;
-    emule::check_host_l1_alignment(
-        address,
-        MetalContext::instance().get_cluster().get_alignment_requirements(
-            device->id(), static_cast<uint32_t>(host_buffer.size())),
-        "WriteToDeviceL1");
+    emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceL1");
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
@@ -304,11 +294,7 @@ bool ReadFromDeviceL1(
     uint32_t address,
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
-    emule::check_host_l1_alignment(
-        address,
-        MetalContext::instance().get_cluster().get_alignment_requirements(
-            device->id(), static_cast<uint32_t>(host_buffer.size())),
-        "ReadFromDeviceL1");
+    emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceL1");
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().read_core(
@@ -323,10 +309,7 @@ bool ReadFromDeviceL1(
     uint32_t size,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
-    emule::check_host_l1_alignment(
-        address,
-        MetalContext::instance().get_cluster().get_alignment_requirements(device->id(), size),
-        "ReadFromDeviceL1");
+    emule::check_host_l1_alignment(device, address, size, "ReadFromDeviceL1");
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     host_buffer = MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
@@ -988,42 +971,14 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         program.impl().allocate_dataflow_buffers(validation_device);
         program.impl().validate_dataflow_buffer_region(validation_device);
 
-        // Per-core-type KERNEL_CONFIG window overflow check. The validators
-        // above only fire when an L1 tensor pins lowest_occupied_compute_l1_address;
-        // on a freshly-initialized device a program can still statically exceed
-        // the reserved KERNEL_CONFIG window. Catch that here.
-        const auto& hal_for_check = MetalContext::instance().hal();
-        const auto& metadata_sizes = program.impl().get_program_config_sizes();
-        for (uint32_t pct_index = 0; pct_index < hal_for_check.get_programmable_core_type_count(); pct_index++) {
-            HalProgrammableCoreType pct = hal_for_check.get_programmable_core_type(pct_index);
-            uint32_t metadata_size = metadata_sizes[pct_index];
-            // TENSIX disallows hal.get_dev_size(KERNEL_CONFIG); its window is
-            // dynamic = DEFAULT_UNRESERVED_base - KERNEL_CONFIG_base. Other core
-            // types report a static KERNEL_CONFIG size directly. Mirrors the
-            // formula in program_dispatch::initialize_worker_config_buf_mgr.
-            uint32_t window_size;
-            if (pct == HalProgrammableCoreType::TENSIX) {
-                uint32_t kc_base =
-                    static_cast<uint32_t>(hal_for_check.get_dev_addr(pct, HalL1MemAddrType::KERNEL_CONFIG));
-                uint32_t unreserved_base =
-                    static_cast<uint32_t>(hal_for_check.get_dev_addr(pct, HalL1MemAddrType::DEFAULT_UNRESERVED));
-                window_size = unreserved_base - kc_base;
-            } else {
-                window_size = hal_for_check.get_dev_size(pct, HalL1MemAddrType::KERNEL_CONFIG);
-            }
-            if (metadata_size > window_size) {
-                TT_THROW(
-                    "Program metadata size {} exceeds reserved KERNEL_CONFIG window {} for programmable core type {}",
-                    metadata_size,
-                    window_size,
-                    pct_index);
-            }
-        }
+        // Emule-only static KERNEL_CONFIG-window overflow sanitizer (no-op on
+        // hardware); a throw here is surfaced as an ASAN panic by the catch below.
+        emule::check_program_metadata_size(program);
     } catch (const std::exception& e) {
-        if (is_emulated && tt::tt_metal::emule::emule_asan_enabled()) {
-            __emule_asan_panic(
-                "[ASAN ERROR] Metadata Overflow: Program metadata exceeds reserved L1 region — %s\n", e.what());
-        }
+        // Surface the overflow as an ASAN panic when emulating; no-op otherwise.
+        // Routed through the facade so this TU carries no __emule_asan_panic
+        // reference in a non-emule build. Always rethrows.
+        emule::report_metadata_overflow(is_emulated, e.what());
         throw;
     }
 

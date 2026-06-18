@@ -4,87 +4,98 @@
 
 #pragma once
 
-// Host-side emule sanitizers + master switch. See SANITIZERS.md.
+// Host-side emule sanitizer facade. See SANITIZER_CHECKS.md.
+//
+// This header is included UNCONDITIONALLY by the core `tt_metal` host API
+// (tt_metal.cpp), so it must compile and link cleanly even in a non-emule build
+// (`-DTT_METAL_USE_EMULE=OFF`). To guarantee that, it is split into two layers:
+//
+//   * This header — the always-safe facade. It only ever exposes:
+//       - the master-switch readers (`emule_asan_enabled` / `dirty_cb_check_skipped`),
+//         which are pure `getenv` and safe in any build, and
+//       - DECLARATIONS of the host checks. In an emule build they resolve to the
+//         real definitions in host_sanitizers.cpp; in a non-emule build they are
+//         inline no-ops, so the call sites in tt_metal.cpp need no `#ifdef`.
+//
+//   * host_sanitizers.cpp — the emule-only implementation. It is the ONLY place
+//     that touches MetalContext/Cluster and references `__emule_asan_panic`
+//     (whose single definition lives in emulated_program_runner.cpp). Because it
+//     is compiled only when TT_METAL_USE_EMULE is set, a non-emule libtt_metal
+//     never carries an unresolved `__emule_asan_panic` reference.
+//
+// Net effect: the panic symbol and the per-poke alignment lookup are confined to
+// the emule build; the production build sees inline no-ops with zero cost.
 
-#include <buffer.hpp>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 
-// Unified ASAN trace. Forward-declared (not #included) because this header is
-// compiled into the tt_metal target too, which does not carry the tt-emule
-// include path. The single definition lives in emulated_program_runner.cpp
-// (EMULE_ASAN_IMPLEMENTATION), linked into the same libtt_metal.
-extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
+// `Buffer` is used by value-of-reference in a declaration below; include the
+// real header (it is core, safe in any build) rather than forward-declaring, so
+// includers that were getting it transitively keep compiling. `IDevice` is only
+// used as a pointer, so a forward declaration suffices.
+#include <buffer.hpp>
+
+namespace tt::tt_metal {
+class IDevice;
+class Program;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::emule {
 
+// ---- Master-switch readers (always safe; pure getenv) -------------------
 // Re-read every call: caching breaks combined test runs that toggle the var.
 inline bool emule_asan_enabled() {
     const char* v = std::getenv("TT_METAL_EMULE_ASAN");
     return v != nullptr && v[0] != '\0' && v[0] != '0';
 }
 
-// Per-check opt-out for the Dirty CB (per-kernel-exit) sanitizer. When set
-// (non-empty, not "0"), the runner skips `sweep_per_kernel_dirty_cbs` while
-// every other sanitizer stays active under the master switch. This lets a full
-// regression run proceed past kernels with a known un-flushed-CB bug without
-// disabling OOB / Padding / Object-Intent / CB-Boundary / etc. Re-read every
-// call (same rationale as the master switch — a static cache would stick to the
-// first observed value across combined gtest runs).
+// Per-check opt-out for the Dirty CB sanitizer (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB):
+// skips only `sweep_per_kernel_dirty_cbs` while every other check stays active.
+// Re-read every call (a static cache would stick across combined gtest runs). What
+// it's for and why this is the one check with its own switch: SANITIZER_CHECKS.md §11.
 inline bool dirty_cb_check_skipped() {
     const char* v = std::getenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
     return v != nullptr && v[0] != '\0' && v[0] != '0';
 }
 
-inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const char* op) {
-    if (!emule_asan_enabled()) {
-        return;
-    }
-    if (!buffer.is_allocated()) {
-        __emule_asan_panic(
-            "[ASAN ERROR] Use-After-Free: %s called on Buffer (unique_id=%zu, size=%lu, type=%d) "
-            "that is not currently allocated (either deallocated or never allocated). "
-            "This would access reclaimed device memory and corrupt unrelated allocations on silicon.\n",
-            op,
-            buffer.unique_id(),
-            static_cast<unsigned long>(buffer.size()),
-            static_cast<int>(buffer.buffer_type()));
-    }
-}
+// ---- Host checks --------------------------------------------------------
+// In an emule build these are defined in host_sanitizers.cpp; otherwise they are
+// inline no-ops. The alignment checks take (device, size) rather than a
+// precomputed alignment so the Cluster::get_alignment_requirements() lookup
+// happens INSIDE the implementation, after the enabled-check — never on the
+// production host path.
+#ifdef TT_METAL_USE_EMULE
 
-// `alignment` is the transfer's real requirement from Cluster::get_alignment_requirements(device, size)
-// (DMA alignment when DMA-backed, else 1). The host->L1 data path
-// (Cluster::write_core -> UMD write_to_device) accepts byte-granular writes and
-// WriteToBuffer applies no separate floor, so a hardcoded word/NoC alignment
-// here would false-positive legitimate writes (e.g. row-major remainders).
-// Register pokes that genuinely need 4-byte alignment go through write_reg,
-// not this path.
-inline void check_host_l1_alignment(uint32_t address, uint32_t alignment, const char* op) {
-    if (!emule_asan_enabled()) {
-        return;
-    }
-    if (alignment > 1 && address % alignment != 0) {
-        __emule_asan_panic(
-            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be %u-byte aligned\n", op, address, alignment);
-    }
-}
+// Use-After-Free: `op` touched a buffer that is not currently allocated.
+void check_buffer_allocated(const Buffer& buffer, const char* op);
 
-// `alignment` is the transfer's real requirement, obtained at the call site
-// from Cluster::get_alignment_requirements(device, size): the DMA alignment
-// when a DMA engine backs the transfer, otherwise 1. A value of 1 means the
-// host/UMD poke path imposes no alignment (e.g. emule's memory-backed I/O, or
-// the unaligned row-major page remainders that WriteToBuffer issues by design),
-// so the check must be a no-op. Passing the value in keeps this header free of
-// MetalContext/Cluster includes.
-inline void check_host_dram_alignment(uint32_t address, uint32_t alignment, const char* op) {
-    if (!emule_asan_enabled()) {
-        return;
-    }
-    if (alignment > 1 && address % alignment != 0) {
-        __emule_asan_panic(
-            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be %u-byte aligned\n", op, address, alignment);
-    }
-}
+// Host->L1 / host->DRAM alignment. `size` is the transfer size; the real
+// requirement is Cluster::get_alignment_requirements(device, size) (DMA
+// alignment when DMA-backed, else 1 → no-op). See host_sanitizers.cpp for why a
+// hardcoded word/NoC alignment would false-positive legitimate byte-granular
+// writes (e.g. row-major remainders).
+void check_host_l1_alignment(const IDevice* device, uint32_t address, uint32_t size, const char* op);
+void check_host_dram_alignment(const IDevice* device, uint32_t address, uint32_t size, const char* op);
+
+// Metadata Overflow check: throws if any programmable core type's program
+// metadata statically exceeds its reserved KERNEL_CONFIG L1 window. This is an
+// emule-only sanitizer (on a freshly-initialized emulated device the normal
+// CB/L1 validators don't fire); the caller wraps it so the throw is surfaced as
+// an ASAN panic via report_metadata_overflow. No-op on hardware.
+void check_program_metadata_size(Program& program);
+
+// Surfaces a Metadata Overflow as an ASAN panic (with the underlying exception
+// text) when emulating with ASAN on; the caller then rethrows. No-op otherwise.
+void report_metadata_overflow(bool is_emulated, const char* what);
+
+#else  // !TT_METAL_USE_EMULE — inline no-ops so callers stay #ifdef-free.
+
+inline void check_buffer_allocated(const Buffer&, const char*) {}
+inline void check_host_l1_alignment(const IDevice*, uint32_t, uint32_t, const char*) {}
+inline void check_host_dram_alignment(const IDevice*, uint32_t, uint32_t, const char*) {}
+inline void check_program_metadata_size(Program&) {}
+inline void report_metadata_overflow(bool, const char*) {}
+
+#endif  // TT_METAL_USE_EMULE
 
 }  // namespace tt::tt_metal::emule
