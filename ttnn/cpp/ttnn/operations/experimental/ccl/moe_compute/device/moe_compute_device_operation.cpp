@@ -193,6 +193,11 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         "num_shared_experts_per_device ({}) must be <= experts_per_device ({})",
         args.num_shared_experts_per_device,
         experts_per_device);
+
+    TT_FATAL(
+        args.bh_ring_size == 8 || args.bh_ring_size == 12 || args.bh_ring_size == 16,
+        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
+        args.bh_ring_size);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -419,10 +424,8 @@ std::vector<ttnn::Tensor> moe_compute(
     // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
     // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
     const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
-    TT_FATAL(
-        ring_n == 8 || ring_n == 12 || ring_n == 16,
-        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
-        ring_n);
+    // NOTE: there has been some experimentation with different ring sizes on Blackhole but there are known correctness
+    // issues for some model configurations for values other than 8, which is why this is not exposed in the public API
 
     // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
     // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
@@ -438,13 +441,6 @@ std::vector<ttnn::Tensor> moe_compute(
     }
 
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
-
-    TT_FATAL(
-        !(compute_only && cluster_axis.has_value()),
-        "moe_compute: compute_only=True is incompatible with cluster_axis (got cluster_axis={}). "
-        "compute_only skips the combine path, so cluster_axis has no meaning.",
-        cluster_axis.value_or(0));
-
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
         // see #27196 for potential limitations
