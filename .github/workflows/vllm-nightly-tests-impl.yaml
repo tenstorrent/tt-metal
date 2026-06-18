@@ -153,7 +153,7 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 100000000}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
               "additional-server-args": "--async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
@@ -166,7 +166,7 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 80000000}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 160000000}",
               "additional-server-args": "--async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
