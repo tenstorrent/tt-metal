@@ -91,7 +91,7 @@ Tensor to_layout_impl(
 
     tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(Layout::TILE);
     if (tensor_arg.layout() == Layout::TILE) {
-        page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor.tensor_spec().tile());
+        page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor_arg.tensor_spec().tile());
     }
     TensorSpec tile_spec = TensorSpec(
         tensor_arg.logical_shape(), tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, output_memory_config));
