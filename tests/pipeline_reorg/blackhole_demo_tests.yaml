@@ -25,7 +25,7 @@
 
 # ─── devstral-small-2-24b ───────────────────────────────────────────────────
 
-- name: devstral-small-2-24b TT demos (image + text)
+- name: devstral-small-2-24b pipeline tests
   cmd: |
     set -e
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
@@ -33,13 +33,12 @@
     export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
     export HF_TOKENIZER_CACHE=/tmp/devstral_hf_tokenizer_cache
     export TT_CACHE_PATH=/tmp/devstral_tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
-    uv pip install mistral-common
-    uv pip install "git+https://github.com/huggingface/transformers"
-    pytest -p models.experimental.devstarl2_small.demo.tt_image_demo models/experimental/devstarl2_small/demo/tt_image_demo.py --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100 &&
-    pytest -p models.experimental.devstarl2_small.demo.tt_text_demo models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 4
+    export MESH_DEVICE=P150x4
+    uv pip install -r models/experimental/devstarl2_small/requirements.txt
+    pytest models/experimental/devstarl2_small/tests/pipeline_tests
   skus:
     bh_quietbox_2:
-      timeout: 45
+      timeout: 120
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
   model-name: devstral-small-2-24b

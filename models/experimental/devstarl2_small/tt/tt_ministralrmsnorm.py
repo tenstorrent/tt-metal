@@ -14,6 +14,28 @@ _TILE = 32
 _PREFILL_NORM_M_CAP = 128  # match TtMinistralMLP; keeps sharded norm CBs within L1
 
 
+def _distributed_rmsnorm_shard_count(mesh_device) -> int:
+    mesh_shape = list(mesh_device.shape)
+    return mesh_shape[1] if mesh_shape[1] > 1 else mesh_shape[0]
+
+
+def validate_distributed_rmsnorm_gamma(torch_weight, dim: int, mesh_device, *, tile: int = _TILE) -> None:
+    """Fail fast if gamma tile layout or mesh shard count is incompatible with ShardTensor2dMesh."""
+    expected_shape = (1, 1, dim // tile, tile)
+    assert tuple(torch_weight.shape) == expected_shape, (
+        f"Distributed RMSNorm gamma shape mismatch: expected {expected_shape} "
+        f"(dim={dim}, tile={tile}), got {tuple(torch_weight.shape)}. "
+        "Gamma must be reshaped to [1, 1, hidden_tiles, tile] before mesh sharding."
+    )
+    n_shards = _distributed_rmsnorm_shard_count(mesh_device)
+    hidden_tiles = dim // tile
+    assert hidden_tiles % n_shards == 0, (
+        f"Distributed RMSNorm gamma cannot shard evenly: hidden_tiles={hidden_tiles} "
+        f"(dim={dim}), n_shards={n_shards} (mesh_shape={list(mesh_device.shape)}). "
+        f"Require (dim // {tile}) % n_shards == 0."
+    )
+
+
 def _block_sharded_prefill_norm_enabled() -> bool:
     for key in (
         "TT_MINISTRAL3_BLOCK_SHARDED_NORM",
@@ -225,6 +247,8 @@ class TtMinistralRMSNorm(RMSNorm):
         if args.rms_norm_add_unit_offset:
             torch_weight = torch_weight + 1.0
 
+        validate_distributed_rmsnorm_gamma(torch_weight, args.dim, mesh_device)
+
         mesh_shape = list(mesh_device.shape)
         shard_dims = (None, 2) if mesh_shape[1] > 1 else (2, None)
         cache_file_name = (
@@ -361,6 +385,7 @@ class TtMinistralRMSNorm(RMSNorm):
 
 __all__ = [
     "TtMinistralRMSNorm",
+    "validate_distributed_rmsnorm_gamma",
     "ministral_prefill_block_shard_add_eligible",
     "ministral_prefill_block_shard_mem_cfg",
     "ministral_prefill_block_shard_grid",

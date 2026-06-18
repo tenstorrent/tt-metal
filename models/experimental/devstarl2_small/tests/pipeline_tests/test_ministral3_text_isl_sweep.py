@@ -342,7 +342,6 @@ def _print_report(results: list[_SweepResult], messages_json: Path) -> None:
     print("------------------------------------------------------------------------------")
 
 
-@pytest.mark.timeout(28800)
 @pytest.mark.models_performance_bare_metal
 def test_devstral_image_text_isl_sweep_perf(monkeypatch):
     messages_json = Path(os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_MESSAGES_JSON", str(_DEFAULT_MESSAGES_JSON)))

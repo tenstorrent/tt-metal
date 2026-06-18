@@ -19,8 +19,16 @@ This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Dev
 - Python packages (install into your tt-metal environment):
 
   ```sh
-  pip install git+https://github.com/huggingface/transformers
-  pip install mistral-common
+  pip install -r models/experimental/devstarl2_small/requirements.txt
+  ```
+
+  Pins `mistral-common>=1.8.6` and installs the latest `transformers` from GitHub (required for Devstral/Mistral3).
+
+- Model environment (from repo root):
+
+  ```sh
+  export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
+  export TT_CACHE_PATH=/tmp/devstral_tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
   ```
 
 ## How to run (PCC tests)
@@ -50,7 +58,7 @@ pytest models/experimental/devstarl2_small/tests/test_ministralattn.py -k pcc
 Compares full decode logits (all text layers + final norm + LM head) against HF for 32 decode steps. Default PCC threshold: ≥ 0.99 (`MINISTRAL3_DECODER_STACK_PCC`).
 
 ```sh
-pytest models/experimental/devstarl2_small/tests/test_ministral3_decoder_layer.py
+pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_decoder_layer.py
 ```
 
 **Accuracy — Text Prefill Logits PCC**
@@ -58,7 +66,7 @@ pytest models/experimental/devstarl2_small/tests/test_ministral3_decoder_layer.p
 Compares full-depth prefill last-token logits (all text layers + final norm + LM head) against HF over the default sequence-length sweep (128 → 8k tokens) from `demo/messages_256k_text.json`. Default PCC threshold: ≥ 0.97 (`MINISTRAL3_PREFILL_LOGITS_PCC`).
 
 ```sh
-pytest models/experimental/devstarl2_small/tests/test_ministral3_prefill_logits.py
+pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_prefill_logits.py
 ```
 
 **Device profiling — Tracy CSV**

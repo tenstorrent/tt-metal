@@ -5,6 +5,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import validate_distributed_rmsnorm_gamma
 
 TILE = 32
 SHARD_HEIGHT = TILE  # rms_norm expects shard height == one tile
@@ -66,6 +67,7 @@ class RMSNorm(LightweightModule):
         )
 
         if self.is_distributed:
+            validate_distributed_rmsnorm_gamma(torch_weight, dim, device, tile=SHARD_HEIGHT)
             mesh_sh = list(device.shape)
             # Shard gamma dim-2 along whichever mesh axis has >1 device ([1,4] vs [4,1]).
             shard_dims = (None, 2) if mesh_sh[1] > 1 else (2, None)
