@@ -313,6 +313,60 @@ class TtGatedDeltaNet(LightweightModule):
             self.conv1d_weight_tt = None
             self.conv_w_cols = None
 
+        # Head-parallel SHARDED decode weights for num_seq>1 (batched decode). Built only
+        # when config.batched_decode (set by the generator when max_batch_size>1) so the
+        # num_seq=1 path pays no extra weight memory. The gathered weights above stay for
+        # prefill (+ num_seq=1 decode).
+        self.batched_decode = bool(getattr(config, "batched_decode", False))
+        if self.dense_tp and self.batched_decode and self.conv1d_weight is not None:
+            self._build_sharded_decode_weights(state_dict, prefix, proj_dtype, dtype)
+
+    def _build_sharded_decode_weights(self, state_dict, prefix, proj_dtype, dtype):
+        """Head-parallel SHARDED weights for batched (num_seq>1) decode: each chip owns
+        nkp=nk/TP k-heads and nvp=nv/TP v-heads. Additive — the gathered prefill/decode
+        weights are kept (num_seq=1 path unchanged). in_proj_qkv and the conv1d weight
+        columns mix q|k|v so they need PER-CHIP-INTERLEAVED layout [q_c|k_c|v_c] (like
+        Wqkv/MLP); z/b/a/A_log/dt_bias/out_proj are head-aligned so plain dim-3 shard
+        works; norm is replicated."""
+        TP = self.tp_size
+        Dk, Dv, Hk, Hv = self.head_k_dim, self.head_v_dim, self.num_k_heads, self.num_v_heads
+        nkp, nvp = Hk // TP, Hv // TP
+        self.nkp, self.nvp = nkp, nvp
+        SH3 = ttnn.ShardTensorToMesh(self.device, dim=3)
+
+        def interleave_qkv(flat):  # flat: [H, conv_dim] = [q(key_dim)|k(key_dim)|v(value_dim)]
+            q = flat[:, :self.key_dim].reshape(-1, Hk, Dk)
+            k = flat[:, self.key_dim:2 * self.key_dim].reshape(-1, Hk, Dk)
+            v = flat[:, 2 * self.key_dim:].reshape(-1, Hv, Dv)
+            blocks = []
+            for c in range(TP):
+                blocks.append(torch.cat([
+                    q[:, c * nkp:(c + 1) * nkp, :].reshape(q.shape[0], -1),
+                    k[:, c * nkp:(c + 1) * nkp, :].reshape(k.shape[0], -1),
+                    v[:, c * nvp:(c + 1) * nvp, :].reshape(v.shape[0], -1),
+                ], dim=1))
+            return torch.cat(blocks, dim=1)  # [H_or_rows, conv_dim] per-chip interleaved
+
+        # in_proj_qkv: [conv_dim, H] -> T -> [H, conv_dim] -> interleaved -> shard dim3
+        qkv_w = state_dict[f"{prefix}.linear_attn.in_proj_qkv.weight"].T.contiguous()
+        self.in_proj_qkv_sh = ttnn.from_torch(
+            interleave_qkv(qkv_w).unsqueeze(0).unsqueeze(0), dtype=proj_dtype,
+            layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=SH3)
+        # conv1d weight columns: [conv_dim, K] -> per-tap [1,1,1,conv_dim] interleaved -> shard dim3
+        self.conv_w_cols_sh = [
+            ttnn.from_torch(
+                interleave_qkv(self.conv1d_weight[:, k].reshape(1, -1)).reshape(1, 1, 1, -1).to(torch.bfloat16),
+                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=SH3)
+            for k in range(self.conv_kernel_size)
+        ]
+        # z / b / a / A_log / dt_bias: head-aligned -> plain dim3 shard
+        self.in_proj_z_sh = self._load_weight(state_dict, f"{prefix}.linear_attn.in_proj_z.weight", proj_dtype, transpose=True, shard_dim=3)
+        self.in_proj_b_sh = self._load_weight(state_dict, f"{prefix}.linear_attn.in_proj_b.weight", proj_dtype, transpose=True, shard_dim=3)
+        self.in_proj_a_sh = self._load_weight(state_dict, f"{prefix}.linear_attn.in_proj_a.weight", proj_dtype, transpose=True, shard_dim=3)
+        self.A_log_sh = self._load_weight(state_dict, f"{prefix}.linear_attn.A_log", dtype, shard_dim=3)
+        self.dt_bias_sh = self._load_weight(state_dict, f"{prefix}.linear_attn.dt_bias", dtype, shard_dim=3)
+        # out_proj already row-parallel (dim2, head-aligned); norm_weight replicated — reuse both.
+
     def _load_weight(self, state_dict, key, dtype, transpose=False, shard_dim=None):
         if key not in state_dict:
             return None
