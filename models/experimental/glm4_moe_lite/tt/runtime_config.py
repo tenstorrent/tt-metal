@@ -107,6 +107,7 @@ class Glm4RuntimeConfig:
     concat_heads: bool
     attn_dp: bool
     head_parallel_kvb2: bool
+    head_parallel_attn: bool
     use_v_cache_slice: bool
     shard_q: bool
 
@@ -182,6 +183,15 @@ class Glm4RuntimeConfig:
             concat_heads=_env_bool("GLM4_MOE_LITE_CONCAT_HEADS"),
             attn_dp=_env_bool("GLM4_MOE_LITE_ATTN_DP"),
             head_parallel_kvb2=(_env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2") and tp_on and tp_sz > 1),
+            # Head-parallel MLA core: shard q_b (column-parallel) + kv_b1 (per-head) so the
+            # whole q-path / FlashMLA / kv_b2 / o_proj runs on H/tp_size heads per device with
+            # a single all_reduce after o_proj (no new collectives). Builds on HEAD_PARALLEL_KVB2.
+            head_parallel_attn=(
+                _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN")
+                and tp_on
+                and tp_sz > 1
+                and _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2")
+            ),
             use_v_cache_slice=_env_bool("GLM4_MOE_LITE_MLA_USE_V_CACHE_SLICE"),
             shard_q=_env_bool("GLM4_MOE_LITE_MLA_SHARD_Q"),
             # MLP / MoE
