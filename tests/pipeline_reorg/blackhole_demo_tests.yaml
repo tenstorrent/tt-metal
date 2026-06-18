@@ -171,6 +171,8 @@
 - name: mistral-small-4-119b multimodal demo
   cmd: |
     set -e
+    # Mistral4/Pixtral support is only on transformers main (not in a release yet).
+    uv pip install git+https://github.com/huggingface/transformers
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=mistralai/Mistral-Small-4-119B-2603
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-4-119B-2603

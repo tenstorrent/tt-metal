@@ -175,6 +175,25 @@ jobs:
               resume_download=True,
           )
           PY
+      - name: Download Mistral-Small-4-119B model weights to cloud-mlperf cache
+        # Only when regenerating the cache (mounts the cloud-mlperf share :rw); the
+        # cache is otherwise :ro and the share is expected to be pre-seeded.
+        if: ${{ inputs.regenerate-ttnn-cache && matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && contains(matrix.test-group.name, 'mistral-small-4-119b') }}
+        timeout-minutes: 180
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/hub
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id="mistralai/Mistral-Small-4-119B-2603",
+              cache_dir="/localdev/blackhole_demos/huggingface_data/hub",
+              token=os.environ.get("HF_TOKEN"),
+              resume_download=True,
+          )
+          PY
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
