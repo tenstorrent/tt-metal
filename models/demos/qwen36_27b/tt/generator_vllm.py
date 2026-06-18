@@ -212,13 +212,18 @@ class Qwen3_5ForConditionalGeneration:
                     ttnn.deallocate(ct)
                 except Exception:
                     pass
-            old_hist = persistent.conv_hist.pop(li, None)
-            if old_hist:
-                for t in old_hist:
-                    try:
-                        ttnn.deallocate(t)
-                    except Exception:
-                        pass
+            if getattr(persistent, "batched", False):
+                # don't drop conv_hist (other rows are mid-decode); flag THIS row to be
+                # reseeded in-place from its fresh conv_state on the next decode step.
+                persistent._reseed_rows.add(row)
+            else:
+                old_hist = persistent.conv_hist.pop(li, None)
+                if old_hist:
+                    for t in old_hist:
+                        try:
+                            ttnn.deallocate(t)
+                        except Exception:
+                            pass
 
     # ---- prefill / decode glue ----
     def prefill_forward(self, tokens, page_table=None, kv_cache=None, start_pos=None,

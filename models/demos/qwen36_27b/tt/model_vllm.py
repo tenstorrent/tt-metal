@@ -186,6 +186,9 @@ class TtQwen36VllmModel(LightweightModule):
         _dd = _os.environ.get("QWEN36_DUMP_DEC")
         dump = [] if (_dd and not getattr(self, "_dec_dumped", False)) else None
         logits = self._run_decode_layers(hidden, cos_t, sin_t, cur, deltanet_state, dump=dump)
+        # all layers consumed any per-row conv_hist reseed flags this step; clear them.
+        if getattr(deltanet_state, "_reseed_rows", None):
+            deltanet_state._reseed_rows = set()
         for t in (hidden, cos_t, sin_t, cur):
             ttnn.deallocate(t)
         if dump is not None:

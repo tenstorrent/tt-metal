@@ -47,6 +47,10 @@ class TtDeltaNetState:
         # set by a new request's prefill (in-place path): re-seed conv_hist buffers
         # in-place from the new conv_state on the next decode step (keeps trace addrs).
         self._reseed_conv_hist = False
+        # batched (continuous batching): batch ROWS whose request just (re)prefilled and
+        # whose sharded conv_hist row must be reseeded (preserving other rows' accumulated
+        # history) before the next decode step.
+        self._reseed_rows = set()
         # When True, state updates write IN-PLACE into the fixed buffers (ttnn.copy)
         # instead of swapping the tensor handle — required for trace (static buffers).
         self.trace_mode = False
@@ -679,19 +683,19 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(xr)
         return out
 
-    def _seed_conv_hist_sharded(self, deltanet_state, B):
-        """Build per-chip per-batch conv history h0,h1,h2 = [1,1,B,cdp] from the
-        (gathered) prefill conv_states [B,1,conv_dim,32]. The conv_dim channels are
-        re-laid PER-CHIP-INTERLEAVED [q_c|k_c|v_c] and sharded (matching in_proj_qkv_sh);
-        cols 1,2,3 are the 3 prior conv inputs. Host-built once per request batch."""
+    def _seed_conv_hist_sharded(self, deltanet_state, B, rows=None):
+        """Build/reseed per-chip per-batch conv history h0,h1,h2 = [1,1,B,cdp] from the
+        (gathered) prefill conv_states [B,1,conv_dim,32]. conv_dim channels are re-laid
+        PER-CHIP-INTERLEAVED [q_c|k_c|v_c] and sharded (matching in_proj_qkv_sh); cols 1,2,3
+        are the 3 prior conv inputs. rows=None -> build ALL B rows fresh. rows=set ->
+        reseed ONLY those batch rows in the existing conv_hist (preserve the others'
+        accumulated decode history) — for continuous batching when a request joins."""
         li = self.layer_idx
         Dk, Dv, Hk, Hv, TP = self.head_k_dim, self.head_v_dim, self.num_k_heads, self.num_v_heads, self.tp_size
         nkp, nvp = self.nkp, self.nvp
-        cs_dev = deltanet_state.conv_states.get(li)
-        cs = mesh_to_torch(cs_dev).float()  # [B,1,conv_dim,32]
-        ck = self.conv_kernel_size
+        cs = mesh_to_torch(deltanet_state.conv_states.get(li)).float()  # [B,1,conv_dim,32]
 
-        def interleave_rows(flat):  # flat [rows, conv_dim] -> per-chip-interleaved [rows, conv_dim]
+        def interleave_rows(flat):  # [rows, conv_dim] -> per-chip-interleaved [rows, conv_dim]
             q = flat[:, :self.key_dim].reshape(-1, Hk, Dk)
             k = flat[:, self.key_dim:2 * self.key_dim].reshape(-1, Hk, Dk)
             v = flat[:, 2 * self.key_dim:].reshape(-1, Hv, Dv)
@@ -699,18 +703,31 @@ class TtGatedDeltaNet(LightweightModule):
                               k[:, c * nkp:(c + 1) * nkp].reshape(k.shape[0], -1),
                               v[:, c * nvp:(c + 1) * nvp].reshape(v.shape[0], -1)], dim=1) for c in range(TP)]
             return torch.cat(blk, dim=1)
-        # per-batch, build the 3 history columns interleaved over channels -> [B, conv_dim] each
-        cols = []
-        for j in (1, 2, 3):
-            colj = cs[:, 0, :, j]  # [B, conv_dim]
-            cols.append(interleave_rows(colj))  # [B, conv_dim] interleaved
+        cols = [interleave_rows(cs[:, 0, :, j]) for j in (1, 2, 3)]  # each [B, conv_dim] interleaved
         SH3 = ttnn.ShardTensorToMesh(self.device, dim=3)
-        hist = []
-        for colj in cols:  # [B, conv_dim] -> [1,1,B,conv_dim] sharded dim3 -> per chip [1,1,B,cdp]
-            hist.append(ttnn.from_torch(colj.reshape(1, 1, B, -1).to(torch.bfloat16),
-                                        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=SH3))
-        deltanet_state.conv_hist[li] = hist
-        return hist
+        existing = deltanet_state.conv_hist.get(li)
+        if rows is None or existing is None:  # build all B rows fresh
+            hist = [ttnn.from_torch(c.reshape(1, 1, B, -1).to(torch.bfloat16),
+                                    dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=SH3)
+                    for c in cols]
+            deltanet_state.conv_hist[li] = hist
+            return hist
+        # reseed only `rows`: rebuild each h_k per-row (new for rows, old slice otherwise)
+        cdp_full = cols[0].shape[1]
+        new_hist = []
+        for k in range(3):
+            parts = []
+            for b in range(B):
+                if b in rows:
+                    parts.append(ttnn.from_torch(cols[k][b:b + 1].reshape(1, 1, 1, -1).to(torch.bfloat16),
+                                                 dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=SH3))
+                else:
+                    parts.append(ttnn.slice(existing[k], [0, 0, b, 0], [1, 1, b + 1, int(existing[k].shape[3])]))
+            nh = ttnn.concat(parts, dim=2) if len(parts) > 1 else parts[0]
+            ttnn.deallocate(existing[k])
+            new_hist.append(nh)
+        deltanet_state.conv_hist[li] = new_hist
+        return new_hist
 
     def _conv_prep_sharded(self, qkv, deltanet_state, B):
         """Per-chip per-batch conv1d+SiLU+L2norm. qkv [1,1,B,cdp] per chip (per-chip-
@@ -722,7 +739,9 @@ class TtGatedDeltaNet(LightweightModule):
         cdp = 2 * kdp + vdp
         hist = deltanet_state.conv_hist.get(li)
         if hist is None:
-            hist = self._seed_conv_hist_sharded(deltanet_state, B)
+            hist = self._seed_conv_hist_sharded(deltanet_state, B)  # all rows (first decode)
+        elif deltanet_state._reseed_rows:
+            hist = self._seed_conv_hist_sharded(deltanet_state, B, rows=deltanet_state._reseed_rows)
         h0, h1, h2 = hist
         w0, w1, w2, w3 = self.conv_w_cols_sh  # [1,1,1,cdp] broadcast over B
         dot = ttnn.add(ttnn.add(ttnn.mul(w0, h0), ttnn.mul(w1, h1)),

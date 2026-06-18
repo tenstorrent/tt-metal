@@ -74,13 +74,21 @@ def main():
             nxt = [int(torch.argmax(logits[r, 0]).item()) for r in range(2)]
             print(f"[val] B2 prefill next: {[(n, tok.decode([n])) for n in nxt]}", flush=True)
             outs = [[n] for n in nxt]
+            import time as _time
+            step_ms = []
             for s in range(args.gen):
                 pos = torch.tensor([Ls[0] + s, Ls[1] + s])
+                _t0 = _time.perf_counter()
                 dl = gen.decode_forward(torch.tensor([[outs[0][-1]], [outs[1][-1]]]),
                                         page_table=pt2, kv_cache=kv, start_pos=pos)
                 host = gen.process_decode_output_host(gen.read_decode_output(dl))
+                step_ms.append((_time.perf_counter() - _t0) * 1000)
                 for r in range(2):
                     outs[r].append(int(torch.argmax(host[r, 0]).item()))
+            import statistics as _st
+            med = _st.median(step_ms[2:] if len(step_ms) > 3 else step_ms)
+            print(f"[val] B2 decode step ms: {[round(x) for x in step_ms]} | median={med:.0f} ms/step "
+                  f"=> {2000.0/med:.2f} tok/s aggregate (B=2)", flush=True)
             for r in range(2):
                 print(f"[val] B2 GEN[{r}]: {prompts[r]!r} + {tok.decode(outs[r])!r}", flush=True)
             print("VAL_DONE", flush=True)
