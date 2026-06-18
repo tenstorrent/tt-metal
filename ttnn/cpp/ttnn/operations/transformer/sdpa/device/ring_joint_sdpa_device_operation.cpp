@@ -578,48 +578,6 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
-    const auto cache_key_logical_n = kv_pad_rotation_enabled ? 0 : args.logical_n;
-
-    std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
-    if (tensor_args.input_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.input_v.value());
-    }
-    if (tensor_args.joint_q.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_q.value());
-        input_tensors.emplace_back(tensor_args.joint_k.value());
-    }
-    if (tensor_args.joint_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_v.value());
-    }
-    input_tensors.emplace_back(tensor_args.gathered_k);
-    if (tensor_args.gathered_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.gathered_v.value());
-    }
-    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.is_causal,
-        args.is_balanced,
-        args.is_cross,
-        cache_key_logical_n,
-        args.ring_size,
-        args.compute_kernel_config,
-        args.program_config,
-        args.ccl_core_grid_offset,
-        args.kv_cache_batch_idx.has_value(),
-        kv_pad_rotation_enabled,
-        tensor_args.has_latent_v(),
-        tensor_args.v_num_heads(),
-        tensor_args.v_head_dim(args.latent_v_head_dim),
-        ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
-            args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
-    );
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, RingJointSDPAResult& output_tensors) {
     Tensors input_tensors = {tensor_args.input_q, tensor_args.input_k};
