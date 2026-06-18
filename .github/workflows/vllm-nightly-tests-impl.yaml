@@ -668,18 +668,13 @@ jobs:
               --result-filename output/vllm_result_structured.json \
               "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
               "${ADDITIONAL_STRUCTURED_OUTPUT_ARGS[@]}"
-      - name: Verify structured output
-        if: ${{ success() && matrix.test-group.structured-output }}
-        run: |
-          # The benchmark returns zero even if responses are not correct.
-          success_message="correct_rate(%) 100.0"
-          if grep -q "$success_message" "${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}"; then
-            echo "✅ Structured output benchmark completed successfully"
-          else
-            echo "❌ Structured output benchmark failed"
-            echo "Check out the server log in a step below."
-            exit 1
-          fi
+
+            # The benchmark exits 0 even when responses are wrong; gate on the
+            # saved correct_rate(%), which must be a perfect 100.0. Reading the
+            # result file (not the log) keeps this race-free under the wrapper.
+            python3 -c "import json, sys; sys.exit(0 if float(json.load(open('output/vllm_result_structured.json'))['correct_rate(%)']) == 100.0 else 1)" \
+              || { echo '❌ Structured output failed (correct_rate(%) != 100.0)'; exit 1; }
+            echo '✅ Structured output passed'
 
       - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}
@@ -688,7 +683,7 @@ jobs:
         with:
           log-file: ${{ env.FILE_MULTIMODAL_TEST_LOG }}
           run: |
-            curl http://localhost:8000/v1/chat/completions \
+            resp=$(curl -sS http://localhost:8000/v1/chat/completions \
               -H "Content-Type: application/json" \
               -H "X-User-ID: vllm_test" \
               -d '{
@@ -717,17 +712,13 @@ jobs:
                 "repetition_penalty": 1.0,
                 "stream": false,
                 "ignore_eos": false
-            }'
-      - name: Verify multimodal
-        if: ${{ success() && matrix.test-group.multimodal }}
-        run: |
-          # If the test fails, the response will not contain the expected word
-          keyword="cat"
-          if ! grep -q -i "$keyword" "${FILE_MULTIMODAL_TEST_LOG}"; then
-            echo "❌ The keyword \"$keyword\" not found in the response"
-            echo "Check out the server log in a step below."
-            exit 1
-          fi
+            }')
+            echo "$resp"
+            # cats.jpeg: a correct description mentions a cat, so its absence
+            # means the model or image pipeline misbehaved. Grep the captured
+            # response (not the log) to stay race-free under the wrapper.
+            grep -qi cat <<<"$resp" || { echo '❌ keyword "cat" not found in multimodal response'; exit 1; }
+            echo '✅ Multimodal response describes a cat'
       - name: 🧪 Run sampling tests
         if: ${{ matrix.test-group.sampling-tests }}
         timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
