@@ -75,6 +75,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: 27723048695
   test-dispatch:
     needs: [check-harbor, build-artifact]
     timeout-minutes: 120
@@ -96,9 +97,6 @@ jobs:
         --device /dev/tenstorrent
         --device /dev/fuse
         --privileged
-        --cap-add=ALL
-        --security-opt seccomp=unconfined
-        -v /sys:/sys
     defaults:
       run:
         shell: bash
