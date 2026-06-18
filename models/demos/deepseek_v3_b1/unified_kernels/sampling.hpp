@@ -8,7 +8,7 @@
 #include "api/numeric/bfloat16.h"
 #include "../metadata/metadata.hpp"
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_sampling.h"
+#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sampling.h"
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
