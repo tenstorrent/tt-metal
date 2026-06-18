@@ -53,17 +53,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     }
 
-    // buffer_descriptor_u bd_val = {0};
-
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
     buffer_descriptor_u bd_val = ckernel::get_buf_desc_from_tensor_shape(tensor_shape_A);
 
     bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
     bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    // bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    // bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    // bd_val.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
