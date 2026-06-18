@@ -148,9 +148,10 @@ def pad_prompt(prompt_ids, max_seq_len, max_new_tokens):
 def run_eager(model, prompt_ids, max_new_tokens, eos_token_id):
     """Greedy generation via the model's public prefill/decode, timed prefill (TTFT) vs decode (tok/s).
 
-    This is Qwen35Model.generate inlined so prefill and the decode loop can be timed separately;
-    prefill()/decode() return host logits (the to_torch read forces a device sync), so the wall-clock
-    around them is honest end-to-end latency including the host readback.
+    This is Qwen35Model.generate inlined so prefill and the decode loop can be timed separately.
+    prefill() returns host logits and decode() returns the on-device argmax id; both force a device
+    sync on read, so the wall-clock around them is honest end-to-end latency. decode() reads back only
+    the id (not the full vocab), which is where the per-token readback cost went.
 
     Returns (tokens, ttft_s, prefill_tok_s, decode_tok_s). prefill_tok_s = seq_len / ttft is the prompt
     INGESTION rate over the padded length actually pushed through the model (all positions run in one
@@ -171,10 +172,10 @@ def run_eager(model, prompt_ids, max_new_tokens, eos_token_id):
     for _ in range(max_new_tokens - 1):
         if eos_token_id is not None and next_id == eos_token_id:
             break
-        logits = model.decode(torch.tensor([[next_id]], dtype=torch.int32), torch.tensor([cur_pos], dtype=torch.int32))[
-            0
-        ]
-        next_id = int(torch.argmax(logits).item())
+        # decode argmaxes on device and reads back only the id (no full-vocab readback per step).
+        next_id = int(
+            model.decode(torch.tensor([[next_id]], dtype=torch.int32), torch.tensor([cur_pos], dtype=torch.int32))[0]
+        )
         out.append(next_id)
         cur_pos += 1
     decode_s = time.time() - t0

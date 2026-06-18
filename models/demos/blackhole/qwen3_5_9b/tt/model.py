@@ -227,6 +227,18 @@ class Qwen35Model(LightweightModule):
             t = ttnn.to_torch(logits)
         return t.reshape(n_rows, -1)[:, : self.vocab_size].float()
 
+    def argmax_on_device(self, logits):
+        """Greedy token select done ON DEVICE, so decode reads back one id instead of the full
+        248K-wide logit row (the ~15 ms/token readback at TP=4). Used by decode() and by the captured
+        decode graph in demo/trace_runner.py. The LM head is replicated, so every device already holds
+        the whole vocab — no gather is needed (unlike tt_transformers' sharded head, which all-gathers
+        first). untilize -> ROW_MAJOR enables argmax's multi-core last-dim path; vocab (248320) is
+        tile-aligned, so there are no padding columns that could win the argmax. Returns a replicated
+        [1, 1, n_rows, 1] uint32 id; read one replica back with ttnn.get_device_tensors(tok)[0].
+        """
+        logits_rm = ttnn.untilize(logits, use_multicore=True)
+        return ttnn.argmax(logits_rm, dim=3, keepdim=True, use_multicore=True)
+
     # ── Public prefill / decode / generate ───────────────────────────────────────────
     def prefill(self, tokens, user_id=0, valid_len=None):
         """Prefill one stream's prompt and return host logits [vocab] at the last real position.
@@ -246,16 +258,28 @@ class Qwen35Model(LightweightModule):
         logits = self.lm_head(last)  # [1, 1, 1, vocab]
         return self._logits_to_torch(logits, n_rows=1).reshape(-1)
 
-    def decode(self, tokens, positions):
-        """Decode one step for B users and return host logits [B, vocab].
+    def decode(self, tokens, positions, return_token=True):
+        """Decode one step for B users; return the greedy next-token id(s) OR the raw logits.
 
-        tokens: host int [B, 1]; positions: host int [B] (absolute position of each user's token).
-        Continues from the KV cache + GDN state left by prefill / prior steps.
+        return_token (default True) picks what crosses back from one decode forward:
+          * True  -> host int32 [B]: the argmax is done ON DEVICE (argmax_on_device) so only the id
+            crosses back, not the full 248K-wide logit row — that readback was ~15 ms/token at TP=4.
+            This is the generation path (demo / generate()), which only ever needs the token.
+          * False -> host float [B, vocab]: the raw logits, for PCC against the HF golden. The whole
+            vocab row crosses back here — that cost is exactly what return_token=True avoids, so it's
+            opt-in for tests that need the numerics rather than the picked token.
+
+        Either way it is ONE forward, so the per-user KV cache + GDN state advance exactly once and the
+        prefill->decode hand-off stays in lock-step. tokens: host int [B, 1]; positions: host int [B]
+        (absolute position of each user's token), continuing from the state prefill / prior steps left.
         """
-        batch = tokens.shape[0]
         hidden = self.forward(tokens, mode="decode", positions=positions)  # [1, 1, B, dim]
-        logits = self.lm_head(hidden)  # [1, 1, B, vocab]
-        return self._logits_to_torch(logits, n_rows=batch)
+        logits = self.lm_head(hidden)  # [1, 1, B, vocab], replicated on a mesh
+        if not return_token:
+            return self._logits_to_torch(logits, n_rows=tokens.shape[0])  # host [B, vocab]
+        tok = self.argmax_on_device(logits)  # [1, 1, B, 1] uint32, replicated on device
+        # The id is replicated, so read ONE device's copy -> B ints cross the bus, not B*vocab.
+        return ttnn.to_torch(ttnn.get_device_tensors(tok)[0]).reshape(-1).to(torch.int32)
 
     def generate(self, prompt_ids, max_new_tokens=20, eos_token_id=None):
         """Greedy end-to-end generation for a single stream (B=1). Returns the list of new token ids.
@@ -295,10 +319,10 @@ class Qwen35Model(LightweightModule):
         for _ in range(max_new_tokens - 1):
             if eos_token_id is not None and next_id == eos_token_id:
                 break
-            logits = self.decode(
-                torch.tensor([[next_id]], dtype=torch.int32), torch.tensor([cur_pos], dtype=torch.int32)
+            # decode argmaxes on device and reads back just the id (see argmax_on_device).
+            next_id = int(
+                self.decode(torch.tensor([[next_id]], dtype=torch.int32), torch.tensor([cur_pos], dtype=torch.int32))[0]
             )
-            next_id = int(torch.argmax(logits[0]).item())
             out.append(next_id)
             cur_pos += 1
         return out

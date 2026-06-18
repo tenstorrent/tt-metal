@@ -57,14 +57,18 @@ class TracedRunner:
         return m.lm_head(last)  # [1, 1, 1, vocab]
 
     def _decode_forward(self):
-        """embed -> N layers (decode) -> final norm -> logits, one step. Reads the fixed token /
-        position / RoPE buffers; GDN layers ignore position/RoPE and advance their own state in place."""
+        """embed -> N layers (decode) -> final norm -> on-device argmax id, one step. Reads the fixed
+        token / position / RoPE buffers; GDN layers ignore position/RoPE and advance their own state.
+
+        The greedy argmax is folded into the captured graph (argmax_on_device) so REPLAY returns the
+        next-token id, not the logits — the per-token readback drops from the full 248K-wide row to one
+        int (~15 ms/token at TP=4), with byte-identical tokens (same bf16 logits, same compare)."""
         m = self.m
         x = ttnn.unsqueeze_to_4D(m.embd(self._d_tok))
         for layer in m.layers:
             x = layer.forward_decode(x, position_tensor=self._d_pos, cos=self._d_cos, sin=self._d_sin)
         h = m.norm(x, mode=Mode.DECODE)  # [1, 1, 1, dim]
-        return m.lm_head(h)  # [1, 1, 1, vocab]
+        return m.argmax_on_device(m.lm_head(h))  # [1, 1, 1, 1] uint32 id
 
     # ── Persistent input buffers ─────────────────────────────────────────────────────────────────
     def _repl(self):
@@ -199,7 +203,7 @@ class TracedRunner:
         snap = self._snapshot_gdn()  # post-prefill state
         self._decode_forward()  # compile (advances GDN state)
         d_tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-        d_logits = self._decode_forward()
+        d_tok = self._decode_forward()  # captured output is the on-device argmax id, not the logits
         ttnn.end_trace_capture(self.device, d_tid, cq_id=0)
         self._restore_gdn(snap)  # rewind to post-prefill so the first replay starts where it should
         capture_s += time.time() - cap_t0
@@ -209,8 +213,8 @@ class TracedRunner:
             if eos_token_id is not None and next_id == eos_token_id:
                 break
             ttnn.execute_trace(self.device, d_tid, cq_id=0, blocking=True)  # decode(token @ pos) from current state
-            logits = m._logits_to_torch(d_logits, n_rows=1)[0]
-            next_id = int(torch.argmax(logits).item())
+            # argmax already done on device (d_tok is the id); read one replica -> a single int, not the vocab row.
+            next_id = int(ttnn.to_torch(ttnn.get_device_tensors(d_tok)[0]).item())
             out.append(next_id)
             pos += 1
             self._write_decode_io(next_id, pos)  # stage inputs for the NEXT replay
