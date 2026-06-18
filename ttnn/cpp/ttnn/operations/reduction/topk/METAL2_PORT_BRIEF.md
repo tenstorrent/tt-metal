@@ -1,10 +1,10 @@
-# Metal 2.0 Port Brief — `ttnn/cpp/ttnn/operations/reduction/topk`
+# Metal 2.0 Port Brief — `ttnn/cpp/ttnn/operations/reduction/topk` (`TopKSingleCoreProgramFactory` subset)
 
-> Audit cleared all gates. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
+> The op is **RED at op level**; only the **single-core factory** subset clears all gates. This brief covers that subset only. The full record — including why the multi-core factory is blocked — is in `METAL2_PREPORT_AUDIT.md`.
 
-**Gates cleared:** ProgramDescriptor ✓ · Device 2.0 ✓ · Features ✓
+**Gates cleared (single-core subset):** ProgramDescriptor ✓ · Device 2.0 ✓ · Features ✓
 
-Scope: one device operation `ttnn::prim::TopKDeviceOperation`, two factories — `TopKSingleCoreProgramFactory` (`device/topk_single_core_program_factory.cpp`) and `TopKMultiCoreProgramFactory` (`device/topk_multi_core_program_factory.cpp`). Nine kernels, all owned in-directory; no donor/borrowed kernels.
+**⚠ Scope: `TopKSingleCoreProgramFactory` only** (`device/topk_single_core_program_factory.cpp`). The sibling `TopKMultiCoreProgramFactory` is **RED — do not port**: its many-core→final-core gather writes results across nodes into a common-address CB (`c_4`/`c_5`), expressible in Metal 2.0 only as a `CrossNodeDataflowBuffer`/`GlobalDataflowBuffer`, which is not yet implemented (see audit *Gate detail → cross-node gather*). `select_program_factory` chooses single- vs multi-core by input size, so the single-core path ports independently. Single-core kernels (all owned in-directory, no donor/borrowed kernels): `reader_create_index_tensor.cpp`, `writer_binary_interleaved.cpp`, `topk.cpp`.
 
 ## TTNN factory analysis
 
@@ -26,18 +26,14 @@ Single-core (`TopKSingleCoreProgramFactory`):
 - `values` output — Case 1. RTA arg 0 = `value_tensor` (`:272`) → `TensorAccessor` (`writer_binary_interleaved.cpp:30`).
 - `indices` output — Case 1. RTA arg 1 = `index_tensor` (`:273`) → `TensorAccessor` (`writer_binary_interleaved.cpp:31`).
 
-Multi-core (`TopKMultiCoreProgramFactory`):
-- `input` — Case 1. RTA arg 0 = `input_tensor` object (`:501`) → `TensorAccessor` (`reader_create_index_local_topk.cpp:33`).
-- `indices` (optional input) — Case 1. RTA arg 4 = `input_indices_tensor->address()` (`:505`) → `TensorAccessor` (`reader_create_index_local_topk.cpp:44`). Same `.address()`-via-RTA → typed-binding cleanup.
-- `values` output — Case 1. RTA arg 0 = `value_tensor` (`:531`) → `TensorAccessor` (`writer_final_topk.cpp:30`).
-- `indices` output — Case 1. RTA arg 1 = `index_tensor` (`:532`) → `TensorAccessor` (`writer_final_topk.cpp:31`).
+*(Multi-core bindings omitted — that factory is RED and out of port scope; see the audit.)*
 
-No Case 2 (raw-pointer) bindings, no compute-kernel tensor binding. Compute kernels and the inter-core transfer kernels (`writer_local_topk.cpp`, `reader_final_topk.cpp`) touch CB L1 memory only.
+No Case 2 (raw-pointer) bindings, no compute-kernel tensor binding in the single-core factory. `topk.cpp` (compute) touches CB L1 memory only.
 
 **Custom hash:** none.
 
 ## Watch for
 
-- **Notable constructs:** none. The two `SemaphoreDescriptor::initial_value = INVALID` (multi-core, lines 326/332) are *zero* (`INVALID == 0`), so this is a plain zero-init semaphore — not the deprecated non-zero path; translate to a standard `SemaphoreSpec`. The multi-core `gathered_values_cb`/`gathered_indices_cb` (c_4/c_5) are written into by remote cores via raw L1 pointer but are genuine producer/consumer DFBs (`reader_final_topk` pushes, `topk_final` consumes) — declare them as normal `DataflowBufferSpec`s, not fake CBs.
+- **Notable constructs:** none in the single-core factory. (The semaphores and the `c_4`/`c_5` gather CBs all belong to the RED multi-core factory, out of scope here.)
 - **Cross-op / shared kernels:** none — all kernels owned in-directory; no port-together coupling.
 - **RTA varargs:** none.

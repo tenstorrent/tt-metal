@@ -18,12 +18,12 @@ Single device operation, two program factories:
 | Field | Value |
 |---|---|
 | **Op directory** | `ttnn/cpp/ttnn/operations/reduction/topk` |
-| **Overall** | GREEN |
-| **DOps / Factories** | `TopKDeviceOperation` → `TopKSingleCoreProgramFactory`, `TopKMultiCoreProgramFactory` |
+| **Overall** | **RED at op level; `TopKSingleCoreProgramFactory` subset is GREEN** |
+| **DOps / Factories** | `TopKDeviceOperation` → `TopKSingleCoreProgramFactory` (**GREEN**), `TopKMultiCoreProgramFactory` (**RED** — cross-node gather DFB) |
 | *Prereqs* — ProgramDescriptor | Yes |
 | *Prereqs* — Device 2.0 (every kernel used) | Yes |
 | *Prereqs* — Cross-op escapes | Ok (no out-of-directory kernel includes) |
-| *Feature Support* — overall | GREEN |
+| *Feature Support* — overall | **RED** (multi-core factory: cross-node gather DFB unsupported) / GREEN (single-core factory) |
 | *Feature Support* — Variadic-CTA | Ok |
 | *TTNN Readiness* — Op-owned tensors | No |
 | *TTNN Readiness* — MeshWorkload needed | No |
@@ -33,11 +33,13 @@ Single device operation, two program factories:
 | *TTNN Readiness* — Custom override-RTA | No |
 | *TTNN Readiness* — Fake CBs (address-only) | None |
 
-**Fake CBs** = CBs used purely as an address source. The multi-core `gathered_values_cb` (c_4) / `gathered_indices_cb` (c_5) on the final core *look* address-only (remote cores write into them by raw L1 pointer in `writer_local_topk.cpp`), but each has a real producer–consumer FIFO: `reader_final_topk.cpp` reserves/pushes (producer side) and `topk_final.cpp` `wait_front`/`pop_front`s (consumer). Producer + consumer present → genuine DFB, **not** a fake CB. No fake CBs anywhere in the op.
+**Fake CBs** = CBs used purely as an address source. None in the op. **⚠ Correction (node-locality):** an earlier revision of this audit marked the multi-core `gathered_values_cb` (c_4) / `gathered_indices_cb` (c_5) on the final core as a clean "genuine producer/consumer DFB." That was wrong. The **data producer is remote** — `writer_local_topk.cpp` running on the *local* cores NoC-writes each core's results into the *final* core's c_4/c_5 (at the common L1 address allocated via `all_cores_range_set`), coordinated by `sender`/`receiver` semaphores. `reader_final_topk.cpp`'s reserve/push on the final core is bookkeeping after the remote write; the actual data crosses nodes. A DFB whose producer and consumer run on different nodes is a **`CrossNodeDataflowBuffer`**, which is **NOT YET SUPPORTED** (`dataflow_buffer_spec.hpp:139`). This **GATEs** the multi-core factory. See *Gate detail → cross-node gather*.
 
 ## Result
 
-**GREEN → brief issued.** Both program factories are on the `ProgramDescriptor` API and every kernel they exercise is Device 2.0 compliant. No UNSUPPORTED Appendix A feature fires. All tensor bindings are Case 1 (read/written exclusively through `TensorAccessor`); no Case 2 raw-pointer bindings and no compute-kernel tensor binding. No custom program hash, no op-owned tensors, no MeshWorkload need, no risky pybind. The port is straightforward, mechanical work: convert `TensorAccessorArgs` CTA plumbing + the buffer-address RTAs into typed `TensorParameter` / `TensorBinding`s.
+**RED at op level → no brief for the whole op.** **`TopKSingleCoreProgramFactory` subset is GREEN and a brief is issued for it.** The single-core factory is on the `ProgramDescriptor` API, all its kernels are Device 2.0 compliant, no UNSUPPORTED feature fires, all bindings are Case 1, and there is no cross-core data movement — a straightforward, mechanical port (convert `TensorAccessorArgs` CTA plumbing + buffer-address RTAs into typed `TensorParameter` / `TensorBinding`s).
+
+**`TopKMultiCoreProgramFactory` is RED** — blocked on a framework feature gap: its many-core → final-core gather writes results across nodes into a common-address CB (`c_4`/`c_5`), which Metal 2.0 can only express as a `CrossNodeDataflowBuffer` (and/or `GlobalDataflowBuffer`), neither of which is implemented yet. Routed to **wait-for-feature**. It unblocks when cross-node DFB support lands. (Selection is per-factory via `select_program_factory` on input size, so the single-core subset can be ported independently.)
 
 ## Gate detail
 
@@ -51,11 +53,13 @@ Single device operation, two program factories:
   - No `noc_async_read`/`noc_async_write` raw forms, no `InterleavedAddrGen`/`ShardedAddrGen`/`InterleavedAddrGenFast`, no bare CB-index `get_read_ptr(cb_id)`/`get_write_ptr(cb_id)` free functions, no raw semaphore addresses. Confirmed by directory-wide grep.
   - No out-of-directory donor kernels are instantiated or `#include`d (all kernel includes are `api/*` LLK/HAL + the two in-directory shared headers), so there is no donor-side Device 2.0 dependency to gate on.
 
+- **Cross-node gather (GATE — multi-core factory only):** `TopKMultiCoreProgramFactory` aggregates per-core local-topk results onto a single *final* core. The destination buffers `c_4` (`gathered_values_cb`) and `c_5` (`gathered_indices_cb`) are declared over `all_cores_range_set` so every core's instance lands at the **same L1 address** (`topk_multi_core_program_factory.cpp:199-219`; the "shared CBs allocated first" comment at `:161-168` is what forces the common address). The transfer is a remote write: `writer_local_topk.cpp` on each local core takes the **final core's NoC coords** + `gathered_*_cb_index` as *destination* (`:392-405`) and writes its local results there, with `sender`/`receiver` semaphores synchronizing the multi-sender handshake; `reader_final_topk.cpp` on the final core *coordinates reception* (`:365-385`) and `topk_final.cpp` consumes. **Producer (local cores) and consumer (final core) are on different nodes** → a `CrossNodeDataflowBuffer`, which `dataflow_buffer_spec.hpp:139` states is **not yet supported**. No same-node DFB or fake-CB workaround expresses a cross-node FIFO, and the typed-binding rules forbid smuggling the remote address through an RTA. **Blocked → wait-for-feature** (cross-node / global DFB). The single-core factory has no cross-core transfer and is unaffected.
+
 - **Feature compatibility:** every Appendix A entry, in order.
 
   | Feature | Status | Notes |
   |---|---|---|
-  | GlobalCircularBuffer | N/A | No `GlobalCircularBuffer` type, no `CBDescriptor::global_circular_buffer` field set, no `remote_index`/`remote_cb_*` idiom. |
+  | GlobalCircularBuffer | **RED (multi-core)** / N/A (single-core) | No `GlobalCircularBuffer` *type* is used, but the multi-core factory **hand-rolls a cross-node gather**: `c_4`/`c_5` are allocated at a common L1 address across `all_cores_range_set` and the local cores' `writer_local_topk.cpp` NoC-writes into the final core's instance under semaphore handshake (`topk_multi_core_program_factory.cpp:199-219`, gather wiring `:365-405`). In Metal 2.0 this is a `CrossNodeDataflowBuffer`/`GlobalDataflowBuffer` (both unimplemented). GATE for the multi-core factory; single-core has no such CB. |
   | Dynamic CircularBuffer (borrowed memory) | N/A | No `CBDescriptor::.buffer` set; no `set_globally_allocated_address`. All CBs are static (`.total_size` + `format_descriptors` only). |
   | CBDescriptor `address_offset` (non-zero) | N/A | No `.address_offset` set on any `CBDescriptor`; no `set_address_offset`. |
   | Aliased Circular Buffers | N/A | Every `CBDescriptor::format_descriptors` is single-element (`{{CBFormatDescriptor{...}}}`). |
@@ -115,4 +119,6 @@ N/A — no custom `compute_program_hash`.
 
 - **Dead `GENERATE_INDICES` branch in single-core (`reader_create_index_tensor.cpp:29-34,66-73`).** The single-core factory hardcodes `{"GENERATE_INDICES", "1"}` unconditionally (`topk_single_core_program_factory.cpp:198-200`) with the comment `// tensor_args.indices.has_value() ? "0" : "1" - GH issue: #36329`. So the `#if not GENERATE_INDICES` precomputed-indices read path is never compiled in the single-core kernel, even though the factory still pushes the optional indices `TensorAccessorArgs` (`:195-197`) and the `indices->address()` RTA (`:266`). The multi-core factory, by contrast, sets the define from `tensor_args.indices.has_value()` (`topk_multi_core_program_factory.cpp:347-349`) and does compile the read path. Net: in the single-core path the optional-indices CTA + RTA are effectively dead. Routes to the op owner (GH #36329); the port enumerates the indices binding either way.
 
-## Recipe notes  *(none)*
+## Recipe notes
+
+- **Cross-node gather DFB not caught by the recipe (over-clear corrected).** An earlier revision of this audit marked the multi-core `c_4`/`c_5` gather CBs "clean / genuine DFB" on the basis that a producer (`reader_final` reserve/push) and consumer (`topk_final` wait_front/pop) were present. That test is insufficient: it does not check **node-locality** of the producer vs. consumer. Here the real data producer is *remote* (`writer_local_topk` on other cores, via NoC write into a common-address CB), so the buffer is a cross-node DFB (`CrossNodeDataflowBuffer`, unsupported), not a same-node FIFO. The recipe's borrowed-memory causal-link gate should be extended to require that a CB marked "clean" has its producer and consumer **on the same node** — a cross-node producer/consumer (remote NoC write into a shared/common-address CB, semaphore-coordinated gather/scatter) is a GATE (wait-for-feature: `CrossNodeDataflowBuffer`/`GlobalDataflowBuffer`). The trap is a hand-rolled cross-core gather that uses no `GlobalCircularBuffer` *type*, so a type-name scan misses it — recognize it by `all_cores_range_set` (or equivalent) on a CB whose data arrives via remote NoC writes from other cores' kernels.
