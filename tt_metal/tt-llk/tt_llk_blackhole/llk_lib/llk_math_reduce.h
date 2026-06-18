@@ -36,6 +36,11 @@ inline void reduce_configure_mop();
 template <bool enforce_fp32_accumulation, bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
+    // The MOVB2D/MOVD2B/ELWADD below read the Src zero-substitution flag (FlushDenormals = !flag).
+    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
+    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
+    // return it to the operand-driven baseline. WH does the same in its fp32 transpose.
+    math::_configure_mov_ops_zero_flag_state_();
     if (enforce_fp32_accumulation)
     {
         // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
@@ -115,6 +120,8 @@ inline void reduce_row_perform_transpose()
         TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
         TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
     }
+    // Restore the operand-driven baseline for the currently-configured formats.
+    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
 }
 
 /**

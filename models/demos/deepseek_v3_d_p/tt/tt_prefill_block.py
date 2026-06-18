@@ -78,6 +78,7 @@ class TtPrefillBlock(LightweightModule):
         routed_expert_weights_dtype=ttnn.bfloat4_b,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
+        kv_only: bool = False,
     ):
         """
         Build TTNN cache for this block (norms + MLA + FFN/MoE) without device copy.
@@ -115,7 +116,13 @@ class TtPrefillBlock(LightweightModule):
             seq_len=seq_len,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
+            kv_only=kv_only,
         )
+
+        if kv_only:
+            # The kv-only last layer has no ffn_norm / FFN / MoE.
+            logger.info(f"Cache built for layer {layer_idx} (kv_only)")
+            return
 
         # Build ffn_norm cache
         TtDistributedRmsNorm.build_ttnn_cache(
@@ -189,6 +196,7 @@ class TtPrefillBlock(LightweightModule):
         slot_num: int = 1,
         layer_num: Optional[int] = None,
         max_seq_len: Optional[int] = None,
+        kv_only: bool = False,
     ):
         super().__init__()
         # In chunked prefill the flat KV-cache slot is cache_user_id * layer_num + cache_layer_idx, so
@@ -197,11 +205,15 @@ class TtPrefillBlock(LightweightModule):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
         emb_dim = config.hidden_size
 
-        logger.info(f"Building TtPrefillBlock layer_idx={layer_idx} ({'MoE' if self.is_moe else 'dense'})")
+        logger.info(
+            f"Building TtPrefillBlock layer_idx={layer_idx} "
+            f"({'MoE' if self.is_moe else 'dense'}, kv_only={kv_only})"
+        )
 
         # --- Attention norm ---
         self.attn_norm = TtDistributedRmsNorm(
@@ -233,7 +245,12 @@ class TtPrefillBlock(LightweightModule):
             is_chunked=is_chunked,
             slot_num=slot_num,
             layer_num=layer_num,
+            kv_only=kv_only,
         )
+
+        if kv_only:
+            # Last layer: no FFN norm, no FFN/MoE. Forward returns after MLA.
+            return
 
         # --- FFN norm ---
         self.ffn_norm = TtDistributedRmsNorm(
@@ -400,6 +417,13 @@ class TtPrefillBlock(LightweightModule):
         if return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
         ttnn.deallocate(attn_norm_out)
+
+        if self.kv_only:
+            # KV cache filled (by MLA), migration callback fired. The block
+            # output is unused (no FFN, no further layers). Return (None, None)
+            # so the transformer can short-circuit.
+            return None, None
+
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
         if return_kv_intermediates:

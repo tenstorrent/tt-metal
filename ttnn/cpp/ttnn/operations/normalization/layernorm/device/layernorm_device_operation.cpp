@@ -404,7 +404,10 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                     CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
                     CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
                     shard_spec.grid = output_grid;
-                    auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        operation_attributes.output_mem_config.memory_layout(),
+                        operation_attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
                 }
@@ -422,7 +425,8 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
 
                 auto mem_config = operation_attributes.output_mem_config;
                 if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
+                    mem_config = tt::tt_metal::MemoryConfig(
+                        mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
                 return ttnn::TensorSpec(

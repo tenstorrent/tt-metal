@@ -561,6 +561,7 @@ class SrcFormatModel:
             DataFormat.Bfp2_b: SrcFormatModel._bfp8b_to_tf32,
             DataFormat.Float16_b: SrcFormatModel._fp16b_to_tf32,
             DataFormat.Float16: SrcFormatModel._fp16_to_tf32,
+            DataFormat.Tf32: SrcFormatModel._fp32_to_tf32,
             DataFormat.Float32: SrcFormatModel._fp32_to_tf32,
             DataFormat.MxFp8R: SrcFormatModel._mxfp8r_to_tf32,
             DataFormat.MxFp8P: SrcFormatModel._mxfp8p_to_tf32,
@@ -1212,8 +1213,15 @@ class MatmulGolden(FidelityMasking):
         t1 = to_tensor(operand1, fidelity_format)
         t2 = to_tensor(operand2, fidelity_format)
         if fidelity_iter is not None:
-            t1, t2 = self._apply_fidelity_masking(
-                fidelity_format, t1, t2, fidelity_iter
+            # The Tensix matmul swaps its operands through the source registers:
+            # the lhs is unpacked into SrcB and the rhs into SrcA. The fidelity
+            # masks are per-source (mask_a -> SrcA, mask_b -> SrcB) and asymmetric
+            # (e.g. LoFi keeps the top 4 of SrcA's mantissa but the top 6 of
+            # SrcB's), so the lhs must take the SrcB mask and the rhs the SrcA mask.
+            # Feed (rhs, lhs) into the masking and unswap the result so each operand
+            # is masked as the source register it actually lands in.
+            t2, t1 = self._apply_fidelity_masking(
+                fidelity_format, t2, t1, fidelity_iter
             )
         return t1, t2
 
@@ -1612,7 +1620,7 @@ class DataCopyGolden:
         input_dimensions: list[int] = [32, 32],
         face_r_dim: int = 16,  # Default to 16 for backward compatibility
         input_format=None,
-        tile_dimensions: list[int] = None,
+        tile_shape=None,
     ):
         torch_format = format_dict[data_format]
 
@@ -1624,14 +1632,15 @@ class DataCopyGolden:
         height, width = input_dimensions[0], input_dimensions[1]
 
         # Tile count selection:
-        # - tile_dimensions given: derive directly from the real tile geometry. This
+        # - tile_shape given: derive directly from the real tile geometry. This
         #   is required for full-width tiny tiles (e.g. 16x32, num_faces=2) where
         #   face_r_dim is still 16 but a tensor packs into more, smaller tiles than
         #   the 32x32 assumption below would compute.
         # - face_r_dim < 16: legacy partial-face path treats the input as one tile.
         # - otherwise: assume standard 32x32 tiles (backward compatible).
-        if tile_dimensions is not None:
-            tile_rows, tile_cols = tile_dimensions
+        if tile_shape is not None:
+            tile_rows = tile_shape.total_row_dim()
+            tile_cols = tile_shape.total_col_dim()
             tile_cnt = (height // tile_rows) * (width // tile_cols)
         elif face_r_dim < 16:
             tile_cnt = 1

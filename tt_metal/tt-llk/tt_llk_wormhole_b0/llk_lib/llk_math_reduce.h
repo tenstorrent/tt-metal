@@ -43,10 +43,11 @@ inline void reduce_row_perform_transpose()
         // SrcA_val=Tf32 addresses hi16 (DEST_NORM), SrcA_val=Float32 addresses lo16 (DEST_32B_LOW).
         // Writing hi16 via MOVB2D(Tf32) clobbers lo16, so we cache lo16 in SrcA first.
 
-        // Enable SrcA format override to control MOVB2D hi16/lo16 addressing,
-        // and Zero_Flag_disabled_src to prevent mantissa flushing during MOV operations.
+        // Enable SrcA format override to control MOVB2D hi16/lo16 addressing, and disable the Src
+        // zero-substitution flag (via the math state tracker) to prevent mantissa flushing during
+        // the MOV operations.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        math::_configure_mov_ops_zero_flag_state_();
 
         // Step 1: Read lo16 from dest into SrcB rows 16-31 and transpose.
         // DEST_32B_LOW reads the lo16 half of 32-bit dest.
@@ -83,9 +84,10 @@ inline void reduce_row_perform_transpose()
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
 
-        // Restore: disable SrcA format override and re-enable zero flag.
+        // Restore: disable SrcA format override and return the Src zero-substitution flag to the
+        // operand-driven baseline for the currently-configured formats.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+        math::_configure_default_zero_flag_state_(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt);
     }
     else
     {

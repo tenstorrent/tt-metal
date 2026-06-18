@@ -250,14 +250,17 @@ class EagerLLMExecutor:
 
         for layer_num in range(num_layers):
             kv_cache_dtype = ttnn.bfloat8_b
-            if self.model_args and self.model_args.optimizations is not None:
-                from models.tt_transformers.tt.model_config import TensorGroup
+            ma = self.model_args
+            if ma is not None:
+                explicit = getattr(ma, "kv_cache_dtype", None)
+                if explicit is not None:
+                    kv_cache_dtype = explicit
+                elif getattr(ma, "optimizations", None) is not None:
+                    from models.tt_transformers.tt.model_config import TensorGroup
 
-                configured = self.model_args.optimizations.get_tensor_dtype(
-                    decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
-                )
-                if configured is not None:
-                    kv_cache_dtype = configured
+                    configured = ma.optimizations.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.KV_CACHE)
+                    if configured is not None:
+                        kv_cache_dtype = configured
 
             # todo)) this could be lazy weight?
             # todo)) use ttnn.zeros() directly instead of as_tensor?
@@ -1796,7 +1799,7 @@ class PerfBenchmarkResult:
 
 
 def run_perf_benchmark(
-    executor: TracedLLMExecutor,
+    executor: EagerLLMExecutor | TracedLLMExecutor,
     *,
     tokens: torch.Tensor,
     kv_cache: list,
@@ -1948,10 +1951,11 @@ def _process_output_prefill(tt_out, last_token_idx, vocab_size, cluster_shape):
 def _process_output_decode(tt_out, B, vocab_size, num_devices, cluster_shape):
     """Device→host for decode. Returns logits [B, 1, vocab_size]."""
     if num_devices > 1:
-        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+        # Decode logits are vocab-sharded across devices; stitch shards back before argmax.
+        tt_out = _concat_host_output(tt_out, cluster_shape).float()
     else:
         tt_out = ttnn.to_torch(tt_out).float()
-    return tt_out[:, :, :B, :vocab_size].view(B, 1, -1)
+    return tt_out[:, :, :B, :vocab_size].contiguous().view(B, 1, -1)
 
 
 def _process_output_decode_tokens(tt_out, B, cluster_shape):

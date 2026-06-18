@@ -49,6 +49,7 @@ class ttMLA:
         tp_axis: int = 1,
         cache_path: Path | None = None,
         device: ttnn.MeshDevice | None = None,
+        kv_only: bool = False,
     ) -> dict | None:
         """
         Shared logic for converting MLA weights to ttnn with caching.
@@ -110,17 +111,9 @@ class ttMLA:
 
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
 
-        # 8 ttnn.as_tensor calls
+        # KV-branch weights (always loaded). The kv-only forward path only
+        # needs these; the rest are gated below on `kv_only`.
         result = {
-            "q_a_layernorm": ttnn.as_tensor(
-                q_a_ln,
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                cache_file_name=_cache_name("q_a_layernorm"),
-            ),
             "kv_a_layernorm": ttnn.as_tensor(
                 kv_a_ln,
                 device=device,
@@ -129,24 +122,6 @@ class ttMLA:
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name("kv_a_layernorm"),
-            ),
-            "q_a_proj": ttnn.as_tensor(
-                q_a_proj,
-                device=device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper_tp0,
-                cache_file_name=_cache_name("q_a_proj"),
-            ),
-            "q_b_proj": ttnn.as_tensor(
-                q_b_proj,
-                device=device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper_tp1,
-                cache_file_name=_cache_name("q_b_proj"),
             ),
             "kv_a_proj_with_mqa": ttnn.as_tensor(
                 kv_a_proj,
@@ -157,34 +132,66 @@ class ttMLA:
                 mesh_mapper=mapper_tp0,
                 cache_file_name=_cache_name("kv_a_proj_with_mqa"),
             ),
-            "wkv_b1": ttnn.as_tensor(
-                wkv_b1,
-                device=device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper_tp1,
-                cache_file_name=_cache_name("wkv_b1"),
-            ),
-            "wkv_b2": ttnn.as_tensor(
-                wkv_b2,
-                device=device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper_tp1,
-                cache_file_name=_cache_name("wkv_b2"),
-            ),
-            "o_proj": ttnn.as_tensor(
-                o_proj,
-                device=device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
-                mesh_mapper=mapper_tp0,
-                cache_file_name=_cache_name("o_proj"),
-            ),
         }
+        if not kv_only:
+            result.update(
+                {
+                    "q_a_layernorm": ttnn.as_tensor(
+                        q_a_ln,
+                        device=device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=mem,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                        cache_file_name=_cache_name("q_a_layernorm"),
+                    ),
+                    "q_a_proj": ttnn.as_tensor(
+                        q_a_proj,
+                        device=device,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=mem,
+                        mesh_mapper=mapper_tp0,
+                        cache_file_name=_cache_name("q_a_proj"),
+                    ),
+                    "q_b_proj": ttnn.as_tensor(
+                        q_b_proj,
+                        device=device,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=mem,
+                        mesh_mapper=mapper_tp1,
+                        cache_file_name=_cache_name("q_b_proj"),
+                    ),
+                    "wkv_b1": ttnn.as_tensor(
+                        wkv_b1,
+                        device=device,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=mem,
+                        mesh_mapper=mapper_tp1,
+                        cache_file_name=_cache_name("wkv_b1"),
+                    ),
+                    "wkv_b2": ttnn.as_tensor(
+                        wkv_b2,
+                        device=device,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=mem,
+                        mesh_mapper=mapper_tp1,
+                        cache_file_name=_cache_name("wkv_b2"),
+                    ),
+                    "o_proj": ttnn.as_tensor(
+                        o_proj,
+                        device=device,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=mem,
+                        mesh_mapper=mapper_tp0,
+                        cache_file_name=_cache_name("o_proj"),
+                    ),
+                }
+            )
 
         if device is None:
             for v in result.values():
@@ -202,10 +209,11 @@ class ttMLA:
         seq_len: int,
         sp_axis: int = 0,
         tp_axis: int = 1,
+        kv_only: bool = False,
     ):
         """Build TTNN cache for MLA weights using device=None (no device copy)."""
         ttMLA._convert_and_cache_weights(
-            state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None
+            state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None, kv_only=kv_only
         )
 
     def __init__(
@@ -223,10 +231,12 @@ class ttMLA:
         is_chunked: bool = False,
         slot_num: int = 1,
         layer_num: int = 61,
+        kv_only: bool = False,
     ):
         self.config = config
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
+        self.kv_only = kv_only
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
         self.is_chunked = is_chunked
@@ -305,7 +315,11 @@ class ttMLA:
         # holding both would waste DRAM. Both sets are owned once per model by TT_CCL and shared by
         # every layer's MLA (uniform across layers, scratch / no per-layer state) instead of
         # re-allocated per layer.
-        if self.is_chunked:
+        #
+        # kv_only (last layer) never reaches SDPA, so it needs no ring/gather buffers at all.
+        if kv_only:
+            pass
+        elif self.is_chunked:
             # Single combined gathered-KV scratch buffer for ring_mla: K and V both come from the
             # latent kvpe cache, so one (1, 1, seq_len, kvpe_dim) buffer replaces the separate
             # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
@@ -336,7 +350,9 @@ class ttMLA:
             self.joint_kv = ring_buffers["joint_kv"]
             self.joint_v = ring_buffers["joint_v"]
 
-        # Load weights to TT device
+        # Load weights to TT device. In kv_only mode the returned dict only
+        # contains kv_a_layernorm / kv_a_proj_with_mqa; the Q-side / V / wo
+        # weights are skipped entirely (saves DRAM + cache reads).
         weights = self._convert_and_cache_weights(
             state_dict,
             mesh_device,
@@ -346,16 +362,18 @@ class ttMLA:
             tp_axis,
             self.weight_cache_path,
             device=mesh_device,
+            kv_only=kv_only,
         )
-        self.q_a_layernorm_weight = weights["q_a_layernorm"]
         self.kv_a_layernorm_weight = weights["kv_a_layernorm"]
-        self.q_a_proj_weight = weights["q_a_proj"]
-        self.q_b_proj_weight = weights["q_b_proj"]
         self.kv_a_proj_with_mqa_weight = weights["kv_a_proj_with_mqa"]
-        self.wkv_b1_weight = weights["wkv_b1"]
-        self.wkv_b2_weight = weights["wkv_b2"]
-        self.o_proj_weight = weights["o_proj"]
-        logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx}")
+        if not kv_only:
+            self.q_a_layernorm_weight = weights["q_a_layernorm"]
+            self.q_a_proj_weight = weights["q_a_proj"]
+            self.q_b_proj_weight = weights["q_b_proj"]
+            self.wkv_b1_weight = weights["wkv_b1"]
+            self.wkv_b2_weight = weights["wkv_b2"]
+            self.o_proj_weight = weights["o_proj"]
+        logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
 
     @staticmethod
     def kv_cache_to_host(kvpe_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
@@ -375,16 +393,22 @@ class ttMLA:
         ).to(torch.bfloat16)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
-        return {
-            "q_a_proj.weight": tuple(self.q_a_proj_weight.shape),
-            "q_a_layernorm.weight": tuple(self.q_a_layernorm_weight.shape),
-            "q_b_proj.weight": tuple(self.q_b_proj_weight.shape),
+        shapes = {
             "kv_a_proj_with_mqa.weight": tuple(self.kv_a_proj_with_mqa_weight.shape),
             "kv_a_layernorm.weight": tuple(self.kv_a_layernorm_weight.shape),
-            "wkv_b1_weight": tuple(self.wkv_b1_weight.shape),
-            "wkv_b2_weight": tuple(self.wkv_b2_weight.shape),
-            "o_proj.weight": tuple(self.o_proj_weight.shape),
         }
+        if not self.kv_only:
+            shapes.update(
+                {
+                    "q_a_proj.weight": tuple(self.q_a_proj_weight.shape),
+                    "q_a_layernorm.weight": tuple(self.q_a_layernorm_weight.shape),
+                    "q_b_proj.weight": tuple(self.q_b_proj_weight.shape),
+                    "wkv_b1_weight": tuple(self.wkv_b1_weight.shape),
+                    "wkv_b2_weight": tuple(self.wkv_b2_weight.shape),
+                    "o_proj.weight": tuple(self.o_proj_weight.shape),
+                }
+            )
+        return shapes
 
     # Default output dtypes per weight, used when no tuned config exists for the seq_len_local
     MM_DEFAULT_DTYPES = {
@@ -649,6 +673,18 @@ class ttMLA:
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
     ) -> ttnn.Tensor:
+        if self.kv_only:
+            return self._forward_kv_only(
+                hidden_states,
+                rope_tensors,
+                kvpe_cache,
+                cache_layer_idx,
+                on_layer_complete,
+                kv_actual_isl=actual_start,
+                actual_end=actual_end,
+                cache_user_id=cache_user_id,
+            )
+
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
@@ -889,3 +925,99 @@ class ttMLA:
         if return_kv_intermediates:
             return out, kv_intermediates
         return out
+
+    def _forward_kv_only(
+        self,
+        hidden_states: ttnn.Tensor,
+        rope_tensors: dict,
+        kvpe_cache: ttnn.Tensor,
+        cache_layer_idx: int,
+        on_layer_complete: Optional[Callable[[int], None]],
+        kv_actual_isl: int,
+        actual_end: Optional[int],
+        cache_user_id: int,
+    ) -> None:
+        """Last-layer fast path: fill the KV cache (which migration consumes) and fire the
+        migration callback, then stop. Skips Q / SDPA / output projection entirely; the
+        block also skips FFN/MoE/norm/LM head, so no first-token output is produced.
+        """
+        signpost(header="MLA_START")
+        seq_len_local = hidden_states.shape[2]
+
+        tt_kv = ttnn.linear(
+            hidden_states,
+            self.kv_a_proj_with_mqa_weight,
+            compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("kv_a_proj_with_mqa", seq_len_local),
+        )
+
+        if self.tp_factor > 1:
+            tt_kv = ttnn.experimental.all_gather_async(
+                tt_kv,
+                dim=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+            tt_kv = ttnn.experimental.fast_reduce_nc(
+                tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+            )
+
+        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
+        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
+        tt_kv_rope = ttnn.slice(
+            tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
+        )
+        ttnn.deallocate(tt_kv)
+
+        tt_kv_nope = ttnn.rms_norm(
+            tt_kv_nope,
+            weight=self.kv_a_layernorm_weight,
+            epsilon=self.config.rms_norm_eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+
+        # Same rope as the full chunked path (indexed/padded when chunked, single-shot otherwise) so
+        # the KV written to the cache carries the correct per-chunk positional offset.
+        tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
+
+        # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
+        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        ttnn.deallocate(tt_kv_rope)
+        tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
+
+        # Write the chunk via the SAME chunked path as _chunked_attn (not a single-shot fill):
+        # update_padded_kv_cache writes at the per-chip offset derived from kv_actual_global.
+        chunk_size_global = seq_len_local * self.sp_factor
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kvpe_cache,
+            tt_kvpe,
+            slot_idx=cache_user_id,
+            layer_idx=cache_layer_idx,
+            num_layers=self.layer_num,
+            kv_actual_global=kv_actual_isl,
+            cluster_axis=self.sp_axis,
+        )
+
+        # Migration-gated: zero the pad window past actual_end so the decode side reads clean zeros,
+        # then fire the per-layer ack (the populated cache is the only output of a kv-only last layer).
+        if on_layer_complete is not None:
+            assert actual_end is not None, "actual_end required when on_layer_complete is set"
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                kvpe_cache,
+                cache_user_id,
+                cache_layer_idx,
+                self.layer_num,
+                actual_end,
+                chunk_size_global,
+                self.sp_axis,
+            )
+            ttnn.synchronize_device(self.mesh_device)
+            on_layer_complete(self.layer_idx)
+
+        signpost(header="MLA_END")
+        return None
