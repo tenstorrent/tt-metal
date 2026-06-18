@@ -42,6 +42,11 @@ def bthwc_to_bcthw(x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.permute(x_bthwc, (0, 4, 1, 2, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+# Max flat elements before depth-to-space chunks over H (the 8-D reshape pads the
+# size-2 dims, so keep the pre-pad flat count well under the device limit).
+_D2S_CHUNK_ELEMS = 32 * 1024 * 1024
+
+
 def dcae_depth_to_space_bthwc(
     x_bthwc: ttnn.Tensor,
     *,
@@ -52,16 +57,39 @@ def dcae_depth_to_space_bthwc(
 ) -> ttnn.Tensor:
     """Depth-to-space on BTHWC: (B,T,H,W,r1*r2*r3*C) -> (B,T*r1,H*r2,W*r3,C).
 
-    NOTE (full-res OOM): at 1024² the full-res decode has multiple ~16GB
-    allocations (this op AND the tail conv3d). Per-op dtype/chunk fixes are
-    whack-a-mole (bf8 here just shifts the OOM to the next op). The real fix is
-    spatial (H/W) parallelism across the mesh — tt_dit's VaeHWParallelConfig.
-    Tracked in the README as VAE-decode memory work.
+    At 1024² the 8-D reshape+permute tilizes the size-2 (r2,r3) dims toward 32 and
+    allocates ~16GB. H rows are independent (each input H expands to r2 output
+    rows), so we chunk over input H and concat — bounding the buffer, exactly
+    (no precision loss).
     """
     b, t, h, w, _ = x_bthwc.shape
-    x = ttnn.reshape(x_bthwc, (b, t, h, w, out_channels, r1, r2, r3))
-    x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
-    return ttnn.reshape(x, (b, t * r1, h * r2, w * r3, out_channels))
+
+    def _d2s(x):
+        # Reference channel order is (r1 r2 r3 c) with c fastest — decoder.py
+        # rearrange "b (r1 r2 r3 c) f h w -> b c (f r1) (h r2) (w r3)". Split the
+        # channel dim accordingly (NOT (c r1 r2 r3)).
+        xb = x.shape[2]
+        x = ttnn.reshape(x, (b, t, xb, w, r1, r2, r3, out_channels))
+        x = ttnn.permute(x, (0, 1, 4, 2, 5, 3, 6, 7))  # -> b, t, r1, xb, r2, w, r3, out
+        return ttnn.reshape(x, (b, t * r1, xb * r2, w * r3, out_channels))
+
+    flat = b * t * h * w * out_channels * r1 * r2 * r3
+    if flat <= _D2S_CHUNK_ELEMS or h <= 1:
+        return _d2s(x_bthwc)
+
+    n_chunks = (flat + _D2S_CHUNK_ELEMS - 1) // _D2S_CHUNK_ELEMS
+    hc = (h + n_chunks - 1) // n_chunks
+    last = x_bthwc.shape[-1]
+    outs = []
+    for o in range(0, h, hc):
+        oe = min(h, o + hc)
+        xs = ttnn.slice(x_bthwc, [0, 0, o, 0, 0], [b, t, oe, w, last])
+        outs.append(_d2s(xs))
+        ttnn.deallocate(xs)
+    out = ttnn.concat(outs, dim=2)  # along H*r2
+    for o_t in outs:
+        ttnn.deallocate(o_t)
+    return out
 
 
 def dcae_space_to_depth_bthwc(
