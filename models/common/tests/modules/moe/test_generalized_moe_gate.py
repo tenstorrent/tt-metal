@@ -394,8 +394,12 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
     else:
         w = dev_sel
     expected = w / (w.sum(-1, keepdim=True) + eps) * scaling_factor
+    # Position-aligned, NOT sorted independently: dev_scores[i] and expected[i] both correspond to expert
+    # dev_idx[i], so they must match elementwise. Sorting each side separately would only check the weight
+    # multiset and would pass even if the kernel paired the right weights with the wrong ids — a real MoE
+    # bug, since combine applies weight[i] to expert dev_idx[i].
     assert torch.allclose(
-        dev_scores.sort(-1).values, expected.sort(-1).values, atol=2e-2
+        dev_scores, expected, atol=2e-2
     ), f"512 normalized scores not consistent with device selection.\n dev={dev_scores}\n expected={expected}"
 
 

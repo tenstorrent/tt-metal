@@ -105,8 +105,10 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(bias_shard.grid.contains(all_cores), "Bias shard grid must contain input shard grid");
 
     TT_FATAL(
-        in_indices_shard.shape[0] % 32 == 0 && in_indices_shard.shape[1] == 32,
-        "Input-indices shard must be tile-aligned (one 32x32 tile per block; block b holds global ids)");
+        input_shard.shape == in_indices_shard.shape,
+        "Input-indices shard shape must equal input shard shape: the kernel consumes num_blocks index tiles "
+        "(derived from the input shard), so a mismatched index shard would hang or route with invalid ids "
+        "(one 32x32 index tile per 256-block; block b holds global ids)");
     TT_FATAL(
         input_shard.orientation == in_indices_shard.orientation, "Input and input-indices orientations must match");
     TT_FATAL(in_indices_shard.grid.contains(all_cores), "Input-indices shard grid must contain input shard grid");
