@@ -33,6 +33,13 @@ class SDXLRunner:
         self.ttnn_device = None
         self.pipeline = None
         self.tt_sdxl = None
+        # Currently fused LoRA, tracked as (lora_path, lora_scale). None = base
+        # weights. Lets repeated requests with the same adapter skip the
+        # unload/reload/fuse cycle.
+        self._current_lora = None
+        # Status of the most recently applied LoRA (surfaced to the client so the
+        # UI can warn when an adapter is skipped/partial). None = no LoRA active.
+        self._last_lora_status = None
 
     def initialize_device(self):
         """Initialize mesh device with proper configuration"""
@@ -240,15 +247,56 @@ class SDXLRunner:
     # The full-pipeline run_inference() path above is left untouched.
     # ------------------------------------------------------------------
 
-    def _maybe_warn_lora(self, request: dict):
-        """LoRA fields are accepted for forward-compat. On-device application is a
-        follow-up (the pipeline exposes a lora_weights_manager, but request-time
-        adapter swap is not wired here yet)."""
-        if request.get("lora_path"):
-            self.logger.warning(
-                f"lora_path={request.get('lora_path')} (scale={request.get('lora_scale')}) "
-                "received but on-device LoRA application is not yet wired; ignoring for now."
-            )
+    def _apply_request_lora(self, request: dict):
+        """Apply the per-request LoRA adapter on device (load + fuse), caching the
+        currently-fused adapter so repeated requests skip the reload.
+
+        The adapter is validated and fused into the base UNet weights via the
+        pipeline's TtLoRAWeightsManager. Switching adapters first unloads the
+        previous one (restoring base weights) so deltas never stack. An empty
+        ``lora_path`` restores base weights.
+        """
+        lora_path = (request.get("lora_path") or "").strip()
+        scale = request.get("lora_scale")
+        scale = float(scale) if scale is not None else 1.0
+
+        if not lora_path:
+            if self._current_lora is not None:
+                self.logger.info("Clearing active LoRA (request has no adapter)")
+                self.tt_sdxl.unload_lora_weights()
+                self._current_lora = None
+            self._last_lora_status = None
+            return
+
+        key = (lora_path, scale)
+        if key == self._current_lora:
+            return  # already fused on device; keep the existing status
+
+        # Switching adapters (or changing scale): restore base weights first so
+        # the new delta is applied to the unmodified base, not a stacked weight.
+        if self._current_lora is not None:
+            self.tt_sdxl.unload_lora_weights()
+            self._current_lora = None
+
+        self.logger.info(f"Loading LoRA lora_path={lora_path!r}, lora_scale={scale}")
+        self.tt_sdxl.load_lora_weights(lora_path)
+        self.tt_sdxl.fuse_lora(lora_scale=scale)
+
+        status = self.tt_sdxl.get_lora_status()
+        applied = bool(status.get("unet") or status.get("text_encoder"))
+        self._last_lora_status = {
+            "requested": lora_path,
+            "scale": scale,
+            "applied": applied,
+            "unet": bool(status.get("unet")),
+            "text_encoder": bool(status.get("text_encoder")),
+            "skipped_reason": status.get("skipped_reason"),
+        }
+        if not applied:
+            self.logger.warning(f"LoRA {lora_path!r} had no effect (skipped_reason={status.get('skipped_reason')})")
+        elif status.get("skipped_reason"):
+            self.logger.warning(f"LoRA {lora_path!r} partially applied: {status.get('skipped_reason')}")
+        self._current_lora = key
 
     def _prompt_lists(self, request: dict):
         """Build the (prompts, negative, prompt_2, negative_2) lists from one request,
@@ -292,12 +340,15 @@ class SDXLRunner:
         latents = latents[: self.tt_sdxl.batch_size]
         return latents.cpu().numpy()
 
-    def denoise(self, request: dict) -> np.ndarray:
+    def denoise(self, request: dict, on_event=None) -> np.ndarray:
         """Staged: encode prompts + run the (traced) UNet denoise loop on device.
 
         Returns raw scheduler latents as numpy [B, C, H, W] (consumed by vae_decode).
+
+        If ``on_event`` is provided, a DenoiseStep event is emitted once per
+        denoise iteration so the server can stream per-step progress.
         """
-        self._maybe_warn_lora(request)
+        self._apply_request_lora(request)
         self._apply_request_settings(request)
         prompts, negative_prompts, prompts_2, negative_prompts_2 = self._prompt_lists(request)
         prompt_embeds, text_embeds = self.tt_sdxl.encode_prompts(
@@ -308,7 +359,15 @@ class SDXLRunner:
             prompt_embeds, text_embeds, start_latent_seed=seed
         )
         self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts[0], tt_texts[0]])
-        latents = self.tt_sdxl.generate_images(return_latents=True)
+
+        on_step = None
+        if on_event is not None:
+            from models.tt_dit.pipelines.events import DenoiseStep
+
+            def on_step(step, total):
+                on_event(DenoiseStep(step=step, total=total, sigma=0.0))
+
+        latents = self.tt_sdxl.generate_images(return_latents=True, on_step=on_step)
         return self._latents_to_numpy(latents)
 
     def vae_decode(self, latents_np: np.ndarray) -> np.ndarray:

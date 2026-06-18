@@ -20,7 +20,7 @@ from models.tt_dit.models.transformers.wan2_2.transformer_wan import WanCheckpoi
 from models.tt_dit.models.vae.vae_wan2_1 import WanVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
+from models.tt_dit.pipelines.events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import UniPCSolver, UniPCVariant
@@ -281,6 +281,7 @@ class WanPipeline(PipelineAPIMixin):
         device: ttnn.MeshDevice,
         config: WanPipelineConfig,
         run_warmup: bool = True,
+        lora_enabled: bool = False,
     ) -> None:
         self.checkpoint_name = config.checkpoint_name
         self.model_type = config.model_type
@@ -288,6 +289,7 @@ class WanPipeline(PipelineAPIMixin):
         self._height = config.height
         self._width = config.width
         self._num_frames = config.num_frames
+        self.lora_enabled = lora_enabled
 
         self._checkpoint = WanCheckpoint(config.checkpoint_name, subfolder="transformer")
         self._checkpoint_2 = WanCheckpoint(config.checkpoint_name, subfolder="transformer_2")
@@ -327,6 +329,7 @@ class WanPipeline(PipelineAPIMixin):
             parallel_config=self.parallel_config,
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
+            lora_enabled=lora_enabled,
         )
 
         self.transformer_2 = self._checkpoint_2.build(
@@ -334,6 +337,7 @@ class WanPipeline(PipelineAPIMixin):
             parallel_config=self.parallel_config,
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
+            lora_enabled=lora_enabled,
         )
 
         self._vae = WanVAEDecoderAdapter(
@@ -699,6 +703,7 @@ class WanPipeline(PipelineAPIMixin):
                 )
 
                 progress_bar.update()
+                on_event(DenoiseStep(step=i + 1, total=num_inference_steps, sigma=float(t)))
 
         self._current_timestep = None
 

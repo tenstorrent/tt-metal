@@ -86,6 +86,13 @@ class TtSDXLPipeline(LightweightModule):
 
         self._lora_weights_manager = TtLoRAWeightsManager(self.ttnn_device, self.torch_pipeline)
 
+        # Text-encoder LoRA state. `_te_lora_base_state` is a lazily-captured
+        # clean snapshot of the torch text-encoder weights (taken before any
+        # adapter is applied) used to revert; `_te_lora_fused` tracks whether the
+        # on-device encoders currently hold merged LoRA weights.
+        self._te_lora_base_state = None
+        self._te_lora_fused = False
+
         # Validate config parameters once at initialization
         self.__validate_config()
 
@@ -193,13 +200,78 @@ class TtSDXLPipeline(LightweightModule):
             logger.info("Fusing LoRA weights on TT device...")
             with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
                 self._lora_weights_manager.fuse_lora(lora_scale=lora_scale)
+        self._fuse_text_encoder_lora(lora_scale)
 
     def load_lora_weights(self, lora_path):
+        # Snapshot clean text-encoder weights before the first adapter is loaded
+        # so text-encoder LoRA can be reverted later.
+        self._ensure_te_base_snapshot()
         self._lora_weights_manager.load_lora_weights(lora_path)
 
     def unload_lora_weights(self):
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
             self._lora_weights_manager.unload_lora_weights()
+        self._unload_text_encoder_lora()
+
+    def get_lora_status(self):
+        """Report which components hold the currently-active LoRA (for the runner/server)."""
+        return {
+            "unet": bool(self._lora_weights_manager.is_fused()),
+            "text_encoder": bool(self._te_lora_fused),
+            "skipped_reason": self._lora_weights_manager.skipped_reason(),
+        }
+
+    def _ensure_te_base_snapshot(self):
+        if self._te_lora_base_state is not None or not self.pipeline_config.encoders_on_device:
+            return
+        state = {}
+        if self.torch_pipeline.text_encoder is not None:
+            state["text_encoder"] = {
+                k: v.detach().cpu().clone() for k, v in self.torch_pipeline.text_encoder.state_dict().items()
+            }
+        state["text_encoder_2"] = {
+            k: v.detach().cpu().clone() for k, v in self.torch_pipeline.text_encoder_2.state_dict().items()
+        }
+        self._te_lora_base_state = state
+
+    def _reload_tt_text_encoders(self):
+        # Push the current torch text-encoder weights onto the device encoders.
+        # Encoders run eagerly (not in a captured trace), so re-loading weights is
+        # safe; program cache keys on shapes, which are unchanged.
+        if self.tt_text_encoder is not None:
+            self.tt_text_encoder.deallocate_weights()
+            self.tt_text_encoder.load_torch_state_dict(self.torch_pipeline.text_encoder.state_dict())
+        self.tt_text_encoder_2.deallocate_weights()
+        self.tt_text_encoder_2.load_torch_state_dict(self.torch_pipeline.text_encoder_2.state_dict())
+
+    def _fuse_text_encoder_lora(self, lora_scale):
+        components = self._lora_weights_manager.text_encoder_components()
+        if not components:
+            return
+        if not self.pipeline_config.encoders_on_device:
+            logger.warning("Text-encoder LoRA present but encoders run on host; TE LoRA not applied.")
+            return
+        logger.info(f"Fusing text-encoder LoRA into {components} and reloading on device...")
+        # Merge the TE LoRA into the torch encoders, then strip all adapters. The
+        # merged weights stay in place with clean state-dict keys, which we push
+        # onto the device encoders. UNet deltas are already applied on device, so
+        # dropping the torch UNet adapter here is harmless.
+        self.torch_pipeline.fuse_lora(components=components, lora_scale=lora_scale)
+        self.torch_pipeline.unload_lora_weights()
+        self._reload_tt_text_encoders()
+        self._te_lora_fused = True
+
+    def _unload_text_encoder_lora(self):
+        if not self._te_lora_fused:
+            return
+        logger.info("Restoring base text-encoder weights on device...")
+        base = self._te_lora_base_state or {}
+        if self.tt_text_encoder is not None and base.get("text_encoder") is not None:
+            self.torch_pipeline.text_encoder.load_state_dict(base["text_encoder"])
+        if base.get("text_encoder_2") is not None:
+            self.torch_pipeline.text_encoder_2.load_state_dict(base["text_encoder_2"])
+        self._reload_tt_text_encoders()
+        self._te_lora_fused = False
 
     def set_num_inference_steps(self, num_inference_steps: int):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.
@@ -725,9 +797,10 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
 
-    def generate_images(self, return_latents=False):
+    def generate_images(self, return_latents=False, on_step=None):
         # SDXL inference run.
         # If return_latents=True, skip VAE decoding and return latents instead of images
+        # on_step: optional callback(step, total) invoked once per denoise iteration
         assert self.image_processing_compiled, "Image processing is not compiled"
         assert self.generated_input_tensors, "Input tensors are not re/generated"
 
@@ -758,6 +831,7 @@ class TtSDXLPipeline(LightweightModule):
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
             return_latents=return_latents,
+            on_step=on_step,
         )
         self._reset_num_inference_steps()
         return imgs

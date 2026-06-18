@@ -24,6 +24,11 @@ class WanRunner:
         self.mesh_device = None
         self.pipeline = None
         self._fabric_config = None
+        # Per-worker LoRA adapter cache: (high_path, low_path, scale) -> registered name.
+        # Repeated requests with the same adapter skip the (slow) reload/register and
+        # only re-bind. ``_active_lora_key`` tracks what is currently fused on device.
+        self._lora_cache: dict = {}
+        self._active_lora_key = None
 
     def initialize_device(self):
         rows, cols = self.config.device_mesh_shape
@@ -56,16 +61,27 @@ class WanRunner:
         return self.mesh_device
 
     def load_model(self, kernel_ready_queue=None):
-        from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+        # When LoRA is enabled the transformer is built with LoRA-aware Linears so
+        # adapters can be hot-swapped per request. Fuse mode keeps forward/trace
+        # overhead at zero, so non-LoRA requests are unaffected.
+        if self.config.lora_enabled:
+            from models.tt_dit.experimental.pipelines.pipeline_wan_runtime_lora import WanPipelineRuntimeLoRA
+
+            pipeline_cls = WanPipelineRuntimeLoRA
+        else:
+            from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+
+            pipeline_cls = WanPipeline
 
         self.logger.info("Creating Wan2.2 T2V pipeline...")
         self.logger.info(f"  model_name: {self.config.model_name}")
         self.logger.info(f"  size: {self.config.width}x{self.config.height}, frames: {self.config.num_frames}")
         self.logger.info(f"  steps: {self.config.num_inference_steps}, use_trace: {self.config.use_trace}")
+        self.logger.info(f"  lora_enabled: {self.config.lora_enabled}")
 
         # Geometry (height/width/num_frames) and CFG are fixed at creation; guidance_scale
         # is applied per call. Enable CFG so per-request guidance_scale > 1 is accepted.
-        self.pipeline = WanPipeline.create_pipeline(
+        self.pipeline = pipeline_cls.create_pipeline(
             mesh_device=self.mesh_device,
             checkpoint_name=self.config.model_name,
             height=self.config.height,
@@ -91,8 +107,53 @@ class WanRunner:
         if kernel_ready_queue is not None:
             kernel_ready_queue.put(self.worker_id)
 
+    def _apply_request_lora(self, request: dict) -> None:
+        """Register (if new) and bind the per-request LoRA adapter on both experts.
+
+        ``high_lora_path`` targets the high-noise expert (transformer) and
+        ``low_lora_path`` the low-noise expert (transformer_2); either or both may
+        be supplied. Adapters are cached per (high, low, scale) so repeated requests
+        with the same adapter only re-bind (sub-second) rather than reload weights.
+        Passing no LoRA fields restores the base weights.
+        """
+        if not hasattr(self.pipeline, "register_lora"):
+            if request.get("high_lora_path") or request.get("low_lora_path"):
+                self.logger.warning(
+                    "LoRA requested but pipeline was built without lora_enabled; ignoring. "
+                    "Restart the server with WanConfig.lora_enabled=True to use adapters."
+                )
+            return
+
+        high = request.get("high_lora_path") or None
+        low = request.get("low_lora_path") or None
+        scale = request.get("lora_scale")
+        scale = float(scale) if scale is not None else 1.0
+
+        if not high and not low:
+            if self._active_lora_key is not None:
+                self.logger.info("Clearing active LoRA (request has no adapter)")
+                self.pipeline.set_active_lora(None)
+                self._active_lora_key = None
+            return
+
+        key = (high, low, scale)
+        if key == self._active_lora_key:
+            return  # already fused on device — no work
+
+        name = self._lora_cache.get(key)
+        if name is None:
+            name = f"lora_{len(self._lora_cache)}"
+            self.pipeline.register_lora(name, high_path=high, low_path=low, scale=scale)
+            self._lora_cache[key] = name
+            self.logger.info(f"Registered LoRA '{name}': high={high}, low={low}, scale={scale}")
+
+        self.pipeline.set_active_lora(name)
+        self._active_lora_key = key
+        self.logger.info(f"Activated LoRA '{name}'")
+
     def run_inference(self, requests: List[dict]) -> List[np.ndarray]:
         request = requests[0]
+        self._apply_request_lora(request)
 
         prompt = request["prompt"]
         negative_prompt = request.get("negative_prompt") or None
@@ -169,13 +230,18 @@ class WanRunner:
             kwargs["boundary_ratio"] = float(boundary_ratio)
         return kwargs
 
-    def denoise(self, request: dict) -> np.ndarray:
+    def denoise(self, request: dict, on_event=None) -> np.ndarray:
         """Staged: encode prompt (umT5) + run the (traced) denoise loop on device.
 
         Returns raw denoised latents as numpy [B, z_dim, F, H, W] (consumed by vae_decode).
+        ``on_event`` is an optional PipelineEventCallback used to stream progress
+        (SectionStart/SectionEnd/DenoiseStep) back to the caller.
         """
+        self._apply_request_lora(request)
         kwargs = self._build_call_kwargs(request)
         kwargs["output_type"] = "latent"
+        if on_event is not None:
+            kwargs["on_event"] = on_event
         self.logger.info(
             f"Staged denoise: prompt='{request['prompt'][:80]}', steps={kwargs['num_inference_steps']}, "
             f"size={self.config.width}x{self.config.height}, seed={kwargs['seed']}"

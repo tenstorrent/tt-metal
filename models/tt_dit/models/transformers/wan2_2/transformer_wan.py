@@ -48,6 +48,7 @@ class WanTransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         sdpa_chunk_size_overrides: dict | None = None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -83,6 +84,7 @@ class WanTransformerBlock(Module):
             is_fsdp=is_fsdp,
             is_self=True,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+            lora_enabled=lora_enabled,
         )
 
         self.attn2 = WanAttention(
@@ -95,6 +97,7 @@ class WanTransformerBlock(Module):
             is_fsdp=is_fsdp,
             is_self=False,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+            lora_enabled=lora_enabled,
         )
 
         self.norm2 = (
@@ -119,6 +122,7 @@ class WanTransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            lora_enabled=lora_enabled,
         )
 
         self.norm3 = DistributedLayerNorm(
@@ -271,6 +275,7 @@ class WanTransformer3DModel(Module):
         is_fsdp: bool = True,
         model_type: str = "t2v",
         output_dtype: ttnn.DataType = ttnn.float32,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -278,6 +283,7 @@ class WanTransformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_fsdp = is_fsdp
+        self.lora_enabled = lora_enabled
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
         self.cached_rope_features = {}
@@ -330,6 +336,7 @@ class WanTransformer3DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
+                lora_enabled=lora_enabled,
             )
             for i in range(num_layers)
         )
@@ -724,6 +731,7 @@ class WanCheckpoint:
         parallel_config: DiTParallelConfig,
         is_fsdp: bool,
         model_type: str,
+        lora_enabled: bool = False,
     ) -> WanTransformer3DModel:
         """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
 
@@ -747,6 +755,7 @@ class WanCheckpoint:
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             model_type=model_type,
+            lora_enabled=lora_enabled,
         )
 
     def load(

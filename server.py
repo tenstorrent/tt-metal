@@ -6,12 +6,16 @@ import os
 import sys
 import uuid
 import time
+import json
+import queue
 import argparse
+import asyncio
 import multiprocessing as mp
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional, List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import io
@@ -167,6 +171,12 @@ class VideoRequest(BaseModel):
     flow_shift: Optional[float] = Field(default=None, ge=0.0, le=30.0)
     boundary_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     seed: Optional[int] = None
+    # LoRA passthrough — Wan2.2 has two experts, so adapters are specified per
+    # expert: high_lora_path -> high-noise (transformer), low_lora_path -> low-noise
+    # (transformer_2). Either or both may be set; lora_scale applies to both.
+    high_lora_path: Optional[str] = None
+    low_lora_path: Optional[str] = None
+    lora_scale: Optional[float] = Field(default=None, ge=0.0, le=2.0)
 
 
 class VideoResponse(BaseModel):
@@ -211,6 +221,10 @@ class TensorResponse(BaseModel):
     image: Optional[Dict[str, Any]] = None
     inference_time: float
     model: str
+    # Optional LoRA application status (SDXL denoise). None when no adapter was
+    # requested. When present, reports whether the adapter was applied and why it
+    # may have been skipped/partially applied.
+    lora: Optional[Dict[str, Any]] = None
 
 
 class VaeDecodeRequest(BaseModel):
@@ -236,6 +250,10 @@ class VideoDenoiseRequest(BaseModel):
     flow_shift: Optional[float] = Field(default=None, ge=0.0, le=30.0)
     boundary_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     seed: Optional[int] = None
+    # LoRA passthrough — per-expert adapters (see VideoRequest for semantics).
+    high_lora_path: Optional[str] = None
+    low_lora_path: Optional[str] = None
+    lora_scale: Optional[float] = Field(default=None, ge=0.0, le=2.0)
 
 
 class VideoVaeDecodeRequest(BaseModel):
@@ -249,6 +267,7 @@ class VideoVaeDecodeRequest(BaseModel):
 task_queue = None
 result_queue = None
 error_queue = None
+progress_queue = None
 workers = []
 
 
@@ -271,7 +290,7 @@ async def lifespan(app: FastAPI):
       - The kernel_ready loop (range(0)) is a no-op — no interleaving required.
       - The warmup wait still applies to the single worker.
     """
-    global task_queue, result_queue, error_queue, workers
+    global task_queue, result_queue, error_queue, progress_queue, workers
 
     logger.info(f"Starting {model_label} server...")
 
@@ -295,6 +314,9 @@ async def lifespan(app: FastAPI):
     warmup_signal_queue = mp.Queue()
     kernel_ready_queue = mp.Queue()
     error_queue = mp.Queue()
+    # Carries per-task progress events (DenoiseStep/Section) from workers to the
+    # streaming endpoints. Unbounded so a slow HTTP consumer never blocks a worker.
+    progress_queue = mp.Queue()
 
     logger.info(f"Starting {config.num_workers} worker(s) with overlapped initialization...")
 
@@ -310,6 +332,7 @@ async def lifespan(app: FastAPI):
                 kernel_ready_queue,
                 error_queue,
                 config,
+                progress_queue,
             ),
             daemon=False,
         )
@@ -518,6 +541,82 @@ def _submit_and_wait(request_dict: dict, timeout_seconds: Optional[float] = None
     raise HTTPException(status_code=408, detail="Request timeout")
 
 
+def _stream_denoise_response(req: dict, *, timeout_seconds: float = None):
+    """Enqueue a denoise task and stream progress events as NDJSON.
+
+    Shared by /video/denoise_stream and /latent/denoise_stream. Sets
+    stream_progress=True so the worker publishes DenoiseStep/Section events to
+    progress_queue; the blocking endpoints leave it unset and never drain it.
+
+    Yields one JSON object per line:
+      - progress events: {"type": "section_start"|"section_end"|"denoise_step", ...}
+      - terminal event:  {"type": "result", "latent": <b64npy>, "inference_time": float}
+      - on failure:      {"type": "error", "detail": str}
+    """
+    task_id = str(uuid.uuid4())
+    req["op"] = "denoise"
+    req["stream_progress"] = True
+    try:
+        task_queue.put((task_id, req), timeout=5)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Task queue is full")
+
+    deadline = time.time() + max(timeout_seconds or config.inference_timeout_seconds, 3600.0)
+
+    async def event_stream():
+        while time.time() < deadline:
+            drained_any = False
+
+            # 1) Forward any progress events for this task.
+            while True:
+                try:
+                    ev = progress_queue.get_nowait()
+                except queue.Empty:
+                    break
+                drained_any = True
+                if ev.get("task_id") == task_id:
+                    yield json.dumps(ev) + "\n"
+
+            # 2) Check for the terminal result.
+            try:
+                result = result_queue.get_nowait()
+            except queue.Empty:
+                result = None
+
+            if result is not None:
+                if result.get("task_id") == task_id:
+                    yield json.dumps(
+                        {
+                            "type": "result",
+                            "latent": ndarray_to_b64npy(result["tensor"]),
+                            "inference_time": result.get("inference_time", 0.0),
+                            "model": model_label,
+                            "lora": result.get("lora"),
+                        }
+                    ) + "\n"
+                    return
+                else:
+                    # Belongs to another task — put it back for its handler.
+                    result_queue.put(result)
+
+            # 3) Surface worker errors.
+            try:
+                err = error_queue.get_nowait()
+                logger.error(f"Worker error: {err}")
+                yield json.dumps({"type": "error", "detail": f"Worker error: {err.get('error', err)}"}) + "\n"
+                return
+            except queue.Empty:
+                pass
+
+            if not drained_any:
+                # Nothing pending; yield control so we don't busy-spin the event loop.
+                await asyncio.sleep(0.05)
+
+        yield json.dumps({"type": "error", "detail": "Request timeout"}) + "\n"
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
 def _require_staged_support():
     """Staged ops are currently implemented for the SDXL runner only."""
     if args.model != "sdxl":
@@ -539,7 +638,19 @@ async def latent_denoise(request: DenoiseRequest):
         latent=ndarray_to_b64npy(result["tensor"]),
         inference_time=result.get("inference_time", 0.0),
         model=model_label,
+        lora=result.get("lora"),
     )
+
+
+@app.post("/latent/denoise_stream")
+async def latent_denoise_stream(request: DenoiseRequest):
+    """Staged SDXL denoise (KSampler) with streaming per-step progress (NDJSON).
+
+    Mirrors /video/denoise_stream. The blocking /latent/denoise endpoint is
+    preserved for older clients.
+    """
+    _require_staged_support()
+    return _stream_denoise_response(request.dict())
 
 
 @app.post("/vae/decode", response_model=TensorResponse)
@@ -590,6 +701,21 @@ async def video_denoise(request: VideoDenoiseRequest):
         inference_time=result.get("inference_time", 0.0),
         model=model_label,
     )
+
+
+@app.post("/video/denoise_stream")
+async def video_denoise_stream(request: VideoDenoiseRequest):
+    """Staged wan22 denoise with streaming progress (NDJSON).
+
+    Yields one JSON object per line:
+      - progress events: {"type": "section_start"|"section_end"|"denoise_step", ...}
+      - terminal event:  {"type": "result", "latent": <b64npy>, "inference_time": float}
+      - on failure:      {"type": "error", "detail": str}
+
+    The blocking /video/denoise endpoint is preserved for older clients.
+    """
+    _require_video_staged_support()
+    return _stream_denoise_response(request.dict())
 
 
 @app.post("/video/vae_decode", response_model=TensorResponse)

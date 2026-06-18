@@ -51,6 +51,11 @@ class WanConfig:
     guidance_scale_2: float = 3.0
     use_trace: bool = True
 
+    # LoRA: build the pipeline with LoRA-aware Linears so per-request adapters
+    # can be hot-swapped on a running server. Fuse mode keeps forward/trace
+    # overhead at zero, so non-LoRA requests behave identically.
+    lora_enabled: bool = True
+
     # Queue settings
     max_queue_size: int = 4
     inference_timeout_seconds: int = 1800  # video gen is slow

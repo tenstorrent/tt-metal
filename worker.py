@@ -10,6 +10,23 @@ import multiprocessing as mp
 from utils.logger import setup_logger
 
 
+def _serialize_pipeline_event(event) -> dict:
+    """Map a tt_dit pipeline event dataclass to a JSON-friendly progress dict.
+
+    Imported lazily by callers (the events module pulls in tt_dit). Returns None
+    for event types we do not forward.
+    """
+    from models.tt_dit.pipelines.events import DenoiseStep, SectionEnd, SectionStart
+
+    if isinstance(event, DenoiseStep):
+        return {"type": "denoise_step", "step": int(event.step), "total": int(event.total)}
+    if isinstance(event, SectionStart):
+        return {"type": "section_start", "name": event.name}
+    if isinstance(event, SectionEnd):
+        return {"type": "section_end", "name": event.name}
+    return None
+
+
 def setup_sdxl_worker_environment(worker_id: int, config):
     """
     Set worker-specific environment variables for SDXL.
@@ -81,6 +98,7 @@ def device_worker_process(
     kernel_ready_queue: mp.Queue,
     error_queue: mp.Queue,
     config,
+    progress_queue: mp.Queue = None,
 ):
     """
     Main worker process function that handles image generation inference tasks.
@@ -162,13 +180,42 @@ def device_worker_process(
                     if not hasattr(runner, op):
                         raise RuntimeError(f"Runner {type(runner).__name__} does not support staged op '{op}'")
                     if op == "denoise":
-                        tensor = runner.denoise(request)
+                        denoise_kwargs = {}
+                        # Stream progress events only when the request opted in (the
+                        # streaming endpoint sets stream_progress=True) AND the runner's
+                        # denoise accepts on_event (WAN). The blocking /video/denoise path
+                        # never drains progress_queue, so we must not emit for it.
+                        if progress_queue is not None and request.get("stream_progress"):
+                            import inspect
+
+                            if "on_event" in inspect.signature(runner.denoise).parameters:
+
+                                def _on_event(event, _tid=task_id):
+                                    ev = _serialize_pipeline_event(event)
+                                    if ev is None:
+                                        return
+                                    ev["task_id"] = _tid
+                                    try:
+                                        progress_queue.put_nowait(ev)
+                                    except Exception:
+                                        pass
+
+                                denoise_kwargs["on_event"] = _on_event
+                        tensor = runner.denoise(request, **denoise_kwargs)
                     elif op == "vae_decode":
                         tensor = runner.vae_decode(request["latent"])
                     else:  # vae_encode
                         tensor = runner.vae_encode(request["image"])
                     inference_time = time.time() - start_time
-                    result_queue.put({"task_id": task_id, "op": op, "tensor": tensor, "inference_time": inference_time})
+                    result_queue.put(
+                        {
+                            "task_id": task_id,
+                            "op": op,
+                            "tensor": tensor,
+                            "inference_time": inference_time,
+                            "lora": getattr(runner, "_last_lora_status", None),
+                        }
+                    )
                 else:
                     raise RuntimeError(f"Unknown op '{op}'")
 
