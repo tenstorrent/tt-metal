@@ -53,6 +53,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
+from helpers.tile_shape import FACE_C_DIM, TileShape, construct_tile_shape
 from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
@@ -658,13 +659,23 @@ def test_unpack_A_targeted_tensor_shape_coverage(
     )
 
     generate_golden = get_golden_generator(DataCopyGolden)
+    tile_shape = (
+        construct_tile_shape(tile_dimensions)
+        if tile_dimensions is not None
+        else TileShape(
+            face_r_dim=face_r_dim,
+            face_c_dim=FACE_C_DIM,
+            num_faces_r_dim=num_faces_r_dim,
+            num_faces_c_dim=num_faces_c_dim,
+        )
+    )
     golden_tensor = generate_golden(
         src_A,
         formats.output_format,
         num_faces,
         input_dimensions,
         face_r_dim,
-        tile_dimensions=tile_dimensions,
+        tile_shape=tile_shape,
     )
 
     raw_dimensions = [
