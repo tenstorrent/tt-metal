@@ -54,11 +54,21 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         fuse_batch=False,
         mcast_in0=False,
     )
+
+    down_subblock_w = 8
+    down_quarter = down_n_tiles // 4
+    down_out_block_w = (
+        down_quarter
+        if down_quarter > 0 and down_n_tiles % down_quarter == 0 and down_quarter % down_subblock_w == 0
+        else down_n_tiles
+    )
     down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=1,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=down_subblock_w,
+        out_block_h=1,
+        out_block_w=down_out_block_w,
         per_core_M=per_core_M,
         per_core_N=down_n_tiles,
         fuse_batch=False,
