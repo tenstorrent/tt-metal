@@ -28,7 +28,7 @@ def device_params(request):
     return {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_conv3d_chunk_equiv(mesh_device):
     mesh_device.enable_program_cache()
     B, T, H, W, Cin, Cout = 1, 4, 64, 64, 32, 32
