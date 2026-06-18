@@ -46,11 +46,11 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-def generate_unpack_tilize_operands_reduce_combinations(
+def generate_unpack_reduce_tilizeA_strided_combinations(
     formats_list: List[FormatConfig],
 ):
     """
-    Generate unpack_tilize_operands_reduce test combinations for Quasar.
+    Generate unpack_reduce_tilizeA_strided test combinations for Quasar.
 
     Args:
         formats_list: List of input/output format pairs
@@ -68,7 +68,7 @@ def generate_unpack_tilize_operands_reduce_combinations(
     # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
     # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
     # and max-square (both loops at capacity).
-    tilize_operands_reduce_dims = {
+    unpack_reduce_tilizeA_strided_dims = {
         (DestSync.Half, DestAccumulation.No): [
             [32, 32],
             [32, 256],
@@ -110,13 +110,13 @@ def generate_unpack_tilize_operands_reduce_combinations(
             ):
                 continue
             for dest_sync in (DestSync.Half, DestSync.Full):
-                for dimensions in tilize_operands_reduce_dims[(dest_sync, acc)]:
+                for dimensions in unpack_reduce_tilizeA_strided_dims[(dest_sync, acc)]:
                     combinations.append((fmt, acc, dest_sync, dimensions))
 
     return combinations
 
 
-UNPACK_TILIZE_OPERANDS_REDUCE_FORMATS = input_output_formats(
+UNPACK_REDUCE_TILIZEA_STRIDED_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
         DataFormat.Float16_b,
@@ -126,22 +126,23 @@ UNPACK_TILIZE_OPERANDS_REDUCE_FORMATS = input_output_formats(
         DataFormat.Int32,
     ],
 )
-ALL_UNPACK_TILIZE_OPERANDS_REDUCE_COMBINATIONS = (
-    generate_unpack_tilize_operands_reduce_combinations(
-        UNPACK_TILIZE_OPERANDS_REDUCE_FORMATS
+ALL_UNPACK_REDUCE_TILIZEA_STRIDED_COMBINATIONS = (
+    generate_unpack_reduce_tilizeA_strided_combinations(
+        UNPACK_REDUCE_TILIZEA_STRIDED_FORMATS
     )
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_tilize_sel_dims=ALL_UNPACK_TILIZE_OPERANDS_REDUCE_COMBINATIONS,
+    formats_dest_acc_sync_unpack_reduce_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_TILIZEA_STRIDED_COMBINATIONS,
 )
-def test_unpack_tilize_operands_reduce_quasar(
-    formats_dest_acc_sync_tilize_sel_dims, boot_mode=BootMode.DEFAULT
+def test_unpack_reduce_tilizeA_strided_quasar(
+    formats_dest_acc_sync_unpack_reduce_tilizeA_strided_sel_dims,
+    boot_mode=BootMode.DEFAULT,
 ):
     (formats, dest_acc, dest_sync_mode, input_dimensions) = (
-        formats_dest_acc_sync_tilize_sel_dims[0]
+        formats_dest_acc_sync_unpack_reduce_tilizeA_strided_sel_dims[0]
     )
 
     num_faces = 4
@@ -188,7 +189,7 @@ def test_unpack_tilize_operands_reduce_quasar(
     }[reduce_dim]
 
     configuration = TestConfig(
-        "sources/quasar/unpack_tilize_operands_reduce_quasar_test.cpp",
+        "sources/quasar/unpack_reduce_tilizeA_strided_quasar_test.cpp",
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
