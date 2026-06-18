@@ -142,9 +142,32 @@ pytest models/experimental/mistral_small_4_119b/tests/perf/test_e2e_performant.p
 
 # Per-op device performance (single layer)
 pytest models/experimental/mistral_small_4_119b/tests/perf/test_perf.py -m models_device_performance_bare_metal
+
+# Single-layer prefill+decode device perf (Tracy per-op CSV/JSON; text decoder only, no vision)
+pytest models/experimental/mistral_small_4_119b/tests/perf/test_device_perf_single_layer_prefill_decode.py \
+    -m models_device_performance_bare_metal
 ```
 
 The e2e perf test isolates steady-state timing (compile/load passes excluded). Decode is trace-captured and replayed over 2 command queues (`decode_next_token_2cq`); prefill is not trace-captured.
+
+**Single-layer prefill+decode device perf** ([test_device_perf_single_layer_prefill_decode.py](tests/perf/test_device_perf_single_layer_prefill_decode.py)) profiles **one text decoder layer** (the **vision tower is not involved** — it builds `TtMistral4TextModel` directly on text-only weights). It holds two tests:
+
+- `test_profile_single_layer_prefill_decode` — the Tracy *workload*: builds a 1-layer model, runs one warmup iteration, then prefills 128 tokens and runs one decode step at position 128 inside a `start`/`stop` signpost window (prefill before decode so per-op tooling can split the two phases). No PCC assertion.
+- `test_device_perf_single_layer_prefill_decode` — the *wrapper* (the normal entry point above): runs the workload under Tracy via `run_device_perf` (shells out to the profile test by node id), then writes `device_perf_*.csv` + a partial benchmark JSON via `prep_device_perf_report`. No golden perf assertion.
+
+Capture the workload standalone under Tracy:
+
+```bash
+python -m tracy -p -v -r --dump-device-data-mid-run \
+    pytest models/experimental/mistral_small_4_119b/tests/perf/test_device_perf_single_layer_prefill_decode.py::test_profile_single_layer_prefill_decode -v
+```
+
+Analyze the generated ops CSV with `tt-perf-report`. The file carries `start`/`stop` signposts; pass both explicitly (default mode anchors only on the last signpost and shows no device ops):
+
+```bash
+tt-perf-report generated/profiler/mistral_small_4_119b_L1_prefill_decode/reports/.../ops_perf_results_*.csv \
+    --start-signpost start --end-signpost stop
+```
 
 **Measured end-to-end performance (BH Loudbox / P150×8, full 36 text + 24 vision layers, 2CQ traced decode, 32 decode iters):**
 
