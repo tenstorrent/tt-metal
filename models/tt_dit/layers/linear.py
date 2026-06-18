@@ -212,6 +212,7 @@ class ColParallelLinear(Module):
         default_block_size=None,
         parallel_config=None,
         dtype=None,
+        core_grid=None,
         use_heuristic_mmcfg=False,
         use_1d_fallback=False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
@@ -235,7 +236,7 @@ class ColParallelLinear(Module):
         if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
-            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic=use_heuristic_mmcfg)
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
@@ -325,6 +326,7 @@ class ColParallelLinear(Module):
         compute_kernel_config=None,
         parallel_config=None,
         dtype=None,
+        core_grid=None,
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
 
@@ -341,7 +343,7 @@ class ColParallelLinear(Module):
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
-            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid)
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
@@ -570,7 +572,7 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
-        return t * ttnn.silu(gate, output_tensor=gate)
+        return ttnn.multiply_(t, ttnn.silu(gate, output_tensor=gate))
 
     msg = f"Activation function {activation_fn} not supported"
     raise ValueError(msg)
