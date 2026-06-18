@@ -2,17 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Strict per-element accuracy tests for the GELU SFPU variants.
+"""Strict per-element BF16 ULP tests for the GELU SFPU variants.
 
-For each ttnn.GeluVariant we compare against torch.nn.functional.gelu with the
-matching `approximate=` flag, asserting both max-abs and mean-abs diff fit
-under per-variant thresholds. Stricter than PCC because PCC can mask a kernel
-that's systematically off by ~1% absolute (PCC ~0.997 still passes).
-
-Thresholds reflect the SFPU error budget for each variant:
-  - Accurate: piecewise CDF (BF16) or FP32 erf, MaxULP ≤ 1 vs exact GELU.
-  - FastLut:  6-segment piecewise-linear LUT, peak ~1-2% absolute error.
-  - Tanh:     FP32 tanh formula, MaxULP ≤ 1 vs F.gelu(approximate="tanh").
+For each ttnn.GeluVariant we exhaustively enumerate every finite BF16 input
+(2^16 bit patterns minus NaN/Inf), run the kernel, and compare to the
+matching torch.nn.functional.gelu reference. Output is a cumulative ULP
+histogram (>=1 ULP, >=2 ULP, ...) plus the top-N worst offenders, with a
+strict ULP-bound assertion for variants that should match BF16 precision
+(Accurate, Tanh). FastLut is informational-only — its 6-segment piecewise
+LUT inherently diverges from exact GELU by ~1% (128+ ULPs near transition).
 """
 
 import pytest
@@ -22,60 +20,136 @@ import ttnn
 pytestmark = pytest.mark.use_module_device
 
 
-# (variant enum, torch `approximate=` flag, {max_abs, mean_abs} bounds for bf16 input)
+# variant_name: (enum, torch `approximate=` flag, ULP bound — None means report-only).
 _VARIANTS = {
-    "accurate": (ttnn.GeluVariant.Accurate, "none", {"max_abs": 0.02, "mean_abs": 5e-4}),
-    "fast_lut": (ttnn.GeluVariant.FastLut, "none", {"max_abs": 0.05, "mean_abs": 1e-2}),
-    "tanh": (ttnn.GeluVariant.Tanh, "tanh", {"max_abs": 0.02, "mean_abs": 5e-4}),
+    "accurate": (ttnn.GeluVariant.Accurate, "none", 4),
+    "fast_lut": (ttnn.GeluVariant.FastLut, "none", None),
+    "tanh": (ttnn.GeluVariant.Tanh, "tanh", 4),
 }
 
 
-def _diff_stats(expected: torch.Tensor, actual: torch.Tensor) -> dict:
-    diff = (expected.float() - actual.float()).abs()
-    return {
-        "max_abs": diff.max().item(),
-        "mean_abs": diff.mean().item(),
-    }
+def _all_bf16_inputs() -> tuple[torch.Tensor, torch.Tensor]:
+    """Every finite BF16 bit pattern arranged as (256, 256). Non-finite slots
+    (NaN/Inf) are filled with +0 to keep the shape tile-aligned and masked
+    out via the returned finite_mask."""
+    bits = torch.arange(0, 65536, dtype=torch.int32)
+    # NaN/Inf: exponent (bits[14:7]) == 0xFF, i.e. bits & 0x7F80 == 0x7F80.
+    finite = (bits & 0x7F80) != 0x7F80
+    bits_safe = torch.where(finite, bits, torch.zeros_like(bits))
+    bf16 = bits_safe.to(torch.int16).contiguous().view(torch.bfloat16).reshape(256, 256)
+    return bf16, finite.reshape(256, 256)
 
 
-def _make_input(shape: tuple[int, ...], dtype: torch.dtype) -> torch.Tensor:
-    """Sample uniformly over GELU's interesting transition zone plus some saturation."""
-    torch.manual_seed(0)
-    return torch.empty(shape, dtype=dtype).uniform_(-6.0, 6.0)
+def _bf16_ulp_diff(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Per-element BF16 ULP distance.
+
+    Maps the 16-bit sign-magnitude bit pattern to a monotonic int (negatives
+    -> 0xFFFF - bits, positives -> bits + 0x8000) so that float ordering is
+    preserved by int subtraction. ULP = |mono(a) - mono(b)|.
+    """
+    a_bits = a.contiguous().view(torch.int16).to(torch.int32) & 0xFFFF
+    b_bits = b.contiguous().view(torch.int16).to(torch.int32) & 0xFFFF
+    a_mono = torch.where((a_bits & 0x8000) != 0, 0xFFFF - a_bits, a_bits + 0x8000)
+    b_mono = torch.where((b_bits & 0x8000) != 0, 0xFFFF - b_bits, b_bits + 0x8000)
+    return (a_mono - b_mono).abs()
+
+
+def _cumulative_histogram(ulps_flat: torch.Tensor) -> list[tuple[int, int, float]]:
+    buckets = [1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 8192]
+    total = ulps_flat.numel()
+    rows = []
+    for b in buckets:
+        n = int((ulps_flat >= b).sum().item())
+        rows.append((b, n, (100.0 * n / total) if total else 0.0))
+    return rows
+
+
+def _format_report(
+    variant_name: str,
+    torch_approximate: str,
+    input_bf16: torch.Tensor,
+    expected_bf16: torch.Tensor,
+    actual_bf16: torch.Tensor,
+    ulps: torch.Tensor,
+    valid: torch.Tensor,
+) -> tuple[str, int, float]:
+    valid_ulps = ulps[valid]
+    max_ulp = int(valid_ulps.max().item()) if valid.any() else 0
+    mean_ulp = float(valid_ulps.float().mean().item()) if valid.any() else 0.0
+
+    lines = [
+        f"\n=== gelu variant={variant_name} (torch approximate={torch_approximate!r}) ===",
+        f"  inputs evaluated: {int(valid.sum().item())}",
+        f"  max ULP: {max_ulp}   mean ULP: {mean_ulp:.4f}",
+        "  cumulative histogram (BF16 ULP distance from torch reference):",
+    ]
+    for thr, count, pct in _cumulative_histogram(valid_ulps):
+        lines.append(f"    >= {thr:5d} ULP : {count:6d}  ({pct:7.4f}%)")
+
+    if valid.any() and max_ulp > 0:
+        # Top-10 worst offenders by ULP.
+        flat_in = input_bf16.flatten()
+        flat_exp = expected_bf16.flatten()
+        flat_act = actual_bf16.flatten()
+        flat_ulp = ulps.flatten()
+        flat_valid = valid.flatten()
+        valid_idx = torch.nonzero(flat_valid, as_tuple=False).flatten()
+        sub_ulp = flat_ulp[valid_idx]
+        k = min(10, valid_idx.numel())
+        top_vals, top_local = torch.topk(sub_ulp, k)
+        lines.append("  top-10 worst offenders:")
+        lines.append(f"    {'input':>14}  {'expected':>14}  {'actual':>14}  {'ulp':>6}")
+        for ul, li in zip(top_vals.tolist(), top_local.tolist()):
+            i = int(valid_idx[li].item())
+            lines.append(
+                f"    {flat_in[i].item():>14.6g}  {flat_exp[i].item():>14.6g}  "
+                f"{flat_act[i].item():>14.6g}  {int(ul):>6d}"
+            )
+
+    return "\n".join(lines), max_ulp, mean_ulp
 
 
 @pytest.mark.parametrize("variant_name", list(_VARIANTS.keys()))
-@pytest.mark.parametrize("shape", [(64, 128), (1, 8192)])
-def test_gelu_variant_accuracy(device, variant_name, shape):
-    """ttnn.gelu output vs torch.nn.functional.gelu, strict mean-abs and max-abs bounds."""
-    variant_enum, torch_approximate, bounds = _VARIANTS[variant_name]
+def test_gelu_variant_accuracy(device, variant_name, capsys):
+    """All finite BF16 inputs, per-element ULP vs PyTorch CPU reference."""
+    variant_enum, torch_approximate, ulp_threshold = _VARIANTS[variant_name]
 
-    torch_input = _make_input(shape, torch.bfloat16)
+    input_bf16, finite_mask = _all_bf16_inputs()
 
-    # Reference: compute GELU in FP32 from the bf16-quantized input, then quantize
-    # the result back to bf16. This isolates the kernel's accuracy from input
-    # quantization noise, matching what the SFPU does when fp32_dest_acc is on.
-    torch_output_bf16 = torch.nn.functional.gelu(torch_input.float(), approximate=torch_approximate).to(torch.bfloat16)
+    # Reference computed at FP32 from the BF16-quantized input, then rounded
+    # back to BF16 — matches what the SFPU does when fp32_dest_acc is on, and
+    # what the BF16 dest-acc path does too (FP32 SFPU math then final convert).
+    expected_bf16 = torch.nn.functional.gelu(input_bf16.float(), approximate=torch_approximate).to(torch.bfloat16)
 
-    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input = ttnn.from_torch(input_bf16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.gelu(tt_input, variant=variant_enum)
-    tt_output_torch = ttnn.to_torch(tt_output)
+    actual_bf16 = ttnn.to_torch(tt_output)
 
-    stats = _diff_stats(torch_output_bf16, tt_output_torch)
-    assert stats["max_abs"] <= bounds["max_abs"], (
-        f"{variant_name}: max-abs-diff {stats['max_abs']:.4g} > {bounds['max_abs']:.4g}. "
-        f"Mean-abs-diff {stats['mean_abs']:.4g}."
+    # Drop NaN/Inf slots: not a fair ULP comparison there. ULP distance between
+    # two NaNs is meaningless and varies by NaN payload; SFPU may flush to zero
+    # while torch propagates NaN.
+    valid = finite_mask & ~expected_bf16.isnan() & ~expected_bf16.isinf() & ~actual_bf16.isnan() & ~actual_bf16.isinf()
+    ulps = _bf16_ulp_diff(expected_bf16, actual_bf16)
+
+    report, max_ulp, _mean_ulp = _format_report(
+        variant_name, torch_approximate, input_bf16, expected_bf16, actual_bf16, ulps, valid
     )
-    assert stats["mean_abs"] <= bounds["mean_abs"], (
-        f"{variant_name}: mean-abs-diff {stats['mean_abs']:.4g} > {bounds['mean_abs']:.4g}. "
-        f"Max-abs-diff {stats['max_abs']:.4g}."
-    )
+
+    # Always show the report — even on pass — so the user can see how tight
+    # the kernel actually is. `capsys.disabled()` makes the report visible
+    # without requiring `pytest -s`.
+    with capsys.disabled():
+        print(report)
+
+    if ulp_threshold is not None:
+        assert max_ulp <= ulp_threshold, f"{variant_name}: max ULP {max_ulp} > {ulp_threshold}."
 
 
 def test_gelu_legacy_bool_matches_fast_lut(device):
-    """fast_and_approximate_mode=True must be bitwise-identical to variant=FastLut."""
-    torch_input = _make_input((64, 128), torch.bfloat16)
-    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    """fast_and_approximate_mode=True must be bitwise-identical to variant=FastLut
+    across the full BF16 input space."""
+    input_bf16, _ = _all_bf16_inputs()
+    tt_input = ttnn.from_torch(input_bf16, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_variant = ttnn.to_torch(ttnn.gelu(tt_input, variant=ttnn.GeluVariant.FastLut))
     out_legacy = ttnn.to_torch(ttnn.gelu(tt_input, fast_and_approximate_mode=True))
@@ -83,36 +157,28 @@ def test_gelu_legacy_bool_matches_fast_lut(device):
 
 
 def test_gelu_default_matches_accurate(device):
-    """ttnn.gelu(x) with no kwargs must resolve to variant=Accurate.
-
-    This guards against nanobind overload resolution picking the bool overload
-    when both overloads have all-default kwargs.
-    """
-    torch_input = _make_input((64, 128), torch.bfloat16)
-    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    """ttnn.gelu(x) with no kwargs must resolve to variant=Accurate (nanobind
+    overload-resolution sanity check)."""
+    input_bf16, _ = _all_bf16_inputs()
+    tt_input = ttnn.from_torch(input_bf16, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_default = ttnn.to_torch(ttnn.gelu(tt_input))
     out_accurate = ttnn.to_torch(ttnn.gelu(tt_input, variant=ttnn.GeluVariant.Accurate))
     assert torch.equal(out_default, out_accurate), (
-        "ttnn.gelu(x) did not resolve to variant=Accurate — overload resolution may have picked "
-        "the legacy bool overload, which would still produce the same result for "
-        "fast_and_approximate_mode=False but indicates incorrect nanobind dispatch."
+        "ttnn.gelu(x) did not resolve to variant=Accurate — overload resolution may "
+        "have picked the legacy bool overload."
     )
 
 
 def test_tanh_differs_from_accurate(device):
-    """variant=Tanh must produce different output from variant=Accurate.
-
-    Their max-abs gap is ~3e-5 mathematically but in BF16 it manifests as a
-    handful of differing tiles. If they were bitwise-equal, GELU_TANH would
-    be silently dispatching to the exact-GELU kernel.
-    """
-    torch_input = _make_input((64, 128), torch.bfloat16)
-    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    """variant=Tanh must produce different output from variant=Accurate; if they
+    were bitwise-equal, GELU_TANH would be silently dispatching to exact GELU."""
+    input_bf16, _ = _all_bf16_inputs()
+    tt_input = ttnn.from_torch(input_bf16, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_accurate = ttnn.to_torch(ttnn.gelu(tt_input, variant=ttnn.GeluVariant.Accurate))
     out_tanh = ttnn.to_torch(ttnn.gelu(tt_input, variant=ttnn.GeluVariant.Tanh))
     assert not torch.equal(out_accurate, out_tanh), (
-        "variant=Tanh produced the same bits as variant=Accurate — GELU_TANH likely dispatched "
-        "to the exact-GELU kernel, not the new tanh-formula kernel."
+        "variant=Tanh produced the same bits as variant=Accurate — GELU_TANH likely "
+        "dispatched to the exact-GELU kernel."
     )

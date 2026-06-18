@@ -24,9 +24,7 @@ MATH_FIDELITY = {
 # "gelu":      exact GELU (piecewise CDF / FP32 erf), matches F.gelu().
 # "gelu_fast": 6-segment piecewise-linear LUT, ~1% absolute error vs exact GELU.
 # "gelu_tanh": FP32 tanh approximation, matches F.gelu(approximate="tanh"). NaN-safe
-#              (kernel uses x*x*x for the cube, no exp/log path), so it does not
-#              repro the audio-decoder "mesh of 4 voices" artifact that bit a prior
-#              hand-rolled ttnn.pow(x, 3.0) decomposition.
+#              (kernel uses x*x*x for the cube, no exp/log path).
 _FUSED_GELU_VARIANTS = {
     "gelu": (ttnn.UnaryOpType.GELU, False),
     "gelu_fast": (ttnn.UnaryOpType.GELU, True),
