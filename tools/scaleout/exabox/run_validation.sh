@@ -221,7 +221,11 @@ if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
     validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
 else
     MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
-    echo "Auto-detected MPI interface: $MPI_IF"
+    # Check if validation failed (command substitution only exits subshell, not parent)
+    if [[ -z "$MPI_IF" ]]; then
+        echo "Error: MPI interface auto-detection failed" >&2
+        exit 1
+    fi
 fi
 
 run_cluster_validation() {
