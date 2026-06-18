@@ -14,6 +14,8 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
+#include "ttnn/operations/ccl/common/host/ccl_helpers_dataflow_host.hpp"
+
 namespace ttnn::fabric {
 
 void bind_fabric_api(nb::module_& mod) {
@@ -229,6 +231,39 @@ void bind_fabric_api(nb::module_& mod) {
         R"(
             Returns the maximum fabric packet payload size in bytes.
         )");
+
+    // ---- CCL dataflow host helpers (Python access for multi-device CCL op authoring) ----
+    nb::class_<ttnn::ccl::dataflow::PacketDims>(mod, "CclPacketDims")
+        .def_ro("packet_size_bytes", &ttnn::ccl::dataflow::PacketDims::packet_size_bytes)
+        .def_ro("pages_per_packet", &ttnn::ccl::dataflow::PacketDims::pages_per_packet)
+        .def_ro("page_segments", &ttnn::ccl::dataflow::PacketDims::page_segments)
+        .def_ro("total_packets", &ttnn::ccl::dataflow::PacketDims::total_packets);
+    nb::class_<ttnn::ccl::dataflow::DmRoute>(mod, "CclDmRoute")
+        .def_ro("num_hops", &ttnn::ccl::dataflow::DmRoute::num_hops)
+        .def_ro("is_forward", &ttnn::ccl::dataflow::DmRoute::is_forward)
+        .def_ro("neighbor_id", &ttnn::ccl::dataflow::DmRoute::neighbor_id);
+    mod.def(
+        "ccl_packet_dims",
+        &ttnn::ccl::dataflow::ccl_packet_dims,
+        nb::arg("dtype"),
+        nb::arg("page_size_bytes"),
+        nb::arg("num_pages"),
+        nb::arg("alignment"),
+        "Frame num_pages of page_size_bytes into fabric packets (owns the bf16 bit_floor + both packing regimes).");
+    mod.def(
+        "ccl_dm_route",
+        [](tt::tt_metal::distributed::MeshDevice* mesh_device,
+           const tt::tt_metal::distributed::MeshCoordinate& sender_coord,
+           const tt::tt_metal::distributed::MeshCoordinate& receiver_coord,
+           ttnn::ccl::Topology topology) {
+            return ttnn::ccl::dataflow::ccl_dm_route(mesh_device, sender_coord, receiver_coord, topology);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("sender_coord"),
+        nb::arg("receiver_coord"),
+        nb::arg("topology"),
+        "Compute {num_hops, is_forward, neighbor_id} for a 1-D unicast (owns the fabric fwd/bwd sign reversal + ring "
+        "shorter-way).");
 }
 
 }  // namespace ttnn::fabric
