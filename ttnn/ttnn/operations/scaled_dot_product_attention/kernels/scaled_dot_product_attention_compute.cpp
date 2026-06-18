@@ -39,6 +39,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+#include "api/debug/device_print.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -78,9 +79,13 @@ void kernel_main() {
     constexpr uint32_t qk_tiles = B_q * B_kv;
     constexpr uint32_t o_tiles = B_q * vDHt;
 
-    // Boot: one hw_configure-bearing init pair (the only ones in the kernel).
-    compute_kernel_hw_startup(cb_q_in, cb_k_in, cb_qk);
+    // Boot: a single hw_configure-bearing init (the only one in the kernel).
+    // mm_block_init is a superset of compute_kernel_hw_startup's setup (it issues
+    // the same llk_*_hw_configure + pack_sync/dest/init) plus matmul init, so it
+    // covers the eltwise/reduce helpers too. Calling BOTH double-issues
+    // pack_sync_init and skews the math/pack/unpack semaphores.
     mm_block_init(cb_q_in, cb_k_in, cb_qk, /*transpose*/ 0, /*ct*/ 1, /*rt*/ 1, /*kt*/ DHt);
+    DEVICE_PRINT("DBG BOOT done\n");
 
     CircularBuffer q_buf(cb_q_in);
     CircularBuffer k_buf(cb_k_in);
@@ -96,6 +101,7 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_work; ++w) {
         // ---------- Phase 0: pre-scale Q (once per Q-block) ----------
         ckl::transform_in_place<cb_q_in>(q_tiles, ckl::MulUnary<>{scale_bits});
+        DEVICE_PRINT("DBG P0 prescale done\n");
 
         for (uint32_t j = 0; j < n_kv; ++j) {
             const bool first = (j == 0);
@@ -112,6 +118,7 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndRetainOnLastBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
                 q_buf, k_buf, qk_buf, q_buf, ckl::MatmulBlockShape::of(B_q, B_kv, 1, 1, DHt, 1));
+            DEVICE_PRINT("DBG P1 QK done\n");
 
             // ---------- Phase 2: S += mask ----------
             if constexpr (has_mask) {
@@ -137,6 +144,7 @@ void kernel_main() {
                 cb_max_scaler,
                 cb_m_blk,
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
+            DEVICE_PRINT("DBG P3a rowmax done\n");
 
             // ---------- Phase 3b: m_run = max(m_prev, m_blk) ----------
             if (first) {
@@ -150,6 +158,7 @@ void kernel_main() {
                     ckl::InputLifecycle::HeldStream,  // m_prev: keep for alpha
                     ckl::InputLifecycle::Streaming>(B_q);
             }
+            DEVICE_PRINT("DBG P3b max done\n");
 
             if (!first) {
                 // ---------- Phase 4: alpha = exp(m_prev - m_run) ----------
@@ -218,6 +227,7 @@ void kernel_main() {
                     ckl::OperandKind::Col>{},
                 ckl::Exp<>{},
                 ckl::PackTile<cb_p, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output, ckl::Dst::D0>{});
+            DEVICE_PRINT("DBG P7 P=exp done\n");
 
             // ---------- Phase 8: commit m_prev = m_run ----------
             ckl::copy<cb_m_run, cb_m_prev>(B_q);
@@ -230,6 +240,7 @@ void kernel_main() {
                 cb_sum_scaler,
                 cb_l_blk,
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
+            DEVICE_PRINT("DBG P9 rowsum done\n");
 
             // ---------- Phase 10: l_run += l_blk ----------
             if (first) {
@@ -259,6 +270,7 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
                 p_buf, v_buf, oblk_buf, p_buf, ckl::MatmulBlockShape::of(B_q, vDHt, 1, 1, B_kv, 1));
+            DEVICE_PRINT("DBG P11 PV done\n");
 
             // ---------- Phase 12: O_run += O_blk ----------
             if (first) {
@@ -277,7 +289,9 @@ void kernel_main() {
                     ckl::OperandKind::Scalar,
                     ckl::OperandKind::Scalar>(o_tiles);
             }
+            DEVICE_PRINT("DBG P12 Oacc done\n");
         }
+        DEVICE_PRINT("DBG LOOP done\n");
 
         // ---------- Phase 10a: recip(l_final) ----------
         ckl::unary<ckl::Recip<>, cb_l_run, cb_l_recip>(B_q);
@@ -300,5 +314,6 @@ void kernel_main() {
         cb_pop_front(cb_q_in, q_tiles);  // retained scaled Q
         cb_wait_front(cb_m_prev, B_q);   // leftover m_final from last commit
         cb_pop_front(cb_m_prev, B_q);
+        DEVICE_PRINT("DBG WORKITEM done\n");
     }
 }

@@ -1,1 +1,3 @@
 {"event":"test_run","status":"hang","test":"test_scaled_dot_product_attention[scale_mode=auto-mask_mode=none-single_tile]","exit":2,"detail":"all RISCs waiting (W); CB counts audited balanced; triage callstack dump failed (ElfFile import error). Suspect boot init or matmul helper deadlock.","ts":"2026-06-18T21:07:31+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"ttnn-static-analyzer","description":"Structural analysis of SDPA kernels","ts":"2026-06-18T21:59:24+00:00"}
+{"event":"device_print_observation","detail":"TR0(unpack) stuck after P0 inside QK matmul P1; TR1(math)+TR2(pack) past P1 stalled in P3a reduce. Boot-init and transpose ruled out. Static analyzer: matmul->reduce(WaitUpfrontNoPop) TRISC desync.","ts":"2026-06-18T21:59:24+00:00"}
