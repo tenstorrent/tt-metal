@@ -109,10 +109,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 @pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     correction = True
-    # a non-unity scalar used to route inputs through mul_tiles_bcast_scalar,
-    # whose FPU SrcA read truncated cb_in to TF32 (10-bit mantissa); at offset=1e6 the TF32
-    # ULP is ~512 so all 32 consecutive integers collapsed to a constant and the variance was
-    # pinned to zero. The scalar is now applied after the (unscaled, precise) Welford reduction
+    # The input is read at full fp32 and reduced unscaled; scalar is now applied after the (unscaled, precise) Welford reduction
     # as var(s*x) = s^2 * var(x), so this case is accurate regardless of offset.
     N = 32
     seq = torch.arange(N, dtype=torch.float32) + offset
