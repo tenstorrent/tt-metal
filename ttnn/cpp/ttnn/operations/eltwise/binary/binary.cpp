@@ -5,6 +5,7 @@
 
 #include "binary.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -528,9 +529,23 @@ inline auto invoke_binary_ng_impl(
                                     (binary_op_type == operations::binary::BinaryOpType::MUL);
         if (is_float_arith) {
             if (is_32bit_int(a_dtype) && tt::tt_metal::is_floating_point(b_dtype)) {
-                lhs_promoted = ttnn::typecast(lhs, float_promote_target(b_dtype));
+                const auto target = float_promote_target(b_dtype);
+                log_debug(
+                    tt::LogOp,
+                    "Binary: typecasting lhs from integer dtype {} to {} to match floating rhs dtype {}",
+                    a_dtype,
+                    target,
+                    b_dtype);
+                lhs_promoted = ttnn::typecast(lhs, target);
             } else if (is_32bit_int(b_dtype) && tt::tt_metal::is_floating_point(a_dtype)) {
-                rhs_promoted = ttnn::typecast(rhs, float_promote_target(a_dtype));
+                const auto target = float_promote_target(a_dtype);
+                log_debug(
+                    tt::LogOp,
+                    "Binary: typecasting rhs from integer dtype {} to {} to match floating lhs dtype {}",
+                    b_dtype,
+                    target,
+                    a_dtype);
+                rhs_promoted = ttnn::typecast(rhs, target);
             }
         }
     }
