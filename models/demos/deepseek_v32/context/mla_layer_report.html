@@ -102,7 +102,7 @@
   /* diagram figures: dark card holding a Cytoscape canvas */
   .fig{ position:relative; background:var(--bg2); border:1px solid var(--line); border-radius:14px; padding:10px; margin:16px 0; box-shadow:0 8px 30px rgba(0,0,0,.35); }
   .frcap{ font-size:13px; color:var(--dim); margin:0 0 6px 2px; }
-  .cybox{ width:100%; height:460px; cursor:grab; }
+  .cybox{ width:100%; height:64vh; max-height:680px; min-height:360px; cursor:grab; }
   .cybox:active{ cursor:grabbing; }
   .dhint{ font-size:11.5px; color:#8a93a6; text-align:right; margin:2px 4px 0; }
   .zc{ position:absolute; top:14px; right:14px; display:flex; flex-direction:column; gap:5px; z-index:5; }
@@ -234,9 +234,9 @@
     <span class="pill phost">host (control-flow)</span>
     <span class="pill pio">mesh I/O activation</span>
   </div>
-  <p class="sub">The three DSA device ops are ROW_MAJOR end to end (<code>indexer_score</code> → <code>topk_large_indices</code>
-  → <code>sparse_sdpa</code>); everything else (v3 linears, norms, RoPE, cache writes) is TILE. The concrete <code>↳</code>
-  shapes on edges use the §3.3 worked example: <b>50k cached + 5k chunk</b> at <code>sp=8, tp=4</code> → <code>S/sp=640,
+  <p class="sub"><b>🟫 on an edge or tensor marks ROW_MAJOR</b> (drawn in amber). The three DSA device ops are ROW_MAJOR
+  end to end (<code>indexer_score</code> → <code>topk_large_indices</code> → <code>sparse_sdpa</code>); everything else
+  (v3 linears, norms, RoPE, cache writes) is TILE. The concrete <code>↳</code> shapes on edges use the §3.3 worked example: <b>50k cached + 5k chunk</b> at <code>sp=8, tp=4</code> → <code>S/sp=640,
   glob=5120, end_pos=56320, k=2048</code>.</p>
 
   <h3><span class="n">1.3</span>Top-level <code>forward()</code> — the router</h3>
@@ -485,27 +485,17 @@
     {selector:'node.comm',style:{'background-color':CLR.comm,'background-opacity':0.16,'border-color':CLR.comm,'border-width':2}},
     {selector:'node.host',style:{'shape':'round-diamond','background-color':CLR.host,'background-opacity':0.16,'border-color':CLR.host,'text-max-width':210}},
     {selector:'edge', style:{'width':1.3,'line-color':'#4a5570','target-arrow-color':'#4a5570','target-arrow-shape':'triangle',
-      'curve-style':'bezier','arrow-scale':0.85,'label':'data(label)','font-size':8,'color':'#aab4c6',
+      'curve-style':'unbundled-bezier','control-point-distances':[38],'control-point-weights':[0.5],
+      'arrow-scale':0.85,'label':'data(label)','font-size':8,'color':'#aab4c6',
       'text-background-color':'#10141f','text-background-opacity':0.9,'text-background-padding':2,
       'font-family':'Helvetica,Arial,sans-serif'}},
+    {selector:'edge.rm', style:{'line-color':'#d4a85a','target-arrow-color':'#d4a85a','width':2.4,
+      'color':'#f0cf8c','font-size':9,'text-background-color':'#241d10','text-background-opacity':1}},
   ];
   const CY = {};
-  // Default view: fit to WIDTH and grow height when the graph fits inline; once that would exceed a
-  // capped viewport (~72vh) switch to a fixed-height box + fit-all and let pan/zoom explore the rest.
-  function fitDefault(box){
-    const cy = CY[box]; if(!cy) return;
-    const el = document.getElementById(box), pad = 16;
-    const bb = cy.elements().boundingBox(); if(!bb.w || !bb.h) return;
-    const W = el.clientWidth;
-    const cap = Math.min(760, Math.round(window.innerHeight * 0.72));
-    let zw = Math.max(0.2, Math.min((W - 2*pad) / bb.w, 2.4));   // width-fit zoom
-    let z, h, topAlign;
-    if(bb.h*zw + 2*pad <= cap){ z = zw; h = bb.h*zw + 2*pad; topAlign = true; }       // fits inline at full width
-    else { h = cap; z = Math.max(0.2, Math.min(zw, (cap - 2*pad)/bb.h)); topAlign = false; }  // bounded viewport, fit-all
-    el.style.height = Math.ceil(h) + 'px';
-    cy.resize(); cy.zoom(z);
-    cy.pan({ x:(W - bb.w*z)/2 - bb.x1*z, y: topAlign ? (pad - bb.y1*z) : ((h - bb.h*z)/2 - bb.y1*z) });
-  }
+  // Robust default: dagre lays out, cytoscape fit()s the whole graph into the fixed-height viewport
+  // (always visible, centred). Pan/zoom and the +/−/⤢ controls explore larger graphs.
+  function refit(box){ const cy = CY[box]; if(cy){ cy.resize(); cy.fit(undefined, 22); } }
   function addZoomControls(box, cy){
     const fig = document.getElementById(box).parentElement;
     if(fig.querySelector('.zc')) return;
@@ -515,26 +505,25 @@
       cy.zoom({ level:z, renderedPosition:{ x:cy.width()/2, y:cy.height()/2 } }); };
     zc.appendChild(mk('+', () => zoomBy(1.25)));
     zc.appendChild(mk('−', () => zoomBy(0.8)));
-    zc.appendChild(mk('⤢', () => fitDefault(box)));
+    zc.appendChild(mk('⤢', () => refit(box)));
     fig.appendChild(zc);
   }
   function renderCy(box, graph){
-    if(CY[box]){ fitDefault(box); return; }
+    if(CY[box]){ refit(box); return; }
     try{ if(window.cytoscapeDagre) cytoscape.use(window.cytoscapeDagre); }catch(e){}
     const els = [];
     graph.nodes.forEach(n => els.push({ data:{id:n.id, label:n.label}, classes:n.cls }));
-    graph.edges.forEach((e,i) => els.push({ data:{id:box+'_e'+i, source:e.f, target:e.t, label:e.l||''} }));
+    graph.edges.forEach((e,i) => els.push({ data:{id:box+'_e'+i, source:e.f, target:e.t, label:e.l||''}, classes: e.rm?'rm':'' }));
     try{
       const cy = cytoscape({ container:document.getElementById(box), elements:els, style:CY_STYLE,
-        autoungrabify:false, minZoom:0.2, maxZoom:2.6, wheelSensitivity:0.2 });
+        layout:{ name:'dagre', rankDir:'TB', nodeSep:26, rankSep:44, edgeSep:8, padding:22, fit:true },
+        autoungrabify:false, minZoom:0.15, maxZoom:3, wheelSensitivity:0.2 });
       CY[box] = cy;
-      const lay = cy.layout({ name:'dagre', rankDir:'TB', nodeSep:26, rankSep:44, edgeSep:8, padding:16, fit:false });
-      lay.one('layoutstop', () => { fitDefault(box); addZoomControls(box, cy); });
-      lay.run();
+      cy.ready(() => { cy.resize(); cy.fit(undefined, 22); addZoomControls(box, cy); });
     }catch(e){ document.getElementById(box).textContent = 'Cytoscape render failed: ' + e; }
   }
   let cyResizeT;
-  window.addEventListener('resize', () => { clearTimeout(cyResizeT); cyResizeT = setTimeout(() => Object.keys(CY).forEach(fitDefault), 150); });
+  window.addEventListener('resize', () => { clearTimeout(cyResizeT); cyResizeT = setTimeout(() => Object.keys(CY).forEach(refit), 150); });
 
   // ===================== graph data models =====================
   const GRAPHS = {
@@ -552,7 +541,7 @@
       edges:[
         {f:'X',t:'DEC'},
         {f:'DEC',t:'WK0',l:'no — dense (chunked)'}, {f:'WK0',t:'V3',l:'K appended'}, {f:'V3',t:'OUT1'},
-        {f:'DEC',t:'TOPK',l:'yes — sparse (DSA)'}, {f:'TOPK',t:'DSA',l:'indices RM'}, {f:'DSA',t:'OUT2'},
+        {f:'DEC',t:'TOPK',l:'yes — sparse (DSA)'}, {f:'TOPK',t:'DSA',l:'🟫 indices RM',rm:1}, {f:'DSA',t:'OUT2'},
       ],
     },
     indexer: {
@@ -578,7 +567,7 @@
         {id:'LOG',  cls:'tp',   label:'ops.indexer_logits · indexer_score\nHB=0, relu(q·kᵀ), head-reduce, causal -inf'},
         {id:'ALLRED',cls:'comm',label:'TP all-reduce (SUM)\npartial → full logits'},
         {id:'TK',   cls:'rep',  label:'ops.topk_indices\ntopk_large_indices'},
-        {id:'IDX',  cls:'io',   label:'indices [1,1,glob,k]\nuint32 RM replicated'},
+        {id:'IDX',  cls:'io',   label:'🟫 indices [1,1,glob,k]\nuint32 RM replicated'},
       ],
       edges:[
         {f:'H',t:'WK'}, {f:'H',t:'QA'}, {f:'H',t:'WP'},
@@ -586,13 +575,13 @@
         {f:'QA',t:'QRS'}, {f:'QRS',t:'QN'}, {f:'QN',t:'QB'}, {f:'QB',t:'QAG',l:'[..,H·D/tp]'}, {f:'QAG',t:'QH'}, {f:'QH',t:'QROPE',l:'[1,16,glob,128]'},
         {f:'WP',t:'WRS'}, {f:'WRS',t:'WAG',l:'[..,H/tp]'}, {f:'WAG',t:'WMUL'},
         {f:'KCAT',t:'LOG',l:'_index_kbuf'}, {f:'QROPE',t:'LOG',l:'q_dev'}, {f:'WMUL',t:'LOG',l:'wts→permute'},
-        {f:'LOG',t:'ALLRED',l:'partial logits'}, {f:'ALLRED',t:'TK',l:'full logits'}, {f:'TK',t:'IDX',l:'k=2048'},
+        {f:'LOG',t:'ALLRED',l:'🟫 partial logits',rm:1}, {f:'ALLRED',t:'TK',l:'🟫 full logits',rm:1}, {f:'TK',t:'IDX',l:'🟫 k=2048',rm:1},
       ],
     },
     attention: {
       nodes:[
         {id:'H',  cls:'io', label:'hidden_states\n[1,1,S/sp,dim/tp]'},
-        {id:'IDX',cls:'io', label:'indices [1,1,glob,k]\n(from §2)'},
+        {id:'IDX',cls:'io', label:'🟫 indices [1,1,glob,k]\n(from §2)'},
         {id:'QA', cls:'tp', label:'Q · linear q_a_proj'},
         {id:'QR', cls:'comm',label:'Q · _tp_rs_ag (TP)'},
         {id:'QLN',cls:'rep',label:'Q · rms_norm q_a_layernorm'},
@@ -624,9 +613,9 @@
         {f:'QA',t:'QR'}, {f:'QR',t:'QLN'}, {f:'QLN',t:'QBP'}, {f:'QBP',t:'QHD',l:'[..,H/tp·192]'}, {f:'QHD',t:'QSL'},
         {f:'QSL',t:'WB1',l:'nope[128]'}, {f:'WB1',t:'QCC',l:'[..,512]'}, {f:'QSL',t:'QRP',l:'rope[64]'}, {f:'QRP',t:'QCC'},
         {f:'KVA',t:'KVR'}, {f:'KVR',t:'KVSL'}, {f:'KVSL',t:'KVN',l:'nope[512]'}, {f:'KVN',t:'KVCC'}, {f:'KVSL',t:'KRP',l:'rope[64]'}, {f:'KRP',t:'KVCC'}, {f:'KVCC',t:'KB8'},
-        {f:'KB8',t:'CACHE'}, {f:'CACHE',t:'GATHER',l:'kvpe written'}, {f:'GATHER',t:'SMLA',l:'kv [..,end_pos,576] RM'},
-        {f:'QCC',t:'SMLA',l:'tt_q RM'},
-        {f:'IDX',t:'IRS'}, {f:'IRS',t:'SMLA',l:'idx [..,S/sp,k]'},
+        {f:'KB8',t:'CACHE'}, {f:'CACHE',t:'GATHER',l:'kvpe written'}, {f:'GATHER',t:'SMLA',l:'🟫 kv [..,end_pos,576] RM',rm:1},
+        {f:'QCC',t:'SMLA',l:'🟫 tt_q RM',rm:1},
+        {f:'IDX',t:'IRS',l:'🟫 indices RM',rm:1}, {f:'IRS',t:'SMLA',l:'🟫 idx [..,S/sp,k]',rm:1},
         {f:'SMLA',t:'WB2',l:'attn_out [..,512]'}, {f:'WB2',t:'CH'}, {f:'CH',t:'OP'}, {f:'OP',t:'ORS',l:'partial [..,dim]'}, {f:'ORS',t:'OUT'},
       ],
     },
