@@ -29,6 +29,7 @@ from models.common.lightweightmodule import LightweightModule
 
 from .transformer_layer import HunyuanTtDecoderLayer
 from .attention.rms_norm import HunyuanTtRMSNorm
+from .parallel_utils import sp_gather, sp_shard
 
 
 class HunyuanTtModel(LightweightModule):
@@ -55,6 +56,10 @@ class HunyuanTtModel(LightweightModule):
         apply_final_norm: bool = True,
         ccl_manager=None,
         expert_mesh_axis: int = 1,
+        tp_axis: int = 1,
+        tp_factor: int = 1,
+        sp_axis: int = 0,
+        sp_factor: int = 1,
         bf16_layers=None,
     ):
         """
@@ -75,6 +80,12 @@ class HunyuanTtModel(LightweightModule):
         self.device = device
         self.hidden_size = hidden_size
         self.apply_final_norm = apply_final_norm
+        # Sequence parallel: split the token sequence across `sp_axis`. All SP
+        # plumbing is contained in forward() — inputs arrive replicated (full S) and
+        # outputs are returned replicated, so the pipeline/demo are unaffected.
+        self.ccl_manager = ccl_manager
+        self.sp_axis = sp_axis
+        self.sp_factor = sp_factor
 
         # Token embedding table (ROW_MAJOR weight; ttnn.embedding emits TILE).
         self.embed_weight = None
@@ -119,6 +130,10 @@ class HunyuanTtModel(LightweightModule):
                     stream_experts=stream_experts,
                     ccl_manager=ccl_manager,
                     expert_mesh_axis=expert_mesh_axis,
+                    tp_axis=tp_axis,
+                    tp_factor=tp_factor,
+                    sp_axis=sp_axis,
+                    sp_factor=sp_factor,
                 )
             )
 
@@ -174,6 +189,40 @@ class HunyuanTtModel(LightweightModule):
         # Build the 2D RoPE tables once and share them across all layers.
         cos_tt, sin_tt = self.layers[0].self_attn.rope.prepare_cos_sin(seq_len, image_infos=image_infos)
 
+        # --- Sequence-parallel entry reshard --------------------------------
+        # Split the replicated inputs across sp_axis: hidden + cos/sin on the seq
+        # dim, the mask on its QUERY dim (keys stay full so each device attends to
+        # the whole sequence). Outputs are gathered back to full S before return.
+        sp = self.sp_factor > 1
+        sp_owned = []
+        sp_pad = 0  # tokens padded so each shard is tile-aligned (sliced off at exit)
+        if sp:
+            n, ax, ccl = self.sp_factor, self.sp_axis, self.ccl_manager
+            # Each shard must be tile-aligned, so pad S up to a multiple of n*TILE.
+            # The real gen sequence (e.g. 4107) is neither even nor tile-aligned.
+            TILE = 32
+            mult = n * TILE
+            S_pad = ((seq_len + mult - 1) // mult) * mult
+            sp_pad = S_pad - seq_len
+            if sp_pad:
+                # hidden/cos/sin: zero-pad the seq dim (padded query outputs are
+                # discarded at exit; padded keys are masked out below).
+                hidden = ttnn.pad(hidden, [(0, 0), (0, sp_pad), (0, 0)], value=0.0)
+                cos_tt = ttnn.pad(cos_tt, [(0, 0), (0, 0), (0, sp_pad), (0, 0)], value=0.0)
+                sin_tt = ttnn.pad(sin_tt, [(0, 0), (0, 0), (0, sp_pad), (0, 0)], value=0.0)
+                if attention_mask is not None:
+                    # Mask the padded KEY columns (-1e30) so real queries ignore the
+                    # padding; padded query ROWS can be anything (sliced off later).
+                    attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, 0), (0, sp_pad)], value=-1.0e30)
+                    attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, sp_pad), (0, 0)], value=0.0)
+            hidden = sp_shard(ccl, hidden, dim=1, mesh_axis=ax, n=n)  # [B, S_pad/n, H]
+            caller_owns_hidden = False  # we created a fresh sharded tensor
+            cos_tt = sp_shard(ccl, cos_tt, dim=2, mesh_axis=ax, n=n)  # [1,1,S_pad/n,hd]
+            sin_tt = sp_shard(ccl, sin_tt, dim=2, mesh_axis=ax, n=n)
+            if attention_mask is not None:
+                attention_mask = sp_shard(ccl, attention_mask, dim=2, mesh_axis=ax, n=n)  # [B,1,S_pad/n,S_pad]
+                sp_owned.append(attention_mask)
+
         for layer in self.layers:
             nxt = layer(
                 hidden,
@@ -189,6 +238,22 @@ class HunyuanTtModel(LightweightModule):
 
         ttnn.deallocate(cos_tt)
         ttnn.deallocate(sin_tt)
+
+        # --- Sequence-parallel exit gather ----------------------------------
+        # Re-assemble the full (replicated) sequence so the caller/pipeline sees the
+        # same [B, S, H] contract as the non-SP path.
+        if sp:
+            full = sp_gather(self.ccl_manager, hidden, dim=1, mesh_axis=self.sp_axis, n=self.sp_factor)
+            ttnn.deallocate(hidden)
+            hidden = full  # [B, S_pad, H]
+            if sp_pad:
+                # Drop the padding rows -> back to the real [B, S, H] contract.
+                shp = list(hidden.shape)
+                unpadded = ttnn.slice(hidden, [0, 0, 0], [shp[0], shp[1] - sp_pad, shp[2]])
+                ttnn.deallocate(hidden)
+                hidden = unpadded
+            for t in sp_owned:
+                ttnn.deallocate(t)
 
         if self.ln_f is not None:
             normed = self.ln_f(hidden)

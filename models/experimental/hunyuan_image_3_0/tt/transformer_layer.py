@@ -46,6 +46,10 @@ class HunyuanTtDecoderLayer(LightweightModule):
         stream_experts: bool = True,
         ccl_manager=None,
         expert_mesh_axis: int = 1,
+        tp_axis: int = 1,
+        tp_factor: int = 1,
+        sp_axis: int = 0,
+        sp_factor: int = 1,
     ):
         super().__init__()
         self.device = device
@@ -66,6 +70,11 @@ class HunyuanTtDecoderLayer(LightweightModule):
             use_qk_norm=use_qk_norm,
             eps=rms_norm_eps,
             weight_dtype=weight_dtype,
+            ccl_manager=ccl_manager,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
         )
         self.post_attention_layernorm = HunyuanTtRMSNorm(
             device, hidden_size, state_dict, f"{prefix}.post_attention_layernorm", eps=rms_norm_eps
@@ -85,6 +94,8 @@ class HunyuanTtDecoderLayer(LightweightModule):
                 use_mixed_mlp_moe=use_mixed_mlp_moe,
                 mesh_axis=expert_mesh_axis,
                 weight_dtype=weight_dtype,
+                sp_axis=sp_axis,
+                sp_factor=sp_factor,
             )
         else:
             self.mlp = HunyuanTtMoE(
