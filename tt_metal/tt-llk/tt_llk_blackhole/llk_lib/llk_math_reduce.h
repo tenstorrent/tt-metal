@@ -157,47 +157,39 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
         constexpr std::uint32_t fid_count  = (math_fidelity == MathFidelity::LoFi) ? 1 : to_underlying(math_fidelity);
         const std::uint32_t replay_buf_len = tensor_shape.num_faces_c_dim * 2 * fid_count;
 
-        auto record_replay = [&tensor_shape](const std::uint32_t last_face_addr_mod)
-        {
-            for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
-            {
-                for (std::uint32_t p = 0; p < fid_count - 1; p++)
-                {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-                }
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-
-                for (std::uint32_t p = 0; p < fid_count - 1; p++)
-                {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 8);
-                }
-                if (faces_remaining == 1)
-                {
-                    TTI_MVMUL(p_setrwc::CLR_AB, 0, last_face_addr_mod, 8);
-                }
-                else
-                {
-                    TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 8);
-                }
-            }
-        };
-
-        const std::uint32_t replay_start      = ckernel::math::replay_buf_offset;
-        const std::uint32_t replay_last_start = replay_start + replay_buf_len;
+        const std::uint32_t replay_start = ckernel::math::replay_buf_offset;
 
         load_replay_buf(
             replay_start,
-            replay_buf_len * 2,
-            [&record_replay]
+            replay_buf_len,
+            [&tensor_shape]
             {
-                record_replay(ADDR_MOD_3);
-                record_replay(ADDR_MOD_4);
+                for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
+                {
+                    for (std::uint32_t p = 0; p < fid_count - 1; p++)
+                    {
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                    }
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+
+                    for (std::uint32_t p = 0; p < fid_count - 1; p++)
+                    {
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 8);
+                    }
+                    if (faces_remaining == 1)
+                    {
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 8);
+                    }
+                    else
+                    {
+                        TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 8);
+                    }
+                }
             });
 
-        const std::uint32_t replay_op      = lltt::replay_insn(replay_start, replay_buf_len);
-        const std::uint32_t replay_last_op = lltt::replay_insn(replay_last_start, replay_buf_len);
+        const std::uint32_t replay_op = lltt::replay_insn(replay_start, replay_buf_len);
         ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);
-        tmp.set_last_outer_loop_instr(replay_last_op);
+        tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B));
         tmp.program();
     }
     else if constexpr (high_fidelity)
@@ -263,6 +255,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         else
         {
             ckernel_template::run();
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
@@ -383,13 +376,6 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
             }
                 .set(ADDR_MOD_3);
         }
-
-        addr_mod_t {
-            .srcb     = {.cr = 1},
-            .dest     = {.cr = 1},
-            .fidelity = {.clr = 1},
-        }
-            .set(ADDR_MOD_4);
     }
     else
     {
