@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Minimal repro: does init_server_context fail when run inside a multiprocessing.Process child?"""
 import multiprocessing as mp
 import os

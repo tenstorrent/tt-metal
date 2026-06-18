@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Minimal repro: does ``extract_speaker_embedding`` hang when called after a
 Talker decode trace has executed?
 

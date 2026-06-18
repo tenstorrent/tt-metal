@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """
 PCC test for the device-side sampling chain used in qwen3_tts CP_decode.
 
