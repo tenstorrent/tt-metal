@@ -54,7 +54,9 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         fuse_batch=False,
         mcast_in0=False,
     )
-
+    # Use quarter-width output blocks to keep the CBs small,
+    # but only if that quarter is a legal out_block_w (a multiple of the subblock and an even divisor of per_core_N);
+    # otherwise use the full width.
     down_subblock_w = 8
     down_quarter = down_n_tiles // 4
     down_out_block_w = (
