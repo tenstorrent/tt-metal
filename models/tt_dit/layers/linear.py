@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import get_1d_matmul_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
@@ -65,19 +65,34 @@ class Linear(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None, use_1d_fallback=False
+    ) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
-        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-        output = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
-            weight_tensor=self.weight.data,
-            bias_tensor=self.bias.data if self.bias is not None else None,
-            config=matmul_config,
-            fused_activation=self.fused_activation_fn,
-            compute_kernel_config=compute_kernel_config or self.compute_config,
-            dtype=dtype,
-        )
+
+        if use_1d_fallback and M <= 64:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
+            program_config = get_1d_matmul_config(M, K, N, core_grid)
+            output = ttnn.linear(
+                x,
+                self.weight.data,
+                bias=self.bias.data if self.bias is not None else None,
+                program_config=program_config,
+                activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+            )
+        else:
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=self.weight.data,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+            )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -201,7 +216,14 @@ class ColParallelLinear(Module):
             state["bias"] = bias
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
+        self,
+        x: ttnn.Tensor,
+        compute_kernel_config=None,
+        default_block_size=None,
+        parallel_config=None,
+        dtype=None,
+        use_heuristic_mmcfg=False,
+        use_1d_fallback=False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -218,14 +240,16 @@ class ColParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+        parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
+        needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
+        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic=use_heuristic_mmcfg)
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
             )
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
@@ -257,9 +281,15 @@ class ColParallelLinear(Module):
         else:
             M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
             core_grid = get_matmul_core_grid(self.mesh_device)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+
+            # Gather if needed here. Helps cleanup upstream code
+            if needs_gather:
+                x = self.ccl_manager.all_gather_persistent_buffer(
+                    x, dim=-1, mesh_axis=parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                )
 
             if self.chunks is not None:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
                 outputs = ttnn.experimental.minimal_matmul_split(
                     x,
                     weight,
@@ -273,17 +303,101 @@ class ColParallelLinear(Module):
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
 
-            output = ttnn.experimental.minimal_matmul(
+            if use_1d_fallback and M <= 128:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
+                program_config = get_1d_matmul_config(M, K, N, core_grid)
+                output = ttnn.linear(
+                    x,
+                    weight,
+                    bias=self.bias.data if self.bias is not None else None,
+                    program_config=program_config,
+                    activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                )
+            else:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+                output = ttnn.experimental.minimal_matmul(
+                    input_tensor=x,
+                    weight_tensor=weight,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                )
+
+        return _apply_activation_fn(output, self.activation_fn)
+
+    def forward_fused_addcmul(
+        self,
+        x: ttnn.Tensor,
+        addcmul_residual: ttnn.Tensor,
+        addcmul_gate: ttnn.Tensor,
+        compute_kernel_config=None,
+        parallel_config=None,
+        dtype=None,
+    ) -> ttnn.Tensor:
+        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
+
+        # Handle FSDP weight gathering (mirrors ColParallelLinear.forward)
+        if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
+            )
+            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        else:
+            weight = self.weight.data
+
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid)
+
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            output = ttnn.experimental.all_gather_minimal_matmul_async(
                 input_tensor=x,
                 weight_tensor=weight,
                 bias_tensor=self.bias.data if self.bias is not None else None,
                 config=matmul_config,
-                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                scalar=1.0,
+                addcmul_input_tensor1=addcmul_residual,
+                addcmul_input_tensor2=addcmul_gate,
+                dtype=dtype,
+            )[0]
+        else:
+            M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            matmul_config = get_matmul_config(M, K, N_out, core_grid)
+
+            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                x,
+                weight,
+                1.0,  # scalar
+                addcmul_residual,
+                addcmul_gate,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
                 compute_kernel_config=compute_kernel_config or self.compute_config,
                 dtype=dtype,
             )
 
-        return _apply_activation_fn(output, self.activation_fn)
+        return output
 
 
 class RowParallelLinear(Module):
@@ -388,16 +502,9 @@ class RowParallelLinear(Module):
         )
 
         if self._mesh_axis_size > 1:
-            needs_reshape = len(output.shape) <= 3
-            if needs_reshape:
-                output = ttnn.unsqueeze(output, 0)
-
             output = self.ccl_manager.reduce_scatter(
-                output, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output, dim=-1, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
-
-            if needs_reshape:
-                output = ttnn.squeeze(output, 0)
 
         return output
 
@@ -434,6 +541,10 @@ class RowParallelLinear(Module):
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
             x = ttnn.unsqueeze(x, 0)
+        pre_rs_shape = tuple(list(x.shape)[:-1] + [N])
+        _, rs_output_buffer = self.ccl_manager.get_rs_ping_pong_buffer(
+            pre_rs_shape, 3, self.mesh_axis, return_intermediate=False
+        )
         _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
             input_tensor=x,
             weight_tensor=weight,
@@ -446,7 +557,8 @@ class RowParallelLinear(Module):
             topology=self.ccl_manager.topology,
             cluster_axis=self.mesh_axis,
             compute_kernel_config=compute_kernel_config or self.compute_config,
-            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+            using_persistent_buffers=True,
+            optional_rs_output_tensor=rs_output_buffer,
             fused_ternary_scalar=scalar,
             addcmul_input_tensor1=addcmul_a,
             addcmul_input_tensor2=addcmul_b,
@@ -470,7 +582,7 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
-        return t * ttnn.silu(gate)
+        return t * ttnn.silu(gate, output_tensor=gate)
 
     msg = f"Activation function {activation_fn} not supported"
     raise ValueError(msg)

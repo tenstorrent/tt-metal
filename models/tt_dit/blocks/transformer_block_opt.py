@@ -13,7 +13,7 @@ from ..layers.linear import ColParallelLinear, prepare_chunked_linear_output
 from ..layers.module import Module
 from ..layers.normalization import DistributedLayerNorm
 from ..utils.substate import rename_substate
-from .attention import Attention
+from .attention_opt import Attention
 
 if TYPE_CHECKING:
     import torch
@@ -47,6 +47,7 @@ class TransformerBlock(Module):
         attention_k_chunk_size: int = 512,
         attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
+        shard_prompt: bool = False,
     ) -> None:
         super().__init__()
 
@@ -131,6 +132,7 @@ class TransformerBlock(Module):
             k_chunk_size=attention_k_chunk_size,
             q_chunk_size=attention_q_chunk_size,
             is_fsdp=is_fsdp,
+            shard_prompt=shard_prompt,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -179,6 +181,14 @@ class TransformerBlock(Module):
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )
+
+        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -236,17 +246,27 @@ class TransformerBlock(Module):
         if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+        # Contract: scale params are consumed with +1 already applied (the norm computes
+        # (1 + scale) * x + shift). External callers pre-add 1 once and share the tuple across
+        # blocks; the internal-modulation path below pre-adds it here for parity.
         if self.norm1_linear is not None:
             assert temb_mod_params_img is None
 
             spatial_time = self.norm1_linear(time_embed)
-            temb_mod_params_img = _chunk_time3d(spatial_time, 6)
+            s_shift_a, s_scale_a, s_gate_a, s_shift_f, s_scale_f, s_gate_f = _chunk_time3d(spatial_time, 6)
+            temb_mod_params_img = (s_shift_a, s_scale_a + 1, s_gate_a, s_shift_f, s_scale_f + 1, s_gate_f)
 
         if self.norm1_context_linear is not None:
             assert temb_mod_params_txt is None
 
             prompt_time = self.norm1_context_linear(time_embed)
-            temb_mod_params_txt = _chunk_time3d(prompt_time, 2 if self.context_pre_only else 6)
+            if self.context_pre_only:
+                # layout: (scale_attn, shift_attn)
+                p_scale_a, p_shift_a = _chunk_time3d(prompt_time, 2)
+                temb_mod_params_txt = (p_scale_a + 1, p_shift_a)
+            else:
+                p_shift_a, p_scale_a, p_gate_a, p_shift_f, p_scale_f, p_gate_f = _chunk_time3d(prompt_time, 6)
+                temb_mod_params_txt = (p_shift_a, p_scale_a + 1, p_gate_a, p_shift_f, p_scale_f + 1, p_gate_f)
 
         assert temb_mod_params_img is not None
         assert temb_mod_params_txt is not None
@@ -263,14 +283,14 @@ class TransformerBlock(Module):
         spatial_normed = ttnn.squeeze(
             self.norm1_norm(
                 ttnn.unsqueeze(spatial, 0),
-                dynamic_weight=(1 + spatial_scale_attn),
+                dynamic_weight=spatial_scale_attn,
                 dynamic_bias=spatial_shift_attn,
             ),
             0,
         )
 
         if self.context_pre_only:
-            prompt_scale_attn, prompt_shift_attn = temb_mod_params_txt
+            prompt_scale_attn, prompt_shift_attn = temb_mod_params_txt[:2]
             prompt_gate_attn = None
             prompt_shift_ff = None
             prompt_scale_ff = None
@@ -288,76 +308,105 @@ class TransformerBlock(Module):
         prompt_normed = ttnn.squeeze(
             self.norm1_context_norm(
                 ttnn.unsqueeze(prompt, 0),
-                dynamic_weight=(1 + prompt_scale_attn),
+                dynamic_weight=prompt_scale_attn,
                 dynamic_bias=prompt_shift_attn,
             ),
             0,
         )
 
-        # Gather spatial, prompt before attention
-        spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
-            spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        )
-        prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
-            prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        )
+        is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
 
-        spatial_attn, prompt_attn = self.attn.forward(
+        # Attention now expects pre-gathered input on TP (no internal AGMM in to_qkv).
+        # if self.parallel_config.tensor_parallel.factor > 1:
+        #     spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+        #         spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        #     )
+        #     prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+        #         prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        #     )
+
+        # NOTE: workaround - addcmul is less accurate with fp32 gate input
+        spatial_gate_attn = ttnn.typecast(spatial_gate_attn, dtype=ttnn.bfloat16)
+        if prompt_gate_attn is not None:
+            prompt_gate_attn = ttnn.typecast(prompt_gate_attn, dtype=ttnn.bfloat16)
+
+        # Fused: to_out + gate * result + residual via addcmul params.
+        spatial, prompt_attn = self.attn.forward(
             spatial=spatial_normed,
             prompt=prompt_normed,
             spatial_rope=spatial_rope,
             prompt_rope=prompt_rope,
             spatial_sequence_length=spatial_sequence_length,
+            addcmul_spatial_residual=spatial,
+            addcmul_spatial_gate=spatial_gate_attn,
+            addcmul_prompt_residual=prompt if not self.context_pre_only else None,
+            addcmul_prompt_gate=prompt_gate_attn,
         )
-        spatial_attn = spatial_attn * spatial_gate_attn
-        prompt_attn = prompt_attn * prompt_gate_attn if prompt_gate_attn is not None else None
-
-        spatial_plus_attn = spatial + spatial_attn
-        if self.add_attention_to_output:
-            spatial = spatial_plus_attn
+        # spatial = original_spatial + to_out(attn) * gate_attn (fused)
+        if prompt_attn is not None:
+            prompt = prompt_attn
 
         spatial_normed = ttnn.squeeze(
             self.norm2(
-                ttnn.unsqueeze(spatial_plus_attn, 0),
-                dynamic_weight=(1 + spatial_scale_ff),
+                ttnn.unsqueeze(spatial, 0),
+                dynamic_weight=spatial_scale_ff,
                 dynamic_bias=spatial_shift_ff,
             ),
             0,
         )
 
-        spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
-            spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        )
-
-        spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0)), 0)
-        spatial_ff = spatial_ff * spatial_gate_ff
-
-        spatial = spatial + spatial_ff
+        spatial_gate_ff = ttnn.typecast(spatial_gate_ff, dtype=ttnn.bfloat16)
+        if is_ring:
+            # Ring: ff1 fuses AG+GEMM internally via parallel_config; ff2 fuses RS+addcmul at final write.
+            spatial = self.ff.forward_fused_addcmul(
+                spatial_normed,
+                spatial,
+                spatial_gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
+            )
+        else:
+            spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
+            spatial_ff = ttnn.squeeze(
+                self.ff(ttnn.unsqueeze(spatial_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
+            )
+            spatial = ttnn.addcmul(spatial, spatial_ff, spatial_gate_ff)
 
         if self.context_pre_only:
             return spatial, None
 
-        prompt_plus_attn = prompt + prompt_attn
-        if self.add_attention_to_output:
-            prompt = prompt_plus_attn
-
         prompt_normed = ttnn.squeeze(
             self.norm2_context(
-                ttnn.unsqueeze(prompt_plus_attn, 0),
-                dynamic_weight=(1 + prompt_scale_ff),
+                ttnn.unsqueeze(prompt, 0),
+                dynamic_weight=prompt_scale_ff,
                 dynamic_bias=prompt_shift_ff,
             ),
             0,
         )
 
-        prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
-            prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        )
-
-        prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0)), 0)
-        prompt_ff = prompt_ff * prompt_gate_ff
-
-        prompt = prompt + prompt_ff
+        prompt_gate_ff = ttnn.typecast(prompt_gate_ff, dtype=ttnn.bfloat16)
+        if is_ring:
+            # Ring: ff1 fuses AG+GEMM internally via parallel_config; ff2 fuses RS+addcmul at final write.
+            prompt = self.ff_context.forward_fused_addcmul(
+                prompt_normed,
+                prompt,
+                prompt_gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
+            )
+        else:
+            prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+                prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
+            prompt_ff = ttnn.squeeze(
+                self.ff_context(ttnn.unsqueeze(prompt_normed, 0), compute_kernel_config=self.ff_compute_kernel_config),
+                0,
+            )
+            prompt = ttnn.addcmul(prompt, prompt_ff, prompt_gate_ff)
 
         return spatial, prompt
 

@@ -18,15 +18,15 @@ Architecture:
 Usage:
     # Orchestrator: sweep one shape
     pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep \\
-        -k "9472_3456_5120_11x10_mm_plain-bh_4x8" -x -s
+        -k "9472_3456_5120_11x10_mm_plain-bh_4x8_sp1_tp0" -x -s
 
     # Worker: run directly (useful for debugging, no profiling)
     pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep_worker \\
-        -k "9472_3456_5120_11x10_mm_plain-bh_4x8" -x -s
+        -k "9472_3456_5120_11x10_mm_plain-bh_4x8_sp1_tp0" -x -s
 
     # Standalone script
     python models/tt_dit/utils/sweep_mm_block_sizes.py \\
-        --device-config bh_4x8 --shape 9472,3456,5120
+        --device-config bh_4x8_sp1_tp0 --shape 9472,3456,5120
 """
 
 import argparse
@@ -42,6 +42,7 @@ from tqdm import tqdm
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 # ============================================================================
 # DEVICE CONFIGURATIONS
@@ -50,16 +51,27 @@ import ttnn
 # The worker and orchestrator will pick it up automatically.
 
 DEVICE_CONFIGS = {
-    "bh_4x8": {
+    "bh_4x8_sp1_tp0": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D_RING",
-        "fabric_router_config_payload": None,  # use default (4352) to match model
+        "fabric_router_config_payload": 8192,  # use default (4352) to match model
         "topology": "Ring",
         "num_links": 2,
         "num_workers_per_link": 6,
         "sp_axis": 1,
         "tp_axis": 0,
         "cluster_axis": 0,
+    },
+    "bh_4x8_sp0_tp1": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 8192,  # use default (4352) to match model
+        "topology": "Ring",
+        "num_links": 2,
+        "num_workers_per_link": 6,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
     },
     # WH Galaxy 4x8, 4-device cluster along axis 0 (rows). Matches wh4x8links4_*
     # configs in tests/.../test_all_gather_minimal_matmul_async.py.
@@ -87,7 +99,7 @@ DEVICE_CONFIGS = {
     },
 }
 
-DEFAULT_DEVICE_CONFIG = "bh_4x8"
+DEFAULT_DEVICE_CONFIG = "bh_4x8_sp1_tp0"
 
 
 def resolve_config(name):
@@ -144,6 +156,92 @@ SHAPES = [
     (3072, 5120, 3840, 8, 8, True, "plain"),
     (3072, 5120, 1280, 8, 8, True, "plain"),
     (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP8_SP4 (bh_4x8_sp0_tp1): K_per_device = 6144/8 = 768,
+    # SP=4 halves M relative to global token count. Core grid 12×9 (AGMM).
+    # Top-3 agmm ops by device time from matmulshapes_new.md, Section 1.
+    # FFN in-proj (ff_spatial, x_c_mlp): activation_fn="swiglu" → swiglu is
+    # applied post-matmul via _apply_activation_fn, NOT fused → use_case="plain".
+    # Attention QKV (to_qkv): chunks=3, math_approx_mode=True → use_case="qkv".
+    # -----------------------------------------------------------------------
+    # 1024 tokens
+    (1024, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj (swiglu post-matmul, not fused)
+    (1152, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (128, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_ctx_spatial_mm_in_proj
+    # 2048 tokens
+    (4096, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj
+    (4224, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (4096, 768, 2304, 12, 9, True, "qkv"),  # SNG_attn_to_qkv (chunks=3, math_approx_mode=True)
+    # 4096 tokens
+    (16384, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj
+    (16512, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (16384, 768, 2304, 12, 9, True, "qkv"),  # DBL_attn_to_qkv
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP8_SP4 (bh_4x8_sp0_tp1): K_global sweep entries.
+    # K=6144 (global) compensates for the double cluster_size division in
+    # get_per_core_dims, giving correct K_per_device=24 tiles for block gen.
+    # Ordered by max device time descending (matmul_agmm_new.md Section 3).
+    # -----------------------------------------------------------------------
+    (16384, 6144, 4608, 12, 9, True, "plain"),  # #1  DBL_ff_spatial_mm_in_proj
+    (16512, 6144, 4608, 12, 9, True, "plain"),  # #2  SNG_x_c_mlp
+    (16384, 6144, 2304, 12, 9, True, "qkv"),  # #3  DBL_attn_to_qkv
+    (16384, 6144, 768, 12, 9, True, "to_out"),  # #4  DBL_attn_out_mm_spatial
+    (4096, 6144, 4608, 12, 9, True, "plain"),  # #5  DBL_ff_spatial_mm_in_proj
+    (4224, 6144, 4608, 12, 9, True, "plain"),  # #6  SNG_x_c_mlp
+    (4096, 6144, 2304, 12, 9, True, "qkv"),  # #7  SNG_attn_to_qkv
+    (4096, 6144, 768, 12, 9, True, "to_out"),  # #8  DBL_attn_out_mm_spatial
+    (1024, 6144, 4608, 12, 9, True, "plain"),  # #9  DBL_ff_spatial_mm_in_proj
+    (1152, 6144, 4608, 12, 9, True, "plain"),  # #10 SNG_x_c_mlp
+    (
+        128,
+        6144,
+        4608,
+        12,
+        9,
+        True,
+        "plain",
+    ),  # #11 DBL_ff_ctx_spatial_mm_in_proj (⚠️ high variance, compare vs worst=406µs)
+    (1024, 6144, 2304, 12, 9, True, "qkv"),  # #12 SNG_attn_to_qkv
+    (1024, 6144, 768, 12, 9, True, "to_out"),  # #13 DBL_attn_out_mm_spatial
+    (128, 6144, 2304, 12, 9, True, "qkv"),  # #14 DBL_attn_add_qkv_proj (⚠️ worst=249µs)
+    (128, 6144, 768, 12, 9, True, "to_out"),  # #15 DBL_attn_out_mm_prompt (⚠️ worst=162µs)
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_global sweep entries.
+    # K=6144 (global) gives K_per_device=48 tiles (6144/32/4). Ordered by
+    # max device time descending (matmul_agmm_new.md Section 3, shapes 16-30).
+    # -----------------------------------------------------------------------
+    (8192, 6144, 9216, 12, 9, True, "plain"),  # #16
+    (8256, 6144, 9216, 12, 9, True, "plain"),  # #17
+    (8192, 6144, 4608, 12, 9, True, "qkv"),  # #18
+    (8192, 6144, 1536, 12, 9, True, "to_out"),  # #19
+    (2048, 6144, 9216, 12, 9, True, "plain"),  # #20
+    (2112, 6144, 9216, 12, 9, True, "plain"),  # #21
+    (2048, 6144, 4608, 12, 9, True, "qkv"),  # #22
+    (576, 6144, 9216, 12, 9, True, "plain"),  # #23
+    (512, 6144, 9216, 12, 9, True, "plain"),  # #24
+    (64, 6144, 9216, 12, 9, True, "plain"),  # #25
+    (512, 6144, 4608, 12, 9, True, "qkv"),  # #26
+    (64, 6144, 4608, 12, 9, True, "qkv"),  # #27
+    (2048, 6144, 1536, 12, 9, True, "to_out"),  # #28
+    (512, 6144, 1536, 12, 9, True, "to_out"),  # #29
+    (64, 6144, 1536, 12, 9, True, "to_out"),  # #30
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_per_device = 6144/4 = 1536,
+    # SP=8 halves M and doubles N relative to TP8_SP4. Core grid 12×9 (AGMM).
+    # Top-3 agmm ops by device time from matmulshapes_new.md, Section 2.
+    # -----------------------------------------------------------------------
+    # 1024 tokens
+    (576, 1536, 9216, 12, 9, True, "plain"),
+    (512, 1536, 9216, 12, 9, True, "plain"),
+    (64, 1536, 9216, 12, 9, True, "plain"),
+    # 2048 tokens
+    (2048, 1536, 9216, 12, 9, True, "plain"),
+    (2112, 1536, 9216, 12, 9, True, "plain"),
+    (2048, 1536, 4608, 12, 9, True, "plain"),
+    # 4096 tokens
+    (8192, 1536, 9216, 12, 9, True, "plain"),
+    (8256, 1536, 9216, 12, 9, True, "plain"),
+    (8192, 1536, 4608, 12, 9, True, "plain"),
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
@@ -171,6 +269,13 @@ USE_CASE_CONFIGS = {
     },
     "cross_attn_kv": {
         "chunks": 2,
+        "math_approx_mode": True,
+        "use_matmul_split": True,
+    },
+    # Single-block to_qkv via minimal_matmul_split with chunks=3, approx math.
+    # Mirrors cross_attn_kv but splits into 3 Q/K/V chunks instead of 2.
+    "qkv_mm_split": {
+        "chunks": 3,
         "math_approx_mode": True,
         "use_matmul_split": True,
     },
@@ -323,6 +428,29 @@ def pick_subblock(m_block, n_block, max_dest_volume=4):
                 best = (h, w)
                 best_product = h * w
     return best
+
+
+# Aliases used by test_sweep_mm.py
+def get_block_candidates(per_core_tiles):
+    return get_mn_block_candidates(per_core_tiles)
+
+
+def get_divisors(k_tiles):
+    return get_k_block_candidates(k_tiles)
+
+
+def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
+    """Return list of valid (sb_h, sb_w) pairs for given block sizes."""
+    combos = []
+    for h in range(1, min(m_block, max_dest_volume) + 1):
+        if m_block % h != 0:
+            continue
+        for w in range(1, min(n_block, max_dest_volume) + 1):
+            if n_block % w != 0:
+                continue
+            if h * w <= max_dest_volume:
+                combos.append((h, w))
+    return combos
 
 
 def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain"):
@@ -548,15 +676,17 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         addcmul_tensor1 = None
         addcmul_tensor2 = None
         if uc_cfg.get("use_addcmul", False):
+            # AGMM output shape is (full_M, N) replicated on every device; addcmul
+            # tensors must match that shape exactly (TT_FATAL checks ternary_a[-2]==M_full).
             addcmul_tensor1 = ttnn.from_torch(
-                torch.randn((M, N), dtype=torch.float32),
+                torch.randn((full_M, N), dtype=torch.float32),
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
             )
             addcmul_tensor2 = ttnn.from_torch(
-                torch.randn((M, N), dtype=torch.float32),
+                torch.randn((full_M, N), dtype=torch.float32),
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
@@ -579,7 +709,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=cfg["num_workers_per_link"],
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=24 if is_blackhole() else 48,
                 scalar=scalar,
                 addcmul_input_tensor1=addcmul_tensor1,
                 addcmul_input_tensor2=addcmul_tensor2,
@@ -834,7 +964,7 @@ def test_mm_sweep(device_config, shape):
     # `-s` so the worker's print/tqdm output flows through to the user's terminal.
     command = (
         f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
-        f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x -s"
+        f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x -s --timeout 90000"
     )
 
     write_csv_header(CSV_FILE)
@@ -987,7 +1117,7 @@ def main():
         os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
         command = (
             f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
-            f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x"
+            f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x --timeout 90000"
         )
 
         try:
