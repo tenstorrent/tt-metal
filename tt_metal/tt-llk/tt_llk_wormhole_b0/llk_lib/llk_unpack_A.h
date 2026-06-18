@@ -223,7 +223,8 @@ inline void _llk_unpack_A_mop_config_(
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
- * @note Call @ref _llk_unpack_A_uninit_ after this function to restore the modified datum-count state.
+ * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
+ *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
  */

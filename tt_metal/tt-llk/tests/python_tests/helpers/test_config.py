@@ -482,8 +482,8 @@ class TestConfig:
             else ""
         )
         # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs:
-        # with asserts off and DEVICE_PRINT_ENABLED on, LLK_DPRINT_TENSOR_SHAPE
-        # logs newly-seen TensorShapes via DPRINT instead of ebreaking the kernel,
+        # with asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
+        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel,
         # so a single run can enumerate every (fn_name, shape) pair exercised.
         llk_assert_define = (
             ""
