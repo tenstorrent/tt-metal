@@ -355,6 +355,11 @@ class LTXPipeline:
         self.transformer_states: list[TransformerState] = []
         self.vae_decoder = None
         self.vae_encoder = None
+        # Memoized I2V conditioning latents, keyed by (image_path, height, width). The VAE
+        # encoder is eager (not part of the denoise trace), so re-running it per generation is
+        # wasteful and — under a traced replay pass — has hung the device; the encode is
+        # deterministic in (path, resolution), so cache the host result and reuse it.
+        self._i2v_cond_cache: dict[tuple[str, int, int], torch.Tensor] = {}
         self.upsampler: LTXLatentUpsampler | None = None
         # On-device audio decode chain (Stage A mel-VAE + Stage B/C vocoder+BWE).
         # Shells are built at `_instantiate_modules`; weights are loaded via
