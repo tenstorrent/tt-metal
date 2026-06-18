@@ -999,15 +999,19 @@ class LTXPipeline:
         tensor = tensor.unsqueeze(2)  # (1, 3, 1, H, W)
         return tensor / 127.5 - 1.0
 
-    def decode_latents(self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
+    def decode_latents(
+        self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"
+    ) -> torch.Tensor:
         """Decode latent tensor to video pixels.
 
         Args:
             latent: (B, num_tokens, C) flat latent from denoising loop
             latent_frames, latent_h, latent_w: Spatial dimensions
+            output_type: "float" → (B, 3, F, H, W) torch in [-1, 1] (for in-pipeline export);
+                         "rgb"   → (B, 3, F, H, W) uint8 numpy, RGB planar
 
         Returns:
-            (B, 3, F, H, W) decoded video
+            decoded video in the requested format
         """
         if self.vae_decoder is None:
             logger.warning("No VAE decoder loaded, returning raw latent")
@@ -1018,7 +1022,10 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        return self.vae_decoder(latent_spatial)
+        video = self.vae_decoder(latent_spatial, output_type=output_type)
+        if output_type != "float":
+            return video.numpy()
+        return video
 
     def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Cached ``(mean-of-means, std-of-means)`` reshaped for ``(B, C, F, H, W)``
