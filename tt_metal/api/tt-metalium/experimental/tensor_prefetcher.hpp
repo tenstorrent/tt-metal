@@ -108,7 +108,7 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     one request page is transparently split across pages.
 //   - Per-GCB ring-buffer state is preserved across requests, so successive
 //     Queue calls against the same GCB resume where the previous call left off.
-//   - Per-tensor `streaming` (on each DramCorePrefetcherInput) is documented on that
+//   - Per-tensor `streaming` (on each TensorPrefetcherInput) is documented on that
 //     struct; it is the only knob that varies delivery order within a request.
 //   - `cq_id` is the command queue on which a trace may be recording. When that
 //     CQ is mid trace-capture, the request is captured into the trace instead of

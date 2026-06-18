@@ -526,7 +526,7 @@ void py_module(nb::module_& mod) {
             GCB only). When true, each weight block is consumed as it arrives instead of waiting
             for the whole tensor, so the GCB can be sized to a small live window. The weight MUST
             be queued with streaming enabled (the ``(weight, block_count, True)`` form of
-            ``queue_dram_core_prefetcher_request``) to match, else the matmul deadlocks. Defaults
+            ``queue_tensor_prefetcher_request``) to match, else the matmul deadlocks. Defaults
             to false.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {

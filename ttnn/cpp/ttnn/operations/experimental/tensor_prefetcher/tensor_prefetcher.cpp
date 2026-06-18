@@ -19,7 +19,7 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device,
 
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const std::vector<DramCorePrefetcherQueueTensor>& tensors,
+    const std::vector<TensorPrefetcherQueueTensor>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     std::optional<uint8_t> cq_id) {

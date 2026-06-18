@@ -443,10 +443,10 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
 
-            // Streaming-split A/B toggle: set TT_DRAM_PREFETCHER_STREAMING_SPLIT=0 to fall back
+            // Streaming-split A/B toggle: set TT_TENSOR_PREFETCHER_STREAMING_SPLIT=0 to fall back
             // to the legacy per-round physical-wrap clamp. Default on (per-receiver source split).
             static const uint32_t streaming_split = [] {
-                const char* env = std::getenv("TT_DRAM_PREFETCHER_STREAMING_SPLIT");
+                const char* env = std::getenv("TT_TENSOR_PREFETCHER_STREAMING_SPLIT");
                 return (env != nullptr && env[0] == '0') ? 0u : 1u;
             }();
 

@@ -377,10 +377,10 @@ def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
-def test_bw_dram_core_prefetcher_streaming(device, op_name, shape):
+def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     """DRAM-core prefetcher in **streaming** receiver-contiguous mode → discard receiver.
 
-    Same recv-contig weight + topology as test_bw_dram_core_prefetcher_recv_contig, but
+    Same recv-contig weight + topology as test_bw_tensor_prefetcher_recv_contig, but
     the request is queued with streaming=True (each receiver's blocks read circularly from
     its ring index g_r) and the GCB is sized to a small window of BENCH_GCB_WINDOW_BLOCKS
     blocks/receiver (default 4) instead of a full layer. This measures the prefetcher-side
@@ -423,8 +423,8 @@ def test_bw_dram_core_prefetcher_streaming(device, op_name, shape):
         f"pages_per_layer={pages_per_layer} gcb_size={gcb_size} trace_repeats={trace_repeats}"
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, num_receivers, True)] * num_prefetch_layers, global_cb=gcb
     )
 
@@ -445,7 +445,7 @@ def test_bw_dram_core_prefetcher_streaming(device, op_name, shape):
     ttnn.synchronize_device(device)
     elapsed = time.perf_counter() - t0
     ttnn.release_trace(device, bench_trace)
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     if os.environ.get("TT_METAL_WATCHER", "0") == "1":
         time.sleep(3)

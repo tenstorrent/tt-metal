@@ -7,7 +7,7 @@ and what it would take to get there. It builds on
 authoritative description of the prefetcher↔receiver contract; read that first.
 
 Status: **implemented for receiver-contiguous mode** (opt-in `streaming` flag on
-`QueueDramCorePrefetcherRequest` + `MatmulMultiCoreReuseMultiCast1DProgramConfig.stream_in1`).
+`QueueTensorPrefetcherRequest` + `MatmulMultiCoreReuseMultiCast1DProgramConfig.stream_in1`).
 recv-contig already shards per receiver (§4.5's prerequisite), so the only change
 needed was moving the per-receiver rotation out of the matmul (which random-accessed
 the resident block set) and into the prefetcher's circular DRAM read: at push step `p`
@@ -46,10 +46,10 @@ Code: in0 ring `reader_bmm_tile_layout_in0_ring_all_gather.cpp`, in1 reader
 
 ### 1.2 The prefetcher feeds in1
 
-The DRAM-core prefetcher (`ttnn.experimental.start_dram_core_prefetcher`)
+The DRAM-core prefetcher (`ttnn.experimental.start_tensor_prefetcher`)
 streams weight blocks from DRAM into the GCB so the matmul never stalls on a
 weight read. Per tensor it pushes exactly `num_blocks = ring_size` pages to
-each receiver, one per K-block (`dram_core_prefetcher.cpp`, block loop at
+each receiver, one per K-block (`tensor_prefetcher.cpp`, block loop at
 `:317`/`:329`, finalize/`pages_sent` per block).
 
 ### 1.3 Why `num_blocks = ring_size`
@@ -176,7 +176,7 @@ only; no GCB shrink.
 Exploit the contiguous-index fact: have bank `b` read its K-stripes starting at
 `b·R` and wrapping (`b·R, b·R+1, …`). A single linear sweep then feeds the
 sliding window. No byte movement — just change the starting `blk` and wrap
-(`block_stride_bytes` already strides; `dram_core_prefetcher.cpp:359`).
+(`block_stride_bytes` already strides; `tensor_prefetcher.cpp:359`).
 
 - Worst-case fill drops from `ring_size-1` to **`R-1 = num_receivers_per_sender-1`**
   (ring=64 → 63 → 7).
@@ -316,8 +316,8 @@ Any of §4.3–4.6 is a **cross-component change** governed by
   `bmm_large_block_zm_fused_bias_activation_gathered.cpp`): replace the
   `wait_front(num_blocks)` gate + random-access addressing with incremental
   `wait_front(1)`/FIFO consumption.
-- **Prefetcher** (`dram_core_prefetcher.cpp`,
-  `dram_core_prefetcher_manager.cpp`): per-shard circular read offset + tall-read
+- **Prefetcher** (`tensor_prefetcher.cpp`,
+  `tensor_prefetcher_manager.cpp`): per-shard circular read offset + tall-read
   chunking; per-block push/`pages_sent` bookkeeping stays the same.
 - **Tensor sharding** (host op / memory config): per-receiver width shards.
 - **Validators** (`dram_prefetcher_validator.cpp`,

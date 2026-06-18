@@ -24,8 +24,8 @@ namespace ttnn::operations::experimental {
 // One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, streaming).
 // block_count is the number of K-blocks to divide the tensor's K dimension into. streaming
 // (receiver-contiguous layout only; omitted == false) delivers that tensor's K-blocks in
-// ring-rotated FIFO order for a matching stream_in1 matmul; see DramCorePrefetcherInput.
-using DramCorePrefetcherQueueTensor =
+// ring-rotated FIFO order for a matching stream_in1 matmul; see TensorPrefetcherInput.
+using TensorPrefetcherQueueTensor =
     std::variant<std::pair<ttnn::Tensor, uint32_t>, std::tuple<ttnn::Tensor, uint32_t, bool>>;
 
 // Thin ttnn-side wrappers around the queueable
@@ -57,7 +57,7 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device,
 
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const std::vector<DramCorePrefetcherQueueTensor>& tensors,
+    const std::vector<TensorPrefetcherQueueTensor>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
     std::optional<uint8_t> cq_id = std::nullopt);

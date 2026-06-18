@@ -808,7 +808,7 @@ def test_tensor_prefetcher_trace_replay(device, replay_count):
     ids=["qkv_small_bf16", "ff1_bf8", "ring32_bf8"],
 )
 @pytest.mark.parametrize("window_blocks", [2, 4, None], ids=["win2", "win4", "winfull"])
-def test_dram_core_prefetcher_streaming_matmul(
+def test_tensor_prefetcher_streaming_matmul(
     device, name, k_tiles_per_shard, n_tiles_per_receiver, recv_per_bank, dtype, window_blocks
 ):
     num_dram_banks = device.dram_grid_size().x
@@ -896,8 +896,8 @@ def test_dram_core_prefetcher_streaming_matmul(
         dst_full_sync_en=True,
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size, True)], global_cb=gcb)
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size, True)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -907,7 +907,7 @@ def test_dram_core_prefetcher_streaming_matmul(
         dtype=ttnn.bfloat16,
         global_cb=gcb,
     )
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     out_torch = ttnn.to_torch(tt_out)
     expected = pt_act.float() @ pt_weight.float()
