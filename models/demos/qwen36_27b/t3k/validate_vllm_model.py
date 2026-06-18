@@ -36,6 +36,7 @@ def main():
     ap.add_argument("--layers", type=int, default=64)
     ap.add_argument("--max-seq-len", type=int, default=512)
     ap.add_argument("--trace", action="store_true", help="enable_trace=True for decode (trace capture/replay)")
+    ap.add_argument("--b2", action="store_true", help="batched num_seq=2 test: prefill 2 prompts, decode both")
     args = ap.parse_args()
 
     from models.demos.qwen36_27b.tt.generator_vllm import Qwen3_5ForConditionalGeneration
@@ -52,11 +53,38 @@ def main():
         hf = build_hf_config()
         print("[val] initialize_vllm_model (load 52GB weights, TP=8 shard) ...", flush=True)
         gen = Qwen3_5ForConditionalGeneration.initialize_vllm_model(
-            hf, md, max_batch_size=1, max_seq_len=args.max_seq_len, n_layers=args.layers,
+            hf, md, max_batch_size=(2 if args.b2 else 1), max_seq_len=args.max_seq_len, n_layers=args.layers,
         )
         print("[val] model built. allocating kv cache pool ...", flush=True)
         # minimal paged pool (model self-manages the contiguous cache): (blocks, nkv, block, hd)
         kv = gen.allocate_kv_cache((8, 4, 64, 256), ttnn.bfloat16, num_layers=args.layers // 4)
+        nb = max(1, (args.max_seq_len + 63) // 64)
+
+        if args.b2:
+            prompts = [args.prompt, "The largest planet in our solar system is"]
+            ids2 = [tok(p, return_tensors="pt").input_ids[0].tolist() for p in prompts]
+            Ls = [len(x) for x in ids2]
+            maxL = max(Ls)
+            toks2 = torch.zeros(2, maxL, dtype=torch.long)
+            for r, x in enumerate(ids2):
+                toks2[r, :len(x)] = torch.tensor(x)
+            pt2 = torch.stack([torch.arange(r * nb, r * nb + nb, dtype=torch.int32) for r in range(2)])  # distinct blocks
+            print("[val] prefill 2 prompts ...", flush=True)
+            logits = gen.prefill_forward(toks2, page_table=pt2, kv_cache=kv, start_pos=[0, 0], prompt_lens=Ls)
+            nxt = [int(torch.argmax(logits[r, 0]).item()) for r in range(2)]
+            print(f"[val] B2 prefill next: {[(n, tok.decode([n])) for n in nxt]}", flush=True)
+            outs = [[n] for n in nxt]
+            for s in range(args.gen):
+                pos = torch.tensor([Ls[0] + s, Ls[1] + s])
+                dl = gen.decode_forward(torch.tensor([[outs[0][-1]], [outs[1][-1]]]),
+                                        page_table=pt2, kv_cache=kv, start_pos=pos)
+                host = gen.process_decode_output_host(gen.read_decode_output(dl))
+                for r in range(2):
+                    outs[r].append(int(torch.argmax(host[r, 0]).item()))
+            for r in range(2):
+                print(f"[val] B2 GEN[{r}]: {prompts[r]!r} + {tok.decode(outs[r])!r}", flush=True)
+            print("VAL_DONE", flush=True)
+            return
 
         L = len(ids)
         nb = max(1, (args.max_seq_len + 63) // 64)
