@@ -368,6 +368,15 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
+    // |scaled| beyond TANH_SAT_THRESHOLD saturates tanh to +/- 1 in FP32:
+    // 1 - tanh(8.66) ~= 2^-24, the FP32 half-ULP at 1.0, so any larger |x|
+    // rounds to exactly +/- 1 in torch's FP32 path. The SFPU's tanh uses a
+    // BF16-precision reciprocal in its internal sigmoid that doesn't round
+    // 2*sigmoid(-2x) - 1 down to exactly -1; instead it lands on the FP32
+    // successor of -1 (= -1 + 2^-24). Without an explicit saturation guard,
+    // 1 + tanh ~= 2^-24 instead of 0, and 0.5 * x * (1 + tanh) leaks a
+    // ~1.5e-7 residual for x ~= -5.x where torch produces +/- 0.
+    constexpr float TANH_SAT_THRESHOLD = 9.0f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -384,15 +393,23 @@ inline void calculate_gelu_tanh() {
 
         sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
 
-        // Bit-identical to ttnn.tanh under FP32 accumulator.
-        sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(scaled);
+        // Default: result = 0 (saturated negative tail, scaled <= -TANH_SAT_THRESHOLD).
+        sfpi::vFloat result = sfpi::vConst0;
 
-        sfpi::vFloat one_plus = 1.0f + t;
-
-        // 0.5 * x first, then multiply by (1 + tanh(...)) — matches Python
-        // left-to-right associativity: `0.5 * x * one_plus_tanh`.
-        sfpi::vFloat half_x = 0.5f * x;
-        sfpi::vFloat result = half_x * one_plus;
+        v_if(scaled >= TANH_SAT_THRESHOLD) {
+            // Saturated positive tail: gelu_tanh(x) = 0.5 * x * 2 = x.
+            result = x;
+        }
+        v_elseif(scaled > -TANH_SAT_THRESHOLD) {
+            // Active region: actually compute the tanh formula.
+            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(scaled);
+            sfpi::vFloat one_plus = 1.0f + t;
+            // 0.5 * x first, then multiply by (1 + tanh(...)) — matches Python
+            // left-to-right associativity: `0.5 * x * one_plus_tanh`.
+            sfpi::vFloat half_x = 0.5f * x;
+            result = half_x * one_plus;
+        }
+        v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
