@@ -21,7 +21,7 @@ from models.experimental.voxtraltts.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC,
 )
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
-from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch, voxtral_to_torch_replicated
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 from models.tt_transformers.tt.common import Mode
 
@@ -690,7 +690,7 @@ class VoxtralTTAcousticModel:
 
         is_end = ttnn.eq(semantic_code_tt, self._end_audio_token_id_tt)
 
-        if ttnn.to_torch(is_end).reshape(-1).bool().any():
+        if voxtral_to_torch_replicated(is_end).reshape(-1).bool().any():
             sem_i32 = ttnn.typecast(semantic_code_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ac_i32 = ttnn.typecast(acoustic_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(semantic_code_tt)
