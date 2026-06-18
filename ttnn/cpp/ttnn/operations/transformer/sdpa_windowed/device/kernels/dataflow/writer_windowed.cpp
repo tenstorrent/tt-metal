@@ -60,7 +60,7 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
         /*compute_uses_reduce_tile=*/true>();
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;

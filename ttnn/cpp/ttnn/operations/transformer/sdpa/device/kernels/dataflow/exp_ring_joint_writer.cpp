@@ -257,8 +257,8 @@ void kernel_main() {
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
-    generate_bcast_unary_scalar(cb_scale_in, scale_val);
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,

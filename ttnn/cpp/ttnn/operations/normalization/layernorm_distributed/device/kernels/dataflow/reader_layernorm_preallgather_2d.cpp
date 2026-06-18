@@ -10,7 +10,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"

@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/dataflow/circular_buffer.h"
 
 /**
  * Register-based argmax along a non-HW (N or C) dim for TILE-layout inputs.
@@ -50,6 +51,9 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr uint32_t onetile = 1;
 
+    CircularBuffer cb_val_obj(cb_val);
+    CircularBuffer cb_out_obj(cb_out);
+
     // Slot layout inside DST (32-bit mode):
     //   slot 0: max_val       (fp value)
     //   slot 1: argmax        (uint32 index)
@@ -75,9 +79,9 @@ void kernel_main() {
 
         // --- Initialize running accumulators from tile k=0 ---
         // max_val <- val[0]
-        cb_wait_front(cb_val, onetile);
+        cb_val_obj.wait_front(onetile);
         copy_tile(cb_val, 0, dst_max);
-        cb_pop_front(cb_val, onetile);
+        cb_val_obj.pop_front(onetile);
 
         // argmax <- 0 (uint32, materialized in-place via SFPU)
         fill_tile_int<DataFormat::UInt32>(dst_argmax, 0u);
@@ -85,9 +89,9 @@ void kernel_main() {
         // --- Reduce over remaining tiles k=1 .. num_reduce_tiles-1 ---
         for (uint32_t k = 1; k < num_reduce_tiles; ++k) {
             // new_val -> scratch_a
-            cb_wait_front(cb_val, onetile);
+            cb_val_obj.wait_front(onetile);
             copy_tile(cb_val, 0, dst_scratch_a);
-            cb_pop_front(cb_val, onetile);
+            cb_val_obj.pop_front(onetile);
 
             // mask (raw 0 / 1) = (new_val > max_val) -> scratch_b
             gt_binary_tile(dst_scratch_a, dst_max, dst_scratch_b);
@@ -105,10 +109,10 @@ void kernel_main() {
 
         tile_regs_commit();
 
-        cb_reserve_back(cb_out, onetile);
+        cb_out_obj.reserve_back(onetile);
         tile_regs_wait();
         pack_tile(dst_argmax, cb_out);
         tile_regs_release();
-        cb_push_back(cb_out, onetile);
+        cb_out_obj.push_back(onetile);
     }
 }

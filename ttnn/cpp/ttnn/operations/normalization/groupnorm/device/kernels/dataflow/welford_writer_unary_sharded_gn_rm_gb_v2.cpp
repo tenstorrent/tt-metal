@@ -64,7 +64,7 @@ void kernel_main() {
 
     constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
     const uint32_t eps = get_arg_val<uint32_t>(0);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
     uint32_t input_mask_tile_id = input_mask_tile_start_id;
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
