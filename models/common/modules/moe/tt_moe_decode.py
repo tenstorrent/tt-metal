@@ -760,7 +760,6 @@ class TTMoEDecode:
         """
         if not self._needs_fast_reduce_padding:
             return tt_x
-
         num_replicated = self.config.mesh_shape[1 - self.config.cluster_axis]
         chunk = self._post_rs_logical_chunk
         padded_chunk = self._padded_pre_split_chunk * self._num_fast_reduce_outputs // num_replicated
