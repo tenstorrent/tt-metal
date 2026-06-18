@@ -333,11 +333,6 @@ def run_pipeline_loop(
         + ")"
     )
 
-    # Opt-in per-chunk timing breakdown. Adds a synchronize_device after compute so the reported
-    # compute time is device-accurate (not just enqueue) — only meaningful for an isolated single-chunk
-    # measurement, where there is no pipeline overlap to distort.
-    time_chunks = os.environ.get("PREFILL_PP_TIME_CHUNKS", "0") == "1"
-
     t0 = time.perf_counter()
     c = 0
     n_done = 0
@@ -347,14 +342,12 @@ def run_pipeline_loop(
         #     drained). No-op on iter 0 and in host transport. (2) Grant the inbound receiver BEFORE the
         #     recv so this chunk's incoming activation drains into its backing. The matching grant of the
         #     outbound sender happens AFTER the push, mirroring test_stream_pipeline.cpp's per-host cadence.
-        t_lease = time.perf_counter()
         if d2d_in is not None:
             d2d_in.wait_for_fabric_links()
         if d2d_out is not None:
             d2d_out.wait_for_fabric_links()
         if d2d_in is not None:
             d2d_in.release_fabric_links()
-        ms_lease = (time.perf_counter() - t_lease) * 1000.0
 
         if cfg.is_first_rank:
             if bounded and c >= n_chunks:
@@ -379,23 +372,15 @@ def run_pipeline_loop(
             inp, meta = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
 
-        # Per-chunk compute START (epoch, comparable across NTP-synced hosts). Always logged with NO
-        # barrier — the real per-chunk wall is the delta between consecutive starts (CHUNK_START), which
-        # equals device throughput wherever the host is throttled (the recv's metadata to_torch on every
-        # non-first rank; rank0 can race ahead so its deltas are enqueue-bound until the CQ saturates).
-        # time_chunks adds a synchronize so compute= reflects device completion (isolated-chunk use only,
-        # at the cost of serializing the per-chunk pipeline and over-counting overlapped D2D work).
+        # Per-chunk compute START (epoch, comparable across NTP-synced hosts; no barrier). The real
+        # per-chunk wall is the delta between consecutive CHUNK_START epochs, and a chunk's compute span
+        # is proxied by the downstream rank's start — see plot_pipeline_trace.py.
         t_start_epoch = time.time()
         if loop_first_compute_start is None:
             loop_first_compute_start = t_start_epoch
-        t_c = time.perf_counter()
         out = runtime.prefill(
             inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
         )
-        if time_chunks:
-            ttnn.synchronize_device(runtime.mesh_device)
-        ms_compute = (time.perf_counter() - t_c) * 1000.0
-        t_end_epoch = time.time()
 
         if not cfg.is_last_rank:
             _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
@@ -404,10 +389,7 @@ def run_pipeline_loop(
         if d2d_out is not None:
             d2d_out.release_fabric_links()
 
-        extra = (
-            f" compute={ms_compute:.2f}ms end={t_end_epoch:.6f} lease_reclaim={ms_lease:.2f}ms" if time_chunks else ""
-        )
-        logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start_epoch:.6f}{extra}")
+        logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start_epoch:.6f}")
 
         n_done += 1
         c += 1
@@ -416,18 +398,13 @@ def run_pipeline_loop(
 
     # The last outbound forward is async after its grant; reclaim once more so it has fully drained into
     # the downstream receiver before this rank tears the mesh down (no teardown barrier across ranks).
-    # For an isolated single-chunk run this drain time IS the D2D fabric-transfer latency on the producer.
-    t_drain = time.perf_counter()
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
-    ms_drain = (time.perf_counter() - t_drain) * 1000.0
-    if time_chunks and d2d_out is not None:
-        logger.info(f"[pp rank {rank}] final D2D drain (fabric transfer) wait = {ms_drain:.2f}ms")
     ttnn.synchronize_device(runtime.mesh_device)
     # E2E clock: first prefill start (this rank) and last compute end (after the single post-loop
-    # synchronize above, so it is device-accurate). No per-chunk synchronize is involved, so the true
-    # wall-clock e2e = max over ranks(last_compute_end) - min over ranks(first_compute_start), with no
-    # measurement inflation. Epochs are time.time() so they compare across hosts (NTP-synced).
+    # synchronize above, so it is device-accurate). The true wall-clock e2e =
+    # max over ranks(last_compute_end) - min over ranks(first_compute_start); epochs are time.time()
+    # so they compare across hosts (NTP-synced).
     loop_last_compute_end = time.time()
     logger.info(
         f"[pp rank {rank}] E2E_CLOCK first_compute_start={loop_first_compute_start:.6f} "

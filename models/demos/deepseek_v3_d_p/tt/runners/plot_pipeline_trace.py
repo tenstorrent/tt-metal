@@ -46,10 +46,7 @@ def parse(path):
             if m:
                 last_end[int(m.group(1))] = float(m.group(3))
     if not starts:
-        raise SystemExit(
-            f"no CHUNK_START lines found in {path} (run with PREFILL_PP_TIME_CHUNKS unset is fine; "
-            f"CHUNK_START is always logged by the standalone loop)"
-        )
+        raise SystemExit(f"no CHUNK_START lines found in {path} (the pipeline loop always logs CHUNK_START)")
     return starts, last_end
 
 
