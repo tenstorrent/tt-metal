@@ -105,6 +105,14 @@ host readback looked correct (0.9998) — but <code>sparse_sdpa</code>'s reader 
 silently read garbage. The un-rotate now <b>concatenates the contiguous per-(slab,chip) slabs</b> into a fresh contiguous
 tensor. The device tests are also now <b>hardware-adaptive</b> (<code>tests/mesh_utils.py</code>, exact device-count match):
 QuietBox single / 1×4 / 2×2, LoudBox sp8×tp1 / sp4×tp2 / sp2×tp4, Galaxy sp8×tp4.</p>
+<p class="sub"><b>Updated 2026-06-18</b>: the indexer is now <b>TP-head-sharded</b> (change B / backlog 21, see §4). It used to
+run replicated at all <code>H_idx=64</code> heads, forcing head-streaming (<code>HB=16</code>) and ~1.85% matmul util
+(802 ms, 96% of the layer at sp4×tp2). Sharding the heads across TP (<code>H_idx/tp</code> per chip, all-reduce the partial
+logits before top-k) keeps them L1-resident at <code>HB=0</code> → <b>util 75.2%, indexer 9.9 ms, layer 839→~63 ms</b>; gate
+green (indexer-vs-ref PCC 0.96–0.99 at tp=2/4). The partial-logit all-reduce is the new sub-cost (~19.5 ms, 8.4% of the
+512 GB/s link — overhead-bound). Note the grid-aligned q/w/k <b>multicast is off</b> in the model: it needs
+<code>groups (=Sqt/QC) == grid.y</code>, but the indexer SP-gathers queries to <code>glob</code> (groups=80 ≫ grid.y=10);
+it engages only at the per-chip 640-query shape (sp=8 with SP-sharded queries). Follow-ups in <code>INDEXER_B_REPORT.md</code>.</p>
 
 <div class="note">
 <b>The one structural fact.</b> <code>forward()</code> is a router (<code>mla.py:226</code>). When the global end position
@@ -193,6 +201,12 @@ flowchart TD
 (reuses v3's q_a latent then the indexer's <code>wq_b</code>), and <b>weights_proj</b> (per-head score weights). Their dot
 product gives index logits; <code>indexer_score</code> fuses the causal mask, and <code>topk_large_indices</code> yields the
 indices. <b>Fully on device</b> — stems, RoPE, key cache, logits and top-k — no host (status.md backlog 6/19).</p>
+<p><b>Change B (backlog 21): the <code>H_idx=64</code> indexer heads are TP-sharded</b> (<code>H_idx/tp</code> per chip).
+<code>wq_b</code> is column-parallel and <code>weights_proj</code> is reduce-scattered on the head dim, so each chip scores
+only its heads into a <b>partial</b> logit; the partials are <b>all-reduced (SUM)</b> over <code>tp_axis</code> before
+top-k (the head-sum is separable, the <code>−inf</code> mask is head-independent so it survives). This keeps all
+<code>H_idx/tp</code> heads L1-resident (<code>HB=0</code>) → <b>indexer math-util 1.85%→75.2%, device 802→9.9 ms</b>
+(sp4×tp2). Cost: the partial-logit all-reduce adds ~19.5 ms (~2× the indexer; 8.4% of the 512 GB/s link).</p>
 
 <div class="fr"><pre class="mermaid">
 flowchart TD
@@ -211,42 +225,44 @@ flowchart TD
     KROPE -->|"[1,1,glob,128]<br/>↳ [1,1,5120,128]"| KCAT
   end
 
-  subgraph QSTEM["Q stem (reuses v3 q_a latent)"]
+  subgraph QSTEM["Q stem (reuses v3 q_a latent; col-parallel wq_b → H_idx/tp heads/chip)"]
     direction TB
     QA["ttnn.linear · q_a_proj"]:::tp
     QRS["_tp_rs_ag (TP)"]:::comm
     QN["ttnn.rms_norm · q_a_layernorm"]:::rep
-    QB["ttnn.linear · _idx_wq_b<br/>[1536, H_idx·D_idx=8192]"]:::rep
+    QB["ttnn.linear · _idx_wq_b<br/>col-parallel [1536, H_idx·D_idx/tp]"]:::tp
     QAG["_sp_all_gather (dim2, SP)"]:::comm
-    QH["nlp_create_qkv_heads<br/>num_heads=H_idx=64"]:::rep
-    QROPE["_device_rope_pe (first 64)"]:::rep
+    QH["nlp_create_qkv_heads<br/>num_heads=H_idx/tp=16"]:::tp
+    QROPE["_device_rope_pe (first 64)"]:::tp
     QA -->|"partial [1,1,S/sp,1536]<br/>↳ [1,1,640,1536]"| QRS -->|"[1,1,S/sp,1536]<br/>↳ [1,1,640,1536]"| QN
-    QN -->|"[1,1,S/sp,1536]<br/>↳ [1,1,640,1536]"| QB -->|"[1,1,S/sp,8192]<br/>↳ [1,1,640,8192]"| QAG
-    QAG -->|"[1,1,glob,8192]<br/>↳ [1,1,5120,8192]"| QH -->|"[1,64,glob,128]<br/>↳ [1,64,5120,128]"| QROPE
+    QN -->|"[1,1,S/sp,1536]<br/>↳ [1,1,640,1536]"| QB -->|"[1,1,S/sp,H_idx·D_idx/tp]<br/>↳ [1,1,640,2048]"| QAG
+    QAG -->|"[1,1,glob,H_idx·D_idx/tp]<br/>↳ [1,1,5120,2048]"| QH -->|"[1,H_idx/tp,glob,128]<br/>↳ [1,16,5120,128]"| QROPE
   end
 
-  subgraph WSTEM["weights_proj"]
+  subgraph WSTEM["weights_proj (reduce-scatter on heads → H_idx/tp/chip)"]
     direction TB
     WP["ttnn.linear · _idx_wproj<br/>[dim,H_idx] sharded on dim"]:::tp
-    WRS["_tp_rs_ag (TP)"]:::comm
+    WRS["_tp_rs_ag(rs_only)<br/>reduce_scatter on head dim (TP)"]:::comm
     WAG["_sp_all_gather (dim2, SP)"]:::comm
-    WMUL["ttnn.multiply<br/>× H_idx^-0.5 · scale"]:::rep
-    WP -->|"partial [1,1,S/sp,64]<br/>↳ [1,1,640,64]"| WRS -->|"[1,1,S/sp,64]<br/>↳ [1,1,640,64]"| WAG
-    WAG -->|"[1,1,glob,64]<br/>↳ [1,1,5120,64]"| WMUL
+    WMUL["ttnn.multiply<br/>× H_idx^-0.5 · scale"]:::tp
+    WP -->|"partial [1,1,S/sp,H_idx]<br/>↳ [1,1,640,64]"| WRS -->|"[1,1,S/sp,H_idx/tp]<br/>↳ [1,1,640,16]"| WAG
+    WAG -->|"[1,1,glob,H_idx/tp]<br/>↳ [1,1,5120,16]"| WMUL
   end
 
   H --> WK
   H --> QA
   H --> WP
 
-  LOG["ops.indexer_logits (device)<br/>indexer_score<br/>relu(q·kᵀ), head-reduce, causal -inf FUSED"]:::rep
+  LOG["ops.indexer_logits (device)<br/>indexer_score HB=0 (H_idx/tp resident)<br/>relu(q·kᵀ), head-reduce, causal -inf FUSED"]:::tp
+  ALLRED["TP all-reduce(SUM) over tp_axis<br/>partial → full logits (RM→TILE→RM)"]:::comm
   TK["ops.topk_indices (device)<br/>topk_large_indices<br/>masked slots → 0xFFFFFFFF sentinel"]:::rep
   IDX["indices 🟫<br/>[1,1,glob,k] uint32 RM replicated<br/>↳ [1,1,5120,2048]"]:::io
 
-  QROPE -->|"q_dev [1,64,glob,128] TILE<br/>↳ [1,64,5120,128]"| LOG
+  QROPE -->|"q_dev [1,H_idx/tp,glob,128] TILE<br/>↳ [1,16,5120,128]"| LOG
   KCAT  -->|"_index_kbuf [1,1,end_pos,128] TILE<br/>↳ [1,1,56320,128]"| LOG
-  WMUL  -->|"wts [1,1,glob,64] → permute [1,64,glob,1]<br/>↳ [1,1,5120,64]"| LOG
-  LOG -->|"🟫 logits [1,1,glob,end_pos] bf16 RM<br/>↳ [1,1,5120,56320]; future cols -inf"| TK
+  WMUL  -->|"wts [1,1,glob,H_idx/tp] → permute [1,H_idx/tp,glob,1]<br/>↳ [1,1,5120,16]"| LOG
+  LOG -->|"🟫 PARTIAL logits [1,1,glob,end_pos] bf16<br/>(sum over this chip's H_idx/tp heads) ↳ [1,1,5120,56320]"| ALLRED
+  ALLRED -->|"🟫 full logits [1,1,glob,end_pos] bf16 RM<br/>↳ [1,1,5120,56320]; future cols -inf"| TK
   TK -->|"🟫 k = min(2048,end_pos), mult. of 16<br/>↳ k = 2048 (uint32 RM)"| IDX
 
   classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
@@ -261,8 +277,8 @@ flowchart TD
 <table>
 <tr><th>Weight</th><th>Layout on device</th><th>Why</th></tr>
 <tr><td><code>_idx_wk</code> <span class="pill ptp">in-sharded</span></td><td><code>[dim, D_idx]</code> uploaded transposed, sharded on <code>dim</code> across <code>tp_axis</code></td><td>contracts over hidden (which is TP-sharded) → per-chip partial, reduced by <code>_tp_rs_ag</code></td></tr>
-<tr><td><code>_idx_weights_proj</code> <span class="pill ptp">in-sharded</span></td><td><code>[dim, H_idx]</code> sharded on <code>dim</code></td><td>same contraction over hidden → partial → TP reduce</td></tr>
-<tr><td><code>_idx_wq_b</code> <span class="pill prep">replicated</span></td><td><code>[q_lora_rank, H_idx·D_idx]</code></td><td>consumes the full (already-reduced) q-latent <code>qr</code></td></tr>
+<tr><td><code>_idx_weights_proj</code> <span class="pill ptp">in-sharded</span></td><td><code>[dim, H_idx]</code> sharded on <code>dim</code></td><td>contraction over hidden → partial; <b>reduce-scattered on the head dim</b> (<code>rs_only</code>) → each chip keeps its <code>H_idx/tp</code> reduced head-weights (change B)</td></tr>
+<tr><td><code>_idx_wq_b</code> <span class="pill ptp">column-parallel</span></td><td><code>[q_lora_rank, H_idx·D_idx]</code> sharded on the <b>output</b> (<code>H_idx·D_idx</code>) across <code>tp_axis</code></td><td>consumes the replicated q-latent <code>qr</code> (no reduce); each chip builds <code>H_idx/tp</code> heads. Per-head partials are all-reduced after <code>indexer_score</code> (change B)</td></tr>
 <tr><td><code>k_norm</code> (w,b) <span class="pill prep">replicated</span></td><td><code>[D_idx]</code></td><td>runs on the 128-wide reduced key</td></tr>
 </table>
 
@@ -274,7 +290,14 @@ op</b> from <code>chunk_start_idx</code> (future/pad columns set to <code>-inf</
 mask. Output is <code>[1,1,Sq,Skv]</code> bf16 <b>ROW_MAJOR</b>, chaining straight into <code>topk_large_indices</code>; the
 <code>-inf</code> columns survive there as the <code>0xFFFFFFFF</code> sentinel (contiguous descending tail), which
 <code>sparse_mla</code> masks. Keys are shared across all <code>H_idx</code> heads (MQA), so a single <code>_index_kbuf</code>
-serves every head.</div>
+serves every head.
+<br/><br/><b>TP head decomposition (change B).</b> The head-sum is separable, so with the heads TP-sharded each chip
+computes a partial <span style="white-space:nowrap">\( \text{logits}_c[s,t] = \sum_{h\in c}\, w[s,h]\cdot\mathrm{relu}(\langle q[s,h], k[t]\rangle) \)</span>
+and an all-reduce sums them to the full logit. <code>relu</code> is per-head (applied before the weighted sum) and the
+<code>−inf</code> causal mask is head-independent, so it is identical on every partial and survives the sum. The op
+accumulates the head-MAC in <b>bf16 DEST</b> (fp32 dest-accum is disallowed by the custom LLK); the cross-device
+<code>reduce_scatter</code> accumulates in fp32, so the split sum matches the replicated 64-head result
+(indexer-vs-reference PCC 0.96–0.99 at tp=2/4, = the tp=1 baseline).</div>
 
 <h2>5. Sparse attention forward (<code>_dsa_forward</code>)</h2>
 <p>Structurally this is v3's <code>forward</code> with the ring SDPA replaced by <code>ops.sparse_mla</code> (now the
@@ -427,8 +450,8 @@ is ~64×).</div>
 <table>
 <tr><th>Stage</th><th>Tensor</th><th>Shape</th><th>Note</th></tr>
 <tr><td rowspan="3">indexer (§4)</td><td>index K-cache <code>_index_kbuf</code></td><td><code>[1,1,51200,128] → [1,1,56320,128]</code></td><td>this chunk's 5120 keys appended (rope'd at pos 51200…56319); replicated across TP, full-seq after SP gather</td></tr>
-<tr><td><code>q_dev</code> (index queries)</td><td><code>[1,64,5120,128]</code></td><td>64 indexer heads; <code>glob</code> queries (after SP all-gather)</td></tr>
-<tr><td><b><code>logits</code></b> 🟫</td><td><b><code>[1,1,5120,56320]</code></b> bf16 RM</td><td>5120 new queries × full 56320-key prefix — the heavy intermediate</td></tr>
+<tr><td><code>q_dev</code> (index queries)</td><td><code>[1,16,5120,128]</code></td><td><code>H_idx/tp=16</code> heads/chip (TP-sharded, change B); <code>glob</code> queries (after SP all-gather)</td></tr>
+<tr><td><b><code>logits</code></b> 🟫</td><td><b><code>[1,1,5120,56320]</code></b> bf16 RM</td><td>5120 new queries × full 56320-key prefix — the heavy intermediate. Per chip a <b>partial</b> (16 heads); <b>all-reduced (SUM)</b> over TP to the full head-sum before top-k</td></tr>
 <tr><td>causality</td><td><b>fused</b> in <code>indexer_score</code> (<code>chunk_start_idx=51200</code>)</td><td>cols set to <code>-inf</code> in-op</td><td>row <i>s</i> (pos 51200+<i>s</i>) keeps keys ≤ 51200+<i>s</i>; no separate triu add</td></tr>
 <tr><td><b>indices</b> 🟫</td><td><b><code>indices</code></b></td><td><b><code>[1,1,5120,2048]</code></b> uint32 RM replicated</td><td>per-query top-2048 (the 27.5× crop); masked slots = <code>0xFFFFFFFF</code> sentinel. <b>Resharded inside <code>sparse_mla</code> to <code>[1,1,640,2048]</code> per chip</b> (SP dim2) to align with q's local seq</td></tr>
 <tr><td rowspan="4">attention (§5)</td><td><code>tt_q</code> (absorbed)</td><td><code>[1,32,640,576]</code></td><td>32 = H/tp heads; 640 = SP-sharded seq; 576 = latent 512 ++ rope 64</td></tr>
@@ -459,7 +482,7 @@ is ~64×).</div>
     <span class="bar bq" style="left:2%;animation-delay:.1s"></span><span class="bar bq" style="left:13%;animation-delay:.5s"></span></div></div>
   <div class="lane"><div class="who">weights_proj: wproj → TP reduce → SP gather → scale</div><div class="slot">
     <span class="bar bw" style="left:4%;animation-delay:.2s"></span></div></div>
-  <div class="lane"><div class="who">indexer_score (causal fused) → topk_large_indices (device)</div><div class="slot">
+  <div class="lane"><div class="who">indexer_score (HB=0, partial) → TP all-reduce → topk_large_indices</div><div class="slot">
     <span class="bar bm" style="left:24%;animation-delay:1.2s"></span></div></div>
   <div class="lane"><div class="who">DSA front-end: Q absorbed + KV cached</div><div class="slot">
     <span class="bar bq" style="left:34%;animation-delay:1.8s"></span><span class="bar bw" style="left:38%;animation-delay:2s"></span></div></div>
