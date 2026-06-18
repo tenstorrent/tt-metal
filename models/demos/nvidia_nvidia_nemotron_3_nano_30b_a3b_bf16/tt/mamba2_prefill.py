@@ -359,8 +359,19 @@ def mamba2_prefill_layer_forward(
 
     # For ISL > 65536 (ISL=262K: S≈257K), projected=[B,S,10304] is 5.3 GB —
     # too large to fit alongside model weights (~26 GB) + state (1.57 GB).
-    # Split into ≤65536-token outer chunks so each projected ≤ 1.35 GB.
+    # Split into _S_M_OUTER-token outer chunks so each projected ≤ 1.35 GB.
     # h_prev and conv_state thread sequentially through chunks.
+    #
+    # Shape bucketing (cf. gpt_oss get_padded_prefill_len): the last partial chunk
+    # is right-padded with zeros to _S_M_OUTER so every recursive call compiles
+    # the same kernel shapes as full chunks — no new unique L1 binaries from the
+    # remainder.  The SSM output at real positions [0:_chunk_S] is causally correct
+    # (no future tokens involved), so trimming back is safe for the output tensor.
+    # The SSM STATE after a right-padded run is A^pad_len * correct_state (decayed
+    # toward zero by the zero inputs), so the padded state is wrong.  Fix: run the
+    # last chunk a second time WITHOUT padding to get the correct final state and
+    # discard its output.  ssm_state/conv_state are read-only inside the function,
+    # so both runs safely share the same pre-chunk state tensors.
     _S_M_OUTER = 65536
     if S > _S_M_OUTER:
         _out_chunks = []
@@ -368,23 +379,82 @@ def mamba2_prefill_layer_forward(
         _cs = conv_state
         for _s in range(0, S, _S_M_OUTER):
             _e = min(_s + _S_M_OUTER, S)
+            _chunk_S = _e - _s
             _hc = ttnn.slice(hidden_states, [0, _s, 0], [B, _e, hidden_states.shape[2]])
-            _oc, _hs, _cs = mamba2_prefill_layer_forward(
-                mesh_device,
-                _hc,
-                norm_weight,
-                in_proj_weight,
-                conv1d_weight,
-                conv1d_bias,
-                dt_bias,
-                A_log,
-                norm_mixer_weight,
-                D,
-                out_proj_weight,
-                norm_eps=norm_eps,
-                ssm_state=_hs,
-                conv_state=_cs,
-            )
+            if _chunk_S < _S_M_OUTER:
+                # Last partial chunk: right-pad to _S_M_OUTER for kernel-shape reuse.
+                _pad_len = _S_M_OUTER - _chunk_S
+                _hc_rm = ttnn.to_layout(_hc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _zeros = ttnn.zeros(
+                    [B, _pad_len, hidden_states.shape[2]],
+                    device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                _hc_pad_rm = ttnn.concat([_hc_rm, _zeros], dim=1)
+                _hc_rm.deallocate(True)
+                _zeros.deallocate(True)
+                _hc_pad = ttnn.to_layout(_hc_pad_rm, _TL, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _hc_pad_rm.deallocate(True)
+                # Padded run: output[:_chunk_S] is causally correct; state is decayed — discard.
+                _oc_full, _hs_wrong, _cs_wrong = mamba2_prefill_layer_forward(
+                    mesh_device,
+                    _hc_pad,
+                    norm_weight,
+                    in_proj_weight,
+                    conv1d_weight,
+                    conv1d_bias,
+                    dt_bias,
+                    A_log,
+                    norm_mixer_weight,
+                    D,
+                    out_proj_weight,
+                    norm_eps=norm_eps,
+                    ssm_state=_hs,
+                    conv_state=_cs,
+                )
+                _hc_pad.deallocate(True)
+                _oc = ttnn.slice(_oc_full, [0, 0, 0], [B, _chunk_S, hidden_states.shape[2]])
+                _oc_full.deallocate(True)
+                _hs_wrong.deallocate(True)
+                for _t in _cs_wrong:
+                    _t.deallocate(True)
+                # Unpadded run: correct final SSM + conv state; output discarded.
+                _out_unused, _hs, _cs = mamba2_prefill_layer_forward(
+                    mesh_device,
+                    _hc,
+                    norm_weight,
+                    in_proj_weight,
+                    conv1d_weight,
+                    conv1d_bias,
+                    dt_bias,
+                    A_log,
+                    norm_mixer_weight,
+                    D,
+                    out_proj_weight,
+                    norm_eps=norm_eps,
+                    ssm_state=_hs,
+                    conv_state=_cs,
+                )
+                _out_unused.deallocate(True)
+            else:
+                _oc, _hs, _cs = mamba2_prefill_layer_forward(
+                    mesh_device,
+                    _hc,
+                    norm_weight,
+                    in_proj_weight,
+                    conv1d_weight,
+                    conv1d_bias,
+                    dt_bias,
+                    A_log,
+                    norm_mixer_weight,
+                    D,
+                    out_proj_weight,
+                    norm_eps=norm_eps,
+                    ssm_state=_hs,
+                    conv_state=_cs,
+                )
             _hc.deallocate(True)
             _out_chunks.append(_oc)
         _result = ttnn.concat(_out_chunks, dim=1)
