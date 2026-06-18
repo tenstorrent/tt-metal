@@ -202,6 +202,7 @@ SHAPES = [
         "plain",
     ),  # #11 DBL_ff_ctx_spatial_mm_in_proj (⚠️ high variance, compare vs worst=406µs)
     (1024, 6144, 2304, 12, 9, True, "qkv"),  # #12 SNG_attn_to_qkv
+    (1152, 6144, 2304, 12, 9, True, "qkv"),  # #12b SNG_attn_to_qkv (1152 tokens)
     (1024, 6144, 768, 12, 9, True, "to_out"),  # #13 DBL_attn_out_mm_spatial
     (128, 6144, 2304, 12, 9, True, "qkv"),  # #14 DBL_attn_add_qkv_proj (⚠️ worst=249µs)
     (128, 6144, 768, 12, 9, True, "to_out"),  # #15 DBL_attn_out_mm_prompt (⚠️ worst=162µs)
@@ -225,6 +226,105 @@ SHAPES = [
     (2048, 6144, 1536, 12, 9, True, "to_out"),  # #28
     (512, 6144, 1536, 12, 9, True, "to_out"),  # #29
     (64, 6144, 1536, 12, 9, True, "to_out"),  # #30
+    # -----------------------------------------------------------------------
+    # Concat-shapes grid sweep (bh_4x8_sp0_tp1): plain N=4608 shapes from
+    # 1024_TP8_X_both_06_21_26.csv trace.  K_global=768×TP8=6144.
+    # 12×9 baseline already above; only 12×5–12×8 variants added here.
+    # Ordered: highest trace device time first.
+    # -----------------------------------------------------------------------
+    # (1152, 6144, 4608) — 491 µs  SNG_x_c_mlp
+    (1152, 6144, 4608, 12, 8, True, "plain"),
+    (1152, 6144, 4608, 12, 7, True, "plain"),
+    (1152, 6144, 4608, 12, 6, True, "plain"),
+    (1152, 6144, 4608, 12, 5, True, "plain"),
+    # (1024, 6144, 4608) — 458 µs  DBL_ff_spatial_mm_in_proj
+    (1024, 6144, 4608, 12, 8, True, "plain"),
+    (1024, 6144, 4608, 12, 7, True, "plain"),
+    (1024, 6144, 4608, 12, 6, True, "plain"),
+    (1024, 6144, 4608, 12, 5, True, "plain"),
+    # (128, 6144, 4608) — 390 µs  DBL_ff_ctx_spatial_mm_in_proj
+    (128, 6144, 4608, 12, 8, True, "plain"),
+    (128, 6144, 4608, 12, 7, True, "plain"),
+    (128, 6144, 4608, 12, 6, True, "plain"),
+    (128, 6144, 4608, 12, 5, True, "plain"),
+    # -----------------------------------------------------------------------
+    # Core-grid sweep: 12×5 – 12×8 variants for all non-plain AGMM shapes.
+    # Used to find the optimal cgy for qkv and to_out ops.  Baseline 12×9
+    # entries live above; results land in sweep_agmm_global_k.csv alongside
+    # the 12×9 entries (same device_config, different core_grid column).
+    # -----------------------------------------------------------------------
+    # TP8_SP4 (bh_4x8_sp0_tp1) — qkv (N=2304) grid variants
+    (16384, 6144, 2304, 12, 8, True, "qkv"),
+    (16384, 6144, 2304, 12, 7, True, "qkv"),
+    (16384, 6144, 2304, 12, 6, True, "qkv"),
+    (16384, 6144, 2304, 12, 5, True, "qkv"),
+    (4096, 6144, 2304, 12, 8, True, "qkv"),
+    (4096, 6144, 2304, 12, 7, True, "qkv"),
+    (4096, 6144, 2304, 12, 6, True, "qkv"),
+    (4096, 6144, 2304, 12, 5, True, "qkv"),
+    (1024, 6144, 2304, 12, 8, True, "qkv"),
+    (1024, 6144, 2304, 12, 7, True, "qkv"),
+    (1024, 6144, 2304, 12, 6, True, "qkv"),
+    (1024, 6144, 2304, 12, 5, True, "qkv"),
+    (1152, 6144, 2304, 12, 8, True, "qkv"),
+    (1152, 6144, 2304, 12, 7, True, "qkv"),
+    (1152, 6144, 2304, 12, 6, True, "qkv"),
+    (1152, 6144, 2304, 12, 5, True, "qkv"),
+    (128, 6144, 2304, 12, 8, True, "qkv"),
+    (128, 6144, 2304, 12, 7, True, "qkv"),
+    (128, 6144, 2304, 12, 6, True, "qkv"),
+    (128, 6144, 2304, 12, 5, True, "qkv"),
+    # TP8_SP4 (bh_4x8_sp0_tp1) — to_out (N=768) grid variants
+    (16384, 6144, 768, 12, 8, True, "to_out"),
+    (16384, 6144, 768, 12, 7, True, "to_out"),
+    (16384, 6144, 768, 12, 6, True, "to_out"),
+    (16384, 6144, 768, 12, 5, True, "to_out"),
+    (4096, 6144, 768, 12, 8, True, "to_out"),
+    (4096, 6144, 768, 12, 7, True, "to_out"),
+    (4096, 6144, 768, 12, 6, True, "to_out"),
+    (4096, 6144, 768, 12, 5, True, "to_out"),
+    (1024, 6144, 768, 12, 8, True, "to_out"),
+    (1024, 6144, 768, 12, 7, True, "to_out"),
+    (1024, 6144, 768, 12, 6, True, "to_out"),
+    (1024, 6144, 768, 12, 5, True, "to_out"),
+    (128, 6144, 768, 12, 8, True, "to_out"),
+    (128, 6144, 768, 12, 7, True, "to_out"),
+    (128, 6144, 768, 12, 6, True, "to_out"),
+    (128, 6144, 768, 12, 5, True, "to_out"),
+    # TP4_SP8 (bh_4x8_sp1_tp0) — qkv (N=4608) grid variants
+    (8192, 6144, 4608, 12, 8, True, "qkv"),
+    (8192, 6144, 4608, 12, 7, True, "qkv"),
+    (8192, 6144, 4608, 12, 6, True, "qkv"),
+    (8192, 6144, 4608, 12, 5, True, "qkv"),
+    (2048, 6144, 4608, 12, 8, True, "qkv"),
+    (2048, 6144, 4608, 12, 7, True, "qkv"),
+    (2048, 6144, 4608, 12, 6, True, "qkv"),
+    (2048, 6144, 4608, 12, 5, True, "qkv"),
+    (512, 6144, 4608, 12, 8, True, "qkv"),
+    (512, 6144, 4608, 12, 7, True, "qkv"),
+    (512, 6144, 4608, 12, 6, True, "qkv"),
+    (512, 6144, 4608, 12, 5, True, "qkv"),
+    (64, 6144, 4608, 12, 8, True, "qkv"),
+    (64, 6144, 4608, 12, 7, True, "qkv"),
+    (64, 6144, 4608, 12, 6, True, "qkv"),
+    (64, 6144, 4608, 12, 5, True, "qkv"),
+    # TP4_SP8 (bh_4x8_sp1_tp0) — to_out (N=1536) grid variants
+    (8192, 6144, 1536, 12, 8, True, "to_out"),
+    (8192, 6144, 1536, 12, 7, True, "to_out"),
+    (8192, 6144, 1536, 12, 6, True, "to_out"),
+    (8192, 6144, 1536, 12, 5, True, "to_out"),
+    (2048, 6144, 1536, 12, 8, True, "to_out"),
+    (2048, 6144, 1536, 12, 7, True, "to_out"),
+    (2048, 6144, 1536, 12, 6, True, "to_out"),
+    (2048, 6144, 1536, 12, 5, True, "to_out"),
+    (512, 6144, 1536, 12, 8, True, "to_out"),
+    (512, 6144, 1536, 12, 7, True, "to_out"),
+    (512, 6144, 1536, 12, 6, True, "to_out"),
+    (512, 6144, 1536, 12, 5, True, "to_out"),
+    (64, 6144, 1536, 12, 8, True, "to_out"),
+    (64, 6144, 1536, 12, 7, True, "to_out"),
+    (64, 6144, 1536, 12, 6, True, "to_out"),
+    (64, 6144, 1536, 12, 5, True, "to_out"),
     # -----------------------------------------------------------------------
     # Flux2 BH 4×8 — MMRS→AGMM (bh_4x8_sp0_tp1): ops previously run as MMRS
     # now running as AGMM. K_global = K_shard × TP8 = 3072 × 8 = 24576.
