@@ -280,42 +280,91 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
     )
 
 
-def run_pipeline_loop(
-    runtime: TtPrefillRuntime,
-    rank: int,
-    num_ranks: int,
-    *,
-    h2d_service=None,
-    d2d_in=None,
-    d2d_out=None,
-    bounded: bool = True,
-    do_pcc: bool = False,
+def _lease_reclaim(d2d_in, d2d_out) -> None:
+    """Before a chunk: reclaim this rank's fabric links (the previous-iter D2D transfer has drained),
+    then grant the inbound receiver so this chunk's activation drains into its backing. No-op without
+    D2D (single rank). The outbound grant happens AFTER the push, in _compute_and_send."""
+    if d2d_in is not None:
+        d2d_in.wait_for_fabric_links()
+    if d2d_out is not None:
+        d2d_out.wait_for_fabric_links()
+    if d2d_in is not None:
+        d2d_in.release_fabric_links()
+
+
+def _compute_and_send(runtime: TtPrefillRuntime, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
+    """Run one chunk: prefill, forward the output downstream (non-last rank) and grant the outbound
+    sender so it ships over fabric, log CHUNK_START. Returns the compute-start epoch (NTP-comparable)."""
+    t_start = time.time()
+    out = runtime.prefill(
+        inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+    )
+    if not runtime.config.is_last_rank:
+        _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
+    if d2d_out is not None:
+        d2d_out.release_fabric_links()
+    logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f}")
+    return t_start
+
+
+def _drain_and_log_e2e(
+    runtime: TtPrefillRuntime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float
 ) -> None:
-    """Decoupled per-rank pipeline loop shared by standalone and request modes — they run the SAME
-    mechanics (rank 0 gets a chunk, runs its layer slice, D2D-sends downstream; middle ranks
-    recv -> compute -> send; the last rank recv -> compute kv-only) and differ only in:
+    """Per-rank teardown: drain the last outbound D2D forward, one synchronize so the e2e clock reflects
+    device completion, then log E2E_CLOCK (first prefill start + last compute end, NTP-comparable epochs)
+    and the chunk count. No teardown barrier across ranks."""
+    if d2d_out is not None:
+        d2d_out.wait_for_fabric_links()
+    ttnn.synchronize_device(runtime.mesh_device)
+    logger.info(
+        f"[pp rank {rank}] E2E_CLOCK first_compute_start={first_compute_start:.6f} last_compute_end={time.time():.6f}"
+    )
+    logger.info(f"[pp rank {rank}] processed {n_done} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
 
-      * input on rank 0: the golden trace (h2d_service is None) or the H2D socket (h2d_service set).
-      * termination: bounded=True runs exactly NUM_CHUNKS and exits cleanly (standalone / bring-up);
-        bounded=False runs until SIGTERM (request / production serving) — the producer decides the
-        chunk count, so the loop blocks on the next H2D push (rank 0) or D2D recv (downstream).
-      * do_pcc: per-rank KV PCC vs the golden trace at the end (standalone only; an unbounded loop
-        never reaches the end normally).
 
-    Per-chunk metadata (slot / actual_start / actual_end / is_last) rides with each activation, so
-    downstream ranks need no shared schedule. Unbounded shutdown is rough: downstream ranks block in
-    recv when rank 0 stops, so they exit on mesh teardown / SIGKILL rather than a clean drain."""
+def run_request_loop(
+    runtime: TtPrefillRuntime, rank: int, num_ranks: int, *, h2d_service=None, d2d_in=None, d2d_out=None
+) -> None:
+    """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
+    producer decides the count); downstream ranks read from D2D. Runs until SIGTERM. There is no
+    end-of-stream marker, so shutdown is rough: ranks block in the recv device op and exit on mesh
+    teardown / SIGKILL. No NUM_CHUNKS, no trace input, no is_last break, no PCC — see run_standalone_loop
+    for those."""
+    cfg = runtime.config
+    if cfg.is_first_rank and h2d_service is None:
+        raise ValueError("request mode requires the H2D service on the first rank for input")
+    logger.info(
+        f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
+        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
+    )
+    t0 = time.perf_counter()
+    c = 0
+    first = None
+    while not _shutdown:
+        _lease_reclaim(d2d_in, d2d_out)
+        if cfg.is_first_rank:
+            inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
+            meta["is_last"] = False  # unbounded: no end-of-stream marker
+        else:
+            inp, meta = _d2d_recv(d2d_in)
+        t = _compute_and_send(runtime, rank, c, inp, meta, d2d_out)
+        if first is None:
+            first = t
+        c += 1
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+
+
+def run_standalone_loop(
+    runtime: TtPrefillRuntime, rank: int, num_ranks: int, *, h2d_service=None, d2d_in=None, d2d_out=None
+) -> None:
+    """Bring-up / benchmark loop — BOUNDED. rank 0 drives NUM_CHUNKS chunks from the golden trace (or the
+    H2D socket if PREFILL_PP_H2D=1); downstream ranks read from D2D and learn the end from is_last. Exits
+    cleanly. With PREFILL_STANDALONE_PCC=1 each rank checks the KV slice it populated vs the golden trace."""
     cfg = runtime.config
     slot_id = 0  # trace fills slot 0; h2d input takes slot_id from the per-push metadata
-
-    if not bounded and (cfg.is_first_rank and h2d_service is None):
-        raise ValueError("unbounded (request) mode requires the H2D service on the first rank for input")
-
+    n_chunks = NUM_CHUNKS
     token_ids = None
-    n_chunks = (NUM_CHUNKS if cfg.is_first_rank else None) if bounded else None
-    if bounded and cfg.is_first_rank:
-        # Bounded: the first rank drives n_chunks (NUM_CHUNKS); later ranks learn the end from is_last.
-        # The cache is sized to chunk*num_chunks by default so this fits; the guard catches a smaller override.
+    if cfg.is_first_rank:
         if h2d_service is None:
             token_ids = _load_token_ids()
             token_ids = (token_ids + [1] * (n_chunks * cfg.chunk_size))[: n_chunks * cfg.chunk_size]
@@ -324,39 +373,24 @@ def run_pipeline_loop(
                 f"{n_chunks} chunks x {cfg.chunk_size} exceeds per-user cache max_seq_len={cfg.max_seq_len}; "
                 f"raise PREFILL_MAX_SEQ_LEN."
             )
-
     logger.info(
-        f"[pp rank {rank}/{num_ranks}] {'bounded' if bounded else 'unbounded'} loop start "
-        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} slot={slot_id} "
+        f"[pp rank {rank}/{num_ranks}] standalone (bounded) loop start "
+        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} "
         f"input={'h2d' if h2d_service is not None else 'trace'}"
-        + (f" chunks={n_chunks}" if bounded and cfg.is_first_rank else "")
+        + (f" chunks={n_chunks}" if cfg.is_first_rank else "")
         + ")"
     )
-
     t0 = time.perf_counter()
     c = 0
-    n_done = 0
-    loop_first_compute_start = None  # epoch of this rank's first prefill; rank0's = pipeline e2e start
+    first = None
     while not _shutdown:
-        # (1) Reclaim my fabric links before this chunk's compute (their previous-iter D2D transfer has
-        #     drained). No-op on iter 0 and in host transport. (2) Grant the inbound receiver BEFORE the
-        #     recv so this chunk's incoming activation drains into its backing. The matching grant of the
-        #     outbound sender happens AFTER the push, mirroring test_stream_pipeline.cpp's per-host cadence.
-        if d2d_in is not None:
-            d2d_in.wait_for_fabric_links()
-        if d2d_out is not None:
-            d2d_out.wait_for_fabric_links()
-        if d2d_in is not None:
-            d2d_in.release_fabric_links()
-
+        _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            if bounded and c >= n_chunks:
+            if c >= n_chunks:
                 break
             if h2d_service is not None:
-                inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
-                # Unbounded: the producer decides the count; the 12-byte H2D metadata carries no
-                # end-of-stream marker, so is_last stays False and the loop runs until SIGTERM.
-                meta["is_last"] = bounded and (c == n_chunks - 1)
+                inp, meta = _socket_next(h2d_service)
+                meta["is_last"] = c == n_chunks - 1
             else:
                 kv_actual = c * cfg.chunk_size
                 inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
@@ -364,66 +398,26 @@ def run_pipeline_loop(
                     "slot_id": slot_id,
                     "actual_start": kv_actual,
                     "actual_end": kv_actual + cfg.chunk_size,  # trace drives full chunks
-                    "is_last": c == n_chunks - 1,  # trace input is bounded-only
+                    "is_last": c == n_chunks - 1,
                 }
         else:
-            # Non-first rank: the upstream stage's hidden state + metadata arrive over the D2D socket
-            # (the only inter-rank transport).
             inp, meta = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-
-        # Per-chunk compute START (epoch, comparable across NTP-synced hosts; no barrier). The real
-        # per-chunk wall is the delta between consecutive CHUNK_START epochs, and a chunk's compute span
-        # is proxied by the downstream rank's start — see plot_pipeline_trace.py.
-        t_start_epoch = time.time()
-        if loop_first_compute_start is None:
-            loop_first_compute_start = t_start_epoch
-        out = runtime.prefill(
-            inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
-        )
-
-        if not cfg.is_last_rank:
-            _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
-
-        # (4) Grant the outbound sender AFTER the push so it forwards this chunk's output downstream.
-        if d2d_out is not None:
-            d2d_out.release_fabric_links()
-
-        logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start_epoch:.6f}")
-
-        n_done += 1
+        t = _compute_and_send(runtime, rank, c, inp, meta, d2d_out)
+        first = first if first is not None else t
         c += 1
         if meta["is_last"]:
             break
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
-    # The last outbound forward is async after its grant; reclaim once more so it has fully drained into
-    # the downstream receiver before this rank tears the mesh down (no teardown barrier across ranks).
-    if d2d_out is not None:
-        d2d_out.wait_for_fabric_links()
-    ttnn.synchronize_device(runtime.mesh_device)
-    # E2E clock: first prefill start (this rank) and last compute end (after the single post-loop
-    # synchronize above, so it is device-accurate). The true wall-clock e2e =
-    # max over ranks(last_compute_end) - min over ranks(first_compute_start); epochs are time.time()
-    # so they compare across hosts (NTP-synced).
-    loop_last_compute_end = time.time()
-    logger.info(
-        f"[pp rank {rank}] E2E_CLOCK first_compute_start={loop_first_compute_start:.6f} "
-        f"last_compute_end={loop_last_compute_end:.6f}"
-    )
-    logger.info(
-        f"[pp rank {rank}] processed {n_done} chunks in "
-        f"{(time.perf_counter() - t0) * 1000.0:.2f} ms (decoupled, no barrier)"
-    )
-
-    if do_pcc and os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
+    if os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
         # Each rank PCC-checks the KV slice it populated against the golden trace (offset by
         # first_layer_idx); all ranks passing == the rank-sliced model reproduces single-rank KV.
-        # Only meaningful for the bounded standalone run (an unbounded server never reaches here).
         from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import kv_cache_pcc_check
 
         trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
         kv_cache_pcc_check(
-            runtime, slot_id=slot_id, n_chunks=n_done, trace_dir=trace_dir, first_layer_idx=cfg.first_layer_idx
+            runtime, slot_id=slot_id, n_chunks=c, trace_dir=trace_dir, first_layer_idx=cfg.first_layer_idx
         )
 
 
@@ -572,10 +566,8 @@ def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
 
-    logger.info(f"[pp rank {rank}] setup complete, entering bounded standalone loop")
-    run_pipeline_loop(
-        runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out, bounded=True, do_pcc=True
-    )
+    logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
+    run_standalone_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
 
     if h2d_service is not None or d2d_in is not None or d2d_out is not None:
         # Free the services while the mesh + command queues are still alive (their dtors free a command
@@ -662,10 +654,8 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
-    logger.info(f"[pp rank {rank}] setup complete, entering unbounded request loop")
-    run_pipeline_loop(
-        runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out, bounded=False, do_pcc=False
-    )
+    logger.info(f"[pp rank {rank}] setup complete, entering request loop")
+    run_request_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
