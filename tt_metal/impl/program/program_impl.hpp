@@ -18,6 +18,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorParameter registry
+#include "tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp"  // RtaName (RTA slot-map key)
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
@@ -385,8 +386,10 @@ public:
         // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
         // that path is not bypassable via skip_validation, so per-call construction would be pure
         // host overhead on the inner re-enqueue loop.
-        std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
-        std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+        // Keyed by RtaName (heap-free inline key) to match RuntimeArgValues' key type, so the hot
+        // apply-path lookup (slot_of.find(name)) is a memcmp, not a std::string hash+compare.
+        std::unordered_map<experimental::RtaName, size_t> runtime_arg_name_to_slot;
+        std::unordered_map<experimental::RtaName, size_t> common_runtime_arg_name_to_slot;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single

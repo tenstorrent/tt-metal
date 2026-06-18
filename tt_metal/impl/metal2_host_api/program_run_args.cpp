@@ -206,7 +206,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 
         // Validate named RTAs: every declared name set per-node, no extras, no duplicate node entries.
         const auto& named_rta_names = schema->runtime_arg_names;
-        const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
+        const std::unordered_set<RtaName> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
         std::unordered_set<NodeCoord> nodes_with_named_params;
         for (const auto& [node, args] : kernel_params.runtime_arg_values) {
@@ -602,7 +602,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             // before allocating. Build the node->values lookups and walk the kernel's logical cores
             // (the node coverage validation has confirmed) to assemble each combined buffer. This
             // runs once; every subsequent call takes the fast path above.
-            std::unordered_map<NodeCoord, const Table<std::string, uint32_t>*> named_rtas_by_node;
+            std::unordered_map<NodeCoord, const Table<RtaName, uint32_t>*> named_rtas_by_node;
             named_rtas_by_node.reserve(kernel_params.runtime_arg_values.size());
             for (const auto& [node, args] : kernel_params.runtime_arg_values) {
                 named_rtas_by_node[node] = &args;
@@ -925,7 +925,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
         // --- Named RTAs: supplied names must be declared (no extras); every non-invariant name
         //     must be supplied for every node; invariant names may be omitted. ---
         const auto& named_rta_names = schema->runtime_arg_names;
-        const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
+        const std::unordered_set<RtaName> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
         std::vector<std::string> regular_rta_names;
         for (const auto& n : named_rta_names) {
             if (!schema->enqueue_invariant_runtime_arg_names.contains(n)) {
@@ -976,7 +976,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
 
         // --- Named CRTAs: regular ones must be supplied; invariant may be omitted; no extras. ---
         const auto& named_crta_names = schema->common_runtime_arg_names;
-        const std::unordered_set<std::string> named_crta_name_set(named_crta_names.begin(), named_crta_names.end());
+        const std::unordered_set<RtaName> named_crta_name_set(named_crta_names.begin(), named_crta_names.end());
         for (const auto& [name, _value] : kernel_params.common_runtime_arg_values) {
             (void)_value;
             TT_FATAL(

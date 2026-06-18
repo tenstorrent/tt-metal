@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
@@ -57,7 +58,11 @@ struct ProgramRunArgs {
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
-        using RuntimeArgValues = Table<std::string, uint32_t>;
+        //
+        // Key type is the heap-free inline RtaName, not std::string: this per-node Table is rebuilt
+        // every dispatch, so a std::string key would heap-allocate for any name past the SSO threshold.
+        // RtaName stores the name inline. Ops still write {{"name", value}} -- the API is unchanged.
+        using RuntimeArgValues = Table<RtaName, uint32_t>;
         struct NodeRuntimeArgs {
             NodeCoord node;
             RuntimeArgValues args;
