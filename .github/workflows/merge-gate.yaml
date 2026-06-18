@@ -318,12 +318,11 @@ jobs:
 
   models-smoke-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
-    if: ${{ github.event_name == 'merge_group' &&
-            (github.ref_name == 'main' ||
+    if: ${{ github.ref_name == 'main' ||
              needs.find-changes.outputs.cmake-changed == 'true' ||
              needs.find-changes.outputs.models-changed == 'true' ||
              needs.find-changes.outputs.tt-nn-changed == 'true' ||
-             needs.find-changes.outputs.tt-metalium-changed == 'true')
+             needs.find-changes.outputs.tt-metalium-changed == 'true'
         }}
     secrets: inherit
     uses: ./.github/workflows/models-smoke-tests-impl.yaml
