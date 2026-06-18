@@ -119,12 +119,12 @@ FORCE_INLINE void fabric_write_bytes(
 
 // Largest power of 2 <= n (n >= 1). Rounds the read-ring depth down to a power of 2 so
 // the ring slot index is a bitmask rather than a modulo.
+// Following uses Hacker's Delight formula
 constexpr uint32_t floor_pow2(uint32_t n) {
-    uint32_t p = 1;
-    while ((p << 1) <= n) {
-        p <<= 1;
+    if (n == 0) {
+        return 0;
     }
-    return p;
+    return 1u << (31 - __builtin_clz(n));
 }
 
 // Thin compile-time transaction-id ring. Depth is a power of 2 (asserted), so a page

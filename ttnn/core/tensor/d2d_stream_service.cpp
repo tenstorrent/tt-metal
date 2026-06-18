@@ -145,7 +145,10 @@ ExchangedEndpoint exchange_service_cores(
     uint32_t metadata_size_bytes,
     bool share_fabric_links) {
     std::vector<uint32_t> out;
-    out.reserve(6 + 3 * coords.size());
+
+    // Push 6 * 3 * coords.size() arguments to out
+    const uint32_t kNumOutputArgs = 6 + 3 * coords.size();
+    out.reserve(kNumOutputArgs);
     out.push_back(tensor_page_size);
     out.push_back(num_pages);
     out.push_back(socket_page_size);
@@ -702,7 +705,6 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // Both kernels run on the single service core, RISCV_0. CB indices are private
 // to each program so the sender (scratch + headers) and receiver (headers only)
 // don't need to agree.
-[[maybe_unused]] constexpr tt::CBIndex kScratchCbIndex = tt::CBIndex::c_0;
 constexpr tt::CBIndex kPacketHeaderCbIndex = tt::CBIndex::c_1;
 
 // Sender read-pipeline trid-ring depth (power of 2): each lane stages this many tensor
