@@ -1,0 +1,84 @@
+name: "test: run-with-log"
+
+# Mechanics smoke test for the run-with-log action: a completed run appends the
+# marker; a timeout-minutes kill does not. Dispatch-only (the timeout case waits
+# ~60s). Classification of the marker is the ai_summary parser's concern, tested
+# in tenstorrent/tt-github-actions — not here.
+on:
+  workflow_dispatch:
+
+jobs:
+  success-case:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/run-with-log
+        with:
+          working-directory: ${{ github.workspace }}
+          log-file: out/ok.log
+          run: |
+            echo hello
+            echo world
+      - name: Assert start + finish markers, exit 0
+        run: |
+          tail -3 out/ok.log
+          head -1 out/ok.log | grep -qx '\[==tt-log-start-line==\]'
+          tail -1 out/ok.log | grep -qx '\[==tt-log-finish-line==\] exit_code=0'
+
+  failure-case:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/run-with-log
+        id: run
+        continue-on-error: true
+        with:
+          working-directory: ${{ github.workspace }}
+          log-file: out/fail.log
+          run: |
+            echo before
+            exit 7
+      - name: Assert failure forwarded, marker carries exit code
+        run: |
+          test "${{ steps.run.outcome }}" = failure
+          tail -1 out/fail.log | grep -qx '\[==tt-log-finish-line==\] exit_code=7'
+
+  timeout-case:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/run-with-log
+        id: run
+        continue-on-error: true
+        timeout-minutes: 1
+        with:
+          working-directory: ${{ github.workspace }}
+          log-file: out/timeout.log
+          run: |
+            echo started
+            sleep 120
+      - name: Assert started but no finish marker (timeout signature)
+        run: |
+          test "${{ steps.run.outcome }}" != success
+          grep -q '^started$' out/timeout.log
+          # start sentinel written before the script ran, finish never reached
+          head -1 out/timeout.log | grep -qx '\[==tt-log-start-line==\]'
+          if grep -q tt-log-finish-line out/timeout.log; then
+            echo "::error::finish marker present after timeout kill — bug"; exit 1
+          fi
+          echo "tracked-but-truncated signature correct (outcome=${{ steps.run.outcome }})"
+
+  no-trailing-newline-case:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/run-with-log
+        with:
+          working-directory: ${{ github.workspace }}
+          log-file: out/nonl.log
+          run: printf 'no trailing newline'
+      - name: Assert finish marker stays line-anchored
+        run: |
+          tail -2 out/nonl.log
+          # script output had no trailing newline; the marker must still be its own line
+          tail -1 out/nonl.log | grep -qx '\[==tt-log-finish-line==\] exit_code=0'
