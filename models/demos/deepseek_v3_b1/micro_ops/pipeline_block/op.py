@@ -211,6 +211,7 @@ class PipelineBlock:
         stages_metadata=None,
         pipeline_config=None,
         forward_metadata=False,
+        forward_metadata_size_bytes=None,
         io_socket_descriptor_prefix=None,
         second_pipeline_core_coord=None,
     ):
@@ -358,7 +359,9 @@ class PipelineBlock:
                     entry_node_downstream,
                     exit_node_upstream,
                     exit_upstream_page_size,
-                    DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
+                    forward_metadata_size_bytes
+                    if forward_metadata_size_bytes is not None
+                    else (DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0),
                 )
 
     def _init_first_stage(
