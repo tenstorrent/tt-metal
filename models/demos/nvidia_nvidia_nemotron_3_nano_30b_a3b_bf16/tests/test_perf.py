@@ -390,15 +390,19 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
     repeats = (needed + len(_seed_ids_short) - 1) // len(_seed_ids_short)
     _seed_ids = (_seed_ids_short * repeats)[:needed]
 
-    # Pre-allocate KV cache for the full model context ONCE.
-    # Reusing across all ISLs keeps KV pages at stable DRAM addresses.
-    print("[state] Pre-allocating decoder state (max_seq_len=262144)...", flush=True)
+    # KV-cache budget strategy:
+    # ISLs ≤ 32K share one persistent state (96 MB KV per device); ISLs > 32K get a
+    # per-ISL state sized for that context window.  At ISL=65536, pre-allocating
+    # MODEL_MAX_SEQ_LEN (262K) costs 1.57 GB/device and leaves no DRAM for MoE
+    # intermediates; a per-ISL state costs only 393 MB/device, giving ~1.2 GB back.
+    _SMALL_ISL_MAX = 32_768
+    print(f"[state] Pre-allocating decoder state (max_seq_len={_SMALL_ISL_MAX})...", flush=True)
     _persistent_state = allocate_decoder_state(
-        mesh_device, B=1, max_seq_len=MODEL_MAX_SEQ_LEN, block_size=DEFAULT_BLOCK_SIZE
+        mesh_device, B=1, max_seq_len=_SMALL_ISL_MAX, block_size=DEFAULT_BLOCK_SIZE
     )
     print("[state] Done.", flush=True)
 
-    # Warmup: compile decode trace and prefill kernels at a short ISL.
+    # Warmup: compile prefill kernels and decode trace at a short ISL.
     print("\n[warmup] Running warmup generate (ISL=32, 5 decode tokens)...", flush=True)
     _warmup_prompt = tokenizer.decode(_seed_ids[:32], skip_special_tokens=False)
     generate(
@@ -406,7 +410,7 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         mesh_device=mesh_device,
         wc=weight_cache,
         max_new_tokens=5,
-        max_seq_len=MODEL_MAX_SEQ_LEN,
+        max_seq_len=_SMALL_ISL_MAX,
         verbose=False,
         cpu_gate=False,
         decoder_state=_persistent_state,
@@ -422,6 +426,20 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         # Clamp decode count: tokenizer round-trip may shift token count by ±few.
         n_decode = max(1, min(N_DECODE, MODEL_MAX_SEQ_LEN - isl - 10))
 
+        # Select / allocate decoder state for this ISL.
+        if isl <= _SMALL_ISL_MAX:
+            _state = _persistent_state
+            _state_max = _SMALL_ISL_MAX
+        else:
+            # Allocate just enough KV cache (isl + decode headroom, rounded up to block).
+            _isl_max = min(
+                ((isl + N_DECODE + 50 + DEFAULT_BLOCK_SIZE - 1) // DEFAULT_BLOCK_SIZE) * DEFAULT_BLOCK_SIZE,
+                MODEL_MAX_SEQ_LEN,
+            )
+            print(f"[state] Allocating per-ISL decoder state (max_seq_len={_isl_max})...", flush=True)
+            _state = allocate_decoder_state(mesh_device, B=1, max_seq_len=_isl_max, block_size=DEFAULT_BLOCK_SIZE)
+            _state_max = _isl_max
+
         print(f"\n{'='*70}")
         print(f"ISL sweep: target ISL={isl}, n_decode={n_decode}")
         print(f"{'='*70}")
@@ -431,11 +449,11 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
             mesh_device=mesh_device,
             wc=weight_cache,
             max_new_tokens=n_decode,
-            max_seq_len=MODEL_MAX_SEQ_LEN,
+            max_seq_len=_state_max,
             verbose=True,
             cpu_gate=False,
             return_metrics=True,
-            decoder_state=_persistent_state,
+            decoder_state=_state,
         )
 
         metrics.print_summary()
@@ -461,6 +479,9 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
             }
         )
         print(f"\n[ISL={isl}] tail: {repr(text[-120:])}")
+
+        if isl > _SMALL_ISL_MAX:
+            del _state  # free the per-ISL KV cache before the next allocation
 
     # --- Summary table ---
     print("\n" + "=" * 78)

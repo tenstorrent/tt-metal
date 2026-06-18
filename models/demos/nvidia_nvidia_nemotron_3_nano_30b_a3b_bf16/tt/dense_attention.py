@@ -30,6 +30,23 @@ TP = 4
 HIDDEN_SIZE = 2688
 NORM_EPS = 1e-5
 
+# Blackhole QB grid: 8×8 = 64 cores.  Chunk sizes follow tt_transformers precedent:
+# 256 tiles for S≥2048 (each tile = 32 tokens, so 8192-token blocks), 64 tiles for S<2048.
+# Multicore flash-attention avoids materialising the full S×S attention matrix in DRAM.
+_SDPA_GRID = (8, 8)
+
+
+def _sdpa_cfg(S: int):
+    if S < 64:
+        return None  # too small to chunk; single-core SDPA is fine
+    chunk = 256 if S >= 2048 else 64
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=_SDPA_GRID,
+        q_chunk_size=chunk,
+        k_chunk_size=chunk,
+        exp_approx_mode=False,
+    )
+
 
 def dense_attention_forward(
     mesh_device: MeshDevice,
@@ -141,16 +158,20 @@ def dense_attention_forward(
     elif has_cache and S > 1:
         # --- Chunked prefill: causal SDPA + bulk KV cache fill ---
         k_cache, v_cache = kv_cache
+        _cfg = _sdpa_cfg(S)
+        _sdpa_kwargs = {"program_config": _cfg} if _cfg is not None else {}
         attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q_4d, k_4d, v_4d, is_causal=True
+            q_4d, k_4d, v_4d, is_causal=True, **_sdpa_kwargs
         )  # [B, 8, S, 128]/device
         del q_4d  # not needed after SDPA; free to reduce peak DRAM
         attn_out = ttnn.permute(attn_out, [0, 2, 1, 3])  # → [B, S, 8, 128] DRAM
     else:
         # --- No-cache path (stateless tests / reference) ---
         is_causal = S > 1
+        _cfg = _sdpa_cfg(S)
+        _sdpa_kwargs = {"program_config": _cfg} if _cfg is not None else {}
         attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q_4d, k_4d, v_4d, is_causal=is_causal
+            q_4d, k_4d, v_4d, is_causal=is_causal, **_sdpa_kwargs
         )  # [B, 8, S, 128]/device
         attn_out = ttnn.permute(attn_out, [0, 2, 1, 3])
 
@@ -174,16 +195,19 @@ def dense_attention_forward(
     out_tt = ttnn.linear(attn_out, wo_tt, transpose_b=True)  # [B, S, 2688] partial/device
 
     # 9. All-reduce → full [B, S, 2688] + residual.
-    # Device-2 DRAM defect: move all_reduce inputs/outputs through L1 so the CCL
-    # reads from safe SRAM.  The final add output goes to DRAM (fresh allocation →
-    # safe page); returning in L1 would keep a large tensor in L1 for the caller's
-    # full lifetime, starving the concat kernel.
-    out_tt = ttnn.to_memory_config(out_tt, ttnn.L1_MEMORY_CONFIG)
-    result_tt = all_reduce(out_tt)
-    del out_tt  # free L1 before result_tt moves to L1 (avoids two 337KB peaks coexisting)
-    # Move all_reduce output to L1 so ttnn.add reads from safe SRAM.
-    result_tt = ttnn.to_memory_config(result_tt, ttnn.L1_MEMORY_CONFIG)
-    # Both inputs in L1 (safe reads); output to DRAM (fresh allocation).
+    # Device-2 DRAM defect workaround: copy to L1 before CCL so reads are from safe SRAM.
+    # Cap at S <= 8192: at 16K tokens the tensor is ~86 MB which exceeds L1 capacity
+    # (~50 MB available).  Above the cap, all_reduce runs directly from DRAM; the output
+    # of ttnn.linear is a fresh DRAM allocation that lands on safe pages.
+    if S <= 8192:
+        out_tt = ttnn.to_memory_config(out_tt, ttnn.L1_MEMORY_CONFIG)
+        result_tt = all_reduce(out_tt)
+        del out_tt  # free L1 before result_tt moves to L1 (avoids two peaks coexisting)
+        result_tt = ttnn.to_memory_config(result_tt, ttnn.L1_MEMORY_CONFIG)
+    else:
+        result_tt = all_reduce(out_tt)
+        del out_tt
+    # Both inputs in L1 (safe reads for S<=8192); output to DRAM (fresh allocation).
     ret = ttnn.add(residual, result_tt)
     del result_tt
     del residual  # async-safe: device executes add before processing this dealloc

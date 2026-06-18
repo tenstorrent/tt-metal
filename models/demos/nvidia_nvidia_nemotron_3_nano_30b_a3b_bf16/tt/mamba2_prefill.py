@@ -59,7 +59,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _rep, _rep_keyed
+from .tp import _col, _rep_keyed, _row, all_gather, all_reduce
 
 # ---------------------------------------------------------------------------
 # Constants (must match mamba2_layer.py exactly)
@@ -362,9 +362,11 @@ def mamba2_prefill_layer_forward(
     w_tt = _rep_keyed(id(norm_weight), norm_weight.bfloat16().unsqueeze(0), mesh_device)  # same key as decode path
     normed = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
 
-    # ---- 2. in_proj [B, S, 2688] → [B, S, 10304] -------------------
-    ip_tt = _rep(in_proj_weight, mesh_device)
-    projected = ttnn.linear(normed, ip_tt, transpose_b=True)
+    # ---- 2. in_proj: column-parallel → partial [B, S, 2576]/device → [B, S, 10304] ----
+    ip_tt = _col(in_proj_weight, mesh_device)  # [2576, 2688]/device
+    _proj_partial = ttnn.linear(normed, ip_tt, transpose_b=True)  # [B, S, 2576]/device
+    projected = all_gather(_proj_partial, dim=2)  # [B, S, 10304]
+    _proj_partial.deallocate(True)
 
     # ---- 3. Split projected ----------------------------------------
     gate = ttnn.slice(projected, [0, 0, 0], [B, S, INTERMEDIATE_SIZE])
@@ -372,22 +374,29 @@ def mamba2_prefill_layer_forward(
     dt_slice = ttnn.slice(
         projected, [0, 0, INTERMEDIATE_SIZE + CONV_DIM], [B, S, INTERMEDIATE_SIZE + CONV_DIM + NUM_HEADS]
     )
+    projected.deallocate(True)  # 5.4 GB freed; gate/hBC/dt_slice are copies
 
     # ---- 4. Causal conv1d ------------------------------------------
     hBC_conv, conv_state_new = _causal_conv1d_prefill(hBC, conv1d_weight, conv1d_bias, mesh_device, conv_state)
+    hBC.deallocate(True)  # hBC_conv is the output copy; hBC no longer needed
 
     # ---- 5. SiLU --------------------------------------------------
     hBC_silu = ttnn.silu(hBC_conv)  # [B, S, 6144]
+    hBC_conv.deallocate(True)
 
     # ---- 6. Split hBC_silu ----------------------------------------
     x_flat = ttnn.slice(hBC_silu, [0, 0, 0], [B, S, INTERMEDIATE_SIZE])
     b_flat = ttnn.slice(hBC_silu, [0, 0, INTERMEDIATE_SIZE], [B, S, INTERMEDIATE_SIZE + N_GROUPS * SSM_STATE_SIZE])
     c_flat = ttnn.slice(hBC_silu, [0, 0, INTERMEDIATE_SIZE + N_GROUPS * SSM_STATE_SIZE], [B, S, CONV_DIM])
+    hBC_silu.deallocate(True)  # 3.22 GB freed; x_flat/b_flat/c_flat are copies
 
     # ---- 7. Reshape for SSM ----------------------------------------
     x_4d = _rr(x_flat, [B, S, NUM_HEADS, HEAD_DIM])  # [B, S, H, D]
+    x_flat.deallocate(True)
     B_4d = _rr(b_flat, [B, S, N_GROUPS, SSM_STATE_SIZE])  # [B, S, G, N]
+    b_flat.deallocate(True)
     C_4d = _rr(c_flat, [B, S, N_GROUPS, SSM_STATE_SIZE])  # [B, S, G, N]
+    c_flat.deallocate(True)
 
     # ---- 8. Pre-compute dt_eff, decay, x_dt (fused via tt-lang) -----
     dt_bias_tt = _rep_keyed(("pf_dtb", id(dt_bias)), dt_bias.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)
@@ -398,67 +407,64 @@ def mamba2_prefill_layer_forward(
 
     decay, x_dt = compute_ssm_inputs(dt_slice, dt_bias_tt, A_log_tt, x_4d, mesh_device)
     # decay: [B, S, H],  x_dt: [B, S, H, D]
+    dt_slice.deallocate(True)
 
     # ---- 9. Expand B / C from N_GROUPS to NUM_HEADS ------------------
     B_exp = _expand_groups(B_4d)  # [B, S, H, N]
+    B_4d.deallocate(True)
     C_exp = _expand_groups(C_4d)  # [B, S, H, N]
+    C_4d.deallocate(True)
 
     # ---- 10. D skip scalar -------------------------------------------
     D_tt = _rep_keyed(("pf_D", id(D)), D.float().bfloat16().view(1, 1, NUM_HEADS, 1), mesh_device)
     D_tt = _rr(D_tt, [1, NUM_HEADS, 1, 1])  # [1, H, 1, 1]
 
     # ---- 11. Chunked SSD scan ----------------------------------------
-    # Pad S to a multiple of CHUNK_SIZE
+    # Pad S to a multiple of CHUNK_SIZE.
+    # When pad_S > 0 at large ISL (e.g. 262112→pad_S=32), B_exp/C_exp are each 4.29 GB.
+    # Creating all padded copies before freeing originals would briefly total ~36 GB (OOM).
+    # Fix: create each padded tensor and immediately free the original, capping the peak
+    # at ~25 GB (one pair of orig+pad at a time).
     pad_S = (-S) % CHUNK_SIZE
     if pad_S > 0:
-        z = ttnn.zeros(
+        _z_hd = ttnn.zeros(
             [B, pad_S, NUM_HEADS, HEAD_DIM],
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=_TL,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        decay_pad = ttnn.concat(
-            [
-                decay,
-                ttnn.zeros(
-                    [B, pad_S, NUM_HEADS],
-                    device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    layout=_TL,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                ),
-            ],
-            dim=1,
+        _z_hn = ttnn.zeros(
+            [B, pad_S, NUM_HEADS, SSM_STATE_SIZE],
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=_TL,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        x_dt_pad = ttnn.concat([x_dt, z], dim=1)
-        B_pad = ttnn.concat(
-            [
-                B_exp,
-                ttnn.zeros(
-                    [B, pad_S, NUM_HEADS, SSM_STATE_SIZE],
-                    device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    layout=_TL,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                ),
-            ],
-            dim=1,
+        _z_h = ttnn.zeros(
+            [B, pad_S, NUM_HEADS],
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=_TL,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        C_pad = ttnn.concat(
-            [
-                C_exp,
-                ttnn.zeros(
-                    [B, pad_S, NUM_HEADS, SSM_STATE_SIZE],
-                    device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    layout=_TL,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                ),
-            ],
-            dim=1,
-        )
-        x_pad = ttnn.concat([x_4d, z], dim=1)
+        decay_pad = ttnn.concat([decay, _z_h], dim=1)
+        decay.deallocate(True)
+        _z_h.deallocate(True)
+
+        x_dt_pad = ttnn.concat([x_dt, _z_hd], dim=1)
+        x_dt.deallocate(True)
+
+        B_pad = ttnn.concat([B_exp, _z_hn], dim=1)
+        B_exp.deallocate(True)
+
+        C_pad = ttnn.concat([C_exp, _z_hn], dim=1)
+        C_exp.deallocate(True)
+        _z_hn.deallocate(True)
+
+        x_pad = ttnn.concat([x_4d, _z_hd], dim=1)
+        x_4d.deallocate(True)
+        _z_hd.deallocate(True)
     else:
         decay_pad = decay
         x_dt_pad = x_dt
@@ -487,13 +493,26 @@ def mamba2_prefill_layer_forward(
 
     ssm_state_new = h_prev  # [B, H, D, N]
 
+    # Free large SSM input arrays — no longer needed after the scan loop.
+    # When pad_S==0, B_pad IS B_exp (same Python object) so freeing B_pad also frees B_exp.
+    # When pad_S>0, originals were already freed during pad creation above — only
+    # the _pad tensors remain and need cleanup here.
+    # At ISL=262K these sum to ~12.7 GB; releasing them before _rr(y_full)
+    # drops peak DRAM from ~25 GB to ~12 GB (34.2 GB budget on each BH device).
+    for _t in [B_pad, C_pad, x_dt_pad, x_pad, decay_pad]:
+        _t.deallocate(True)
+
     # ---- 12. Concatenate chunk outputs --------------------------------
     y_full = ttnn.concat(y_chunks, dim=1)  # [B, S_pad, H, D]
+    del y_chunks  # individual chunk tensors freed by reference counting
     if pad_S > 0:
-        y_full = ttnn.slice(y_full, [0, 0, 0, 0], [B, S, NUM_HEADS, HEAD_DIM])
+        _y_padded = y_full
+        y_full = ttnn.slice(_y_padded, [0, 0, 0, 0], [B, S, NUM_HEADS, HEAD_DIM])
+        _y_padded.deallocate(True)
 
     # Flatten: [B, S, H, D] → [B, S, 4096]
     y_flat = _rr(y_full, [B, S, INTERMEDIATE_SIZE])
+    y_full.deallocate(True)
 
     # ---- 13. MambaRMSNormGated ----------------------------------------
     gate_silu = ttnn.silu(gate)  # [B, S, 4096]
@@ -513,9 +532,11 @@ def mamba2_prefill_layer_forward(
     )
     scan_out = ttnn.mul(xg_normed_flat, nw_tt)  # [B, S, 4096]
 
-    # ---- 14. out_proj -------------------------------------------------
-    op_tt = _rep(out_proj_weight, mesh_device)
-    out = ttnn.linear(scan_out, op_tt, transpose_b=True)  # [B, S, 2688]
+    # ---- 14. out_proj: row-parallel → partial [B, S, 2688]/device → full via all_reduce ----
+    op_tt = _row(out_proj_weight, mesh_device)  # [2688, 1024]/device
+    _out_partial = ttnn.linear(scan_out, op_tt, transpose_b=True)  # [B, S, 2688] partial
+    out = all_reduce(_out_partial)  # [B, S, 2688] full
+    _out_partial.deallocate(True)
 
     # ---- 15. Residual -------------------------------------------------
     return ttnn.add(residual, out), ssm_state_new, conv_state_new

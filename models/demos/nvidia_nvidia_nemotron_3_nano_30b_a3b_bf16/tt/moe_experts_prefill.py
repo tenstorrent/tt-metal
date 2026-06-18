@@ -40,12 +40,14 @@ _UP_IN0_BLOCK_W = 7
 _DOWN_IN0_BLOCK_W = 3
 
 # Outer sequence chunk: max tokens processed through up→act→down in one shot.
-# act [1, 128, S_OUTER, I] = 128 * 32768 * 464 * 2 = 3.87 GB/device at S_OUTER=32768.
-# QB TP=4 has 32 GB/device (128 GB total) so this fits with ~10 GB to spare.
-# Larger S_OUTER → fewer outer iterations (8 vs 64 at S=256K) and 8× larger UP
-# sparse_matmul (G=1024 rows vs 128) for better hardware utilisation.
+# act [1, 128, S_OUTER, I] = 128 * 16384 * 464 * 2 = 1.94 GB/device at S_OUTER=16384.
+# QB TP=4 has 32 GB/device but at large ISL (e.g. 262K) the pre-allocated KV cache
+# + model weights consume ~26 GB, leaving ~5 GB free with ~407 MB largest contiguous
+# block per DRAM bank.  S_OUTER=32768 (3.87 GB) overflows that; S_OUTER=16384 (1.94 GB)
+# needs 242 MB/bank which fits.  At S=256K this means 16 outer iterations (vs 8) with
+# G=512 rows in the UP sparse_matmul (still 4× better than G=128 at S_OUTER=4096).
 # Must be a multiple of TILE=32 (for the UP reshape) and ≥ S_CHUNK=128 (DOWN inner).
-S_OUTER_CHUNK = 32768
+S_OUTER_CHUNK = 16384
 
 # Inner DOWN chunk (bounds per_core_M = S_CHUNK//32 = 4).
 S_CHUNK = 128
@@ -211,7 +213,7 @@ def _moe_experts_bulk_one_outer_chunk(
 
 def moe_experts_prefill_forward(
     mesh_device: MeshDevice,
-    hidden_states: ttnn.Tensor,  # [1, S, 2688] bf16 on device — S divisible by 32
+    hidden_states: ttnn.Tensor,  # [1, S, 2688] bf16 on device — caller may pass non-tile-aligned S
     routing_weights: ttnn.Tensor,  # [1, 1, S, 128] bf16 on device — dense routing mask
     up_weights_tt: ttnn.Tensor,  # [1, 128, 2688, 464] bfloat16, col-sharded
     down_weights_tt: ttnn.Tensor,  # [1, 128, 464, 2688] bfloat16, col-sharded
@@ -227,18 +229,46 @@ def moe_experts_prefill_forward(
     """
     S = hidden_states.shape[1]
 
-    if S <= S_OUTER_CHUNK:
-        # Single outer chunk — hidden_states is a view of normed_tt; do NOT slice or deallocate
-        partial = _moe_experts_bulk_one_outer_chunk(
-            mesh_device, hidden_states, routing_weights, up_weights_tt, down_weights_tt
+    # Pad to TILE multiple so inner reshape [1,S_outer,H] → [1,G,32,H] is valid.
+    # Tokenizer round-trips can produce S that is not divisible by 32 (e.g. 126 for ISL=128).
+    S_padded = math.ceil(S / TILE) * TILE
+    if S_padded > S:
+        pad_len = S_padded - S
+        zeros_h = ttnn.from_torch(
+            torch.zeros(1, pad_len, HIDDEN_SIZE, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        h_work = ttnn.concat([hidden_states, zeros_h], dim=1)
+        zeros_h.deallocate(True)
+        zeros_rw = ttnn.from_torch(
+            torch.zeros(1, 1, pad_len, N_EXPERTS, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        rw_work = ttnn.concat([routing_weights, zeros_rw], dim=2)
+        zeros_rw.deallocate(True)
+    else:
+        # Already aligned — use originals directly (hidden_states may be a view of normed_tt)
+        h_work = hidden_states
+        rw_work = routing_weights
+
+    if S_padded <= S_OUTER_CHUNK:
+        # Single outer chunk — h_work/rw_work are either views (no pad) or new tensors (padded)
+        partial = _moe_experts_bulk_one_outer_chunk(mesh_device, h_work, rw_work, up_weights_tt, down_weights_tt)
     else:
         # Multiple outer chunks — ttnn.slice creates independent copies
         acc = None
-        for start in range(0, S, S_OUTER_CHUNK):
-            end = min(start + S_OUTER_CHUNK, S)
-            h_c = ttnn.slice(hidden_states, [0, start, 0], [1, end, HIDDEN_SIZE])
-            rw_c = ttnn.slice(routing_weights, [0, 0, start, 0], [1, 1, end, N_EXPERTS])
+        for start in range(0, S_padded, S_OUTER_CHUNK):
+            end = min(start + S_OUTER_CHUNK, S_padded)
+            h_c = ttnn.slice(h_work, [0, start, 0], [1, end, HIDDEN_SIZE])
+            rw_c = ttnn.slice(rw_work, [0, 0, start, 0], [1, 1, end, N_EXPERTS])
             chunk_partial = _moe_experts_bulk_one_outer_chunk(mesh_device, h_c, rw_c, up_weights_tt, down_weights_tt)
             h_c.deallocate(True)
             rw_c.deallocate(True)
@@ -251,6 +281,15 @@ def moe_experts_prefill_forward(
                 acc = new_acc
         partial = acc
 
+    if S_padded > S:
+        h_work.deallocate(True)
+        rw_work.deallocate(True)
+
     # Single all_reduce per E-layer: sums partial intermediate-column contributions across TP=4
-    partial = all_reduce(partial)  # [1, 1, S, H]
+    partial = all_reduce(partial)  # [1, 1, S_padded, H]
+
+    # Trim padding tokens before reshaping back to [1, S, H]
+    if S_padded > S:
+        partial = ttnn.slice(partial, [0, 0, 0, 0], [1, 1, S, HIDDEN_SIZE])
+
     return ttnn.reshape(partial, [1, S, HIDDEN_SIZE])

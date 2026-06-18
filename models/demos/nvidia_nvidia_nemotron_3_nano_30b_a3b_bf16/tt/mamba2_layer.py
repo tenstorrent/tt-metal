@@ -37,7 +37,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _rep, _rep_keyed
+from .tp import _col, _rep_keyed, _row, all_gather, all_reduce
 
 NUM_HEADS = 64
 HEAD_DIM = 64
@@ -95,9 +95,13 @@ def mamba2_layer_forward(
     w_tt = _rep_keyed(id(norm_weight), norm_weight.bfloat16().unsqueeze(0), mesh_device)
     normed_tt = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
 
-    # 2. in_proj: [B, 1, 2688] → [B, 1, 10304]
-    ip_tt = _rep(in_proj_weight, mesh_device)
-    projected_tt = ttnn.linear(normed_tt, ip_tt, transpose_b=True)
+    # 2. in_proj: column-parallel → partial [B, 1, 2576]/device, then all_gather → [B, 1, 10304].
+    # Column sharding halves on-device weight DRAM (55.5 MB → 13.9 MB per layer/device).
+    # At S=1 the all_gather tensor is only 20 KB — negligible CCL cost.
+    ip_tt = _col(in_proj_weight, mesh_device)  # [2576, 2688]/device
+    _proj_partial = ttnn.linear(normed_tt, ip_tt, transpose_b=True)  # [B, 1, 2576]/device
+    projected_tt = all_gather(_proj_partial, dim=2)  # [B, 1, 10304]
+    _proj_partial.deallocate(True)
 
     # 3. Split projected: gate [B,1,4096] | hBC [B,1,6144] | dt [B,1,64]
     gate_tt = ttnn.slice(projected_tt, [0, 0, 0], [B, 1, INTERMEDIATE_SIZE])
@@ -249,9 +253,12 @@ def mamba2_layer_forward(
     norm_w_tt = _rep_keyed(id(norm_mixer_weight), norm_mixer_weight.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)
     scan_out_tt = ttnn.mul(xg_normed_flat_tt, norm_w_tt)  # [B, 1, 4096]
 
-    # 12. out_proj: [B, 1, 4096] → [B, 1, 2688]
-    op_tt = _rep(out_proj_weight, mesh_device)
-    out_tt = ttnn.linear(scan_out_tt, op_tt, transpose_b=True)
+    # 12. out_proj: row-parallel → partial [B, 1, 2688]/device, then all_reduce → full.
+    # Row sharding: [2688, 4096] → [2688, 1024]/device (22 MB → 5.5 MB per layer/device).
+    op_tt = _row(out_proj_weight, mesh_device)  # [2688, 1024]/device
+    _out_partial = ttnn.linear(scan_out_tt, op_tt, transpose_b=True)  # [B, 1, 2688] partial
+    out_tt = all_reduce(_out_partial)  # [B, 1, 2688] full
+    _out_partial.deallocate(True)
 
     # 13. Residual
     return ttnn.add(residual, out_tt), state_new_tt, conv_state_new
