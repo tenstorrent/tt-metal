@@ -106,8 +106,9 @@ class ttMLA(_ttMLAv3):
 
         wk / weights_proj contract over `dim` (hidden is TP-sharded on dim), so they
         are uploaded transposed and sharded on that contraction axis → matmul yields
-        per-chip partials reduced by _tp_rs_ag. wq_b consumes the full q-latent and
-        k_norm runs on the reduced 128-wide key, so both are replicated.
+        per-chip partials reduced by _tp_rs_ag. wq_b is column-parallel (sharded on its
+        H_idx*D_idx output) so each chip builds H_idx/tp indexer heads (change B); qr is
+        replicated so no reduce is needed. k_norm runs on the reduced 128-wide key (replicated).
         """
 
         def repl(t):
@@ -119,9 +120,9 @@ class ttMLA(_ttMLAv3):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
-        def shard_in(t):  # t [out, in] -> device [in, out] sharded on `in` across tp_axis
+        def shard(t, axis):  # t [out, in] -> device [in, out], tensor dim `axis` sharded across tp_axis
             dims = [None, None]
-            dims[self.tp_axis] = 0
+            dims[self.tp_axis] = axis
             return ttnn.from_torch(
                 t.T.contiguous().to(torch.bfloat16),
                 device=self.mesh_device,
@@ -132,7 +133,13 @@ class ttMLA(_ttMLAv3):
                 ),
             )
 
-        self._idx_wq_b = repl(w["indexer.wq_b"].T)  # [q_lora_rank, H_idx*D_idx]
+        def shard_in(t):  # device [in, out] sharded on `in` (contraction axis) across tp_axis
+            return shard(t, 0)
+
+        # wq_b is column-parallel (backlog 21 / change B): shard its H_idx*D_idx OUTPUT across tp so
+        # each chip builds only H_idx/tp indexer heads. qr is replicated, so no reduce is needed; the
+        # per-head logits are summed across tp by an all-reduce after indexer_score (see _indexer_topk).
+        self._idx_wq_b = shard(w["indexer.wq_b"], axis=1)  # [q_lora_rank, H_idx*D_idx] col-sharded on out
         self._idx_wk = shard_in(w["indexer.wk"])  # [dim, D_idx] sharded on dim
         self._idx_wproj = shard_in(w["indexer.weights_proj"])  # [dim, H_idx] sharded on dim
         self._idx_knorm_w = repl(w["indexer.k_norm"])  # [D_idx]
@@ -208,26 +215,39 @@ class ttMLA(_ttMLAv3):
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, S/sp, H_idx*D_idx]
-        q = self._sp_all_gather(q, dim=2)  # [1, 1, glob, H_idx*D_idx] full, replicated
+        q = self._sp_all_gather(q, dim=2)  # [1, 1, glob, (H_idx/tp)*D_idx] full-seq, head-sharded on tp
+        heads_local = a.index_n_heads // self.tp_factor  # this chip's indexer heads (col-parallel wq_b)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )  # [1, H_idx, glob, D_idx]
+            q, num_heads=heads_local, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [1, H_idx/tp, glob, D_idx]
         q_dev = self._device_rope_pe(q, glob, start_pos)
 
-        # weights_proj: device stem + all-reduce + SP gather + scale -> [1, 1, glob, H_idx]
+        # weights_proj: device stem -> reduce-scatter the H_idx heads across tp (each chip keeps the
+        # reduced H_idx/tp slice matching its wq_b heads) -> SP gather -> scale -> [1, 1, glob, H_idx/tp].
         wts = ttnn.linear(
             hidden_states,
             self._idx_wproj,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        wts = self._tp_rs_ag(wts)
+        wts = self._tp_rs_ag(wts, rs_only=True)  # reduce-scatter on the head dim -> this chip's heads
         wts = self._sp_all_gather(wts, dim=2)
         wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * self.scale)
 
         # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx),
-        # so no triu mask add here; topk_large_indices chains off the row-major bf16 logits.
-        logits = ops.indexer_logits(q_dev, self._index_kbuf, wts, chunk_start_idx=start_pos)
+        # so no triu mask add here. Each chip scores only its H_idx/tp heads -> a PARTIAL logit
+        # (the head-sum is separable; the -inf mask is head-independent so it survives the sum).
+        # HB=0 keeps all H_idx/tp heads resident (fits L1 for tp>=2, i.e. <=32 heads/chip); tp=1 has
+        # all 64 heads on one chip and must head-stream (HB=16). See INDEXER_OP.md "head residency".
+        hb = 0 if self.tp_factor > 1 else 16
+        cfg = ops.indexer_program_config(end_pos, head_group=hb)
+        logits = ops.indexer_logits(q_dev, self._index_kbuf, wts, chunk_start_idx=start_pos, program_config=cfg)
+        # All-reduce(SUM) the partial logits over tp -> full head-summed logit before top-k. The op emits
+        # ROW_MAJOR; _tp_rs_ag (reduce_scatter+all_gather) runs in TILE, so round-trip the layout.
+        if self.tp_factor > 1:
+            logits = ttnn.to_layout(logits, ttnn.TILE_LAYOUT)
+            logits = self._tp_rs_ag(logits)  # RS+AG over tp_axis == all-reduce SUM (reduce accumulates fp32)
+            logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         return ops.topk_indices(logits, min(self.index_args.index_topk, end_pos))
 
     def forward(self, hidden_states, rope_tensors, kvpe_cache, **kwargs):

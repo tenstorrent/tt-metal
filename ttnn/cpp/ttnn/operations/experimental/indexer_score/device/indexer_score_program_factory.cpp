@@ -13,6 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -171,6 +172,16 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const bool grid_aligned = plan.grid_aligned;
     const uint32_t k_mcast_on = plan.k_mcast_on;
     const uint32_t q_mcast_on = plan.q_mcast_on;
+
+    // q/w (rows) and k (columns) each multicast only when the dense deal lands grid-aligned; otherwise
+    // that input falls back to per-core DRAM reads. Surface the decision so a perf run shows which path ran.
+    log_info(
+        tt::LogOp,
+        "indexer_score: q/w mcast {}, k mcast {} (grid_aligned={}, cores={})",
+        q_mcast_on ? "ON" : "OFF",
+        k_mcast_on ? "ON" : "OFF",
+        grid_aligned,
+        num_cores);
 
     auto cidx = [&](uint32_t x, uint32_t y) { return y * grid.x + x; };
     // Physical NoC bounding box of one grid column / row, used to build the multicast rects below.

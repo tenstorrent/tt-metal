@@ -259,8 +259,16 @@ def test_indexer_device_vs_reference(mesh_device, layer, device_params, variant,
     x = ref["mla_in"].reshape(1, 1, SEQ_LEN, -1)  # [1,1,S,hidden]
 
     captured = {}
-    orig = ops.indexer_logits
-    monkeypatch.setattr(ops, "indexer_logits", lambda *a, **k: captured.setdefault("logits", orig(*a, **k)))
+    # Capture the FULL head-summed logits that feed top-k. Under TP head-sharding (change B) the
+    # head-sum is split across tp: ops.indexer_logits returns this chip's PARTIAL (H_idx/tp heads) and
+    # _indexer_topk all-reduces the partials before top-k. So capture top-k's input, not indexer_logits'.
+    orig_topk = ops.topk_indices
+
+    def _capture_topk(logits, k):
+        captured["logits"] = logits
+        return orig_topk(logits, k)
+
+    monkeypatch.setattr(ops, "topk_indices", _capture_topk)
     # _indexer_topk takes the per-chip (SP-local) sequence; it all-gathers back to the global glob.
     idx = mla._indexer_topk(_shard_idx_input(x, mesh_device), SEQ_LEN // mesh_device.shape[0])
 

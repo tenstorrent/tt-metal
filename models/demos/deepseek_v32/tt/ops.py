@@ -17,22 +17,24 @@ import torch
 import ttnn
 
 
-def indexer_program_config(skv: int) -> "ttnn.IndexerScoreProgramConfig":
+def indexer_program_config(skv: int, head_group: int = 16) -> "ttnn.IndexerScoreProgramConfig":
     """Indexer kernel work-unit knobs for the DeepSeek-V3.2 (H_idx=64) indexer:
-    QC=2 (q_chunk=64), KC=8 (k_chunk=256), HB=16 (heads streamed in 4 groups).
+    QC=2 (q_chunk=64), KC=8 (k_chunk=256).
 
     ``k_chunk`` is capped to the key length because the op requires KC <= Skv/32; at the
     model's DSA K (end_pos > index_topk=2048) the cap is inert and KC stays 8. Shape unit
     tests with tiny Skv get the largest valid KC (e.g. Skv=128 -> KC=4).
 
-    HB=16 (not HB=0): all 64 heads resident overflows Blackhole L1 at KC>=4, so heads are
-    streamed. The TP-sharded alternative (16 heads/device + logits all-reduce) that would
-    allow HB=0 is documented in models/demos/deepseek_v32/INDEXER_OP.md ("head residency").
+    ``head_group`` (HB) = heads resident at once (0 = all). With the indexer run replicated at
+    all 64 heads, HB=0 overflows Blackhole L1 at KC>=4, so the replicated default streams (HB=16).
+    Under the TP-head-sharded path (change B, mla.py::_indexer_topk) each chip holds H_idx/tp
+    heads (<=32 at tp>=2), which fits resident, so that path passes head_group=0. See
+    INDEXER_OP.md "head residency".
     """
-    return ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=min(256, skv), head_group_size=16)
+    return ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=min(256, skv), head_group_size=head_group)
 
 
-# Full-model default (H_idx=64): QC=2 / KC=8 / HB=16.
+# Replicated full-model default (H_idx=64, no TP head-shard): QC=2 / KC=8 / HB=16.
 INDEXER_FULL_MODEL_CONFIG = indexer_program_config(256)
 
 
