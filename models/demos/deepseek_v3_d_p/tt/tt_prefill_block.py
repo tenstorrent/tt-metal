@@ -204,7 +204,15 @@ class TtPrefillBlock(LightweightModule):
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
         self.mesh_device = mesh_device
         self.num_links = num_links
-        self.topology = topology
+        # Per-axis CCL topology. A (row=SP-axis-0, col=TP-axis-1) tuple configures each mesh
+        # axis independently; a scalar applies to both. FABRIC_2D_TORUS_Y wraps ONLY the SP
+        # axis into a ring, so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all
+        # on cluster_axis=tp_axis) must stay Linear even when the SP-axis MoE dispatch/combine
+        # run Ring. Applying Ring to the unwrapped TP axis deadlocks: get_usable_topology keeps
+        # Ring (the coords span the axis) and the all-gather waits forever on a wrap link that
+        # has no physical fabric edge. MoE receives the full `topology` and splits row/col itself.
+        tp_topology = topology[1] if isinstance(topology, tuple) else topology
+        self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
@@ -223,7 +231,7 @@ class TtPrefillBlock(LightweightModule):
             epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
-            topology=topology,
+            topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
         )
@@ -240,6 +248,7 @@ class TtPrefillBlock(LightweightModule):
             seq_len=max_seq_len if max_seq_len is not None else seq_len,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
+            topology=tp_topology,  # MLA's q/kv all-gathers run on the TP axis (cluster_axis=tp_axis)
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,
@@ -260,7 +269,7 @@ class TtPrefillBlock(LightweightModule):
             epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
-            topology=topology,
+            topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
@@ -290,7 +299,7 @@ class TtPrefillBlock(LightweightModule):
                 mesh_device=mesh_device,
                 torch_weights=state_dict.get("ffn_weights"),  # None if cache exists
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
             )

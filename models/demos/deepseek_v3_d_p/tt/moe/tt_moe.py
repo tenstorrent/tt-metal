@@ -431,7 +431,6 @@ class TtMoe(LightweightModule):
         # Gate: compute weights/indices/offsets/counts from x
         # ========================================
         # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
-
         scores, indices, gate_logits = self.gate(ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])))
 
         signpost(header="moe_gate_calculate_dispatch_offsets")
