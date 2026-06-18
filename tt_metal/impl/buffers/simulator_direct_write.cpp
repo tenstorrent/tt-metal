@@ -63,9 +63,11 @@ bool try_direct_write(
     }
     auto buffer_type = shard_view.buffer_type();
     bool is_l1_sharded_upload = buffer_type == BufferType::L1 && is_sharded(shard_view.buffer_layout());
-    bool can_direct_write_buffer = buffer_type == BufferType::DRAM || is_l1_sharded_upload;
+    bool can_direct_write_buffer = is_l1_sharded_upload;
     // Keep interleaved L1 on the normal CQ path. Those tensors can be transient
     // decode intermediates whose ordering is observable by host fallback paths.
+    // Keep DRAM on the normal CQ path too: on WH simulator, direct DRAM writes
+    // can mis-handle DRAM view/bank placement for replicated tiled tensors.
     if (!can_direct_write_buffer) {
         return false;
     }
