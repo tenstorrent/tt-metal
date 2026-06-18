@@ -291,6 +291,8 @@ ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-c
 ttnn/cpp/ttnn/operations/experimental/conv3d/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/cnn/ @tenstorrent/metalium-developers-convolutions @esmalTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/cnn/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @esmalTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/ @rdjogoTT @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/**/CMakeLists.txt @rdjogoTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass

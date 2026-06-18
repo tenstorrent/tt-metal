@@ -8,15 +8,9 @@
 #include "api/compute/common.h"
 #include "api/compute/transpose_wh.h"
 #ifdef TRISC_MATH
-#ifdef ARCH_BLACKHOLE
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_moe_gate_topk_single_face.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_deepseek_moe_gate_eltwise_binary_api.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_deepseek_moe_gate_transpose_dest_single_face_api.h"
-#else
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_deepseek_moe_gate_topk_single_face.h"
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_deepseek_moe_gate_eltwise_binary_api.h"
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_deepseek_moe_gate_transpose_dest_single_face_api.h"
-#endif
+#include "llk_math_deepseek_moe_gate_topk_single_face.h"
+#include "experimental/llk_math_deepseek_moe_gate_eltwise_binary_api.h"
+#include "experimental/llk_math_deepseek_moe_gate_transpose_dest_single_face_api.h"
 #endif
 
 namespace ckernel {
@@ -59,7 +53,7 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
         // Add binary reuse (FPU)
         UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb1, 0)));
         MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
-            icb1, icb1, 0, true)));
+            icb1, icb1, 0)));
         // Init transpose dest addrmods (does not conflict with add binary reuse)
         MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
@@ -68,7 +62,7 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
         // Copy add (FPU)
         UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
         MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
-            icb0, icb1, 0, true)));
+            icb0, icb1, 0)));
     }
     // Set srcb dummy valid for transpose wh (FPU)
     UNPACK((llk_unpack_set_srcb_dummy_valid()));

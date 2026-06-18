@@ -15,21 +15,23 @@
 
 using namespace ckernel;
 
-namespace ckernel {
+namespace ckernel
+{
 
-constexpr std::uint32_t transpose_dest_tile_offset = 64;  // 1 tile x 64 rows per tile
+constexpr std::uint32_t transpose_dest_tile_offset = 64; // 1 tile x 64 rows per tile
 
 // Configure address modifiers for single face transpose
 template <bool is_32bit>
-inline void deepseek_moe_gate_transpose_dest_single_face_configure_addrmod() {
-    addr_mod_t{
+inline void deepseek_moe_gate_transpose_dest_single_face_configure_addrmod()
+{
+    addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = transpose_dest_tile_offset},
     }
         .set(ADDR_MOD_2);
 
-    addr_mod_t{
+    addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
@@ -38,7 +40,8 @@ inline void deepseek_moe_gate_transpose_dest_single_face_configure_addrmod() {
 }
 
 template <std::uint32_t num_tiles = 1, bool is_32bit>
-inline void deepseek_moe_gate_transpose_dest_single_face_step0_configure_mop() {
+inline void deepseek_moe_gate_transpose_dest_single_face_step0_configure_mop()
+{
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
@@ -72,7 +75,8 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step0_configure_mop() {
 }
 
 template <std::uint32_t num_tiles = 1, bool is_32bit>
-inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
+inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop()
+{
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
@@ -100,7 +104,8 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
 }
 
 template <std::uint32_t num_tiles = 1, bool is_32bit>
-inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop() {
+inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop()
+{
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 4);
     // Move 8 rows from DEST to SrcB (4 rows at a time)
@@ -119,13 +124,15 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop() {
 
 // Initialize for single face transpose
 template <bool is_32bit = false>
-inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init_() {
+inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init_()
+{
     deepseek_moe_gate_transpose_dest_single_face_configure_addrmod<is_32bit>();
 }
 
 // Initialize for single face transpose
 template <bool is_32bit = false>
-inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_init_() {
+inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_init_()
+{
     deepseek_moe_gate_transpose_dest_single_face_step0_configure_mop<4, is_32bit>();
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     // TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
@@ -133,21 +140,22 @@ inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_init_()
 
 // Initialize for single face transpose
 template <bool is_32bit = false>
-inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_init_() {
+inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_init_()
+{
     deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop<3, is_32bit>();
 }
 
 // Initialize for single face transpose
 template <bool is_32bit = false>
-inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_init_() {
+inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_init_()
+{
     deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop<2, is_32bit>();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
-inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_() {
-    static_assert(
-        !(is_32bit || is_fp32_dest_acc_en),
-        "32-bit and fp32 dest accum enable are not supported for single face transpose");
+inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_()
+{
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // Wait for SFPU and SrcB to be available
@@ -161,10 +169,9 @@ inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_() {
 // dst_index: The tile index in DEST register buffer (0, 1, 2, ...)
 //            The function transposes face 0 of the specified tile
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
-inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_() {
-    static_assert(
-        !(is_32bit || is_fp32_dest_acc_en),
-        "32-bit and fp32 dest accum enable are not supported for single face transpose");
+inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_()
+{
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
@@ -179,10 +186,9 @@ inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_() {
 // dst_index: The tile index in DEST register buffer (0, 1, 2, ...)
 //            The function transposes face 0 of the specified tile
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
-inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_() {
-    static_assert(
-        !(is_32bit || is_fp32_dest_acc_en),
-        "32-bit and fp32 dest accum enable are not supported for single face transpose");
+inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_()
+{
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
@@ -194,4 +200,4 @@ inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_() {
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
-}  // namespace ckernel
+} // namespace ckernel
