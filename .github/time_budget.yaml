@@ -64,6 +64,13 @@ metal_infra:
 # Current time budgets are based on sums of existing tests.
 # No official decision has been made yet for division of budgets per team.
 ttnn:
+  smoke:
+    wh_n150_civ2: 45
+    wh_n300_civ2: 55
+    wh_llmbox_civ2_viommu: 15
+    wh_llmbox_civ2_prio: 15
+    bh_p150b_civ2_viommu: 45
+    bh_p150b_civ2_viommu_prio: 45
   sanity:
     wh_n300_civ2: 545
     bh_p100: 545
@@ -126,6 +133,8 @@ shield:
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
+  smoke:
+    wh_n300_civ2: 10
   unit:
     wh_llmbox: 60
     wh_galaxy: 25
@@ -150,6 +159,13 @@ scaleout:
     bh_quietbox_2: 80
 
 runtime:
+  smoke:
+    wh_n150_civ2: 45
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 15
+    wh_llmbox_civ2_prio: 15
+    bh_p150b_civ2_viommu: 45
+    bh_p150b_civ2_viommu_prio: 45
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
@@ -170,15 +186,19 @@ runtime:
     wh_n300_civ2: 55
     bh_p150_perf: 40
 
-debug:
-  triage:
+triage:
+  smoke:
+    wh_n150_civ2: 11
+    bh_p150b_civ2_viommu_prio: 11
+    bh_p150b_civ2_viommu: 11
+  unit:
     wh_n150_civ2: 16
     bh_p150b_civ2_viommu_prio: 16
     bh_p150b_civ2_viommu: 16
 
 llk:
   unit:
-    wh_n150_civ2: 180
+    wh_n150_civ2: 40
     wh_n300_civ2: 40
     bh_p150: 40
     bh_p150b_civ2_viommu: 110
@@ -191,10 +211,14 @@ llk:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
   smoke:
-    wh_n150_civ2: 160
+    wh_n150_civ2: 300
     bh_p150b_civ2: 160
+    bh_p150b_civ2_viommu: 70
+    bh_p150b_civ2_viommu_prio: 70
 
 models:
+  smoke:
+    wh_galaxy_merge_gate: 5
   sanity:
     wh_galaxy_perf: 10
     wh_n300_civ2: 5

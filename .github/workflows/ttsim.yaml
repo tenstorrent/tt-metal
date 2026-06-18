@@ -151,7 +151,9 @@ jobs:
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
     env:
-      TTNN_TESTS_YAML: tests/pipeline_reorg/ttnn-tests.yaml
+      TTNN_TESTS_YAML: |
+        tests/pipeline_reorg/ttnn-tests.yaml
+        tests/pipeline_reorg/ttnn_smoke_merge_gate_tests.yaml
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
@@ -170,11 +172,14 @@ jobs:
         run: |
           set -euo pipefail
           pip3 install -q PyYAML
-          python3 - "${{ env.TTNN_TESTS_YAML }}" "$GITHUB_OUTPUT" << 'PY'
-          import json, re, sys, yaml
-          path, out_path = sys.argv[1], sys.argv[2]
-          with open(path) as f:
-              tests = yaml.safe_load(f)
+          python3 - "$GITHUB_OUTPUT" << 'PY'
+          import json, os, re, sys, yaml
+          out_path = sys.argv[1]
+          paths = [line.strip() for line in os.environ["TTNN_TESTS_YAML"].splitlines() if line.strip()]
+          tests = []
+          for path in paths:
+              with open(path) as f:
+                  tests.extend(yaml.safe_load(f) or [])
           # TTSim runs all tests on ubuntu-latest; ignore skus and timeouts from YAML, use fixed timeout.
           TTSIM_TIMEOUT_MINUTES = 40
           entries = []

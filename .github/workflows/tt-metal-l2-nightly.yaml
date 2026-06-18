@@ -336,8 +336,9 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      run-hang-report-test: true
+      test-category: unit
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
   # =============================================================================
   # LLK team
   # =============================================================================
@@ -356,5 +357,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      l2-only: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
