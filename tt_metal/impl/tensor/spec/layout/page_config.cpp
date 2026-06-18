@@ -41,8 +41,8 @@ PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if (layout == Layout::ROW_MAJOR) {
-        // TODO: add TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported")
-        config_ = RowMajorPageConfig(tile.value_or(Tile()));
+        TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported");
+        config_ = RowMajorPageConfig();
     } else {
         config_ = TilePageConfig(tile.value_or(Tile()));
     }
@@ -145,15 +145,6 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
-RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {
-    if (tile != Tile{}) {
-        log_warning(
-            LogMetal,
-            "Configuring a ROW MAJOR page config with a tile configuration, this will be rejected in the future. See "
-            "#18536");
-    }
-}
-
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
@@ -217,14 +208,12 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
 }
 
 const Tile& RowMajorPageConfig::get_tile() const {
-    if (tile_ != Tile{}) {
-        log_warning(
-            LogMetal,
-            "Attempting to extract tile information out of a ROW MAJOR layout, this will be rejected in the future. "
-            "See "
-            "#18536.");
-    }
-    return tile_;
+    static const Tile default_tile{};
+    log_warning(
+        LogMetal,
+        "Attempting to extract tile information out of a ROW MAJOR layout, this will be rejected in the future. See "
+        "#18536.");
+    return default_tile;
 }
 
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
