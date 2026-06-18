@@ -136,7 +136,7 @@ static inline void unpack_operand_configure_impl(
         context.configure_b = context.current;
     }
 
-    // fixme: this is shared state, only set during the configure. current assumption is that it won't change.
+    // sstanisic fixme: this is shared state, only set during the configure. current assumption is that it won't change. (see #47440)
     state.dest_width_32 = dst_acc_en;
     state.is_configured = true;
 }
@@ -270,7 +270,7 @@ static inline void pack_operand_check_impl(
             state.input_format, src_fmt, CTSTR("configured vs provided PACK DEST FORMAT are mismatched"), context.configure_pack, current);
         operand_assert<Trigger::ERROR>(
             state.output_format, dst_fmt, CTSTR("configured vs provided PACK L1 FORMAT are mismatched"), context.configure_pack, current);
-        // sstanisic fixme: face_height check
+        // sstanisic fixme: face_height check (see #47440)
         operand_assert<Trigger::ERROR>(
             state.tile_width, tile_width, CTSTR("configured vs provided PACK L1 TILE WIDTH are mismatched"), context.configure_pack, current);
         operand_assert<Trigger::ERROR>(

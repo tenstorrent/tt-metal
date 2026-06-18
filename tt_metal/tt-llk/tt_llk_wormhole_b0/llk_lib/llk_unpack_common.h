@@ -83,7 +83,7 @@ inline void _llk_unpack_hw_configure_(
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
 
-    // sstanisic todo: add tile_size_a and tile_size_b to operand state?
+    // sstanisic todo: add tile_size_a and tile_size_b to operand state? (see #47440)
     llk::san::unpack_operand_configure(
         is_fp32_dest_acc_en,
         unpA_src_format,
