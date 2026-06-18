@@ -5,8 +5,9 @@
 Follows gpt_oss/tt/experts/prefill.py _process_prefill_chunk pattern, extended
 with an outer sequence chunk loop for long-context (S > S_OUTER_CHUNK):
 
-Outer loop (S_OUTER_CHUNK = 4096 tokens per iteration):
-  bounds `act [1, 128, S_outer, I]` at 484 MB/device — safe with 14 GB expert weights.
+Outer loop (S_OUTER_CHUNK = 32768 tokens per iteration):
+  bounds `act [1, 128, S_outer, I]` at 3.87 GB/device — safe with 32 GB/device (QB TP=4).
+  Gives 8× fewer outer iterations (8 vs 64 at S=256K) and 8× larger UP sparse_matmul.
 
 Per outer chunk:
   1. Reshape [1, S_outer, H] → [1, G, 32, H]  (G = S_outer // 32)
@@ -39,9 +40,12 @@ _UP_IN0_BLOCK_W = 7
 _DOWN_IN0_BLOCK_W = 3
 
 # Outer sequence chunk: max tokens processed through up→act→down in one shot.
-# act [1, 128, S_OUTER, I] = 128 * 4096 * 464 * 2 = 484 MB/device at S_OUTER=4096.
+# act [1, 128, S_OUTER, I] = 128 * 32768 * 464 * 2 = 3.87 GB/device at S_OUTER=32768.
+# QB TP=4 has 32 GB/device (128 GB total) so this fits with ~10 GB to spare.
+# Larger S_OUTER → fewer outer iterations (8 vs 64 at S=256K) and 8× larger UP
+# sparse_matmul (G=1024 rows vs 128) for better hardware utilisation.
 # Must be a multiple of TILE=32 (for the UP reshape) and ≥ S_CHUNK=128 (DOWN inner).
-S_OUTER_CHUNK = 4096
+S_OUTER_CHUNK = 32768
 
 # Inner DOWN chunk (bounds per_core_M = S_CHUNK//32 = 4).
 S_CHUNK = 128
@@ -214,8 +218,8 @@ def moe_experts_prefill_forward(
 ) -> ttnn.Tensor:
     """Bulk prefill MoE routed experts following gpt_oss experts/prefill.py.
 
-    For S ≤ S_OUTER_CHUNK (4096): single outer chunk, matches the previous behaviour.
-    For S > S_OUTER_CHUNK: processes 4K-token outer chunks sequentially, accumulates
+    For S ≤ S_OUTER_CHUNK (32768): single outer chunk, no slicing.
+    For S > S_OUTER_CHUNK: processes 32K-token outer chunks sequentially, accumulates
     partial [1,1,S,H] before a single all_reduce — one CCL op per E-layer regardless
     of sequence length.
 
