@@ -293,9 +293,10 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                DeviceZoneScopedN("IN0-KBLOCK");
+                DeviceZoneScopedN("AVAILABLE");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+                        DeviceZoneScopedN("DEFER-WRITE");
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
@@ -340,6 +341,7 @@ void kernel_main() {
                 bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
                 uint32_t k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                 uint32_t k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
+
                 compute_actual_k_block(
                     k_block_iter,
                     K_num_blocks,
@@ -358,62 +360,70 @@ void kernel_main() {
                     k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
-                if (is_injector_core) {
-                    read_in0_block_sync<M_block_tiles, K_block_tiles>(
-                        in0_reader,
-                        in0_shape,
-                        in0_start_address,
-                        in0_tile_size,
+
+                {
+                    DeviceZoneScopedN("SNF-CHAIN");
+                    if (is_injector_core) {
+                        read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                            in0_reader,
+                            in0_shape,
+                            in0_start_address,
+                            in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
-                        in3_reader,
-                        my_rank * padded_K_tiles_per_device,
-                        ((my_rank + 1) * padded_K_tiles_per_device) - 1,
-                        padded_K_tiles_per_device,
+                            in3_reader,
+                            my_rank * padded_K_tiles_per_device,
+                            ((my_rank + 1) * padded_K_tiles_per_device) - 1,
+                            padded_K_tiles_per_device,
 #endif
-                        m_tile,
-                        m_tile_end,
-                        k_block_left_tile,
-                        k_block_left_tile + k_left_tiles,
-                        k_left_tiles,
-                        k_block_right_tile,
-                        k_block_right_tile + k_right_tiles,
-                        k_right_tiles);
-                } else {
-                    // Get from previous device
-                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
-                }
+                            m_tile,
+                            m_tile_end,
+                            k_block_left_tile,
+                            k_block_left_tile + k_left_tiles,
+                            k_left_tiles,
+                            k_block_right_tile,
+                            k_block_right_tile + k_right_tiles,
+                            k_right_tiles);
+                    } else {
+                        // Get from previous device
+                        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
+                        noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
+                        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+                    }
 
-                // Critical to performance for sender to push data to compute before mcasting
-                // This frees sender to start next read earlier
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
-                if (!is_sink_core) {
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                    // Critical to performance for sender to push data to compute before mcasting
+                    // This frees sender to start next read earlier
+                    cb_push_back(cb_id_in0, in0_block_num_tiles);
+                    if (!is_sink_core) {
+                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 
-                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                        uint64_t in0_unicast_data_addr =
+                            get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
-                    /**
-                     * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
-                     * padded tiles. Use `current_block_bytes`.
-                     */
-                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                        /**
+                         * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
+                         * padded tiles. Use `current_block_bytes`.
+                         */
+                        noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                        noc_async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
-                }
+                        noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    }
+                }  // end of IN0-SNF-CHAIN
 #if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
+                    DeviceZoneScopedN("FABRIC-SEND");
+
                     bool forward_slice = false;
                     if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                         forward_slice = true;
                     }
                     if (forward_slice) {
+                        get_write_ptr(cb_id_in0);
                         if (in0_core_order_index == forward_in0_core_order_index) {
                             // If forward, send backward
                             forward_half_block_to_fabric_neighbor(
