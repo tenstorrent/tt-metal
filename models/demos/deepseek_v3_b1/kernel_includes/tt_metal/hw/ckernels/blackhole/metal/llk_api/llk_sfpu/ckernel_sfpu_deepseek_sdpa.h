@@ -14,8 +14,25 @@
 
 namespace ckernel::sfpu {
 
+/**
+ * Fused max-sub-exp-add SFPI kernel for SDPA tail reduction.
+ *
+ * Computes:
+ *   cur_max = max(prev_max, worker_max)
+ *   cur_sum = exp((worker_max - cur_max) * scale) * worker_sum
+ *           + exp((prev_max - cur_max) * scale) * prev_sum
+ *
+ * Results (final_norm=false):
+ *   dst_reg[prev_max_base_idx]   = exp((prev_max - cur_max) * scale)
+ *   dst_reg[worker_max_base_idx] = exp((worker_max - cur_max) * scale)
+ *   dst_reg[cur_sum_base_idx]    = cur_sum
+ *   dst_reg[cur_max_base_idx]    = cur_max
+ *
+ * Results (final_norm=true):
+ *   dst_reg[prev_max_base_idx]   = exp((prev_max - cur_max) * scale) * recip(cur_sum)
+ *   dst_reg[worker_max_base_idx] = exp((worker_max - cur_max) * scale) * recip(cur_sum)
+ */
 template <bool SDPA_EXP_APPROX_MODE, bool final_norm = false>
-inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     static_assert(!(final_norm && SDPA_EXP_APPROX_MODE), "Approx mode must be disabled when final_norm is true");
 
     constexpr int ITERATIONS_HALF_FACE = 2;
