@@ -975,9 +975,7 @@ class TYPECAST_FORMATS(TemplateParameter):
 
     Emits the logical input/output ``DataFormat`` enum values consumed by
     ``typecast_tile<IN, OUT>`` (mirrored by the typecast dispatch in
-    ``sfpu_operations.h``, reached via ``SfpuType::typecast``) plus
-    ``IS_INT_FPU_EN``, which routes the A2D datacopy that loads the input tile
-    into Dest through the integer FPU datapath for integer inputs.
+    ``sfpu_operations.h``, reached via ``SfpuType::typecast``).
     """
 
     input_format: DataFormat = DataFormat.Float32
@@ -987,6 +985,5 @@ class TYPECAST_FORMATS(TemplateParameter):
         lines = [
             f"constexpr auto TYPECAST_IN_FORMAT = DataFormat::{self.input_format.name};",
             f"constexpr auto TYPECAST_OUT_FORMAT = DataFormat::{self.output_format.name};",
-            f"constexpr bool IS_INT_FPU_EN = {str(self.input_format.is_integer()).lower()};",
         ]
         return "\n".join(lines)

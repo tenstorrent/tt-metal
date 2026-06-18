@@ -19,7 +19,6 @@
 // Compile-time configuration emitted by the Python harness:
 //   TYPECAST_IN_FORMAT  : DataFormat of the L1 input  (typecast IN_DTYPE)
 //   TYPECAST_OUT_FORMAT : DataFormat of the L1 output (typecast OUT_DTYPE)
-//   IS_INT_FPU_EN       : route the A2D datacopy through the integer FPU datapath
 //   APPROX_MODE         : SFPU approximation mode
 //
 
@@ -74,17 +73,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-constexpr bool is_int_fpu_en = IS_INT_FPU_EN;
-constexpr int iterations     = 8;
+constexpr int iterations = 8;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Copy SrcA to Dest (datacopy A2D). For integer inputs the FPU must run in
-    // the integer datapath so the raw bits land in Dest unmodified.
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
+    // Copy SrcA to Dest (datacopy A2D). Integer inputs always run with 32-bit
+    // Dest (dest_acc=Yes), which already routes the copy so the raw bits land in
+    // Dest unmodified; no separate integer-FPU flag is needed here.
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();

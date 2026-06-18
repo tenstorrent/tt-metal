@@ -112,15 +112,19 @@ def _whole_number_float_spec(high: int) -> StimuliSpec:
     return StimuliSpec(distribution=dist, seed=0)
 
 
-def _required_dest_acc(formats: InputOutputFormat) -> DestAccumulation:
-    """32-bit Dest is mandatory whenever the SFPU integer datapath is used.
+def _valid_dest_acc_options(formats: InputOutputFormat) -> list[DestAccumulation]:
+    """Dest-accumulation modes worth exercising for a given format pair.
 
-    The SFPU typecast computes the result into Dest before the packer reads it,
-    and the integer datapath always operates on 32-bit Dest data. So any integer
+    32-bit Dest is mandatory whenever the SFPU integer datapath is used: the
+    SFPU typecast computes the result into Dest before the packer reads it, and
+    the integer datapath always operates on 32-bit Dest data. So any integer
     input or output (not just the 32-bit ones) requires ``dest_acc=Yes`` —
     otherwise pack_src stays 16-bit and ``is_packer_to_L1_conversion_supported``
     rejects the pack (LLK assert in configure_pack). 32-bit float formats also
     require 32-bit Dest.
+
+    For the remaining (16-bit float / block-float) pairs both modes are valid,
+    so we sweep both to widen coverage.
     """
     in_fmt = formats.input_format
     out_fmt = formats.output_format
@@ -130,12 +134,13 @@ def _required_dest_acc(formats: InputOutputFormat) -> DestAccumulation:
         or in_fmt.is_32_bit()
         or out_fmt.is_32_bit()
     ):
-        return DestAccumulation.Yes
-    return DestAccumulation.No
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
 
 
 @parametrize(
     formats=TYPECAST_PAIRS,
+    dest_acc=_valid_dest_acc_options,
     approx_mode=[ApproximationMode.No],
     input_dimensions=[
         [32, 32]
@@ -143,11 +148,10 @@ def _required_dest_acc(formats: InputOutputFormat) -> DestAccumulation:
 )
 def test_eltwise_unary_typecast(
     formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
 ):
-    dest_acc = _required_dest_acc(formats)
-
     # Stimuli selection per input/output dtype:
     #  * integer -> block-float: small ints (0..15) so int->fp16b->bfp is exact
     #    (full-range ints would differ from the golden by >1 bfp ULP);

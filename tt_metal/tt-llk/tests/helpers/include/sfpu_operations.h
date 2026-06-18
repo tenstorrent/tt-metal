@@ -58,7 +58,8 @@ using namespace ckernel::sfpu;
 // compute-kernel macros. They call the *exact same* `init_typecast_*` /
 // `calculate_typecast_*` LLK primitives through the same SFPU_UNARY_* macros
 // production uses. Pairs realised purely by unpacker/packer format conversion
-// have no SFPU call, exactly like the production header.
+// issue no SFPU call: they simply match no branch in the calculate helper (the
+// init helper still falls through to the bare `SFPU_UNARY_INIT(typecast)`).
 //
 // These are reached through the shared `call_unary_sfpu_operation[_init]`
 // dispatch below via `SfpuType::typecast` (with IN/OUT supplied as the trailing
@@ -161,10 +162,6 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_fp32_to_int32, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
     }
-    else if constexpr (IN == DataFormat::Float16_b && OUT == DataFormat::Float32)
-    {
-        // no SFPU kernel needed, handled by packer
-    }
     else if constexpr (IN == DataFormat::Float32 && OUT == DataFormat::Float16_b)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_fp32_to_fp16b, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
@@ -242,22 +239,6 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_int32_to_uint16, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
     }
-    else if constexpr (IN == DataFormat::Bfp8_b && OUT == DataFormat::Float16_b)
-    {
-        // no SFPU kernel needed, handled by unpacker
-    }
-    else if constexpr (IN == DataFormat::Float16_b && OUT == DataFormat::Bfp8_b)
-    {
-        // no SFPU kernel needed, handled by packer
-    }
-    else if constexpr (IN == DataFormat::Bfp8_b && OUT == DataFormat::Float32)
-    {
-        // no SFPU kernel needed, handled by unpacker/packer
-    }
-    else if constexpr (IN == DataFormat::Float32 && OUT == DataFormat::Bfp8_b)
-    {
-        // no SFPU kernel needed, handled by packer
-    }
     else if constexpr (IN == DataFormat::Bfp4_b && OUT == DataFormat::UInt16)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_fp32_to_uint16, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
@@ -282,30 +263,6 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint32_to_fp16b, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
     }
-    else if constexpr (IN == DataFormat::Bfp4_b && OUT == DataFormat::Float16_b)
-    {
-        // no SFPU kernel needed, handled by unpacker
-    }
-    else if constexpr (IN == DataFormat::Float16_b && OUT == DataFormat::Bfp4_b)
-    {
-        // no SFPU kernel needed, handled by packer
-    }
-    else if constexpr (IN == DataFormat::Bfp4_b && OUT == DataFormat::Bfp8_b)
-    {
-        // no SFPU kernel needed, handled by unpacker
-    }
-    else if constexpr (IN == DataFormat::Bfp8_b && OUT == DataFormat::Bfp4_b)
-    {
-        // no SFPU kernel needed, handled by packer
-    }
-    else if constexpr (IN == DataFormat::Bfp4_b && OUT == DataFormat::Float32)
-    {
-        // no SFPU kernel needed, handled by unpacker/packer
-    }
-    else if constexpr (IN == DataFormat::Float32 && OUT == DataFormat::Bfp4_b)
-    {
-        // no SFPU kernel needed, handled by packer
-    }
     else if constexpr (
         (IN == DataFormat::Float32 || IN == DataFormat::Float16_b || IN == DataFormat::Bfp8_b || IN == DataFormat::Bfp4_b) && OUT == DataFormat::UInt8)
     {
@@ -323,10 +280,6 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     else if constexpr (IN == DataFormat::UInt8 && (OUT == DataFormat::Float16_b || OUT == DataFormat::Bfp8_b || OUT == DataFormat::Bfp4_b))
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint32_to_fp16b, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
-    }
-    else if constexpr (IN == DataFormat::UInt8 && (OUT == DataFormat::Int32 || OUT == DataFormat::UInt32))
-    {
-        // No SFPU kernel needed.
     }
     else if constexpr (IN == DataFormat::UInt8 && OUT == DataFormat::UInt16)
     {
