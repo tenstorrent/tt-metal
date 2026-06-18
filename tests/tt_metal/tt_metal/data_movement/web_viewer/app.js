@@ -173,6 +173,8 @@ const TESTS = [
 const INTERNAL_COLUMNS = new Set([
     "Run Host ID",
     "Architecture",
+    "Subordinate Grid Size X",
+    "Subordinate Grid Size Y",
 ]);
 
 const METRIC_COLUMNS = new Set([
@@ -243,23 +245,29 @@ function analyzeColumns(rows) {
     return { metrics, sweepDimensions, constants };
 }
 
-function buildChartConfig(analysis) {
+function buildChartConfig(analysis, chosenXAxis) {
     const { metrics, sweepDimensions } = analysis;
 
     const bandwidthCol =
         metrics.find((m) => m.includes("Bandwidth")) || null;
     const latencyCol = metrics.find((m) => m.includes("Latency")) || null;
 
-    const xAxisDim = sweepDimensions.find(
-        (d) => d.column === DEFAULT_X_AXIS
-    );
-    const xAxis = xAxisDim ? DEFAULT_X_AXIS : sweepDimensions[0]?.column;
+    const allDimensions = sweepDimensions.map((d) => d.column);
+
+    let xAxis;
+    if (chosenXAxis && allDimensions.includes(chosenXAxis)) {
+        xAxis = chosenXAxis;
+    } else if (allDimensions.includes(DEFAULT_X_AXIS)) {
+        xAxis = DEFAULT_X_AXIS;
+    } else {
+        xAxis = allDimensions[0];
+    }
 
     const groupers = sweepDimensions
         .filter((d) => d.column !== xAxis)
         .map((d) => d.column);
 
-    return { xAxis, groupers, bandwidthCol, latencyCol };
+    return { xAxis, groupers, allDimensions, bandwidthCol, latencyCol };
 }
 
 // ── CSV Loading ────────────────────────────────────────────────────
@@ -418,19 +426,30 @@ function renderChart(rows, config) {
         ? config.latencyCol || "Latency (cycles)"
         : config.bandwidthCol || "Bandwidth (bytes/cycle)";
 
+    const xIsNumeric = traces.length > 0 &&
+        traces[0].x.length > 0 &&
+        traces.every((t) => t.x.every((v) => typeof v === "number" && isFinite(v) && v > 0));
+
+    const xaxis = {
+        title: { text: config.xAxis, font: { color: "#a0a0b0" } },
+        tickfont: { color: "#a0a0b0" },
+        gridcolor: "#2a2a4a",
+        zerolinecolor: "#2a2a4a",
+        linecolor: "#2a2a4a",
+    };
+
+    if (xIsNumeric) {
+        xaxis.type = "log";
+        xaxis.dtick = Math.log10(2);
+        xaxis.tickformat = "";
+        xaxis.tickvals = getBase2Ticks(traces);
+        xaxis.ticktext = getBase2Ticks(traces).map(formatBytes);
+    } else {
+        xaxis.type = "category";
+    }
+
     const layout = {
-        xaxis: {
-            type: "log",
-            dtick: Math.log10(2),
-            title: { text: config.xAxis, font: { color: "#a0a0b0" } },
-            tickfont: { color: "#a0a0b0" },
-            tickformat: "",
-            tickvals: getBase2Ticks(traces),
-            ticktext: getBase2Ticks(traces).map(formatBytes),
-            gridcolor: "#2a2a4a",
-            zerolinecolor: "#2a2a4a",
-            linecolor: "#2a2a4a",
-        },
+        xaxis,
         yaxis: {
             type: isLatency ? "log" : "linear",
             title: { text: yLabel, font: { color: "#a0a0b0" } },
@@ -470,7 +489,7 @@ function getBase2Ticks(traces) {
             if (v > max) max = v;
         }
     }
-    if (!isFinite(min)) return [];
+    if (!isFinite(min) || min <= 0) return [];
     const ticks = [];
     let exp = Math.floor(Math.log2(min));
     while (Math.pow(2, exp) <= max) {
@@ -567,6 +586,34 @@ function renderTestInfo(analysis) {
     }
 }
 
+function renderXAxisSelector(config) {
+    const container = document.getElementById("x-axis-selector");
+    const select = document.getElementById("x-axis-select");
+
+    if (config.allDimensions.length <= 1) {
+        container.style.display = "none";
+        return;
+    }
+
+    container.style.display = "";
+    select.innerHTML = "";
+
+    for (const dim of config.allDimensions) {
+        const option = document.createElement("option");
+        option.value = dim;
+        option.textContent = dim;
+        option.selected = dim === config.xAxis;
+        select.appendChild(option);
+    }
+
+    select.onchange = () => {
+        const newConfig = buildChartConfig(state.analysis, select.value);
+        state.chartConfig = newConfig;
+        renderSweepFilters(newConfig, state.csvData);
+        renderChart(state.csvData, newConfig);
+    };
+}
+
 function renderSweepFilters(config, rows) {
     const container = document.getElementById("sweep-filters");
     container.innerHTML = "";
@@ -639,6 +686,7 @@ async function selectTest(test) {
         document.getElementById("test-info").innerHTML =
             '<span class="info-item"><span class="info-value">No CSV data found for any architecture.</span></span>';
         document.getElementById("arch-chips").innerHTML = "";
+        document.getElementById("x-axis-selector").style.display = "none";
         document.getElementById("sweep-filters").innerHTML = "";
         Plotly.purge("chart");
         return;
@@ -671,6 +719,7 @@ async function loadAndRender() {
 
         renderArchChips();
         renderTestInfo(analysis);
+        renderXAxisSelector(config);
         renderSweepFilters(config, rows);
         renderChart(rows, config);
 

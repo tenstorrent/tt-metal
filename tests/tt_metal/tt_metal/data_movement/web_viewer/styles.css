@@ -248,6 +248,7 @@ header h1 {
 
 .arch-selector .label,
 .y-axis-toggle .label,
+.x-axis-selector .label,
 .series-controls .label {
     font-size: 13px;
     color: var(--text-secondary);
@@ -297,6 +298,27 @@ header h1 {
     display: flex;
     align-items: center;
     gap: 12px;
+}
+
+.x-axis-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.x-axis-selector select {
+    padding: 4px 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+}
+
+.x-axis-selector select:focus {
+    border-color: var(--accent);
 }
 
 .y-axis-toggle label {
