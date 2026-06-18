@@ -67,10 +67,10 @@ void kernel_main() {
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 #endif
 
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
+        PREPROCESS(LHS, CircularBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
+        PREPROCESS(RHS, CircularBuffer(cb_pre_rhs), exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);

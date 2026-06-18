@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Experimental Start / Queue / Stop lifecycle API for the queueable DRAM-core
-// (DRISC) prefetcher. A long-running DRISC kernel on every DRAM sender core
+// Experimental Start / Queue / Stop lifecycle API for the queueable Tensor
+// prefetcher (DRISC). A long-running DRISC kernel on every DRAM sender core
 // reads requests off a per-core H2D socket; each request identifies a
 // DRAM-sender GlobalCircularBuffer and a per-tensor work list. The host can
 // keep queueing new requests after Start returns; per-GCB ring-buffer state
@@ -33,23 +33,23 @@ namespace experimental {
 
 class GlobalCircularBuffer;
 
-struct DramCorePrefetcherConfig {
+struct TensorPrefetcherConfig {
     // When true, drive each DRAM bank with two DRISC sender cores instead of one:
     // the free non-endpoint subchannel plus the bank's NOC1-endpoint subchannel
     // (both write on NOC0). The bank's receivers are split ceil/floor across the two
     // cores, adding a second DMA engine + NoC initiator per bank. Only supported for
     // the receiver-contiguous DRAM layout. The GlobalCircularBuffer must be created
     // with the matching `dual_senders_per_bank` flag so its sender cores agree with
-    // the prefetcher's; a mismatch is rejected at QueueDramCorePrefetcherRequest.
+    // the prefetcher's; a mismatch is rejected at QueueTensorPrefetcherRequest.
     bool dual_senders_per_bank = false;
 };
 
-// Returns true if the DRAM-core prefetcher is supported on `mesh_device`, i.e.
+// Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
 // programmable DRAM cores are available (Blackhole with
 // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1). When this returns false,
-// StartDramCorePrefetcher would TT_FATAL, so callers (e.g. tests) can use this
+// StartTensorPrefetcher would TT_FATAL, so callers (e.g. tests) can use this
 // to skip rather than fail.
-bool IsDramCorePrefetcherSupported(const distributed::MeshDevice& mesh_device);
+bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 
 // One prefetch work item: a weight tensor plus the number of K-blocks to split
 // its K dimension into. `block_count` is used in place of the GCB ring size when
@@ -68,7 +68,7 @@ bool IsDramCorePrefetcherSupported(const distributed::MeshDevice& mesh_device);
 // receiver r in bank b owns columns
 // `[b*N_per_bank + r*N_per_recv, b*N_per_bank + (r+1)*N_per_recv)`, where
 // N_per_recv = N_per_bank / num_receivers_per_sender.
-struct DramCorePrefetcherInput {
+struct TensorPrefetcherInput {
     std::reference_wrapper<const MeshTensor> tensor;
     uint32_t block_count = 0;
 };
@@ -86,7 +86,7 @@ struct DramCorePrefetcherInput {
 //   - No other prefetcher is currently active on this mesh device.
 //   - DRAM programmable cores are available on this mesh
 //     (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1).
-void StartDramCorePrefetcher(distributed::MeshDevice& mesh_device, const DramCorePrefetcherConfig& config);
+void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.
 //
@@ -102,14 +102,21 @@ void StartDramCorePrefetcher(distributed::MeshDevice& mesh_device, const DramCor
 //     one request page is transparently split across pages.
 //   - Per-GCB ring-buffer state is preserved across requests, so successive
 //     Queue calls against the same GCB resume where the previous call left off.
+//   - `cq_id` is the command queue on which a trace may be recording. When that
+//     CQ is mid trace-capture, the request is captured into the trace instead of
+//     being sent immediately, and is (re)sent on every replay of that trace
+//     (ReplayTrace / ttnn.execute_trace). When the CQ is not capturing, the
+//     request is sent immediately. Defaults (std::nullopt) to the current/default
+//     command queue.
 //
 // The caller is responsible for keeping the tensors in `input_tensors` and
 // `gcb` alive until Stop returns.
-void QueueDramCorePrefetcherRequest(
+void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
-    const std::vector<DramCorePrefetcherInput>& input_tensors);
+    const std::vector<TensorPrefetcherInput>& input_tensors,
+    std::optional<uint8_t> cq_id = std::nullopt);
 
 // Fence the prefetcher against command queue `cq_id`: every prefetch request queued
 // after this call waits until all work previously enqueued on `cq_id` has completed
@@ -118,13 +125,13 @@ void QueueDramCorePrefetcherRequest(
 // the prefetcher streams it.
 //
 // Call this synchronously on the host thread that issued the data writes — after
-// those writes, and before the QueueDramCorePrefetcherRequest that consumes them.
+// those writes, and before the QueueTensorPrefetcherRequest that consumes them.
 //
 //   - `cq_id` selects the command queue to fence against.
 //   - `device_subset` defaults to the full mesh when std::nullopt.
 //
 // Preconditions (TT_FATAL): a prefetcher is active on this mesh device.
-void WaitForCqOnDramCorePrefetcher(
+void WaitForCqOnTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     uint8_t cq_id,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset);
@@ -132,7 +139,7 @@ void WaitForCqOnDramCorePrefetcher(
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no
 // prefetcher is active.
-void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device);
+void StopTensorPrefetcher(distributed::MeshDevice& mesh_device);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

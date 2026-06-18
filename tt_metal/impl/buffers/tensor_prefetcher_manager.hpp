@@ -18,12 +18,13 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/dram_core_prefetcher.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
-#include "impl/buffers/dram_core_prefetcher_request.hpp"
+#include "impl/buffers/tensor_prefetcher_request.hpp"
 
 namespace tt::tt_metal {
 
@@ -35,12 +36,12 @@ namespace distributed {
 
 class MeshDevice;
 
-// Long-lived DRAM-core (DRISC) prefetcher for a single MeshDevice. Holds the
+// Long-lived Tensor prefetcher (DRISC) for a single MeshDevice. Holds the
 // per-device Programs, the per-(device, sender) H2D sockets, and the host worker
 // thread that drains the request queue. It does NOT own or hold the queued tensors
 // or GCBs alive — queue() serializes each request into socket pages and keeps only
 // those bytes, so the caller must keep the tensors and GCB alive until stop() (see
-// the public dram_core_prefetcher.hpp note).
+// the public tensor_prefetcher.hpp note).
 //
 // Single-prefetcher-at-a-time invariant: start() asserts is_active() is false.
 //
@@ -55,12 +56,12 @@ class MeshDevice;
 //     fans each page out to every socket whose mesh coord is in `subset` via
 //     non-blocking try_write so one slow socket can't starve the others. The
 //     caller is responsible for keeping tensors and the GCB alive until stop()
-//     (see the public dram_core_prefetcher.hpp note).
+//     (see the public tensor_prefetcher.hpp note).
 //   * stop() pushes a zero-tensor request targeting the full mesh, joins the
 //     worker thread (the kernel exits on `num_entries == 0`), WaitProgramDone
 //     on each device, releases per-cycle resources.
 //   * Destructor calls stop().
-class DramCorePrefetcherManager {
+class TensorPrefetcherManager {
 public:
     // `lock_api_function` grabs the owning MeshDevice's api_mutex_ (bound from
     // MeshDeviceImpl::lock_api). start()/queue()/stop() take it for the duration
@@ -68,20 +69,34 @@ public:
     // device API, mirroring MeshCommandQueueBase. enqueue_cq_signal_and_wait() also
     // takes it, but only around its manager-state snapshot — it must release the lock
     // before the dispatcher write, which re-locks the same (non-recursive) api_mutex_.
-    DramCorePrefetcherManager(MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function);
-    ~DramCorePrefetcherManager();
+    TensorPrefetcherManager(MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function);
+    ~TensorPrefetcherManager();
 
-    DramCorePrefetcherManager(const DramCorePrefetcherManager&) = delete;
-    DramCorePrefetcherManager& operator=(const DramCorePrefetcherManager&) = delete;
-    DramCorePrefetcherManager(DramCorePrefetcherManager&&) = delete;
-    DramCorePrefetcherManager& operator=(DramCorePrefetcherManager&&) = delete;
+    TensorPrefetcherManager(const TensorPrefetcherManager&) = delete;
+    TensorPrefetcherManager& operator=(const TensorPrefetcherManager&) = delete;
+    TensorPrefetcherManager(TensorPrefetcherManager&&) = delete;
+    TensorPrefetcherManager& operator=(TensorPrefetcherManager&&) = delete;
 
-    void start(const experimental::DramCorePrefetcherConfig& config);
+    void start(const experimental::TensorPrefetcherConfig& config);
 
+    // When `cq_id`'s command queue is mid trace-capture, the serialized request pages are
+    // captured into trace_requests_ keyed by that trace's MeshTraceId instead of being sent
+    // immediately; they are (re)sent on every replay_trace() of that trace. Otherwise the
+    // pages are queued for immediate fan-out. `cq_id` == std::nullopt resolves to the
+    // current/default command queue (see MeshDevice::mesh_command_queue).
     void queue(
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
-        const std::vector<experimental::DramCorePrefetcherInput>& tensors);
+        const std::vector<experimental::TensorPrefetcherInput>& tensors,
+        std::optional<uint8_t> cq_id = std::nullopt);
+
+    // Re-queue every request captured under `trace_id` for immediate fan-out. No-op if no
+    // prefetcher requests were captured during that trace's capture. Called from the trace
+    // replay path so a captured request is re-sent on each trace execution.
+    void replay_trace(const MeshTraceId& trace_id);
+
+    // Drop the requests captured under `trace_id`. Called when the trace is released.
+    void release_trace(const MeshTraceId& trace_id);
 
     // Make the prefetcher wait until all work currently enqueued on command queue
     // `cq_id` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
@@ -100,13 +115,16 @@ private:
     // ---- Constants shared with the kernel side ----
     // The request page wire format (header + entry table + deduplicated layout table)
     // and the fixed payload size kRequestPageBytes live in
-    // impl/buffers/dram_core_prefetcher_request.hpp so the host and the kernel agree on
+    // impl/buffers/tensor_prefetcher_request.hpp so the host and the kernel agree on
     // both the byte layout and the payload size. A Queue call whose tensors overflow one
     // page is split across multiple pages.
 
     // FIFO depth — how many in-flight requests a single socket can hold before
     // back-pressuring. kSocketFifoPages × align_up(kRequestPageBytes, pcie) per socket.
-    static constexpr uint32_t kSocketFifoPages = 16;
+    // Scaled inversely with kRequestPageBytes (128 × 128 B == the previous 16 × 1024 B) so
+    // shrinking the page to one-matmul granularity keeps the per-socket DRISC L1 FIFO at the
+    // same footprint while allowing 8× more small in-flight requests.
+    static constexpr uint32_t kSocketFifoPages = 128;
 
     struct Request {
         std::vector<uint8_t> page;  // one socket page; identical bytes for every target
@@ -121,7 +139,7 @@ private:
     // tensor layouts within each page and splitting when a page fills.
     std::vector<std::vector<uint8_t>> serialize_request_pages(
         const experimental::GlobalCircularBuffer& gcb,
-        const std::vector<experimental::DramCorePrefetcherInput>& data_tensors) const;
+        const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
     MeshCoordinateRangeSet full_mesh_subset() const;
 
     MeshDevice* mesh_device_;
@@ -153,7 +171,7 @@ private:
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
     uint32_t num_banks_ = 0;
-    // When true, each DRAM bank is driven by two sender cores (see DramCorePrefetcherConfig).
+    // When true, each DRAM bank is driven by two sender cores (see TensorPrefetcherConfig).
     bool dual_senders_per_bank_ = false;
 
     // One program per IDevice in the mesh; programs_[d].
@@ -173,6 +191,11 @@ private:
     std::condition_variable queue_cv_;
     std::deque<Request> pending_;
     std::atomic<bool> stop_requested_{false};
+
+    // Requests captured during trace capture, keyed by the recording trace's id. Populated by
+    // queue() when its command queue is mid-capture; drained back onto pending_ by
+    // replay_trace() on each trace execution; erased by release_trace(). Guarded by queue_mu_.
+    std::unordered_map<MeshTraceId, std::vector<Request>> trace_requests_;
 };
 
 }  // namespace distributed

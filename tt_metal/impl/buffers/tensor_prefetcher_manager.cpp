@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/buffers/dram_core_prefetcher_manager.hpp"
+#include "impl/buffers/tensor_prefetcher_manager.hpp"
 
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_command_queue_base.hpp"
@@ -21,6 +21,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -40,7 +41,7 @@ namespace {
 
 constexpr uint32_t kRemoteCBId = 31;
 
-constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/dram_core_prefetcher.cpp";
+constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
 
@@ -89,7 +90,7 @@ LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t t
         const auto& bds_opt = buf.buffer_distribution_spec();
         TT_FATAL(
             bds_opt.has_value() && static_cast<uint32_t>(bds_opt->num_shards()) == total_receivers,
-            "Receiver-contiguous DRAM-core prefetcher weight must have num_shards == total_receivers "
+            "Receiver-contiguous Tensor prefetcher weight must have num_shards == total_receivers "
             "(ring_size = {}); got {} shards.",
             total_receivers,
             bds_opt.has_value() ? static_cast<uint32_t>(bds_opt->num_shards()) : 0u);
@@ -99,25 +100,25 @@ LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t t
 }
 
 // Address-independent per-tensor geometry for the K-row-major DRAM layout — see
-// DramCorePrefetcherTensorLayout in impl/buffers/dram_core_prefetcher_request.hpp for
+// TensorPrefetcherTensorLayout in impl/buffers/tensor_prefetcher_request.hpp for
 // the field-by-field documentation, and tt_metal/impl/buffers/prefetcher_matmul_design.md
 // §6 for the fit ladder. The tensor's bank-local address is carried separately in the
-// per-tensor DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
-DramCorePrefetcherTensorLayout compute_tensor_layout_krow_major(
+// per-tensor TensorPrefetcherEntry, so identical-geometry tensors share one layout.
+TensorPrefetcherTensorLayout compute_tensor_layout_krow_major(
     const MeshTensor& t, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half, ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const auto shard_shape = ref_buffer->shard_spec().shape();
     const uint32_t tile_bytes = tt::tile_size(datatype_to_dataformat_converter(t.dtype()));
     TT_FATAL(
         shard_shape[0] % tt::constants::TILE_HEIGHT == 0 && shard_shape[1] % tt::constants::TILE_WIDTH == 0,
-        "DRAM-core prefetcher requires tile-aligned shards; got shard_shape=({}, {}), tile=({}, {})",
+        "Tensor prefetcher requires tile-aligned shards; got shard_shape=({}, {}), tile=({}, {})",
         shard_shape[0],
         shard_shape[1],
         tt::constants::TILE_HEIGHT,
         tt::constants::TILE_WIDTH);
     const uint32_t k_tiles_raw = shard_shape[0] / tt::constants::TILE_HEIGHT;
     const uint32_t n_per_bank = shard_shape[1] / tt::constants::TILE_WIDTH;
-    TT_FATAL(block_count > 0, "DRAM-core prefetcher block_count must be > 0");
+    TT_FATAL(block_count > 0, "Tensor prefetcher block_count must be > 0");
     TT_FATAL(
         n_per_bank % num_receivers == 0,
         "n_per_bank ({}) must divide num_receivers ({}); reduce N_per_bank or grow num_receivers",
@@ -133,7 +134,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_krow_major(
     const auto [coalesced_page_size, coalesced_num_pages] = pick_page_size(noc_max_burst, n_per_recv, tile_bytes);
     TT_FATAL(
         coalesced_page_size <= noc_max_burst,
-        "DRAM-core prefetcher coalesced page size ({} B) exceeds the one-packet NoC write limit ({} B).",
+        "Tensor prefetcher coalesced page size ({} B) exceeds the one-packet NoC write limit ({} B).",
         coalesced_page_size,
         noc_max_burst);
 
@@ -163,7 +164,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_krow_major(
         }
         TT_FATAL(
             picked,
-            "DRAM-core prefetcher cannot fit one K-row of tensor (k_tiles={}, n_per_bank={}, tile_bytes={}, "
+            "Tensor prefetcher cannot fit one K-row of tensor (k_tiles={}, n_per_bank={}, tile_bytes={}, "
             "row_bytes={} B) into DRISC L1 stage half ({} B) even with M=num_receivers ({}).",
             k_tiles_raw,
             n_per_bank,
@@ -177,7 +178,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_krow_major(
     TT_FATAL(
         sub_chunk_bytes <= ring_half, "Internal: chunk size {} B exceeds ring_half {} B", sub_chunk_bytes, ring_half);
 
-    DramCorePrefetcherTensorLayout g;
+    TensorPrefetcherTensorLayout g;
     g.num_sub = num_sub;
     g.M = M;
     g.rows_per_sub = rows_per_sub;
@@ -193,8 +194,8 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_krow_major(
 
 // Two layouts are interchangeable iff every geometry field matches. The struct is a
 // packed POD of uint32_t fields, so a byte compare is exact (no padding).
-bool layout_equal(const DramCorePrefetcherTensorLayout& a, const DramCorePrefetcherTensorLayout& b) {
-    return std::memcmp(&a, &b, sizeof(DramCorePrefetcherTensorLayout)) == 0;
+bool layout_equal(const TensorPrefetcherTensorLayout& a, const TensorPrefetcherTensorLayout& b) {
+    return std::memcmp(&a, &b, sizeof(TensorPrefetcherTensorLayout)) == 0;
 }
 
 // Receiver-contiguous layout: BDS holds `ring_size` shards round-robin across
@@ -204,8 +205,8 @@ bool layout_equal(const DramCorePrefetcherTensorLayout& a, const DramCorePrefetc
 // per-receiver visit (B clamped by free space and fifo wrap at runtime); the
 // manager just computes the static ceiling target_per_visit_pages. The tensor's
 // bank-local address is carried separately in the per-tensor
-// DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
-DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
+// TensorPrefetcherEntry, so identical-geometry tensors share one layout.
+TensorPrefetcherTensorLayout compute_tensor_layout_recv_contig(
     const MeshTensor& t, uint32_t block_count, uint32_t stage_third, ContextId context_id) {
     // Read the original (non-squeezed) NdShardSpec from the MemoryConfig — the
     // BDS internally collapses adjacent matching dims, so its
@@ -214,7 +215,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
     const auto& nd_opt = t.nd_shard_spec();
     TT_FATAL(
         nd_opt.has_value(),
-        "Receiver-contiguous DRAM-core prefetcher tensor must be allocated with an "
+        "Receiver-contiguous Tensor prefetcher tensor must be allocated with an "
         "NdShardSpec (e.g. ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))).");
     const auto& shard_shape = nd_opt->shard_shape;
     TT_FATAL(
@@ -239,12 +240,12 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
         n_per_recv);
 
     const uint32_t tile_bytes = tt::tile_size(datatype_to_dataformat_converter(t.dtype()));
-    TT_FATAL(block_count > 0, "DRAM-core prefetcher block_count must be > 0");
+    TT_FATAL(block_count > 0, "Tensor prefetcher block_count must be > 0");
     // K must divide evenly into block_count K-blocks. A ceil here would make the kernel push
     // block_count * ceil(K_tiles/block_count) K-rows per receiver — more than the slab
     // (recv_stride = K_tiles * n_per_recv * tile_bytes) holds — so the last block over-reads
     // into the next receiver's slab (or past the buffer for the last slab). For a matmul-fed
-    // weight, compute block_count via dram_core_prefetcher_block_count_for_matmul_1d(), which
+    // weight, compute block_count via tensor_prefetcher_block_count_for_matmul_1d(), which
     // also pins block_count == ring_size.
     TT_FATAL(
         k_tiles_raw % block_count == 0,
@@ -259,7 +260,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
     const auto [coalesced_page_size, coalesced_num_pages] = pick_page_size(noc_max_burst, n_per_recv, tile_bytes);
     TT_FATAL(
         coalesced_page_size <= noc_max_burst,
-        "DRAM-core prefetcher coalesced page size ({} B) exceeds the one-packet NoC write limit ({} B).",
+        "Tensor prefetcher coalesced page size ({} B) exceeds the one-packet NoC write limit ({} B).",
         coalesced_page_size,
         noc_max_burst);
 
@@ -315,7 +316,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
         target_per_visit_pages = 1;
     }
 
-    DramCorePrefetcherTensorLayout g;
+    TensorPrefetcherTensorLayout g;
     g.num_sub = num_sub;
     g.M = 1;  // unused in recv-contig (no N-chunking)
     g.rows_per_sub = rows_per_sub;
@@ -332,7 +333,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
     return g;
 }
 
-DramCorePrefetcherTensorLayout compute_tensor_layout(
+TensorPrefetcherTensorLayout compute_tensor_layout(
     const MeshTensor& t,
     uint32_t block_count,
     uint32_t num_banks,
@@ -350,7 +351,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout(
         // count entirely, and tolerates non-uniform per-bank receivers.)
         TT_FATAL(
             num_banks > 0 && total_receivers % num_banks == 0,
-            "DRAM-core prefetcher (K-row-major): total receivers ({}) must divide evenly across {} banks. "
+            "Tensor prefetcher (K-row-major): total receivers ({}) must divide evenly across {} banks. "
             "Non-uniform per-bank receiver counts are only supported by the receiver-contiguous layout.",
             total_receivers,
             num_banks);
@@ -361,16 +362,16 @@ DramCorePrefetcherTensorLayout compute_tensor_layout(
 
 }  // namespace
 
-DramCorePrefetcherManager::DramCorePrefetcherManager(
+TensorPrefetcherManager::TensorPrefetcherManager(
     MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
     mesh_device_(mesh_device), lock_api_function_(std::move(lock_api_function)) {
-    TT_FATAL(mesh_device_ != nullptr, "DramCorePrefetcherManager requires a non-null MeshDevice");
-    TT_FATAL(static_cast<bool>(lock_api_function_), "DramCorePrefetcherManager requires a valid lock_api_function");
+    TT_FATAL(mesh_device_ != nullptr, "TensorPrefetcherManager requires a non-null MeshDevice");
+    TT_FATAL(static_cast<bool>(lock_api_function_), "TensorPrefetcherManager requires a valid lock_api_function");
 }
 
-DramCorePrefetcherManager::~DramCorePrefetcherManager() { stop(); }
+TensorPrefetcherManager::~TensorPrefetcherManager() { stop(); }
 
-void DramCorePrefetcherManager::enumerate_dram_senders() {
+void TensorPrefetcherManager::enumerate_dram_senders() {
     const auto context_id = mesh_device_->impl().get_context_id();
     const auto& soc_desc = MetalContext::instance(context_id)
                                .get_cluster()
@@ -393,7 +394,7 @@ void DramCorePrefetcherManager::enumerate_dram_senders() {
     num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
 }
 
-void DramCorePrefetcherManager::allocate_sockets() {
+void TensorPrefetcherManager::allocate_sockets() {
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     const uint32_t page_size = align_up(kRequestPageBytes, pcie_alignment);
@@ -425,7 +426,7 @@ void DramCorePrefetcherManager::allocate_sockets() {
     }
 }
 
-void DramCorePrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size) {
+void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size) {
     // Sockets must already be allocated so each kernel can be given its
     // socket_config_addr as a runtime arg.
     TT_FATAL(sockets_.size() == devices_.size() * num_senders_, "sockets must be allocated before programs");
@@ -461,16 +462,15 @@ void DramCorePrefetcherManager::build_and_launch_programs(uint32_t stage_ring_ba
     }
 }
 
-void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConfig& config) {
+void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& config) {
     auto lock = lock_api_function_();
     dual_senders_per_bank_ = config.dual_senders_per_bank;
-    TT_FATAL(
-        !active_, "A DRAM-core prefetcher is already active on this mesh device. Call StopDramCorePrefetcher first.");
+    TT_FATAL(!active_, "A Tensor prefetcher is already active on this mesh device. Call StopTensorPrefetcher first.");
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DRAM-core prefetcher requires programmable DRAM cores; set "
+        "Tensor prefetcher requires programmable DRAM cores; set "
         "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1");
 
     enumerate_dram_senders();
@@ -500,7 +500,7 @@ void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConf
     const uint32_t socket_data_bytes = socket_fifo_size_for_layout + pcie_alignment_for_layout;
     const uint32_t kernel_region_base = static_cast<uint32_t>(arena.kernel_working_region_base());
     // Per-CQ signal slots at the front of the region: a small uint32 counter per
-    // command queue, written by the dispatcher for WaitForCqOnDramCorePrefetcher
+    // command queue, written by the dispatcher for WaitForCqOnTensorPrefetcher
     // and polled by the kernel's WAIT_CQ handler.
     const uint32_t cq_signal_bytes = align_up(kNumCqSignalSlots * sizeof(uint32_t), l1_alignment);
     cq_signal_l1_addr_ = align_up(kernel_region_base, l1_alignment);
@@ -553,20 +553,20 @@ void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConf
     }
 
     stop_requested_.store(false);
-    host_worker_ = std::thread(&DramCorePrefetcherManager::worker_loop, this);
+    host_worker_ = std::thread(&TensorPrefetcherManager::worker_loop, this);
     active_ = true;
 }
 
-MeshCoordinateRangeSet DramCorePrefetcherManager::full_mesh_subset() const {
+MeshCoordinateRangeSet TensorPrefetcherManager::full_mesh_subset() const {
     MeshCoordinateRangeSet out;
     out.merge(MeshCoordinateRange(mesh_device_->shape()));
     return out;
 }
 
-std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_pages(
+std::vector<std::vector<uint8_t>> TensorPrefetcherManager::serialize_request_pages(
     const experimental::GlobalCircularBuffer& gcb,
-    const std::vector<experimental::DramCorePrefetcherInput>& data_tensors) const {
-    TT_FATAL(!data_tensors.empty(), "QueueDramCorePrefetcherRequest requires at least one tensor");
+    const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const {
+    TT_FATAL(!data_tensors.empty(), "QueueTensorPrefetcherRequest requires at least one tensor");
 
     const ContextId context_id = mesh_device_->impl().get_context_id();
 
@@ -579,7 +579,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     for (const auto& [_sender, receivers] : mapping) {
         total_receivers += receivers.num_cores();
     }
-    TT_FATAL(num_banks_ > 0, "DRAM-core prefetcher: num_banks must be > 0");
+    TT_FATAL(num_banks_ > 0, "Tensor prefetcher: num_banks must be > 0");
     // receivers_per_bank is only consumed by the K-row-major layout (single sender per
     // bank). Recv-contig derives its geometry from the shard shape and ignores it, and
     // its receivers need not be uniform per bank — so the even-divisibility requirement
@@ -590,9 +590,9 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     const uint32_t pcie_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
     const uint32_t aligned_page_bytes = align_up(kRequestPageBytes, pcie_alignment);
 
-    constexpr uint32_t kHeaderBytes = sizeof(DramCorePrefetcherRequestHeader);
-    constexpr uint32_t kEntryBytes = sizeof(DramCorePrefetcherEntry);
-    constexpr uint32_t kLayoutBytes = sizeof(DramCorePrefetcherTensorLayout);
+    constexpr uint32_t kHeaderBytes = sizeof(TensorPrefetcherRequestHeader);
+    constexpr uint32_t kEntryBytes = sizeof(TensorPrefetcherEntry);
+    constexpr uint32_t kLayoutBytes = sizeof(TensorPrefetcherTensorLayout);
 
     std::vector<std::vector<uint8_t>> pages;
 
@@ -602,7 +602,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     std::vector<uint8_t> page;
     uint32_t num_entries = 0;
     uint32_t num_layouts = 0;
-    std::vector<DramCorePrefetcherTensorLayout> seen;
+    std::vector<TensorPrefetcherTensorLayout> seen;
 
     auto begin_page = [&]() {
         page.assign(aligned_page_bytes, 0);
@@ -611,7 +611,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
         seen.clear();
     };
     auto finalize_page = [&]() {
-        auto* header = reinterpret_cast<DramCorePrefetcherRequestHeader*>(page.data());
+        auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
         header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
         header->prefetch.num_entries = static_cast<uint16_t>(num_entries);
         header->prefetch.num_layouts = num_layouts;
@@ -624,7 +624,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
         const auto& input = data_tensors[tensor_idx];
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
-        const DramCorePrefetcherTensorLayout layout = compute_tensor_layout(
+        const TensorPrefetcherTensorLayout layout = compute_tensor_layout(
             input.tensor.get(),
             input.block_count,
             num_banks_,
@@ -638,7 +638,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
         // building wrong per-sender geometry.
         TT_FATAL(
             !dual_senders_per_bank_ || layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
-            "DRAM-core prefetcher: dual_senders_per_bank is only supported for the receiver-contiguous "
+            "Tensor prefetcher: dual_senders_per_bank is only supported for the receiver-contiguous "
             "DRAM layout, but input tensor {} is K-row-major.",
             tensor_idx);
 
@@ -647,7 +647,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
         // kernel hangs. Guard it here (applies to both layouts).
         TT_FATAL(
             gcb.size() >= layout.page_bytes_per_recv,
-            "DRAM-core prefetcher: GCB per-receiver fifo size ({} B) must be at least one full per-receiver "
+            "Tensor prefetcher: GCB per-receiver fifo size ({} B) must be at least one full per-receiver "
             "page ({} B) for input tensor {}; a smaller fifo makes the sender's free-space poll spin forever.",
             gcb.size(),
             layout.page_bytes_per_recv,
@@ -683,7 +683,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
             ++num_layouts;
         }
 
-        DramCorePrefetcherEntry entry;
+        TensorPrefetcherEntry entry;
         entry.bank_local_base = bank_local_base;
         entry.layout_index = static_cast<uint32_t>(layout_idx);
         std::memcpy(page.data() + (kHeaderBytes + num_entries * kEntryBytes), &entry, kEntryBytes);
@@ -694,21 +694,22 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     return pages;
 }
 
-void DramCorePrefetcherManager::queue(
+void TensorPrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
-    const std::vector<experimental::DramCorePrefetcherInput>& tensors) {
+    const std::vector<experimental::TensorPrefetcherInput>& tensors,
+    std::optional<uint8_t> cq_id) {
     auto lock = lock_api_function_();
-    TT_FATAL(active_, "QueueDramCorePrefetcherRequest called before StartDramCorePrefetcher");
+    TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
     TT_FATAL(
         experimental::sender_core_type(gcb) == experimental::SenderCoreType::Dram,
-        "QueueDramCorePrefetcherRequest requires a DRAM-sender GlobalCircularBuffer");
+        "QueueTensorPrefetcherRequest requires a DRAM-sender GlobalCircularBuffer");
     TT_FATAL(
         gcb.sender_receiver_core_mapping().size() == num_senders_,
         "GCB num_senders ({}) does not match prefetcher num_senders ({})",
         gcb.sender_receiver_core_mapping().size(),
         num_senders_);
-    TT_FATAL(!tensors.empty(), "QueueDramCorePrefetcherRequest requires at least one tensor");
+    TT_FATAL(!tensors.empty(), "QueueTensorPrefetcherRequest requires at least one tensor");
 
     // A Queue call may span more tensors than fit in one socket page; serialize into one
     // or more pages, each an independent request. The per-GCB fifo_wr_ptr persists across
@@ -723,7 +724,7 @@ void DramCorePrefetcherManager::queue(
         for (const auto& coord : range) {
             TT_FATAL(
                 device_index_by_coord_.contains(coord),
-                "QueueDramCorePrefetcherRequest target MeshCoordinate {} is not in the mesh this prefetcher was "
+                "QueueTensorPrefetcherRequest target MeshCoordinate {} is not in the mesh this prefetcher was "
                 "started "
                 "on",
                 coord);
@@ -731,21 +732,48 @@ void DramCorePrefetcherManager::queue(
         }
     }
 
+    // If the target command queue is mid trace-capture, capture this request into the trace
+    // instead of sending it now; it is (re)sent on every replay of that trace. Otherwise send
+    // immediately via the host worker.
+    const std::optional<MeshTraceId> recording_trace_id = mesh_device_->mesh_command_queue(cq_id).trace_id();
+
     {
-        // Push all pages of this call under one lock so worker_loop sends them in order
-        // (required for fifo_wr_ptr continuity across the split).
+        // Push all pages of this call under one lock so they stay contiguous and ordered
+        // (required for fifo_wr_ptr continuity across the split), whether captured or sent.
         std::lock_guard<std::mutex> lk(queue_mu_);
         for (auto& page : pages) {
             Request req;
             req.page = std::move(page);
             req.target_devices = target_devices;
-            pending_.push_back(std::move(req));
+            if (recording_trace_id.has_value()) {
+                trace_requests_[*recording_trace_id].push_back(std::move(req));
+            } else {
+                pending_.push_back(std::move(req));
+            }
         }
+    }
+    // Only the immediate path needs to wake the worker; captured requests wait for replay.
+    if (!recording_trace_id.has_value()) {
+        queue_cv_.notify_one();
+    }
+}
+
+void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
+    {
+        std::lock_guard<std::mutex> lk(queue_mu_);
+        auto it = trace_requests_.find(trace_id);
+        if (it == trace_requests_.end()) {
+            // No prefetcher requests were captured during this trace's capture.
+            return;
+        }
+        // Copy (not move) so the captured requests survive for the next replay. Pushed in
+        // capture order so fifo_wr_ptr continuity matches the original Queue calls.
+        pending_.insert(pending_.end(), it->second.begin(), it->second.end());
     }
     queue_cv_.notify_one();
 }
 
-void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
+void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     uint8_t cq_id, const std::optional<MeshCoordinateRangeSet>& device_subset) {
     // Hold the API lock across this whole call. Three things must be atomic together:
     //   1. the counter bump (++cq_signal_counter_[cq_id]),
@@ -759,10 +787,10 @@ void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
     // serialize. enqueue_write_dram_core_counter is documented to run under the caller's
     // api lock and does NOT re-lock, so holding it here does not self-deadlock.
     auto lock = lock_api_function_();
-    TT_FATAL(active_, "WaitForCqOnDramCorePrefetcher called before StartDramCorePrefetcher");
+    TT_FATAL(active_, "WaitForCqOnTensorPrefetcher called before StartTensorPrefetcher");
     TT_FATAL(
         cq_id < cq_signal_counter_.size(),
-        "WaitForCqOnDramCorePrefetcher cq_id ({}) out of range [0, {})",
+        "WaitForCqOnTensorPrefetcher cq_id ({}) out of range [0, {})",
         cq_id,
         cq_signal_counter_.size());
 
@@ -776,7 +804,7 @@ void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
         for (const auto& coord : range) {
             TT_FATAL(
                 device_index_by_coord_.contains(coord),
-                "WaitForCqOnDramCorePrefetcher target MeshCoordinate {} is not in the mesh this prefetcher was "
+                "WaitForCqOnTensorPrefetcher target MeshCoordinate {} is not in the mesh this prefetcher was "
                 "started on",
                 coord);
             target_devices.push_back(coord);
@@ -816,7 +844,7 @@ void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
     const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
     Request req;
     req.page.assign(page_bytes, 0);
-    auto* header = reinterpret_cast<DramCorePrefetcherRequestHeader*>(req.page.data());
+    auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(req.page.data());
     header->base.cmd_id = DRAM_PREFETCHER_CMD_WAIT_CQ;
     header->wait_cq.cq_index = cq_id;
     header->wait_cq.cq_wait_value = signal_value;
@@ -829,7 +857,12 @@ void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
     queue_cv_.notify_one();
 }
 
-void DramCorePrefetcherManager::worker_loop() {
+void TensorPrefetcherManager::release_trace(const MeshTraceId& trace_id) {
+    std::lock_guard<std::mutex> lk(queue_mu_);
+    trace_requests_.erase(trace_id);
+}
+
+void TensorPrefetcherManager::worker_loop() {
     while (true) {
         Request req;
         {
@@ -851,7 +884,7 @@ void DramCorePrefetcherManager::worker_loop() {
             auto it = device_index_by_coord_.find(dev_coord);
             TT_FATAL(
                 it != device_index_by_coord_.end(),
-                "QueueDramCorePrefetcherRequest target MeshCoordinate {} is not in the mesh this prefetcher was "
+                "QueueTensorPrefetcherRequest target MeshCoordinate {} is not in the mesh this prefetcher was "
                 "started "
                 "on; would silently drop the request for that device",
                 dev_coord);
@@ -882,7 +915,7 @@ void DramCorePrefetcherManager::worker_loop() {
     }
 }
 
-void DramCorePrefetcherManager::stop() {
+void TensorPrefetcherManager::stop() {
     // Note: the MeshDevice close path (close_impl) calls stop() without holding
     // api_mutex_, and the destructor only reaches here after active_ is already
     // false, so taking the lock here never self-deadlocks.
@@ -927,6 +960,7 @@ void DramCorePrefetcherManager::stop() {
     devices_.clear();
     device_index_by_coord_.clear();
     sender_logical_cores_.clear();
+    trace_requests_.clear();
     num_senders_ = 0;
     active_ = false;
 }
@@ -934,39 +968,40 @@ void DramCorePrefetcherManager::stop() {
 }  // namespace tt::tt_metal::distributed
 
 // -----------------------------------------------------------------------------
-// experimental::StartDramCorePrefetcher / Queue / Stop
+// experimental::StartTensorPrefetcher / Queue / Stop
 // -----------------------------------------------------------------------------
 namespace tt::tt_metal::experimental {
 
-bool IsDramCorePrefetcherSupported(const distributed::MeshDevice& mesh_device) {
+bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
     const auto& hal = MetalContext::instance(mesh_device.impl().get_context_id()).hal();
     return hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
-void StartDramCorePrefetcher(distributed::MeshDevice& mesh_device, const DramCorePrefetcherConfig& config) {
-    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
+void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config) {
+    auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
     manager.start(config);
 }
 
-void QueueDramCorePrefetcherRequest(
+void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
-    const std::vector<DramCorePrefetcherInput>& input_tensors) {
-    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
-    manager.queue(gcb, device_subset, input_tensors);
+    const std::vector<TensorPrefetcherInput>& input_tensors,
+    std::optional<uint8_t> cq_id) {
+    auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
+    manager.queue(gcb, device_subset, input_tensors, cq_id);
 }
 
-void WaitForCqOnDramCorePrefetcher(
+void WaitForCqOnTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     uint8_t cq_id,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset) {
-    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
+    auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
     manager.enqueue_cq_signal_and_wait(cq_id, device_subset);
 }
 
-void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device) {
-    auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
+void StopTensorPrefetcher(distributed::MeshDevice& mesh_device) {
+    auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
     manager.stop();
 }
 
