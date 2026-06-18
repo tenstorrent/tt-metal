@@ -69,7 +69,7 @@ def reduce_experts(expert_output):
 def apply_expert_parallel_allreduce(tensor, mesh_config, ccl_manager):
     """Apply expert parallel allreduce communication."""
     tensor_allreduced = ttnn.all_reduce(
-        tensor, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.ep_axis
+        tensor, num_links=ccl_manager.num_links, topology=ccl_manager.topology, cluster_axis=mesh_config.ep_axis
     )
     tensor.deallocate(True)
     return tensor_allreduced
@@ -94,7 +94,7 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, seq_len, c
         Allreduced tensor
     """
     tensor_allreduced = ttnn.all_reduce(
-        tensor, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.tp_axis
+        tensor, num_links=ccl_manager.num_links, topology=ccl_manager.topology, cluster_axis=mesh_config.tp_axis
     )
     tensor.deallocate(True)
 
@@ -104,7 +104,7 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, seq_len, c
 def apply_sequence_parallel_allgather(tensor, mesh_config, ccl_manager):
     """Apply sequence parallel allgather communication."""
     tensor_gathered = ttnn.all_gather(
-        tensor, dim=-2, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.sp_axis
+        tensor, dim=-2, num_links=ccl_manager.num_links, topology=ccl_manager.topology, cluster_axis=mesh_config.sp_axis
     )
     tensor.deallocate(True)
     return tensor_gathered

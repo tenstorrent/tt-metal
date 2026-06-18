@@ -173,11 +173,22 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
             )
         ]
     else:
+        from models.common.utility_functions import is_blackhole
+
+        def _fabric_for_shape(shape):
+            if shape == (1, 1):
+                return None
+            # Single-row BH (e.g. 1×8 T3K): TP chips are connected in a line, not a ring.
+            if is_blackhole() and shape[0] == 1:
+                return ttnn.FabricConfig.FABRIC_1D
+            # Multi-row BH Galaxy (e.g. 4×8) or non-BH: TP axis is a ring.
+            return ttnn.FabricConfig.FABRIC_1D_RING
+
         params = [
             pytest.param(
                 shape,
                 {
-                    "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
+                    "fabric_config": _fabric_for_shape(shape),
                     "trace_region_size": 100000000,
                 },
                 id=f"{shape[0]}x{shape[1]}",
