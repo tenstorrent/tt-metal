@@ -37,12 +37,8 @@ constexpr std::uint8_t PC_BUF_SEMAPHORE_BASE = 32; // base address for semaphore
 constexpr std::uint8_t STREAM_SEMAPHORE      = 5;  // semaphore used by unpack thread to sync between trisc and unpacker
 constexpr std::uint8_t TENSIX_STREAM_SEMAPHORE                = p_stall::SEMAPHORE_5; // semaphore used by unpack thread to sync between trisc and unpacker
 constexpr std::uint8_t PARAM_ITERATIONS                       = 0;
-constexpr std::uint8_t TENSIX_UNPACK_TO_DEST_UNPACK_SEMAPHORE = p_stall::SEMAPHORE_4;
-constexpr std::uint8_t UNPACK_TO_DEST_UNPACK_SEMAPHORE        = 4;
 constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE           = p_stall::SEMAPHORE_6;
 constexpr std::uint8_t PACK_STREAM_SEMAPHORE                  = 6;
-constexpr std::uint8_t TENSIX_UNPACK_TO_DEST_PACK_SEMAPHORE   = p_stall::SEMAPHORE_7;
-constexpr std::uint8_t UNPACK_TO_DEST_PACK_SEMAPHORE          = 7;
 
 volatile std::uint32_t *const reg_base        = (volatile std::uint32_t *)0xFFB10000;
 volatile std::uint32_t *const pc_buf_base     = (volatile std::uint32_t *)PC_BUF_BASE;

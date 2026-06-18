@@ -21,6 +21,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -322,6 +323,7 @@ struct ReaderDatacopyWriterConfig {
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
     experimental::NodeCoord node;
+    bool dst_full_sync_en = false;
 };
 
 // Shared host-side state for reader_datacopy_writer: DRAM buffers, sizing,
@@ -454,6 +456,11 @@ bool reader_datacopy_writer(
         .hw_config = writer_dm_cfg,
     };
 
+    // 32-bit input formats require 32-bit dest mode; otherwise the unpacker
+    // would write 32-bit data into a 16-bit dest. Derived, not user-supplied.
+    const bool fp32_dest_acc_en = (test_config.l1_input_data_format == tt::DataFormat::Float32) ||
+                                  (test_config.l1_input_data_format == tt::DataFormat::Int32) ||
+                                  (test_config.l1_input_data_format == tt::DataFormat::UInt32);
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
@@ -474,7 +481,16 @@ bool reader_datacopy_writer(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .unpack_to_dest_mode =
+                    (test_config.l1_input_data_format == tt::DataFormat::Float32)
+                        ? experimental::ComputeHardwareConfig::
+                              UnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
+                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
+            },
     };
 
     experimental::WorkUnitSpec wu{
@@ -571,7 +587,8 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .node = experimental::NodeCoord(0, 0)};
     for (unsigned int id = 0; id < num_devices_; id++) {
-        if (devices_.at(id)->arch() != ARCH::QUASAR) { // TODO (#38092): Remove when we can run back to back tests on Quasar
+        if (devices_.at(id)->arch() !=
+            ARCH::QUASAR) {  // TODO (#38092): Remove when we can run back to back tests on Quasar
             test_config.num_tiles = 1;
             ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
             test_config.num_tiles = 4;
@@ -579,6 +596,27 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         }
         test_config.num_tiles = 8;
         ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+    }
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDatacopyToDestWriter) {
+    // Int32/Float32 x SyncFull/SyncHalf
+    for (const tt::DataFormat data_format : {tt::DataFormat::Int32, tt::DataFormat::Float32}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            SCOPED_TRACE(
+                std::string(data_format == tt::DataFormat::Int32 ? "Int32" : "Float32") +
+                (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+            unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
+                .num_tiles = 4,
+                .tile_byte_size = sizeof(uint32_t) * constants::TILE_HEIGHT * constants::TILE_WIDTH,
+                .l1_input_data_format = data_format,
+                .l1_output_data_format = data_format,
+                .node = experimental::NodeCoord(0, 0),
+                .dst_full_sync_en = dst_full_sync_en};
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+            }
+        }
     }
 }
 

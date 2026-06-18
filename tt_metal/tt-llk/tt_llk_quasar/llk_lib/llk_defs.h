@@ -126,6 +126,9 @@ enum class MathFidelity : std::uint8_t
     HiFi4 = 4
 };
 
+constexpr bool UnpackToDestEn  = true;
+constexpr bool UnpackToDestDis = false;
+
 enum class StochRndType : std::uint8_t
 {
     None = 0,
