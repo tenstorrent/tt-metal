@@ -22,7 +22,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id          = 0;
     const std::uint32_t num_tiles_per_unpack = params.TILE_CNT;
 
@@ -30,8 +29,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     const auto tensor_shape_A = tensor_shape_from_params(params);
-
-    buffer_descriptor_u bd_val = ckernel::get_buf_desc_from_tensor_shape(tensor_shape_A);
 
     unsigned l1_addr_16B;
     if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
@@ -43,12 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         l1_addr_16B = params.buffer_A[0] / 16;
     }
 
-    bd_val.f.l1_addr_16B = l1_addr_16B;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-
-    td_val.buf_desc        = bd_val;
-    td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+    tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc(tensor_shape_A, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
 
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
     if (is_fp32_dest_acc_en)
@@ -118,18 +110,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    tdma_descriptor_t tdma_desc;
-
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
-    buffer_descriptor_u bd_val = ckernel::get_buf_desc_from_tensor_shape(tensor_shape_A);
-
-    bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-
-    tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+    tdma_descriptor_t tdma_desc =
+        ckernel::trisc::construct_tdma_desc(tensor_shape_A, (params.buffer_Res[0] / 16), formats.pack_dst, buf_desc_id, formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);

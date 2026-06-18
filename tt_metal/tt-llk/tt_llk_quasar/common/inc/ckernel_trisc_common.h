@@ -14,6 +14,7 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "tensix_types.h"
+#include "tensor_shape.h"
 
 namespace ckernel::trisc
 {
@@ -355,6 +356,50 @@ inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 inline std::uint32_t find_max(std::uint32_t input1, std::uint32_t input2)
 {
     return (input1 >= input2) ? input1 : input2;
+}
+
+/**
+ * @brief helper function used to compute z-dim for buf_desc from TensorShape.
+ * Compares two values, then computes the square of the smaller value.
+ *
+ * @param input1/input2: values to be compared, then squared
+ */
+inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t input2)
+{
+    return (input1 < input2) ? input1 * input1 : input2 * input2;
+}
+
+/**
+ * @brief Creates a tdma_descriptor_t structure from TensorShape and other needed parameters
+ * Currently supported buffer descriptor dimensions are:
+ * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
+ *
+ * @param tensor_shape: Tile/face dimensions and shape of input tensor
+ * @param base_l1_16B: base address of the buffer in L1
+ * @param data_format: L1 data encoding format
+ * @param buf_desc_id: buffer descriptor table ID
+ * @param reg_data_format: Register data encoding format
+ * @param end_l1_16B: end address of the buffer in L1 (defaults to 0 in .cpp tests)
+ */
+inline tdma_descriptor_t construct_tdma_desc(
+    const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format, unsigned end_l1_16B = 0)
+{
+    buffer_descriptor_u buf_desc = {0};
+    buf_desc.f.x_dim             = tensor_shape.face_c_dim;
+    buf_desc.f.y_dim             = tensor_shape.face_r_dim;
+    if (tensor_shape.num_faces_r_dim == tensor_shape.num_faces_c_dim)
+    {
+        buf_desc.f.z_dim = tensor_shape.total_num_faces();
+    }
+    else
+    {
+        buf_desc.f.z_dim = static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
+    }
+    buf_desc.f.l1_addr_16B  = base_l1_16B;
+    buf_desc.f.lmt_addr_16B = end_l1_16B;
+    buf_desc.f.format       = static_cast<std::uint8_t>(data_format);
+
+    return {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
 }
 
 } // namespace ckernel::trisc

@@ -93,30 +93,4 @@ __attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const T
            (face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16) && (face_c_dim == 16);
 }
 
-/**
- * @brief Populates buffer descriptor using values from TensorShape.
- * Currently supported buffer descriptor dimensions are:
- * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
- *
- * @param tensor_shape: Tile/face dimensions and shape of input tensor
- * @return buf_desc: Buffer descriptor struct w/ dimensions populated with values from TensorShape
- */
-inline buffer_descriptor_u get_buf_desc_from_tensor_shape(const TensorShape& tensor_shape)
-{
-    buffer_descriptor_u buf_desc = {0};
-    buf_desc.f.x_dim             = tensor_shape.face_c_dim;
-    buf_desc.f.y_dim             = tensor_shape.face_r_dim;
-    if (tensor_shape.num_faces_r_dim == tensor_shape.num_faces_c_dim)
-    {
-        buf_desc.f.z_dim = static_cast<std::uint8_t>(tensor_shape.total_num_faces());
-    }
-    else
-    {
-        buf_desc.f.z_dim = (tensor_shape.num_faces_r_dim < tensor_shape.num_faces_c_dim)
-                               ? static_cast<std::uint8_t>(tensor_shape.num_faces_r_dim * tensor_shape.num_faces_r_dim)
-                               : static_cast<std::uint8_t>(tensor_shape.num_faces_c_dim * tensor_shape.num_faces_c_dim);
-    }
-    return buf_desc;
-}
-
 } // namespace ckernel
