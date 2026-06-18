@@ -40,6 +40,13 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
 # FlashMLA → kv_b2 → w_o op-chain tuning constants (edit to retune without touching function bodies).
 _KVB2_INPUT_L1 = True
 
+# At batch==1, reshape the q_b output [1,1,1,H*HD] straight to [1,H,1,HD] instead of
+# reshape->[1,1,H,HD] then permute(0,2,1,3). Puts the H heads in the batch dim on clean
+# head_dim=8-tile column boundaries, avoiding the sub-tile head-into-tile-height scatter
+# (~10us ReshapeView) and the following permute (~3us). Validated bit-identical (PCC=1.0)
+# to reshape+permute ONLY at batch==1; ~10us/layer device saving. Default off.
+_Q_DIRECT_RESHAPE = os.environ.get("GLM4_MOE_LITE_DECODE_Q_DIRECT_RESHAPE", "0").strip() == "1"
+
 
 def _flatten_v_heads_for_wo(
     v: ttnn.Tensor,
@@ -279,8 +286,11 @@ def q_projection(
     q = attn_linear(q_a, w.w_q_b, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
     ttnn.deallocate(q_a, force=False)
 
-    q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
-    q = ttnn.permute(q, (0, 2, 1, 3))  # [1,H,B,qk_head_dim]
+    if _Q_DIRECT_RESHAPE and batch == 1:
+        q = ttnn.reshape(q, (1, int(hparams.num_attention_heads), 1, int(hparams.qk_head_dim)))
+    else:
+        q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
+        q = ttnn.permute(q, (0, 2, 1, 3))  # [1,H,B,qk_head_dim]
 
     q_nope = _safe_slice(
         q,
