@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# HF-aligned Ministral3 RoPE tables (NumPy build + HfRotarySetupOld device caches).
+# HF-aligned Ministral3 RoPE tables (NumPy build + device caches).
 
 from __future__ import annotations
 
@@ -10,12 +10,10 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import resolve_rope_parameters
 from models.tt_transformers.tt.prefetcher import Prefetcher
-
-# HfRotarySetupOld API (get_rot_mats); legacy rotary_embedding in TtMinistralAttention.
-from models.tt_transformers.tt.rope import HfRotarySetupOld as HfRotarySetup
 
 
 def _compute_default_inv_freq_numpy(config: Any, rope_parameters: dict) -> Tuple[np.ndarray, float]:
@@ -209,8 +207,8 @@ def _pad_rot_idx_to_nearest_32(
     return ttnn.concat([rot_idx, pad], dim=-1)
 
 
-class TtMinistral3RotaryEmbedding(HfRotarySetup):
-    """HF-aligned Ministral3 RoPE caches on device via NumPy table build + :class:`HfRotarySetup` lookup."""
+class TtMinistral3RotaryEmbedding(LightweightModule):
+    """HF-aligned Ministral3 RoPE caches on device via NumPy table build."""
 
     def __init__(
         self,
@@ -224,24 +222,14 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         shard_batch_to_mesh_dim: Optional[int] = 1,
         prefetcher: Optional[Prefetcher] = None,
     ) -> None:
+        super().__init__()
         if use_qk_fused:
             raise NotImplementedError("use_qk_fused")
         rope_theta = float(resolve_rope_parameters(config)["rope_theta"])
-        super().__init__(
-            device=device,
-            batch_size=batch_size,
-            head_dim=head_dim,
-            max_seq_len=max_seq_len,
-            rope_theta=rope_theta,
-            rope_scaling=None,
-            use_qk_fused=use_qk_fused,
-            datatype=datatype,
-            shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
-            prefetcher=prefetcher,
-        )
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len
+        self.rope_theta = rope_theta
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.prefetcher = prefetcher
@@ -271,9 +259,38 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         else:
             self._rot_idx_pad = None
 
+    def get_rot_idxs(self, position_idxs: Any, on_host: bool = False) -> ttnn.Tensor:
+        import torch
+
+        if not isinstance(position_idxs, torch.Tensor):
+            raise TypeError(f"position_idxs must be a torch.Tensor, got {type(position_idxs)}")
+        if len(position_idxs.shape) != 1:
+            raise ValueError("position idxs must be a [batch] tensor")
+
+        batch = position_idxs.shape[0]
+        position_idxs = position_idxs.reshape(1, batch)
+        if torch.min(position_idxs) < 0:
+            raise ValueError("position idxs must be non-negative")
+
+        pad_size = nearest_32(batch) - batch
+        position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
+        common = {
+            "dtype": ttnn.uint32,
+            "layout": ttnn.ROW_MAJOR_LAYOUT,
+            "mesh_mapper": ttnn.replicate_tensor_to_mesh_mapper(self.device),
+        }
+        if on_host:
+            return ttnn.as_tensor(position_idxs, **common)
+        return ttnn.as_tensor(
+            position_idxs,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **common,
+        )
+
     def get_rot_mats(
         self,
-        position_idxs: Union["torch.Tensor", ttnn.Tensor, np.ndarray],
+        position_idxs: Union[Any, ttnn.Tensor, np.ndarray],
         return_rot_idxs: bool = False,
     ) -> List[ttnn.Tensor]:
         """Decode cos/sin via embedding; ROW_MAJOR tables + padded indices -> fused TILE (no extra tilize)."""
@@ -312,6 +329,9 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         cos_slice = self.cos_matrix_prefill[:, :, start_pos:required_end, :]
         sin_slice = self.sin_matrix_prefill[:, :, start_pos:required_end, :]
         return [cos_slice, sin_slice]
+
+    def get_both_trans_mats(self) -> dict:
+        return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
 
     @property
     def ministral3_config(self) -> Any:

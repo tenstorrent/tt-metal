@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: HF PixtralVisionModel vs TtPixtralVisionModel (first n_layers).
+# PCC: HF PixtralVisionModel + projector vs TT PixtralVisionModel + projector.
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import pytest
 import torch
 from loguru import logger
 from transformers import AutoConfig
+from transformers.models.mistral3.modeling_mistral3 import Mistral3MultiModalProjector
 from transformers.models.pixtral.modeling_pixtral import (
     PixtralVisionModel,
     generate_block_attention_mask,
@@ -20,6 +21,7 @@ from transformers.utils.generic import is_flash_attention_requested
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.experimental.devstarl2_small.tt.pipeline.tt_multimodal_projector import TTMistral3MultiModalProjector
 from models.experimental.devstarl2_small.tt.pipeline.tt_pixtral_vision_model import TtPixtralVisionModel
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.load_checkpoints import (
@@ -33,9 +35,12 @@ DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 
 
 def _prefixes(n_layers: int) -> tuple[str, ...]:
-    return ("vision_tower.patch_conv.", "vision_tower.ln_pre.") + tuple(
-        f"vision_tower.transformer.layers.{i}." for i in range(n_layers)
-    )
+    return (
+        "vision_tower.patch_conv.",
+        "vision_tower.ln_pre.",
+        "multi_modal_projector.",
+        "model.multi_modal_projector.",
+    ) + tuple(f"vision_tower.transformer.layers.{i}." for i in range(n_layers))
 
 
 def _to_meta(raw: dict, text_head_dim: int) -> dict:
@@ -112,11 +117,19 @@ def test_pixtral_vision_model_pcc_devstral_weights(mesh_device, n_layers, monkey
     hf_sd = load_hf_state_dict_filtered(
         DEVSTRAL_REPO_ID, _prefixes(n_layers), local_files_only=os.getenv("CI") == "true"
     )
-    meta_state = _to_meta(hf_sd, text_head_dim)
+    standardized_sd = standardize_hf_keys_multimodal(hf_sd)
+    meta_state = convert_vision_hf_to_meta(standardized_sd, text_head_dim)
 
     hf_vm = PixtralVisionModel(vision_cfg).to(torch.bfloat16).eval()
-    sd_vm = {k[len("vision_tower.") :]: v for k, v in hf_sd.items() if k.startswith("vision_tower.")}
+    sd_vm = {k[len("vision_tower.") :]: v for k, v in standardized_sd.items() if k.startswith("vision_tower.")}
     hf_vm.load_state_dict(sd_vm, strict=False)
+    hf_projector = Mistral3MultiModalProjector(hf_cfg).to(torch.bfloat16).eval()
+    sd_projector = {
+        k[len("multi_modal_projector.") :]: v
+        for k, v in standardized_sd.items()
+        if k.startswith("multi_modal_projector.")
+    }
+    hf_projector.load_state_dict(sd_projector, strict=False)
 
     patch_sz = int(vision_cfg.patch_size)
     H = W = patch_sz * 32
@@ -128,7 +141,8 @@ def test_pixtral_vision_model_pcc_devstral_weights(mesh_device, n_layers, monkey
     plist = [e[..., : s[0] // patch_sz, : s[1] // patch_sz] for e, s in zip(pe_conv, image_sizes)]
     position_ids = position_ids_in_meshgrid(plist, max_width=_max_patch_grid_side(vision_cfg))
 
-    ref = _hf_vision_forward_truncated(hf_vm, pixel_values, image_sizes, n_layers)
+    ref_hidden = _hf_vision_forward_truncated(hf_vm, pixel_values, image_sizes, n_layers)
+    ref = hf_projector(ref_hidden.squeeze(0), torch.tensor(image_sizes, dtype=torch.long))
 
     tt_vm = TtPixtralVisionModel(
         mesh_device=mesh_device,
@@ -141,13 +155,27 @@ def test_pixtral_vision_model_pcc_devstral_weights(mesh_device, n_layers, monkey
         n_layers=n_layers,
     )
     tt_out = tt_vm(pixel_values, image_sizes, position_ids=position_ids)
+    seq_len, hidden = int(tt_out.shape[2]), int(tt_out.shape[3])
+    tt_tokens = ttnn.reshape(tt_out, (seq_len, hidden))
+    if tt_tokens.memory_config().buffer_type == ttnn.BufferType.L1:
+        tt_tokens = ttnn.to_memory_config(tt_tokens, ttnn.DRAM_MEMORY_CONFIG)
 
-    hidden = model_args.vision_dim
-    tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-    tt_torch = tt_torch[:, :, :, :hidden].squeeze(0)
+    tt_projector = TTMistral3MultiModalProjector(
+        mesh_device=mesh_device,
+        args=model_args,
+        state_dict=meta_state,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        dtype=dtype,
+        eps=float(hf_projector.norm.variance_epsilon),
+    )
+    tt_features = tt_projector(tt_tokens, image_sizes)
+    tt_torch = ttnn.to_torch(tt_features, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).float()
+    while tt_torch.dim() > 2:
+        tt_torch = tt_torch.squeeze(0)
+    tt_torch = tt_torch[: ref.shape[0], : ref.shape[1]]
 
     pcc_required = 0.99
-    passing, msg = comp_pcc(ref, tt_torch, pcc_required)
-    logger.info(comp_allclose(ref, tt_torch))
+    passing, msg = comp_pcc(ref.float(), tt_torch, pcc_required)
+    logger.info(comp_allclose(ref.float(), tt_torch))
     logger.info(f"PCC: {msg}")
     assert passing, f"PCC below {pcc_required}: {msg}"

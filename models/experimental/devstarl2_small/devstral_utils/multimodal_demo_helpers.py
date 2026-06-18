@@ -473,7 +473,6 @@ def tt_lm_head_logits_last_token(
 
 
 def devstral_supports_on_device_sampling(model_args: ModelArgs, mesh_device) -> bool:
-    """True when Sampling1D can keep Devstral token selection on device for this 1D mesh."""
     mesh_shape = list(mesh_device.shape)
     if min(mesh_shape) > 1:
         return False

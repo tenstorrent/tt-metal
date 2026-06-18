@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.devstarl2_small.tt.tt_ministralattn import TtMinistralAttention
@@ -24,6 +26,10 @@ from models.tt_transformers.tt.model_config import (
     PrecisionSetting,
     TensorGroup,
 )
+
+
+def ministral_text_reduced_precision_enabled() -> bool:
+    return os.environ.get("TT_MINISTRAL3_TEXT_REDUCED_PRECISION", "1").strip().lower() not in ("0", "false", "no")
 
 
 class TtMinistral3DecoderLayer(LightweightModule):
@@ -47,22 +53,24 @@ class TtMinistral3DecoderLayer(LightweightModule):
         super().__init__()
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl  # fabric num_links for all_gather
-        model_args.decoders_optimizations.set_decoder_conf(
-            layer_num,
-            ModelOptimizations(
-                {
-                    "TensorPrecision": {
-                        TensorGroup.WQKV: PrecisionSetting.BFP8,
-                        TensorGroup.WO: PrecisionSetting.BFP8,
-                        TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
-                    },
-                    "OpFidelity": {
-                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.LOFI,
-                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
-                    },
-                }
-            ),
-        )
+        use_reduced_precision = ministral_text_reduced_precision_enabled()
+        if use_reduced_precision:
+            model_args.decoders_optimizations.set_decoder_conf(
+                layer_num,
+                ModelOptimizations(
+                    {
+                        "TensorPrecision": {
+                            TensorGroup.WQKV: PrecisionSetting.BFP8,
+                            TensorGroup.WO: PrecisionSetting.BFP8,
+                            TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
+                        },
+                        "OpFidelity": {
+                            OpGroup.LI_QKV_PREFILL: MathFidelitySetting.LOFI,
+                            OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
+                        },
+                    }
+                ),
+            )
 
         self.input_layernorm = TtMinistralRMSNorm(
             mesh_device,
@@ -78,7 +86,9 @@ class TtMinistral3DecoderLayer(LightweightModule):
             tt_ccl,
             model_args,
             meta_state_dict,
-            model_args.weight_cache_path(ttnn.bfloat8_b) if weight_cache_path is not None else None,
+            model_args.weight_cache_path(ttnn.bfloat8_b)
+            if use_reduced_precision and weight_cache_path is not None
+            else weight_cache_path,
             layer_num,
             dtype,
             transformation_mats,

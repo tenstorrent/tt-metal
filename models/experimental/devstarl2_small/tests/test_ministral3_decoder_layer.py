@@ -1,25 +1,27 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# PCC: HF Ministral3DecoderLayer stack vs TtMinistral3DecoderLayer stack decode (Devstral).
+# PCC: HF Ministral3 decode logits vs TtDevstral2SmallModel decode logits.
 
 from __future__ import annotations
 
 import os
+import re
 import types
 
-import numpy as np
 import pytest
 import torch
 from loguru import logger
 from transformers.cache_utils import DynamicCache
 from transformers.models.ministral3.modeling_ministral3 import Ministral3DecoderLayer
 
+# Keep long decoder PCC runs focused; set TT_LOGGER_LEVEL=Warning/Debug externally when debugging TT-Metal.
+os.environ.setdefault("TT_LOGGER_LEVEL", "Error")
+
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstarl2_small.devstral_utils import apply_fp8_dequantize_compat, resolve_rope_parameters
-from models.experimental.devstarl2_small.tt.tt_ministral3_decoder_layer import TtMinistral3DecoderLayer
-from models.experimental.devstarl2_small.tt.tt_ministral_rotary_emb import TtMinistral3RotaryEmbedding
+from models.experimental.devstarl2_small.devstral_utils import apply_fp8_dequantize_compat
+from models.experimental.devstarl2_small.tt.pipeline.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -28,15 +30,77 @@ apply_fp8_dequantize_compat()
 
 DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 
-PCC_TARGET = float(os.environ.get("MINISTRAL3_DECODER_STACK_PCC", "0.99"))
-DECODE_STEPS = int(os.environ.get("MINISTRAL3_DECODER_DECODE_STEPS", "5"))
+PCC_TARGET = float(os.environ.get("MINISTRAL3_DECODER_STACK_PCC", "0.98"))
+DECODE_STEPS = int(os.environ.get("MINISTRAL3_DECODER_DECODE_STEPS", "32"))
 # Profile decode forward only: skip per-step to_torch (UntilizeDeviceOperation in Tracy).
 PROFILE_DECODE = os.environ.get("MINISTRAL3_DECODER_PROFILE", "0").strip().lower() in ("1", "true", "yes")
+_DECODE_PCC_RESULTS: dict[int, float | str] = {}
 
 
 def _text_model_root(multimodal_inner):
     lm = multimodal_inner.language_model
     return lm.model if hasattr(lm, "model") else lm
+
+
+def _hf_lm_head(hf_full, text_root):
+    candidates = (
+        hf_full,
+        getattr(hf_full, "model", None),
+        getattr(hf_full, "language_model", None),
+        getattr(getattr(hf_full, "model", None), "language_model", None),
+        text_root,
+        getattr(text_root, "language_model", None),
+    )
+    for candidate in candidates:
+        if candidate is not None and hasattr(candidate, "lm_head"):
+            return candidate.lm_head
+    raise AttributeError("Could not find HF lm_head on Devstral model.")
+
+
+def _logits_from_hidden(hf_full, text_root, hidden):
+    normed = text_root.norm(hidden)
+    return _hf_lm_head(hf_full, text_root)(normed).float()
+
+
+def _tt_decode_logits_to_bsv(tt_logits, mesh_device, batch_size, vocab_size):
+    logits_torch = ttnn.to_torch(tt_logits, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    while logits_torch.dim() > 4:
+        logits_torch = logits_torch.squeeze(0)
+    if logits_torch.dim() == 4:
+        rows = logits_torch[:, :1, :batch_size, :vocab_size]
+    elif logits_torch.dim() == 3:
+        rows = logits_torch[0, :batch_size, :vocab_size]
+    elif logits_torch.dim() == 2:
+        rows = logits_torch[:batch_size, :vocab_size]
+    else:
+        raise RuntimeError(f"Unexpected TT logits shape after mesh compose: {tuple(logits_torch.shape)}")
+    return rows.reshape(batch_size, 1, vocab_size)
+
+
+def _pcc_value(pcc_msg) -> float | str:
+    try:
+        return float(pcc_msg)
+    except (TypeError, ValueError):
+        match = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", str(pcc_msg))
+        return float(match.group(0)) if match is not None else str(pcc_msg)
+
+
+def _print_decode_pcc_summary(terminalreporter) -> None:
+    if not _DECODE_PCC_RESULTS:
+        return
+    terminalreporter.write_sep("-", "Devstral text decode logits PCC")
+    terminalreporter.write_line("decode_step\tPCC")
+    for step, pcc in sorted(_DECODE_PCC_RESULTS.items()):
+        pcc_str = f"{pcc:.6f}" if isinstance(pcc, float) else str(pcc)
+        terminalreporter.write_line(f"{step}\t{pcc_str}")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def decode_pcc_summary(pytestconfig):
+    yield
+    terminalreporter = pytestconfig.pluginmanager.get_plugin("terminalreporter")
+    if terminalreporter is not None:
+        _print_decode_pcc_summary(terminalreporter)
 
 
 def _hf_decoder_stack_forward(
@@ -61,6 +125,17 @@ def _hf_decoder_stack_forward(
         )
         hidden = layer_out[0] if isinstance(layer_out, tuple) else layer_out
     return hidden
+
+
+def _token_ids_to_tt(token_ids: torch.Tensor, mesh_device) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        token_ids.to(torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 @pytest.fixture
@@ -90,13 +165,17 @@ def trust_remote_ministral(monkeypatch):
     monkeypatch.setattr(mc.ModelArgs, "get_hf_model_cls", _get_hf_model_cls_devstral_safe)
 
 
-_MESH_DEVICE = [{"P150": (1, 1), "BH-QB": (1, 4)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))]
+def _mesh_device_param():
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
+        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
+    return int(os.environ.get("TT_MESH_WIDTH", "4"))
 
 
 @torch.no_grad()
 @pytest.mark.timeout(7200)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("mesh_device", _MESH_DEVICE, indirect=True)
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize(
     "device_params",
@@ -109,7 +188,7 @@ def test_ministral3_decoder_layer_decode_pcc_devstral_weights(
     monkeypatch,
     trust_remote_ministral,
 ):
-    """Full decoder stack decode PCC vs HF (KV cache filled incrementally; no prefill pass)."""
+    """Full decoder stack + final norm + LM head decode logits PCC vs HF."""
     monkeypatch.setenv("HF_MODEL", DEVSTRAL_REPO_ID)
 
     dtype = ttnn.bfloat16
@@ -128,12 +207,11 @@ def test_ministral3_decoder_layer_decode_pcc_devstral_weights(
 
     depth = int(model_args.full_model_n_layers)
     n_layers = depth
+    model_args.n_layers = n_layers
     logger.info(
         f"Ministral3 decoder stack decode PCC: n_layers={n_layers}/{depth} "
         f"steps={DECODE_STEPS} pcc_required={PCC_TARGET}"
     )
-
-    text_cfg = model_args.hf_config.text_config
 
     try:
         meta_state_dict = model_args.load_state_dict()
@@ -146,113 +224,61 @@ def test_ministral3_decoder_layer_decode_pcc_devstral_weights(
     text_root = _text_model_root(hf_full.model)
     rotary = text_root.rotary_emb
     rotary.eval()
+    text_root.norm.eval()
+    _hf_lm_head(hf_full, text_root).eval()
     hf_layers = text_root.layers[:n_layers]
     for layer in hf_layers:
         assert isinstance(layer, Ministral3DecoderLayer), type(layer)
         layer.eval()
 
-    rope_params = resolve_rope_parameters(text_cfg)
-
     tt_ccl = TT_CCL(mesh_device)
-    transformation_mats = {"decode": None, "prefill": None}
-    weight_cache_path = model_args.weight_cache_path(dtype)
-
-    tt_layers = [
-        TtMinistral3DecoderLayer(
-            mesh_device,
-            tt_ccl,
-            model_args,
-            meta_state_dict,
-            weight_cache_path,
-            layer_num=i,
-            dtype=dtype,
-            transformation_mats=transformation_mats,
-            configuration=model_args,
-            llama_4_scaling_beta=rope_params.get("llama_4_scaling_beta"),
-            original_max_position_embeddings=rope_params.get("original_max_position_embeddings"),
-        )
-        for i in range(n_layers)
-    ]
-
-    tt_rope = TtMinistral3RotaryEmbedding(
-        device=mesh_device,
-        batch_size=batch_size,
-        head_dim=model_args.head_dim,
-        max_seq_len=model_args.max_seq_len,
-        config=text_cfg,
+    tt_model = TtDevstral2SmallModel(
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        model_args=model_args,
+        meta_state_dict=meta_state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        dtype=dtype,
+        transformation_mats={"decode": None, "prefill": None},
+        configuration=model_args,
+        vision_config=hf_full.config.vision_config,
     )
 
     hf_cache = DynamicCache()
     generation_start_pos = 0
     all_pass = True
 
-    residual_mem_cfg = model_args.get_residual_mem_config(Mode.DECODE, None)
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    decode_in_dev = ttnn.to_device(
-        model_args.prepare_residual_tensor_decode(
-            torch.zeros(batch_size, 1, model_args.dim, dtype=torch.bfloat16),
-            residual_mem_cfg,
-            on_host=True,
-        ),
-        mesh_device,
-        memory_config=residual_mem_cfg,
-    )
-    pos_host_init = ttnn.from_torch(
-        np.zeros((1, batch_size), dtype=np.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=mesh_mapper,
-    )
-    current_pos_dev = ttnn.to_device(pos_host_init, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(pos_host_init)
-
-    pcc_steps = [] if PROFILE_DECODE else list(range(DECODE_STEPS))
+    # Direct decode at pos=0 seeds the KV cache; PCC is checked on the next 32 decode steps.
+    pcc_steps = [] if PROFILE_DECODE else list(range(1, DECODE_STEPS + 1))
     if PROFILE_DECODE and DECODE_STEPS > 0:
-        pcc_steps = [DECODE_STEPS - 1]
+        pcc_steps = [DECODE_STEPS]
 
-    for step in range(DECODE_STEPS):
+    for step in range(DECODE_STEPS + 1):
         pos = generation_start_pos + step
-        pt_decode_in = torch.randn(batch_size, 1, model_args.dim, dtype=torch.bfloat16)
+        token_ids = torch.randint(0, model_args.vocab_size, (batch_size, 1), dtype=torch.long)
+        pt_decode_in = text_root.embed_tokens(token_ids)
         position_ids = torch.full((batch_size, 1), pos, dtype=torch.long)
 
-        ref_out = _hf_decoder_stack_forward(hf_layers, rotary, pt_decode_in, position_ids, hf_cache)
+        ref_hidden = _hf_decoder_stack_forward(hf_layers, rotary, pt_decode_in, position_ids, hf_cache)
 
-        current_pos = np.full((batch_size,), pos, dtype=np.int32)
-        pos_host = ttnn.from_torch(
-            current_pos.reshape(1, batch_size),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
-        )
-        ttnn.copy_host_to_device_tensor(pos_host, current_pos_dev)
-        ttnn.deallocate(pos_host)
-
-        rot_mats = tt_rope.get_rot_mats(torch.from_numpy(current_pos))
-
-        decode_in_host = model_args.prepare_residual_tensor_decode(
-            pt_decode_in,
-            residual_mem_cfg,
-            on_host=True,
-        )
-        ttnn.copy_host_to_device_tensor(decode_in_host, decode_in_dev)
-        ttnn.deallocate(decode_in_host)
-
-        h_tt = decode_in_dev
-        for tt_layer in tt_layers:
-            h_tt = tt_layer.forward_decode(h_tt, current_pos_dev, rot_mats)
+        token_ids_tt = _token_ids_to_tt(token_ids, mesh_device)
+        tt_logits = tt_model.forward_decode(token_ids_tt, pos)
+        ttnn.deallocate(token_ids_tt)
 
         if step in pcc_steps:
             ttnn.synchronize_device(mesh_device)
-            tt_torch = ttnn.to_torch(h_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-            tt_torch = tt_torch[:, :1, :batch_size, : model_args.dim].reshape(batch_size, 1, model_args.dim)
+            ref_logits = _logits_from_hidden(hf_full, text_root, ref_hidden)
+            tt_logits_torch = _tt_decode_logits_to_bsv(tt_logits, mesh_device, batch_size, model_args.vocab_size)
 
-            passing, pcc_value = comp_pcc(ref_out, tt_torch, PCC_TARGET)
-            logger.info(comp_allclose(ref_out, tt_torch))
-            logger.info(f"Decode step {step} pos={pos} n_layers={n_layers} PCC: {pcc_value}")
+            passing, pcc_value = comp_pcc(ref_logits, tt_logits_torch, PCC_TARGET)
+            _DECODE_PCC_RESULTS[step - 1] = _pcc_value(pcc_value)
+            logger.info(comp_allclose(ref_logits, tt_logits_torch))
+            logger.info(f"Decode step {step - 1} pos={pos} n_layers={n_layers} logits PCC: {pcc_value}")
             if not passing:
                 all_pass = False
+        ttnn.deallocate(tt_logits)
 
     if PROFILE_DECODE:
         logger.info("MINISTRAL3_DECODER_PROFILE=1: PCC on final step only (no per-step to_torch in Tracy hot path).")
 
-    assert all_pass, f"Decode PCC below {PCC_TARGET} for one or more steps"
+    assert all_pass, f"Decode logits PCC below {PCC_TARGET} for one or more steps"

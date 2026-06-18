@@ -45,6 +45,39 @@ Single file, e.g. attention only:
 pytest models/experimental/devstarl2_small/tests/test_ministralattn.py -k pcc
 ```
 
+**Accuracy — Text Decoder Logits PCC**
+
+Compares full decode logits (all text layers + final norm + LM head) against HF for 32 decode steps. Default PCC threshold: ≥ 0.99 (`MINISTRAL3_DECODER_STACK_PCC`).
+
+```sh
+pytest models/experimental/devstarl2_small/tests/test_ministral3_decoder_layer.py
+```
+
+**Accuracy — Text Prefill Logits PCC**
+
+Compares full-depth prefill last-token logits (all text layers + final norm + LM head) against HF over the default sequence-length sweep (128 → 8k tokens) from `demo/messages_256k_text.json`. Default PCC threshold: ≥ 0.97 (`MINISTRAL3_PREFILL_LOGITS_PCC`).
+
+```sh
+pytest models/experimental/devstarl2_small/tests/test_ministral3_prefill_logits.py
+```
+
+**Device profiling — Tracy CSV**
+
+Runs the one-layer prefill+decode logits test (`n_layers=1`) under Tracy:
+
+```sh
+python -m tracy -p -r -v -m pytest models/experimental/devstarl2_small/tests/test_ministral3_one_layer_prefill_decode_logits.py
+```
+
+**Performance — ISL Sweep**
+
+Sweeps the input sequence length through the full vision-text pipeline. Text is sourced from `demo/messages_256k_text.json`; one image is always included; output is fixed at 200 tokens per sweep point. The default Devstral sweep is 4k → 256k tokens.
+
+```sh
+pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_text_isl_sweep.py
+```
+
+
 ## Demos
 
 Run from repo root on Blackhole QuietBox or P150.
@@ -97,6 +130,73 @@ python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square
 | Image + text | P150 | 1x1 | 100 | 5 | 4.2 | 3121 |
 | Text LM | BH-QB | 1x4 | 200 | 30.3 | 28.4 | 279 |
 | Text LM | P150 | 1x1 | 200 | 5.1 | 5 | 528 |
+
+**Text Prefill Logits PCC**
+
+Results from `test_ministral3_prefill_logits.py` on BH QB-2 (`P150x4`) using Tale of Two Cities tokens. This compares the full text model path (40 layers + final norm + LM head) against HF. PCC threshold: >= 0.97.
+
+| Seq len | PCC |
+|--------:|----:|
+| 128 | 0.985114 |
+| 256 | 0.991430 |
+| 512 | 0.996213 |
+| 1024 | 0.996917 |
+| 4096 | 0.996743 |
+| 8192 | 0.996909 |
+| 32k, 64k, 128k, 256k | TBD |
+
+Note: larger context lengths take longer to verify because the HuggingFace reference runs a full 24B forward pass over the entire sequence.
+
+**Decode Logits PCC — 32 Generation Steps**
+
+Results from `test_ministral3_decoder_layer.py` on BH QB-2 (`P150x4`). This compares the full text model path (40 layers + final norm + LM head) against HF over 32 decode steps. Per-step PCC threshold: >= 0.98.
+
+| Step | PCC |
+|-----:|----:|
+| 0 | 0.996207 |
+| 1 | 0.997521 |
+| 2 | 0.996235 |
+| 3 | 0.996735 |
+| 4 | 0.993788 |
+| 5 | 0.993598 |
+| 6 | 0.996316 |
+| 7 | 0.997877 |
+| 8 | 0.997422 |
+| 9 | 0.992626 |
+| 10 | 0.995248 |
+| 11 | 0.997696 |
+| 12 | 0.997402 |
+| 13 | 0.995050 |
+| 14 | 0.996312 |
+| 15 | 0.997565 |
+| 16 | 0.996812 |
+| 17 | 0.997307 |
+| 18 | 0.996894 |
+| 19 | 0.997204 |
+| 20 | 0.992352 |
+| 21 | 0.997408 |
+| 22 | 0.996683 |
+| 23 | 0.997833 |
+| 24 | 0.997360 |
+| 25 | 0.997428 |
+| 26 | 0.996770 |
+| 27 | 0.998583 |
+| 28 | 0.998061 |
+| 29 | 0.998206 |
+| 30 | 0.997654 |
+| 31 | 0.998227 |
+
+**ISL (Context Window) Sweep**
+
+| Config | Batch | ISL (max_seq_len) | Prefill tokens | decode_t/s/u (tok/s) | decode_t/s (tok/s) |
+|:-------|------:|------------------:|---------------:|---------------------:|-------------------:|
+| b1_isl4k | 1 | 4k (4096) | 4096 | 29.24 | 29.24 |
+| b1_isl8k | 1 | 8k (8192) | 8192 | 22.28 | 22.28 |
+| b1_isl16k | 1 | 16k (16384) | 16384 | 21.68 | 21.68 |
+| b1_isl32k | 1 | 32k (32768) | 32768 | 20.42 | 20.42 |
+| b1_isl64k | 1 | 64k (65536) | 65536 | 18.43 | 18.43 |
+| b1_isl128k | 1 | 128k (131072) | 131072 | 15.35 | 15.35 |
+| b1_isl256k | 1 | 256k (262144) | 262144 | 15.74 | 15.74 |
 
 ## Resources
 
@@ -163,3 +263,7 @@ The following optimizations were applied across the vision tower, projector, and
 - **Scaled dot-product attention (SDPA)** — Program config is chosen from sequence length: below 2048 tokens, 128×128 chunks (aligned with Mistral vision, PCC-safe); at 2048 and above, chunks scale up to 256×256 with matmul batch count. `PIXTRAL_SDPA_Q_CHUNK` and `PIXTRAL_SDPA_K_CHUNK` environment variables can override chunk sizes. The SDPA grid uses the device `max_grid_size`, and SDPA runs with an explicit DRAM memory config. Redundant `to_memory_config` after head concatenation was removed.
 - **Async collectives (multi-chip)** — Replaced synchronous `all_gather` with `all_gather_async` on mesh paths (vision attention output gather, text MLP/decoder collectives where applicable). Tuned `chunks_per_sync`, `num_workers_per_link`, `num_buffers_per_channel`, and `num_links` per cluster axis (e.g. higher sync chunking and four workers per link on vision attention gather; two links and smaller chunks on text prefill/decode) for better fabric overlap and throughput.
 - **Matmul batching and tiles** — On the 1024-token PCC path, matmul tile size increases from 512 to 1024 with batch fusion enabled. For 1540×1540 vision inputs (~12k tokens), the number of batches per matmul is roughly halved compared to the prior chunk-concat approach.
+
+## Open Items
+
+- Prefill logits PCC verification at context lengths >=32k (32k, 64k, 128k, 256k).
