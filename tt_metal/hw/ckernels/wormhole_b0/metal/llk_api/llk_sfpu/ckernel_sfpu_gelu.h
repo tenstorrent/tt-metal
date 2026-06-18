@@ -368,14 +368,19 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // Saturation threshold for tanh -> +/- 1. Match torch's vectorized CPU
-    // tanh (Sleef / VML), which collapses to exactly +/- 1 once |scaled|
-    // crosses ~8.668. Empirically torch's FP64 path also saturates around
-    // this threshold (not at the strict IEEE-754 round-to-nearest crossover
-    // at |scaled| ~ 19.07 that you'd predict from FP64 ULPs), so using the
-    // same threshold in both BF16 and FP32 dest-acc modes gives the closest
-    // match against both torch FP32->BF16 and torch FP64->FP32 references.
-    constexpr float TANH_SAT_THRESHOLD = 8.667f;
+    // Saturation threshold for tanh -> +/- 1, dtype-dependent:
+    //   BF16 mode: 8.667 to match torch's vectorized CPU tanh (Sleef / VML)
+    //              which collapses to +/- 1 at |scaled| > ~8.668. Required so
+    //              BF16(kernel) == BF16(torch FP32 -> BF16) for the saturation
+    //              band inputs (x in [-5.16, -5.06] all -> 0 in BF16).
+    //   FP32 mode: 19.07, the analytical FP64 saturation point — where
+    //              1 - tanh(s) drops below FP64 half-ULP at 1.0 (= 2^-54 =
+    //              5.55e-17) so torch's `1 + tanh` rounds to 0 exactly. A
+    //              torch sweep confirms this empirically: gelu(-7.2, FP64) =
+    //              -4e-16 (scaled ~= 19.05, NOT saturated) and gelu(-7.3,
+    //              FP64) = -0 (scaled ~= 19.70, saturated); 19.07 sits in
+    //              the gap and matches torch's actual behaviour.
+    constexpr float TANH_SAT_THRESHOLD = is_fp32_dest_acc_en ? 19.07f : 8.667f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
