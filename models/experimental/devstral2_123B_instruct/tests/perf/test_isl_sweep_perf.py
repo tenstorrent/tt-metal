@@ -14,7 +14,8 @@ Run::
     pytest models/experimental/devstral2_123B_instruct/tests/perf/test_isl_sweep_perf.py -k sweep -v
 
 Set ``DEVSTRAL2_HF_LOCAL_ONLY=1`` when HF shards and the TT weight cache are already
-populated. Results are written under ``tests/isl_sweep_perf_outputs/``.
+populated. Results are written incrementally under ``tests/isl_sweep_perf_outputs/``
+(aggregate JSON after each ISL plus per-ISL JSON files).
 """
 
 from __future__ import annotations

@@ -69,6 +69,32 @@ _OUTPUT_DIR = Path(__file__).resolve().parent.parent / "isl_sweep_perf_outputs"
 _isl_perf_model_cache: dict[tuple[tuple[int, int], int], tuple[TtMinistral3ForCausalLM, Devstral2Args, str]] = {}
 
 
+def _chunk_log_every(num_chunks: int) -> int:
+    """Log prefill chunk progress every N chunks (0 = disable)."""
+    raw = os.environ.get("DEVSTRAL2_ISL_PERF_CHUNK_LOG_EVERY", "32").strip()
+    every = int(raw)
+    if every <= 0:
+        return num_chunks + 1
+    return max(1, every)
+
+
+def _log_prefill_chunk_progress(
+    *,
+    isl: int,
+    phase: str,
+    chunk_idx: int,
+    num_chunks: int,
+    phase_started_s: float,
+) -> None:
+    every = _chunk_log_every(num_chunks)
+    if chunk_idx != 0 and chunk_idx != num_chunks - 1 and (chunk_idx + 1) % every != 0:
+        return
+    elapsed_s = time.perf_counter() - phase_started_s
+    logger.info(
+        f"ISL={isl} prefill {phase}: chunk {chunk_idx + 1}/{num_chunks} " f"({elapsed_s:.1f}s elapsed in {phase})"
+    )
+
+
 def _trace_prefill_enabled() -> bool:
     return os.environ.get("DEVSTRAL2_TRACE_PREFILL", "1").strip().lower() not in ("0", "false", "no")
 
@@ -176,6 +202,7 @@ def _run_traced_chunked_prefill(
     mesh_device,
     model: TtMinistral3ForCausalLM,
     *,
+    isl: int,
     input_ids_padded: torch.Tensor,
     num_chunks: int,
     kv_block_size: int,
@@ -212,8 +239,12 @@ def _run_traced_chunked_prefill(
         )
         warm = model(prefill_chunk_dev, mode="prefill", **flex)
         warm.deallocate(True)
+        _log_prefill_chunk_progress(
+            isl=isl, phase="compile", chunk_idx=chunk_idx, num_chunks=num_chunks, phase_started_s=t0
+        )
     ttnn.synchronize_device(mesh_device)
     prefill_compile_s = _time_tt_op(t0)
+    logger.info(f"ISL={isl} prefill compile done: {prefill_compile_s:.1f}s ({num_chunks} chunk(s))")
 
     chunk_tokens = input_ids_padded[:, :kv_block_size]
     chunk_page_table = _update_prefill_trace_buffers(
@@ -242,6 +273,7 @@ def _run_traced_chunked_prefill(
     t0 = time.perf_counter()
     ttnn.execute_trace(mesh_device, prefill_trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(mesh_device)
+    _log_prefill_chunk_progress(isl=isl, phase="replay", chunk_idx=0, num_chunks=num_chunks, phase_started_s=t0)
     for chunk_idx in range(1, num_chunks):
         chunk_start = chunk_idx * kv_block_size
         chunk_tokens = input_ids_padded[:, chunk_start : chunk_start + kv_block_size]
@@ -259,7 +291,11 @@ def _run_traced_chunked_prefill(
         ttnn.synchronize_device(mesh_device)
         ttnn.execute_trace(mesh_device, prefill_trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(mesh_device)
+        _log_prefill_chunk_progress(
+            isl=isl, phase="replay", chunk_idx=chunk_idx, num_chunks=num_chunks, phase_started_s=t0
+        )
     prefill_replay_s = _time_tt_op(t0)
+    logger.info(f"ISL={isl} prefill replay done: {prefill_replay_s:.3f}s (TTFT window)")
 
     prefill_logits.deallocate(True)
     ttnn.release_trace(mesh_device, prefill_trace_id)
@@ -304,10 +340,15 @@ def measure_isl_perf_point(
     rotary_emb = model.model.rotary_emb
     decode_trace_id = None
 
+    logger.info(
+        f"ISL={isl} start: padded={padded_len}, chunks={num_chunks}, " f"decode_replay_iters={decode_replay_iters}"
+    )
+
     try:
         prefill_compile_s, prefill_replay_s = _run_traced_chunked_prefill(
             mesh_device,
             model,
+            isl=isl,
             input_ids_padded=input_ids_padded,
             num_chunks=num_chunks,
             kv_block_size=kv_block_size,
@@ -326,6 +367,7 @@ def measure_isl_perf_point(
         if decode_replay_iters > 0:
             decode_token = 0
             decode_pos = prompt_len
+            logger.info(f"ISL={isl} decode: compile + capture + {decode_replay_iters} replay(s)")
 
             t0 = time.perf_counter()
             stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, decode_token, decode_pos)
@@ -403,19 +445,50 @@ def _format_results_table(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _write_sweep_json(rows: list[dict], *, label: str, isl_lengths: list[int]) -> Path:
-    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = _OUTPUT_DIR / f"isl_perf_{label}.json"
+def _sweep_payload(
+    rows: list[dict],
+    *,
+    label: str,
+    isl_lengths: list[int],
+    complete: bool,
+) -> dict:
     max_new_tokens = devstral2_max_new_tokens()
-    payload = {
+    completed_isl = [row["isl"] for row in rows]
+    pending_isl = [isl for isl in isl_lengths if isl not in completed_isl]
+    return {
         "label": label,
+        "complete": complete,
         "model_max_seq_len": rows[0]["model_max_seq_len"] if rows else devstral2_isl_perf_kv_max_seq_len(isl_lengths),
         "max_new_tokens": max_new_tokens,
         "decode_replay_cap": int(os.getenv("DEVSTRAL2_ISL_PERF_DECODE_REPLAY_CAP", "32")),
+        "isl_lengths": isl_lengths,
+        "completed_isl": completed_isl,
+        "pending_isl": pending_isl,
         "results": rows,
     }
+
+
+def _write_isl_point_json(row: dict, *, label: str) -> Path:
+    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _OUTPUT_DIR / f"isl_perf_{label}_isl_{row['isl']}.json"
+    out_path.write_text(json.dumps(row, indent=2), encoding="utf-8")
+    logger.info(f"Wrote ISL perf point JSON to {out_path}")
+    return out_path
+
+
+def _write_sweep_json(
+    rows: list[dict],
+    *,
+    label: str,
+    isl_lengths: list[int],
+    complete: bool = True,
+) -> Path:
+    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _OUTPUT_DIR / f"isl_perf_{label}.json"
+    payload = _sweep_payload(rows, label=label, isl_lengths=isl_lengths, complete=complete)
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    logger.info(f"Wrote ISL perf sweep JSON to {out_path}")
+    status = "complete" if complete else f"{len(rows)}/{len(isl_lengths)} points"
+    logger.info(f"Wrote ISL perf sweep JSON ({status}) to {out_path}")
     return out_path
 
 
@@ -433,12 +506,17 @@ def run_isl_perf_sweep(
 
     rows: list[dict] = []
     logger.info("ISL perf sweep columns:\n" + _format_results_table([]).split("\n")[0])
-    for isl in isl_lengths:
-        rows.append(measure_isl_perf_point(mesh_device, model, args, isl=isl))
+    for point_idx, isl in enumerate(isl_lengths):
+        logger.info(f"ISL perf point {point_idx + 1}/{len(isl_lengths)}: ISL={isl}")
+        row = measure_isl_perf_point(mesh_device, model, args, isl=isl)
+        rows.append(row)
+        _write_isl_point_json(row, label=label)
+        _write_sweep_json(rows, label=label, isl_lengths=isl_lengths, complete=False)
+        logger.info(f"ISL perf progress ({label}):\n{_format_results_table(rows)}")
 
     table = _format_results_table(rows)
     logger.info(f"ISL perf sweep results ({label}):\n{table}")
-    _write_sweep_json(rows, label=label, isl_lengths=isl_lengths)
+    _write_sweep_json(rows, label=label, isl_lengths=isl_lengths, complete=True)
     return rows
 
 
