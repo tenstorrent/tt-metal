@@ -7,6 +7,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/actions/sweep-run-analysis/ @stevendae @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/blackhole_demo_systems.yaml @roseli-TT @tdowdallTT @williamlyTT @tenstorrent/codeowner-bypass
 .github/time_budget.yaml @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
 .github/time_budgets/ @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
 .github/workflows/pipeline-select-profiler.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
