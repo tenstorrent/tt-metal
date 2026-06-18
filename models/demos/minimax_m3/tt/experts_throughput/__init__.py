@@ -1,0 +1,499 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Throughput-optimized MoE Experts Module with all_to_all operations.
+
+This module provides a high-throughput implementation of MoE experts using
+all_to_all_dispatch and all_to_all_combine operations to dynamically batch
+tokens across 32 Galaxy devices (4 experts per device).
+
+The key difference from the standard experts module is:
+- Standard: Each device processes all experts, uses sparse matmul for routing
+- Throughput: Experts distributed across devices, tokens routed via all_to_all
+
+This approach enables handling multiple batches efficiently by dynamically
+creating batches on each device based on expert routing decisions.
+
+Usage:
+    from models.demos.minimax_m3.tt.experts_throughput import (
+        ThroughputExperts,
+        ThroughputExpertConfig,
+        ThroughputProgramConfig,
+    )
+
+    config = ThroughputExpertConfig.from_hf_config(hf_config, mesh_device)
+    program_config = ThroughputProgramConfig()
+
+    experts = ThroughputExperts(
+        mesh_device=mesh_device,
+        config=config,
+        state_dict=state_dict,
+        program_config=program_config,
+    )
+
+    output = experts(hidden_states, topk_indices, topk_weights)
+"""
+
+import ttnn
+from typing import Optional
+from models.demos.minimax_m3.config import MeshConfig
+from .config import (
+    ThroughputExpertConfig,
+    ThroughputProgramConfig,
+    AllToAllDispatchConfig,
+    AllToAllCombineConfig,
+    FusedMoeGptConfig,
+    create_expert_mapping_tensors,
+    create_remap_topk_mask,
+)
+from .decode import decode_forward
+from .fused_decode import fused_decode_forward
+from .prefill import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_expert_weights_for_deepseek
+from .weights import (
+    ThroughputExpertWeights,
+    load_throughput_expert_weights,
+    create_fused_moe_gpt_config,
+    get_moe_gpt_combine_core_range,
+)
+
+__all__ = [
+    "ThroughputExperts",
+    "ThroughputExpertConfig",
+    "ThroughputProgramConfig",
+    "DeepSeekPrefillConfig",
+    "ThroughputExpertWeights",
+    "AllToAllDispatchConfig",
+    "AllToAllCombineConfig",
+    "FusedMoeGptConfig",
+    "fused_decode_forward",
+    "create_fused_moe_gpt_config",
+    "get_moe_gpt_combine_core_range",
+]
+
+
+class ThroughputExperts:
+    """
+    Throughput-optimized MoE Expert implementation using all_to_all operations.
+
+    This class distributes experts across devices (4 per device on a 32-device
+    Galaxy system) and uses all_to_all_dispatch and all_to_all_combine to
+    dynamically route tokens to their assigned experts.
+
+    The workflow is:
+    1. Router computes top-k experts per token (external)
+    2. all_to_all_dispatch sends tokens to devices hosting their experts
+    3. Each device runs MLP on its local experts
+    4. all_to_all_combine returns results to original token positions
+    5. Results weighted by routing weights and summed
+
+    Attributes:
+        config: Expert configuration
+        weights: Loaded expert weights (sharded by device)
+        program_config: Matmul program configurations
+        expert_mapping_tensors: Device-expert mapping for routing
+        remap_topk_mask: Mask for expert remapping
+        dispatch_config: all_to_all_dispatch configuration
+        combine_config: all_to_all_combine configuration
+    """
+
+    def __init__(
+        self,
+        mesh_device,
+        config: ThroughputExpertConfig,
+        state_dict: dict,
+        ccl_manager,
+        mesh_config: MeshConfig,
+        program_config: ThroughputProgramConfig = None,
+        weight_dtype=ttnn.bfloat4_b,
+        tensor_cache_path: str = None,
+        dispatch_cluster_axis: Optional[int] = None,
+        decode_memory_config: ttnn.MemoryConfig = None,
+        prefill_memory_config: ttnn.MemoryConfig = None,
+        fused_config: Optional[FusedMoeGptConfig] = None,
+        prefill_config: Optional["DeepSeekPrefillConfig"] = None,
+    ):
+        """
+        Initialize throughput experts.
+
+        Args:
+            mesh_device: TTNN mesh device (expected 32 devices for Galaxy)
+            config: Expert configuration
+            state_dict: Expert weights dictionary
+            program_config: Optional custom program config (uses defaults if None)
+            weight_dtype: Data type for weights (default: bfloat4_b)
+            tensor_cache_path: Optional path for weight caching
+            dispatch_cluster_axis: Mesh axis for all_to_all operations (default: 0 for rows)
+            decode_memory_config: Memory config for decode (default: L1)
+            prefill_memory_config: Memory config for prefill (default: DRAM)
+            fused_config: If provided, use the fused flow (all_to_all_dispatch_metadata +
+                moe_gpt + selective_reduce_combine) for decode instead of the dense flow.
+                The existing unit tests use the dense flow (fused_config=None).
+
+        Raises:
+            ValueError: If mesh configuration is incompatible with all_to_all operations
+        """
+        # Validate mesh configuration for all_to_all operations
+        mesh_shape = mesh_device.shape
+
+        self.mesh_device = mesh_device
+        self.mesh_config = mesh_config
+        self.ccl_manager = ccl_manager
+        self.config = config
+        self.program_config = program_config or ThroughputProgramConfig()
+        self.fused_config = fused_config
+        self.prefill_config = prefill_config
+
+        # Memory configurations
+        decode_memory_config = decode_memory_config or ttnn.L1_MEMORY_CONFIG
+        prefill_memory_config = prefill_memory_config or ttnn.DRAM_MEMORY_CONFIG
+
+        # Create all_to_all configurations (used by dense flow)
+        _axis = dispatch_cluster_axis if dispatch_cluster_axis is not None else 0
+        _num_links = ccl_manager.num_links
+        self.dispatch_config_decode = AllToAllDispatchConfig(
+            memory_config=decode_memory_config,
+            cluster_axis=_axis,
+            num_links=_num_links,
+        )
+        self.dispatch_config_prefill = AllToAllDispatchConfig(
+            memory_config=prefill_memory_config,
+            cluster_axis=_axis,
+            num_links=_num_links,
+        )
+        self.combine_config_decode = AllToAllCombineConfig(
+            memory_config=decode_memory_config,
+            cluster_axis=_axis,
+            num_links=_num_links,
+        )
+        self.combine_config_prefill = AllToAllCombineConfig(
+            memory_config=prefill_memory_config,
+            cluster_axis=_axis,
+            num_links=_num_links,
+        )
+
+        # Load weights for the dense flow. When using the fused flow (fused_config is set),
+        # the weights are pre-loaded in moe_gpt format and stored in fused_config.
+        # We still load the dense weights here for prefill and for backward compatibility.
+        self.weights = load_throughput_expert_weights(
+            mesh_device=mesh_device,
+            config=config,
+            state_dict=state_dict,
+            weight_dtype=weight_dtype,
+            tensor_cache_path=tensor_cache_path,
+        )
+
+        # Create mapping tensors for all_to_all routing (dense flow)
+        self.expert_mapping_tensors = create_expert_mapping_tensors(
+            num_devices=config.num_devices,
+            num_experts_global=config.num_experts,
+            mesh_device=mesh_device,
+        )
+
+        # Create remap mask (rows is dispatch dimension)
+        num_dispatch_device_rows = mesh_device.shape[0]
+        self.remap_topk_mask = create_remap_topk_mask(
+            num_dispatch_device_rows=num_dispatch_device_rows,
+            num_experts=config.num_experts,
+            mesh_device=mesh_device,
+        )
+
+        # For backward compatibility with existing code
+        self.intermediate_size = config.intermediate_size
+        self.num_experts = config.num_experts
+        self.hidden_size = config.hidden_size
+        self.num_experts_per_device = config.num_experts_per_device
+
+        # Precompute a chunk-sized round-robin index tensor used to pad short
+        # warmup seqs (e.g. seq=128) up to seq_len_per_chip. Built once at init
+        # so forward_prefill stays trace-compatible — no ttnn.from_torch host
+        # writes are allowed once trace capture starts.
+        self._round_robin_pad_indices = None
+        prefill_cfg = getattr(self, "prefill_config", None)
+        if prefill_cfg is not None:
+            import torch as _torch
+
+            chunk_init = prefill_cfg.seq_len_per_chip
+            num_experts_init = config.num_experts
+            num_experts_per_tok_init = config.num_experts_per_tok
+            positions_init = _torch.arange(chunk_init, dtype=_torch.int32).view(chunk_init, 1, 1, 1)
+            ks_init = _torch.arange(num_experts_per_tok_init, dtype=_torch.int32).view(
+                1, 1, 1, num_experts_per_tok_init
+            )
+            rr_torch = ((positions_init + ks_init) % num_experts_init).to(_torch.int32).contiguous()
+            # uint16 matches ttnn.topk output dtype (see prefill.py dispatch).
+            # num_experts (128) fits comfortably in uint16.
+            self._round_robin_pad_indices = ttnn.from_torch(
+                rr_torch.to(_torch.int32),  # ttnn.from_torch needs int32 source for uint16
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint16,
+            )
+
+    def __call__(
+        self,
+        hidden_states: ttnn.Tensor,
+        topk_expert_indices: ttnn.Tensor,
+        topk_expert_weights: ttnn.Tensor,
+        is_decode: bool = True,
+        chunk_size: int = 128,  # TODO: increasing this causes diverging outputs for last mesh row (https://github.com/tenstorrent/tt-metal/issues/36335)
+    ) -> ttnn.Tensor:
+        """
+        Forward pass - automatically dispatches to decode or prefill.
+
+        Args:
+            hidden_states: Input tensor [batch/seq, 1, 1, hidden_size]
+            topk_expert_indices: Top-k expert indices per token
+                [batch/seq, 1, 1, num_experts_per_tok]
+            topk_expert_weights: Dense routing scores for top-k experts
+                [batch/seq, 1, 1, num_experts_per_tok]
+            chunk_size: Chunk size for prefill (default: 2048)
+
+        Returns:
+            Expert output tensor [batch/seq, 1, 1, hidden_size]
+        """
+
+        if is_decode:
+            return self.forward_decode(
+                hidden_states,
+                topk_expert_indices,
+                topk_expert_weights,
+            )
+        else:
+            return self.forward_prefill(
+                hidden_states,
+                topk_expert_indices,
+                topk_expert_weights,
+                chunk_size=chunk_size,
+            )
+
+    def forward_decode(
+        self,
+        hidden_states: ttnn.Tensor,
+        topk_expert_indices: ttnn.Tensor,
+        topk_expert_weights: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """
+        Decode forward pass.
+
+        When fused_config is set (passed at init), uses the fused flow:
+          all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine
+        Otherwise uses the dense flow:
+          all_to_all_dispatch → batched matmul → all_to_all_combine → weighted sum → all_reduce
+
+        Args:
+            hidden_states: Input [batch_per_device, 1, 1, hidden_size]
+            topk_expert_indices: Expert indices [batch_per_device, 1, 1, k]
+            topk_expert_weights: Routing weights [batch_per_device, 1, 1, k]
+
+        Returns:
+            Dense flow: [batch_per_device, 1, 1, hidden_size] (fully reduced)
+            Fused flow: [1, 1, tokens_per_device, hidden_size] (unweighted expert sum +
+                all_reduce across cluster_axis=1; PCC vs. reference is low without bias)
+        """
+        if self.fused_config is not None:
+            return fused_decode_forward(
+                hidden_states=hidden_states,
+                topk_expert_indices=topk_expert_indices,
+                topk_expert_scores=topk_expert_weights,
+                config=self.config,
+                fused_config=self.fused_config,
+                mesh_device=self.mesh_device,
+            )
+        return decode_forward(
+            hidden_states=hidden_states,
+            topk_expert_indices=topk_expert_indices,
+            topk_expert_weights=topk_expert_weights,
+            weights=self.weights,
+            config=self.config,
+            expert_mapping_tensors=self.expert_mapping_tensors,
+            remap_topk_mask=self.remap_topk_mask,
+            dispatch_config=self.dispatch_config_decode,
+            combine_config=self.combine_config_decode,
+            program_config=self.program_config,
+            mesh_device=self.mesh_device,
+            mesh_config=self.mesh_config,
+            ccl_manager=self.ccl_manager,
+        )
+
+    def forward_prefill(
+        self,
+        hidden_states: ttnn.Tensor,
+        topk_expert_indices: ttnn.Tensor,
+        topk_expert_weights: ttnn.Tensor,
+        chunk_size: int,
+    ) -> ttnn.Tensor:
+        """
+        Prefill forward pass.
+
+        Args:
+            hidden_states: Input [seq_per_device, 1, 1, hidden_size]
+            topk_expert_indices: Expert indices [seq_per_device, 1, 1, k]
+            topk_expert_weights: Routing weights [seq_per_device, 1, 1, k]
+            chunk_size: Chunk size for long sequences
+
+        Returns:
+            Output [seq_per_device, 1, 1, hidden_size]
+        """
+        # DeepSeek-style chunked prefill is the only supported path; the legacy
+        # chunked fallback was removed when DeepSeek prefill was bundled into
+        # use_throughput_experts.
+        #
+        # The DeepSeek prefill path is hardcoded for seq_len_per_chip (kernels,
+        # CB sizes, dispatch tables all baked at config init). For seq shorter
+        # than that (e.g. vLLM warmup at seq_len=128), pad up to seq_len_per_chip
+        # with zeros + expert_id=0 + weight=0, then slice the output back.
+        chunk = self.prefill_config.seq_len_per_chip
+        seq_per_device = hidden_states.shape[2] if len(hidden_states.shape) >= 3 else hidden_states.shape[0]
+        if seq_per_device < chunk:
+            pad_len = chunk - seq_per_device
+
+            # Pad along seq axis only; build spec sized to each tensor's rank
+            # to avoid "padding len can't be larger than input tensor rank".
+            def _pad_seq(t, seq_axis, value):
+                rank = len(t.shape)
+                spec = [(0, 0)] * rank
+                spec[seq_axis] = (0, pad_len)
+                return ttnn.pad(t, spec, value=value)
+
+            # hidden_states is [..., S, H] — seq is axis 2 if rank>=3 else axis 0
+            h_seq_axis = 2 if len(hidden_states.shape) >= 3 else 0
+            hidden_states = _pad_seq(hidden_states, h_seq_axis, value=0.0)
+
+            # topk_expert_indices: padding all positions with expert_id=0 would
+            # route every padding token to expert 0 and overflow the dispatch
+            # buffer (max_dispatched_tokens_per_expert is sized for balanced
+            # routing). Instead, slice a pad_len-sized chunk from the
+            # precomputed round-robin index tensor (built at init) and concat.
+            # This keeps the forward path host-write-free for trace capture.
+            if self._round_robin_pad_indices is None:
+                raise RuntimeError(
+                    "ThroughputExperts._round_robin_pad_indices was not "
+                    "initialized; did the prefill_config get set after "
+                    "__init__?"
+                )
+            pad_idx_slice = ttnn.slice(
+                self._round_robin_pad_indices,
+                [0, 0, 0, 0],
+                [pad_len, 1, 1, self.config.num_experts_per_tok],
+            )
+            # Cached tensor is 4D [chunk, 1, 1, K]; runtime indices may be 2D
+            # [N, K] (from topk_router) or 4D. Reshape slice to match runtime
+            # rank/shape (with seq dim replaced by pad_len) before concat.
+            target_shape = list(topk_expert_indices.shape)
+            target_shape[0] = pad_len
+            pad_idx_slice = ttnn.reshape(pad_idx_slice, target_shape)
+            # ttnn.concat requires matching layouts; the cached round-robin
+            # tensor is ROW_MAJOR but runtime topk indices may be TILE
+            # (depending on the upstream router output). Align before concat.
+            if pad_idx_slice.layout != topk_expert_indices.layout:
+                pad_idx_slice = ttnn.to_layout(pad_idx_slice, topk_expert_indices.layout)
+            topk_expert_indices = ttnn.concat([topk_expert_indices, pad_idx_slice], dim=0)
+            # Convert to TILE_LAYOUT to match what ttnn.topk normally produces.
+            # The chunk function does "idx_for_routing = to_layout(topk_expert_indices,
+            # ROW_MAJOR_LAYOUT); ... deallocate(idx_for_routing)". When the input is
+            # already ROW_MAJOR, to_layout aliases instead of creating a new buffer,
+            # so the deallocate kills topk_expert_indices itself, leading to
+            # "Tensor is not allocated" on the next use. By passing TILE here, the
+            # chunk function's ROW_MAJOR conversion is a real copy, no alias.
+            topk_expert_indices = ttnn.to_layout(topk_expert_indices, ttnn.TILE_LAYOUT)
+
+            # weights: pad with zeros — combine multiplies expert outputs by these,
+            # so padding contributions are zeroed regardless of which expert ran them.
+            topk_expert_weights = _pad_seq(topk_expert_weights, 0, value=0.0)
+            out = forward_prefill_deepseek(
+                hidden_states=hidden_states,
+                topk_expert_indices=topk_expert_indices,
+                topk_expert_weights=topk_expert_weights,
+                config=self.config,
+                prefill_config=self.prefill_config,
+                mesh_device=self.mesh_device,
+                mesh_config=self.mesh_config,
+                ccl_manager=self.ccl_manager,
+                weights=self.weights,
+                program_config=self.program_config,
+            )
+            return ttnn.slice(
+                out,
+                [0, 0, 0, 0],
+                [out.shape[0], out.shape[1], seq_per_device, out.shape[3]],
+            )
+
+        return forward_prefill_deepseek(
+            hidden_states=hidden_states,
+            topk_expert_indices=topk_expert_indices,
+            topk_expert_weights=topk_expert_weights,
+            config=self.config,
+            prefill_config=self.prefill_config,
+            mesh_device=self.mesh_device,
+            mesh_config=self.mesh_config,
+            ccl_manager=self.ccl_manager,
+            weights=self.weights,
+            program_config=self.program_config,
+        )
+
+    @classmethod
+    def from_hf_model(
+        cls,
+        mesh_device,
+        hf_config,
+        hf_state_dict: dict,
+        layer_idx: int = None,
+        program_config: ThroughputProgramConfig = None,
+        weight_dtype=ttnn.bfloat4_b,
+        tensor_cache_path: str = None,
+    ) -> "ThroughputExperts":
+        """
+        Create ThroughputExperts from a HuggingFace model.
+
+        Args:
+            mesh_device: TTNN mesh device
+            hf_config: HuggingFace model config
+            hf_state_dict: HuggingFace state dict
+            layer_idx: Optional layer index for extracting layer-specific weights
+            program_config: Optional program config
+            weight_dtype: Weight data type
+            tensor_cache_path: Optional cache path
+
+        Returns:
+            ThroughputExperts instance
+        """
+        config = ThroughputExpertConfig.from_hf_config(hf_config, mesh_device)
+
+        # Extract expert weights from HF state dict
+        # HF typically stores as model.layers.{i}.mlp.experts.{e}.{proj}.weight
+        expert_weights = {}
+        prefix = f"model.layers.{layer_idx}.mlp." if layer_idx is not None else ""
+
+        # Try to find expert weights
+        import torch
+
+        # Check for fused gate_up_proj format (MiniMax-M2 style)
+        fused_key = f"{prefix}experts.gate_up_proj"
+        if fused_key in hf_state_dict:
+            expert_weights["gate_up_proj"] = hf_state_dict[fused_key]
+            expert_weights["down_proj"] = hf_state_dict[f"{prefix}experts.down_proj"]
+            if f"{prefix}experts.gate_up_proj_bias" in hf_state_dict:
+                expert_weights["gate_up_proj_bias"] = hf_state_dict[f"{prefix}experts.gate_up_proj_bias"]
+                expert_weights["down_proj_bias"] = hf_state_dict[f"{prefix}experts.down_proj_bias"]
+        else:
+            # Individual expert format
+            w1_list, w2_list, w3_list = [], [], []
+            for i in range(config.num_experts):
+                w1_list.append(hf_state_dict[f"{prefix}experts.{i}.gate_proj.weight"].t())
+                w2_list.append(hf_state_dict[f"{prefix}experts.{i}.down_proj.weight"].t())
+                w3_list.append(hf_state_dict[f"{prefix}experts.{i}.up_proj.weight"].t())
+
+            # Stack and reshape to expected format
+            expert_weights["gate_proj"] = torch.stack(w1_list, dim=0)
+            expert_weights["down_proj"] = torch.stack(w2_list, dim=0)
+            expert_weights["up_proj"] = torch.stack(w3_list, dim=0)
+
+        return cls(
+            mesh_device=mesh_device,
+            config=config,
+            state_dict=expert_weights,
+            program_config=program_config,
+            weight_dtype=weight_dtype,
+            tensor_cache_path=tensor_cache_path,
+        )
