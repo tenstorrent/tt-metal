@@ -40,10 +40,13 @@
 #                     Use for issue-solver tests that don't pre-build ELFs.
 #   --log-dir  DIR    When set, append combined stdout+stderr from each phase to
 #                     <DIR>/compile.log and <DIR>/run.log (created if missing).
-#                     Output still streams to the terminal as usual; the file keeps
-#                     the full untruncated stream (Bash-tool output is truncated on
-#                     long runs). Codegen agents always pass this with their LOG_DIR;
-#                     manual runs may omit it. Default: no log file.
+#                     run.log captures the full pytest stream AND, on a hang, the
+#                     RUN_LLK_TESTS_HANG block + llk-triage dump (see _do_simulate)
+#                     so the forensic output survives as an artifact, not just on
+#                     stderr. Output still streams to the terminal as usual; the
+#                     file keeps the full untruncated stream (Bash-tool output is
+#                     truncated on long runs). Codegen agents always pass this with
+#                     their LOG_DIR; manual runs may omit it. Default: no log file.
 #   --progress        Manual-debug aid: emit a periodic `[progress]` status line to
 #                     stderr during the compile and simulate phases (elapsed time;
 #                     in simulate also the age of the last output line). Off by
@@ -650,28 +653,35 @@ _do_simulate() {
   # caught it = this was a hang, not a normal failure. Override sim_exit with
   # 5 and run the arch-specific cleanup (sim straggler kill, or device reset).
   if [[ -s "$hang_log" ]]; then
-    echo "========================================" >&2
-    echo "RUN_LLK_TESTS_HANG: watchdog tripped" >&2
-    cat "$hang_log" >&2
-    if [[ "$MODE" == "simulator" ]]; then
-      pkill -9 -f "emu-${ARCH}" 2>/dev/null || true
-    else
-      # Reparented pytest descendants (PPID=1 after the parent subshell
-      # died) aren't reachable from _kill_tree, so pattern-kill them by
-      # cmdline before tt-smi -r. If a stale pytest survives the reset
-      # holding the device, the NEXT run's consumer phase hangs on device
-      # acquisition and looks like "tt-smi -r didn't work" — it did, but
-      # there was nothing to reset to.
-      pkill -9 -f "pytest.*--compile-consumer" 2>/dev/null || true
-      # LLK-specific triage runs HERE: the consumer's ttexalens session
-      # was released by _kill_tree + the safety-net pkill, but the Tensix
-      # is still wedged. A fresh ttexalens session can now read mailbox /
-      # RISC state. After triage, tt-smi -r fully resets the device.
-      _run_llk_triage
-      echo "Resetting device (tt-smi -r)..." >&2
-      tt-smi -r >&2 || echo "WARNING: tt-smi -r failed" >&2
-    fi
-    echo "========================================" >&2
+    # Emit the full hang diagnosis — reason line, RUN_LLK_TESTS_HANG block, and
+    # (on silicon) the llk-triage dump — as one stream so it can be persisted.
+    # The group's stdout+stderr is tee'd into LOG_DIR/run.log when set, so the
+    # forensic output becomes a run artifact instead of vanishing with the
+    # deleted hang_log temp file; otherwise it just passes through to stderr.
+    {
+      echo "========================================"
+      echo "RUN_LLK_TESTS_HANG: watchdog tripped"
+      cat "$hang_log"
+      if [[ "$MODE" == "simulator" ]]; then
+        pkill -9 -f "emu-${ARCH}" 2>/dev/null || true
+      else
+        # Reparented pytest descendants (PPID=1 after the parent subshell
+        # died) aren't reachable from _kill_tree, so pattern-kill them by
+        # cmdline before tt-smi -r. If a stale pytest survives the reset
+        # holding the device, the NEXT run's consumer phase hangs on device
+        # acquisition and looks like "tt-smi -r didn't work" — it did, but
+        # there was nothing to reset to.
+        pkill -9 -f "pytest.*--compile-consumer" 2>/dev/null || true
+        # LLK-specific triage runs HERE: the consumer's ttexalens session
+        # was released by _kill_tree + the safety-net pkill, but the Tensix
+        # is still wedged. A fresh ttexalens session can now read mailbox /
+        # RISC state. After triage, tt-smi -r fully resets the device.
+        _run_llk_triage
+        echo "Resetting device (tt-smi -r)..."
+        tt-smi -r || echo "WARNING: tt-smi -r failed"
+      fi
+      echo "========================================"
+    } 2>&1 | if [[ -n "$LOG_DIR" ]]; then tee -a "${LOG_DIR}/run.log" >&2; else cat >&2; fi
     sim_exit=5
   fi
 
