@@ -26,6 +26,15 @@ inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_init = 
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
+inline constexpr std::array<TensorShape, 6> covered_shapes_llk_unpack_AB_matmul_init = {{
+    TENSOR_SHAPE_FR1_NF1x2,
+    TENSOR_SHAPE_FR2_NF1x2,
+    TENSOR_SHAPE_FR4_NF1x2,
+    TENSOR_SHAPE_FR8_NF1x2,
+    TENSOR_SHAPE_FR16_NF1x2,
+    TENSOR_SHAPE_FR16_NF2x2,
+}};
+
 inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_mop_config = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
@@ -89,6 +98,8 @@ constexpr bool is_unpack_tensor_shape_covered(const TensorShapeFunctionCoverage 
     {
         case Function::_llk_unpack_AB_init_:
             return contains_tensor_shape(covered_shapes_llk_unpack_AB_init, tensor_shape);
+        case Function::_llk_unpack_AB_matmul_init_:
+            return contains_tensor_shape(covered_shapes_llk_unpack_AB_matmul_init, tensor_shape);
         case Function::_llk_unpack_AB_mop_config_:
             return contains_tensor_shape(covered_shapes_llk_unpack_AB_mop_config, tensor_shape);
         case Function::_llk_unpack_AB_reduce_init_:

@@ -342,21 +342,15 @@ class ElfStrings:
         try:
             elf = parse_elf(elf_path, require_debug_symbols=False)
             self._parsed_elf = elf
-            self.pointer_size = elf.elf.elfclass // 8
+            # LLK TRISC kernel ELFs are 32-bit; native ElfFile no longer exposes elf.elfclass.
+            self.pointer_size = 4
             self.type_table = _type_table_for(self.pointer_size)
-            self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
-                elf.elf.elfclass
-            ]
-            sections = (
-                elf.sections
-                if isinstance(elf.sections, dict)
-                else {s.name: s for s in elf.sections}
-            )
-            strings = sections.get(".device_print_strings")
+            self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[32]
+            strings = elf.get_section_by_name(".device_print_strings")
             if strings is not None:
                 self._strings_addr = strings.address
                 self._strings_data = bytes(strings.data)
-            info = sections.get(".device_print_strings_info")
+            info = elf.get_section_by_name(".device_print_strings_info")
             if info is not None:
                 self._info_addr = info.address
                 self._info_data = bytes(info.data)

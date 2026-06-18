@@ -42,12 +42,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.CT_DIM,
         params.RT_DIM,
         params.KT_DIM,
-        params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM,
-        params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
-        params.num_faces_B,     // in1
-        params.num_faces_A,     // in0
-        params.PARTIAL_FACE_B,  // in1
-        params.PARTIAL_FACE_A); // in0
+        ckernel::make_tensor_shape_from_legacy(params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM, params.num_faces_B), // in1
+        ckernel::make_tensor_shape_from_legacy(params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM, params.num_faces_A), // in0
+        params.PARTIAL_FACE_B,                                                                                                               // in1
+        params.PARTIAL_FACE_A);                                                                                                              // in0
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(

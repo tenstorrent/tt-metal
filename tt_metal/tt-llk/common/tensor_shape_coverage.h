@@ -30,6 +30,7 @@ enum class TensorShapeFunctionCoverage
     _llk_math_reduce_,
     _llk_math_reduce_init_,
     _llk_unpack_AB_init_,
+    _llk_unpack_AB_matmul_init_,
     _llk_unpack_AB_mop_config_,
     _llk_unpack_AB_reduce_init_,
     _llk_unpack_reduce_init_,
@@ -59,6 +60,8 @@ constexpr const char* tensor_shape_function_name(const TensorShapeFunctionCovera
             return "_llk_math_reduce_init_";
         case Function::_llk_unpack_AB_init_:
             return "_llk_unpack_AB_init_";
+        case Function::_llk_unpack_AB_matmul_init_:
+            return "_llk_unpack_AB_matmul_init_";
         case Function::_llk_unpack_AB_mop_config_:
             return "_llk_unpack_AB_mop_config_";
         case Function::_llk_unpack_AB_reduce_init_:

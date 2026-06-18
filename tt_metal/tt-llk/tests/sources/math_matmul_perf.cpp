@@ -71,12 +71,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             CT_DIM,
             RT_DIM,
             KT_DIM,
-            in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
-            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B,     // In1
-            num_faces_A,     // In0
-            PARTIAL_FACE_B,  // In1
-            PARTIAL_FACE_A); // In0
+            ckernel::make_tensor_shape_from_legacy(in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM, num_faces_B), // In1
+            ckernel::make_tensor_shape_from_legacy(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces_A), // In0
+            PARTIAL_FACE_B,                                                                                                 // In1
+            PARTIAL_FACE_A);                                                                                                // In0
         PROFILER_SYNC();
     }
     {
