@@ -148,29 +148,6 @@ Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");
-    return operation::hash_operation<NeighborPadAsyncDeviceOperation>(
-        args.dim,
-        args.padding_left,
-        args.padding_right,
-        args.padding_mode,
-        args.cluster_axis,
-        args.num_links,
-        args.output_mem_config,
-        args.topology,
-        args.ring_size,
-        args.pad_dim2,
-        args.pad2_left,
-        args.pad2_right,
-        args.pad2_cluster_axis,
-        args.pad2_num_links,
-        args.logical_h,
-        args.t_front_pad,
-        tensor_args);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

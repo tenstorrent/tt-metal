@@ -107,6 +107,47 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("t_front_pad", t_front_pad);
         return attrs;
     }
+
+    // Program-cache hash / canonical-key fields. Lists exactly the structural fields the former
+    // custom compute_program_hash included; the three GlobalSemaphore members and
+    // using_persistent_buffers are runtime-only and intentionally excluded.
+    static constexpr auto attribute_names = std::make_tuple(
+        "dim",
+        "padding_left",
+        "padding_right",
+        "padding_mode",
+        "cluster_axis",
+        "num_links",
+        "output_mem_config",
+        "topology",
+        "ring_size",
+        "pad_dim2",
+        "pad2_left",
+        "pad2_right",
+        "pad2_cluster_axis",
+        "pad2_num_links",
+        "logical_h",
+        "t_front_pad");
+
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->dim,
+            this->padding_left,
+            this->padding_right,
+            this->padding_mode,
+            this->cluster_axis,
+            this->num_links,
+            this->output_mem_config,
+            this->topology,
+            this->ring_size,
+            this->pad_dim2,
+            this->pad2_left,
+            this->pad2_right,
+            this->pad2_cluster_axis,
+            this->pad2_num_links,
+            this->logical_h,
+            this->t_front_pad);
+    }
 };
 
 struct NeighborPadAsyncInputs {
