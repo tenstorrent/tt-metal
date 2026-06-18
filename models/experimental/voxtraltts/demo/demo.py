@@ -373,10 +373,12 @@ def _short_chunking_enabled() -> bool:
 
 def _min_speech_tokens(text: str) -> int:
     n_words = len(text.split())
+    estimate = _estimate_acoustic_frames(n_words)
     if _short_chunking_enabled():
-        return max(64, _estimate_acoustic_frames(n_words))
-    # Trace path: original demo floor (~8 tok/word, min 4096 for long single-pass runs).
-    return max(4096, n_words * _TOKENS_PER_WORD_ESTIMATE)
+        return max(64, estimate)
+    # Trace path: headroom for END_AUDIO without forcing 4096 frames on short prompts
+    # (4096 undecoded frames decode as noise when END_AUDIO is never hit → 1×4 whole-prompt-missing).
+    return max(256, estimate * 4)
 
 
 def _prompt_seq_len(text: str, voice: str, model_name_or_path: str) -> int:
@@ -960,7 +962,9 @@ def run_latents_mode(
     ttnn.deallocate(lt)
     wav_tt = pipe.audio_tokenizer.pretransform_decode_tt(mel)
     ttnn.deallocate(mel)
-    wav = ttnn.to_torch(wav_tt).float()
+    from models.experimental.voxtraltts.utils.mesh import voxtral_to_torch_replicated
+
+    wav = voxtral_to_torch_replicated(wav_tt).float()
     ttnn.deallocate(wav_tt)
     t1 = perf_counter()
     T = int(latent.shape[2])
@@ -987,13 +991,21 @@ def run_demo(args: DemoArgs) -> None:
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Default 2CQ overlap on. Production decode always trace-replays (see voxtral_tts).
-    os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
-    os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
+    # Trace defaults gated by compute mesh: OFF on 1×1 BH (clean audio), ON on 1×4 TP. Override
+    # with env vars. 1×4 chunking follows decode_trace_enabled() via _short_chunking_enabled().
+    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+
+    if voxtral_requested_compute_mesh_shape() == (1, 1):
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "0")
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "0")
+    else:
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
     from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, decode_trace_enabled
 
     logger.info(
-        f"[demo] trace replay=always, 2CQ={'on' if decode_trace_2cq_enabled() else 'off'}, "
+        f"[demo] trace replay={'on' if decode_trace_enabled() else 'off'}, "
+        f"2CQ={'on' if decode_trace_2cq_enabled() else 'off'}, "
         f"chunking={'short (non-trace)' if not decode_trace_enabled() else 'trace default'}"
     )
 
