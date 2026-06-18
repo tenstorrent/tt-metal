@@ -137,7 +137,6 @@ Captures device timing for a single layer of each target model, used to track pe
 
 | Pipeline | Workflow |
 |----------|----------|
-| Models post-commit | [`[internal] models tests impl`](../.github/workflows/models-post-commit.yaml) |
 | PR Gate | [`PR Gate`](../.github/workflows/pr-gate.yaml) |
 | Merge Gate | [`Merge Gate`](../.github/workflows/merge-gate.yaml) |
 | vLLM nightly tests | [`vLLM nightly tests`](../.github/workflows/vllm-nightly-tests.yaml) |
