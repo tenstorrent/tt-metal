@@ -573,7 +573,11 @@ def run_model(
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             },
             1,
-            ttnn.Topology.Ring,
+            # Per-axis topology (SP-axis-0, TP-axis-1). FABRIC_2D_TORUS_Y wraps ONLY the SP axis
+            # into a ring → Ring for SP-axis MoE dispatch/combine; the 4-wide TP axis stays a line
+            # → Linear for TP-axis collectives (RMS-norm, MLA, shared-expert, gate). A scalar Ring
+            # here deadlocks the TP-axis all-gathers on a non-existent column wrap link.
+            (ttnn.Topology.Ring, ttnn.Topology.Linear),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-torus-y-8x4",
         ),
