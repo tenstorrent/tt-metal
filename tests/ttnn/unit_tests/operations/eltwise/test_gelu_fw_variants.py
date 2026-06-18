@@ -46,12 +46,20 @@ def _bf16_ulp_diff(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     Maps the 16-bit sign-magnitude bit pattern to a monotonic int (negatives
     -> 0xFFFF - bits, positives -> bits + 0x8000) so that float ordering is
     preserved by int subtraction. ULP = |mono(a) - mono(b)|.
+
+    Treats +0 and -0 as identical (0 ULP apart): they're numerically equal
+    per IEEE 754 (`+0 == -0` is `true`), and the SFPU's pack/convert pipeline
+    canonicalises -0 to +0 anyway, so the 1-ULP gap that the monotonic-int
+    mapping would otherwise report for a (-0 expected, +0 actual) pair is an
+    artefact of the mapping, not a real numerical difference.
     """
     a_bits = a.contiguous().view(torch.int16).to(torch.int32) & 0xFFFF
     b_bits = b.contiguous().view(torch.int16).to(torch.int32) & 0xFFFF
     a_mono = torch.where((a_bits & 0x8000) != 0, 0xFFFF - a_bits, a_bits + 0x8000)
     b_mono = torch.where((b_bits & 0x8000) != 0, 0xFFFF - b_bits, b_bits + 0x8000)
-    return (a_mono - b_mono).abs()
+    diff = (a_mono - b_mono).abs()
+    both_zero = ((a_bits & 0x7FFF) == 0) & ((b_bits & 0x7FFF) == 0)
+    return torch.where(both_zero, torch.zeros_like(diff), diff)
 
 
 def _cumulative_histogram(ulps_flat: torch.Tensor) -> list[tuple[int, int, float]]:
@@ -71,46 +79,39 @@ def _format_report(
     expected_bf16: torch.Tensor,
     actual_bf16: torch.Tensor,
     ulps: torch.Tensor,
-    valid: torch.Tensor,
-    offender_mask: torch.Tensor | None = None,
+    mask: torch.Tensor,
 ) -> tuple[str, int, float]:
-    """`valid` drives the histogram (full distribution). `offender_mask`, if
-    provided, scopes the worst-offenders table to a subset (e.g. excluding
-    FTZ-band inputs that are visible in the histogram but unfixable in
-    software). Defaults to `valid` if not provided."""
-    if offender_mask is None:
-        offender_mask = valid
-
-    valid_ulps = ulps[valid]
-    max_ulp = int(valid_ulps.max().item()) if valid.any() else 0
-    mean_ulp = float(valid_ulps.float().mean().item()) if valid.any() else 0.0
+    """Format the per-variant report. Histogram, worst-offenders, max ULP,
+    and mean ULP are all scoped to `mask` (typically `assertable` — the same
+    set the strict ULP threshold is checked over). FTZ-excluded inputs are
+    surfaced separately in the `[note]` line outside this helper."""
+    mask_ulps = ulps[mask]
+    max_ulp = int(mask_ulps.max().item()) if mask.any() else 0
+    mean_ulp = float(mask_ulps.float().mean().item()) if mask.any() else 0.0
 
     lines = [
         f"\n=== gelu variant={variant_name} (torch approximate={torch_approximate!r}) ===",
-        f"  inputs evaluated: {int(valid.sum().item())}",
+        f"  inputs evaluated: {int(mask.sum().item())}",
         f"  max ULP: {max_ulp}   mean ULP: {mean_ulp:.4f}",
         "  cumulative histogram (BF16 ULP distance from torch reference):",
     ]
-    for thr, count, pct in _cumulative_histogram(valid_ulps):
+    for thr, count, pct in _cumulative_histogram(mask_ulps):
         lines.append(f"    >= {thr:5d} ULP : {count:6d}  ({pct:7.4f}%)")
 
-    offender_ulps = ulps[offender_mask]
-    if offender_mask.any() and offender_ulps.max().item() > 0:
-        # Top-10 worst offenders by ULP, scoped to the offender mask so the
-        # table surfaces actionable issues only.
+    if mask.any() and mask_ulps.max().item() > 0:
         flat_in = input_bf16.flatten()
         flat_exp = expected_bf16.flatten()
         flat_act = actual_bf16.flatten()
         flat_ulp = ulps.flatten()
-        flat_offender = offender_mask.flatten()
-        offender_idx = torch.nonzero(flat_offender, as_tuple=False).flatten()
-        sub_ulp = flat_ulp[offender_idx]
-        k = min(10, offender_idx.numel())
+        flat_mask = mask.flatten()
+        mask_idx = torch.nonzero(flat_mask, as_tuple=False).flatten()
+        sub_ulp = flat_ulp[mask_idx]
+        k = min(10, mask_idx.numel())
         top_vals, top_local = torch.topk(sub_ulp, k)
         lines.append("  top-10 worst offenders:")
         lines.append(f"    {'input':>14}  {'expected':>14}  {'actual':>14}  {'ulp':>6}")
         for ul, li in zip(top_vals.tolist(), top_local.tolist()):
-            i = int(offender_idx[li].item())
+            i = int(mask_idx[li].item())
             lines.append(
                 f"    {flat_in[i].item():>14.6g}  {flat_exp[i].item():>14.6g}  "
                 f"{flat_act[i].item():>14.6g}  {int(ul):>6d}"
@@ -161,8 +162,7 @@ def test_gelu_variant_accuracy(device, variant_name, capsys):
         expected_bf16,
         actual_bf16,
         ulps,
-        valid,
-        offender_mask=assertable,
+        mask=assertable,
     )
 
     # Always show the report — even on pass — so the user can see how tight
