@@ -1,0 +1,8 @@
+---
+interface:
+  display_name: "TTTv2 Module Contract"
+  short_description: "Requirements, strategy, and tests for a TTTv2-style module"
+  default_prompt: "Use $tttv2-module to check a reusable module under models/common/modules (or a model-local candidate under new_modules/modules) against the Universal Module Contract: LightweightModule + single <Name>Config dataclass, simple and from_config constructors, lazy weight loading, straight-line mode-dispatched forward with no static if-else in the hot path, full power-user override surface, and the parametrized config-construction + vs-reference (PCC >= 0.99) + override test suite."
+
+policy:
+  allow_implicit_invocation: true
