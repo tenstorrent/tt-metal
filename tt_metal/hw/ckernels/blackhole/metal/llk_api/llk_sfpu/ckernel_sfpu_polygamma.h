@@ -105,12 +105,14 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
         // Scale by inv_z^n, taking advantage of inv_z^2's
         // computation above
-        if (n & 1) {
+        int pwr = n;
+        if (pwr & 1) {
             tail *= inv_z;
         }
-        if (auto n2 = n >> 1) {
+        pwr >>= 1;
+        if (pwr) {
             // x^2n == (x^2)^n
-            tail = power(inv_z2, n2, tail);
+            tail = power(inv_z2, pwr, tail);
         }
 
         sum += tail;
