@@ -123,7 +123,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
     // SUM/AVG REDUCE_ROW swaps operands (scaler→SrcA, data→SrcB), no transpose needed.
     // MAX REDUCE_ROW keeps original layout (data→SrcA transposed, scaler→SrcB) — GMPOOL only reads SrcA.
     constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type != PoolType::MAX);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>((reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type == PoolType::MAX));
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>((reduce_dim == ReduceDim::REDUCE_ROW));
 
     // Swapped REDUCE_ROW: SrcA holds the scaler (always a full 16x16 face for MVMUL).
     // Non-swapped: SrcA holds the data tile, respects face_r_dim.
