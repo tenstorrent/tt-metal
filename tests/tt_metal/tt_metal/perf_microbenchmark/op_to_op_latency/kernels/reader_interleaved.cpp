@@ -158,12 +158,17 @@ void kernel_main() {
             drain_trid ^= 1u;
         }
 
-        // Tail: drain the final in-flight batch (may be partial).
+        // Tail: drain the final in-flight batch (may be partial). The barrier here
+        // completes the last outstanding reads, so it is the read-bandwidth end point:
+        // BW = bytes_read / (READ_LAST_BARRIER - READ_BEFORE_BARRIER). The interval
+        // spans first-read-issued to last-read-complete, so it still pays the pipeline
+        // fill/drain latency tax at each end (small vs the steady-state middle).
         noc_async_read_barrier_with_trid(drain_trid);
         if (pushed == 0) {
             // n_pages <= N: head never ran, so emit the first-read marker here.
             DeviceTimestampedData("READ_AFTER_BARRIER", effective_start_tile_id);
         }
+        DeviceTimestampedData("READ_LAST_BARRIER", effective_start_tile_id);
         cb_push_back(cb_in, (n_pages - pushed) * tiles_per_page);
 
         DeviceTimestampedData("NCRISC_DONE", program_id);

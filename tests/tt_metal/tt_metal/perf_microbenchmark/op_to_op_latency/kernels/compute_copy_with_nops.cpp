@@ -15,6 +15,12 @@
 //   0: input  CB id
 //   1: output CB id
 //   2: NUM_NOPS_PER_TILE  (tunable; 0 disables the spin)
+//   3: PROFILE_PER_TILE   (1 = stamp TILE_IDX + MATH zone every tile, for latency
+//                          analysis; 0 = lean mode for bandwidth measurement: stamp
+//                          TILE_IDX only for tile 0 and drop the per-tile MATH zone so
+//                          the per-tile profiler writes don't pace the consumer and
+//                          back-pressure the reader. Compute cost is then copy + NOPs
+//                          only, which is what we want when balancing NOPs vs read BW.)
 //
 // Runtime args:
 //   0: n_tiles
@@ -33,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t num_nops_per_tile = get_compile_time_arg_val(2);
+    constexpr uint32_t profile_per_tile = get_compile_time_arg_val(3);
 
     const uint32_t n_tiles = get_arg_val<uint32_t>(0);
     const uint32_t program_id = get_arg_val<uint32_t>(1);
@@ -42,28 +49,43 @@ void kernel_main() {
 
     DeviceTimestampedData("PROG_ID", program_id);
 
+    // The actual per-tile consumer work: copy CB_in -> dst regs (+ NOP spin) -> CB_out.
+    // Kept identical across profiling modes so lean mode changes only instrumentation.
+    auto copy_one_tile = [&]() {
+        tile_regs_acquire();
+        copy_tile(cb_in, /*tile_index=*/0, /*dst_index=*/0);
+
+#pragma GCC unroll 65534
+        for (uint32_t j = 0; j < num_nops_per_tile; ++j) {
+            TTI_NOP;
+        }
+
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(/*src_index=*/0, cb_out);
+        tile_regs_release();
+    };
+
     for (uint32_t i = 0; i < n_tiles; ++i) {
         cb_wait_front(cb_in, 1);
         cb_reserve_back(cb_out, 1);
 
-        UNPACK(DeviceTimestampedData("TILE_IDX", i));
-
-        {
-            DeviceZoneScopedN("MATH");
-
-            tile_regs_acquire();
-            copy_tile(cb_in, /*tile_index=*/0, /*dst_index=*/0);
-
-#pragma GCC unroll 65534
-            for (uint32_t j = 0; j < num_nops_per_tile; ++j) {
-                TTI_NOP;
+        // Per-tile TILE_IDX marker only in profiling mode; lean mode keeps just tile 0
+        // (op-to-op latency needs the program's first-tile compute start).
+        if constexpr (profile_per_tile) {
+            UNPACK(DeviceTimestampedData("TILE_IDX", i));
+        } else {
+            if (i == 0) {
+                UNPACK(DeviceTimestampedData("TILE_IDX", i));
             }
+        }
 
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(/*src_index=*/0, cb_out);
-            tile_regs_release();
+        if constexpr (profile_per_tile) {
+            DeviceZoneScopedN("MATH");
+            copy_one_tile();
+        } else {
+            copy_one_tile();
         }
 
         cb_push_back(cb_out, 1);

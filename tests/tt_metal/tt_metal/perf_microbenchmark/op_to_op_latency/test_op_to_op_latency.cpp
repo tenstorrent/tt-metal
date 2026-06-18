@@ -156,6 +156,10 @@ struct BenchmarkConfig {
     // Read-only mode: writer pops from output CB but skips DRAM writes.
     // Isolates pure DRAM read BW through the reader pipeline.
     bool read_only = false;
+    // Lean compute: drop per-tile TILE_IDX / MATH profiler markers (keep tile 0) so the
+    // consumer drains at full speed and does not back-pressure the reader. Use when
+    // measuring read bandwidth; compute cost is then copy + NOPs only.
+    bool lean_compute = false;
     // Writer: 0 = noc_async_writes_flushed every page; 1 = flush only when output
     // CB back-pressure requires it (recommended back-pressure write path).
     bool writer_flush_on_pressure = false;
@@ -233,6 +237,9 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     }
     if (test_args::has_command_option(args, "--read-only")) {
         cfg.read_only = true;
+    }
+    if (test_args::has_command_option(args, "--lean-compute")) {
+        cfg.lean_compute = true;
     }
     if (test_args::has_command_option(args, "--writer-flush-on-pressure")) {
         cfg.writer_flush_on_pressure = true;
@@ -669,7 +676,8 @@ BuiltProgram build_program(
             .compile_args = writer_compile_time_args});
 
     // Compute: copy_tile + tunable NOP spin.
-    std::vector<uint32_t> compute_compile_time_args = {kInputCbId, kOutputCbId, cfg.num_nops_per_tile};
+    std::vector<uint32_t> compute_compile_time_args = {
+        kInputCbId, kOutputCbId, cfg.num_nops_per_tile, cfg.lean_compute ? 0u : 1u};
     auto compute_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/kernels/compute_copy_with_nops.cpp",
