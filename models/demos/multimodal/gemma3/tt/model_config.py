@@ -493,6 +493,14 @@ class ModelArgs(TTModelArgs):
             vt = model.model.vision_tower
         return vt
 
+    @classmethod
+    def _gemma3_vision_transformer(cls, model):
+        # transformers 5.x flattened SiglipVisionModel (dropped the `.vision_model` /
+        # SiglipVisionTransformer wrapper); embeddings/encoder/post_layernorm are now direct
+        # attributes. Return that transformer level on <5 (`.vision_model`) and >=5 (the tower itself).
+        vt = cls._gemma3_vision_tower(model)
+        return vt.vision_model if hasattr(vt, "vision_model") else vt
+
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = self._gemma3_multi_modal_projector(model)
@@ -564,52 +572,52 @@ class ModelArgs(TTModelArgs):
 
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = self._gemma3_vision_tower(model).vision_model
+        layer = self._gemma3_vision_transformer(model)
         return layer
 
     def reference_vision_mlp(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = self._gemma3_vision_tower(model).vision_model.encoder.layers[0].mlp
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0].mlp
         return layer
 
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = self._gemma3_vision_tower(model).vision_model.embeddings.patch_embedding
+        layer = self._gemma3_vision_transformer(model).embeddings.patch_embedding
         return layer
 
     def reference_vision_pos_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = self._gemma3_vision_tower(model).vision_model.embeddings.position_embedding
+        layer = self._gemma3_vision_transformer(model).embeddings.position_embedding
         return layer
 
     def reference_vision_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = self._gemma3_vision_tower(model).vision_model.embeddings
+        layer = self._gemma3_vision_transformer(model).embeddings
         return layer
 
     def reference_vision_layernorm(self, layer_name="layer_norm1"):
         model = self.reference_vision_transformer(wrap=False)
         if layer_name == "layer_norm1":
-            layer = self._gemma3_vision_tower(model).vision_model.encoder.layers[0].layer_norm1
+            layer = self._gemma3_vision_transformer(model).encoder.layers[0].layer_norm1
         elif layer_name == "layer_norm2":
-            layer = self._gemma3_vision_tower(model).vision_model.encoder.layers[0].layer_norm2
+            layer = self._gemma3_vision_transformer(model).encoder.layers[0].layer_norm2
         else:
-            layer = self._gemma3_vision_tower(model).vision_model.post_layernorm
+            layer = self._gemma3_vision_transformer(model).post_layernorm
         return layer
 
     def reference_vision_attention(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = self._gemma3_vision_tower(model).vision_model.encoder.layers[0].self_attn  # Common naming
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0].self_attn  # Common naming
         return layer
 
     def reference_vision_encoder_block(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = self._gemma3_vision_tower(model).vision_model.encoder.layers[0]
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0]
         return layer
 
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = self._gemma3_vision_tower(model).vision_model.encoder
+        layer = self._gemma3_vision_transformer(model).encoder
         return layer
 
     def reference_decoder(self, i=0):
