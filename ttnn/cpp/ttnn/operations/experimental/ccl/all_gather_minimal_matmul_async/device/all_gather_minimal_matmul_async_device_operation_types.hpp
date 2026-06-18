@@ -91,44 +91,40 @@ struct AllGatherMinimalMatmulAsyncParams {
         using_persistent_weight_buffer(using_persistent_weight_buffer),
         fsdp_topology(fsdp_topology) {}
 
+    // Structural fields that affect program-cache key. Mirrors the set the former custom
+    // compute_program_hash hashed: runtime-only fields (GlobalSemaphores, persistent-buffer
+    // presence flags, dtype/activation only used for runtime args) are intentionally excluded.
+    // `config` covers the matmul block/subblock sizes; `output_mem_config` is the output memory
+    // layout. The tensor_args (input/weight/optional tensors) are hashed structurally by the
+    // default reflection path.
     static constexpr auto attribute_names = std::make_tuple(
         "num_links",
         "ring_size",
+        "output_mem_config",
         "topology",
-        "barrier_semaphore",
-        "using_persistent_buffers",
         "cluster_axis",
-        "semaphore",
         "force_transpose",
         "num_workers_per_link",
         "num_buffers_per_channel",
-        "chunks",
-        "dim",
+        "config",
         "fsdp_cluster_axis",
         "fsdp_ring_size",
-        "fsdp_semaphore",
-        "using_persistent_weight_buffer",
-        "fsdp_topology");
+        "using_persistent_weight_buffer");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
             this->num_links,
             this->ring_size,
+            this->output_mem_config,
             this->topology,
-            this->barrier_semaphore,
-            this->using_persistent_buffers,
             this->cluster_axis,
-            this->semaphore,
             this->force_transpose,
             this->num_workers_per_link,
             this->num_buffers_per_channel,
-            this->chunks,
-            this->dim,
+            this->config,
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
-            this->fsdp_semaphore,
-            this->using_persistent_weight_buffer,
-            this->fsdp_topology);
+            this->using_persistent_weight_buffer);
     }
 };
 
