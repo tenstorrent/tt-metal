@@ -7,7 +7,9 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/actions/sweep-run-analysis/ @stevendae @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-.github/time_budget.yaml @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/blackhole_demo_systems.yaml @roseli-TT @tdowdallTT @williamlyTT @tenstorrent/codeowner-bypass
+.github/time_budget.yaml @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
+.github/time_budgets/ @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
 .github/workflows/pipeline-select-profiler.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -15,9 +17,9 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 .github/workflows/t3000-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/single-card-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/single-card-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/galaxy_profiler_tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/t3k_profiler_tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/galaxy_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/t3k_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT @roseli-TT @tenstorrent/codeowner-bypass
 .github/bug_checker/ @stevendae @cmaryanTT @tenstorrent/codeowner-bypass
 .github/workflows/ttnn-run-sweeps*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar @tenstorrent/codeowner-bypass
 .github/workflows/ttnn-model-trace-sweep-validation*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar @tenstorrent/codeowner-bypass
@@ -65,12 +67,12 @@ conftest.py @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/ttsim-skip-list.yaml @mcraigheadTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/ @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/ttsim-skip-list.yaml @mcraigheadTT @roseli-TT @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @roseli-TT @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @roseli-TT @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @roseli-TT @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @roseli-TT @tenstorrent/codeowner-bypass
 tests/scripts/single_card/run_single_card_profiler_tests.sh @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
