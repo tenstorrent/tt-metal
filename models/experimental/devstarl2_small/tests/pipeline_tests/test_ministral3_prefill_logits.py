@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
+import bz2
 import contextlib
 import gc
 import os
-import json
 import re
 import types
 from pathlib import Path
@@ -34,7 +34,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 apply_fp8_dequantize_compat()
 
 DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
-MESSAGES_JSON = Path("models/experimental/devstarl2_small/demo/messages_256k_text.json")
+PROMPT_FILE = Path("models/tt_transformers/tests/tale-of-two-cities.txt.bz2")
 PCC_TARGET = float(os.environ.get("MINISTRAL3_PREFILL_LOGITS_PCC", "0.98"))
 _PREFILL_PCC_RESULTS: dict[int, float | str] = {}
 
@@ -69,27 +69,14 @@ def _hf_lm_head(hf_full, text_root):
     raise AttributeError("Could not find HF lm_head on Devstral model.")
 
 
-def _messages_text(path: Path) -> str:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    block = raw["scenarios"][raw.get("default_scenario")] if "scenarios" in raw else raw
-    pieces = []
-    for message in block.get("messages", []):
-        content = message.get("content", "")
-        if isinstance(content, str):
-            pieces.append(content)
-        else:
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    pieces.append(str(item.get("text", "")))
-    text = "\n".join(piece for piece in pieces if piece)
-    if not text:
-        raise ValueError(f"{path}: no text content found in messages")
-    return text
+def _prompt_text(path: Path) -> str:
+    with bz2.open(path, "rt", encoding="utf-8") as f:
+        return f.read()
 
 
 def _prompt_ids(model_args, seq_len: int) -> torch.Tensor:
-    ids = model_args.encode_prompt(_messages_text(MESSAGES_JSON), instruct=False)
-    assert len(ids) >= seq_len, f"{MESSAGES_JSON} tokenized to {len(ids)} tokens, shorter than seq_len={seq_len}"
+    ids = model_args.encode_prompt(_prompt_text(PROMPT_FILE), instruct=False)
+    assert len(ids) >= seq_len, f"{PROMPT_FILE} tokenized to {len(ids)} tokens, shorter than seq_len={seq_len}"
     return torch.tensor(ids[:seq_len], dtype=torch.long).unsqueeze(0)
 
 

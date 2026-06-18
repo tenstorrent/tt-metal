@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
+import bz2
 import contextlib
 import gc
 import io
-import json
 import os
 import re
 from dataclasses import dataclass
@@ -21,8 +21,7 @@ from models.experimental.devstarl2_small.demo import tt_image_demo
 
 OUTPUT_SEQ_LEN = 200
 _DEFAULT_ISLS = (4096, 8192, 16384, 32768, 65536, 131072, 262144)
-_DEFAULT_MESSAGES_JSON = Path("models/experimental/devstarl2_small/demo/messages_256k_text.json")
-_SYNTHETIC_PROMPT_TOKEN_COUNT = 300_000
+_DEFAULT_PROMPT_FILE = Path("models/tt_transformers/tests/tale-of-two-cities.txt.bz2")
 
 _TTFT_RE = re.compile(r"TTFT \(prompt -> 1st new tok\)\s+([0-9.]+) ms")
 _FIRST_TRACED_RE = re.compile(r"First traced decode step latency\s+([0-9.]+) ms")
@@ -87,41 +86,9 @@ def _sweep_id(isl: int) -> str:
     return f"b1_isl{_format_isl(isl)}"
 
 
-def _ensure_messages_json(path: Path) -> None:
-    if path.exists():
-        return
-    if path != _DEFAULT_MESSAGES_JSON:
-        raise FileNotFoundError(f"Missing benchmark messages JSON: {path}")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    prompt = " ".join(["token"] * _SYNTHETIC_PROMPT_TOKEN_COUNT)
-    payload = {
-        "messages": [
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": prompt}],
-            }
-        ]
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-
-def _messages_text(path: Path) -> str:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    block = raw["scenarios"][raw.get("default_scenario")] if "scenarios" in raw else raw
-    pieces = []
-    for message in block.get("messages", []):
-        content = message.get("content", "")
-        if isinstance(content, str):
-            pieces.append(content)
-        else:
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    pieces.append(str(item.get("text", "")))
-    text = "\n".join(piece for piece in pieces if piece)
-    if not text:
-        raise ValueError(f"{path}: no text content found in messages")
-    return text
+def _prompt_text(path: Path) -> str:
+    with bz2.open(path, "rt", encoding="utf-8") as f:
+        return f.read()
 
 
 _PROCESSOR_CACHE = None
@@ -148,12 +115,7 @@ def _text_from_token_count(source_text: str, token_count: int) -> str:
         return source_text
     if token_count <= 0:
         return ""
-    if len(source_tokens) < token_count:
-        repeats = (token_count + len(source_tokens) - 1) // len(source_tokens)
-        source_tokens = (source_tokens * repeats)[:token_count]
-    else:
-        source_tokens = source_tokens[:token_count]
-    return tokenizer.decode(source_tokens)
+    return tokenizer.decode(source_tokens[:token_count])
 
 
 def _multimodal_messages(text: str) -> list[dict]:
@@ -323,12 +285,12 @@ def _print_result(result: _SweepResult) -> None:
     print("------------------------------------------------------------------------------")
 
 
-def _print_report(results: list[_SweepResult], messages_json: Path) -> None:
+def _print_report(results: list[_SweepResult], prompt_file: Path) -> None:
     print()
     print("------------------------------------------------------------------------------")
     print("  Devstral image+text ISL sweep decode throughput summary")
     print("------------------------------------------------------------------------------")
-    print(f"  messages_json: {messages_json}")
+    print(f"  prompt_file: {prompt_file}")
     print(f"  output_seq_len: {OUTPUT_SEQ_LEN}")
     print("------------------------------------------------------------------------------")
     print("| config       | max_seq_len | prefill_tok | decode_t/s/u | decode_t/s | status  |")
@@ -344,9 +306,8 @@ def _print_report(results: list[_SweepResult], messages_json: Path) -> None:
 
 @pytest.mark.models_performance_bare_metal
 def test_devstral_image_text_isl_sweep_perf(monkeypatch):
-    messages_json = Path(os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_MESSAGES_JSON", str(_DEFAULT_MESSAGES_JSON)))
-    _ensure_messages_json(messages_json)
-    source_text = _messages_text(messages_json)
+    prompt_file = Path(os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_PROMPT_FILE", str(_DEFAULT_PROMPT_FILE)))
+    source_text = _prompt_text(prompt_file)
 
     mesh_width = _mesh_width()
     if mesh_width > ttnn.get_num_devices():
@@ -377,4 +338,4 @@ def test_devstral_image_text_isl_sweep_perf(monkeypatch):
         results.append(result)
         _print_result(result)
 
-    _print_report(results, messages_json)
+    _print_report(results, prompt_file)

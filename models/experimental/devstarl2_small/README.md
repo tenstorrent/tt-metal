@@ -6,7 +6,7 @@ P150 and Blackhole QuietBox.
 
 ## Introduction
 
-This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral Small 2](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512)** (Mistral3 multimodal): Pixtral-class vision tower, multimodal projector, and Ministral3 text stack. PCC tests compare subgraphs and full vision+projector paths against Hugging Face references.
+This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral Small 2](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512)** (Mistral3 multimodal): Pixtral-class vision tower, multimodal projector, and Ministral3 text stack. PCC tests compare subgraphs and full vision+projector, Text prefill and decode paths against Hugging Face references.
 
 **Maximum context length**: **256K** on BH-QB, **49K** on P150 (prompt + generation combined) for the TT demos and on-device stack.
 
@@ -30,6 +30,7 @@ This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Dev
   export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
   export TT_CACHE_PATH=/tmp/devstral_tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
   ```
+
 
 ## How to run (PCC tests)
 
@@ -55,7 +56,7 @@ pytest models/experimental/devstarl2_small/tests/test_ministralattn.py -k pcc
 
 **Accuracy — Text Decoder Logits PCC**
 
-Compares full decode logits (all text layers + final norm + LM head) against HF for 32 decode steps. Default PCC threshold: ≥ 0.99 (`MINISTRAL3_DECODER_STACK_PCC`).
+Compares full decode logits (40 text layers + final norm + LM head) against HF for 32 decode steps. Default PCC threshold: ≥ 0.99 (`MINISTRAL3_DECODER_STACK_PCC`).
 
 ```sh
 pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_decoder_layer.py
@@ -63,7 +64,7 @@ pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_
 
 **Accuracy — Text Prefill Logits PCC**
 
-Compares full-depth prefill last-token logits (all text layers + final norm + LM head) against HF over the default sequence-length sweep (128 → 8k tokens) from `demo/messages_256k_text.json`. Default PCC threshold: ≥ 0.97 (`MINISTRAL3_PREFILL_LOGITS_PCC`).
+Compares full-depth prefill last-token logits (all text layers + final norm + LM head) against HF over the default sequence-length sweep (128 → 8k tokens) from the Tale of Two Cities corpus at `models/tt_transformers/tests/tale-of-two-cities.txt.bz2`. Default PCC threshold: ≥ 0.97 (`MINISTRAL3_PREFILL_LOGITS_PCC`).
 
 ```sh
 pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_prefill_logits.py
@@ -79,7 +80,7 @@ python -m tracy -p -r -v -m pytest models/experimental/devstarl2_small/tests/tes
 
 **Performance — ISL Sweep**
 
-Sweeps the input sequence length through the full vision-text pipeline. Text is sourced from `demo/messages_256k_text.json`; one image is always included; output is fixed at 200 tokens per sweep point. The default Devstral sweep is 4k → 256k tokens.
+Sweeps the input sequence length through the full vision-text pipeline. Text is sourced from the Tale of Two Cities corpus at `models/tt_transformers/tests/tale-of-two-cities.txt.bz2`; one image is always included; output is fixed at 200 tokens per sweep point. The default Devstral sweep is 4k → 256k tokens.
 
 ```sh
 pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_text_isl_sweep.py
@@ -141,7 +142,7 @@ python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square
 
 **Text Prefill Logits PCC**
 
-Results from `test_ministral3_prefill_logits.py` on BH QB-2 (`P150x4`) using Tale of Two Cities tokens. This compares the full text model path (40 layers + final norm + LM head) against HF. PCC threshold: >= 0.97.
+Results from `test_ministral3_prefill_logits.py` on BH QB-2 (`P150x4`) using the Tale of Two Cities corpus from `models/tt_transformers/tests/tale-of-two-cities.txt.bz2`. This compares the full text model path (40 layers + final norm + LM head) against HF. PCC threshold: >= 0.97.
 
 | Seq len | PCC |
 |--------:|----:|
