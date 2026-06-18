@@ -21,6 +21,7 @@ from models.experimental.voxtraltts.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC,
 )
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 from models.tt_transformers.tt.common import Mode
 
@@ -109,9 +110,11 @@ def _build_acoustic_1d_mcast_configs(dim: int, hidden_dim: int, n_heads: int, n_
 
 
 def _linear_weight_ttnn(w_out_in: torch.Tensor, device, dtype) -> ttnn.Tensor:
-    return ttnn.from_torch(
+    # voxtral_from_torch replicates onto every mesh rank for 1xN (QB2); identical to ttnn.from_torch
+    # on a single device (P150 / 1x1 submesh), so the 1x1 weights are byte-for-byte 03398dd.
+    return voxtral_from_torch(
         w_out_in.transpose(-2, -1).contiguous(),
-        device=device,
+        device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -176,16 +179,16 @@ class VoxtralTTAcousticModel:
             self._empty_audio_token_id + n_special,
             dtype=torch.int32,
         )
-        self._empty_acoustic_output_codes_tt = ttnn.from_torch(
+        self._empty_acoustic_output_codes_tt = voxtral_from_torch(
             empty_codes,
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
         )
-        self._acoustic_offset_u32_tt = ttnn.from_torch(
+        self._acoustic_offset_u32_tt = voxtral_from_torch(
             torch.tensor([[[n_special]]], dtype=torch.int32),
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
@@ -193,9 +196,9 @@ class VoxtralTTAcousticModel:
 
         half = dim // 2
         inv_freq_cpu = torch.exp(-math.log(time_embedding_theta) * torch.arange(half).float() / half)
-        self._inv_freq_tt = ttnn.from_torch(
+        self._inv_freq_tt = voxtral_from_torch(
             inv_freq_cpu.reshape(1, 1, -1),
-            device=mesh_device,
+            mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
@@ -213,16 +216,16 @@ class VoxtralTTAcousticModel:
         _sem_mask = torch.zeros(1, 1, _sem_size, dtype=torch.float32)
         _sem_mask[0, 0, self._empty_audio_token_id] = float("-inf")
         _sem_mask[0, 0, self._tail_mask_start :] = float("-inf")
-        self._sem_mask_tt = ttnn.from_torch(
+        self._sem_mask_tt = voxtral_from_torch(
             _sem_mask,
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._semantic_dram_mem_config,
         )
-        self._end_audio_token_id_tt = ttnn.from_torch(
+        self._end_audio_token_id_tt = voxtral_from_torch(
             torch.tensor([[[self._end_audio_token_id]]], dtype=torch.int32),
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
@@ -599,9 +602,9 @@ class VoxtralTTAcousticModel:
         host = self.fm_noise_host_torch(bsz, seed)
         if scale != 1.0:
             host = host * float(scale)
-        return ttnn.from_torch(
+        return voxtral_from_torch(
             host,
-            device=self.mesh_device,
+            self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
