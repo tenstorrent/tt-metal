@@ -1905,28 +1905,20 @@ static void run_single_dfb_program_2_0(
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
-            // Trisc→DM BLOCKED→STRIDED. The Tensix producer flat-prefills the ring (ring[s]=input[s]) — it
-            // never scatters — so the golden is block_size-INDEPENDENT and is purely the STRIDED consumer's
-            // read of a flat ring. For C≥P (stride=C, one TC/consumer) it is identity. For P>C, stride=P and
-            // consumer c round-robins its ntc_c=P/C TCs (TC t base = slot c*ntc_c + t, advancing by P):
-            //   expected[m*C + c] = input[(c*(P/C) + (m % (P/C))) + (m / (P/C)) * P]   (identity at C≥P).
+            // Trisc→DM BLOCKED→STRIDED is IDENTITY for ALL P/C. The Tensix producer flat-prefills the ring
+            // (ring[s]=input[s]) — it never scatters. The DM STRIDED consumer (dfb_consumer_2_0.cpp) reads its
+            // tiles with stride = num_consumers (C) and writes them back with that SAME stride
+            // (page = tile_id*C + consumer_idx), so over a flat ring the read-stride and write-stride cancel
+            // and the round-trip is identity regardless of the P:C ratio.
+            // (Confirmed: DM→DM 4Bx2S — same C=2 consumer routing — passes with its scatter-composed
+            // permutation golden, proving the consumer de-interleave is correct on this build; Trisc→DM differs
+            // only by the flat prefill, which yields identity.)
+            // NOTE: an earlier C<P "stride=P round-robin" permutation golden here was WRONG — the consumer
+            // strides by C (num_consumers), not P. It only ever affected P>C,C>1 (the lone 4Bx2S case).
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             const uint32_t P = p.num_producers;
             const uint32_t C = p.num_consumers;
-            std::vector<uint32_t> expected(input.size(), 0u);
-            if (C >= P) {
-                expected = input;  // identity
-            } else {
-                const uint32_t ntc_c = P / C;
-                for (uint32_t c = 0; c < C; ++c) {
-                    for (uint32_t m = 0; m < p.num_entries / C; ++m) {
-                        const uint32_t slot = (c * ntc_c + (m % ntc_c)) + (m / ntc_c) * P;
-                        const uint32_t dst = m * C + c;
-                        std::copy(
-                            input.begin() + slot * wpe, input.begin() + (slot + 1) * wpe, expected.begin() + dst * wpe);
-                    }
-                }
-            }
+            std::vector<uint32_t> expected = input;  // identity for all P/C (see above)
             if (expected != output) {
                 for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
                     int match = -1;
