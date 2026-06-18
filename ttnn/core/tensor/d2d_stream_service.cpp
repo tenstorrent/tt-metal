@@ -1423,7 +1423,7 @@ D2DStreamService::create_pair(
         sender_mesh,
         std::move(sender_socket),
         std::move(sender_service_cores),
-        std::move(receiver_tensor_addrs),
+        receiver_tensor_addrs,
         sender_backing,
         cfg);
     auto receiver_handle = finalize_receiver(
@@ -1507,7 +1507,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
         sender_mesh,
         std::move(sender_socket),
         std::move(sender_service_cores),
-        std::move(receiver_tensor_addrs),
+        receiver_tensor_addrs,
         sender_backing,
         cfg);
     EnqueueMeshWorkload(
