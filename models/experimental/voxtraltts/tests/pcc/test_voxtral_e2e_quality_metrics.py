@@ -25,12 +25,15 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_al
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 
 _QUALITY_TEXT = VOXTRAL_STANDARD_CHAR_TEXT
-_QUALITY_VOICE = "casual_male"
+_QUALITY_VOICE = "cheerful_female"
 _OUTPUT_SAMPLE_RATE = 24000
 _WARMUP_TOKENS = 8
 _MAX_SPEECH_TOKENS = 1500
 _TEXT_MAX_SEQ_LEN = 2048
-_DEFAULT_REFERENCE_WAV = Path("models/experimental/voxtraltts/reference/male_casual_sample.wav")
+# Reference speaker audio (ECAPA similarity) is pulled from Mistral's demo Space, which ships
+# per-voice samples under examples/. Cached by HF like any repo file — no binary committed here.
+_REFERENCE_WAV_SPACE = "mistralai/voxtral-tts-demo"
+_REFERENCE_WAV_FILE = f"examples/{_QUALITY_VOICE}_sample.wav"
 UTMOS_V2_MIN_SCORE = float(os.environ.get("VOXTRAL_TTS_UTMOS_V2_MIN_SCORE", "3.0"))
 ECAPA_MIN_COSINE = float(os.environ.get("VOXTRAL_TTS_ECAPA_MIN_COSINE", "0.55"))
 ASR_WER_TARGET = float(os.environ.get("VOXTRAL_TTS_WER_TARGET", "0.30"))
@@ -51,8 +54,21 @@ def _has_module(name: str) -> bool:
 
 
 def _reference_wav_path() -> Path | None:
+    """Local override via env, else the per-voice sample from the demo Space. None if unavailable."""
     value = os.environ.get("VOXTRAL_TTS_REFERENCE_WAV")
-    return Path(value).expanduser() if value else _DEFAULT_REFERENCE_WAV
+    if value:
+        logger.info(f"Reference speaker wav (env override): {value}")
+        return Path(value).expanduser()
+    try:
+        from huggingface_hub import hf_hub_download
+
+        logger.info(f"Fetching reference speaker wav from HF Space {_REFERENCE_WAV_SPACE!r}: {_REFERENCE_WAV_FILE}")
+        path = Path(hf_hub_download(_REFERENCE_WAV_SPACE, _REFERENCE_WAV_FILE, repo_type="space"))
+        logger.info(f"Reference speaker wav ready (voice={_QUALITY_VOICE}): {path}")
+        return path
+    except Exception as exc:
+        logger.warning(f"Reference speaker wav unavailable ({exc}); skipping ECAPA similarity.")
+        return None
 
 
 def _to_float(value) -> float:
@@ -193,7 +209,7 @@ def test_ttnn_voxtral_tts_500_char_quality_and_perf(device, reset_seeds):
     except Exception as exc:
         pytest.skip(f"Quality metric deps unavailable: {exc}")
 
-    reference_wav = str(_reference_wav_path())
+    reference_wav = _reference_wav_path()
     waveform, n_frames, hit_end, duration_s, latency_s, rtf, chars_per_s = _generate_tt_waveform(device)
     metric_waveform = _normalize_waveform(waveform)
     transcription = _transcribe_waveform(metric_waveform, _OUTPUT_SAMPLE_RATE)
@@ -202,13 +218,15 @@ def test_ttnn_voxtral_tts_500_char_quality_and_perf(device, reset_seeds):
     score = _to_float(
         model.predict(data=metric_waveform.unsqueeze(0), sr=_OUTPUT_SAMPLE_RATE, device="cpu", verbose=False)
     )
-    with tempfile.NamedTemporaryFile(suffix=".wav") as f:
-        _save_wav(f.name, waveform, _OUTPUT_SAMPLE_RATE)
-        verification = speaker.SpeakerRecognition.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
-        ecapa_score, prediction = verification.verify_files(reference_wav, f.name)
-
-    cosine = _to_float(ecapa_score)
-    same_speaker = bool(_to_float(prediction))
+    cosine = float("nan")
+    same_speaker = False
+    if reference_wav is not None:
+        with tempfile.NamedTemporaryFile(suffix=".wav") as f:
+            _save_wav(f.name, waveform, _OUTPUT_SAMPLE_RATE)
+            verification = speaker.SpeakerRecognition.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+            ecapa_score, prediction = verification.verify_files(str(reference_wav), f.name)
+        cosine = _to_float(ecapa_score)
+        same_speaker = bool(_to_float(prediction))
     logger.info(
         f"Voxtral TTS 500-char quality/perf: chars={len(_QUALITY_TEXT)} frames={n_frames} "
         f"audio={duration_s:.2f}s latency={latency_s:.2f}s "
