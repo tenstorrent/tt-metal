@@ -663,9 +663,21 @@ def convert_decoder_layer_weights(
     attn_proj_mapper = None if attn_dp else attn_row_mapper
     attn_proj_variant = f"{attn_variant}_attndp" if attn_dp and attn_variant else attn_variant
 
-    # MLA linears (w_q_a/b, w_kv_a, w_o): BFP8 — medium matmuls; BFP4 unpack hurts latency.
+    # MLA linears (w_q_a, w_kv_a, w_o): BFP8 — medium matmuls; BFP4 unpack hurts latency.
     attn_proj_dtype = _ATTN_PROJ_DTYPE
     attn_proj_tag = _dtype_cache_tag(attn_proj_dtype)
+
+    # w_q_b (32x768x5120) is the one bandwidth-bound MLA linear (~63.6% DRAM): BFP4 weights run
+    # ~17% faster on it (14.1→11.8us) at the cost of PCC 0.9998→0.9932 on the query projection
+    # (validated in experiments/bf4_weight_probe.py). Override via GLM4_MOE_LITE_WQB_DTYPE (bf8/bf16).
+    _wqb_override = os.environ.get("GLM4_MOE_LITE_WQB_DTYPE", "").strip().lower()
+    if _wqb_override in {"bf8", "bfloat8_b"}:
+        wqb_dtype = ttnn.bfloat8_b
+    elif _wqb_override in {"bf16", "bfloat16"}:
+        wqb_dtype = ttnn.bfloat16
+    else:
+        wqb_dtype = ttnn.bfloat4_b
+    wqb_tag = _dtype_cache_tag(wqb_dtype)
 
     w_q_a = _linear_weight_tt(
         device=device,
@@ -677,8 +689,8 @@ def convert_decoder_layer_weights(
     w_q_b = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_b_proj.weight"],
-        cache_file=c("w_q_b", f"{attn_proj_variant}_{attn_proj_tag}" if attn_proj_variant else attn_proj_tag),
-        dtype=attn_proj_dtype,
+        cache_file=c("w_q_b", f"{attn_proj_variant}_{wqb_tag}" if attn_proj_variant else wqb_tag),
+        dtype=wqb_dtype,
         mesh_mapper=attn_proj_mapper,
     )
     w_kv_a = _linear_weight_tt(
