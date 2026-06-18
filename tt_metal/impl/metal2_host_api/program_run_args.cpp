@@ -334,8 +334,11 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 // emit straight into their destination (push_back onto the assembled CRTA vector on the
 // full path, or write into the kernel's existing CRTA buffer slot on the partial paths)
 // rather than through a per-binding temporary vector.
+//
+// `emit` is taken by const-ref (not a forwarding reference): it is invoked multiple times
+// here, so it must not be forwarded/moved-from.
 template <typename Emit>
-void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& tensor, Emit&& emit) {
+void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& tensor, const Emit& emit) {
     const auto address = tensor.address();
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(),
