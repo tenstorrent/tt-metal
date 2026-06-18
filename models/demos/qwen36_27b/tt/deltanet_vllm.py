@@ -688,7 +688,7 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(xr)
         return out
 
-    def _seed_conv_hist_sharded(self, deltanet_state, B, rows=None):
+    def _seed_conv_hist_sharded(self, deltanet_state, B, rows=None, inplace=False):
         """Build/reseed per-chip per-batch conv history h0,h1,h2 = [1,1,B,cdp] from the
         (gathered) prefill conv_states [B,1,conv_dim,32]. conv_dim channels are re-laid
         PER-CHIP-INTERLEAVED [q_c|k_c|v_c] and sharded (matching in_proj_qkv_sh); cols 1,2,3
@@ -729,8 +729,15 @@ class TtGatedDeltaNet(LightweightModule):
                 else:
                     parts.append(ttnn.slice(existing[k], [0, 0, b, 0], [1, 1, b + 1, int(existing[k].shape[3])]))
             nh = ttnn.concat(parts, dim=2) if len(parts) > 1 else parts[0]
-            ttnn.deallocate(existing[k])
-            new_hist.append(nh)
+            if inplace:
+                # copy into the EXISTING fixed buffer (preserves trace-captured address)
+                ttnn.copy(nh, existing[k])
+                ttnn.deallocate(nh)
+            else:
+                ttnn.deallocate(existing[k])
+                new_hist.append(nh)
+        if inplace:
+            return existing
         deltanet_state.conv_hist[li] = new_hist
         return new_hist
 

@@ -233,7 +233,16 @@ class TtQwen36VllmModel(LightweightModule):
             self._dec_trace_id = tid
             deltanet_state.restore_decode_state(snap)  # undo the 2 setup-run advances
         else:
-            self._maybe_reseed_conv_hist(deltanet_state)  # in-place reseed for a new request
+            if batched and getattr(deltanet_state, "_reseed_rows", None):
+                # staggered join: reseed the joining rows IN-PLACE into the fixed (trace-
+                # captured) conv_hist buffers before replay (host op, outside the trace).
+                rows = deltanet_state._reseed_rows
+                for i, layer in enumerate(self.layers):
+                    if self.config.layer_types[i] != "full_attention":
+                        layer.token_mixer._seed_conv_hist_sharded(deltanet_state, B, rows=rows, inplace=True)
+                deltanet_state._reseed_rows = set()
+            else:
+                self._maybe_reseed_conv_hist(deltanet_state)  # in-place reseed (gathered/num_seq=1)
             self._copy_into(self._tr_hidden, emb, self.dtype)
             self._copy_into(self._tr_cos, cos, ttnn.bfloat16)
             self._copy_into(self._tr_sin, sin, ttnn.bfloat16)
