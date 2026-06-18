@@ -629,7 +629,9 @@ def moe_topk_tt(
 
     if norm_topk_prob:
         denom = ttnn.sum(topk_weights, dim=3, keepdim=True, memory_config=mc)
-        denom = ttnn.add(denom, 1e-20, output_tensor=denom)
+        # decode (use_l1): sigmoid > 0, sum of k=8 values is always > 0, so eps is dead code.
+        if not use_l1:
+            denom = ttnn.add(denom, 1e-20, output_tensor=denom)
         topk_weights = ttnn.div(topk_weights, denom, memory_config=mc)
         ttnn.deallocate(denom, force=False)
 
