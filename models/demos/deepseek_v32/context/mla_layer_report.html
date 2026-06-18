@@ -9,7 +9,10 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
   onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<!-- diagrams: Cytoscape.js + dagre auto-layout -->
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 
 <style>
   :root{
@@ -17,9 +20,7 @@
     --ink:#e8edf6; --dim:#97a3ba; --line:#283150; --line2:#384566;
     --accent:#5ad1c8; --accent2:#7aa2ff; --gold:#ffd86b; --red:#ff6b81; --purple:#c98bff; --green:#46d39a;
     --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
-    /* legacy distribution tints (used by mermaid node fills, pills, strips) */
-    --rep:#2e7d32; --repbg:#e6ffe6; --tp:#1565c0; --tpbg:#e3f2fd; --spc:#e65100; --spbg:#fff3e0;
-    --comm:#c62828; --commbg:#ffebee; --host:#6a1b9a; --hostbg:#f3e5f5; --muted:#97a3ba;
+    --repbg:#e6ffe6; --tpbg:#e3f2fd; --spbg:#fff3e0; --hostbg:#f3e5f5;
   }
   *{box-sizing:border-box}
   body{ margin:0; background:var(--bg); color:var(--ink); font-size:15.5px; line-height:1.55;
@@ -98,13 +99,16 @@
   .pio { color:var(--dim); border-color:var(--line2); }
   .legend{ display:flex; flex-wrap:wrap; gap:7px; align-items:center; margin:12px 0; }
 
-  /* mermaid figures: light "screenshot" card on the dark page (keeps the existing light node fills) */
-  .fig{ background:#f7f9fc; border:1px solid var(--line2); border-radius:14px; padding:12px 14px; margin:16px 0; overflow-x:auto; box-shadow:0 8px 30px rgba(0,0,0,.35); }
+  /* diagram figures: dark card holding a Cytoscape canvas */
+  .fig{ position:relative; background:var(--bg2); border:1px solid var(--line); border-radius:14px; padding:10px; margin:16px 0; box-shadow:0 8px 30px rgba(0,0,0,.35); }
   .frcap{ font-size:13px; color:var(--dim); margin:0 0 6px 2px; }
-  pre.mermaid{ background:transparent; text-align:center; line-height:normal; margin:0; }
-  pre.mermaid svg{ max-width:100%; height:auto; }
-  .mermaid .edgePaths path,.mermaid .flowchart-link{ stroke-dasharray:7 5; animation:dashflow .9s linear infinite; }
-  @keyframes dashflow{ to{ stroke-dashoffset:-24; } }
+  .cybox{ width:100%; height:460px; cursor:grab; }
+  .cybox:active{ cursor:grabbing; }
+  .dhint{ font-size:11.5px; color:#8a93a6; text-align:right; margin:2px 4px 0; }
+  .zc{ position:absolute; top:14px; right:14px; display:flex; flex-direction:column; gap:5px; z-index:5; }
+  .zc button{ width:30px; height:30px; font-size:16px; line-height:1; border:1px solid var(--line2); border-radius:8px;
+    background:rgba(21,26,40,.85); color:var(--ink); cursor:pointer; backdrop-filter:blur(4px); transition:.12s; }
+  .zc button:hover{ border-color:var(--accent); color:var(--accent); }
 
   /* worked-example to-scale strips */
   .strip{ display:flex; height:42px; border:1px solid var(--line2); border-radius:8px; overflow:hidden; font-size:12.5px; text-align:center; }
@@ -147,8 +151,8 @@
 
   footer{ text-align:center; color:var(--dim); font-size:12.5px; margin-top:40px; padding-top:18px; border-top:1px solid var(--line); }
   footer button{ font:inherit; padding:5px 14px; border:1px solid var(--line2); border-radius:8px; background:var(--panel); color:var(--dim); cursor:pointer; }
-  body.still .edgePaths path, body.still .flowchart-link, body.still .bar, body.still .tbar{ animation:none!important; transition:none!important; }
-  @media (prefers-reduced-motion: reduce){ .edgePaths path,.flowchart-link,.bar{ animation:none!important; } }
+  body.still .bar, body.still .tbar{ animation:none!important; transition:none!important; }
+  @media (prefers-reduced-motion: reduce){ .bar{ animation:none!important; } }
 </style>
 </head>
 <body>
@@ -176,9 +180,9 @@
 <section class="tab" data-tab="overview">
   <h2><span class="n">§1</span>Overview &amp; the router</h2>
   <p class="lede">Nodes in the graphs are <b>ops</b>; edges are <b>tensors</b> labelled with their shapes; node colour is the
-  <b>distribution</b> across the mesh (see §1.2). Edges animate in the direction data flows. The DSA path is entirely on
-  device — stems, RoPE, key cache, <code>indexer_score</code>, <code>topk_large_indices</code> and <code>sparse_sdpa</code>
-  all run SPMD per chip, with no host round-trip.</p>
+  <b>distribution</b> across the mesh (see §1.2). The DSA path is entirely on device — stems, RoPE, key cache,
+  <code>indexer_score</code>, <code>topk_large_indices</code> and <code>sparse_sdpa</code> all run SPMD per chip, with no host
+  round-trip.</p>
 
   <div class="callout host"><span class="who">the one structural fact</span>
   <code>forward()</code> is a router. When the global end position is <span class="pill phost">≤ index_topk (2048)</span>
@@ -230,32 +234,15 @@
     <span class="pill phost">host (control-flow)</span>
     <span class="pill pio">mesh I/O activation</span>
   </div>
-  <p class="sub">Orthogonal to colour, <b>🟫 on an edge marks a ROW_MAJOR tensor</b>; unmarked is TILE. The three DSA device
-  ops are ROW_MAJOR end to end (<code>indexer_score</code> → <code>topk_large_indices</code> → <code>sparse_sdpa</code>);
-  everything else (v3 linears, norms, RoPE, cache writes) is TILE. The concrete <code>↳</code> shapes on every edge use the
-  §3.3 worked example: <b>50k cached + 5k chunk</b> at <code>sp=8, tp=4</code> → <code>S/sp=640, glob=5120, end_pos=56320,
-  k=2048</code>.</p>
+  <p class="sub">The three DSA device ops are ROW_MAJOR end to end (<code>indexer_score</code> → <code>topk_large_indices</code>
+  → <code>sparse_sdpa</code>); everything else (v3 linears, norms, RoPE, cache writes) is TILE. The concrete <code>↳</code>
+  shapes on edges use the §3.3 worked example: <b>50k cached + 5k chunk</b> at <code>sp=8, tp=4</code> → <code>S/sp=640,
+  glob=5120, end_pos=56320, k=2048</code>.</p>
 
   <h3><span class="n">1.3</span>Top-level <code>forward()</code> — the router</h3>
   <p class="frcap">Decision at <code>mla.py:230</code>. The dense passthrough re-uses all of v3; DSA is the new path.</p>
-  <div class="fig"><pre class="mermaid">
-flowchart TD
-  X["hidden_states<br/>[1, 1, S/sp, dim/tp]<br/>↳ [1,1,640,1792]"]:::io
-  DEC{"🏠 end_pos = kv_isl + S_local·sp<br/>&gt; index_topk (2048) ?<br/>↳ 56320 &gt; 2048 → yes"}:::host
-  X -->|"[1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"| DEC
-  DEC -->|"no — dense (chunked: kv_isl set)"| WK0["_indexer_write_k<br/>(device K-cache warm)"]:::comm
-  WK0 -->|"K appended"| V3["super().forward<br/>(v3 dense ring SDPA)"]:::tp
-  V3 -->|"[1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"| OUT1["out"]:::io
-  DEC -->|"yes — sparse (DSA)"| TOPK["_indexer_topk (device)<br/>→ indices [1,1,glob,k]<br/>↳ [1,1,5120,2048] replicated"]:::rep
-  TOPK -->|"🟫 indices [1,1,glob,k] uint32 RM<br/>↳ [1,1,5120,2048]"| DSA["_dsa_forward<br/>(sparse_mla over selected latents)"]:::tp
-  DSA -->|"[1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"| OUT2["out"]:::io
-  classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
-  classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
-  classDef tp fill:#e3f2fd,stroke:#1565c0,color:#000;
-  classDef sp fill:#fff3e0,stroke:#e65100,color:#000;
-  classDef comm fill:#ffebee,stroke:#c62828,color:#000;
-  classDef host fill:#f3e5f5,stroke:#6a1b9a,color:#000;
-</pre></div>
+  <div class="fig"><div class="cybox" id="cy-router"></div></div>
+  <p class="dhint">drag to pan · scroll to zoom · drag a node to nudge it</p>
 </section>
 
 <!-- ============================ 2 · INDEXER ============================ -->
@@ -274,62 +261,8 @@ flowchart TD
   L1-resident (<code>HB=0</code>) lifts <b class="hl">indexer math-util 1.85% → 75.2% and device time 802 → 9.9 ms</b>
   (sp4×tp2). The trade-off — the partial-logit all-reduce — is the layer's new largest cost (~19.5 ms); see §4.</div>
 
-  <div class="fig"><pre class="mermaid">
-flowchart TD
-  H["hidden_states<br/>[1,1,S/sp,dim/tp]"]:::io
-  subgraph KSTEM["K stem — _indexer_write_k (every chunk, dense incl.)"]
-    direction TB
-    WK["ttnn.linear · _idx_wk<br/>[dim,D_idx] sharded on dim"]:::tp
-    KRS["_tp_rs_ag<br/>reduce_scatter+all_gather (TP)"]:::comm
-    KLN["ttnn.layer_norm · k_norm (w,b)"]:::rep
-    KAG["_sp_all_gather (dim2, SP)"]:::comm
-    KROPE["_device_rope_pe<br/>rotary_embedding_hf on first 64 (device)"]:::rep
-    KCAT["ttnn.concat → _index_kbuf (device)<br/>(grow by concat, natural order)"]:::rep
-    WK -->|"partial [1,1,S/sp,128]<br/>↳ [1,1,640,128]"| KRS -->|"[1,1,S/sp,128]<br/>↳ [1,1,640,128]"| KLN
-    KLN -->|"[1,1,S/sp,128]<br/>↳ [1,1,640,128]"| KAG -->|"[1,1,glob,128]<br/>↳ [1,1,5120,128]"| KROPE
-    KROPE -->|"[1,1,glob,128]<br/>↳ [1,1,5120,128]"| KCAT
-  end
-  subgraph QSTEM["Q stem (col-parallel wq_b → H_idx/tp heads/chip)"]
-    direction TB
-    QA["ttnn.linear · q_a_proj"]:::tp
-    QRS["_tp_rs_ag (TP)"]:::comm
-    QN["ttnn.rms_norm · q_a_layernorm"]:::rep
-    QB["ttnn.linear · _idx_wq_b<br/>col-parallel [1536, H_idx·D_idx/tp]"]:::tp
-    QAG["_sp_all_gather (dim2, SP)"]:::comm
-    QH["nlp_create_qkv_heads<br/>num_heads=H_idx/tp=16"]:::tp
-    QROPE["_device_rope_pe (first 64)"]:::tp
-    QA -->|"partial [1,1,S/sp,1536]<br/>↳ [1,1,640,1536]"| QRS -->|"[1,1,S/sp,1536]<br/>↳ [1,1,640,1536]"| QN
-    QN -->|"[1,1,S/sp,1536]<br/>↳ [1,1,640,1536]"| QB -->|"[1,1,S/sp,H_idx·D_idx/tp]<br/>↳ [1,1,640,2048]"| QAG
-    QAG -->|"[1,1,glob,H_idx·D_idx/tp]<br/>↳ [1,1,5120,2048]"| QH -->|"[1,H_idx/tp,glob,128]<br/>↳ [1,16,5120,128]"| QROPE
-  end
-  subgraph WSTEM["weights_proj (reduce-scatter on heads → H_idx/tp/chip)"]
-    direction TB
-    WP["ttnn.linear · _idx_wproj<br/>[dim,H_idx] sharded on dim"]:::tp
-    WRS["_tp_rs_ag(rs_only)<br/>reduce_scatter on head dim (TP)"]:::comm
-    WAG["_sp_all_gather (dim2, SP)"]:::comm
-    WMUL["ttnn.multiply<br/>× H_idx^-0.5 · scale"]:::tp
-    WP -->|"partial [1,1,S/sp,H_idx]<br/>↳ [1,1,640,64]"| WRS -->|"[1,1,S/sp,H_idx/tp]<br/>↳ [1,1,640,16]"| WAG
-    WAG -->|"[1,1,glob,H_idx/tp]<br/>↳ [1,1,5120,16]"| WMUL
-  end
-  H --> WK
-  H --> QA
-  H --> WP
-  LOG["ops.indexer_logits (device)<br/>indexer_score HB=0 (H_idx/tp resident)<br/>relu(q·kᵀ), head-reduce, causal -inf FUSED"]:::tp
-  ALLRED["TP all-reduce(SUM) over tp_axis<br/>partial → full logits (RM→TILE→RM)"]:::comm
-  TK["ops.topk_indices (device)<br/>topk_large_indices<br/>masked slots → 0xFFFFFFFF sentinel"]:::rep
-  IDX["indices 🟫<br/>[1,1,glob,k] uint32 RM replicated<br/>↳ [1,1,5120,2048]"]:::io
-  QROPE -->|"q_dev [1,H_idx/tp,glob,128] TILE<br/>↳ [1,16,5120,128]"| LOG
-  KCAT  -->|"_index_kbuf [1,1,end_pos,128] TILE<br/>↳ [1,1,56320,128]"| LOG
-  WMUL  -->|"wts [1,1,glob,H_idx/tp] → permute [1,H_idx/tp,glob,1]<br/>↳ [1,1,5120,16]"| LOG
-  LOG -->|"🟫 PARTIAL logits [1,1,glob,end_pos] bf16<br/>(sum over this chip's H_idx/tp heads) ↳ [1,1,5120,56320]"| ALLRED
-  ALLRED -->|"🟫 full logits [1,1,glob,end_pos] bf16 RM<br/>↳ [1,1,5120,56320]; future cols -inf"| TK
-  TK -->|"🟫 k = min(2048,end_pos), mult. of 16<br/>↳ k = 2048 (uint32 RM)"| IDX
-  classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
-  classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
-  classDef tp fill:#e3f2fd,stroke:#1565c0,color:#000;
-  classDef sp fill:#fff3e0,stroke:#e65100,color:#000;
-  classDef comm fill:#ffebee,stroke:#c62828,color:#000;
-</pre></div>
+  <div class="fig"><div class="cybox" id="cy-indexer"></div></div>
+  <p class="dhint">drag to pan · scroll to zoom</p>
 
   <h3><span class="n">2.1</span>How each stem is sharded</h3>
   <table>
@@ -368,68 +301,8 @@ flowchart TD
   order <b>on device</b>, concatenating contiguous per-(slab,chip) slabs since <code>sparse_sdpa</code> reads raw physical
   order.</p>
 
-  <div class="fig"><pre class="mermaid">
-flowchart TD
-  H["hidden_states<br/>[1,1,S/sp,dim/tp]"]:::io
-  IDX["indices [1,1,glob,k]<br/>(from §2)"]:::io
-  subgraph Q["Q path → absorbed latent query"]
-    direction TB
-    QA["linear q_a_proj"]:::tp
-    QR["_tp_rs_ag (TP)"]:::comm
-    QLN["rms_norm q_a_layernorm"]:::rep
-    QBP["linear q_b_proj (col-parallel)"]:::tp
-    QHD["nlp_create_qkv_heads H_local"]:::tp
-    QSL["slice nope[128] | rope[64]"]:::tp
-    WB1["linear wkv_b1 → latent 512"]:::tp
-    QRP["_apply_rope (rope half)"]:::tp
-    QCC["concat → tt_q [1,H/tp,S/sp,576]"]:::tp
-    QA -->|"partial [..,1536]<br/>↳ [1,1,640,1536]"| QR -->|"[..,1536]<br/>↳ [1,1,640,1536]"| QLN -->|"[..,1536]<br/>↳ [1,1,640,1536]"| QBP
-    QBP -->|"[..,H/tp·192]<br/>↳ [1,1,640,6144]"| QHD -->|"[1,H/tp,S/sp,192]<br/>↳ [1,32,640,192]"| QSL
-    QSL -->|"nope [..,128]<br/>↳ [1,32,640,128]"| WB1 -->|"[..,512]<br/>↳ [1,32,640,512]"| QCC
-    QSL -->|"rope [..,64]<br/>↳ [1,32,640,64]"| QRP -->|"[..,64]<br/>↳ [1,32,640,64]"| QCC
-  end
-  subgraph KV["KV path → cached latent"]
-    direction TB
-    KVA["linear kv_a_proj_with_mqa"]:::tp
-    KVR["_tp_ag_reduce (TP, if tp&gt;1)"]:::comm
-    KVSL["slice nope[512] | rope[64]"]:::rep
-    KVN["rms_norm kv_a_layernorm"]:::rep
-    KRP["_apply_rope"]:::rep
-    KVCC["concat → kvpe [1,1,S/sp,576]"]:::rep
-    KB8["typecast bf8 → cache write"]:::sp
-    KVA -->|"[1,1,S/sp,576]<br/>↳ [1,1,640,576]"| KVR -->|"[1,1,S/sp,576]<br/>↳ [1,1,640,576]"| KVSL
-    KVSL -->|"nope [..,512]<br/>↳ [1,1,640,512]"| KVN -->|"[..,512]<br/>↳ [1,1,640,512]"| KVCC
-    KVSL -->|"rope [..,64]<br/>↳ [1,1,640,64]"| KRP -->|"[..,64]<br/>↳ [1,1,640,64]"| KVCC
-    KVCC -->|"[1,1,S/sp,576]<br/>↳ [1,1,640,576]"| KB8
-  end
-  H --> QA
-  H --> KVA
-  CACHE["KVPE cache write<br/>single-shot: fill_cache_for_user_<br/>chunked: update_padded_kv_cache"]:::sp
-  GATHER["on-device latent gather (no host)<br/>chunked: _gather_kvpe_prefix — ND→INTER · SP all_gather ·<br/>typecast bf8→bf16 · TILE→RM · un-rotate (concat→contiguous)"]:::comm
-  IRS["ttnn.mesh_partition (device, sp&gt;1)<br/>replicated → SP-sharded on dim2<br/>[1,1,glob,k] → [1,1,S/sp,k]"]:::comm
-  SMLA["ttnn.transformer.sparse_sdpa (device, 🟫RM-only)<br/>SPMD per chip: gather k latents + online-softmax<br/>V = kv[..,:512]; sentinel-masked"]:::tp
-  WB2["linear wkv_b2 → v_head_dim 128"]:::tp
-  CH["nlp_concat_heads"]:::tp
-  OP["linear o_proj (in-sharded)"]:::tp
-  ORS["_tp_rs_ag (rs_only) reduce_scatter"]:::comm
-  OUT["out [1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"]:::io
-  KB8 --> CACHE
-  CACHE -->|"kvpe_b8 written<br/>↳ chunk [1,1,640,576]"| GATHER
-  GATHER -->|"🟫 kv [1,1,end_pos,576] RM bf16 replicated<br/>↳ [1,1,56320,576]"| SMLA
-  QCC -->|"tt_q [1,H/tp,S/sp,576] TILE→🟫RM in op<br/>↳ [1,32,640,576]"| SMLA
-  IDX -->|"🟫 indices [1,1,glob,k] RM replicated<br/>↳ [1,1,5120,2048]"| IRS
-  IRS -->|"🟫 idx [1,1,S/sp,k] RM (matches q seq)<br/>↳ [1,1,640,2048]"| SMLA
-  SMLA -->|"attn_out latent [1,H/tp,S/sp,512]<br/>TILE · ↳ [1,32,640,512]"| WB2
-  WB2 -->|"[1,H/tp,S/sp,128]<br/>↳ [1,32,640,128]"| CH
-  CH -->|"[1,1,S/sp,(H/tp)·128]<br/>↳ [1,1,640,4096]"| OP
-  OP -->|"partial [1,1,S/sp,dim]<br/>↳ [1,1,640,7168]"| ORS
-  ORS -->|"[1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"| OUT
-  classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
-  classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
-  classDef tp fill:#e3f2fd,stroke:#1565c0,color:#000;
-  classDef sp fill:#fff3e0,stroke:#e65100,color:#000;
-  classDef comm fill:#ffebee,stroke:#c62828,color:#000;
-</pre></div>
+  <div class="fig"><div class="cybox" id="cy-attn"></div></div>
+  <p class="dhint">drag to pan · scroll to zoom · the Q-path and KV-path run in parallel into sparse_sdpa</p>
 
   <h3><span class="n">3.1</span>What <code>sparse_mla</code> does</h3>
   <div class="callout"><span class="who">flashmla sparse contract</span>
@@ -438,7 +311,7 @@ flowchart TD
   online-softmax:
   $$ O_{h,s} = \mathrm{softmax}_j\!\Big(\text{scale}\cdot\langle q_{h,s},\,kv[\mathrm{idx}_{s,j}]\rangle\Big)\cdot kv[\mathrm{idx}_{s,j}][{:}512] $$
   V is the first 512 dims of the same latent (MQA). The merged <code>ttnn.transformer.sparse_sdpa</code> device op is invoked
-  <b>SPMD across the SP×TP mesh</b> — heads on TP (dim1), sequence on SP (dim2). It is <b>🟫 ROW_MAJOR-only</b>; both the
+  <b>SPMD across the SP×TP mesh</b> — heads on TP (dim1), sequence on SP (dim2). It is <b>ROW_MAJOR-only</b>; both the
   <code>kv</code> prefix and the <code>indices</code> reshard are produced on device. The remaining C++ follow-up is
   perf-only: an SP-ring that avoids materializing the full-T replica (backlog 12).</div>
 
@@ -458,9 +331,9 @@ flowchart TD
   <tr><td>11</td><td><code>slice + rms_norm kv_a_layernorm</code></td><td><code>nope[512]</code></td><td><span class="pill prep">replicated</span></td></tr>
   <tr><td>12</td><td><code>_apply_rope</code> + <code>concat</code></td><td><code>rope[64] → kvpe [1,1,S/sp,576]</code></td><td><span class="pill prep">rep</span> · <span class="pill psp">SP-seq</span></td></tr>
   <tr><td>13</td><td><code>typecast bf8 + cache write</code></td><td><code>update_padded_kv_cache</code></td><td><span class="pill psp">SP-sharded cache</span></td></tr>
-  <tr><td>14</td><td><code>_gather_kvpe_prefix</code> (device)</td><td>SP <code>all_gather</code> · bf8→bf16 · TILE→RM · block-cyclic un-rotate (<code>concat</code> → contiguous) → <code>[1,1,end_pos,576]</code> 🟫RM</td><td><span class="pill pcomm">CCL+device</span> → <span class="pill prep">rep</span></td></tr>
-  <tr><td>15a</td><td><code>ttnn.mesh_partition</code> indices</td><td>🟫RM <code>[1,1,glob,k]</code> rep → <code>[1,1,S/sp,k]</code> SP-sharded</td><td><span class="pill pcomm">CCL</span> → <span class="pill psp">SP</span></td></tr>
-  <tr><td>15b</td><td><code>ops.sparse_mla</code> (<code>sparse_sdpa</code>, 🟫RM)</td><td><code>tt_q + kv + idx → [1,H/tp,S/sp,512]</code>; SPMD per chip</td><td><span class="pill ptp">TP</span>·<span class="pill psp">SP</span></td></tr>
+  <tr><td>14</td><td><code>_gather_kvpe_prefix</code> (device)</td><td>SP <code>all_gather</code> · bf8→bf16 · TILE→RM · block-cyclic un-rotate (<code>concat</code> → contiguous) → <code>[1,1,end_pos,576]</code> RM</td><td><span class="pill pcomm">CCL+device</span> → <span class="pill prep">rep</span></td></tr>
+  <tr><td>15a</td><td><code>ttnn.mesh_partition</code> indices</td><td>RM <code>[1,1,glob,k]</code> rep → <code>[1,1,S/sp,k]</code> SP-sharded</td><td><span class="pill pcomm">CCL</span> → <span class="pill psp">SP</span></td></tr>
+  <tr><td>15b</td><td><code>ops.sparse_mla</code> (<code>sparse_sdpa</code>, RM)</td><td><code>tt_q + kv + idx → [1,H/tp,S/sp,512]</code>; SPMD per chip</td><td><span class="pill ptp">TP</span>·<span class="pill psp">SP</span></td></tr>
   <tr><td>16</td><td><code>linear wkv_b2</code></td><td><code>[..,512] → [..,128]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
   <tr><td>17</td><td><code>nlp_concat_heads</code></td><td><code>→ [1,1,S/sp,(H/tp)·128]</code></td><td><span class="pill ptp">TP</span></td></tr>
   <tr><td>18</td><td><code>linear o_proj</code></td><td><code>→ [1,1,S/sp,dim]</code> partial</td><td><span class="pill ptp">TP partial</span></td></tr>
@@ -510,30 +383,7 @@ flowchart TD
 
   <h3><span class="n">4.1</span>The layer as a flow, sized by time</h3>
   <p class="frcap">Each node is annotated with its device time and share of the layer (compute = blue/teal, collective = red).</p>
-  <div class="fig"><pre class="mermaid">
-flowchart TD
-  H["hidden_states"]:::io
-  STEMS["indexer stems + RoPE<br/>K/Q/W linears · gathers · rope<br/><b>2.62 ms · 4%</b>"]:::tp
-  ISCORE["indexer_score (HB=0)<br/><b>9.86 ms · 16%</b><br/>75% math-util"]:::tp
-  AR["logits all-reduce<br/>tilize → RS → AG → untilize<br/><b>19.5 ms · 31%</b><br/>RS/AG ≈ 43 GB/s = 8% of 512"]:::comm
-  TOPK["topk_large_indices<br/><b>15.0 ms · 24%</b><br/>no perf model"]:::rep
-  QPATH["attn Q-path<br/>q_a · q_b · wkv_b1 · rope<br/><b>2.50 ms · 4%</b><br/>matmuls 17–44% util"]:::tp
-  KVPATH["attn KV-path + cache write<br/><b>0.22 ms</b>"]:::sp
-  GATHER["latent gather (SP)<br/>all_gather + un-rotate<br/><b>2.17 ms · 4%</b><br/>AG ≈ 77 GB/s = 15%"]:::comm
-  RESHARD["indices reshard<br/>mesh_partition · <b>0.06 ms</b>"]:::comm
-  SDPA["sparse_sdpa<br/><b>9.12 ms · 15%</b><br/>no perf model"]:::tp
-  EPI["epilogue<br/>wkv_b2 · concat · o_proj · RS<br/><b>1.66 ms · 3%</b><br/>o_proj 69% util"]:::tp
-  OUT["out [1,1,S/sp,dim/tp]"]:::io
-  H --> STEMS --> ISCORE --> AR --> TOPK --> RESHARD
-  H --> QPATH --> SDPA
-  H --> KVPATH --> GATHER --> SDPA
-  RESHARD --> SDPA --> EPI --> OUT
-  classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
-  classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
-  classDef tp fill:#e3f2fd,stroke:#1565c0,color:#000;
-  classDef sp fill:#fff3e0,stroke:#e65100,color:#000;
-  classDef comm fill:#ffebee,stroke:#c62828,color:#000;
-</pre></div>
+  <div class="fig"><div class="cybox" id="cy-timing"></div></div>
 
   <h3><span class="n">4.2</span>Per-stage breakdown</h3>
   <div class="panel">
@@ -596,39 +446,215 @@ flowchart TD
 
 <footer>
   <button onclick="document.body.classList.toggle('still')">⏸ toggle animations</button>
-  &nbsp;·&nbsp; generated from <code>tt/mla/mla.py</code> + tracy · respects your OS “reduce motion” setting
+  &nbsp;·&nbsp; diagrams: Cytoscape.js + dagre · generated from <code>tt/mla/mla.py</code> + tracy
 </footer>
 </main>
 
 <script>
-  mermaid.initialize({ startOnLoad:false, theme:'base', flowchart:{ curve:'basis', htmlLabels:true },
-    themeVariables:{ fontFamily:'-apple-system,Segoe UI,Roboto,Arial,sans-serif', fontSize:'13px' } });
-
-  // Mermaid mis-renders ("Syntax error in text") inside display:none tabs, so render each
-  // tab's diagrams lazily the first time the tab is shown (and thus laid out / measurable).
-  async function renderTabMermaid(id){
-    const sec = document.querySelector('section.tab[data-tab="'+id+'"]');
-    if(!sec) return;
-    const nodes = Array.from(sec.querySelectorAll('pre.mermaid:not([data-processed])'));
-    if(nodes.length){ try{ await mermaid.run({ nodes }); }catch(e){ console.error('mermaid', e); } }
-  }
-
-  // ---- tabbed nav + hash routing ----
+  // ===================== tabbed nav + hash routing =====================
   const TABS = ['overview','indexer','attention','timing','tests'];
-  let chartBuilt = false;
+  const TAB_GRAPH = {
+    overview:  {box:'cy-router',  g:'router'},
+    indexer:   {box:'cy-indexer', g:'indexer'},
+    attention: {box:'cy-attn',    g:'attention'},
+    timing:    {box:'cy-timing',  g:'timing'},
+  };
   function showTab(id){
     if(!TABS.includes(id)) id = 'overview';
     document.querySelectorAll('section.tab').forEach(s => s.classList.toggle('on', s.dataset.tab===id));
     document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===id));
     if(('#'+id) !== location.hash) history.replaceState(null,'','#'+id);
-    renderTabMermaid(id);
+    const tg = TAB_GRAPH[id]; if(tg) renderCy(tg.box, GRAPHS[tg.g]);
     if(id==='timing') animateChart();
     window.scrollTo({top:0, behavior:'instant'});
   }
   document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
   window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
 
-  // ---- interactive timing chart ----
+  // ===================== Cytoscape renderer (one model per diagram) =====================
+  // dark diagram theme: nodes are a faint class-colour tint over the dark card, bright class border, light text.
+  const CLR = { io:'#97a3ba', rep:'#46d39a', tp:'#7aa2ff', sp:'#ffd86b', comm:'#ff6b81', host:'#c98bff' };
+  const CY_STYLE = [
+    {selector:'node', style:{'shape':'round-rectangle','background-color':'#1b2236','background-opacity':1,'border-width':1.5,'border-color':'#384566',
+      'label':'data(label)','text-wrap':'wrap','text-max-width':180,'font-size':10,'font-family':'Helvetica,Arial,sans-serif',
+      'text-valign':'center','text-halign':'center','padding':'9px','width':'label','height':'label','color':'#e8edf6'}},
+    {selector:'node.io',  style:{'background-color':CLR.io,  'background-opacity':0.10,'border-color':CLR.io}},
+    {selector:'node.rep', style:{'background-color':CLR.rep, 'background-opacity':0.16,'border-color':CLR.rep}},
+    {selector:'node.tp',  style:{'background-color':CLR.tp,  'background-opacity':0.16,'border-color':CLR.tp}},
+    {selector:'node.sp',  style:{'background-color':CLR.sp,  'background-opacity':0.16,'border-color':CLR.sp}},
+    {selector:'node.comm',style:{'background-color':CLR.comm,'background-opacity':0.16,'border-color':CLR.comm,'border-width':2}},
+    {selector:'node.host',style:{'shape':'round-diamond','background-color':CLR.host,'background-opacity':0.16,'border-color':CLR.host,'text-max-width':210}},
+    {selector:'edge', style:{'width':1.3,'line-color':'#4a5570','target-arrow-color':'#4a5570','target-arrow-shape':'triangle',
+      'curve-style':'bezier','arrow-scale':0.85,'label':'data(label)','font-size':8,'color':'#aab4c6',
+      'text-background-color':'#10141f','text-background-opacity':0.9,'text-background-padding':2,
+      'font-family':'Helvetica,Arial,sans-serif'}},
+  ];
+  const CY = {};
+  // Default view: fit to WIDTH and grow height when the graph fits inline; once that would exceed a
+  // capped viewport (~72vh) switch to a fixed-height box + fit-all and let pan/zoom explore the rest.
+  function fitDefault(box){
+    const cy = CY[box]; if(!cy) return;
+    const el = document.getElementById(box), pad = 16;
+    const bb = cy.elements().boundingBox(); if(!bb.w || !bb.h) return;
+    const W = el.clientWidth;
+    const cap = Math.min(760, Math.round(window.innerHeight * 0.72));
+    let zw = Math.max(0.2, Math.min((W - 2*pad) / bb.w, 2.4));   // width-fit zoom
+    let z, h, topAlign;
+    if(bb.h*zw + 2*pad <= cap){ z = zw; h = bb.h*zw + 2*pad; topAlign = true; }       // fits inline at full width
+    else { h = cap; z = Math.max(0.2, Math.min(zw, (cap - 2*pad)/bb.h)); topAlign = false; }  // bounded viewport, fit-all
+    el.style.height = Math.ceil(h) + 'px';
+    cy.resize(); cy.zoom(z);
+    cy.pan({ x:(W - bb.w*z)/2 - bb.x1*z, y: topAlign ? (pad - bb.y1*z) : ((h - bb.h*z)/2 - bb.y1*z) });
+  }
+  function addZoomControls(box, cy){
+    const fig = document.getElementById(box).parentElement;
+    if(fig.querySelector('.zc')) return;
+    const zc = document.createElement('div'); zc.className = 'zc';
+    const mk = (t,fn) => { const b=document.createElement('button'); b.textContent=t; b.title=t; b.onclick=fn; return b; };
+    const zoomBy = f => { const z=Math.max(cy.minZoom(),Math.min(cy.maxZoom(),cy.zoom()*f));
+      cy.zoom({ level:z, renderedPosition:{ x:cy.width()/2, y:cy.height()/2 } }); };
+    zc.appendChild(mk('+', () => zoomBy(1.25)));
+    zc.appendChild(mk('−', () => zoomBy(0.8)));
+    zc.appendChild(mk('⤢', () => fitDefault(box)));
+    fig.appendChild(zc);
+  }
+  function renderCy(box, graph){
+    if(CY[box]){ fitDefault(box); return; }
+    try{ if(window.cytoscapeDagre) cytoscape.use(window.cytoscapeDagre); }catch(e){}
+    const els = [];
+    graph.nodes.forEach(n => els.push({ data:{id:n.id, label:n.label}, classes:n.cls }));
+    graph.edges.forEach((e,i) => els.push({ data:{id:box+'_e'+i, source:e.f, target:e.t, label:e.l||''} }));
+    try{
+      const cy = cytoscape({ container:document.getElementById(box), elements:els, style:CY_STYLE,
+        autoungrabify:false, minZoom:0.2, maxZoom:2.6, wheelSensitivity:0.2 });
+      CY[box] = cy;
+      const lay = cy.layout({ name:'dagre', rankDir:'TB', nodeSep:26, rankSep:44, edgeSep:8, padding:16, fit:false });
+      lay.one('layoutstop', () => { fitDefault(box); addZoomControls(box, cy); });
+      lay.run();
+    }catch(e){ document.getElementById(box).textContent = 'Cytoscape render failed: ' + e; }
+  }
+  let cyResizeT;
+  window.addEventListener('resize', () => { clearTimeout(cyResizeT); cyResizeT = setTimeout(() => Object.keys(CY).forEach(fitDefault), 150); });
+
+  // ===================== graph data models =====================
+  const GRAPHS = {
+    router: {
+      nodes:[
+        {id:'X',   cls:'io',  label:'hidden_states\n[1,1,S/sp,dim/tp]\n↳ [1,1,640,1792]'},
+        {id:'DEC', cls:'host',label:'end_pos = kv_isl + S_local·sp\n> index_topk (2048)?\n↳ 56320 > 2048 → yes'},
+        {id:'WK0', cls:'comm',label:'_indexer_write_k\n(device K-cache warm)'},
+        {id:'V3',  cls:'tp',  label:'super().forward\n(v3 dense ring SDPA)'},
+        {id:'OUT1',cls:'io',  label:'out'},
+        {id:'TOPK',cls:'rep', label:'_indexer_topk (device)\n→ indices [1,1,glob,k]\n↳ [1,1,5120,2048] replicated'},
+        {id:'DSA', cls:'tp',  label:'_dsa_forward\n(sparse_mla over selected latents)'},
+        {id:'OUT2',cls:'io',  label:'out'},
+      ],
+      edges:[
+        {f:'X',t:'DEC'},
+        {f:'DEC',t:'WK0',l:'no — dense (chunked)'}, {f:'WK0',t:'V3',l:'K appended'}, {f:'V3',t:'OUT1'},
+        {f:'DEC',t:'TOPK',l:'yes — sparse (DSA)'}, {f:'TOPK',t:'DSA',l:'indices RM'}, {f:'DSA',t:'OUT2'},
+      ],
+    },
+    indexer: {
+      nodes:[
+        {id:'H', cls:'io', label:'hidden_states\n[1,1,S/sp,dim/tp]'},
+        {id:'WK',   cls:'tp',   label:'K · linear _idx_wk\n[dim,D_idx] sharded on dim'},
+        {id:'KRS',  cls:'comm', label:'K · _tp_rs_ag\nreduce_scatter+all_gather (TP)'},
+        {id:'KLN',  cls:'rep',  label:'K · layer_norm · k_norm'},
+        {id:'KAG',  cls:'comm', label:'K · _sp_all_gather (dim2, SP)'},
+        {id:'KROPE',cls:'rep',  label:'K · _device_rope_pe (first 64)'},
+        {id:'KCAT', cls:'rep',  label:'K · concat → _index_kbuf'},
+        {id:'QA',   cls:'tp',   label:'Q · linear q_a_proj'},
+        {id:'QRS',  cls:'comm', label:'Q · _tp_rs_ag (TP)'},
+        {id:'QN',   cls:'rep',  label:'Q · rms_norm q_a_layernorm'},
+        {id:'QB',   cls:'tp',   label:'Q · linear _idx_wq_b\ncol-parallel [1536, H_idx·D_idx/tp]'},
+        {id:'QAG',  cls:'comm', label:'Q · _sp_all_gather (dim2, SP)'},
+        {id:'QH',   cls:'tp',   label:'Q · nlp_create_qkv_heads\nnum_heads=H_idx/tp=16'},
+        {id:'QROPE',cls:'tp',   label:'Q · _device_rope_pe (first 64)'},
+        {id:'WP',   cls:'tp',   label:'W · linear _idx_wproj\n[dim,H_idx] sharded on dim'},
+        {id:'WRS',  cls:'comm', label:'W · _tp_rs_ag(rs_only)\nreduce_scatter on head dim'},
+        {id:'WAG',  cls:'comm', label:'W · _sp_all_gather (dim2, SP)'},
+        {id:'WMUL', cls:'tp',   label:'W · multiply × H_idx^-0.5 · scale'},
+        {id:'LOG',  cls:'tp',   label:'ops.indexer_logits · indexer_score\nHB=0, relu(q·kᵀ), head-reduce, causal -inf'},
+        {id:'ALLRED',cls:'comm',label:'TP all-reduce (SUM)\npartial → full logits'},
+        {id:'TK',   cls:'rep',  label:'ops.topk_indices\ntopk_large_indices'},
+        {id:'IDX',  cls:'io',   label:'indices [1,1,glob,k]\nuint32 RM replicated'},
+      ],
+      edges:[
+        {f:'H',t:'WK'}, {f:'H',t:'QA'}, {f:'H',t:'WP'},
+        {f:'WK',t:'KRS',l:'partial [..,128]'}, {f:'KRS',t:'KLN'}, {f:'KLN',t:'KAG'}, {f:'KAG',t:'KROPE',l:'[..,glob,128]'}, {f:'KROPE',t:'KCAT'},
+        {f:'QA',t:'QRS'}, {f:'QRS',t:'QN'}, {f:'QN',t:'QB'}, {f:'QB',t:'QAG',l:'[..,H·D/tp]'}, {f:'QAG',t:'QH'}, {f:'QH',t:'QROPE',l:'[1,16,glob,128]'},
+        {f:'WP',t:'WRS'}, {f:'WRS',t:'WAG',l:'[..,H/tp]'}, {f:'WAG',t:'WMUL'},
+        {f:'KCAT',t:'LOG',l:'_index_kbuf'}, {f:'QROPE',t:'LOG',l:'q_dev'}, {f:'WMUL',t:'LOG',l:'wts→permute'},
+        {f:'LOG',t:'ALLRED',l:'partial logits'}, {f:'ALLRED',t:'TK',l:'full logits'}, {f:'TK',t:'IDX',l:'k=2048'},
+      ],
+    },
+    attention: {
+      nodes:[
+        {id:'H',  cls:'io', label:'hidden_states\n[1,1,S/sp,dim/tp]'},
+        {id:'IDX',cls:'io', label:'indices [1,1,glob,k]\n(from §2)'},
+        {id:'QA', cls:'tp', label:'Q · linear q_a_proj'},
+        {id:'QR', cls:'comm',label:'Q · _tp_rs_ag (TP)'},
+        {id:'QLN',cls:'rep',label:'Q · rms_norm q_a_layernorm'},
+        {id:'QBP',cls:'tp', label:'Q · linear q_b_proj (col-parallel)'},
+        {id:'QHD',cls:'tp', label:'Q · nlp_create_qkv_heads H_local'},
+        {id:'QSL',cls:'tp', label:'Q · slice nope[128] | rope[64]'},
+        {id:'WB1',cls:'tp', label:'Q · linear wkv_b1 → latent 512'},
+        {id:'QRP',cls:'tp', label:'Q · _apply_rope (rope half)'},
+        {id:'QCC',cls:'tp', label:'Q · concat → tt_q [1,H/tp,S/sp,576]'},
+        {id:'KVA',cls:'tp', label:'KV · linear kv_a_proj_with_mqa'},
+        {id:'KVR',cls:'comm',label:'KV · _tp_ag_reduce (TP, if tp>1)'},
+        {id:'KVSL',cls:'rep',label:'KV · slice nope[512] | rope[64]'},
+        {id:'KVN',cls:'rep',label:'KV · rms_norm kv_a_layernorm'},
+        {id:'KRP',cls:'rep',label:'KV · _apply_rope'},
+        {id:'KVCC',cls:'rep',label:'KV · concat → kvpe [1,1,S/sp,576]'},
+        {id:'KB8',cls:'sp', label:'KV · typecast bf8'},
+        {id:'CACHE',cls:'sp',label:'KVPE cache write\nupdate_padded_kv_cache (block-cyclic)'},
+        {id:'GATHER',cls:'comm',label:'_gather_kvpe_prefix (device)\nSP all_gather · bf8→bf16 · TILE→RM · un-rotate'},
+        {id:'IRS',cls:'comm',label:'ttnn.mesh_partition\n[1,1,glob,k] → [1,1,S/sp,k]'},
+        {id:'SMLA',cls:'tp',label:'ttnn.transformer.sparse_sdpa (RM)\nSPMD: gather k latents + online-softmax'},
+        {id:'WB2',cls:'tp', label:'linear wkv_b2 → 128'},
+        {id:'CH', cls:'tp', label:'nlp_concat_heads'},
+        {id:'OP', cls:'tp', label:'linear o_proj (in-sharded)'},
+        {id:'ORS',cls:'comm',label:'_tp_rs_ag(rs_only) reduce_scatter'},
+        {id:'OUT',cls:'io', label:'out [1,1,S/sp,dim/tp]\n↳ [1,1,640,1792]'},
+      ],
+      edges:[
+        {f:'H',t:'QA'}, {f:'H',t:'KVA'},
+        {f:'QA',t:'QR'}, {f:'QR',t:'QLN'}, {f:'QLN',t:'QBP'}, {f:'QBP',t:'QHD',l:'[..,H/tp·192]'}, {f:'QHD',t:'QSL'},
+        {f:'QSL',t:'WB1',l:'nope[128]'}, {f:'WB1',t:'QCC',l:'[..,512]'}, {f:'QSL',t:'QRP',l:'rope[64]'}, {f:'QRP',t:'QCC'},
+        {f:'KVA',t:'KVR'}, {f:'KVR',t:'KVSL'}, {f:'KVSL',t:'KVN',l:'nope[512]'}, {f:'KVN',t:'KVCC'}, {f:'KVSL',t:'KRP',l:'rope[64]'}, {f:'KRP',t:'KVCC'}, {f:'KVCC',t:'KB8'},
+        {f:'KB8',t:'CACHE'}, {f:'CACHE',t:'GATHER',l:'kvpe written'}, {f:'GATHER',t:'SMLA',l:'kv [..,end_pos,576] RM'},
+        {f:'QCC',t:'SMLA',l:'tt_q RM'},
+        {f:'IDX',t:'IRS'}, {f:'IRS',t:'SMLA',l:'idx [..,S/sp,k]'},
+        {f:'SMLA',t:'WB2',l:'attn_out [..,512]'}, {f:'WB2',t:'CH'}, {f:'CH',t:'OP'}, {f:'OP',t:'ORS',l:'partial [..,dim]'}, {f:'ORS',t:'OUT'},
+      ],
+    },
+    timing: {
+      nodes:[
+        {id:'H',     cls:'io',  label:'hidden_states'},
+        {id:'STEMS', cls:'tp',  label:'indexer stems + RoPE\nK/Q/W linears · gathers · rope\n2.62 ms · 4%'},
+        {id:'ISCORE',cls:'tp',  label:'indexer_score (HB=0)\n9.86 ms · 16% · 75% util'},
+        {id:'AR',    cls:'comm',label:'logits all-reduce\ntilize → RS → AG → untilize\n19.5 ms · 31% · RS/AG ≈43 GB/s = 8%'},
+        {id:'TOPK',  cls:'rep', label:'topk_large_indices\n15.0 ms · 24% · no perf model'},
+        {id:'QPATH', cls:'tp',  label:'attn Q-path\nq_a · q_b · wkv_b1 · rope\n2.50 ms · 4% · 17–44% util'},
+        {id:'KVPATH',cls:'sp',  label:'attn KV-path + cache write\n0.22 ms'},
+        {id:'GATHER',cls:'comm',label:'latent gather (SP)\nall_gather + un-rotate\n2.17 ms · 4% · AG ≈77 GB/s = 15%'},
+        {id:'RESHARD',cls:'comm',label:'indices reshard\nmesh_partition · 0.06 ms'},
+        {id:'SDPA',  cls:'tp',  label:'sparse_sdpa\n9.12 ms · 15% · no perf model'},
+        {id:'EPI',   cls:'tp',  label:'epilogue\nwkv_b2 · concat · o_proj · RS\n1.66 ms · 3% · o_proj 69%'},
+        {id:'OUT',   cls:'io',  label:'out [1,1,S/sp,dim/tp]'},
+      ],
+      edges:[
+        {f:'H',t:'STEMS'}, {f:'STEMS',t:'ISCORE'}, {f:'ISCORE',t:'AR'}, {f:'AR',t:'TOPK'}, {f:'TOPK',t:'RESHARD'},
+        {f:'H',t:'QPATH'}, {f:'QPATH',t:'SDPA'},
+        {f:'H',t:'KVPATH'}, {f:'KVPATH',t:'GATHER'}, {f:'GATHER',t:'SDPA'},
+        {f:'RESHARD',t:'SDPA'}, {f:'SDPA',t:'EPI'}, {f:'EPI',t:'OUT'},
+      ],
+    },
+  };
+
+  // ===================== interactive timing chart (§4.2) =====================
   const TIMING = [
     {nm:'logits all-reduce', ms:19.50, pct:31.1, cls:'ccl',     note:'RS+AG ≈ 13.4 ms @ ~43 GB/s (8% of the 512 GB/s link — overhead-bound) + ~6 ms RM↔TILE round-trip. The cost change B adds.'},
     {nm:'top-k',             ms:15.00, pct:23.9, cls:'compute', note:'topk_large_indices — now the single largest op. No perf model. Next op-level optimization target.'},
@@ -644,6 +670,7 @@ flowchart TD
   const maxMs = Math.max.apply(null, TIMING.map(t=>t.ms));
   const cap = document.getElementById('tcap');
   const defaultCap = cap.innerHTML;
+  let chartBuilt = false;
   function buildChart(){
     const root = document.getElementById('tchart');
     TIMING.forEach((t,i) => {
@@ -656,8 +683,7 @@ flowchart TD
         row.classList.add('sel');
         cap.innerHTML = '<span class="lbl">'+t.nm+'</span><b>'+t.ms.toFixed(2)+' ms · '+t.pct.toFixed(1)+'%</b> — '+t.note;
       };
-      row.addEventListener('mouseover', set);
-      row.addEventListener('click', set);
+      row.addEventListener('mouseover', set); row.addEventListener('click', set);
       root.appendChild(row);
     });
     root.addEventListener('mouseleave', () => {
