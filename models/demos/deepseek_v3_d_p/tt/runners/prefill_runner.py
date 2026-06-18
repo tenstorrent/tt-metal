@@ -554,6 +554,10 @@ def main() -> None:
         first_layer_idx=first_layer_idx,
         is_first_rank=is_first_rank,
         is_last_rank=is_last_rank,
+        # Chunked prefill never samples (the populated KV cache is the output), so the final stage is
+        # headless: its last layer runs KV-only and no norm/LM-head is built. Single-rank inherits this
+        # ("no lm head in runner", PR #45533); a pipeline's last rank does too.
+        kv_only_last_layer=is_last_rank,
     )
 
     runtime = TtPrefillRuntime(
