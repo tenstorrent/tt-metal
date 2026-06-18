@@ -142,13 +142,13 @@ ChunkPlan derive_chunk_plan(uint32_t tensor_page_size, uint32_t tensor_num_pages
 // gate skips the block entirely).
 struct WorkerSyncArgs {
     bool enabled = false;
-    uint32_t data_ready_sem_addr = 0;    // worker-grid L1 (mesh-wide GlobalSemaphore)
-    uint32_t consumed_counter_addr = 0;  // service-core L1 (per-coord, allocated via ServiceCoreManager)
-    uint32_t mcast_noc_x_start = 0;      // physical NoC bbox of worker_cores on this device
+    uint32_t data_ready_sem_addr = 0;     // worker-grid L1 (mesh-wide GlobalSemaphore)
+    uint32_t consumed_counter_addr = 0;   // service-core L1 (per-coord, allocated via ServiceCoreManager)
+    uint32_t mcast_noc_x_start = 0;       // physical NoC bbox of worker_cores on this device
     uint32_t mcast_noc_y_start = 0;
     uint32_t mcast_noc_x_end = 0;
     uint32_t mcast_noc_y_end = 0;
-    uint32_t num_workers = 0;  // mcast destination count + sync arithmetic target
+    uint32_t num_workers = 0;             // mcast destination count + sync arithmetic target
 };
 
 // Metadata multicast CT-arg block. Populated when Config::metadata_size_bytes > 0.
@@ -275,7 +275,10 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     for (const auto& coord : coords) {
         auto* d = mesh_device_->get_device(coord);
         auto claimable = svc.get_claimable_cores(d);
-        TT_FATAL(!claimable.empty(), "H2DStreamService: no claimable service core on device at coord {}", coord);
+        TT_FATAL(
+            !claimable.empty(),
+            "H2DStreamService: no claimable service core on device at coord {}",
+            coord);
         const CoreCoord chosen = claimable.front();
         svc.claim(d, {chosen});
         service_cores_.emplace(coord, chosen);
