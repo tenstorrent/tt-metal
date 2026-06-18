@@ -83,13 +83,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
-    // Int32 max/min/sum use the SFPU reduce path (GMPOOL has no Int32 support).
-    // The host already lowers reduce_min to math_op=MAX + negate=true (see reduce_op.cpp::reduce_min),
-    // so this check covers MAX, MIN and SUM. SUM never negates, so use_fpu_negate is unaffected.
-    const bool use_sfpu_reduce_path =
-        a.dtype() == DataType::INT32 &&
-        (operation_attributes.math_op == ReduceOpMath::MAX || operation_attributes.math_op == ReduceOpMath::SUM);
-    const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_reduce_path;
+    // Int32 max/min/sum use the SFPU reduce path (GMPOOL has no Int32 support); see
+    // use_sfpu_reduce_path() in common.hpp. SUM never negates, so use_fpu_negate is unaffected.
+    const bool is_sfpu_reduce = use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op);
+    const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;

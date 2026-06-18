@@ -153,20 +153,10 @@ Tensor reduce(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
     }
 
-    // GMPOOL applies exp2(floor(log2(|s|))) of the scalar (only the exponent), so for
-    // MAX/MIN with non-unity scalar we instead reduce with scaler=1.0 and apply the user
-    // scalar after reduction via post-multiplication. See issue #40498. The flag also
-    // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
-    // min through reduce_min before reaching here.
-    //
-    // Int32 SUM additionally needs post-mul: it runs on the SFPU reduce path, which ignores the
-    // scaler CB entirely (like MAX). Float/bf16 SUM keep using the scaler CB on the FPU/matmul
-    // path, so they are excluded here. (Int32 post-mul is a typecast-bracketed fp32 multiply, so a
-    // non-unity scalar on Int32 SUM is lossy for |result| > 2^24 — fine for the default scaler=1.0.)
-    const bool use_post_mul =
-        (scaler != 1.0f) &&
-        (reduce_math == tt::tt_metal::ReduceOpMath::MAX ||
-         (reduce_math == tt::tt_metal::ReduceOpMath::SUM && tilized_input.dtype() == tt::tt_metal::DataType::INT32));
+    // A non-unity scalar is applied after the reduction (see requires_post_mul() in common.hpp):
+    // GMPOOL keeps only the scaler's exponent for MAX/MIN, and the Int32 SFPU path ignores the
+    // scaler CB. Int32 post-mul rounds through fp32, so it is lossy for |result| > 2^24.
+    const bool use_post_mul = ttnn::prim::requires_post_mul(reduce_math, tilized_input.dtype(), scaler);
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 

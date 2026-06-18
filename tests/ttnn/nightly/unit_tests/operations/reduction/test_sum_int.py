@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.sum vs torch.sum for int32 (SFPU reduce path, issue #26726)."""
+"""ttnn.sum vs torch.sum for int32 (SFPU reduce path)."""
 
 import pytest
 import torch
@@ -78,7 +78,7 @@ def test_sum_int32_overflow_wraps(device):
 
 
 def test_sum_int32_all_zeros_regression(device):
-    """Guards the original silent all-zeros int32 sum bug (issue #26726)."""
+    """Guards the original silent all-zeros int32 sum bug."""
     torch.manual_seed(0)
     x = torch.randint(-_INT32_VALUE_BOUND, _INT32_VALUE_BOUND + 1, (1, 3, 17, 19), dtype=torch.int32)
     x_ttnn = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.int32)

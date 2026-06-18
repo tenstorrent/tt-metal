@@ -51,6 +51,21 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
     return static_cast<uint32_t>(bf16);
 }
 
+// True when the reduce uses the Int32 SFPU path (FPU GMPOOL/matmul have no Int32 support).
+// Int32 MAX/SUM only; MIN is lowered to MAX + negate on the host before reaching the factories.
+inline bool use_sfpu_reduce_path(tt::tt_metal::DataType dtype, tt::tt_metal::ReduceOpMath math_op) {
+    using tt::tt_metal::ReduceOpMath;
+    return dtype == tt::tt_metal::DataType::INT32 && (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM);
+}
+
+// True when a non-unity scalar must be applied as a post-reduce multiply instead of via the scaler
+// CB (MAX/MIN keep only its exponent; the Int32 SFPU path ignores the CB). Float/bf16 SUM use the CB.
+inline bool requires_post_mul(tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, float scaler) {
+    using tt::tt_metal::ReduceOpMath;
+    return scaler != 1.0f &&
+           (math_op == ReduceOpMath::MAX || (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32));
+}
+
 // All RM-path locals derived from the input shape, tile geometry, and math op.
 // One instance is populated at the top of the RM branch in each factory and consumed
 // by the build_rm_*_ct_args helpers; both factories see the same field layout.

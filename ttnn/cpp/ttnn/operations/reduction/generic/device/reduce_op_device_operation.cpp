@@ -81,10 +81,8 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
         // INT32 MIN/MAX/SUM is supported via the SFPU reduce path (format deduced from input CB in
         // compute_kernel_lib::reduce; MIN uses the dedicated reduce_{h,w}_neg kernels). MIN is lowered
-        // to MAX + negate on the host, so only MAX and SUM appear here.
-        const bool is_int32_sfpu_reduce =
-            tensor_args.dtype() == DataType::INT32 &&
-            (operation_attributes.math_op == ReduceOpMath::MAX || operation_attributes.math_op == ReduceOpMath::SUM);
+        // to MAX + negate on the host, so only MAX and SUM appear here. See common.hpp.
+        const bool is_int32_sfpu_reduce = use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
                 tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
