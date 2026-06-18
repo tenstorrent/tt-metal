@@ -92,10 +92,10 @@ LiDAR (B,1,256,256)                                                      │
 | ResNet-34 BasicBlocks ×32 | **TTNN** | High FLOP density; BN-fold enables weight-only conv |
 | GPT cross-modal fusion ×4 | PyTorch | `AdaptiveAvgPool2d` + `F.interpolate` interleaved with attention; mixed-mode migration complex |
 | FPN conv layers ×3 | **TTNN** | Plain `nn.Conv2d`, no BN; direct weight cast |
-| FPN bilinear upsample ×2 | PyTorch | `ttnn.upsample` is nearest-only; bilinear diverges at these scales |
+| FPN bilinear upsample ×2 | **TTNN** | `ttnn.upsample(mode="bilinear")` matches torch `align_corners=False` to PCC ≥ 0.99999 at the ×2/×4 integer scales |
 | `_bev_downscale` 1×1 conv | PyTorch | Deferred to Stage 4 |
 | Perception TransformerDecoder | PyTorch | Deferred to Stage 4 |
-| TrajectoryHead DDIM + grid_sample | PyTorch | `F.grid_sample` has no TTNN equivalent |
+| TrajectoryHead DDIM + grid_sample | PyTorch | denoiser still host; `ttnn.grid_sample` itself is validated (see `tt/ttnn_grid_sample_attention.py`) |
 
 ---
 
@@ -149,14 +149,15 @@ RuntimeError: Out of Memory: Not enough space to allocate ... bank size is 0 B
 The fix is to open the device with `l1_small_size=32768` — this is already set in
 `tests/conftest.py` and the Usage example below.
 
-### 3.4 Why FPN bilinear upsample stays in PyTorch
+### 3.4 FPN bilinear upsample runs on TTNN
 
 The FPN needs two bilinear upsamples (8×8→16×16 and 16×16→64×64).
-`ttnn.upsample` currently supports nearest-neighbour only.  Using nearest instead
-of bilinear on these small feature maps produces non-trivial pixel differences that
-propagate through the downstream transformer and drop full-model PCC below 0.99.
-Until bilinear is supported in TTNN, `F.interpolate(mode="bilinear")` is used
-in-place.
+`ttnn.upsample(mode="bilinear")` **is** available in this build (integer scale
+factors only — the FPN's ×2 and ×4 both qualify) and matches torch
+`F.interpolate(mode="bilinear", align_corners=False)` to PCC ≥ 0.99999 on both
+steps.  `TtnnFPN` therefore runs both upsamples on-device; the earlier
+`F.interpolate` fallback has been removed.  (An earlier note here claimed
+`ttnn.upsample` was nearest-only — that is no longer accurate.)
 
 ### 3.5 DDIM noise seeding — a non-obvious PCC pitfall
 
@@ -201,9 +202,11 @@ new full-model tests.
 | 1 | PyTorch wrapper + BN-fold primitives + BasicBlock PCC | 0 | 14/14 | `857671c0aa` |
 | 2 | All 32 ResNet-34 BasicBlock conv layers on TTNN | +70 | 15/15 | `a72716b165` |
 | 3 | FPN 3 conv layers on TTNN (`TtnnFPN`) | +3 | 18/18 | `edd70f9e9f` |
+| 3.1 | Review fixes: 2-ch DDIM noise (upstream match), FPN bilinear upsample on TTNN, `ttnn.grid_sample` validated, conv-weight caching | +0 conv (+2 upsample) | 24/24 | _(uncommitted)_ |
 
-**Current total: 21 tests pass** (18 PCC + 3 sanity).  73 `ttnn.conv2d` ops run on
-device per forward pass (each BasicBlock runs 2 conv ops + optional 1×1 downsample).
+**Current total: 24 tests pass** (21 PCC + 3 sanity).  73 `ttnn.conv2d` ops + 2
+`ttnn.upsample` (bilinear) ops run on device per forward pass (each BasicBlock
+runs 2 conv ops + optional 1×1 downsample).  See §10 for the Stage-3.1 fixes.
 
 ### TTNN ops on-device at Stage 3
 
@@ -361,7 +364,7 @@ Tests that require the anchor file skip automatically when it is absent.
 source python_env/bin/activate
 export PYTHONPATH=/root/tt/tt-metal
 
-# Full suite (18 PCC + 3 sanity = 21 tests)
+# Full suite (21 PCC + 3 sanity = 24 tests)
 python -m pytest models/demos/diffusion_drive/tests/ -v
 
 # PCC tests only (require attached Wormhole device)
@@ -466,6 +469,41 @@ diffusion_drive/
 | Stage | Scope | Key blocker |
 |---|---|---|
 | 4 | Perception stack: `_bev_downscale` (1×1 conv), `bev_proj` (Linear+ReLU+LN), `_tf_decoder` (3-layer SDPA+FFN) | TTNN SDPA API validation at d=256, 8 heads, 31×65 tokens |
-| 5 | TrajectoryHead DDIM denoiser (linear layers and noise schedule) | `F.grid_sample` deformable cross-BEV attention has no TTNN equivalent yet |
+| 5 | TrajectoryHead DDIM denoiser (linear layers and noise schedule) | `ttnn.grid_sample` (bilinear/zeros/align_corners=False) is validated as a drop-in (PCC ≥ 0.99) in `tt/ttnn_grid_sample_attention.py`; remaining work is porting the surrounding Linear/SDPA/Mish layers and the DDIM scheduler arithmetic |
 | 6 | GPT cross-modal fusion (2-layer transformer ×4 scales) | `AdaptiveAvgPool2d` + `F.interpolate` interleaved with attention; complex mixed-mode migration |
 | 7 | Full-stack trace capture | Requires all forward ops on-device to eliminate PCIe round-trips |
+
+---
+
+## 10. Stage-3.1 review fixes (uncommitted)
+
+Applied after a line-by-line review against upstream
+(`hustvl/DiffusionDrive`).  All 24 tests pass.
+
+1. **DDIM noise channel — correctness vs upstream.**
+   `TrajectoryHead._forward_test` now diffuses the 2 `(x, y)` channels only,
+   matching upstream `forward_test`.  The previous code padded a zero heading
+   column, making `noise = randn(img.shape)` `(B,K,T,3)` instead of `(B,K,T,2)`;
+   because `randn` fills row-major, that shifted the x/y noise and broke
+   bit-for-bit reproduction of the upstream PDMS-88.04 behaviour.  Locked in by
+   `tests/pcc/test_noise_channels.py`.
+
+2. **FPN bilinear upsample on TTNN.**  `TtnnFPN` now runs both upsamples via
+   `ttnn.upsample(mode="bilinear")` instead of `F.interpolate` (see §3.4).
+
+3. **`ttnn.grid_sample` validated.**  `tt/ttnn_grid_sample_attention.py` ports
+   `GridSampleCrossBEVAttention` with the deformable sampling on-device
+   (PCC ≥ 0.99); `tests/pcc/test_pcc_grid_sample.py`.  Removes the Stage-5
+   "no TTNN equivalent" blocker.
+
+4. **Conv-weight caching.**  `ttnn.conv2d` weights are pre-converted to TTNN
+   host tensors once at build time (`prep_conv_weights`) and `TtnnBasicBlock`
+   objects are built once, instead of re-tilizing weights on every forward.
+
+5. **`_keyval_embedding` formula.**  Uses `lidar_vert_anchors *
+   lidar_horz_anchors + 1` (the semantically correct token count) instead of
+   `img_vert_anchors**2 + 1` (coincidentally equal at 8).
+
+**Still PyTorch (open fallbacks):** ResNet stems, GPT cross-modal fusion,
+perception `_tf_decoder`, the rest of the TrajectoryHead denoiser, and all the
+Linear/LayerNorm/SDPA host ops.  See `01_plan.md` for the full inventory.

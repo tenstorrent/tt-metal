@@ -111,11 +111,23 @@ def _make_conv_config() -> ttnn.Conv2dConfig:
     )
 
 
+def prep_conv_weights(weight: torch.Tensor, bias: torch.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Pre-convert a torch weight/bias pair to TTNN host tensors (do once at build).
+
+    Previously this conversion happened inside every ``ttnn.conv2d`` call, so the
+    weights were re-tilized on the host on every forward pass.  Hoisting it into
+    the block/FPN constructors removes that per-forward cost.
+    """
+    w_ttnn = ttnn.from_torch(weight, dtype=ttnn.bfloat16)
+    b_ttnn = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16)
+    return w_ttnn, b_ttnn
+
+
 def _ttnn_conv2d(
     device: ttnn.Device,
     x: ttnn.Tensor,
-    weight: torch.Tensor,
-    bias: torch.Tensor,
+    w_ttnn: ttnn.Tensor,
+    b_ttnn: ttnn.Tensor,
     B: int,
     H: int,
     W: int,
@@ -125,11 +137,11 @@ def _ttnn_conv2d(
     stride: int,
     padding: int,
 ) -> Tuple[ttnn.Tensor, int, int]:
-    """Run ttnn.conv2d and return (output_tensor, out_H, out_W)."""
-    # Convert weight / bias to TTNN host tensors on first call
-    w_ttnn = ttnn.from_torch(weight, dtype=ttnn.bfloat16)
-    b_ttnn = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16)
+    """Run ttnn.conv2d and return (output_tensor, out_H, out_W).
 
+    ``w_ttnn`` / ``b_ttnn`` are pre-converted TTNN host tensors (see
+    :func:`prep_conv_weights`) — no per-call host conversion happens here.
+    """
     conv_config = _make_conv_config()
     [out, [out_H, out_W], [_, _]] = ttnn.conv2d(
         input_tensor=x,
@@ -174,10 +186,17 @@ class TtnnBasicBlock:
         stride: int,
         device: ttnn.Device,
     ) -> None:
-        self._params = params
         self._stride = stride
         self._device = device
         self._has_downsample = "downsample" in params
+
+        # Pre-convert weights to TTNN host tensors once (was per-forward before).
+        self._C_mid = int(params["conv1"]["weight"].shape[0])
+        self._C_out = int(params["conv2"]["weight"].shape[0])
+        self._w1, self._b1 = prep_conv_weights(params["conv1"]["weight"], params["conv1"]["bias"])
+        self._w2, self._b2 = prep_conv_weights(params["conv2"]["weight"], params["conv2"]["bias"])
+        if self._has_downsample:
+            self._w_ds, self._b_ds = prep_conv_weights(params["downsample"]["weight"], params["downsample"]["bias"])
 
     def __call__(
         self,
@@ -187,34 +206,39 @@ class TtnnBasicBlock:
         B, H, W, C_in = shape
 
         # Conv1: 3×3, stride=self._stride, BN-folded + ReLU
-        w1 = self._params["conv1"]["weight"]
-        b1 = self._params["conv1"]["bias"]
-        C_mid = w1.shape[0]
+        C_mid = self._C_mid
         identity = x
 
         out, H1, W1 = _ttnn_conv2d(
-            self._device, x, w1, b1, B, H, W, C_in, C_mid, kernel_size=3, stride=self._stride, padding=1
+            self._device, x, self._w1, self._b1, B, H, W, C_in, C_mid, kernel_size=3, stride=self._stride, padding=1
         )
         # Move to interleaved DRAM + TILE for reliable add/relu
         out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG) if out.is_sharded() else out
         out = ttnn.relu(out)
 
         # Conv2: 3×3, stride=1, BN-folded (no activation)
-        w2 = self._params["conv2"]["weight"]
-        b2 = self._params["conv2"]["bias"]
-        C_out = w2.shape[0]
+        C_out = self._C_out
 
         out, H2, W2 = _ttnn_conv2d(
-            self._device, out, w2, b2, B, H1, W1, C_mid, C_out, kernel_size=3, stride=1, padding=1
+            self._device, out, self._w2, self._b2, B, H1, W1, C_mid, C_out, kernel_size=3, stride=1, padding=1
         )
         out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG) if out.is_sharded() else out
 
         # Shortcut
         if self._has_downsample:
-            w_ds = self._params["downsample"]["weight"]
-            b_ds = self._params["downsample"]["bias"]
             identity, _, _ = _ttnn_conv2d(
-                self._device, identity, w_ds, b_ds, B, H, W, C_in, C_out, kernel_size=1, stride=self._stride, padding=0
+                self._device,
+                identity,
+                self._w_ds,
+                self._b_ds,
+                B,
+                H,
+                W,
+                C_in,
+                C_out,
+                kernel_size=1,
+                stride=self._stride,
+                padding=0,
             )
             identity = (
                 ttnn.sharded_to_interleaved(identity, ttnn.DRAM_MEMORY_CONFIG) if identity.is_sharded() else identity
