@@ -213,13 +213,22 @@ def dense_attention_forward(
     del residual  # async-safe: device executes add before processing this dealloc
 
     # 10. Fill KV cache for prefill after CCL.
-    # k_4d/v_4d move to L1 so paged_fill_cache reads from safe on-chip SRAM.
+    # For S <= 32768: copy k/v to L1 so paged_fill_cache reads from safe on-chip SRAM
+    # (device-2 DRAM defect workaround — defect is write-side, but L1 is safest).
+    # For S > 32768: k_4d is [1, 2, S, 128] > 16 MB; with accumulated kernel binaries
+    # occupying ~80% of L1 by the time large ISLs run, the L1 copy would OOM.
+    # Reads from DRAM are safe (line 71), so call paged_fill_cache from DRAM directly.
+    _KV_FILL_L1_MAX = 32768
     if has_cache and S > 1:
-        k_4d_l1 = ttnn.to_memory_config(k_4d, ttnn.L1_MEMORY_CONFIG)
-        v_4d_l1 = ttnn.to_memory_config(v_4d, ttnn.L1_MEMORY_CONFIG)
-        ttnn.experimental.paged_fill_cache(k_cache, k_4d_l1, page_table, batch_idx=0)
-        ttnn.experimental.paged_fill_cache(v_cache, v_4d_l1, page_table, batch_idx=0)
-        del k_4d_l1
-        del v_4d_l1
+        if S <= _KV_FILL_L1_MAX:
+            k_4d_l1 = ttnn.to_memory_config(k_4d, ttnn.L1_MEMORY_CONFIG)
+            v_4d_l1 = ttnn.to_memory_config(v_4d, ttnn.L1_MEMORY_CONFIG)
+            ttnn.experimental.paged_fill_cache(k_cache, k_4d_l1, page_table, batch_idx=0)
+            ttnn.experimental.paged_fill_cache(v_cache, v_4d_l1, page_table, batch_idx=0)
+            del k_4d_l1
+            del v_4d_l1
+        else:
+            ttnn.experimental.paged_fill_cache(k_cache, k_4d, page_table, batch_idx=0)
+            ttnn.experimental.paged_fill_cache(v_cache, v_4d, page_table, batch_idx=0)
 
     return ret
