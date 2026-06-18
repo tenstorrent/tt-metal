@@ -15,7 +15,7 @@ excludeAgent: "cloud-agent"
 
 ## 🟡 IMPORTANT
 
-- **No debug print statements in production code**: remove `printf`, `std::cout`, custom debug print macros (e.g., `concat_db_print`), and leftover debugging artifacts before merge. Use `tt::log_debug` for structured debug output that respects log levels.
+- **No debug print statements in production code**: remove `printf`, `std::cout`, custom debug print macros (e.g., `concat_db_print`), and leftover debugging artifacts before merge. Use `log_debug(tt::LogOp, ...)` for structured debug output that respects log levels.
 - **No magic numbers**: numeric literals without context (tile sizes, loop bounds, buffer counts) must be named constants or derived from configuration. Reviewers should ask: "What is this number and what happens when it changes?"
 - **Unify duplicate Python/C++ API paths**: when Python and C++ versions of the same API (e.g., `open_device` vs `CreateDevice`) diverge in defaults, unify via optional parameters handled in C++. Maintaining two paths with subtly different behavior is a long-term maintenance trap.
 - **`std::find` over manual loops**: use STL algorithms (`std::find`, `std::any_of`, `std::transform`) instead of hand-written search loops in host-side code. They are more readable and less error-prone.
