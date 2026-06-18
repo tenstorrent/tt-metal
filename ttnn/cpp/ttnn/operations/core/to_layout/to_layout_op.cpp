@@ -23,15 +23,18 @@ namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
 bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
-    auto tile = tensor.tensor_spec().tile();
     if (layout == Layout::ROW_MAJOR) {
         // There shouldn't be extra paddings for Row Major layout
         return tensor.logical_shape() != tensor.padded_shape();
     }
     // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
+    tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(layout);
+    if (tensor.layout() == Layout::TILE) {
+        page_config = tt::tt_metal::PageConfig(layout, tensor.tensor_spec().tile());
+    }
+
     TensorSpec padded_spec(
-        tensor.padded_shape(),
-        tt::tt_metal::TensorLayout(tensor.dtype(), tt::tt_metal::PageConfig(layout, tile), tensor.memory_config()));
+        tensor.padded_shape(), tt::tt_metal::TensorLayout(tensor.dtype(), page_config, tensor.memory_config()));
     return tensor.padded_shape() != padded_spec.padded_shape();
 }
 
@@ -82,15 +85,17 @@ Tensor to_layout_impl(
     }
 
     auto tensor = tensor_arg;
-    const auto tile = tensor.tensor_spec().tile();
     auto output_shape = tensor_arg.logical_shape();
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
 
-    TensorSpec tile_spec(
-        tensor_arg.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            tensor_arg.dtype(), tt::tt_metal::PageConfig(Layout::TILE, tile), output_memory_config));
+    tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(Layout::TILE);
+    if (tensor_arg.layout() == Layout::TILE) {
+        page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor_arg.tensor_spec().tile());
+    }
+    TensorSpec tile_spec = TensorSpec(
+        tensor_arg.logical_shape(), tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, output_memory_config));
+
     auto padded_output_shape = tile_spec.padded_shape();
     auto original_rank = tensor_arg.logical_shape().rank();
     const auto& original_shape = tensor_arg.logical_shape();
@@ -121,7 +126,10 @@ Tensor to_layout_impl(
             }
             if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
-                    const auto tensor_tile = tensor.tensor_spec().tile();
+                    tt::tt_metal::Tile tensor_tile = tt::tt_metal::Tile();
+                    if (tensor.layout() == ttnn::TILE_LAYOUT) {
+                        tensor_tile = tensor.tensor_spec().tile();
+                    }
                     uint32_t tile_height = tensor_tile.get_height();
                     uint32_t tile_width = tensor_tile.get_width();
                     const auto mem_config = get_memory_config(tensor).value();
