@@ -67,7 +67,13 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
 
     # the layer id of the first cross-attention branch that occurs in the nnet needed for cache allocation id
     layer_idx = config.text_config.cross_attention_layers[0]
-    reference_model = MllamaTextCrossAttention(config.text_config, layer_idx=layer_idx)
+    # transformers 5.x changed the cross-attention cache-hit check from `cache_position[0] != 0` to
+    # `past_key_values.get_seq_length() > 0`, which inspects layer 0 (Cache.get_seq_length defaults to
+    # layer_idx=0). This isolated single-layer test populates only one cache slot, so route the reference's
+    # cache through slot 0 (the cross-attn math is layer-independent; layer_idx only selects the cache slot).
+    # The real layer_idx is still used below for the HF weight-key prefix. Works on both <5 and >=5.
+    cache_layer_idx = 0
+    reference_model = MllamaTextCrossAttention(config.text_config, layer_idx=cache_layer_idx)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
         AutoModelForImageTextToText, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.cross_attn."
@@ -114,7 +120,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         **{_pkv_kw: past_key_values},
     )
     # tt_model expects a list of Key and Value projections
-    pt_xattn_cache_chunks = list(hf_cache_layer_kv(past_key_values, layer_idx))
+    pt_xattn_cache_chunks = list(hf_cache_layer_kv(past_key_values, cache_layer_idx))
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(
