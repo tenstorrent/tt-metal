@@ -1807,12 +1807,28 @@ def moe_sparse_experts_forward_tt(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(topk_weights_rm, force=False)
-            local_weights, sparsity = ttnn.moe_expert_token_remap(
-                topk_weights_dense,
-                rt.expert_mapping_tensors,
-                topk_indices_rm,
-                reduction_size=int(rt.sparsity_block_size),
-            )
+            block = int(rt.sparsity_block_size)
+            if _env_bool("GLM4_MOE_LITE_MOE_FAST_REMAP") and total_tokens == block:
+                # Decode (single sparsity block): `moe_expert_token_remap` splits work over
+                # metadata pages in multiples of `reduction_size`. With reduction_size ==
+                # total_tokens there is exactly ONE work unit, so the kernel runs on a single
+                # core (~95us, 100+ idle cores). Experts are assigned contiguously per device
+                # (see `create_moe_runtime` mapping), so the two remap outputs reduce to:
+                #   - local_weights: the per-device expert-dim partition of the dense weights
+                #   - sparsity: per-local-expert presence (1 if any token in the block routes
+                #     to it) across the single 32-token block.
+                # Validated exact-equal to the remap on a 1x4 mesh (experiments/remap_equiv.py).
+                local_weights = ttnn.mesh_partition(topk_weights_dense, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _presence = ttnn.sum(ttnn.to_layout(local_weights, ttnn.TILE_LAYOUT), dim=2, keepdim=True)
+                sparsity = ttnn.to_layout(ttnn.typecast(ttnn.gtz(_presence), ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(_presence, force=False)
+            else:
+                local_weights, sparsity = ttnn.moe_expert_token_remap(
+                    topk_weights_dense,
+                    rt.expert_mapping_tensors,
+                    topk_indices_rm,
+                    reduction_size=block,
+                )
             # `ttnn.moe_expert_token_remap` returns a UINT16 (0/1) sparsity tensor.
             # `ttnn.sparse_matmul` accepts this UINT16 sparsity directly, and keeping it as
             # UINT16 avoids a device-side typecast on small Row-Major tensors (e.g. last dim
