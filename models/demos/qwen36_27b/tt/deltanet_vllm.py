@@ -142,24 +142,29 @@ class TtDeltaNetState:
         twice; restoring this snapshot afterward resets it to the post-prefill value
         so the first replay starts correctly. (conv_states/cs is NOT mutated in the
         decode path, so it is not snapshotted.)"""
+        # batched: rs is sharded dim1, conv_hist sharded dim3 -> gather those dims to host.
+        rdim = 1 if self.batched else None
+        hdim = 3 if self.batched else None
         return {
-            "recur": {li: mesh_to_torch(rs).clone() for li, rs in self.recurrent_states.items()},
-            "hist": {li: [mesh_to_torch(t).clone() for t in h] for li, h in self.conv_hist.items()},
+            "recur": {li: mesh_to_torch(rs, dim=rdim).clone() for li, rs in self.recurrent_states.items()},
+            "hist": {li: [mesh_to_torch(t, dim=hdim).clone() for t in h] for li, h in self.conv_hist.items()},
         }
 
     def restore_decode_state(self, snap):
         """Restore the snapshot IN-PLACE into the existing fixed buffers (so captured
         trace buffer addresses stay valid)."""
         rep = ttnn.ReplicateTensorToMesh(self.device)
+        rs_map = ttnn.ShardTensorToMesh(self.device, dim=1) if self.batched else rep
+        h_map = ttnn.ShardTensorToMesh(self.device, dim=3) if self.batched else rep
         for li, rs_cpu in snap["recur"].items():
             tmp = ttnn.from_torch(rs_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                                  device=self.device, mesh_mapper=rep)
+                                  device=self.device, mesh_mapper=rs_map)
             ttnn.copy(tmp, self.recurrent_states[li])
             ttnn.deallocate(tmp)
         for li, hs in snap["hist"].items():
             for k, t_cpu in enumerate(hs):
                 tmp = ttnn.from_torch(t_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                                      device=self.device, mesh_mapper=rep)
+                                      device=self.device, mesh_mapper=h_map)
                 ttnn.copy(tmp, self.conv_hist[li][k])
                 ttnn.deallocate(tmp)
 

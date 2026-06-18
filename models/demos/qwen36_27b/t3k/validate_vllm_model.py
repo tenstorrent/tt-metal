@@ -80,7 +80,7 @@ def main():
                 pos = torch.tensor([Ls[0] + s, Ls[1] + s])
                 _t0 = _time.perf_counter()
                 dl = gen.decode_forward(torch.tensor([[outs[0][-1]], [outs[1][-1]]]),
-                                        page_table=pt2, kv_cache=kv, start_pos=pos)
+                                        page_table=pt2, kv_cache=kv, start_pos=pos, enable_trace=args.trace)
                 host = gen.process_decode_output_host(gen.read_decode_output(dl))
                 step_ms.append((_time.perf_counter() - _t0) * 1000)
                 for r in range(2):

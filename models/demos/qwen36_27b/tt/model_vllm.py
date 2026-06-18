@@ -205,13 +205,19 @@ class TtQwen36VllmModel(LightweightModule):
         runs advance it twice, so we snapshot the post-prefill state and restore it after
         capture. cur_pos/cos/sin/embed are refreshed into the fixed buffers each step."""
         dev = self.device
+        B = int(emb.shape[2])
+        batched = bool(getattr(self.config, "batched_decode", False))
         if getattr(self, "_dec_trace_id", None) is None:
             # seed conv history for all DeltaNet layers so the buffers exist + snapshot-able
             for i, layer in enumerate(self.layers):
                 if self.config.layer_types[i] != "full_attention":
-                    layer.token_mixer._seed_conv_hist(deltanet_state)
+                    if batched:
+                        layer.token_mixer._seed_conv_hist_sharded(deltanet_state, B)
+                    else:
+                        layer.token_mixer._seed_conv_hist(deltanet_state)
             deltanet_state.trace_mode = True  # in-place recurrent/conv-state writeback
             deltanet_state._reseed_conv_hist = False  # seeded fresh below
+            deltanet_state._reseed_rows = set()  # (batched) seeded fresh; no host reseed in trace
             snap = deltanet_state.snapshot_decode_state()
             # fixed input buffers
             self._tr_hidden = self._mk(emb, self.dtype)
