@@ -30,6 +30,8 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
+#define HAS_TTNN
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
@@ -373,6 +375,14 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
+    py_log_cout("sharded memory config args");
+    py_log1_cout(nhw_shard);
+    py_log1_cout(channel_shard);
+    py_log1_cout(num_cores_nhw);
+    py_log1_cout(num_cores_channels);
+    py_log1_cout(channels);
+    py_log1_cout(nhw_shape);
+    py_log1_cout(nhw_padded);
     auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
@@ -609,6 +619,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     bool is_shard_width_tile_multiple) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
+
     ParallelConfig parallel_config;
     if (input_tensor_parallel_config.has_value()) {
         parallel_config = input_tensor_parallel_config.value();
@@ -646,6 +657,16 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
 
     MemoryConfig input_tensor_sharded_memory_config =
         create_sharded_memory_config_from_parallel_config(input_padded_shape, parallel_config, round_up_size);
+
+    py_log1_cout(input_channels_alignment);
+    py_log1_cout(input_num_cores_nhw);
+    py_log1_cout(input_num_cores_c);
+    py_log1_cout(tensor_height);
+    py_log1_cout(round_up_size);
+    py_log1_cout(input_tensor_height_snapped_to_tile);
+    py_log1_cout(input_tensor_width_snapped_to_channels_alignment);
+    py_log1_cout(input_padded_shape);
+    py_log1_cout(input_tensor_sharded_memory_config);
 
     return {input_padded_shape, input_tensor_sharded_memory_config};
 };
@@ -842,16 +863,6 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
         uint32_t tensor_width = input_shape[3];
-        if (!input_tensor_on_device) {
-            if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
-                input_tensor = ttnn::pad(
-                    input_tensor,
-                    tt::tt_metal::Array4D(
-                        {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    0);
-            }
-        }
 
         // In case we are in auto sharded codepath and convolution maps to matmul
         // Skip sharding of the input tensor and run the matmul out of interleaved tensor.
@@ -898,10 +909,24 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 input_tensor = resharded_input_tensor;
             }
         } else {
+            py_log_tensor(input_tensor);
+            py_log1_cout(input_tensor_sharded_memory_config);
             input_tensor = ttnn::to_device(
                 input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+
+            if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
+                py_log_tensor(input_tensor);
+                input_tensor = ttnn::pad(
+                    input_tensor,
+                    tt::tt_metal::Array4D(
+                        {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
+                    tt::tt_metal::Array4D({0, 0, 0, 0}),
+                    0);
+                py_log_tensor(input_tensor);
+            }
         }
     }
+
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
@@ -1438,8 +1463,10 @@ ttnn::Tensor fold_tensor(
         tensor_on_device = ttnn::reshape(tensor_on_device, unflattened_shape, unflattened_shape);
     }
 
+    py_log_tensor(tensor_on_device);
     // Core folding operation
     tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, padding_n4);
+    py_log_tensor(tensor_on_device);
 
     return tensor_on_device;
 }
