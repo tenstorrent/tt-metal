@@ -137,20 +137,20 @@ ChunkPlan derive_chunk_plan(uint32_t tensor_page_size, uint32_t tensor_num_pages
 // gate skips the block entirely).
 struct WorkerSyncArgs {
     bool enabled = false;
-    uint32_t data_ready_sem_addr = 0;     // worker-grid L1 (mesh-wide GlobalSemaphore)
-    uint32_t consumed_counter_addr = 0;   // service-core L1 (per-coord, allocated via ServiceCoreManager)
-    uint32_t mcast_noc_x_start = 0;       // physical NoC bbox of worker_cores on this device
+    uint32_t data_ready_sem_addr = 0;    // worker-grid L1 (mesh-wide GlobalSemaphore)
+    uint32_t consumed_counter_addr = 0;  // service-core L1 (per-coord, allocated via ServiceCoreManager)
+    uint32_t mcast_noc_x_start = 0;      // physical NoC bbox of worker_cores on this device
     uint32_t mcast_noc_y_start = 0;
     uint32_t mcast_noc_x_end = 0;
     uint32_t mcast_noc_y_end = 0;
-    uint32_t num_workers = 0;             // mcast destination count + sync arithmetic target
+    uint32_t num_workers = 0;  // mcast destination count + sync arithmetic target
 };
 
 // Metadata multicast CT-arg block. Populated when Config::metadata_size_bytes > 0.
 struct MetadataArgs {
     bool enabled = false;
-    uint32_t metadata_size_bytes = 0;     // user-specified size; <= socket_page_size
-    uint32_t metadata_l1_addr = 0;        // worker-grid L1 (mesh-wide L1-sharded Buffer)
+    uint32_t metadata_size_bytes = 0;  // user-specified size; <= socket_page_size
+    uint32_t metadata_l1_addr = 0;     // worker-grid L1 (mesh-wide L1-sharded Buffer)
 };
 
 // Builds the single-core persistent H2D program for one socket / device buffer.
@@ -264,18 +264,21 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
     per_shard_spec_ = device_tensor_.tensor_spec();
 
+    // isolated_claim: claim the service core ISOLATED so it is excluded from the per-op EnqueueMeshWorkload
+    // no-mixing routing (has_any_non_isolated_claims()) — concurrent model workloads keep the fast enqueue
+    // path with no per-op dispatch tax. The persistent receiver program is then launched via direct
+    // slow-dispatch below (like the realtime profiler) instead of EnqueueMeshWorkload.
+    const bool isolated = cfg_.isolated_claim;
+
     // Each device may resolve a different free service core; record it per coord.
     auto& svc = tt::tt_metal::internal::service_core_manager();
     const auto& coords = topology.mesh_coords();
     for (const auto& coord : coords) {
         auto* d = mesh_device_->get_device(coord);
         auto claimable = svc.get_claimable_cores(d);
-        TT_FATAL(
-            !claimable.empty(),
-            "H2DStreamService: no claimable service core on device at coord {}",
-            coord);
+        TT_FATAL(!claimable.empty(), "H2DStreamService: no claimable service core on device at coord {}", coord);
         const CoreCoord chosen = claimable.front();
-        svc.claim(d, {chosen});
+        svc.claim(d, {chosen}, /*isolated=*/isolated);
         service_cores_.emplace(coord, chosen);
     }
 
@@ -420,10 +423,26 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             device_tensor_.dtype(),
             worker_sync,
             metadata);
+        if (isolated) {
+            // Launch directly via slow-dispatch (like the realtime profiler). The isolated claim keeps
+            // EnqueueMeshWorkload on its fast path, so it will NOT service-route this program for us.
+            auto* ld = mesh_device_->get_device(core.device_coord);
+            tt::tt_metal::detail::LaunchProgram(
+                ld, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        }
         workload_->add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
     }
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    if (isolated) {
+        // The persistent receiver was already launched per-device via direct slow-dispatch above.
+        log_info(
+            tt::LogOp,
+            "[h2d] isolated_claim: persistent receiver launched via direct slow-dispatch; the service core "
+            "is excluded from per-op EnqueueMeshWorkload routing so concurrent model ops keep the fast "
+            "enqueue path");
+    } else {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    }
 }
 
 H2DStreamService::H2DStreamService(
@@ -623,13 +642,9 @@ const Tensor& H2DStreamService::get_backing_tensor() const {
     return device_tensor_;
 }
 
-std::size_t H2DStreamService::payload_size_bytes() const {
-    return cfg_.global_spec.compute_packed_buffer_size_bytes();
-}
+std::size_t H2DStreamService::payload_size_bytes() const { return cfg_.global_spec.compute_packed_buffer_size_bytes(); }
 
-std::size_t H2DStreamService::metadata_size_bytes() const {
-    return cfg_.metadata_size_bytes;
-}
+std::size_t H2DStreamService::metadata_size_bytes() const { return cfg_.metadata_size_bytes; }
 
 std::string H2DStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "H2DStreamService::export_descriptor: only owner-side services can be exported");
@@ -702,8 +717,7 @@ std::unique_ptr<H2DStreamService> H2DStreamService::connect(
         new H2DStreamService(std::move(cfg), std::move(sockets), desc.socket_page_size, desc.num_socket_pages));
 }
 
-void H2DStreamService::forward_to_tensor(
-    ttsl::Span<const std::byte> bytes, ttsl::Span<const std::byte> metadata) {
+void H2DStreamService::forward_to_tensor(ttsl::Span<const std::byte> bytes, ttsl::Span<const std::byte> metadata) {
     // Partial transfers aren't supported: the kernel's chunk count is baked into its CT args.
     const size_t expected = cfg_.global_spec.compute_packed_buffer_size_bytes();
     TT_FATAL(
@@ -730,11 +744,8 @@ void H2DStreamService::forward_to_tensor(
     ttsl::Span<const std::byte> mapper_input = bytes;
     if (cfg_.preprocessor) {
         std::memcpy(preprocess_scratch_.data(), bytes.data(), bytes.size());
-        cfg_.preprocessor(
-            ttsl::Span<std::byte>(preprocess_scratch_.data(), preprocess_scratch_.size()),
-            metadata);
-        mapper_input = ttsl::Span<const std::byte>(
-            preprocess_scratch_.data(), preprocess_scratch_.size());
+        cfg_.preprocessor(ttsl::Span<std::byte>(preprocess_scratch_.data(), preprocess_scratch_.size()), metadata);
+        mapper_input = ttsl::Span<const std::byte>(preprocess_scratch_.data(), preprocess_scratch_.size());
     }
 
     Tensor borrowed = make_borrowed_host_tensor(mapper_input, cfg_.global_spec);

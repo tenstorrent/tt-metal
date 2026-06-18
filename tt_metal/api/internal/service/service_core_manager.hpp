@@ -107,7 +107,11 @@ public:
     //   - arch is not Blackhole or UBB Galaxy
     //   - no manual FD session is active (initialize_fast_dispatch not yet called)
     //   - any core in the list is already claimed
-    void claim(IDevice* device, const std::vector<CoreCoord>& cores);
+    // `isolated`: set up the per-core L1 allocator but EXCLUDE the core from has_any_claims()/
+    // is_service_core()/claimed_cores(), so model workloads keep the fast EnqueueMeshWorkload path. The
+    // service must then launch its own program via direct slow-dispatch (detail::LaunchProgram) instead
+    // of EnqueueMeshWorkload's service-routing path. (Used by the H2D stream service.)
+    void claim(IDevice* device, const std::vector<CoreCoord>& cores, bool isolated = false);
 
     // Release one or more claimed cores and destroy their L1 allocators. All addresses
     // handed out by allocate_l1() for these cores become invalid after this call.

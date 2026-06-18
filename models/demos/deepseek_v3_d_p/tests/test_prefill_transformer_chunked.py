@@ -779,6 +779,7 @@ def run_chunked_transformer_no_pcc(
     topology,
     num_iters,
     with_h2d_service=False,
+    h2d_isolated_claim=False,
     routing_use_l1_small_for_semaphores=False,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
@@ -901,8 +902,14 @@ def run_chunked_transformer_no_pcc(
             mapper_config=H2D_MAPPER_CONFIG,
             worker_cores=H2D_SYNC_WORKER_CORES,
             metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+            # isolated_claim=True drops the per-op dispatch tax the resident service otherwise imposes on
+            # every model op (claimed isolated + receiver launched via direct slow-dispatch).
+            isolated_claim=h2d_isolated_claim,
         )
-        logger.info("[h2d-bg] H2D service built and spinning in the background (unused; no producer/socket)")
+        logger.info(
+            f"[h2d-bg] H2D service built and spinning in the background (unused; no producer/socket); "
+            f"isolated_claim={h2d_isolated_claim}"
+        )
 
     profiler.start("tt_forward")
     for it in range(num_iters):
@@ -953,12 +960,18 @@ def run_chunked_transformer_no_pcc(
 
 
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
-# trace dependency, no intermediate readback, and no PCC. with_h2d_service toggles the background H2D
-# stream service (service-presence dispatch-tax study). Requires only the Kimi TTNN weight cache (set
-# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
-@pytest.mark.parametrize("with_h2d_service", [False, True], ids=["nosvc", "h2dsvc"])
+# trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
+# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional. Service modes:
+#   nosvc           - no H2D stream service (baseline)
+#   h2dsvc          - resident H2D service, legacy claim -> per-op dispatch tax on every model op
+#   h2dsvc_isolated - resident H2D service with isolated_claim=True -> no per-op tax (matches nosvc)
+@pytest.mark.parametrize(
+    "with_h2d_service, h2d_isolated_claim",
+    [(False, False), (True, False), (True, True)],
+    ids=["nosvc", "h2dsvc", "h2dsvc_isolated"],
+)
 @pytest.mark.parametrize("num_iters", [1, 2, 10, 20], ids=["iters1", "two_iters", "iters10", "iters20"])
-@pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
+@pytest.mark.parametrize("n_chunks", [1, 11], ids=["chunks1", "chunks11"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -992,6 +1005,7 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
     n_chunks,
     num_iters,
     with_h2d_service,
+    h2d_isolated_claim,
     num_links,
     topology,
 ):
@@ -1007,5 +1021,6 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
         topology,
         num_iters,
         with_h2d_service=with_h2d_service,
+        h2d_isolated_claim=h2d_isolated_claim,
         routing_use_l1_small_for_semaphores=True,
     )

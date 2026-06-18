@@ -35,7 +35,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     // cores) or entirely a normal one.
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto& programs = mesh_workload.impl().get_programs();
-    if (svc.impl().has_any_claims()) {
+    // Use has_any_non_isolated_claims(): an ISOLATED service (e.g. the H2D stream service, which launches
+    // its own program via direct slow-dispatch) must NOT push every model op through this per-op
+    // no-mixing validation loop. Non-isolated claims still route here normally.
+    if (svc.impl().has_any_non_isolated_claims()) {
         bool saw_service = false;
         bool saw_normal = false;
         for (auto& [device_range, program] : programs) {

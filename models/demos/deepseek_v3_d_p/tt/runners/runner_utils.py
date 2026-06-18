@@ -177,6 +177,7 @@ def build_h2d_service(
     mapper_config: ttnn.MeshMapperConfig,
     worker_cores: ttnn.CoreRange,
     metadata_size_bytes: int,
+    isolated_claim: bool = False,
 ) -> ttnn.H2DStreamService:
     """Construct an H2DStreamService whose per-shard backing tensor matches
     what `prepare_prefill_input_tensor` would have produced. Each push carries one chunk_size-token
@@ -207,6 +208,9 @@ def build_h2d_service(
         mapper=mapper,
         worker_cores=worker_cores,
         metadata_size_bytes=metadata_size_bytes,
+        # When True the service core is claimed isolated + the receiver program is launched via direct
+        # slow-dispatch, so the resident service adds no per-op dispatch tax to concurrent model workloads.
+        isolated_claim=isolated_claim,
     )
     logger.info(
         f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
