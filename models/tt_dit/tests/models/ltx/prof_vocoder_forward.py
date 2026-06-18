@@ -47,12 +47,21 @@ def _wrap_conv(mod):
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_prof_vocoder_per_conv(mesh_device, device_params):
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis",
+    [
+        [(2, 4), (2, 4), 4, 1, 2, 0],
+        [(4, 8), (4, 8), 8, 1, 4, 0],
+    ],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_prof_vocoder_per_conv(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
     parent = mesh_device
-    mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = AudioTCParallelConfig(
-        time_parallel=ParallelFactor(factor=4, mesh_axis=1), channel_parallel=ParallelFactor(factor=2, mesh_axis=0)
+        time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+        channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
     )
     ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
     torch_voc = _build_torch_stage_b(seed=42)
@@ -125,12 +134,21 @@ def _wrap_cat(mod, label):
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_prof_vocoder_categories(mesh_device, device_params):
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis",
+    [
+        [(2, 4), (2, 4), 4, 1, 2, 0],
+        [(4, 8), (4, 8), 8, 1, 4, 0],
+    ],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_prof_vocoder_categories(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
     parent = mesh_device
-    mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = AudioTCParallelConfig(
-        time_parallel=ParallelFactor(factor=4, mesh_axis=1), channel_parallel=ParallelFactor(factor=2, mesh_axis=0)
+        time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+        channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
     )
     ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
     torch_voc = _build_torch_stage_b(seed=42)
@@ -189,18 +207,26 @@ def test_prof_vocoder_categories(mesh_device, device_params):
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_prof_vocoder_devicetime(mesh_device, device_params):
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis",
+    [
+        [(2, 4), (2, 4), 4, 1, 2, 0],
+        [(4, 8), (4, 8), 8, 1, 4, 0],
+    ],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_prof_vocoder_devicetime(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
     # Run under: python -m tracy -p -r -m pytest <this>::test_prof_vocoder_devicetime
     # Flushes the on-device profiler buffer after each AMPBlock1 (~300 ops/window) to stay
     # under the 1000-zone tracy buffer limit; the CSV then has every op's DEVICE FW DURATION.
     # Sum of DEVICE FW DURATION over one forward = true device-active time; compare to the
     # host wall (printed) to get the host-dispatch-bound fraction (the trace-mode ceiling).
     parent = mesh_device
-    mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = AudioTCParallelConfig(
-        time_parallel=ParallelFactor(factor=4, mesh_axis=1),
-        channel_parallel=ParallelFactor(factor=2, mesh_axis=0),
+        time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+        channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
     )
     ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
     torch_voc = _build_torch_stage_b(seed=42)
@@ -215,22 +241,31 @@ def test_prof_vocoder_devicetime(mesh_device, device_params):
     )
     tt_voc.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
 
-    # Periodic profiler flush after each AMPBlock1 to bound the device zone buffer.
+    # Periodic profiler flush after each AMPBlock1 to bound the device zone buffer. On a
+    # 32-chip mesh each flush is a full mesh sync + readback (~seconds), so per-block flushing
+    # is the run-phase pathology. Set LTX_PROF_NOFLUSH=1 (with a buffer big enough via
+    # TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT) to capture everything in ONE end-of-run readback.
+    _noflush = os.environ.get("LTX_PROF_NOFLUSH") == "1"
+
     def _walk(m):
         yield m
         for _, c in m.named_children():
             yield from _walk(c)
 
-    for mod in _walk(tt_voc):
-        if isinstance(mod, AMPBlock1):
-            orig = mod.forward
+    if not _noflush:
+        for mod in _walk(tt_voc):
+            if isinstance(mod, AMPBlock1):
+                orig = mod.forward
 
-            def timed(*a, _orig=orig, **k):
-                r = _orig(*a, **k)
-                ttnn.ReadDeviceProfiler(mesh)
-                return r
+                def timed(*a, _orig=orig, **k):
+                    r = _orig(*a, **k)
+                    # Flush only at a quiesced point — reading mid-flight truncates an open
+                    # CCL/halo zone -> "End marker without start marker" abort on dump.
+                    ttnn.synchronize_device(mesh)
+                    ttnn.ReadDeviceProfiler(mesh)
+                    return r
 
-            mod.forward = timed
+                mod.forward = timed
 
     mel = _vocoder_mel()
     _ = tt_voc(mel)
@@ -368,14 +403,22 @@ def test_forward_traced_correctness(mesh_device, device_params):
     [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_full_forward_wall(mesh_device, device_params):
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis",
+    [
+        [(2, 4), (2, 4), 4, 1, 2, 0],
+        [(4, 8), (4, 8), 8, 1, 4, 0],
+    ],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_full_forward_wall(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
     # Full vocoder forward (host prep + device + readback) wall: eager vs forward_traced.
     parent = mesh_device
-    mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = AudioTCParallelConfig(
-        time_parallel=ParallelFactor(factor=4, mesh_axis=1),
-        channel_parallel=ParallelFactor(factor=2, mesh_axis=0),
+        time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+        channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
     )
     ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
     torch_voc = _build_torch_stage_b(seed=42)
@@ -414,16 +457,25 @@ def test_full_forward_wall(mesh_device, device_params):
     [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_vocoder_with_bwe_traced(mesh_device, device_params):
-    # Validate the VocoderWithBWE.use_trace wiring: traced main vocoder + eager BWE == fully eager.
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis",
+    [
+        [(2, 4), (2, 4), 4, 1, 2, 0],
+        [(4, 8), (4, 8), 8, 1, 4, 0],
+    ],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_vocoder_with_bwe_traced(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
+    # Validate both generators traced (main + BWE) == fully eager, on the replayed graph (the
+    # production path): warm -> capture -> replay, compare replay to eager.
     from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c, _build_tt_stage_c
 
     parent = mesh_device
-    mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = AudioTCParallelConfig(
-        time_parallel=ParallelFactor(factor=4, mesh_axis=1),
-        channel_parallel=ParallelFactor(factor=2, mesh_axis=0),
+        time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+        channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
     )
     ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
     torch_full = _build_torch_stage_c(seed=42)
@@ -434,14 +486,93 @@ def test_vocoder_with_bwe_traced(mesh_device, device_params):
 
     mel = _vocoder_mel()
     tt_full.use_trace = False
+    tt_full.use_trace_bwe = False
     out_eager = tt_full(mel)
+    t0 = time.perf_counter()
+    for _ in range(5):
+        out_eager = tt_full(mel)
+    eager_ms = (time.perf_counter() - t0) * 1000 / 5
     tt_full.use_trace = True
-    _ = tt_full(mel)  # capture
-    out_traced = tt_full(mel)  # replay
+    tt_full.use_trace_bwe = True
+    _ = tt_full(mel)  # warm lazy device-graph state
+    _ = tt_full(mel)  # capture (prep_run=False)
+    out_traced = tt_full(mel)  # replay — the production path
+    t0 = time.perf_counter()
+    for _ in range(5):
+        out_traced = tt_full(mel)
+    traced_ms = (time.perf_counter() - t0) * 1000 / 5
     tt_full.release_trace()
     max_abs = (out_eager - out_traced).abs().max().item()
-    print(f"\nVOC_BWE_TRACED max|Δ|(traced vs eager)={max_abs:.3e}", flush=True)
+    print(f"\nVOC_BWE_TRACED max|Δ|(replay vs eager)={max_abs:.3e}", flush=True)
+    print(f"VOC_BWE_WALL eager={eager_ms:.2f}ms traced={traced_ms:.2f}ms speedup={eager_ms/traced_ms:.2f}x", flush=True)
     assert max_abs < 5e-3, f"VocoderWithBWE traced diverged: {max_abs:.3e}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis",
+    [
+        [(2, 4), (2, 4), 4, 1, 2, 0],
+        [(4, 8), (4, 8), 8, 1, 4, 0],
+    ],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_bwe_traced_wall(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
+    """Size the BWE-trace prize: full VocoderWithBWE (main+BWE) eager vs main-traced-only
+    (current prod) vs both-traced. Gate: both-traced must match eager (max|Δ|<5e-3)."""
+    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import (
+        _build_torch_stage_c,
+        _build_tt_stage_c,
+        _diffusers_vocoder_with_bwe_state_to_tt,
+    )
+
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
+    pc = AudioTCParallelConfig(
+        time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+        channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
+    )
+    ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
+    torch_full = _build_torch_stage_c(seed=42)
+    tt_full = _build_tt_stage_c(mesh, parallel_config=pc, ccl_manager=ccl)
+    tt_full.load_torch_state_dict(_diffusers_vocoder_with_bwe_state_to_tt(torch_full.state_dict()))
+
+    mel = _vocoder_mel()
+
+    def wall(n=5):
+        ttnn.synchronize_device(mesh)
+        t = time.perf_counter()
+        for _ in range(n):
+            out = tt_full(mel)
+        ttnn.synchronize_device(mesh)
+        return out, (time.perf_counter() - t) * 1000 / n
+
+    tt_full.use_trace = False
+    tt_full.use_trace_bwe = False
+    out_eager, ms_eager = wall()
+
+    tt_full.use_trace = True  # current production path: main vocoder traced, BWE eager
+    _ = tt_full(mel)  # capture main
+    _, ms_main = wall()
+
+    tt_full.use_trace_bwe = True  # proposed: BWE traced too
+    _ = tt_full(mel)  # capture BWE
+    out_both, ms_both = wall()
+    tt_full.release_trace()
+
+    max_abs = (out_eager - out_both).abs().max().item()
+    print(
+        f"\nBWE_TRACE_WALL eager={ms_eager:.1f}ms main_traced={ms_main:.1f}ms both_traced={ms_both:.1f}ms "
+        f"| main_speedup={ms_eager / ms_main:.2f}x both_speedup={ms_eager / ms_both:.2f}x "
+        f"| max|Δ|(both vs eager)={max_abs:.3e}",
+        flush=True,
+    )
+    assert max_abs < 5e-3, f"BWE traced diverged: {max_abs:.3e}"
 
 
 @pytest.mark.parametrize(
@@ -599,3 +730,76 @@ def test_prof_bwe_per_conv(mesh_device, device_params):
 
 def _round32(c):
     return ((c + 31) // 32) * 32
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape",
+    [[(2, 4), (2, 4)], [(4, 8), (4, 8)]],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_audio_decoder_traced_wall(mesh_device, mesh_shape, device_params):
+    """Gate + size the mel-VAE (AudioDecoder) trace: eager vs forward_traced, bit-identical.
+    Validates the Conv2dViaConv3d _persistent_zeros fix makes the device graph capturable."""
+    from models.tt_dit.models.audio_vae.audio_decoder_ltx import AudioDecoder
+    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import (
+        _AUDIO_DECODER_CFG,
+        _audio_decoder_state_from_diffusers,
+        _require_diffusers,
+    )
+
+    AutoencoderKLLTX2Audio, _, _ = _require_diffusers()
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    torch.manual_seed(42)
+    ref_vae = AutoencoderKLLTX2Audio(
+        base_channels=_AUDIO_DECODER_CFG["ch"],
+        output_channels=_AUDIO_DECODER_CFG["out_ch"],
+        ch_mult=_AUDIO_DECODER_CFG["ch_mult"],
+        num_res_blocks=_AUDIO_DECODER_CFG["num_res_blocks"],
+        attn_resolutions=_AUDIO_DECODER_CFG["attn_resolutions"],
+        resolution=_AUDIO_DECODER_CFG["resolution"],
+        latent_channels=_AUDIO_DECODER_CFG["z_channels"],
+        norm_type="pixel",
+        causality_axis="height",
+        mid_block_add_attention=_AUDIO_DECODER_CFG["mid_block_add_attention"],
+        sample_rate=_AUDIO_DECODER_CFG["sample_rate"],
+        mel_hop_length=_AUDIO_DECODER_CFG["mel_hop_length"],
+        is_causal=_AUDIO_DECODER_CFG["is_causal"],
+        mel_bins=_AUDIO_DECODER_CFG["mel_bins"],
+    ).eval()
+
+    z_times_f = _AUDIO_DECODER_CFG["z_channels"] * _AUDIO_DECODER_CFG["mel_bins"]
+    tt_decoder = AudioDecoder(mesh_device=mesh, **_AUDIO_DECODER_CFG)
+    tt_decoder.load_torch_state_dict(
+        _audio_decoder_state_from_diffusers(ref_vae, stats_std=torch.ones(z_times_f), stats_mean=torch.zeros(z_times_f))
+    )
+
+    latent = torch.randn(1, _AUDIO_DECODER_CFG["z_channels"], 64, _AUDIO_DECODER_CFG["mel_bins"], dtype=torch.float32)
+
+    def wall(fn, n=5):
+        ttnn.synchronize_device(mesh)
+        t = time.perf_counter()
+        for _ in range(n):
+            out = fn(latent)
+        ttnn.synchronize_device(mesh)
+        return out, (time.perf_counter() - t) * 1000 / n
+
+    out_eager, ms_eager = wall(tt_decoder.forward)
+    _ = tt_decoder.forward_traced(latent)  # capture
+    out_traced, ms_traced = wall(tt_decoder.forward_traced)
+    tt_decoder.release_trace()
+
+    max_abs = (out_eager - out_traced).abs().max().item()
+    print(
+        f"\nAUDIO_DECODER_TRACE_WALL eager={ms_eager:.1f}ms traced={ms_traced:.1f}ms "
+        f"speedup={ms_eager / ms_traced:.2f}x | max|Δ|={max_abs:.3e}",
+        flush=True,
+    )
+    assert max_abs < 5e-3, f"AudioDecoder traced diverged: {max_abs:.3e}"

@@ -201,33 +201,46 @@ class UpSample1d(Module):
         B, T, C = x_BTC.shape
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
 
-        if sharded and self.pad > 0:
+        poly2 = self._use_polyphase and self.ratio == 2
+        # The ratio-2 polyphase path only ever reads x_pad[2:T_pad-2], so pad two fewer rows
+        # per side and consume the result directly — no crop slice, and a 2-row-lighter halo
+        # exchange. Falls back to the full pad + slice when there aren't 2 rows to drop.
+        crop = 2 if (poly2 and self.pad >= 2) else 0
+        eff_pad = self.pad - crop
+
+        if sharded and eff_pad > 0:
             x_pad = _t_neighbor_pad(
                 x_BTC,
-                pad_left=self.pad,
-                pad_right=self.pad,
+                pad_left=eff_pad,
+                pad_right=eff_pad,
                 parallel_config=self.parallel_config,
                 ccl_manager=self.ccl_manager,
                 padding_mode="replicate",
             )
         else:
-            x_pad = _replicate_pad_t(x_BTC, self.pad, self.pad, self.mesh_device)
+            x_pad = _replicate_pad_t(x_BTC, eff_pad, eff_pad, self.mesh_device)
 
-        if self._use_polyphase and self.ratio == 2:
+        if poly2:
             B_, T_pad, C_ = x_pad.shape
-            in0 = ttnn.slice(x_pad, [0, 2, 0], [B_, T_pad - 3, C_])
-            in1 = ttnn.slice(x_pad, [0, 3, 0], [B_, T_pad - 2, C_])
+            # Both phases share one window: phase 0 reads taps at even positions, phase 1 at odd
+            # (= phase 0's window advanced one sample). Zero-padding each sub-tap vector — sub0
+            # trailing, sub1 leading — folds that one-sample offset into the filter, so both convs
+            # read the same input. Bit-identical to the historical two-offset-slice form.
+            if crop:
+                base = x_pad
+            else:
+                base = ttnn.slice(x_pad, [0, 2, 0], [B_, T_pad - 2, C_])
             scaled_taps = [t * self.ratio for t in self._taps_cpu]
-            sub0 = [scaled_taps[2 * j + 0] for j in range(self._poly_K_sub)]
-            sub1 = [scaled_taps[2 * j + 1] for j in range(self._poly_K_sub)]
+            sub0 = [scaled_taps[2 * j + 0] for j in range(self._poly_K_sub)] + [0.0]
+            sub1 = [0.0] + [scaled_taps[2 * j + 1] for j in range(self._poly_K_sub)]
             ph0 = depthwise_tap_filter(
-                in0, sub0, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+                base, sub0, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
             )
             ph1 = depthwise_tap_filter(
-                in1, sub1, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+                base, sub1, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
             )
-            ttnn.deallocate(in0)
-            ttnn.deallocate(in1)
+            if base is not x_pad:
+                ttnn.deallocate(base)
             T_out = ph0.shape[1]
             ph0_b = ttnn.reshape(ph0, (B_, T_out, 1, C_))
             ph1_b = ttnn.reshape(ph1, (B_, T_out, 1, C_))

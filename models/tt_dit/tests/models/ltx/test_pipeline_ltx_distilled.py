@@ -22,11 +22,10 @@ from models.tt_dit.utils.ltx import (
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.vbench import assert_vbench_quality
 
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
-# One per fabric topology so the trace region pairs with the row's own fabric config. Harmless
-# for eager runs (the region is just reserved DRAM, never written).
 ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
 line_trace_params = {**line_params, "trace_region_size": 300_000_000}
 
@@ -47,8 +46,8 @@ line_trace_params = {**line_params, "trace_region_size": 300_000_000}
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        # BH on 2x4 (line_trace_params so LTX_TRACED=1 is runnable here; line fabric matches Linear)
-        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # BH on 2x4
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8. Requires increased worker_l1_size to avoid code-size error in RingAttention.
         [(4, 8), (4, 8), 1, 0, 4, True, {"worker_l1_size": 1344544, **ring_params}, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -163,6 +162,76 @@ def test_pipeline_distilled(
             prompt=prompt,
         )
 
+    vbench_thresholds_by_height = {
+        1088: {
+            "subject_consistency": 0.92,
+            "background_consistency": 0.93,
+            "motion_smoothness": 0.955,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.645,
+        },
+    }
+
+    # RUN_VBENCH=0 skips the quality gate (e.g. perf-only iteration); defaults on so CI gates.
+    run_vbench = os.environ.get("RUN_VBENCH", "1") in ("1", "true", "True")
+    # RUN_CLIP=0 skips the CLIP prompt-alignment gate; defaults on (mirrors the wan2.2 test).
+    run_clip = os.environ.get("RUN_CLIP", "1") in ("1", "true", "True")
+
+    def check_output_with_vbench(prompt, number):
+        if not run_vbench:
+            logger.info("RUN_VBENCH=0, skipping VBench quality gate")
+            return
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+            thresholds = vbench_thresholds_by_height[height]
+            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+
+    def check_output_with_clip(prompt, number, clip_threshold=None):
+        # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each
+        # against the prompt with CLIP, assert the mean clears a floor. LTX writes the video to
+        # disk (generate() returns only the path), so frames are read back from the mp4.
+        if not run_clip:
+            logger.info("RUN_CLIP=0, skipping CLIP score check")
+            return
+        if int(ttnn.distributed_context_get_rank()) != 0:
+            return
+        try:
+            from decord import VideoReader
+            from PIL import Image
+
+            from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
+        except ImportError as e:
+            logger.warning(f"CLIP deps unavailable ({e}), skipping CLIP score check")
+            return
+
+        # LTX baseline mean ~31.3 (vs wan2.2's ~37): the LTX prompt exceeds CLIP's 77-token limit
+        # so only its head is scored, and frames are read back re-encoded (CRF=25). 28.0 leaves
+        # ~3pt headroom for run-to-run variance. Override with CLIP_THRESHOLD.
+        threshold = float(os.environ.get("CLIP_THRESHOLD", "28.0")) if clip_threshold is None else clip_threshold
+        output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+
+        vr = VideoReader(output_filename)
+        total_frames = len(vr)
+        indices = np.linspace(0, total_frames - 1, min(8, total_frames), dtype=int)
+
+        clip_encoder = CLIPEncoder()
+        scores = []
+        for i in indices:
+            frame = vr[int(i)].asnumpy()  # (H, W, 3) uint8 RGB
+            pil_img = Image.fromarray(frame.astype(np.uint8))
+            score = clip_encoder.get_clip_score(prompt, pil_img).item() * 100.0
+            scores.append(score)
+
+        clip_min = min(scores)
+        clip_max = max(scores)
+        clip_mean = sum(scores) / len(scores)
+        logger.info(f"CLIP scores: min={clip_min:.2f}, max={clip_max:.2f}, mean={clip_mean:.2f}")
+
+        assert clip_mean >= threshold, (
+            f"Mean CLIP score {clip_mean:.2f} is below threshold {threshold:.2f}. "
+            f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
+        )
+
     if no_prompt:
         seed = int(os.environ.get("SEED", "10"))
         run(prompt=prompt, number=0, seed=seed)
@@ -171,6 +240,11 @@ def test_pipeline_distilled(
         if traced:
             logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
             run(prompt=prompt, number=1, seed=seed)
+            check_output_with_clip(prompt, 1)
+            check_output_with_vbench(prompt, 1)
+        else:
+            check_output_with_clip(prompt, 0)
+            check_output_with_vbench(prompt, 0)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -179,6 +253,8 @@ def test_pipeline_distilled(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+            check_output_with_clip(prompt, i)
+            check_output_with_vbench(prompt, i)
 
     if traced:
         pipeline.release_traces()
@@ -192,8 +268,9 @@ def test_pipeline_distilled(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
     ],
-    ids=["bh_2x4sp1tp0"],
+    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp):
@@ -227,6 +304,7 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
         is_fsdp=is_fsdp,
         run_warmup=False,
         traced=traced,
+        audio_only=True,  # skip the ~10-min video warmup; decode_audio captures its own trace
         num_frames=num_frames,
         height=height,
         width=width,
@@ -250,7 +328,12 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     audio = pipeline.decode_audio(latent, num_frames, fps=24.0)  # cold: weight load + compile (+ capture)
     cold_ms = (time.perf_counter() - t0) * 1000
 
-    N = 5
+    # One untimed decode to absorb a late first-replay cost (the BWE trace captures on the
+    # first post-cold call, not during the cold decode), so warm_ms is true steady state.
+    pipeline.decode_audio(latent, num_frames, fps=24.0)
+    # WARM_REPS shrinks the steady-state loop for fast dev iteration (the PCC oracle below is
+    # unaffected); default 5 keeps warm_ms a stable average for reported timings.
+    N = int(os.environ.get("WARM_REPS", "5"))
     t0 = time.perf_counter()
     for _ in range(N):
         audio = pipeline.decode_audio(latent, num_frames, fps=24.0)
@@ -329,6 +412,7 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     assert c_pcc > 0.95, f"conv1d-vs-torch PCC {c_pcc:.4f} below floor (traced={traced}) — vocoder output is wrong"
 
     pipeline.release_traces()
+    pipeline.release_audio_submesh()
     dur = wav.shape[-1] / sr
     print(
         f"\nAUDIO_GIRL depthwise={'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'mac'} traced={traced} "

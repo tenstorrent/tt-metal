@@ -475,6 +475,17 @@ _DEFAULT_BLOCKINGS = {
     (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_out
     (1024, 4096, (1, 3, 3)): (256, 32, 1, 1, 1),  # upsampler (kT=1)
     (1024, 128, (3, 3, 3)): (256, 32, 1, 1, 1),  # upsampler final_conv
+    # LTX-2.3 audio mel-VAE decoder (Conv2dViaConv3d, kT=1, W=mel_bins=16). These
+    # combos otherwise fell to the hardcoded (Cin, 32, 1, 1, 1) default, whose
+    # H_out=W_out=1 forces one output pixel per work-unit (4-16ms/conv). Block the
+    # full mel width (W_out=16) and a height chunk so each unit produces more output.
+    (512, 512, (1, 3, 3)): (512, 32, 1, 8, 16),
+    (256, 256, (1, 3, 3)): (256, 32, 1, 8, 16),
+    (128, 128, (1, 3, 3)): (128, 32, 1, 8, 16),
+    (512, 256, (1, 3, 3)): (512, 32, 1, 8, 16),
+    (256, 128, (1, 3, 3)): (256, 32, 1, 8, 16),
+    (32, 512, (1, 3, 3)): (32, 32, 1, 8, 16),  # conv_in (z_channels 8 -> aligned 32)
+    (128, 32, (1, 3, 3)): (128, 32, 1, 8, 16),  # conv_out (out_ch 2 -> aligned 32)
     # LTX-2.3 22B VAE encoder (I2V) conservative channel fallbacks.
     (64, 128, (3, 3, 3)): (64, 128, 1, 2, 2),  # conv_in
     (128, 64, (3, 3, 3)): (128, 64, 1, 2, 2),  # compress_space_res inner conv (mult 2)

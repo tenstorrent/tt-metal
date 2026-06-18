@@ -132,6 +132,11 @@ class LTXDistilledPipeline(LTXPipeline):
             # from cache instead of building from the checkpoint (cold ~64s).
             logger.info("warmup audio decode (on-device)")
             self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
+            # The BWE trace captures on the first POST-cold decode (not the cold one above), and that
+            # capturing pass emits clipped audio. A second warmup decode absorbs the capture so the
+            # first real generate is a clean replay.
+            if self._traced:
+                self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
 
             self._prepare_transformer(0)
 
