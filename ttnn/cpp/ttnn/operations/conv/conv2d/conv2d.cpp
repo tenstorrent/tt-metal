@@ -27,8 +27,6 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#define HAS_TTNN
-#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::operations::conv::conv2d {
 
@@ -78,8 +76,6 @@ Result conv2d_L1(
         padding_n4,
         mm_conv,
         conv_config);
-
-    py_log_tensor(input_tensor);
 
     if (conv_config.enable_activation_reuse) {
         if (conv_config.enable_act_double_buffer) {
@@ -141,7 +137,6 @@ Result conv2d_L1(
         auto_shard = true;
     }
     const bool should_deallocate_act = conv_config.deallocate_activation && !input_tensor.memory_config().is_dram();
-    py_log_tensor(input_tensor);
     auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
         device,
         input_tensor,
