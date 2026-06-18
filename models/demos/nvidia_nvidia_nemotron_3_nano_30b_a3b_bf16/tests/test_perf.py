@@ -350,140 +350,17 @@ def test_prefill_mamba2_latency(mesh_device, weight_cache):
 
 @pytest.mark.timeout(0)
 def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
-    """Full ISL sweep: end-to-end TTFT and tok/s at multiple input sequence lengths.
+    """Full ISL sweep from 128 to model limit (262K): TTFT, prefill ms/tok, decode tok/s.
 
-    Runs generate() with return_metrics=True at ISL in [128, 256, 512, 1024].
-    Each ISL is an independent call with fresh decoder state allocation.
-    Checks output coherency (non-empty, printable text) and prints a summary table.
+    Covers the complete model context range in doubling steps — identical in
+    spirit to gpt_oss perf sweeps.  Uses MODEL_MAX_SEQ_LEN=262144 for the KV
+    cache and each generate() call so all ISLs share one pre-allocated state.
 
-    Note: JIT compilation happens on the first prefill token of the first call;
-    subsequent ISL runs benefit from cached kernels.  Run test_decode_traced or
-    test_prefill_mamba2_latency first to pre-warm the kernel cache if you want
-    clean per-ISL prefill numbers.
-    """
-    from transformers import AutoTokenizer
+    Seed token list is built by repeating a short phrase so any ISL up to 256K
+    is covered without tokenizing a huge string.
 
-    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import SNAP as _SNAP
-    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import generate
-    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.kv_cache import (
-        DEFAULT_BLOCK_SIZE,
-        DEFAULT_MAX_SEQ_LEN,
-        allocate_decoder_state,
-    )
-
-    ISL_LIST = [128, 256, 512, 1024]
-    N_DECODE = 30
-
-    tokenizer = AutoTokenizer.from_pretrained(_SNAP)
-
-    # Build a long token list from a repeating seed; slice to target ISL.
-    _seed = (
-        "Tenstorrent Blackhole is an AI accelerator for hybrid SSM and MoE models. "
-        "NemotronH-30B combines Mamba2 and dense-attention layers. "
-        "The tensor-parallel TP=4 configuration runs on a four-chip QuietBox. "
-    )
-    _seed_ids = tokenizer.encode(_seed * 30, add_special_tokens=True)
-    assert len(_seed_ids) >= max(ISL_LIST), "seed too short; increase repetition factor"
-
-    # Pre-allocate decoder state ONCE before warmup while DRAM is clean.
-    # Reusing it across warmup + ISL sweep keeps the KV cache pages at their
-    # original safe DRAM addresses, avoiding the device-2 defect that causes
-    # paged_fill_cache to hang when recycled bad pages are reallocated.
-    print("[state] Pre-allocating decoder state (before warmup)...", flush=True)
-    _persistent_state = allocate_decoder_state(
-        mesh_device, B=1, max_seq_len=DEFAULT_MAX_SEQ_LEN, block_size=DEFAULT_BLOCK_SIZE
-    )
-    print("[state] Done.", flush=True)
-
-    # Warmup: compile all JIT kernels and capture the decode trace once before
-    # the sweep so TTFT numbers reflect inference time, not compilation overhead.
-    print("\n[warmup] Running warmup generate (ISL=32, 5 decode tokens)...", flush=True)
-    _warmup_prompt = tokenizer.decode(_seed_ids[:32], skip_special_tokens=False)
-    generate(
-        prompt=_warmup_prompt,
-        mesh_device=mesh_device,
-        wc=weight_cache,
-        max_new_tokens=5,
-        verbose=False,
-        cpu_gate=False,
-        decoder_state=_persistent_state,
-    )
-    print("[warmup] Done.", flush=True)
-
-    results = []
-
-    for isl in ISL_LIST:
-        prompt_ids = _seed_ids[:isl]
-        # Decode back so generate() re-tokenizes to a near-identical length.
-        prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
-
-        print(f"\n{'='*70}")
-        print(f"ISL sweep: target ISL={isl}, N_DECODE={N_DECODE}")
-        print(f"{'='*70}")
-
-        text, metrics = generate(
-            prompt=prompt,
-            mesh_device=mesh_device,
-            wc=weight_cache,
-            max_new_tokens=N_DECODE,
-            verbose=True,
-            cpu_gate=False,
-            return_metrics=True,
-            decoder_state=_persistent_state,
-        )
-
-        metrics.print_summary()
-
-        actual_isl = metrics.prompt_tokens
-        prefill_s = metrics.prefill_compile_s + metrics.prefill_inference_s
-        prefill_ms_per_tok = prefill_s * 1000.0 / max(actual_isl, 1)
-
-        # Coherency: the returned text must be non-empty and printable.
-        assert len(text) > 0, f"ISL={isl}: generate() returned empty text"
-        assert metrics.generated_tokens > 0, f"ISL={isl}: no tokens were generated"
-        printable_ratio = sum(1 for c in text if c.isprintable()) / max(len(text), 1)
-        assert printable_ratio > 0.9, (
-            f"ISL={isl}: text has low printable ratio {printable_ratio:.2f} — " f"possible NaN/garbage output"
-        )
-
-        results.append(
-            {
-                "isl": actual_isl,
-                "ttft_ms": metrics.ttft_s * 1000.0,
-                "prefill_ms_per_tok": prefill_ms_per_tok,
-                "decode_toks_s": metrics.decode_toks_s,
-                "gen_tokens": metrics.generated_tokens,
-                "text_preview": text[-120:],  # tail of generated output
-            }
-        )
-
-        print(f"\n[ISL={isl}] tail: {repr(text[-120:])}")
-
-    # --- Summary table ---
-    print("\n" + "=" * 78)
-    print("ISL Sweep — NemotronH-30B QB TP=4 (chunked prefill, traced decode)")
-    print(f"{'ISL':>6}  {'TTFT(ms)':>10}  {'prefill ms/tok':>15}  {'tok/s':>7}  {'gen_toks':>9}")
-    print(f"{'-'*6}  {'-'*10}  {'-'*15}  {'-'*7}  {'-'*9}")
-    for r in results:
-        print(
-            f"{r['isl']:>6}  {r['ttft_ms']:>10.0f}  {r['prefill_ms_per_tok']:>15.1f}  "
-            f"{r['decode_toks_s']:>7.1f}  {r['gen_tokens']:>9}"
-        )
-    print("=" * 78)
-
-
-@pytest.mark.timeout(0)
-def test_isl_sweep_long_context(mesh_device, weight_cache):
-    """Long-context ISL sweep up to 256K tokens.
-
-    Uses the gpt_oss-style bulk E-layer prefill (moe_experts_prefill.py) with
-    an outer-chunk loop (S_OUTER=4096) that keeps peak `act` at 484 MB/device
-    regardless of sequence length.
-
-    ISL_LIST extends to 262112 (≈256K) in doubling steps.
-    max_seq_len=MODEL_MAX_SEQ_LEN=262144 in both allocate_decoder_state and
-    generate() calls.  At each ISL, decode count is capped so prompt+decode
-    never exceeds the model's positional-encoding limit.
+    n_decode is clamped per-ISL so prompt+decode never exceeds 262144.
+    Checks output coherency (non-empty, printable text) at every ISL.
     """
     from transformers import AutoTokenizer
 
@@ -495,14 +372,14 @@ def test_isl_sweep_long_context(mesh_device, weight_cache):
         allocate_decoder_state,
     )
 
-    # 262112 = 262144 - 32: leaves at least 31 decode tokens of headroom at max ISL.
-    # n_decode is clamped per-ISL so prompt + decode < MODEL_MAX_SEQ_LEN.
-    ISL_LIST = [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262112]
+    # 262112 = MODEL_MAX_SEQ_LEN - 32; leaves ≥31 decode tokens of headroom at max ISL.
+    ISL_LIST = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262112]
     N_DECODE = 30
 
     tokenizer = AutoTokenizer.from_pretrained(_SNAP)
 
-    # Build a long token list by repeating a short seed; avoids re-tokenizing a huge string.
+    # Build seed token list by repeating a short phrase.
+    # Avoids tokenizing a huge string; round-trip-stable for BPE tokenizers.
     _seed = (
         "Tenstorrent Blackhole is an AI accelerator for hybrid SSM and MoE models. "
         "NemotronH-30B combines Mamba2 and dense-attention layers. "
@@ -513,21 +390,22 @@ def test_isl_sweep_long_context(mesh_device, weight_cache):
     repeats = (needed + len(_seed_ids_short) - 1) // len(_seed_ids_short)
     _seed_ids = (_seed_ids_short * repeats)[:needed]
 
-    # Allocate KV cache for the full 256K context once; reuse across all ISLs.
-    print("[state] Allocating decoder state (max_seq_len=262144)...", flush=True)
+    # Pre-allocate KV cache for the full model context ONCE.
+    # Reusing across all ISLs keeps KV pages at stable DRAM addresses.
+    print("[state] Pre-allocating decoder state (max_seq_len=262144)...", flush=True)
     _persistent_state = allocate_decoder_state(
         mesh_device, B=1, max_seq_len=MODEL_MAX_SEQ_LEN, block_size=DEFAULT_BLOCK_SIZE
     )
     print("[state] Done.", flush=True)
 
-    # Warmup: compile prefill kernels at a short ISL before the sweep.
-    print("\n[warmup] Running warmup generate (ISL=64, 3 decode tokens)...", flush=True)
-    _warmup_prompt = tokenizer.decode(_seed_ids[:64], skip_special_tokens=False)
+    # Warmup: compile decode trace and prefill kernels at a short ISL.
+    print("\n[warmup] Running warmup generate (ISL=32, 5 decode tokens)...", flush=True)
+    _warmup_prompt = tokenizer.decode(_seed_ids[:32], skip_special_tokens=False)
     generate(
         prompt=_warmup_prompt,
         mesh_device=mesh_device,
         wc=weight_cache,
-        max_new_tokens=3,
+        max_new_tokens=5,
         max_seq_len=MODEL_MAX_SEQ_LEN,
         verbose=False,
         cpu_gate=False,
@@ -541,12 +419,11 @@ def test_isl_sweep_long_context(mesh_device, weight_cache):
         prompt_ids = _seed_ids[:isl]
         prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
-        # Cap decode tokens so actual_prompt_len + n_decode < MODEL_MAX_SEQ_LEN.
-        # Tokenizer round-trip may give ±a few tokens; subtract 10 for safety.
+        # Clamp decode count: tokenizer round-trip may shift token count by ±few.
         n_decode = max(1, min(N_DECODE, MODEL_MAX_SEQ_LEN - isl - 10))
 
         print(f"\n{'='*70}")
-        print(f"Long-context sweep: target ISL={isl}, n_decode={n_decode}")
+        print(f"ISL sweep: target ISL={isl}, n_decode={n_decode}")
         print(f"{'='*70}")
 
         text, metrics = generate(
@@ -581,13 +458,13 @@ def test_isl_sweep_long_context(mesh_device, weight_cache):
                 "prefill_ms_per_tok": prefill_ms_per_tok,
                 "decode_toks_s": metrics.decode_toks_s,
                 "gen_tokens": metrics.generated_tokens,
-                "text_preview": text[-120:],
             }
         )
         print(f"\n[ISL={isl}] tail: {repr(text[-120:])}")
 
+    # --- Summary table ---
     print("\n" + "=" * 78)
-    print("Long-Context Sweep — NemotronH-30B QB TP=4 (gpt_oss bulk prefill, outer-chunk 4K)")
+    print("ISL Sweep — NemotronH-30B QB TP=4 (bulk E-layer prefill, traced decode)")
     print(f"{'ISL':>8}  {'TTFT(ms)':>10}  {'prefill ms/tok':>15}  {'tok/s':>7}  {'gen_toks':>9}")
     print(f"{'-'*8}  {'-'*10}  {'-'*15}  {'-'*7}  {'-'*9}")
     for r in results:
