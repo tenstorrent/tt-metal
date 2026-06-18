@@ -182,8 +182,8 @@ inline void accumulate_heads(uint32_t r, uint32_t c, uint32_t acc_slot) {
     pack_reconfig_l1_acc(0);  // done accumulating; downstream packs (mask, untilize) overwrite
 }
 
-/** Stamp the causal mask for absolute column `k_tile` onto acc write slot `slot` (before
- *  cb_push_back, no repush). Two cases:
+/** Stamp the causal mask for absolute column `k_tile` onto acc write slot `slot` (written into the
+ *  already-reserved acc_cb slot before its push_back, no repush). Two cases:
  *   - diagonal (k_tile == diag_tile): L1-ACCUMULATE the strict-upper -inf tile, keeping the lower tri.
  *   - past diagonal (incl. pad cols >= Tt): OVERWRITE with -inf, so stale-k garbage in a pad column is
  *     discarded rather than turned to nan by `garbage + -inf`. */
