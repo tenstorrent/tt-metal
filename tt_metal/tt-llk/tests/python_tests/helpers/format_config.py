@@ -713,7 +713,7 @@ class InputOutputFormat:
     def __str__(self):
         if self.register_format_hint is not None:
             return f"InputOutputFormat[L1_Input:{self.input},A(reg_hint):{self.register_format_hint},B(reg_hint):{self.register_format_hint},out:{self.output}]"
-        return f"InputOutputFormat[A:{self.input},B:{self.input_B},out:{self.output}]"
+        return f"InputOutputFormat[L1_Input_A:{self.input},L1_Input_B:{self.input_B},out:{self.output}]"
 
 
 def create_formats_for_testing(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:

@@ -77,6 +77,8 @@ ELTWISE_FORMATS = input_output_formats(
     [
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
+        DataFormat.MxFp6R,
+        DataFormat.MxFp6P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,

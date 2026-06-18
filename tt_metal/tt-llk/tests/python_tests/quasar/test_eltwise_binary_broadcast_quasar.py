@@ -52,6 +52,8 @@ FACE_ELEMS = 16 * 16
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,

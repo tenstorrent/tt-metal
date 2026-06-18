@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from filelock import FileLock
 
-from .format_config import DataFormat, FormatConfig
+from .format_config import MX_FORMAT_BLOCK_SIZE, DataFormat, FormatConfig
 from .llk_params import format_dict
 from .logger import logger
 from .tile_constants import (
@@ -503,6 +503,42 @@ def _mxfp_block_aware_compare(
     return is_valid | both_nan
 
 
+def _log_mx_failure_diff(
+    golden_tensor,
+    res_tensor,
+    is_valid,
+    output_data_format: DataFormat,
+    max_rows: int = 64,
+) -> None:
+    """Log a compact, paste-friendly diff for a failing MX-format comparison.
+
+    The MX path in `passed_test` returns before the generic tile-diff printer,
+    so without this MX failures produce no diagnostic output. Lists every
+    mismatching element (capped at `max_rows`) as flat-index / golden / result /
+    |diff| plus a summary, so the table can be pasted back for analysis.
+    """
+    g = golden_tensor.float().flatten()
+    r = res_tensor.float().flatten()
+    bad = (~is_valid.flatten()).nonzero(as_tuple=True)[0]
+    total = g.numel()
+    n_bad = bad.numel()
+
+    block = MX_FORMAT_BLOCK_SIZE
+    lines = [
+        f"MX compare FAILED [{output_data_format.name}]: "
+        f"{n_bad}/{total} elements mismatch (block size {block})",
+        f"{'idx':>6} {'block':>6} {'golden':>16} {'result':>16} {'abs_diff':>14}",
+    ]
+    for idx in bad[:max_rows].tolist():
+        gi, ri = g[idx].item(), r[idx].item()
+        lines.append(
+            f"{idx:>6} {idx // block:>6} {gi:>16.8g} {ri:>16.8g} {abs(gi - ri):>14.6g}"
+        )
+    if n_bad > max_rows:
+        lines.append(f"... {n_bad - max_rows} more mismatching elements omitted")
+    logger.error("\n{}", "\n".join(lines))
+
+
 def passed_test(
     golden_tensor,
     res_tensor,
@@ -591,6 +627,10 @@ def passed_test(
         # check is the principled correctness criterion here, so trust its
         # verdict rather than re-gating on PCC (sign flips and gross multi-step
         # jumps still fail the lattice-aware check).
+        if print_errors and not _RECORD_TEST_ORDER and not is_within_tolerance:
+            _log_mx_failure_diff(
+                golden_tensor, res_tensor, is_valid, output_data_format
+            )
         return bool(is_within_tolerance)
 
     if print_errors and not _RECORD_TEST_ORDER:
