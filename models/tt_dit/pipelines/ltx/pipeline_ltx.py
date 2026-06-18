@@ -100,6 +100,9 @@ class TransformerState:
     cache_name: str
     lora_specs: list[LoraSpec] = field(default_factory=list)
     state_dict_provider: Callable[[], dict[str, torch.Tensor]] | None = None
+    # Whether a load that hits the PyTorch path should persist a disk cache.
+    # Dynamic LoRA fuses default to in-memory only (create_cache=False).
+    create_cache: bool = True
 
 
 class LTXTransformerState:
@@ -579,15 +582,19 @@ class LTXPipeline:
             logger.info(f"VAE encoder config: {len(self._vae_encoder_blocks)} blocks")
 
     @staticmethod
-    def _build_transformer_state_dict(checkpoint_path: str, lora_specs: list[LoraSpec]) -> dict[str, torch.Tensor]:
+    def _build_transformer_state_dict(
+        checkpoint_path: str, lora_specs: list[LoraSpec], *, strict: bool = False
+    ) -> dict[str, torch.Tensor]:
         """Load + LoRA-fuse the transformer state dict from safetensors. Only
-        invoked on cache miss by ``cache_module.load_model``."""
+        invoked on cache miss by ``cache_module.load_model``. ``strict`` raises
+        if a staged LoRA fuses 0 tensors (keyspace mismatch) — used by the
+        runtime ``fuse_lora`` path so a bad adaptor fails loudly."""
         logger.info(f"Transformer cache miss — loading safetensors: {checkpoint_path}")
         raw = load_file(checkpoint_path)
         prefix = "model.diffusion_model."
         sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
         if lora_specs:
-            sd = fuse_loras_into(sd, lora_specs)
+            sd = fuse_loras_into(sd, lora_specs, strict=strict)
         return sd
 
     @staticmethod
@@ -774,8 +781,17 @@ class LTXPipeline:
         self._prepare_audio_decoder()
         self._prepare_transformer(0)
 
-    def _prepare_transformer(self, idx: int = 0) -> None:
+    def _load_transformer(self, idx: int = 0, *, create_cache: bool = True, force_reload: bool = False) -> None:
+        """Load (or reload) transformer variant ``idx`` and make it active.
+
+        ``force_reload`` deallocates the variant's weights first so the load
+        re-runs even when the model is already loaded (used by the dynamic LoRA
+        path to re-fuse variant 0 in place). The effective disk-cache write is
+        ``create_cache and state.create_cache`` — a fuse-in-memory variant
+        (``state.create_cache=False``) is never persisted."""
         state = self.transformer_states[idx]
+        if force_reload:
+            state.model.deallocate_weights()
         cache_module.load_model(
             state.model,
             model_name=state.cache_name,
@@ -784,8 +800,14 @@ class LTXPipeline:
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=state.state_dict_provider,
+            create_cache=create_cache and state.create_cache,
         )
         self.transformer = state.model
+
+    def _prepare_transformer(self, idx: int = 0) -> None:
+        """Initial/priming load of variant ``idx`` (preserves the current behavior:
+        no-op when already loaded, writes a cache, no force-reload)."""
+        self._load_transformer(idx)
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
         """Disk-cache path for on-device prompt embeddings. Separate namespace from the
