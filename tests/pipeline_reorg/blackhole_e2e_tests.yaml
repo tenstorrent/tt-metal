@@ -92,7 +92,7 @@
   skus:
     bh_p150:
       timeout: 15
-  owner_id: TBD # ssinghal@tenstorrent.com — fill in Slack user ID before merge
+  owner_id: U087HGJ455E # ssinghal@tenstorrent.com
   team: models
   model-name: qwen3-tts
 
@@ -325,6 +325,6 @@
   skus:
     bh_p150_perf:
       timeout: 15
-  owner_id: TBD # ssinghal@tenstorrent.com — fill in Slack user ID before merge
+  owner_id: U087HGJ455E # ssinghal@tenstorrent.com
   team: models
   model-name: qwen3-tts
