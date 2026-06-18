@@ -207,10 +207,15 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
 
     input_tensor, finite_mask = _all_inputs(torch_dtype)
 
-    # Reference: compute in FP32 from the dtype-quantised input, then cast back
-    # to the input dtype. For FP32 inputs the cast is a no-op; for BF16 it
-    # matches what the SFPU does (FP32 math then final BF16 convert).
-    expected = torch.nn.functional.gelu(input_tensor.float(), approximate=torch_approximate).to(torch_dtype)
+    # Reference: compute in FP64 from the dtype-quantised input, then round
+    # to the input dtype. FP64 dodges the 2*sigmoid(2x) - 1 cancellation error
+    # that limits torch's CPU FP32 path to ~5 ULPs at magnitude 1 (which
+    # magnifies to ~hundreds of ULPs at small (1 + tanh) magnitudes). Our
+    # kernel uses the sigmoid-identity formulation to avoid the same
+    # cancellation, so an FP64-rounded reference is the right yardstick for
+    # how close it gets to true math. For BF16 inputs the difference between
+    # FP32-ref and FP64-ref is hidden by BF16 rounding in 99.9%+ of cases.
+    expected = torch.nn.functional.gelu(input_tensor.double(), approximate=torch_approximate).to(torch_dtype)
 
     tt_input = ttnn.from_torch(input_tensor, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.gelu(tt_input, variant=variant_enum)

@@ -368,20 +368,14 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // |scaled| beyond TANH_SAT_THRESHOLD saturates tanh to +/- 1: torch's
-    // vectorized CPU tanh (Sleef / VML) collapses to exactly +/- 1 once
-    // |scaled| crosses ~8.67, sooner than a strict IEEE-754 round-to-nearest
-    // analysis would predict (which would put the crossover at ~9.013, where
-    // 1 - tanh(s) < 2^-25). The SFPU's tanh goes through a BF16-precision
-    // reciprocal in its internal sigmoid that doesn't round 2*sigmoid(-2x) - 1
-    // down to exactly -1; it lands on the FP32 successor of -1 (-1 + 2^-24).
-    // Without an explicit saturation guard, 1 + tanh ~= 2^-24 instead of 0,
-    // and 0.5 * x * (1 + tanh) leaks a ~1.5e-7 residual for x in [-5.16, -5.06]
-    // where torch produces +/- 0. The 8.66 threshold is set just below the
-    // lowest observed offender (x = -5.0625 with scaled = -8.671) and is
-    // safely above the next BF16 grid point's scaled magnitude (x = -5.03125,
-    // scaled = -8.56), where torch's tanh does not saturate.
-    constexpr float TANH_SAT_THRESHOLD = 8.66f;
+    // |scaled| beyond TANH_SAT_THRESHOLD saturates tanh to +/- 1 to match
+    // torch's vectorized CPU tanh (Sleef / VML), which collapses to exactly
+    // +/- 1 once |scaled| crosses ~8.668. The 8.667 threshold sits in the
+    // narrow band between the observed BF16-input saturation point and the
+    // observed FP32-input non-saturation point:
+    //   BF16 x = -5.0625 -> scaled ~= -8.6683 (torch SATURATES; we must too)
+    //   FP32 x = -5.0613 -> scaled ~= -8.6642 (torch does NOT saturate)
+    constexpr float TANH_SAT_THRESHOLD = 8.667f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -411,25 +405,24 @@ inline void calculate_gelu_tanh() {
 
         v_if(scaled >= TANH_SAT_THRESHOLD) {
             // Saturated positive tail: gelu_tanh(x) = 0.5 * x * 2 = x.
+            // Explicit saturation matches torch's vectorized tanh which
+            // collapses to exactly +1 here; without the guard, the sigmoid
+            // identity below would produce x*(1 - tiny) which differs from
+            // torch by a few BF16 ULPs in the saturation band.
             result = x;
         }
         v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            // Active region: actually compute the tanh formula. Force FP32
-            // precision inside tanh (2-step NR reciprocal + FP32-accurate exp)
-            // regardless of the dest-accumulator mode. The rest of this kernel
-            // already runs in FP32; if we let tanh fall back to BF16 precision
-            // for `is_fp32_dest_acc_en=false`, the ~0.5% relative error in
-            // sigmoid leaks 1 BF16 ULP into the final result for inputs whose
-            // scaled value is just above tanh's internal polynomial threshold
-            // (|scaled| ~ 0.6, i.e. x ~ 0.75). The final BF16 conversion
-            // happens at the end of this function — there's no benefit to
-            // dropping precision earlier.
-            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
-            sfpi::vFloat one_plus = 1.0f + t;
-            // 0.5 * x first, then multiply by (1 + tanh(...)) — matches Python
-            // left-to-right associativity: `0.5 * x * one_plus_tanh`.
-            sfpi::vFloat half_x = 0.5f * x;
-            result = half_x * one_plus;
+            // Active region: use the identity 1 + tanh(s) = 2*sigmoid(2s),
+            //   0.5 * x * (1 + tanh(scaled)) = x * sigmoid(2 * scaled)
+            // which skips the catastrophic 2*sig - 1 cancellation that
+            // limits the tanh-chain to ~5 FP32 ULPs at magnitude 1.0 (and
+            // thereby ~hundreds of ULPs at the small (1 + tanh) magnitude).
+            // The sigmoid path runs in FP32 with FP32-accurate exp + 2-step
+            // NR reciprocal so the result is precise to ~1-2 FP32 ULPs at
+            // its OWN magnitude — no cancellation, no magnification.
+            sfpi::vFloat two_scaled = 2.0f * scaled;
+            sfpi::vFloat sig = _sfpu_sigmoid_<true>(two_scaled);
+            result = x * sig;
         }
         v_endif;
 
