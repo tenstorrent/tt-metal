@@ -22,6 +22,8 @@ needs (``SquadExample``/``SquadFeatures``/``squad_convert_examples_to_features``
 ``ArgumentHandler``, ``PaddingStrategy``) still ship in 5.x.
 """
 
+from __future__ import annotations
+
 import inspect
 import types
 import warnings
