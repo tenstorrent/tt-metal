@@ -12,172 +12,233 @@
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
 
 <style>
-  :root { --rep:#2e7d32; --repbg:#e6ffe6; --tp:#1565c0; --tpbg:#e3f2fd; --sp:#e65100; --spbg:#fff3e0;
-          --comm:#c62828; --commbg:#ffebee; --host:#6a1b9a; --hostbg:#f3e5f5;
-          --ink:#1c1c1c; --muted:#666; }
-  body { font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif; color:var(--ink); margin:0; background:#fafafa; }
-  main { max-width:1180px; margin:0 auto; padding:24px 32px 90px; }
-  h1 { font-size:1.55em; margin-bottom:0; }
-  h2 { font-size:1.22em; margin-top:2.3em; border-bottom:1px solid #ddd; padding-bottom:4px; }
-  h3 { font-size:1.03em; margin-bottom:.3em; }
-  .sub { color:var(--muted); margin-top:4px; font-size:.95em; }
-  table { border-collapse:collapse; width:100%; font-size:.87em; margin:8px 0; }
-  th,td { border:1px solid #ddd; padding:6px 9px; text-align:left; vertical-align:top; }
-  th { background:#f0f0f0; }
-  code,pre { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.9em; }
-  pre { background:#272822; color:#f8f8f2; padding:14px 18px; border-radius:8px; overflow-x:auto; line-height:1.45; }
-  pre .c { color:#88846f; } pre .k { color:#f92672; } pre .s { color:#e6db74; }
-  /* mermaid lives in <pre> but must NOT inherit the dark code-block background */
-  pre.mermaid { background:#fff !important; color:var(--ink) !important; padding:8px !important;
-                text-align:center; line-height:normal; border-radius:8px; }
-  pre.mermaid svg { background:#fff; max-width:100%; height:auto; }
-  .note { background:var(--hostbg); border-left:4px solid var(--host); padding:8px 14px; border-radius:0 6px 6px 0; font-size:.93em; margin:12px 0; }
-  .warn { background:#fff8e1; border-left:4px solid #b06f00; padding:8px 14px; border-radius:0 6px 6px 0; font-size:.93em; margin:12px 0; }
-  .pill { display:inline-block; padding:1px 9px; border-radius:10px; font-size:.82em; border:1px solid; margin:2px 4px 2px 0; white-space:nowrap; }
-  .prep { background:var(--repbg); color:var(--rep); border-color:var(--rep); }
-  .ptp  { background:var(--tpbg);  color:var(--tp);  border-color:var(--tp); }
-  .psp  { background:var(--spbg);  color:var(--sp);  border-color:var(--sp); }
-  .pcomm{ background:var(--commbg);color:var(--comm);border-color:var(--comm); }
-  .phost{ background:var(--hostbg);color:var(--host);border-color:var(--host); }
-  .fr { background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:10px 14px; margin:14px 0; overflow-x:auto; }
-  .frcap { font-size:.85em; color:var(--muted); margin:0 0 6px 2px; }
-  .legend { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:10px 0; font-size:.9em; }
+  :root{
+    --bg:#0b0e15; --bg2:#10141f; --panel:#151a28; --panel2:#1b2236;
+    --ink:#e8edf6; --dim:#97a3ba; --line:#283150; --line2:#384566;
+    --accent:#5ad1c8; --accent2:#7aa2ff; --gold:#ffd86b; --red:#ff6b81; --purple:#c98bff; --green:#46d39a;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+    /* legacy distribution tints (used by mermaid node fills, pills, strips) */
+    --rep:#2e7d32; --repbg:#e6ffe6; --tp:#1565c0; --tpbg:#e3f2fd; --spc:#e65100; --spbg:#fff3e0;
+    --comm:#c62828; --commbg:#ffebee; --host:#6a1b9a; --hostbg:#f3e5f5; --muted:#97a3ba;
+  }
+  *{box-sizing:border-box}
+  body{ margin:0; background:var(--bg); color:var(--ink); font-size:15.5px; line-height:1.55;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background-image:radial-gradient(1100px 650px at 85% -12%,#18223c 0,transparent 60%),
+                     radial-gradient(900px 600px at 5% 0%,#141b30 0,transparent 55%);
+    background-attachment:fixed; }
+  main{ max-width:1180px; margin:0 auto; padding:0 28px 110px; }
+  a{ color:var(--accent2); }
+  code{ font-family:var(--mono); font-size:.9em; background:var(--panel2); padding:1px 6px; border-radius:5px; color:var(--accent); }
+  b.hl{ color:var(--gold); } i{ color:var(--accent2); font-style:normal; }
 
-  /* Mermaid sharding node classes */
-  .mermaid .rep > rect, .mermaid .rep > polygon { fill:var(--repbg)!important; stroke:var(--rep)!important; }
-  .mermaid .tp  > rect, .mermaid .tp  > polygon { fill:var(--tpbg)!important;  stroke:var(--tp)!important; }
-  .mermaid .sp  > rect, .mermaid .sp  > polygon { fill:var(--spbg)!important;  stroke:var(--sp)!important; }
-  .mermaid .comm> rect, .mermaid .comm> polygon { fill:var(--commbg)!important;stroke:var(--comm)!important; stroke-width:2px!important; }
-  .mermaid .host> rect, .mermaid .host> polygon { fill:var(--hostbg)!important;stroke:var(--host)!important; stroke-dasharray:4 3!important; }
-  .mermaid .io  > rect, .mermaid .io  > polygon { fill:#fff!important; stroke:#555!important; stroke-width:2px!important; }
+  /* hero */
+  header.hero{ padding:48px 0 14px; text-align:center; }
+  .eyebrow{ font-family:var(--mono); text-transform:uppercase; letter-spacing:.14em; font-size:12px; color:var(--accent); }
+  h1{ font-size:2.1em; margin:8px 0 0; font-weight:800; letter-spacing:-.01em; }
+  h1 .grad{ background:linear-gradient(90deg,var(--accent),var(--accent2),var(--purple));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .tagline{ color:var(--dim); max-width:820px; margin:10px auto 0; font-size:16px; }
+  .tagline code{ font-size:.85em; }
+  .eq{ display:inline-block; font-family:var(--mono); font-size:15px; background:var(--panel2);
+    border:1px solid var(--line2); border-radius:10px; padding:10px 18px; margin-top:18px; }
+  .eq b{ color:var(--green); } .eq i{ color:var(--accent2); } .eq u{ color:var(--gold); text-decoration:none; }
 
-  /* Animated dataflow: edges "flow" in the direction tensors travel */
-  .mermaid .edgePaths path, .mermaid .flowchart-link {
-     stroke-dasharray:7 5; animation:dashflow .9s linear infinite; }
-  @keyframes dashflow { to { stroke-dashoffset:-24; } }
-  @media (prefers-reduced-motion: reduce) {
-     .mermaid .edgePaths path, .mermaid .flowchart-link { animation:none; stroke-dasharray:none; } }
-  /* to-scale token strips */
-  .strip { display:flex; height:40px; border:1px solid #ccc; border-radius:6px; overflow:hidden;
-           font-size:.78em; text-align:center; }
-  .strip div { display:flex; align-items:center; justify-content:center; border-right:1px solid #ccc;
-               min-width:0; overflow:hidden; white-space:nowrap; padding:0 2px; }
-  .ctrl { font-size:.85em; color:var(--muted); margin:4px 0 0; }
-  .ctrl button { font:inherit; padding:2px 10px; border:1px solid #bbb; border-radius:6px; background:#fff; cursor:pointer; }
+  /* tab nav */
+  nav.tabs{ position:sticky; top:0; z-index:50; display:flex; flex-wrap:wrap; gap:9px; justify-content:center;
+    padding:16px 8px; margin:22px 0 30px; background:rgba(11,14,21,.85); backdrop-filter:blur(10px);
+    border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  nav.tabs button{ font-family:inherit; font-size:15px; font-weight:700; color:var(--dim); cursor:pointer;
+    background:var(--panel); border:1px solid var(--line2); border-radius:11px; padding:11px 20px; transition:.16s; }
+  nav.tabs button .n{ font-family:var(--mono); font-size:12px; opacity:.7; margin-right:7px; }
+  nav.tabs button:hover{ color:var(--accent); border-color:var(--accent); background:var(--panel2); transform:translateY(-2px); }
+  nav.tabs button.on{ color:#04120f; background:linear-gradient(90deg,var(--accent),var(--accent2));
+    border-color:transparent; box-shadow:0 4px 14px rgba(90,209,200,.35); }
+  nav.tabs button.on .n{ opacity:.6; }
 
-  /* steady-state pipeline strip */
-  .pipe { background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:16px; }
-  .lane { display:flex; align-items:center; margin:8px 0; gap:8px; }
-  .lane .who { width:280px; font-size:.82em; color:var(--muted); flex:none; }
-  .slot { flex:1; height:26px; border-radius:5px; position:relative; overflow:hidden; background:#f2f2f2; }
-  .bar { position:absolute; top:3px; bottom:3px; width:8%; border-radius:4px; opacity:.92; animation:slide 7s linear infinite; }
-  .bq { background:var(--tpbg); border:1px solid var(--tp); }
-  .bk { background:var(--repbg); border:1px solid var(--rep); }
-  .bm { background:var(--hostbg); border:1px solid var(--host); }
-  .bw { background:var(--spbg); border:1px solid var(--sp); }
-  @keyframes slide { from { transform:translateX(-130%);} to { transform:translateX(1280%);} }
-  @media (prefers-reduced-motion: reduce) { .bar { animation:none; left:8%; } }
+  section.tab{ display:none; animation:fade .35s ease; }
+  section.tab.on{ display:block; }
+  @keyframes fade{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
+
+  h2{ font-size:1.4em; margin:.2em 0 .1em; font-weight:800; }
+  h2 .n{ font-family:var(--mono); color:var(--accent); font-size:.66em; margin-right:10px; }
+  h3{ font-size:1.06em; margin:1.8em 0 .3em; color:var(--ink); }
+  h3 .n{ font-family:var(--mono); color:var(--accent2); font-size:.85em; margin-right:8px; }
+  .lede{ color:var(--dim); font-size:16px; max-width:900px; }
+  p{ max-width:980px; }
+  .small,.sub{ font-size:13.5px; color:var(--dim); max-width:980px; }
+
+  /* cards / panels / callouts */
+  .panel{ background:linear-gradient(180deg,var(--panel),var(--bg2)); border:1px solid var(--line);
+    border-radius:14px; padding:18px 22px; margin:18px 0; }
+  .callout{ border-left:3px solid var(--accent); background:rgba(90,209,200,.07); padding:12px 16px;
+    border-radius:0 10px 10px 0; margin:14px 0; }
+  .callout.warn{ border-color:var(--gold); background:rgba(255,216,107,.07); }
+  .callout.host{ border-color:var(--purple); background:rgba(201,139,255,.08); }
+  .callout .who{ font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); display:block; margin-bottom:3px; }
+  .callout.warn .who{ color:var(--gold); } .callout.host .who{ color:var(--purple); }
+  details.cl{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:4px 16px; margin:14px 0; }
+  details.cl summary{ cursor:pointer; font-weight:700; padding:8px 0; color:var(--accent); }
+  details.cl .sub{ margin:6px 0 12px; }
+
+  /* tables */
+  table{ border-collapse:collapse; width:100%; font-size:13.7px; margin:14px 0; }
+  th,td{ text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th{ color:var(--accent); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; background:var(--panel2); }
+  tr:hover td{ background:rgba(122,162,255,.05); }
+  td code, th code{ background:transparent; padding:0; color:var(--accent); }
+
+  /* distribution pills/tags */
+  .pill{ display:inline-block; padding:2px 9px; border-radius:7px; font-size:11.5px; border:1px solid; margin:1px 3px 1px 0; white-space:nowrap; font-family:var(--mono); }
+  .prep{ color:var(--green); border-color:var(--green); background:rgba(70,211,154,.08); }
+  .ptp { color:var(--accent2); border-color:var(--accent2); background:rgba(122,162,255,.08); }
+  .psp { color:var(--gold); border-color:var(--gold); background:rgba(255,216,107,.08); }
+  .pcomm{ color:var(--red); border-color:var(--red); background:rgba(255,107,129,.08); }
+  .phost{ color:var(--purple); border-color:var(--purple); background:rgba(201,139,255,.08); }
+  .pio { color:var(--dim); border-color:var(--line2); }
+  .legend{ display:flex; flex-wrap:wrap; gap:7px; align-items:center; margin:12px 0; }
+
+  /* mermaid figures: light "screenshot" card on the dark page (keeps the existing light node fills) */
+  .fig{ background:#f7f9fc; border:1px solid var(--line2); border-radius:14px; padding:12px 14px; margin:16px 0; overflow-x:auto; box-shadow:0 8px 30px rgba(0,0,0,.35); }
+  .frcap{ font-size:13px; color:var(--dim); margin:0 0 6px 2px; }
+  pre.mermaid{ background:transparent; text-align:center; line-height:normal; margin:0; }
+  pre.mermaid svg{ max-width:100%; height:auto; }
+  .mermaid .edgePaths path,.mermaid .flowchart-link{ stroke-dasharray:7 5; animation:dashflow .9s linear infinite; }
+  @keyframes dashflow{ to{ stroke-dashoffset:-24; } }
+
+  /* worked-example to-scale strips */
+  .strip{ display:flex; height:42px; border:1px solid var(--line2); border-radius:8px; overflow:hidden; font-size:12.5px; text-align:center; }
+  .strip div{ display:flex; align-items:center; justify-content:center; border-right:1px solid rgba(0,0,0,.25); min-width:0; overflow:hidden; white-space:nowrap; padding:0 2px; color:#10141f; font-weight:600; }
+
+  /* steady-state pipeline */
+  .pipe{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .lane{ display:flex; align-items:center; margin:8px 0; gap:10px; }
+  .lane .who{ width:300px; font-size:12.5px; color:var(--dim); flex:none; }
+  .slot{ flex:1; height:26px; border-radius:6px; position:relative; overflow:hidden; background:var(--bg2); border:1px solid var(--line); }
+  .bar{ position:absolute; top:3px; bottom:3px; width:8%; border-radius:5px; opacity:.95; animation:slide 7s linear infinite; }
+  .bq{ background:rgba(122,162,255,.5); border:1px solid var(--accent2); }
+  .bk{ background:rgba(70,211,154,.5); border:1px solid var(--green); }
+  .bm{ background:rgba(201,139,255,.5); border:1px solid var(--purple); }
+  .bw{ background:rgba(255,216,107,.5); border:1px solid var(--gold); }
+  @keyframes slide{ from{ transform:translateX(-130%);} to{ transform:translateX(1280%);} }
+
+  /* interactive timing chart */
+  .tctl{ display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin:10px 0 4px; }
+  .tlegend{ display:flex; gap:14px; font-size:12.5px; color:var(--dim); }
+  .tlegend span{ display:inline-flex; align-items:center; gap:6px; }
+  .sw{ width:14px; height:14px; border-radius:4px; display:inline-block; }
+  .sw.compute{ background:linear-gradient(90deg,var(--accent),var(--accent2)); }
+  .sw.ccl{ background:linear-gradient(90deg,var(--red),#ff9baa); }
+  .sw.other{ background:var(--line2); }
+  .tchart{ margin:14px 0 6px; }
+  .trow{ display:flex; align-items:center; gap:12px; margin:6px 0; cursor:pointer; transition:.12s; border-radius:8px; }
+  .trow .nm{ width:200px; flex:none; font-size:13px; text-align:right; color:var(--ink); }
+  .ttrack{ flex:1; height:30px; background:var(--bg2); border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  .tbar{ height:100%; width:0; border-radius:6px; transition:width 1s cubic-bezier(.2,.7,.2,1);
+    display:flex; align-items:center; padding-left:11px; font-size:12.5px; font-weight:800; white-space:nowrap; }
+  .tbar.compute{ background:linear-gradient(90deg,var(--accent),var(--accent2)); color:#04120f; }
+  .tbar.ccl{ background:linear-gradient(90deg,var(--red),#ff9baa); color:#2a0008; }
+  .tbar.other{ background:var(--line2); color:var(--ink); }
+  .trow .pc{ width:64px; flex:none; font-family:var(--mono); font-size:12.5px; color:var(--dim); }
+  .trow:hover{ background:rgba(122,162,255,.06); }
+  .trow.sel .nm{ color:var(--accent); font-weight:700; }
+  .tcap{ min-height:44px; font-size:14px; background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:11px 15px; margin-top:10px; }
+  .tcap .lbl{ font-family:var(--mono); font-size:11px; color:var(--accent); text-transform:uppercase; letter-spacing:.07em; margin-right:8px; }
+
+  footer{ text-align:center; color:var(--dim); font-size:12.5px; margin-top:40px; padding-top:18px; border-top:1px solid var(--line); }
+  footer button{ font:inherit; padding:5px 14px; border:1px solid var(--line2); border-radius:8px; background:var(--panel); color:var(--dim); cursor:pointer; }
+  body.still .edgePaths path, body.still .flowchart-link, body.still .bar, body.still .tbar{ animation:none!important; transition:none!important; }
+  @media (prefers-reduced-motion: reduce){ .edgePaths path,.flowchart-link,.bar{ animation:none!important; } }
 </style>
 </head>
 <body>
 <main>
 
-<h1>DeepSeek&nbsp;V3.2 MLA &mdash; the DSA layer as an op graph</h1>
-<p class="sub">
-Source: <code>models/demos/deepseek_v32/tt/mla/mla.py</code> (the <code>ttMLA</code> subclass) +
-<code>tt/ops.py</code> (thin wrappers over the now-landed C++ ops), exercised by
-<code>tests/test_mla.py::test_v32_mla_vs_cpu_reference</code> and <code>…_chunked_…</code>.
-V3.2 MLA = the v3 dense MLA (<code>deepseek_v3_d_p</code>) <b>plus</b> DeepSeek Sparse Attention (DSA): a lightning
-<b>indexer</b> proposes top-k keys, and ring SDPA is swapped for <code>sparse_mla</code> over just those keys.
-Nodes below are <b>ops</b>; edges are <b>tensors</b> labelled with their shapes; node colour is the <b>distribution</b>
-(see legend). Edges animate in the direction data flows.</p>
-<p class="sub"><b>Updated 2026-06-16</b> to reflect the device-op port (status.md Step 6) <b>and the on-device gather (Step 7)</b>:
-the indexer is <b>fully on device</b> (stems, RoPE, key cache, <code>indexer_score</code>, <code>topk_large_indices</code>),
-<code>sparse_mla</code> is the <code>ttnn.transformer.sparse_sdpa</code> <b>device</b> op run SPMD per chip, and the latent
-prefix it consumes is now <b>gathered entirely on device</b> (no host readback) — with the <code>indices</code> SP-reshard
-done via <code>ttnn.mesh_partition</code>. <b>The DSA path no longer touches the host.</b> This report focuses on the
-<b>chunked-prefill</b> path.</p>
-<p class="sub"><b>Updated 2026-06-17</b>: the <b>chunked-prefill DSA path now runs on multi-chip SP&gt;1</b> (validated on LoudBox
-sp2×tp4 and sp4×tp2, chunked seq4k PCC ≈ 0.997). The prior guard that forced 2×2 chunked back to 1×4 is <b>removed</b>: the
-root cause was <code>_gather_kvpe_prefix</code>'s un-rotate using <code>reshape</code>+<code>permute</code>, which leaves the
-latent prefix <b>physically non-contiguous</b> (a strided view). <code>to_torch</code> honours the strides — so every
-host readback looked correct (0.9998) — but <code>sparse_sdpa</code>'s reader consumes <b>raw physical order</b> and
-silently read garbage. The un-rotate now <b>concatenates the contiguous per-(slab,chip) slabs</b> into a fresh contiguous
-tensor. The device tests are also now <b>hardware-adaptive</b> (<code>tests/mesh_utils.py</code>, exact device-count match):
-QuietBox single / 1×4 / 2×2, LoudBox sp8×tp1 / sp4×tp2 / sp2×tp4, Galaxy sp8×tp4.</p>
-<p class="sub"><b>Updated 2026-06-18</b>: the indexer is now <b>TP-head-sharded</b> (change B / backlog 21, see §4). It used to
-run replicated at all <code>H_idx=64</code> heads, forcing head-streaming (<code>HB=16</code>) and ~1.85% matmul util
-(802 ms, 96% of the layer at sp4×tp2). Sharding the heads across TP (<code>H_idx/tp</code> per chip, all-reduce the partial
-logits before top-k) keeps them L1-resident at <code>HB=0</code> → <b>util 75.2%, indexer 9.9 ms, layer 839→~63 ms</b>; gate
-green (indexer-vs-ref PCC 0.96–0.99 at tp=2/4). The partial-logit all-reduce is the new sub-cost (~19.5 ms, 8.4% of the
-512 GB/s link — overhead-bound). Note the grid-aligned q/w/k <b>multicast is off</b> in the model: it needs
-<code>groups (=Sqt/QC) == grid.y</code>, but the indexer SP-gathers queries to <code>glob</code> (groups=80 ≫ grid.y=10);
-it engages only at the per-chip 640-query shape (sp=8 with SP-sharded queries). Follow-ups in <code>INDEXER_B_REPORT.md</code>.</p>
+<header class="hero">
+  <div class="eyebrow">DeepSeek&nbsp;V3.2 · DeepSeek Sparse Attention</div>
+  <h1>The MLA layer as an <span class="grad">op graph</span></h1>
+  <p class="tagline">V3.2 MLA is the v3 dense MLA (<code>deepseek_v3_d_p</code>) <b>plus</b> DSA: a lightning <b>indexer</b>
+  proposes the top-k keys, then ring SDPA is replaced by <code>sparse_mla</code> over just those keys. This report traces the
+  <b>chunked-prefill</b> path — fully on device — from <code>tt/mla/mla.py</code> (<code>ttMLA</code>) and
+  <code>tt/ops.py</code>.</p>
+  <div class="eq">score[s,t] = Σ<sub>h</sub> <u>w[s,h]</u> · relu(⟨<i>q[s,h]</i>, <b>k[t]</b>⟩)</div>
+</header>
 
-<div class="note">
-<b>The one structural fact.</b> <code>forward()</code> is a router (<code>mla.py:226</code>). When the global end position
-is <span class="pill phost">≤ index_topk (2048)</span> the selection is a no-op (every causal key fits in top-k), so it falls
-straight through to the unchanged <b>v3 dense</b> <code>super().forward</code> — and on the <b>chunked</b> path
-(<code>kv_actual_isl</code> passed) the indexer K-cache is still written (<code>mla.py:231-232</code>) so later chunks can score
-against the early prefix. Only when <span class="pill phost">end_pos &gt; 2048</span> does the real DSA path
-run: <code>_indexer_topk → _dsa_forward</code>.</div>
+<nav class="tabs" id="tabnav">
+  <button data-tab="overview"><span class="n">1</span>Overview</button>
+  <button data-tab="indexer"><span class="n">2</span>Indexer</button>
+  <button data-tab="attention"><span class="n">3</span>Attention</button>
+  <button data-tab="timing"><span class="n">4</span>Where time goes</button>
+  <button data-tab="tests"><span class="n">5</span>Tests</button>
+</nav>
 
-<h2>1. Symbols &amp; dimensions</h2>
-<table>
-<tr><th>Symbol</th><th>Meaning</th><th>Value (V3.2 671B)</th></tr>
-<tr><td><code>S</code> / <code>S_local</code></td><td>global / per-device seq (<code>S_local = S/sp</code>)</td><td>runtime</td></tr>
-<tr><td><code>sp</code> / <code>tp</code></td><td>devices on sequence- / tensor-parallel mesh axis</td><td><code>sp_axis=0, tp_axis=1</code>; DSA runs at <b>any SP</b> (multi-chip chunked fixed 2026-06-17)</td></tr>
-<tr><td><code>glob</code></td><td>global query/key count this chunk = <code>S_local·sp</code></td><td>runtime</td></tr>
-<tr><td><code>start_pos</code> / <code>end_pos</code></td><td><code>kv_actual_isl</code> / <code>start_pos + glob</code></td><td>runtime</td></tr>
-<tr><td><code>dim</code></td><td>model hidden (<code>hidden_size</code>)</td><td>7168</td></tr>
-<tr><td><code>H</code> / <code>H_local</code></td><td>attention heads / per-device (<code>H/tp</code>)</td><td>128 / 32 @ tp=4</td></tr>
-<tr><td><code>q_lora_rank</code></td><td>query LoRA rank</td><td>1536</td></tr>
-<tr><td><code>kv_lora_rank</code> (c)</td><td>KV latent rank (= V latent width)</td><td>512</td></tr>
-<tr><td><code>qk_nope</code> / <code>qk_rope</code> / <code>qk_head</code></td><td>Q/K nope / rope / total per-head</td><td>128 / 64 / 192</td></tr>
-<tr><td><code>v_head_dim</code></td><td>value per-head dim (after <code>wkv_b2</code>)</td><td>128</td></tr>
-<tr><td><code>kvpe</code></td><td>cached latent width = <code>kv_lora_rank + qk_rope</code></td><td><b>576</b></td></tr>
-<tr><td><code>H_idx</code></td><td>indexer heads (<code>index_n_heads</code>)</td><td>64</td></tr>
-<tr><td><code>D_idx</code></td><td>indexer head dim (<code>index_head_dim</code>); rope on first 64</td><td>128</td></tr>
-<tr><td><code>k</code> (κ)</td><td>kept keys = <code>min(index_topk, end_pos)</code></td><td>≤ 2048</td></tr>
-</table>
+<!-- ============================ 1 · OVERVIEW ============================ -->
+<section class="tab" data-tab="overview">
+  <h2><span class="n">§1</span>Overview &amp; the router</h2>
+  <p class="lede">Nodes in the graphs are <b>ops</b>; edges are <b>tensors</b> labelled with their shapes; node colour is the
+  <b>distribution</b> across the mesh (see §1.2). Edges animate in the direction data flows. The DSA path is entirely on
+  device — stems, RoPE, key cache, <code>indexer_score</code>, <code>topk_large_indices</code> and <code>sparse_sdpa</code>
+  all run SPMD per chip, with no host round-trip.</p>
 
-<h2>2. Distribution legend</h2>
-<p>Every node is coloured by how its <i>output tensor</i> is laid out across the mesh. Mesh entry/exit activation is
-<code>[1, 1, S/sp, dim/tp]</code> — SP on the sequence dim, TP on the hidden dim.</p>
-<div class="legend">
-  <span class="pill prep">🟩 replicated (across TP)</span>
-  <span class="pill ptp">🟦 TP-sharded (heads or hidden)</span>
-  <span class="pill psp">🟧 SP-sharded (sequence)</span>
-  <span class="pill pcomm">🟥 CCL collective (comm)</span>
-  <span class="pill phost">🏠 host (CPU / control-flow decision)</span>
-  <span class="pill io">⬜ mesh I/O activation</span>
-</div>
-<p class="sub"><b>Layout marker (orthogonal to colour).</b> 🟫 on an edge = that tensor is <b>ROW_MAJOR</b>; unmarked = TILE.
-The DSA device ops are ROW_MAJOR (<code>indexer_score</code> emits RM logits → <code>topk_large_indices</code> RM uint32
-indices → <code>sparse_sdpa</code> RM q/kv/idx/out); inside <code>sparse_mla</code> the absorbed q is converted TILE→RM on
-the way in and the output RM→TILE on the way out for the <code>wkv_b2</code> linear. Everything else (v3 linears, norms,
-RoPE, cache writes) is TILE.</p>
-<p class="sub">Edge labels carry the <b>symbolic</b> shape; the <code>↳</code> line below it is the <b>concrete</b> shape for the
-§7 runtime (<b>50k cached + 5k chunk</b>, <code>sp=8, tp=4</code>, 50k=50·1024, 5k=5·1024:
-<code>S/sp=640, dim/tp=1792, H/tp=32, glob=5120, end_pos=56320, k=2048</code>). <b>Dimension assumptions kept from the
-original report:</b> <code>tp=4 &lt; sp=8</code>, 50k cached prefix, 5k chunk. Note the SP all-gathers in the indexer are
-<b>real</b> at sp=8 — per-device tensors are <code>S/sp=640</code> until the gather, then jump to the global
-<code>glob=5120</code>.</p>
-<div class="good"><b>The DSA path is now fully on device</b> (status.md Step 6 + Step 7). The three ops in <code>tt/ops.py</code>
-that were host/composed workarounds are thin wrappers over <b>C++ device ops</b>:
-<code>indexer_logits</code>→<code>ttnn.experimental.indexer_score</code>,
-<code>topk_indices</code>→<code>ttnn.experimental.topk_large_indices</code>,
-<code>sparse_mla</code>→<code>ttnn.transformer.sparse_sdpa</code>. <b>Step 7</b> removed the last host hop: the latent prefix
-feeding <code>sparse_mla</code> is gathered on device (<code>to_memory_config</code> ND→interleaved → SP <code>all_gather</code>
-→ <code>typecast</code> bf8→bf16 → <code>to_layout</code> TILE→RM → on-device block-cyclic un-rotate), and the
-<code>indices</code> SP-reshard uses <code>ttnn.mesh_partition</code> (the inverse of all-gather). No tensor leaves the
-device. Remaining C++ follow-up (perf, not correctness): the SP-ring + full device-residency that would avoid materializing
-the full-T replica (backlog 12) — see the dedicated <code>kvpe_sparse_pipeline_report.html</code>.</div>
+  <div class="callout host"><span class="who">the one structural fact</span>
+  <code>forward()</code> is a router. When the global end position is <span class="pill phost">≤ index_topk (2048)</span>
+  every causal key already fits in the top-k, so selection is a no-op and the layer falls through to the unchanged <b>v3
+  dense</b> <code>super().forward</code> — though on the chunked path the indexer K-cache is still written, so later chunks can
+  score against the early prefix. Only when <span class="pill phost">end_pos &gt; 2048</span> does the real DSA path run:
+  <code>_indexer_topk → _dsa_forward</code>.</div>
 
-<h2>3. Top-level <code>forward()</code> — the router</h2>
-<p class="frcap">Decision at <code>mla.py:230</code>. Dense passthrough re-uses all of v3 (see <code>MLA_layer_v3.md</code>);
-DSA is the new path.</p>
-<div class="fr"><pre class="mermaid">
+  <details class="cl"><summary>Change history</summary>
+    <p class="sub"><b>2026-06-16</b> — device-op port (Step 6) and on-device gather (Step 7): the indexer became fully on
+    device and <code>sparse_mla</code> became the <code>ttnn.transformer.sparse_sdpa</code> device op; the latent prefix is
+    gathered on device and indices resharded via <code>ttnn.mesh_partition</code>. The DSA path no longer touches the host.</p>
+    <p class="sub"><b>2026-06-17</b> — chunked-prefill DSA runs on multi-chip SP&gt;1 (LoudBox sp2×tp4 / sp4×tp2, seq4k
+    PCC ≈ 0.997). Prior 2×2 guard root cause: <code>_gather_kvpe_prefix</code>'s un-rotate used <code>reshape</code>+<code>permute</code>
+    (a strided view) that <code>sparse_sdpa</code>'s raw-physical reader mis-read; it now <code>concat</code>s contiguous slabs.</p>
+    <p class="sub"><b>2026-06-18</b> — the indexer is now <b>TP-head-sharded</b> (change B, see §2). It was replicated at all
+    <code>H_idx=64</code> heads, which forced head-streaming (<code>HB=16</code>) and ~1.85% matmul util (802 ms, 96% of the
+    layer at sp4×tp2). Sharding heads across TP and all-reducing the partial logits keeps them L1-resident
+    (<code>HB=0</code>) → <b>util 75.2%, indexer 9.9 ms, layer 839→~63 ms</b>; gate green (PCC 0.96–0.99 at tp=2/4). The
+    partial-logit all-reduce is the new sub-cost (~19.5 ms) — see §4 and <code>INDEXER_B_REPORT.md</code>.</p>
+  </details>
+
+  <h3><span class="n">1.1</span>Symbols &amp; dimensions</h3>
+  <table>
+  <tr><th>Symbol</th><th>Meaning</th><th>Value (V3.2 671B)</th></tr>
+  <tr><td><code>S</code> / <code>S_local</code></td><td>global / per-device seq (<code>S_local = S/sp</code>)</td><td>runtime</td></tr>
+  <tr><td><code>sp</code> / <code>tp</code></td><td>devices on the sequence- / tensor-parallel mesh axis</td><td><code>sp_axis=0, tp_axis=1</code>; DSA runs at any SP</td></tr>
+  <tr><td><code>glob</code></td><td>global query/key count this chunk = <code>S_local·sp</code></td><td>runtime</td></tr>
+  <tr><td><code>start_pos</code> / <code>end_pos</code></td><td><code>kv_actual_isl</code> / <code>start_pos + glob</code></td><td>runtime</td></tr>
+  <tr><td><code>dim</code></td><td>model hidden width (<code>hidden_size</code>)</td><td>7168</td></tr>
+  <tr><td><code>H</code> / <code>H_local</code></td><td>attention heads / per-device (<code>H/tp</code>)</td><td>128 / 32 @ tp=4</td></tr>
+  <tr><td><code>q_lora_rank</code></td><td>query LoRA rank</td><td>1536</td></tr>
+  <tr><td><code>kv_lora_rank</code> (c)</td><td>KV latent rank (= V latent width)</td><td>512</td></tr>
+  <tr><td><code>qk_nope/qk_rope/qk_head</code></td><td>Q/K nope / rope / total per-head</td><td>128 / 64 / 192</td></tr>
+  <tr><td><code>kvpe</code></td><td>cached latent width = <code>kv_lora_rank + qk_rope</code></td><td><b>576</b></td></tr>
+  <tr><td><code>H_idx</code></td><td>indexer heads (<code>index_n_heads</code>)</td><td>64</td></tr>
+  <tr><td><code>D_idx</code></td><td>indexer head dim; rope on first 64</td><td>128</td></tr>
+  <tr><td><code>k</code> (κ)</td><td>kept keys = <code>min(index_topk, end_pos)</code></td><td>≤ 2048</td></tr>
+  </table>
+
+  <h3><span class="n">1.2</span>Distribution &amp; layout legend</h3>
+  <p>Every node is coloured by how its <i>output tensor</i> is laid out across the mesh. Mesh entry/exit activation is
+  <code>[1, 1, S/sp, dim/tp]</code> — SP on the sequence dim, TP on the hidden dim.</p>
+  <div class="legend">
+    <span class="pill prep">replicated (across TP)</span>
+    <span class="pill ptp">TP-sharded (heads or hidden)</span>
+    <span class="pill psp">SP-sharded (sequence)</span>
+    <span class="pill pcomm">CCL collective (comm)</span>
+    <span class="pill phost">host (control-flow)</span>
+    <span class="pill pio">mesh I/O activation</span>
+  </div>
+  <p class="sub">Orthogonal to colour, <b>🟫 on an edge marks a ROW_MAJOR tensor</b>; unmarked is TILE. The three DSA device
+  ops are ROW_MAJOR end to end (<code>indexer_score</code> → <code>topk_large_indices</code> → <code>sparse_sdpa</code>);
+  everything else (v3 linears, norms, RoPE, cache writes) is TILE. The concrete <code>↳</code> shapes on every edge use the
+  §3.3 worked example: <b>50k cached + 5k chunk</b> at <code>sp=8, tp=4</code> → <code>S/sp=640, glob=5120, end_pos=56320,
+  k=2048</code>.</p>
+
+  <h3><span class="n">1.3</span>Top-level <code>forward()</code> — the router</h3>
+  <p class="frcap">Decision at <code>mla.py:230</code>. The dense passthrough re-uses all of v3; DSA is the new path.</p>
+  <div class="fig"><pre class="mermaid">
 flowchart TD
   X["hidden_states<br/>[1, 1, S/sp, dim/tp]<br/>↳ [1,1,640,1792]"]:::io
   DEC{"🏠 end_pos = kv_isl + S_local·sp<br/>&gt; index_topk (2048) ?<br/>↳ 56320 &gt; 2048 → yes"}:::host
@@ -195,23 +256,27 @@ flowchart TD
   classDef comm fill:#ffebee,stroke:#c62828,color:#000;
   classDef host fill:#f3e5f5,stroke:#6a1b9a,color:#000;
 </pre></div>
+</section>
 
-<h2>4. The indexer — selecting the top-k keys (<code>_indexer_topk</code>)</h2>
-<p>Three stems run off the same <code>hidden_states</code>: the <b>K stem</b> (cached, runs every chunk), the <b>Q stem</b>
-(reuses v3's q_a latent then the indexer's <code>wq_b</code>), and <b>weights_proj</b> (per-head score weights). Their dot
-product gives index logits; <code>indexer_score</code> fuses the causal mask, and <code>topk_large_indices</code> yields the
-indices. <b>Fully on device</b> — stems, RoPE, key cache, logits and top-k — no host (status.md backlog 6/19).</p>
-<p><b>Change B (backlog 21): the <code>H_idx=64</code> indexer heads are TP-sharded</b> (<code>H_idx/tp</code> per chip).
-<code>wq_b</code> is column-parallel and <code>weights_proj</code> is reduce-scattered on the head dim, so each chip scores
-only its heads into a <b>partial</b> logit; the partials are <b>all-reduced (SUM)</b> over <code>tp_axis</code> before
-top-k (the head-sum is separable, the <code>−inf</code> mask is head-independent so it survives). This keeps all
-<code>H_idx/tp</code> heads L1-resident (<code>HB=0</code>) → <b>indexer math-util 1.85%→75.2%, device 802→9.9 ms</b>
-(sp4×tp2). Cost: the partial-logit all-reduce adds ~19.5 ms (~2× the indexer; 8.4% of the 512 GB/s link).</p>
+<!-- ============================ 2 · INDEXER ============================ -->
+<section class="tab" data-tab="indexer">
+  <h2><span class="n">§2</span>Indexer — selecting the top-k keys</h2>
+  <p class="lede">Three stems run off the same <code>hidden_states</code>: the <b>K stem</b> (cached, every chunk), the
+  <b>Q stem</b> (reusing v3's q_a latent, then the indexer's <code>wq_b</code>), and <b>weights_proj</b>. Their dot product
+  gives the index logits; <code>indexer_score</code> fuses the causal mask; <code>topk_large_indices</code> emits the indices.
+  All on device — <code>_indexer_topk</code> touches no host.</p>
 
-<div class="fr"><pre class="mermaid">
+  <div class="callout"><span class="who">change B · backlog 21</span>
+  The <code>H_idx=64</code> indexer heads are <b>TP-sharded</b> — <code>H_idx/tp</code> per chip. <code>wq_b</code> is
+  column-parallel and <code>weights_proj</code> is reduce-scattered on the head dim, so each chip scores only its heads into a
+  <b>partial</b> logit; the partials are <b>all-reduced (SUM)</b> over <code>tp_axis</code> before top-k (the head-sum is
+  separable, and the <code>−inf</code> causal mask is head-independent so it survives). Keeping all <code>H_idx/tp</code> heads
+  L1-resident (<code>HB=0</code>) lifts <b class="hl">indexer math-util 1.85% → 75.2% and device time 802 → 9.9 ms</b>
+  (sp4×tp2). The trade-off — the partial-logit all-reduce — is the layer's new largest cost (~19.5 ms); see §4.</div>
+
+  <div class="fig"><pre class="mermaid">
 flowchart TD
   H["hidden_states<br/>[1,1,S/sp,dim/tp]"]:::io
-
   subgraph KSTEM["K stem — _indexer_write_k (every chunk, dense incl.)"]
     direction TB
     WK["ttnn.linear · _idx_wk<br/>[dim,D_idx] sharded on dim"]:::tp
@@ -224,8 +289,7 @@ flowchart TD
     KLN -->|"[1,1,S/sp,128]<br/>↳ [1,1,640,128]"| KAG -->|"[1,1,glob,128]<br/>↳ [1,1,5120,128]"| KROPE
     KROPE -->|"[1,1,glob,128]<br/>↳ [1,1,5120,128]"| KCAT
   end
-
-  subgraph QSTEM["Q stem (reuses v3 q_a latent; col-parallel wq_b → H_idx/tp heads/chip)"]
+  subgraph QSTEM["Q stem (col-parallel wq_b → H_idx/tp heads/chip)"]
     direction TB
     QA["ttnn.linear · q_a_proj"]:::tp
     QRS["_tp_rs_ag (TP)"]:::comm
@@ -238,7 +302,6 @@ flowchart TD
     QN -->|"[1,1,S/sp,1536]<br/>↳ [1,1,640,1536]"| QB -->|"[1,1,S/sp,H_idx·D_idx/tp]<br/>↳ [1,1,640,2048]"| QAG
     QAG -->|"[1,1,glob,H_idx·D_idx/tp]<br/>↳ [1,1,5120,2048]"| QH -->|"[1,H_idx/tp,glob,128]<br/>↳ [1,16,5120,128]"| QROPE
   end
-
   subgraph WSTEM["weights_proj (reduce-scatter on heads → H_idx/tp/chip)"]
     direction TB
     WP["ttnn.linear · _idx_wproj<br/>[dim,H_idx] sharded on dim"]:::tp
@@ -248,73 +311,67 @@ flowchart TD
     WP -->|"partial [1,1,S/sp,H_idx]<br/>↳ [1,1,640,64]"| WRS -->|"[1,1,S/sp,H_idx/tp]<br/>↳ [1,1,640,16]"| WAG
     WAG -->|"[1,1,glob,H_idx/tp]<br/>↳ [1,1,5120,16]"| WMUL
   end
-
   H --> WK
   H --> QA
   H --> WP
-
   LOG["ops.indexer_logits (device)<br/>indexer_score HB=0 (H_idx/tp resident)<br/>relu(q·kᵀ), head-reduce, causal -inf FUSED"]:::tp
   ALLRED["TP all-reduce(SUM) over tp_axis<br/>partial → full logits (RM→TILE→RM)"]:::comm
   TK["ops.topk_indices (device)<br/>topk_large_indices<br/>masked slots → 0xFFFFFFFF sentinel"]:::rep
   IDX["indices 🟫<br/>[1,1,glob,k] uint32 RM replicated<br/>↳ [1,1,5120,2048]"]:::io
-
   QROPE -->|"q_dev [1,H_idx/tp,glob,128] TILE<br/>↳ [1,16,5120,128]"| LOG
   KCAT  -->|"_index_kbuf [1,1,end_pos,128] TILE<br/>↳ [1,1,56320,128]"| LOG
   WMUL  -->|"wts [1,1,glob,H_idx/tp] → permute [1,H_idx/tp,glob,1]<br/>↳ [1,1,5120,16]"| LOG
   LOG -->|"🟫 PARTIAL logits [1,1,glob,end_pos] bf16<br/>(sum over this chip's H_idx/tp heads) ↳ [1,1,5120,56320]"| ALLRED
   ALLRED -->|"🟫 full logits [1,1,glob,end_pos] bf16 RM<br/>↳ [1,1,5120,56320]; future cols -inf"| TK
   TK -->|"🟫 k = min(2048,end_pos), mult. of 16<br/>↳ k = 2048 (uint32 RM)"| IDX
-
   classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
   classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
   classDef tp fill:#e3f2fd,stroke:#1565c0,color:#000;
   classDef sp fill:#fff3e0,stroke:#e65100,color:#000;
   classDef comm fill:#ffebee,stroke:#c62828,color:#000;
-  classDef host fill:#f3e5f5,stroke:#6a1b9a,color:#000;
 </pre></div>
 
-<h3>Why each stem is sharded the way it is</h3>
-<table>
-<tr><th>Weight</th><th>Layout on device</th><th>Why</th></tr>
-<tr><td><code>_idx_wk</code> <span class="pill ptp">in-sharded</span></td><td><code>[dim, D_idx]</code> uploaded transposed, sharded on <code>dim</code> across <code>tp_axis</code></td><td>contracts over hidden (which is TP-sharded) → per-chip partial, reduced by <code>_tp_rs_ag</code></td></tr>
-<tr><td><code>_idx_weights_proj</code> <span class="pill ptp">in-sharded</span></td><td><code>[dim, H_idx]</code> sharded on <code>dim</code></td><td>contraction over hidden → partial; <b>reduce-scattered on the head dim</b> (<code>rs_only</code>) → each chip keeps its <code>H_idx/tp</code> reduced head-weights (change B)</td></tr>
-<tr><td><code>_idx_wq_b</code> <span class="pill ptp">column-parallel</span></td><td><code>[q_lora_rank, H_idx·D_idx]</code> sharded on the <b>output</b> (<code>H_idx·D_idx</code>) across <code>tp_axis</code></td><td>consumes the replicated q-latent <code>qr</code> (no reduce); each chip builds <code>H_idx/tp</code> heads. Per-head partials are all-reduced after <code>indexer_score</code> (change B)</td></tr>
-<tr><td><code>k_norm</code> (w,b) <span class="pill prep">replicated</span></td><td><code>[D_idx]</code></td><td>runs on the 128-wide reduced key</td></tr>
-</table>
+  <h3><span class="n">2.1</span>How each stem is sharded</h3>
+  <table>
+  <tr><th>Weight</th><th>Layout on device</th><th>Why</th></tr>
+  <tr><td><code>_idx_wk</code> <span class="pill ptp">in-sharded</span></td><td><code>[dim, D_idx]</code> sharded on <code>dim</code> across <code>tp_axis</code></td><td>contracts over hidden (TP-sharded) → per-chip partial, reduced by <code>_tp_rs_ag</code></td></tr>
+  <tr><td><code>_idx_weights_proj</code> <span class="pill ptp">in-sharded</span></td><td><code>[dim, H_idx]</code> sharded on <code>dim</code></td><td>contracts over hidden → partial; then <b>reduce-scattered on the head dim</b> (<code>rs_only</code>) so each chip keeps its <code>H_idx/tp</code> reduced head-weights (change B)</td></tr>
+  <tr><td><code>_idx_wq_b</code> <span class="pill ptp">column-parallel</span></td><td><code>[q_lora_rank, H_idx·D_idx]</code> sharded on the <b>output</b> across <code>tp_axis</code></td><td>consumes the replicated q-latent (no reduce); each chip builds <code>H_idx/tp</code> heads. Per-head partials are all-reduced after <code>indexer_score</code> (change B)</td></tr>
+  <tr><td><code>k_norm</code> (w,b) <span class="pill prep">replicated</span></td><td><code>[D_idx]</code></td><td>runs on the 128-wide reduced key</td></tr>
+  </table>
 
-<div class="note"><b>The score math</b> (<code>ops.indexer_logits</code>):
-$$ \text{logits}[s,t] = \sum_{h} w[s,h]\cdot \mathrm{relu}\big(\langle q[s,h],\,k[t]\rangle\big) $$
-The reference fuses this as DeepGEMM <code>fp8_mqa_logits</code>; the port now calls the merged
-<code>ttnn.experimental.indexer_score</code> C++ op (bf16, no fp8/Hadamard yet) — <b>causality is fused inside the
-op</b> from <code>chunk_start_idx</code> (future/pad columns set to <code>-inf</code>), so the caller no longer adds a triu
-mask. Output is <code>[1,1,Sq,Skv]</code> bf16 <b>ROW_MAJOR</b>, chaining straight into <code>topk_large_indices</code>; the
-<code>-inf</code> columns survive there as the <code>0xFFFFFFFF</code> sentinel (contiguous descending tail), which
-<code>sparse_mla</code> masks. Keys are shared across all <code>H_idx</code> heads (MQA), so a single <code>_index_kbuf</code>
-serves every head.
-<br/><br/><b>TP head decomposition (change B).</b> The head-sum is separable, so with the heads TP-sharded each chip
-computes a partial <span style="white-space:nowrap">\( \text{logits}_c[s,t] = \sum_{h\in c}\, w[s,h]\cdot\mathrm{relu}(\langle q[s,h], k[t]\rangle) \)</span>
-and an all-reduce sums them to the full logit. <code>relu</code> is per-head (applied before the weighted sum) and the
-<code>−inf</code> causal mask is head-independent, so it is identical on every partial and survives the sum. The op
-accumulates the head-MAC in <b>bf16 DEST</b> (fp32 dest-accum is disallowed by the custom LLK); the cross-device
-<code>reduce_scatter</code> accumulates in fp32, so the split sum matches the replicated 64-head result
-(indexer-vs-reference PCC 0.96–0.99 at tp=2/4, = the tp=1 baseline).</div>
+  <h3><span class="n">2.2</span>The score math</h3>
+  <div class="callout"><span class="who">ops.indexer_logits</span>
+  $$ \text{logits}[s,t] = \sum_{h} w[s,h]\cdot \mathrm{relu}\big(\langle q[s,h],\,k[t]\rangle\big) $$
+  The reference fuses this as DeepGEMM <code>fp8_mqa_logits</code>; the port calls
+  <code>ttnn.experimental.indexer_score</code> (bf16, no fp8/Hadamard yet). <b>Causality is fused</b> from
+  <code>chunk_start_idx</code> (future/pad columns set to <code>-inf</code>), so the caller adds no triu mask. The output is
+  <code>[1,1,Sq,Skv]</code> bf16 <b>ROW_MAJOR</b>, chaining straight into <code>topk_large_indices</code>, where the
+  <code>-inf</code> columns survive as the <code>0xFFFFFFFF</code> sentinel. Keys are MQA-shared across all heads, so one
+  <code>_index_kbuf</code> serves every head.
+  <br/><br/><b>Why the TP split is exact.</b> The head-sum is separable, so each chip computes a partial
+  <span style="white-space:nowrap">\( \text{logits}_c[s,t] = \sum_{h\in c} w[s,h]\cdot\mathrm{relu}(\langle q[s,h], k[t]\rangle) \)</span>
+  and the all-reduce sums them. <code>relu</code> is per-head (applied before the weighted sum), and the <code>−inf</code> mask
+  is head-independent, so it is identical on every partial and survives. The op accumulates the head-MAC in <b>bf16 DEST</b>
+  (fp32 dest-accum is disallowed by the custom LLK), but the cross-device <code>reduce_scatter</code> accumulates in fp32, so
+  the split sum matches the replicated 64-head result — indexer-vs-reference PCC 0.96–0.99 at tp=2/4, equal to the tp=1
+  baseline.</div>
+</section>
 
-<h2>5. Sparse attention forward (<code>_dsa_forward</code>)</h2>
-<p>Structurally this is v3's <code>forward</code> with the ring SDPA replaced by <code>ops.sparse_mla</code> (now the
-<code>ttnn.transformer.sparse_sdpa</code> <b>device</b> op): Q is built absorbed (latent 512 ++ rope 64 = 576), KV is built +
-cached exactly as v3, then attention runs over <b>only the k selected latents</b>. Like v3's chunked path it keeps attention
-latent and applies <code>wkv_b2</code> <i>after</i>. The <b>chunked</b> cache write is
-<code>update_padded_kv_cache</code> (block-cyclic across SP); the latent prefix for the op is then gathered and un-rotated to
-natural order <b>on device</b> (<code>_gather_kvpe_prefix</code>), with no host round-trip. The un-rotate must yield a
-<b>physically contiguous</b> tensor — it <code>concat</code>s the per-(slab,chip) slabs rather than
-<code>reshape</code>+<code>permute</code> (a strided view) — because <code>sparse_sdpa</code> reads the prefix in raw
-physical order.</p>
+<!-- ============================ 3 · ATTENTION ============================ -->
+<section class="tab" data-tab="attention">
+  <h2><span class="n">§3</span>Attention — <code>sparse_mla</code> over the selected keys</h2>
+  <p class="lede">Structurally this is v3's <code>forward</code> with the ring SDPA replaced by <code>ops.sparse_mla</code> (the
+  <code>ttnn.transformer.sparse_sdpa</code> device op): Q is built absorbed (latent 512 ++ rope 64 = 576), KV is built and
+  cached exactly as in v3, then attention runs over <b>only the k selected latents</b>. The chunked cache write is
+  <code>update_padded_kv_cache</code> (block-cyclic across SP); the latent prefix is then gathered and un-rotated to natural
+  order <b>on device</b>, concatenating contiguous per-(slab,chip) slabs since <code>sparse_sdpa</code> reads raw physical
+  order.</p>
 
-<div class="fr"><pre class="mermaid">
+  <div class="fig"><pre class="mermaid">
 flowchart TD
   H["hidden_states<br/>[1,1,S/sp,dim/tp]"]:::io
-  IDX["indices [1,1,glob,k]<br/>(from §4)"]:::io
-
+  IDX["indices [1,1,glob,k]<br/>(from §2)"]:::io
   subgraph Q["Q path → absorbed latent query"]
     direction TB
     QA["linear q_a_proj"]:::tp
@@ -331,7 +388,6 @@ flowchart TD
     QSL -->|"nope [..,128]<br/>↳ [1,32,640,128]"| WB1 -->|"[..,512]<br/>↳ [1,32,640,512]"| QCC
     QSL -->|"rope [..,64]<br/>↳ [1,32,640,64]"| QRP -->|"[..,64]<br/>↳ [1,32,640,64]"| QCC
   end
-
   subgraph KV["KV path → cached latent"]
     direction TB
     KVA["linear kv_a_proj_with_mqa"]:::tp
@@ -346,12 +402,10 @@ flowchart TD
     KVSL -->|"rope [..,64]<br/>↳ [1,1,640,64]"| KRP -->|"[..,64]<br/>↳ [1,1,640,64]"| KVCC
     KVCC -->|"[1,1,S/sp,576]<br/>↳ [1,1,640,576]"| KB8
   end
-
   H --> QA
   H --> KVA
-
   CACHE["KVPE cache write<br/>single-shot: fill_cache_for_user_<br/>chunked: update_padded_kv_cache"]:::sp
-  GATHER["on-device latent gather (no host)<br/>chunked: _gather_kvpe_prefix — ND→INTER · SP all_gather ·<br/>typecast bf8→bf16 · TILE→RM · un-rotate (concat→contiguous)<br/>single-shot: SP all_gather + to_layout RM"]:::comm
+  GATHER["on-device latent gather (no host)<br/>chunked: _gather_kvpe_prefix — ND→INTER · SP all_gather ·<br/>typecast bf8→bf16 · TILE→RM · un-rotate (concat→contiguous)"]:::comm
   IRS["ttnn.mesh_partition (device, sp&gt;1)<br/>replicated → SP-sharded on dim2<br/>[1,1,glob,k] → [1,1,S/sp,k]"]:::comm
   SMLA["ttnn.transformer.sparse_sdpa (device, 🟫RM-only)<br/>SPMD per chip: gather k latents + online-softmax<br/>V = kv[..,:512]; sentinel-masked"]:::tp
   WB2["linear wkv_b2 → v_head_dim 128"]:::tp
@@ -359,167 +413,104 @@ flowchart TD
   OP["linear o_proj (in-sharded)"]:::tp
   ORS["_tp_rs_ag (rs_only) reduce_scatter"]:::comm
   OUT["out [1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"]:::io
-
   KB8 --> CACHE
   CACHE -->|"kvpe_b8 written<br/>↳ chunk [1,1,640,576]"| GATHER
   GATHER -->|"🟫 kv [1,1,end_pos,576] RM bf16 replicated<br/>↳ [1,1,56320,576]"| SMLA
   QCC -->|"tt_q [1,H/tp,S/sp,576] TILE→🟫RM in op<br/>↳ [1,32,640,576]"| SMLA
   IDX -->|"🟫 indices [1,1,glob,k] RM replicated<br/>↳ [1,1,5120,2048]"| IRS
   IRS -->|"🟫 idx [1,1,S/sp,k] RM (matches q seq)<br/>↳ [1,1,640,2048]"| SMLA
-  SMLA -->|"attn_out latent [1,H/tp,S/sp,512]<br/>TILE (sparse_mla re-tilized RM→TILE) · ↳ [1,32,640,512]"| WB2
+  SMLA -->|"attn_out latent [1,H/tp,S/sp,512]<br/>TILE · ↳ [1,32,640,512]"| WB2
   WB2 -->|"[1,H/tp,S/sp,128]<br/>↳ [1,32,640,128]"| CH
   CH -->|"[1,1,S/sp,(H/tp)·128]<br/>↳ [1,1,640,4096]"| OP
   OP -->|"partial [1,1,S/sp,dim]<br/>↳ [1,1,640,7168]"| ORS
   ORS -->|"[1,1,S/sp,dim/tp]<br/>↳ [1,1,640,1792]"| OUT
-
   classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
   classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
   classDef tp fill:#e3f2fd,stroke:#1565c0,color:#000;
   classDef sp fill:#fff3e0,stroke:#e65100,color:#000;
   classDef comm fill:#ffebee,stroke:#c62828,color:#000;
-  classDef host fill:#f3e5f5,stroke:#6a1b9a,color:#000;
 </pre></div>
 
-<h3>What <code>sparse_mla</code> actually does</h3>
-<div class="note">
-FlashMLA sparse contract: <b>no causal flag</b> — the indices already encode causality (via the <code>0xFFFFFFFF</code>
-sentinel; <code>start_pos</code> is vestigial/ignored). Per query row it gathers its k selected latents and runs a tiny
-absorbed-MQA online-softmax:
-$$ O_{h,s} = \mathrm{softmax}_j\!\Big(\text{scale}\cdot\langle q_{h,s},\,kv[\mathrm{idx}_{s,j}]\rangle\Big)\cdot kv[\mathrm{idx}_{s,j}][{:}512] $$
-V is the first 512 dims of the same latent (MQA). This is now the merged <code>ttnn.transformer.sparse_sdpa</code>
-<b>device</b> op (Blackhole single-chip kernel), invoked <b>SPMD across the SP×TP mesh</b>: each chip runs the kernel over
-its own q shard, so q's distribution is preserved end-to-end — <b>heads on TP (dim1), sequence on SP (dim2)</b>, output the
-same. Preconditions the producer guarantees: per-chip <code>H</code> a multiple of 32 (128/tp=4=32), <code>indices</code>
-uint32 with sentinels as a contiguous tail, every row ≥1 valid key, all valid indices &lt;T. The op is <b>🟫 ROW_MAJOR-only</b>:
-the wrapper converts the absorbed q TILE→RM in and converts the latent output RM→TILE out for <code>wkv_b2</code>. Both the
-<code>kv</code> prefix and the <code>indices</code> SP-reshard are produced <b>on device</b> (the latent gather of §5's
-graph; <code>ttnn.mesh_partition</code> for indices) — no host hop. The remaining C++ follow-up is perf only: an SP-ring +
-full device-residency that avoids materializing the full-T replica (backlog 12).</div>
+  <h3><span class="n">3.1</span>What <code>sparse_mla</code> does</h3>
+  <div class="callout"><span class="who">flashmla sparse contract</span>
+  There is <b>no causal flag</b> — the indices already encode causality through the <code>0xFFFFFFFF</code> sentinel
+  (<code>start_pos</code> is vestigial). Per query row it gathers its k selected latents and runs a small absorbed-MQA
+  online-softmax:
+  $$ O_{h,s} = \mathrm{softmax}_j\!\Big(\text{scale}\cdot\langle q_{h,s},\,kv[\mathrm{idx}_{s,j}]\rangle\Big)\cdot kv[\mathrm{idx}_{s,j}][{:}512] $$
+  V is the first 512 dims of the same latent (MQA). The merged <code>ttnn.transformer.sparse_sdpa</code> device op is invoked
+  <b>SPMD across the SP×TP mesh</b> — heads on TP (dim1), sequence on SP (dim2). It is <b>🟫 ROW_MAJOR-only</b>; both the
+  <code>kv</code> prefix and the <code>indices</code> reshard are produced on device. The remaining C++ follow-up is
+  perf-only: an SP-ring that avoids materializing the full-T replica (backlog 12).</div>
 
-<h2>6. Op-by-op shape &amp; sharding table (DSA path)</h2>
-<table>
-<tr><th>#</th><th>Op</th><th>In → Out</th><th>Output sharding</th></tr>
-<tr><td>1</td><td><code>linear q_a_proj</code></td><td><code>[1,1,S/sp,dim/tp] → [..,1536]</code> partial</td><td><span class="pill ptp">TP partial</span></td></tr>
-<tr><td>2</td><td><code>_tp_rs_ag</code></td><td>reduce_scatter+all_gather</td><td><span class="pill pcomm">CCL</span> → <span class="pill prep">rep</span></td></tr>
-<tr><td>3</td><td><code>rms_norm q_a_layernorm</code></td><td><code>[..,1536]</code></td><td><span class="pill prep">replicated</span></td></tr>
-<tr><td>4</td><td><code>linear q_b_proj</code></td><td><code>[..,1536] → [..,H/tp·192]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
-<tr><td>5</td><td><code>nlp_create_qkv_heads</code></td><td><code>→ [1,H/tp,S/sp,192]</code></td><td><span class="pill ptp">TP</span> · <span class="pill psp">SP</span></td></tr>
-<tr><td>6</td><td><code>slice + linear wkv_b1</code></td><td><code>nope[128] → [..,512]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
-<tr><td>7</td><td><code>_apply_rope</code> (rope half)</td><td><code>[..,64]</code></td><td><span class="pill ptp">TP</span></td></tr>
-<tr><td>8</td><td><code>concat → tt_q</code></td><td><code>→ [1,H/tp,S/sp,576]</code></td><td><span class="pill ptp">TP</span> · <span class="pill psp">SP</span></td></tr>
-<tr><td>9</td><td><code>linear kv_a_proj_with_mqa</code></td><td><code>[..,dim/tp] → [1,1,S/sp,576]</code></td><td><span class="pill ptp">TP partial</span></td></tr>
-<tr><td>10</td><td><code>_tp_ag_reduce</code> (tp&gt;1)</td><td>all_gather(dim1)+fast_reduce_nc</td><td><span class="pill pcomm">CCL</span> → <span class="pill prep">rep</span></td></tr>
-<tr><td>11</td><td><code>slice + rms_norm kv_a_layernorm</code></td><td><code>nope[512]</code></td><td><span class="pill prep">replicated</span></td></tr>
-<tr><td>12</td><td><code>_apply_rope</code> + <code>concat</code></td><td><code>rope[64] → kvpe [1,1,S/sp,576]</code></td><td><span class="pill prep">rep</span> · <span class="pill psp">SP-seq</span></td></tr>
-<tr><td>13</td><td><code>typecast bf8 + cache write</code></td><td><code>fill_cache_for_user_</code> / <code>update_padded_kv_cache</code></td><td><span class="pill psp">SP-sharded cache</span></td></tr>
-<tr><td>14</td><td><code>_gather_kvpe_prefix</code> (on device)</td><td>chunked: <code>to_memory_config</code> ND→INTER · SP <code>all_gather</code> · <code>typecast</code> bf8→bf16 · <code>to_layout</code> RM · block-cyclic un-rotate (<code>concat</code> of contiguous per-(slab,chip) slabs → fresh contiguous tensor; a <code>reshape</code>+<code>permute</code> view is silently mis-read by <code>sparse_sdpa</code>) → <code>[1,1,end_pos,576]</code> 🟫RM; single-shot: <code>all_gather</code> + <code>to_layout</code></td><td><span class="pill pcomm">CCL+device</span> → <span class="pill prep">rep</span></td></tr>
-<tr><td>15a</td><td><code>ttnn.mesh_partition</code> indices (sp&gt;1)</td><td>🟫RM <code>[1,1,glob,k]</code> replicated → <code>[1,1,S/sp,k]</code> SP-sharded (dim2), on device</td><td><span class="pill pcomm">CCL</span> → <span class="pill psp">SP</span></td></tr>
-<tr><td>15b</td><td><code>ops.sparse_mla</code> (<code>sparse_sdpa</code>, device, 🟫RM-only)</td><td>q TILE→RM; <code>tt_q + kv + idx → [1,H/tp,S/sp,512]</code> RM→TILE; SPMD per chip</td><td><span class="pill ptp">TP</span>·<span class="pill psp">SP</span></td></tr>
-<tr><td>16</td><td><code>linear wkv_b2</code></td><td><code>[..,512] → [..,128]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
-<tr><td>17</td><td><code>nlp_concat_heads</code></td><td><code>→ [1,1,S/sp,(H/tp)·128]</code></td><td><span class="pill ptp">TP</span></td></tr>
-<tr><td>18</td><td><code>linear o_proj</code></td><td><code>→ [1,1,S/sp,dim]</code> partial</td><td><span class="pill ptp">TP partial</span></td></tr>
-<tr><td>19</td><td><code>_tp_rs_ag(rs_only)</code></td><td>reduce_scatter (dim3)</td><td><span class="pill pcomm">CCL</span> → <span class="pill psp">SP</span>·<span class="pill ptp">TP</span></td></tr>
-</table>
-<p class="sub">Symbolic shapes above; for the §7 runtime (<code>sp=8, tp=4</code>, 50k cached + 5k chunk):
-<code>S/sp=640</code>, <code>dim/tp=1792</code>, <code>H/tp=32</code>, <code>glob=5120</code>, <code>end_pos=56320</code>,
-<code>k=2048</code>.</p>
+  <h3><span class="n">3.2</span>Op-by-op shape &amp; sharding (DSA path)</h3>
+  <table>
+  <tr><th>#</th><th>Op</th><th>In → Out</th><th>Output sharding</th></tr>
+  <tr><td>1</td><td><code>linear q_a_proj</code></td><td><code>[1,1,S/sp,dim/tp] → [..,1536]</code> partial</td><td><span class="pill ptp">TP partial</span></td></tr>
+  <tr><td>2</td><td><code>_tp_rs_ag</code></td><td>reduce_scatter+all_gather</td><td><span class="pill pcomm">CCL</span> → <span class="pill prep">rep</span></td></tr>
+  <tr><td>3</td><td><code>rms_norm q_a_layernorm</code></td><td><code>[..,1536]</code></td><td><span class="pill prep">replicated</span></td></tr>
+  <tr><td>4</td><td><code>linear q_b_proj</code></td><td><code>[..,1536] → [..,H/tp·192]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
+  <tr><td>5</td><td><code>nlp_create_qkv_heads</code></td><td><code>→ [1,H/tp,S/sp,192]</code></td><td><span class="pill ptp">TP</span> · <span class="pill psp">SP</span></td></tr>
+  <tr><td>6</td><td><code>slice + linear wkv_b1</code></td><td><code>nope[128] → [..,512]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
+  <tr><td>7</td><td><code>_apply_rope</code> (rope half)</td><td><code>[..,64]</code></td><td><span class="pill ptp">TP</span></td></tr>
+  <tr><td>8</td><td><code>concat → tt_q</code></td><td><code>→ [1,H/tp,S/sp,576]</code></td><td><span class="pill ptp">TP</span> · <span class="pill psp">SP</span></td></tr>
+  <tr><td>9</td><td><code>linear kv_a_proj_with_mqa</code></td><td><code>[..,dim/tp] → [1,1,S/sp,576]</code></td><td><span class="pill ptp">TP partial</span></td></tr>
+  <tr><td>10</td><td><code>_tp_ag_reduce</code> (tp&gt;1)</td><td>all_gather(dim1)+fast_reduce_nc</td><td><span class="pill pcomm">CCL</span> → <span class="pill prep">rep</span></td></tr>
+  <tr><td>11</td><td><code>slice + rms_norm kv_a_layernorm</code></td><td><code>nope[512]</code></td><td><span class="pill prep">replicated</span></td></tr>
+  <tr><td>12</td><td><code>_apply_rope</code> + <code>concat</code></td><td><code>rope[64] → kvpe [1,1,S/sp,576]</code></td><td><span class="pill prep">rep</span> · <span class="pill psp">SP-seq</span></td></tr>
+  <tr><td>13</td><td><code>typecast bf8 + cache write</code></td><td><code>update_padded_kv_cache</code></td><td><span class="pill psp">SP-sharded cache</span></td></tr>
+  <tr><td>14</td><td><code>_gather_kvpe_prefix</code> (device)</td><td>SP <code>all_gather</code> · bf8→bf16 · TILE→RM · block-cyclic un-rotate (<code>concat</code> → contiguous) → <code>[1,1,end_pos,576]</code> 🟫RM</td><td><span class="pill pcomm">CCL+device</span> → <span class="pill prep">rep</span></td></tr>
+  <tr><td>15a</td><td><code>ttnn.mesh_partition</code> indices</td><td>🟫RM <code>[1,1,glob,k]</code> rep → <code>[1,1,S/sp,k]</code> SP-sharded</td><td><span class="pill pcomm">CCL</span> → <span class="pill psp">SP</span></td></tr>
+  <tr><td>15b</td><td><code>ops.sparse_mla</code> (<code>sparse_sdpa</code>, 🟫RM)</td><td><code>tt_q + kv + idx → [1,H/tp,S/sp,512]</code>; SPMD per chip</td><td><span class="pill ptp">TP</span>·<span class="pill psp">SP</span></td></tr>
+  <tr><td>16</td><td><code>linear wkv_b2</code></td><td><code>[..,512] → [..,128]</code></td><td><span class="pill ptp">TP (heads)</span></td></tr>
+  <tr><td>17</td><td><code>nlp_concat_heads</code></td><td><code>→ [1,1,S/sp,(H/tp)·128]</code></td><td><span class="pill ptp">TP</span></td></tr>
+  <tr><td>18</td><td><code>linear o_proj</code></td><td><code>→ [1,1,S/sp,dim]</code> partial</td><td><span class="pill ptp">TP partial</span></td></tr>
+  <tr><td>19</td><td><code>_tp_rs_ag(rs_only)</code></td><td>reduce_scatter (dim3)</td><td><span class="pill pcomm">CCL</span> → <span class="pill psp">SP</span>·<span class="pill ptp">TP</span></td></tr>
+  </table>
 
-<h2>7. Worked example — 50k cached, processing a fresh 5k chunk</h2>
-<p class="sub">Concrete trace with <code>kv_actual_isl = 51200</code> (50·1024), this chunk = 5120 tokens (5·1024), on an
-<code>8×4</code> mesh (<code>sp=8, tp=4</code>). Because <code>kv_actual_isl</code> is passed, this is the <b>chunked</b> path.
-(The DSA path — single-shot <b>and</b> chunked — is validated on multi-chip SP&gt;1: LoudBox sp2×tp4 and sp4×tp2, chunked
-seq4k PCC ≈ 0.997, after the un-rotate contiguity fix. <code>sp=8</code> here is illustrative — it exercises the general SP
-wiring, where the indexer all-gathers and the <code>indices</code> SP-reshard become real, not no-ops.)</p>
+  <h3><span class="n">3.3</span>Worked example — 50k cached, fresh 5k chunk</h3>
+  <p class="sub">A concrete trace with <code>kv_actual_isl = 51200</code> and this chunk = 5120 tokens, on an <code>8×4</code>
+  mesh (<code>sp=8, tp=4</code>). Because <code>kv_actual_isl</code> is passed, this is the chunked path. These are the shapes on
+  every edge's <code>↳</code> line throughout the report.</p>
+  <table>
+  <tr><th>Quantity</th><th>Value</th><th>Set by</th></tr>
+  <tr><td><code>seq_len_local = S/sp</code></td><td>640</td><td><code>hidden_states.shape[2]</code> (5120 ÷ sp=8)</td></tr>
+  <tr><td><code>start_pos = kv_actual_isl</code></td><td>51200</td><td>caller (tokens already cached)</td></tr>
+  <tr><td><code>glob = S_local·sp</code></td><td>5120</td><td>this chunk, global (640·8)</td></tr>
+  <tr><td><code>end_pos = start_pos + glob</code></td><td>56320</td><td>total valid prefix after this chunk</td></tr>
+  <tr><td>router decision</td><td><code>56320 &gt; 2048</code> → <b>DSA active</b></td><td><code>mla.py:205</code></td></tr>
+  <tr><td><code>k = min(index_topk, end_pos)</code></td><td><b>2048</b></td><td><code>mla.py:199</code></td></tr>
+  </table>
 
-<table>
-<tr><th>Quantity</th><th>Value</th><th>Set by</th></tr>
-<tr><td><code>seq_len_local = S/sp</code></td><td>640</td><td><code>hidden_states.shape[2]</code> (5120 chunk ÷ sp=8)</td></tr>
-<tr><td><code>start_pos = kv_actual_isl</code></td><td>51200</td><td>caller (tokens already cached)</td></tr>
-<tr><td><code>glob = S_local·sp</code></td><td>5120</td><td>this chunk, global (640·8)</td></tr>
-<tr><td><code>end_pos = start_pos + glob</code></td><td>56320</td><td>total valid prefix after this chunk</td></tr>
-<tr><td>router decision</td><td><code>56320 &gt; 2048</code> → <b>DSA active</b></td><td><code>mla.py:205</code></td></tr>
-<tr><td><code>k = min(index_topk, end_pos)</code></td><td><b>2048</b></td><td><code>mla.py:199</code></td></tr>
-</table>
+  <div class="callout"><span class="who">the selection, in one line</span>
+  Each of the <b>5120</b> new queries scores against up to <b>56320</b> causal keys, then keeps only its top <b>2048</b> — a
+  <b class="hl">~27.5× key reduction</b>. <code>sparse_mla</code> then attends 2048 keys per row, not 56320. That gap <i>is</i>
+  DeepSeek Sparse Attention; it widens with context (27.5× at 50k, ~64× at 128k).</div>
 
-<div class="note"><b>The selection, in one line.</b> Each of the <b>5120</b> new queries scores against up to <b>56320</b> causal
-keys, then keeps only its top <b>2048</b> — a <b>~27.5× key reduction</b>. <code>sparse_mla</code> then attends 2048 keys per
-row, not 56320. That gap <i>is</i> DeepSeek Sparse Attention; it widens with context (at 50k it is already 27.5×, at 128k it
-is ~64×).</div>
+  <p class="sub"><b>One query row's view</b> (row 5119, global position 56319): 56320 causal candidates; the indexer keeps the
+  2048 highest-scoring (anywhere in the prefix — not a window). The bottom strip is to scale — the purple sliver is what
+  <code>sparse_mla</code> actually computes over.</p>
+  <div class="strip">
+    <div style="flex:51200;background:var(--repbg)">cached prefix — 51200 keys</div>
+    <div style="flex:5120;background:var(--spbg)">this chunk — 5120</div>
+  </div>
+  <div class="strip" style="margin-top:6px">
+    <div style="flex:2048;background:var(--hostbg)">top-2048 selected (scattered across the 56320)</div>
+    <div style="flex:54272;background:#dfe4ee;color:#555">54272 keys masked out (not attended)</div>
+  </div>
+</section>
 
-<h3>Key tensors at this scenario</h3>
-<table>
-<tr><th>Stage</th><th>Tensor</th><th>Shape</th><th>Note</th></tr>
-<tr><td rowspan="3">indexer (§4)</td><td>index K-cache <code>_index_kbuf</code></td><td><code>[1,1,51200,128] → [1,1,56320,128]</code></td><td>this chunk's 5120 keys appended (rope'd at pos 51200…56319); replicated across TP, full-seq after SP gather</td></tr>
-<tr><td><code>q_dev</code> (index queries)</td><td><code>[1,16,5120,128]</code></td><td><code>H_idx/tp=16</code> heads/chip (TP-sharded, change B); <code>glob</code> queries (after SP all-gather)</td></tr>
-<tr><td><b><code>logits</code></b> 🟫</td><td><b><code>[1,1,5120,56320]</code></b> bf16 RM</td><td>5120 new queries × full 56320-key prefix — the heavy intermediate. Per chip a <b>partial</b> (16 heads); <b>all-reduced (SUM)</b> over TP to the full head-sum before top-k</td></tr>
-<tr><td>causality</td><td><b>fused</b> in <code>indexer_score</code> (<code>chunk_start_idx=51200</code>)</td><td>cols set to <code>-inf</code> in-op</td><td>row <i>s</i> (pos 51200+<i>s</i>) keeps keys ≤ 51200+<i>s</i>; no separate triu add</td></tr>
-<tr><td><b>indices</b> 🟫</td><td><b><code>indices</code></b></td><td><b><code>[1,1,5120,2048]</code></b> uint32 RM replicated</td><td>per-query top-2048 (the 27.5× crop); masked slots = <code>0xFFFFFFFF</code> sentinel. <b>Resharded inside <code>sparse_mla</code> to <code>[1,1,640,2048]</code> per chip</b> (SP dim2) to align with q's local seq</td></tr>
-<tr><td rowspan="4">attention (§5)</td><td><code>tt_q</code> (absorbed)</td><td><code>[1,32,640,576]</code></td><td>32 = H/tp heads; 640 = SP-sharded seq; 576 = latent 512 ++ rope 64</td></tr>
-<tr><td>this chunk's <code>kvpe</code></td><td><code>[1,1,640,576]</code> bf8</td><td>SP-sharded; written via <code>update_padded_kv_cache</code> at offset 51200</td></tr>
-<tr><td>latent prefix (on-device gather)</td><td>🟫RM <code>[1,1,56320,576]</code> replicated</td><td><code>_gather_kvpe_prefix</code>: block-cyclic cache un-rotated to natural order <b>on device</b> (no host) — backlog 9 done</td></tr>
-<tr><td><code>sparse_mla</code> out → <code>out</code></td><td><code>[1,32,640,512] → [1,1,640,1792]</code></td><td>device <code>sparse_sdpa</code> (gather 2048/row, online-softmax), then wkv_b2, concat, o_proj, reduce_scatter</td></tr>
-</table>
+<!-- ============================ 4 · WHERE TIME GOES ============================ -->
+<section class="tab" data-tab="timing">
+  <h2><span class="n">§4</span>Where the time goes <span style="font-size:.6em;color:var(--dim);font-weight:600">measured · sp4×tp2</span></h2>
+  <p class="lede">Per-op device timing from <code>test_mla_perf.py</code> under tracy (Blackhole p150, the §3.3 scenario at
+  <b>sp4×tp2</b> — 32 indexer heads/chip). <b class="hl">Device-collapsed critical path = 62.7 ms.</b> Convention: compute ops
+  take the <b>max</b> across the 8 chips, collectives the <b>mean</b>. Math-util = perf-model ideal ÷ actual (meaningful only
+  for matmul-bound ops). CCL throughput = wire bytes <code>(N−1)/N × buffer</code> ÷ time, against the <b>512 GB/s</b>
+  per-link peak.</p>
 
-<h3>One query row's view (row 5119, global position 56319)</h3>
-<p class="sub">It has 56320 causal candidates; the indexer keeps the 2048 highest-scoring (anywhere in the prefix — not a window).</p>
-<div class="strip">
-  <div style="flex:51200;background:var(--repbg);color:var(--rep)">cached prefix — 51200 keys 🟩</div>
-  <div style="flex:5120;background:var(--spbg);color:var(--sp)">this chunk — 5120 🟧</div>
-</div>
-<div class="strip" style="margin-top:6px">
-  <div style="flex:2048;background:var(--hostbg);color:var(--host)">top-2048 selected (scattered across the 56320)</div>
-  <div style="flex:54272;background:#f2f2f2;color:var(--muted)">54272 keys masked out (not attended)</div>
-</div>
-<p class="sub">Bottom strip is to scale: the purple sliver is what <code>sparse_mla</code> actually computes over.</p>
-
-<h2>8. Dataflow timeline (steady state, one DSA chunk)</h2>
-<p class="sub">Relative ordering of the three indexer stems (parallel) → logits/top-k → the attention front-end → sparse_mla
-→ epilogue. Bars are tensors moving between ops; colour = distribution.</p>
-<div class="pipe">
-  <div class="lane"><div class="who">K stem: wk → TP reduce → norm → SP gather → rope → cache</div><div class="slot">
-    <span class="bar bk" style="left:0"></span><span class="bar bk" style="left:11%;animation-delay:.4s"></span></div></div>
-  <div class="lane"><div class="who">Q stem: q_a → norm → wq_b → SP gather → heads → rope</div><div class="slot">
-    <span class="bar bq" style="left:2%;animation-delay:.1s"></span><span class="bar bq" style="left:13%;animation-delay:.5s"></span></div></div>
-  <div class="lane"><div class="who">weights_proj: wproj → TP reduce → SP gather → scale</div><div class="slot">
-    <span class="bar bw" style="left:4%;animation-delay:.2s"></span></div></div>
-  <div class="lane"><div class="who">indexer_score (HB=0, partial) → TP all-reduce → topk_large_indices</div><div class="slot">
-    <span class="bar bm" style="left:24%;animation-delay:1.2s"></span></div></div>
-  <div class="lane"><div class="who">DSA front-end: Q absorbed + KV cached</div><div class="slot">
-    <span class="bar bq" style="left:34%;animation-delay:1.8s"></span><span class="bar bw" style="left:38%;animation-delay:2s"></span></div></div>
-  <div class="lane"><div class="who">on-device latent gather → sparse_sdpa (device, SPMD)</div><div class="slot">
-    <span class="bar bk" style="left:50%;animation-delay:2.8s"></span></div></div>
-  <div class="lane"><div class="who">wkv_b2 → concat_heads → o_proj → reduce_scatter</div><div class="slot">
-    <span class="bar bq" style="left:64%;animation-delay:3.6s"></span><span class="bar bw" style="left:68%;animation-delay:3.8s"></span></div></div>
-</div>
-
-<h2>9. How the test exercises this</h2>
-<p><code>tests/test_mla.py</code> drives three regimes against the CPU reference (<code>MLACPU</code>, indexer fp8 path off
-for functional parity):</p>
-<table>
-<tr><th>Test / param</th><th>seq</th><th>Path taken</th><th>What it proves</th></tr>
-<tr><td><code>test_v32_mla_vs_cpu_reference</code> · seq256 / seq2k</td><td>≤ 2048</td><td>dense passthrough (v3)</td><td>DSA mask is zero over the causal region → v32 must match dense v3 (PCC ≥ 0.98)</td></tr>
-<tr><td>… · seq4k</td><td>4096</td><td><b>DSA active</b></td><td>device indexer + <code>sparse_mla</code> vs the CPU index mask; logs banded PCC for rows&lt;2048 vs ≥2048</td></tr>
-<tr><td><code>test_v32_mla_chunked_vs_cpu_reference</code></td><td>4k, chunk 1k</td><td>DSA + chunked cache</td><td>block-cyclic cache read-back (<code>concat</code> un-rotate → contiguous) feeds <code>sparse_mla</code>; per-chunk + KVPE PCC. Runs multi-chip (LoudBox sp2×tp4 / sp4×tp2)</td></tr>
-<tr><td><code>test_v32_mla_determinism</code></td><td>4096 ×3</td><td>DSA active</td><td>bit-exact run-to-run (PCC 1.0) across CCL reductions, the <code>sparse_sdpa</code> device op, and topk ties</td></tr>
-</table>
-<p class="sub">Meshes are chosen from the box at collection time (<code>tests/mesh_utils.py</code>, exact device-count match):
-QuietBox single / <code>1×4</code> (pure TP, <code>sp=1</code>) / <code>2×2</code>; LoudBox <code>sp8×tp1</code> /
-<code>sp4×tp2</code> / <code>sp2×tp4</code>; Galaxy <code>sp8×tp4</code> (prod TP=4, SP=8). At <code>sp&gt;1</code> the SP
-all-gathers and the <code>indices</code> SP-reshard are real, not no-ops. DSA runs <b>single-shot and chunked on multi-chip
-SP&gt;1</b> — chunked validated on LoudBox <code>sp2×tp4</code> and <code>sp4×tp2</code> (seq4k + 1k ≈ 0.997) after the
-un-rotate contiguity fix. Two configs are skipped for unrelated reasons: <b>seq256 / SP=8</b> (32 tok/chip is below the
-kvpe ND-shard minimum) and <b>chunked at TP=1</b> (the 128-head <code>nlp_concat_heads</code> epilogue overflows L1 without
-TP head-sharding).</p>
-
-<h2>10. Where the time goes (measured — sp4×tp2 chunked DSA layer)</h2>
-<p>Per-op device timing from <code>test_mla_perf.py</code> under tracy (Blackhole p150, the §7 scenario:
-5120-token chunk @ 51200 cached, <b>sp4×tp2</b> — so 32 indexer heads/chip, <i>not</i> the §7 sp8×tp4 numbers).
-<b>Device-collapsed critical path = 62.7 ms.</b> Convention: compute ops take the <b>max</b> across the 8 chips,
-collectives the <b>mean</b>. <b>Math-util</b> = perf-model ideal ÷ actual (meaningful only for matmul-bound ops;
-<code>top-k</code>/<code>sparse_sdpa</code> ship no perf model). <b>CCL throughput</b> = wire bytes
-(<code>(N−1)/N × buffer</code>) ÷ time, against the <b>512 GB/s</b> per-link peak.</p>
-
-<div class="fr"><pre class="mermaid">
+  <h3><span class="n">4.1</span>The layer as a flow, sized by time</h3>
+  <p class="frcap">Each node is annotated with its device time and share of the layer (compute = blue/teal, collective = red).</p>
+  <div class="fig"><pre class="mermaid">
 flowchart TD
   H["hidden_states"]:::io
   STEMS["indexer stems + RoPE<br/>K/Q/W linears · gathers · rope<br/><b>2.62 ms · 4%</b>"]:::tp
@@ -533,12 +524,10 @@ flowchart TD
   SDPA["sparse_sdpa<br/><b>9.12 ms · 15%</b><br/>no perf model"]:::tp
   EPI["epilogue<br/>wkv_b2 · concat · o_proj · RS<br/><b>1.66 ms · 3%</b><br/>o_proj 69% util"]:::tp
   OUT["out [1,1,S/sp,dim/tp]"]:::io
-
   H --> STEMS --> ISCORE --> AR --> TOPK --> RESHARD
   H --> QPATH --> SDPA
   H --> KVPATH --> GATHER --> SDPA
   RESHARD --> SDPA --> EPI --> OUT
-
   classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
   classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
   classDef tp fill:#e3f2fd,stroke:#1565c0,color:#000;
@@ -546,40 +535,142 @@ flowchart TD
   classDef comm fill:#ffebee,stroke:#c62828,color:#000;
 </pre></div>
 
-<table>
-<tr><th>Stage</th><th>Device time</th><th>% of layer</th><th>Note</th></tr>
-<tr><td><b>logits all-reduce</b></td><td>19.50 ms</td><td><b>31.1%</b></td><td>the cost change B adds; RS+AG ≈ 13.4 ms @ ~43 GB/s (<b>8% of link</b> → overhead-bound, not saturated) + ~6 ms RM↔TILE round-trip</td></tr>
-<tr><td><b>top-k</b> (<code>topk_large_indices</code>)</td><td>15.00 ms</td><td><b>23.9%</b></td><td>now the single largest op; next op-level target</td></tr>
-<tr><td><b>indexer_score</b></td><td>9.86 ms</td><td>15.7%</td><td><b>75% math-util</b> (HB=0, heads resident) — the win from change B</td></tr>
-<tr><td><b>sparse_sdpa</b></td><td>9.12 ms</td><td>14.5%</td><td>gather 2048 keys/row + online-softmax; no perf model</td></tr>
-<tr><td>indexer stems + RoPE</td><td>2.62 ms</td><td>4.2%</td><td>K/Q/W linears (24–44% util), SP/TP gathers, device RoPE</td></tr>
-<tr><td>attn Q-path</td><td>2.50 ms</td><td>4.0%</td><td>q_a/q_b/wkv_b1 matmuls (17–44% util), heads, rope, concat</td></tr>
-<tr><td>latent gather (SP)</td><td>2.17 ms</td><td>3.5%</td><td>SP all_gather (~77 GB/s = 15%) + block-cyclic un-rotate</td></tr>
-<tr><td>epilogue</td><td>1.66 ms</td><td>2.6%</td><td>wkv_b2, concat_heads, o_proj (69% util), reduce_scatter</td></tr>
-<tr><td>attn KV-path + cache</td><td>0.22 ms</td><td>0.4%</td><td>kv_a, TP all-gather+reduce, norm, rope, bf8 cache write</td></tr>
-<tr><td>indices reshard</td><td>0.06 ms</td><td>0.1%</td><td><code>mesh_partition</code> replicated → SP-sharded</td></tr>
-<tr><td><b>DSA layer critical path</b></td><td><b>62.70 ms</b></td><td><b>100%</b></td><td>compute=max, collectives=mean across 8 chips</td></tr>
-</table>
+  <h3><span class="n">4.2</span>Per-stage breakdown</h3>
+  <div class="panel">
+    <div class="tctl">
+      <div class="tlegend">
+        <span><i class="sw compute"></i>compute</span>
+        <span><i class="sw ccl"></i>collective</span>
+        <span><i class="sw other"></i>other</span>
+      </div>
+      <span class="small" style="margin-left:auto">hover / tap a bar for detail · bar length ∝ device time</span>
+    </div>
+    <div class="tchart" id="tchart"></div>
+    <div class="tcap" id="tcap"><span class="lbl">layer</span><b>62.70 ms</b> critical path · after change B the indexer is no longer the bottleneck — the <b>logits all-reduce (31%)</b> and <b>top-k (24%)</b> now dominate.</div>
+  </div>
 
-<div class="note"><b>Read-out.</b> After change B the indexer matmul is no longer the bottleneck (75% util, 16%). The layer is
-now gated by <b>data movement and the unmodeled ops</b>: the <b>logits all-reduce (31%)</b> and <b>top-k (24%)</b>
-together are 55% of the layer. The all-reduce runs at only ~8% of link BW (it's latency/launch-bound at this size, not
-bandwidth-bound) and pays ~6 ms to round-trip ROW_MAJOR↔TILE (the op emits RM, the CCL runs in TILE). Passing the RM
-logits straight to the CCL does <i>not</i> help — measured ~10 ms <b>slower</b>, because ttnn's RM reduce_scatter/all_gather
-tilize-with-padding internally and add RM concats; the explicit TILE round-trip is the cheaper path today. The TP matmuls
-are small per chip (skinny GEMMs, 17–69% util) but a tiny slice of the layer. <b>Highest-leverage next steps:</b>
-(1) SP-shard the indexer queries — shrinks the all-reduce buffer to <code>1/sp</code> and turns the indexer multicast ON
-at sp=8 (needs <code>groups==grid.y</code>); (2) a fused/RM-native CCL that avoids the padded-tilize + concats (naive RM
-is slower); (3) attack <code>top-k</code>, now the largest single op.</div>
+  <div class="callout warn"><span class="who">read-out</span>
+  The layer is now gated by <b>data movement and the unmodeled ops</b>: the logits all-reduce (31%) and top-k (24%) are 55%
+  combined. The all-reduce runs at only ~8% of link BW (latency/launch-bound, not saturated) and pays ~6 ms to round-trip
+  ROW_MAJOR↔TILE. Passing the RM logits straight to the CCL does <i>not</i> help — measured ~10 ms <b>slower</b>, since ttnn's
+  RM reduce_scatter/all_gather tilize-with-padding internally and add RM concats. The TP matmuls are small per chip (17–69%
+  util) but a tiny slice. <b>Highest-leverage next steps:</b> (1) SP-shard the indexer queries — shrinks the all-reduce buffer
+  to <code>1/sp</code> and turns the indexer multicast ON at sp=8; (2) a fused/RM-native CCL; (3) attack <code>top-k</code>,
+  the largest single op.</div>
 
-<p class="ctrl"><button onclick="document.body.classList.toggle('still')">⏸ toggle animation</button>
-&nbsp;(also respects your OS “reduce motion” setting)</p>
-<style>body.still .edgePaths path, body.still .flowchart-link, body.still .bar { animation:none!important; }</style>
+  <h3><span class="n">4.3</span>Dataflow timeline (steady state, one chunk)</h3>
+  <p class="sub">Relative ordering of the three indexer stems (parallel) → logits / top-k → attention front-end →
+  <code>sparse_mla</code> → epilogue. Bars are tensors moving between ops; colour = distribution.</p>
+  <div class="pipe">
+    <div class="lane"><div class="who">K stem: wk → TP reduce → norm → SP gather → rope → cache</div><div class="slot"><span class="bar bk" style="left:0"></span><span class="bar bk" style="left:11%;animation-delay:.4s"></span></div></div>
+    <div class="lane"><div class="who">Q stem: q_a → norm → wq_b → SP gather → heads → rope</div><div class="slot"><span class="bar bq" style="left:2%;animation-delay:.1s"></span><span class="bar bq" style="left:13%;animation-delay:.5s"></span></div></div>
+    <div class="lane"><div class="who">weights_proj: wproj → TP reduce → SP gather → scale</div><div class="slot"><span class="bar bw" style="left:4%;animation-delay:.2s"></span></div></div>
+    <div class="lane"><div class="who">indexer_score (HB=0, partial) → TP all-reduce → topk</div><div class="slot"><span class="bar bm" style="left:24%;animation-delay:1.2s"></span></div></div>
+    <div class="lane"><div class="who">DSA front-end: Q absorbed + KV cached</div><div class="slot"><span class="bar bq" style="left:34%;animation-delay:1.8s"></span><span class="bar bw" style="left:38%;animation-delay:2s"></span></div></div>
+    <div class="lane"><div class="who">on-device latent gather → sparse_sdpa (SPMD)</div><div class="slot"><span class="bar bk" style="left:50%;animation-delay:2.8s"></span></div></div>
+    <div class="lane"><div class="who">wkv_b2 → concat_heads → o_proj → reduce_scatter</div><div class="slot"><span class="bar bq" style="left:64%;animation-delay:3.6s"></span><span class="bar bw" style="left:68%;animation-delay:3.8s"></span></div></div>
+  </div>
+</section>
+
+<!-- ============================ 5 · TESTS ============================ -->
+<section class="tab" data-tab="tests">
+  <h2><span class="n">§5</span>How the tests exercise this</h2>
+  <p><code>tests/test_mla.py</code> drives three regimes against the CPU reference (<code>MLACPU</code>, with the indexer fp8
+  path off for functional parity):</p>
+  <table>
+  <tr><th>Test / param</th><th>seq</th><th>Path taken</th><th>What it proves</th></tr>
+  <tr><td><code>test_v32_mla_vs_cpu_reference</code> · seq256 / seq2k</td><td>≤ 2048</td><td>dense passthrough (v3)</td><td>the DSA mask is zero over the causal region → v32 must match dense v3 (PCC ≥ 0.98)</td></tr>
+  <tr><td>… · seq4k</td><td>4096</td><td><b>DSA active</b></td><td>device indexer + <code>sparse_mla</code> vs the CPU index mask; banded PCC rows&lt;2048 vs ≥2048</td></tr>
+  <tr><td><code>test_v32_mla_chunked_vs_cpu_reference</code></td><td>4k, chunk 1k</td><td>DSA + chunked cache</td><td>block-cyclic cache read-back (concat un-rotate → contiguous) feeds <code>sparse_mla</code>; multi-chip (sp2×tp4 / sp4×tp2)</td></tr>
+  <tr><td><code>test_v32_mla_determinism</code></td><td>4096 ×3</td><td>DSA active</td><td>bit-exact run-to-run (PCC 1.0) across CCL reductions, the device op, and topk ties</td></tr>
+  </table>
+  <p class="sub">Meshes are chosen from the box at collection time (<code>tests/mesh_utils.py</code>, exact device-count
+  match): QuietBox single / <code>1×4</code> / <code>2×2</code>; LoudBox <code>sp8×tp1</code> / <code>sp4×tp2</code> /
+  <code>sp2×tp4</code>; Galaxy <code>sp8×tp4</code>. Two configs are skipped for unrelated reasons: <b>seq256 / SP=8</b>
+  (32 tok/chip, below the kvpe ND-shard minimum) and <b>chunked at TP=1</b> (the 128-head <code>nlp_concat_heads</code>
+  epilogue overflows L1 without TP head-sharding).</p>
+  <p class="sub"><b>Indexer-specific gate.</b> <code>test_indexer_device_vs_reference</code> compares the device logits against
+  the official capture (PCC ≥ 0.95). Under change B it captures top-k's input — the post-all-reduce full logits — not
+  <code>ops.indexer_logits</code>' per-chip partial. Gate green: PCC 0.96–0.99 at tp=2/4, top-k overlap ≥ 0.985.</p>
+</section>
+
+<footer>
+  <button onclick="document.body.classList.toggle('still')">⏸ toggle animations</button>
+  &nbsp;·&nbsp; generated from <code>tt/mla/mla.py</code> + tracy · respects your OS “reduce motion” setting
+</footer>
+</main>
 
 <script>
-  mermaid.initialize({ startOnLoad:true, theme:'base', flowchart:{ curve:'basis', htmlLabels:true },
+  mermaid.initialize({ startOnLoad:false, theme:'base', flowchart:{ curve:'basis', htmlLabels:true },
     themeVariables:{ fontFamily:'-apple-system,Segoe UI,Roboto,Arial,sans-serif', fontSize:'13px' } });
+
+  // Mermaid mis-renders ("Syntax error in text") inside display:none tabs, so render each
+  // tab's diagrams lazily the first time the tab is shown (and thus laid out / measurable).
+  async function renderTabMermaid(id){
+    const sec = document.querySelector('section.tab[data-tab="'+id+'"]');
+    if(!sec) return;
+    const nodes = Array.from(sec.querySelectorAll('pre.mermaid:not([data-processed])'));
+    if(nodes.length){ try{ await mermaid.run({ nodes }); }catch(e){ console.error('mermaid', e); } }
+  }
+
+  // ---- tabbed nav + hash routing ----
+  const TABS = ['overview','indexer','attention','timing','tests'];
+  let chartBuilt = false;
+  function showTab(id){
+    if(!TABS.includes(id)) id = 'overview';
+    document.querySelectorAll('section.tab').forEach(s => s.classList.toggle('on', s.dataset.tab===id));
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===id));
+    if(('#'+id) !== location.hash) history.replaceState(null,'','#'+id);
+    renderTabMermaid(id);
+    if(id==='timing') animateChart();
+    window.scrollTo({top:0, behavior:'instant'});
+  }
+  document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+  window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+
+  // ---- interactive timing chart ----
+  const TIMING = [
+    {nm:'logits all-reduce', ms:19.50, pct:31.1, cls:'ccl',     note:'RS+AG ≈ 13.4 ms @ ~43 GB/s (8% of the 512 GB/s link — overhead-bound) + ~6 ms RM↔TILE round-trip. The cost change B adds.'},
+    {nm:'top-k',             ms:15.00, pct:23.9, cls:'compute', note:'topk_large_indices — now the single largest op. No perf model. Next op-level optimization target.'},
+    {nm:'indexer_score',     ms:9.86,  pct:15.7, cls:'compute', note:'75% math-util at HB=0 (all H_idx/tp heads L1-resident). The win from change B (was 1.85% / 802 ms when replicated at 64 heads).'},
+    {nm:'sparse_sdpa',       ms:9.12,  pct:14.5, cls:'compute', note:'Gather 2048 keys/row + absorbed-MQA online-softmax. No perf model.'},
+    {nm:'indexer stems + RoPE', ms:2.62, pct:4.2, cls:'compute', note:'K/Q/W linears (24–44% util) + SP/TP gathers + on-device RoPE.'},
+    {nm:'attn Q-path',       ms:2.50,  pct:4.0, cls:'compute', note:'q_a / q_b / wkv_b1 matmuls (17–44% util), create-heads, rope, concat → absorbed tt_q.'},
+    {nm:'latent gather (SP)',ms:2.17,  pct:3.5, cls:'ccl',     note:'SP all_gather (~77 GB/s = 15% of link) + block-cyclic un-rotate (concat → contiguous).'},
+    {nm:'epilogue',          ms:1.66,  pct:2.6, cls:'compute', note:'wkv_b2, nlp_concat_heads, o_proj (69% util), reduce_scatter.'},
+    {nm:'attn KV-path + cache', ms:0.22, pct:0.4, cls:'other', note:'kv_a, TP all-gather+reduce, norm, rope, bf8 cache write (update_padded_kv_cache).'},
+    {nm:'indices reshard',   ms:0.06,  pct:0.1, cls:'other',   note:'ttnn.mesh_partition: replicated indices → SP-sharded to match q.'},
+  ];
+  const maxMs = Math.max.apply(null, TIMING.map(t=>t.ms));
+  const cap = document.getElementById('tcap');
+  const defaultCap = cap.innerHTML;
+  function buildChart(){
+    const root = document.getElementById('tchart');
+    TIMING.forEach((t,i) => {
+      const row = document.createElement('div'); row.className = 'trow'; row.dataset.i = i;
+      row.innerHTML = '<div class="nm">'+t.nm+'</div>'
+        + '<div class="ttrack"><div class="tbar '+t.cls+'" data-w="'+(t.ms/maxMs*100).toFixed(1)+'">'+t.ms.toFixed(2)+' ms</div></div>'
+        + '<div class="pc">'+t.pct.toFixed(1)+'%</div>';
+      const set = () => {
+        document.querySelectorAll('#tchart .trow').forEach(r=>r.classList.remove('sel'));
+        row.classList.add('sel');
+        cap.innerHTML = '<span class="lbl">'+t.nm+'</span><b>'+t.ms.toFixed(2)+' ms · '+t.pct.toFixed(1)+'%</b> — '+t.note;
+      };
+      row.addEventListener('mouseover', set);
+      row.addEventListener('click', set);
+      root.appendChild(row);
+    });
+    root.addEventListener('mouseleave', () => {
+      document.querySelectorAll('#tchart .trow').forEach(r=>r.classList.remove('sel'));
+      cap.innerHTML = defaultCap;
+    });
+  }
+  function animateChart(){
+    if(!chartBuilt){ buildChart(); chartBuilt = true; }
+    requestAnimationFrame(() => document.querySelectorAll('#tchart .tbar').forEach(b => { b.style.width = b.dataset.w + '%'; }));
+  }
+
+  showTab(location.hash.slice(1) || 'overview');
 </script>
-</main>
 </body>
 </html>
