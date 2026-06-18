@@ -182,6 +182,15 @@ class Qwen3_5ForConditionalGeneration:
                     ttnn.deallocate(ct)
                 except Exception:
                     pass
+            # This request wrote a fresh prefill conv_state; drop any stale on-device
+            # decode conv history so the first decode step reseeds from it.
+            old_hist = persistent.conv_hist.pop(li, None)
+            if old_hist:
+                for t in old_hist:
+                    try:
+                        ttnn.deallocate(t)
+                    except Exception:
+                        pass
 
     # ---- prefill / decode glue ----
     def prefill_forward(self, tokens, page_table=None, kv_cache=None, start_pos=None,

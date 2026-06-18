@@ -40,6 +40,10 @@ class TtDeltaNetState:
         self.batch = batch
         self.conv_states = {}
         self.recurrent_states = {}
+        # On-device decode conv history: per layer, the 3 prior conv inputs as
+        # [1,1,1,conv_dim] device tensors (h0=oldest..h2=newest-1). Lazily seeded
+        # from the prefill conv_state on the first decode step, then updated on-device.
+        self.conv_hist = {}
         # When True, state updates write IN-PLACE into the fixed buffers (ttnn.copy)
         # instead of swapping the tensor handle — required for trace (static buffers).
         self.trace_mode = False
@@ -262,9 +266,21 @@ class TtGatedDeltaNet(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
+            # Per-tap conv weight columns [1,1,1,conv_dim] (replicated across the mesh,
+            # matching the gathered full-width qkv) for the on-device decode conv1d
+            # (dot = w0*h0 + w1*h1 + w2*h2 + w3*x). Avoids the per-layer CPU round-trip.
+            _rep = ttnn.ReplicateTensorToMesh(self.device) if self.dense_tp else None
+            self.conv_w_cols = [
+                ttnn.from_torch(
+                    self.conv1d_weight[:, k].contiguous().reshape(1, 1, 1, -1).to(torch.bfloat16),
+                    dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=_rep,
+                )
+                for k in range(self.conv_kernel_size)
+            ]
         else:
             self.conv1d_weight = None
             self.conv1d_weight_tt = None
+            self.conv_w_cols = None
 
     def _load_weight(self, state_dict, key, dtype, transpose=False, shard_dim=None):
         if key not in state_dict:
@@ -359,11 +375,85 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(scaled)
         return beta, decay
 
+    def _l2norm_per_head_dev(self, x_flat, H, D, scale=None):
+        """On-device per-head L2norm of [1,1,1,H*D] over each D-vector; optional scale.
+        Returns [1,1,1,H*D]. The [1,1,1,H*D] <-> [1,1,H,D] reshape is done in
+        ROW_MAJOR (a pure contiguous view); doing it in TILE layout mis-orders data
+        across tile boundaries (heads get scrambled)."""
+        xr = ttnn.to_layout(x_flat, ttnn.ROW_MAJOR_LAYOUT)
+        xh = ttnn.reshape(xr, [1, 1, H, D])
+        ttnn.deallocate(xr)
+        xh = ttnn.to_layout(xh, ttnn.TILE_LAYOUT)
+        sq = ttnn.mul(xh, xh)
+        s = ttnn.sum(sq, dim=-1, keepdim=True)  # [1,1,H,1]
+        ttnn.deallocate(sq)
+        inv = ttnn.rsqrt(ttnn.add(s, 1e-6))
+        ttnn.deallocate(s)
+        out = ttnn.mul(xh, inv)  # broadcast over D
+        ttnn.deallocate(xh)
+        ttnn.deallocate(inv)
+        if scale is not None:
+            out2 = ttnn.mul(out, scale)
+            ttnn.deallocate(out)
+            out = out2
+        outr = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(out)
+        flat = ttnn.reshape(outr, [1, 1, 1, H * D])
+        ttnn.deallocate(outr)
+        return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+
     def _decode_conv_prep(self, qkv, deltanet_state, B):
-        """Apply causal conv1d + SiLU + per-head L2norm (+ q scale) host-side for the
-        decode step, since the deltanet_decode_full reader is PASS-THROUGH for qkv.
-        Mirrors single-device deltanet.py::_decode_step_fused. q/k stay in
-        num_k_heads layout (kernel expands to v-heads). Updates the conv state.
+        """On-device causal conv1d + SiLU + per-head L2norm (+ q scale) for decode
+        (the deltanet_decode_full reader is PASS-THROUGH for qkv). Eliminates the
+        per-layer CPU round-trip: conv via persistent history tensors (h0,h1,h2) and
+        precomputed weight columns (dot = w0*h0+w1*h1+w2*h2+w3*x), all ttnn ops.
+        Consumes `qkv` (raw projection becomes next step's history — caller must NOT
+        deallocate it). Returns conv'd+normed [1,1,1,conv_dim]. B>1 falls back to CPU."""
+        if B != 1 or self.conv_w_cols is None:
+            return self._decode_conv_prep_cpu(qkv, deltanet_state, B)
+        li = self.layer_idx
+        conv_dim = self.key_dim * 2 + self.value_dim
+        kd, Dk, Hk = self.key_dim, self.head_k_dim, self.num_k_heads
+        rep = ttnn.ReplicateTensorToMesh(self.device) if self.dense_tp else None
+
+        hist = deltanet_state.conv_hist.get(li)
+        if hist is None:
+            # seed (h0,h1,h2) from the prefill conv_state once, then stay on-device.
+            cs = deltanet_state.get_conv_state_cpu(li, self.conv_kernel_size)  # [1,conv_dim,ck] or None
+
+            def mk(vec):
+                return ttnn.from_torch(vec.contiguous().reshape(1, 1, 1, -1).to(torch.bfloat16),
+                                       dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+            if cs is not None:
+                csq = cs.squeeze(0).float()  # [conv_dim, ck]; cols 1,2,3 = the 3 prior inputs
+                hist = [mk(csq[:, 1]), mk(csq[:, 2]), mk(csq[:, 3])]
+            else:
+                z = torch.zeros(conv_dim)
+                hist = [mk(z), mk(z), mk(z)]
+        h0, h1, h2 = hist
+        w0, w1, w2, w3 = self.conv_w_cols
+        dot = ttnn.add(ttnn.add(ttnn.mul(w0, h0), ttnn.mul(w1, h1)),
+                       ttnn.add(ttnn.mul(w2, h2), ttnn.mul(w3, qkv)))
+        conv = ttnn.silu(dot)
+        ttnn.deallocate(dot)
+        # shift history; raw qkv becomes the newest prior input (kept; caller won't free it)
+        ttnn.deallocate(h0)
+        deltanet_state.conv_hist[li] = [h1, h2, qkv]
+        # split q|k|v and per-head L2norm (q also scaled by 1/sqrt(Dk)); v unchanged
+        q = ttnn.slice(conv, [0, 0, 0, 0], [1, 1, 1, kd])
+        k = ttnn.slice(conv, [0, 0, 0, kd], [1, 1, 1, 2 * kd])
+        v = ttnn.slice(conv, [0, 0, 0, 2 * kd], [1, 1, 1, conv_dim])
+        ttnn.deallocate(conv)
+        q = self._l2norm_per_head_dev(q, Hk, Dk, scale=self.scale)
+        k = self._l2norm_per_head_dev(k, Hk, Dk)
+        out = ttnn.concat([q, k, v], dim=3)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        return out
+
+    def _decode_conv_prep_cpu(self, qkv, deltanet_state, B):
+        """CPU fallback (B>1): conv1d+SiLU+L2norm+q-scale via host round-trip.
         qkv: gathered [1,1,B,conv_dim] (replicated). Returns replicated [1,1,B,conv_dim]."""
         conv_dim = self.key_dim * 2 + self.value_dim
         ck = self.conv_kernel_size
@@ -388,6 +478,7 @@ class TtGatedDeltaNet(LightweightModule):
             deltanet_state.set_conv_state_from_cpu(self.layer_idx, new_cs.unsqueeze(0))
         out = torch.stack(outs, dim=0).reshape(1, 1, B, conv_dim).to(torch.bfloat16)
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.dense_tp else None
+        ttnn.deallocate(qkv)
         return ttnn.from_torch(out, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
                                device=self.device, mesh_mapper=mapper)
 
@@ -414,9 +505,9 @@ class TtGatedDeltaNet(LightweightModule):
         # the single-device deltanet.py::_decode_step_fused. Without this, decode
         # feeds raw projections to the recurrence (the decode-gibberish bug).
         # q/k stay in num_k_heads (16) layout; the kernel expands to 48 v-heads.
-        qkv_conv = self._decode_conv_prep(qkv, deltanet_state, B)
-        ttnn.deallocate(qkv)
-        qkv = qkv_conv
+        # NOTE: _decode_conv_prep owns `qkv`'s lifetime (on-device path keeps the raw
+        # projection as next step's conv history; CPU fallback frees it). Don't free here.
+        qkv = self._decode_conv_prep(qkv, deltanet_state, B)
 
         qkv_k = self._to_batch_major(qkv, B)
         z_k = self._to_batch_major(z, B)
