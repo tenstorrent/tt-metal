@@ -119,27 +119,14 @@ def decode_forward(
                 return apply_rope(t, cos_pos, sin_pos, token_index=0)
             return apply_rope_decode_peruser(t, cos_b, sin_b)
 
-        # Q+K share cos/sin and head_dim, so rotate them in a SINGLE call by
-        # concatenating along the heads dim (cos/sin broadcast over heads), then
-        # split back — one rotary_embedding per layer instead of two. apply_rope's
-        # decode path pads the heads dim to TILE_HEIGHT (32) and slices back, so
-        # this requires the combined head count to fit in 32 (true for every
-        # supported variant/TP); otherwise fall back to separate Q/K rotations.
-        if is_kv_shared:
-            # Only Q needs RoPE (K comes from the source layer's cache).
-            tt_q = _rope(tt_q)
-        elif tt_q.shape[2] + tt_k.shape[2] <= 32:
-            nq = tt_q.shape[2]
-            qk = ttnn.concat([tt_q, tt_k], dim=2)
-            tt_q.deallocate(True)
-            tt_k.deallocate(True)
-            qk_roped = _rope(qk)
-            qk.deallocate(True)
-            tt_q = qk_roped[:, :, :nq, :]
-            tt_k = qk_roped[:, :, nq:, :]
-            qk_roped.deallocate(True)
-        else:
-            tt_q = _rope(tt_q)
+        # Rotate Q (and K, unless this is a KV-shared layer) with the shared
+        # cos/sin. A concat(Q,K)->rope->split "fusion" was tried to collapse the
+        # two rotary_embedding calls into one, but at decode batch=1 under metal
+        # trace replay it regressed throughput (~3%): host dispatch is already
+        # free under replay, so it only added concat+split device kernels while
+        # removing one tiny rope kernel. Keep separate rotations.
+        tt_q = _rope(tt_q)
+        if not is_kv_shared:
             tt_k = _rope(tt_k)
     else:
         # Legacy path: full 4D cache with Python int token_index
