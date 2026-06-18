@@ -5,7 +5,9 @@ model: MLA + the DSA "lightning indexer" + sparse attention. We validate our TTN
 against a GPU golden trace (captured from vLLM's `deepseek_v2.py` `is_v32` path), reusing
 the DeepSeek-V3.2 `reference_cpu` and the v32 `ttMLA` with GLM dims.
 
-Harness: `models/demos/deepseek_v32/tests/test_vs_gpu_ref_glm.py` (mirrors `test_vs_gpu_ref.py`).
+Harness: `models/demos/deepseek_v32/tests/test_vs_gpu_ref.py` — one parametrized file covering
+**both** DeepSeek-V3.2 and GLM-5.1 (a `ModelSpec` per model). GLM cases carry **`glm_5_1`** in the
+test id; DS cases carry `deepseek_v32`. Filter to GLM with `-k glm_5_1`.
 
 ## Status — all phases green (2026-06-17)
 - **Phase 1** trace self-consistency (no weights/device): green L0/30/60/77.
@@ -94,23 +96,25 @@ tests **skip** (not fail), printing the path they looked for.
 = forward output (post o_proj, pre-residual); `dsa/indexer_logits` = index_score **pre causal mask**
 (compared over tril); `dsa/dsa_topk_indices` (−1 = pad); `kv_cache/layer_L` = `[latent 512 ‖ k_pe 64]`.
 
-## Run it
+## Run it (pytest; GLM cases carry `glm_5_1` in the test id)
 ```bash
+T=models/demos/deepseek_v32/tests/test_vs_gpu_ref.py
+
 # Phase 1 — trace self-consistency (no weights, no device):
-python models/demos/deepseek_v32/tests/test_vs_gpu_ref_glm.py            # standalone runner
-#   (Phase-1 pytest also works: pytest <file> -k "trace or topk or logits or kv_split")
+python -m pytest $T -k "glm_5_1 and not host and not device"
 
-# Phase 2 — host ceiling (CPU ref vs trace; downloads per-layer weights):
-python models/demos/deepseek_v32/tests/test_vs_gpu_ref_glm.py --layers 0,30,60,77
-#   add --full for the MLA output/kv recompute (CPU dense forward at seq5120 is very slow — prefer device)
+# Phase 2 — host ceiling (CPU ref vs trace; downloads per-layer weights; the seq5120 CPU forward
+# in the kv/output host tests is slow — prefer the device tests):
+python -m pytest $T -k "host and glm_5_1" -s
 
-# Phase 3 — device (Blackhole). Meshes box-adaptive (mesh_utils); run with the whole box visible
+# Phase 3 — device (Blackhole). Box-adaptive meshes (mesh_utils); run with the whole box visible
 # (no TT_VISIBLE_DEVICES masking). On a LoudBox(8) the meshes are sp8xtp1 + sp4xtp2 (both 8-chip):
-python -m pytest .../test_vs_gpu_ref_glm.py -k "device" --ds-kpe-layout vllm -s              # all meshes × all layers
-python -m pytest .../test_vs_gpu_ref_glm.py -k "device and sp4xtp2" --ds-kpe-layout vllm -s  # one mesh, all layers
-python -m pytest .../test_vs_gpu_ref_glm.py -k "device and L30" -s                           # one layer, all meshes
-#   only MLA output: -k "mla_output_device and L30 and sp4xtp2"
+python -m pytest $T -k "device and glm_5_1" --ds-kpe-layout vllm -s              # all meshes × all layers
+python -m pytest $T -k "device and glm_5_1 and sp4xtp2" --ds-kpe-layout vllm -s  # one mesh, all layers
+python -m pytest $T -k "device and glm_5_1 and L30" -s                           # one layer, all meshes
+#   only MLA output: -k "mla_output_device and glm_5_1"
 #   drop --ds-kpe-layout vllm to use the frame-invariant k_pe L2 check instead (see caveat)
+#   drop "and glm_5_1" to also run the DeepSeek-V3.2 cases (the file covers both models).
 ```
 
 ## Caveats (all expected, not bugs)
