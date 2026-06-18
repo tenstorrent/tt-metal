@@ -8,7 +8,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/actions/sweep-run-analysis/ @stevendae @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/time_budget.yaml @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
-.github/time_budgets/pre_merge_budget.yaml @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
+.github/time_budgets/** @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
 .github/workflows/pipeline-select-profiler.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
