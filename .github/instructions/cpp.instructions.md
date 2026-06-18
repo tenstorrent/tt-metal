@@ -50,10 +50,6 @@ C++20. Use modern facilities over legacy patterns:
 - No `enable_if`, SFINAE, or recursive template instantiation unless the author demonstrates concepts cannot express the constraint.
 - Flag recursive template instantiation depth > 3 levels.
 
-## clang-tidy
-
-Active profiles: `bugprone-*`, `performance-*`, `modernize-*`, `readability-*`, `cppcoreguidelines-*`. Do not flag issues these profiles already report.
-
 ## Include Hygiene
 
 - Prefer forward declarations over `#include` in headers.
