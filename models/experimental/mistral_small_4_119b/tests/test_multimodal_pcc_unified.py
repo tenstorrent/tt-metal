@@ -14,21 +14,23 @@ on TTNN, and compares the full-sequence logits against an HF Torch reference.
 Run::
 
     export MISTRAL4_MM_PCC=1
-    export MISTRAL4_MM_TEXT_LAYERS=36
-    export MISTRAL4_MM_VISION_LAYERS=24
-    export MISTRAL4_MM_IMAGE=Battle.jpg
+    export MISTRAL4_MM_IMAGE=Battle.jpg   # optional; local path or URL. Defaults to a sample
+                                          # battle-scene URL (like demo); set to "" for a random image.
     export MISTRAL4_WEIGHT_CACHE_DIR=/tmp/mistral4_weights  # optional; cache quantized text weights to skip re-quantization
     export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py -v -s --timeout=0
 
-Long-context (vision + language) sweep:
-  Set MISTRAL4_MM_MAX_TEXT_TOKENS to pad the prompt with coherent English filler up to that
-  many text tokens (image tokens are added on top). Verified up to 32000 on P150x8. The HF
-  CPU reference (RAM + O(seq^2) attention) is the practical ceiling — full 36+24 layers at
-  32K needs a large-RAM host (>256 GB recommended).
+Layer / long-context sweep:
+  Parametrized over (num_text_layers, num_vision_layers, max_text_tokens) with ids like
+  L1V1 (light smoke) and L36V24_16384 (full model, 16K text context). max_text_tokens pads
+  the prompt with coherent English filler up to that many tokens (image tokens added on top;
+  0 = prompt unchanged). Context values stay within the HF CPU reference's reach (verified up
+  to 32000 on P150x8). Pick one with `-k`, e.g. `-k L36V24_16384`. The HF reference runs in
+  chunks (MISTRAL4_MM_PREFILL_CHUNK, default 2048) backed by a DynamicCache and loads the model
+  in bf16, keeping attention memory at O(chunk × past) instead of O(seq²); a large-RAM host is
+  still recommended for the full 36+24-layer cases at 32K.
 
-    export MISTRAL4_MM_MAX_TEXT_TOKENS=32000
-    pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py -v -s --timeout=0
+    pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py -v -s --timeout=0 -k L36V24_16384
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ import psutil
 import pytest
 import torch
 from loguru import logger
+from transformers.cache_utils import DynamicCache
 
 import ttnn
 from models.common.utility_functions import comp_pcc, run_for_wormhole_b0_or_blackhole
@@ -75,16 +78,23 @@ pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mi
 pytest.importorskip("transformers.models.pixtral.modeling_pixtral", reason="Pixtral required")
 
 
-_TEXT_LAYERS = int(os.environ.get("MISTRAL4_MM_TEXT_LAYERS", "2"))
-_VISION_LAYERS = int(os.environ.get("MISTRAL4_MM_VISION_LAYERS", "2"))
-_IMAGE_PATH = os.environ.get("MISTRAL4_MM_IMAGE", "")
+# Default sample image (a battle scene), matching demo_multimodal.py. Pass a local path or
+# URL via MISTRAL4_MM_IMAGE to override, or MISTRAL4_MM_IMAGE="" to use a random synthetic image.
+DEFAULT_IMAGE_URL = (
+    "https://static.wikia.nocookie.net/essentialsdocs/images/7/70/Battle.png/" "revision/latest?cb=20220523172438"
+)
+
+_IMAGE_PATH = os.environ.get("MISTRAL4_MM_IMAGE", DEFAULT_IMAGE_URL)
 _PROMPT = os.environ.get("MISTRAL4_MM_PROMPT", "Describe this image.")
 _IMAGE_MAX_SIDE = int(os.environ.get("MISTRAL4_MM_IMAGE_MAX_SIDE", "224"))
 _IMG_PATCHES = int(os.environ.get("MISTRAL4_MM_IMG_PATCHES", "10"))
-# Long-context sweep: pad the text prompt with coherent English filler up to this many
-# tokens (0 = use _PROMPT unchanged). Verified up to 32000 (vision + language) on P150x8;
-# the HF CPU reference RAM/time is the practical ceiling beyond that.
-_MAX_TEXT_TOKENS = int(os.environ.get("MISTRAL4_MM_MAX_TEXT_TOKENS", "0"))
+# (num_text_layers, num_vision_layers, max_text_tokens) sweep. max_text_tokens pads the text
+# prompt with coherent English filler up to that many tokens (0 = prompt unchanged; image
+# tokens are added on top). Context values stay within the HF CPU reference's reach (verified
+# up to 32000 on P150x8); select one with `-k`, e.g. `-k L36V24_16384`.
+# Chunk size for the HF reference prefill. Chunking with a DynamicCache keeps attention
+# memory at O(chunk × past) instead of O(seq²), so long contexts fit on a CPU host.
+_PREFILL_CHUNK = int(os.environ.get("MISTRAL4_MM_PREFILL_CHUNK", "2048"))
 # Vision bf8 quantization dominates the accuracy floor.
 _PCC_FLOOR = 0.80
 
@@ -134,15 +144,21 @@ def _build_hf_mm_ref(full_config, state_dict: dict, n_text: int, n_vision: int):
     for sub in (cfg.text_config, cfg.vision_config):
         for attr in ("attn_implementation", "_attn_implementation"):
             if hasattr(sub, attr):
-                setattr(sub, attr, "eager")
+                setattr(sub, attr, "sdpa")
 
     if n_text >= 36 and n_vision >= 24:
         logger.info("Enabling activation checkpointing for full-layer model (36+24)…")
         cfg.text_config.gradient_checkpointing = True
         cfg.vision_config.gradient_checkpointing = True
 
+    # Force bf16 meta tensors so set_module_tensor_to_device preserves bf16 dtype.
+    # Without this, init_empty_weights creates float32 meta tensors → model loads as fp32
+    # (~476 GB for 119B params) instead of bf16 (~238 GB).
+    _prev_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.bfloat16)
     with init_empty_weights():
         model = Mistral3ForConditionalGeneration(cfg)
+    torch.set_default_dtype(_prev_dtype)
 
     missing = []
     for name, _ in model.named_parameters():
@@ -170,7 +186,11 @@ def _build_hf_mm_ref(full_config, state_dict: dict, n_text: int, n_vision: int):
 
     if missing:
         logger.warning(f"HF model missing keys (first 5): {missing[:5]}")
-    return model.eval()
+    model = model.eval()
+    param_gb = sum(p.numel() * p.element_size() for p in model.parameters()) / 1e9
+    sample_dtype = next(model.parameters()).dtype
+    logger.info(f"HF model params: {param_gb:.1f} GB (dtype={sample_dtype}, expected ~238 GB for bf16)")
+    return model
 
 
 _FILLER_SENTENCE = (
@@ -194,14 +214,75 @@ def _build_long_prompt(tokenizer, target_text_tokens: int, question: str) -> str
     return f"{filler}\n\nNow answer only this: {question}"
 
 
+def _chunked_hf_forward(hf_model, pixel_values, input_ids, image_sizes, chunk_size: int) -> torch.Tensor:
+    """Run HF forward in chunks using DynamicCache (updated in-place) — O(chunk × past) memory.
+
+    Returns the full float32 logits [seq, vocab] so the per-position + flattened PCC comparison
+    keeps working. Chunking only bounds the attention/activation memory (O(chunk × past) instead
+    of O(seq²)); the bf16 model load is the other long-context enabler.
+
+    Follows devstral2 logit_pcc_common pattern: DynamicCache created once, mutated in-place,
+    no attention_mask, position_ids only for chunks after the first.
+    """
+    seq_len = input_ids.shape[-1]
+    chunk_logits: list[torch.Tensor] = []
+    cache = DynamicCache()
+
+    for chunk_start in range(0, seq_len, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, seq_len)
+        chunk_ids = input_ids[:, chunk_start:chunk_end]
+
+        pv = pixel_values if chunk_start == 0 else None
+        iz = image_sizes if chunk_start == 0 else None
+
+        kwargs = dict(pixel_values=pv, input_ids=chunk_ids, image_sizes=iz, past_key_values=cache, use_cache=True)
+        if chunk_start > 0:
+            kwargs["position_ids"] = torch.arange(chunk_start, chunk_end, dtype=torch.long).unsqueeze(0)
+
+        with torch.inference_mode():
+            out = hf_model(**kwargs)
+
+        chunk_logits.append(out.logits[0].float().clone())
+        del out
+        gc.collect()
+        logger.info(f"Chunked prefill: {chunk_end}/{seq_len} tokens")
+
+    return torch.cat(chunk_logits, dim=0)
+
+
 @torch.no_grad()
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.skipif(
     os.environ.get("MISTRAL4_MM_PCC") != "1",
     reason="Set MISTRAL4_MM_PCC=1 to run.",
 )
+@pytest.mark.slow
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
-def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
+@pytest.mark.parametrize(
+    "num_text_layers, num_vision_layers, max_text_tokens",
+    [
+        (1, 1, 128),
+        (36, 24, 128),
+        (36, 24, 4096),
+        (36, 24, 16384),
+        (36, 24, 65536),
+        (36, 24, 131072),
+        (36, 24, 262144),
+    ],
+    ids=[
+        "L1V1",
+        "L36V24",
+        "L36V24_4096",
+        "L36V24_16384",
+        "L36V24_65536",
+        "L36V24_131072",
+        "L36V24_262144",
+    ],
+)
+def test_mistral_small_4_multimodal_pcc_unified(
+    reset_seeds, mesh_device, num_text_layers, num_vision_layers, max_text_tokens
+):
     """
     End-to-end multimodal PCC: vision (bf8) + text (bf16) co-resident on device.
 
@@ -217,7 +298,7 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     image_token_id = int(getattr(cfg, "image_token_index", 10))
 
     try:
-        state_dict = load_hf_state_dict_filtered(HF_MODEL_ID, _state_dict_prefixes(_TEXT_LAYERS, _VISION_LAYERS))
+        state_dict = load_hf_state_dict_filtered(HF_MODEL_ID, _state_dict_prefixes(num_text_layers, num_vision_layers))
     except (FileNotFoundError, OSError) as exc:
         pytest.skip(f"Checkpoint load failed: {exc}")
 
@@ -225,7 +306,22 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     from PIL import Image
     from transformers import AutoProcessor
 
-    if _IMAGE_PATH and os.path.exists(_IMAGE_PATH):
+    if _IMAGE_PATH and _IMAGE_PATH.startswith(("http://", "https://")):
+        import io
+        import urllib.request
+
+        logger.info(f"Fetching image from URL: {_IMAGE_PATH}")
+        with urllib.request.urlopen(_IMAGE_PATH) as resp:
+            img = Image.open(io.BytesIO(resp.read())).convert("RGB")
+        if max(img.size) > _IMAGE_MAX_SIDE:
+            scale = _IMAGE_MAX_SIDE / max(img.size)
+            new_w = max(VISION_PATCH_SIZE, int(round(img.size[0] * scale)))
+            new_h = max(VISION_PATCH_SIZE, int(round(img.size[1] * scale)))
+            img = img.resize((new_w, new_h))
+            logger.info(f"Resized {_IMAGE_PATH!r} → {img.size} (max side ≤ {_IMAGE_MAX_SIDE})")
+        else:
+            logger.info(f"Loaded {_IMAGE_PATH!r} at {img.size}")
+    elif _IMAGE_PATH and os.path.exists(_IMAGE_PATH):
         img = Image.open(_IMAGE_PATH).convert("RGB")
         if max(img.size) > _IMAGE_MAX_SIDE:
             scale = _IMAGE_MAX_SIDE / max(img.size)
@@ -248,12 +344,12 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     processor = AutoProcessor.from_pretrained(HF_MODEL_ID)
 
     prompt_text = _PROMPT
-    if _MAX_TEXT_TOKENS:
+    if max_text_tokens:
         from transformers import AutoTokenizer
 
         tok = getattr(processor, "tokenizer", None) or AutoTokenizer.from_pretrained(HF_MODEL_ID)
-        prompt_text = _build_long_prompt(tok, _MAX_TEXT_TOKENS, _PROMPT)
-        logger.info(f"Long-context prompt: target {_MAX_TEXT_TOKENS} text tokens, {len(prompt_text)} chars")
+        prompt_text = _build_long_prompt(tok, max_text_tokens, _PROMPT)
+        logger.info(f"Long-context prompt: target {max_text_tokens} text tokens, {len(prompt_text)} chars")
 
     messages = [
         {
@@ -281,7 +377,7 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
         image_sizes = torch.tensor([[pixel_values.shape[-2], pixel_values.shape[-1]]], dtype=torch.long)
 
     logger.info(
-        f"Config: text_layers={_TEXT_LAYERS}, vision_layers={_VISION_LAYERS}, "
+        f"Config: text_layers={num_text_layers}, vision_layers={num_vision_layers}, "
         f"pixel_values {tuple(pixel_values.shape)}, {num_image_tokens} image tokens, "
         f"seq_len={seq_len}, prompt_chars={len(prompt_text)}"
     )
@@ -289,32 +385,24 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     # ── HF reference forward ─────────────────────────────────────────
     _log_memory_usage("before HF build")
     logger.info("Building HF Mistral3ForConditionalGeneration (CPU, bf16)…")
-    hf_model = _build_hf_mm_ref(cfg, state_dict, _TEXT_LAYERS, _VISION_LAYERS)
+    hf_model = _build_hf_mm_ref(cfg, state_dict, num_text_layers, num_vision_layers)
     _log_memory_usage("after HF build, before forward")
 
-    logger.info("Running HF reference forward (activation checkpointing enabled)…")
+    logger.info(f"Running HF reference forward in chunks of {_PREFILL_CHUNK} tokens…")
     try:
-        with torch.inference_mode():
-            hf_out = hf_model(
-                pixel_values=pixel_values,
-                input_ids=input_ids,
-                image_sizes=image_sizes,
-            )
-            ref_logits = hf_out.logits[0].float()
-            ref_logits = ref_logits.detach().clone()
-            _log_memory_usage("after HF forward")
+        ref_logits = _chunked_hf_forward(hf_model, pixel_values, input_ids, image_sizes, _PREFILL_CHUNK)
+        _log_memory_usage("after HF forward")
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
             logger.error(
                 f"OOM during HF forward: {e}\n"
-                f"Config: text={_TEXT_LAYERS} layers, vision={_VISION_LAYERS} layers\n"
-                f"Memory optimization: activation checkpointing enabled for full model.\n"
-                f"If still OOM, try reducing MISTRAL4_MM_TEXT_LAYERS and/or MISTRAL4_MM_VISION_LAYERS,\n"
-                f"or run on a machine with more CPU RAM (>256GB recommended for full model)."
+                f"Config: text={num_text_layers} layers, vision={num_vision_layers} layers, chunk={_PREFILL_CHUNK}\n"
+                f"Try reducing MISTRAL4_MM_PREFILL_CHUNK (e.g. 512), selecting a smaller layer/context\n"
+                f"param (e.g. -k L1V1), or running on a machine with more CPU RAM."
             )
         raise
 
-    del hf_model, hf_out
+    del hf_model
     gc.collect()
     _log_memory_usage("after HF cleanup")
     logger.info(f"HF reference logits: {tuple(ref_logits.shape)}")
@@ -327,8 +415,8 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
         state_dict=state_dict,
         text_config=cfg.text_config,
         image_token_id=image_token_id,
-        num_text_layers=_TEXT_LAYERS,
-        num_vision_layers=_VISION_LAYERS,
+        num_text_layers=num_text_layers,
+        num_vision_layers=num_vision_layers,
         max_seq_len=seq_len + 16,
         vision_dtype=ttnn.bfloat8_b,
     )
