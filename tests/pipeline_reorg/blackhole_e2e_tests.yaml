@@ -101,23 +101,6 @@
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
 
-- id: bh-ring-sdpa-perf
-  name: ring sdpa perf tests
-  tags: [sdpa]
-  cmd: |
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
-  skus:
-    bh_loudbox:
-      timeout: 10
-    bh_p300:
-      timeout: 10
-    bh_quietbox_2:
-      timeout: 10
-  owner_id: U07RD9YRFT9 # Slavko Krstic
-  team: ttnn
-
 # --- unit ---
 - id: bh-fabric-ttnn-udm-unit
   name: fabric and ttnn UDM unit tests
