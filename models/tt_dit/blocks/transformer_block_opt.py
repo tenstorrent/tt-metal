@@ -252,14 +252,24 @@ class TransformerBlock(Module):
         if self.norm1_linear is not None:
             assert temb_mod_params_img is None
 
-            spatial_time = self.norm1_linear(time_embed)
+            spatial_time = self.norm1_linear(
+                time_embed,
+                core_grid=Attention.get_core_grid(
+                    time_embed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                ),
+            )
             s_shift_a, s_scale_a, s_gate_a, s_shift_f, s_scale_f, s_gate_f = _chunk_time3d(spatial_time, 6)
             temb_mod_params_img = (s_shift_a, s_scale_a + 1, s_gate_a, s_shift_f, s_scale_f + 1, s_gate_f)
 
         if self.norm1_context_linear is not None:
             assert temb_mod_params_txt is None
 
-            prompt_time = self.norm1_context_linear(time_embed)
+            prompt_time = self.norm1_context_linear(
+                time_embed,
+                core_grid=Attention.get_core_grid(
+                    time_embed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                ),
+            )
             if self.context_pre_only:
                 # layout: (scale_attn, shift_attn)
                 p_scale_a, p_shift_a = _chunk_time3d(prompt_time, 2)
@@ -365,6 +375,9 @@ class TransformerBlock(Module):
                 scalar=1.0,
                 compute_kernel_config=self.ff_compute_kernel_config,
                 parallel_config=self.parallel_config,
+                core_grid=Attention.get_core_grid(
+                    spatial_normed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                ),
             )
         else:
             spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
@@ -397,6 +410,9 @@ class TransformerBlock(Module):
                 scalar=1.0,
                 compute_kernel_config=self.ff_compute_kernel_config,
                 parallel_config=self.parallel_config,
+                core_grid=Attention.get_core_grid(
+                    prompt_normed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                ),
             )
         else:
             prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
