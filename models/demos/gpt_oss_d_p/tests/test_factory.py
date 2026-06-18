@@ -42,8 +42,12 @@ class TestFactory:
 
         mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-        # Setup CCL
-        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
+        # Setup CCL — topology must match the fabric: BH uses linear (no torus links),
+        # WH uses ring.  (1,1) has no inter-chip fabric so topology is irrelevant.
+        from models.common.utility_functions import is_blackhole
+
+        topology = ttnn.Topology.Ring if not is_blackhole() and mesh_shape != (1, 1) else ttnn.Topology.Linear
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=topology)
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
 

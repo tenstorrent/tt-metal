@@ -23,8 +23,8 @@ Then run this test (1×8 mesh, TP=8):
       --max-layers 5
 
 Notes:
-  - Only SP=1 (single-row) meshes are supported.  Use --cols 8 (default) for a 1×8
-    T3K mesh or --cols 1 for a single card.
+  - Supports both SP=1 (1×8) and SP=4 (4×8) meshes.  For SP>1 the per-row hidden
+    states are gathered and concatenated along the sequence axis before comparison.
   - kv_cache is not populated; SDPA operates on the freshly-computed K/V directly so
     hidden-state activations are identical to the cache-filling path.
 """
@@ -70,20 +70,24 @@ def _sp_shard_embed(mesh, model, padded_ids, sp, isl_per_row):
 
 
 def _gather_hidden_states(tt_tensor, mesh) -> torch.Tensor:
-    """Return hidden states as a CPU float32 tensor [seq_len, hidden_size].
+    """Return hidden states as a CPU float32 tensor [total_seq_len, hidden_size].
 
-    Between layers, each TP device holds a full-width replicated copy of the
-    hidden states ([1, 1, seq_len, hidden_size]).  We read from device 0
-    (first device in the first SP row).  Only SP=1 meshes are supported.
+    Each SP row holds a contiguous slice of the sequence; within a row every TP
+    device holds an identical full-width copy ([1, 1, isl_per_row, hidden_size]).
+    We read column-0 of each row and concatenate along the sequence axis.
     """
+    sp, tp = mesh.shape
     device_tensors = ttnn.get_device_tensors(tt_tensor)
-    hs = ttnn.to_torch(device_tensors[0]).float()  # [1, 1, seq_len, hidden_size]
-    return hs[0, 0]  # [seq_len, hidden_size]
+    row_slices = []
+    for row in range(sp):
+        hs = ttnn.to_torch(device_tensors[row * tp]).float()  # [1, 1, isl_per_row, hidden_size]
+        row_slices.append(hs[0, 0])  # [isl_per_row, hidden_size]
+    return torch.cat(row_slices, dim=0)  # [total_seq_len, hidden_size]
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rows", type=int, default=1)
+    ap.add_argument("--rows", type=int, default=4)
     ap.add_argument("--cols", type=int, default=8)
     ap.add_argument("--prompt", type=str, default="What are the prime factors of 1?")
     ap.add_argument(
@@ -105,14 +109,6 @@ def main():
         help=f"minimum PCC for a layer to pass (default: {PCC_THRESHOLD})",
     )
     args = ap.parse_args()
-
-    if args.rows > 1:
-        print(
-            f"[layer_act] ERROR: SP={args.rows} (multi-row mesh) is not supported by this test. "
-            "Use --rows 1 (default) with --cols 8 or --cols 1.",
-            flush=True,
-        )
-        return 1
 
     oracle_dir = pathlib.Path(args.oracle_dir)
     results_path = oracle_dir / "ref_results.json"
@@ -174,7 +170,7 @@ def main():
         fabric = ttnn.FabricConfig.FABRIC_1D_RING
         topology = ttnn.Topology.Ring
 
-    print(f"[layer_act] mesh={shape} TP={shape[1]} fabric={fabric}", flush=True)
+    print(f"[layer_act] mesh={shape} SP={shape[0]} TP={shape[1]} fabric={fabric}", flush=True)
 
     if fabric is not None:
         ttnn.set_fabric_config(fabric)
