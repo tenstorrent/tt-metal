@@ -13,7 +13,7 @@ def device_params(request):
 
 
 @pytest.mark.parametrize("out,r1", [(8, 1), (64, 1), (64, 2), (128, 2)])
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_d2s_chunk_equiv(mesh_device, out, r1):
     b, t, h, w, r2, r3 = 1, 2, 16, 16, 2, 2
     cin = out * r1 * r2 * r3

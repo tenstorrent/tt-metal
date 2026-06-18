@@ -141,7 +141,8 @@ def device_params(request):
     return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+# Recommended full-QB2 layout: 2x2 mesh, SP=2 (axis 0) + TP=2 (axis 1) + 4-way EP.
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_resident_denoise_step(mesh_device):
     mesh_device.enable_program_cache()
     c = _cfg()
@@ -206,6 +207,10 @@ def test_resident_denoise_step(mesh_device):
         weight_dtype=ttnn.bfloat8_b,
         ccl_manager=ccl,
         expert_mesh_axis=1,
+        tp_axis=1,
+        tp_factor=2,
+        sp_axis=0,
+        sp_factor=2,
     )
 
     step = HunyuanTtDenoiseStep(
