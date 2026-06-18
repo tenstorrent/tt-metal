@@ -86,6 +86,16 @@
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
+- id: bh-qwen3-tts-pcc
+  name: qwen3-tts pcc
+  cmd: pytest models/demos/qwen3_tts/tests/test_qwen3_tts_pcc.py --timeout=600
+  skus:
+    bh_p150:
+      timeout: 15
+  owner_id: TBD # ssinghal@tenstorrent.com — fill in Slack user ID before merge
+  team: models
+  model-name: qwen3-tts
+
 # --- perf ---
 - id: bh-fabric-sanity-benchmark
   name: fabric sanity benchmark
@@ -308,3 +318,13 @@
       timeout: 20
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
+
+- id: bh-qwen3-tts-perf
+  name: qwen3-tts perf
+  cmd: pytest models/demos/qwen3_tts/tests/test_qwen3_tts_perf_device.py --timeout=600
+  skus:
+    bh_p150_perf:
+      timeout: 15
+  owner_id: TBD # ssinghal@tenstorrent.com — fill in Slack user ID before merge
+  team: models
+  model-name: qwen3-tts

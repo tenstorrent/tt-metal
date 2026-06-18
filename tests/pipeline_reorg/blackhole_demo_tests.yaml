@@ -168,19 +168,10 @@
 
 # ─── Qwen3-TTS ───────────────────────────────────────────────────────────────
 
-- name: qwen3-tts pcc
-  cmd: pytest models/demos/qwen3_tts/tests/test_qwen3_tts_pcc.py --timeout=600
+- name: qwen3-tts demo
+  cmd: pytest models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py::test_demo --timeout=600
   skus:
     bh_p150:
-      timeout: 15
-  owner_id: TBD # ssinghal@tenstorrent.com — fill in Slack user ID before merge
-  team: models
-  model-name: qwen3-tts
-
-- name: qwen3-tts perf
-  cmd: pytest models/demos/qwen3_tts/tests/test_qwen3_tts_perf_device.py --timeout=600
-  skus:
-    bh_p150_perf:
       timeout: 15
   owner_id: TBD # ssinghal@tenstorrent.com — fill in Slack user ID before merge
   team: models

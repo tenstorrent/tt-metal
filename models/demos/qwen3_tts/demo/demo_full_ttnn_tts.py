@@ -415,5 +415,25 @@ def main():
     )
 
 
+def test_demo():
+    """Pytest entrypoint for CI demo pipeline."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[4]
+    ref_audio = str(repo_root / "models" / "demos" / "qwen3_tts" / "demo" / "jim_reference.wav")
+    ref_text = "Jason, can we take a look at the review slides"
+    result = run_full_ttnn_tts(
+        text=(
+            "Good morning. Today is a beautiful day for a walk in the park, "
+            "with bright sun and a gentle breeze through the trees."
+        ),
+        ref_audio=ref_audio,
+        ref_text=ref_text,
+        output_path="/tmp/qwen3_tts_demo_ci.wav",
+        seed=42,
+    )
+    assert isinstance(result, dict), f"run_full_ttnn_tts must return a dict; got {type(result)}"
+
+
 if __name__ == "__main__":
     main()
