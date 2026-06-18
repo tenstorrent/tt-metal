@@ -363,10 +363,17 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
     if hasattr(vit, "encoder"):  # transformers <5: ViTEncoder is a callable module
         model = vit.encoder.to(torch.float32)
         torch_output = model(torch_hidden_states).last_hidden_state
-    else:  # transformers >=5: ViTEncoder removed; run the ViTLayer stack (ViTModel.layers) directly
-        model = vit.layers.to(torch.float32)
+    else:  # transformers >=5: ViTEncoder removed. Wrap the ViTLayer stack (ViTModel.layers) in a
+        # module exposing `.layer` so it preprocesses like the <5 ViTEncoder — a bare ModuleList
+        # otherwise trips ttnn's make_parameter_dict (which expects a dict, not a ParameterList).
+        class _ViTEncoderShim(torch.nn.Module):
+            def __init__(self, layers):
+                super().__init__()
+                self.layer = layers
+
+        model = _ViTEncoderShim(vit.layers).to(torch.float32)
         hidden = torch_hidden_states
-        for layer in model:
+        for layer in model.layer:
             # 5.x ViTLayer.forward returns a bare Tensor (4.x returned a tuple); don't index [0],
             # which would slice off the batch dim and corrupt the shape for the next layer.
             hidden = layer(hidden)

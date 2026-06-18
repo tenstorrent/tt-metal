@@ -465,11 +465,11 @@ def vit_encoder(
     )
     ttnn.deallocate(embeddings)
 
-    # transformers 5.x removed ViTEncoder (ViTModel.encoder.layer -> ViTModel.layers),
-    # so the preprocessed params are the layer list directly (no `.layer` sub-key).
-    # NB: use `in` (dict membership), not hasattr — ParameterDict.__getattr__ is dict.__getitem__,
-    # so hasattr() on a missing key raises KeyError instead of returning False.
-    encoder_layers = parameters.layer if "layer" in parameters else parameters
+    # transformers 5.x removed ViTEncoder (ViTModel.encoder.layer -> ViTModel.layers). The
+    # preprocessed params are either a ParameterDict with a `.layer` sub-key (<5 ViTEncoder, or the
+    # wrapped 5.x layer stack) or the layer list itself (ParameterList). ParameterList subclasses
+    # `list` and its __contains__ does an int comparison, so distinguish by isinstance, not `in`.
+    encoder_layers = parameters if isinstance(parameters, list) else parameters.layer
     for index, encoder_parameters in enumerate(encoder_layers):
         encoder_output = vit_layer(
             config,
