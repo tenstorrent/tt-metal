@@ -351,11 +351,11 @@ jobs:
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
-              "name": "[WH-T3K] NoOp test model (vLLM overhead)",
+              "name": "[WH-GLX] NoOp test model (vLLM overhead)",
               "model": "models/vllm_test_utils/no_op_test",
               "server-timeout": 2,
               "benchmark-timeout": 2,
-              "runner-label": "config-t3000",
+              "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(1, 2)",
               "tt-config": "{\"register_test_models\": true, \"input_queue_batching_delay\": 0}",
