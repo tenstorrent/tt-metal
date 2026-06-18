@@ -380,20 +380,15 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
     tokenizer = AutoTokenizer.from_pretrained(_SNAP)
 
     # Use Frankenstein (Project Gutenberg) as the long-context document — same
-    # source as gpt_oss's input_data_long_128k.json.  Each ISL prompt is:
-    #   [book text clipped to isl - len(question)] + question
-    # For ISLs longer than the book (~105K tokens), the book is repeated.
-    # The question asks for 3 quotes with AI metaphors — a real recall task that
-    # produces structured, verifiable output rather than repetition collapse.
+    # source as gpt_oss's input_data_long_128k.json.  This is a base (non-instruct)
+    # model so the right coherency test is raw text continuation: feed the first
+    # ~isl tokens of the book and verify the model continues with coherent prose.
+    # Instruction-following prompts ("find 3 quotes...") only work with instruct
+    # fine-tunes and cause base models to hallucinate or echo the template.
+    # For ISLs longer than the book (~105K tokens) the book is repeated.
+    # Leave _HEADROOM tokens so the prompt never exactly fills max_seq_len.
     _GUTENBERG_URL = "https://www.gutenberg.org/cache/epub/84/pg84.txt"
-    _QUESTION = (
-        "Based on the text above, explicitly state three quotes directly taken "
-        "from the book inside double quotes, each followed by a metaphor relating "
-        "to artificial intelligence:\n"
-        'A. "<quote>"\nMetaphor: <metaphor>\n'
-        'B. "<quote>"\nMetaphor: <metaphor>\n'
-        'C. "<quote>"\nMetaphor: <metaphor>\n'
-    )
+    _HEADROOM = 64  # tokens reserved for decode within the max_seq_len window
     _cache_dir = pathlib.Path("/tmp/nemotron_context_cache")
     _cache_dir.mkdir(exist_ok=True)
     _book_cache = _cache_dir / "frankenstein_pg84.txt"
@@ -407,21 +402,13 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         print(f"[context] Cached to {_book_cache} ({len(_book_text):,} chars).", flush=True)
 
     _book_ids = tokenizer.encode(_book_text, add_special_tokens=False)
-    _question_ids = tokenizer.encode(_QUESTION, add_special_tokens=False)
-    print(
-        f"[context] Book: {len(_book_ids):,} tokens  Question: {len(_question_ids)} tokens",
-        flush=True,
-    )
+    print(f"[context] Book: {len(_book_ids):,} tokens", flush=True)
 
     def _build_prompt_ids(isl: int) -> list:
-        """Return token list of length ~isl: [book[:isl-Q]] + question."""
-        n_book = max(0, isl - len(_question_ids))
-        if n_book == 0:
-            return _question_ids[:isl]
-        # Repeat book if ISL exceeds its length.
-        reps = (n_book + len(_book_ids) - 1) // len(_book_ids)
-        book_pool = (_book_ids * reps)[:n_book]
-        return book_pool + _question_ids
+        """Return ~(isl - _HEADROOM) tokens of book text (repeated if needed)."""
+        n = max(1, isl - _HEADROOM)
+        reps = (n + len(_book_ids) - 1) // len(_book_ids)
+        return (_book_ids * reps)[:n]
 
     # KV-cache budget strategy:
     # ISLs ≤ 32K share one persistent state (96 MB KV per device); ISLs > 32K get a
