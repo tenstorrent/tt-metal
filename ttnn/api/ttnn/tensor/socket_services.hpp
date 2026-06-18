@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <tt_stl/span.hpp>
@@ -30,7 +31,12 @@
 namespace tt::tt_metal::distributed {
 class MeshDevice;
 class MeshBuffer;
+class NamedShm;
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
+class PinnedMemory;
+}  // namespace tt::tt_metal::experimental
 
 namespace tt::tt_metal {
 
@@ -98,8 +104,12 @@ public:
         const Tensor& host_tensor,
         ttsl::Span<const std::byte> metadata = {});
 
-    // Block until every in-flight host->socket write has been ACKed by the
-    // device-side kernel.
+    // Block until every in-flight transfer has fully landed in the backing tensor.
+    // The reader acks each socket page as soon as it is staged in L1 (recycling the
+    // host FIFO slot early), so the socket ack no longer implies the DRAM write is
+    // done; barrier() therefore also waits on the per-coord writer DRAM-completion
+    // counters (pushed to shared host pinned memory) before returning. Safe to read
+    // the backing tensor afterward from the owner.
     void barrier();
 
     const Tensor& get_backing_tensor() const;
@@ -171,11 +181,24 @@ private:
         Config cfg,
         std::vector<std::unique_ptr<distributed::H2DSocket>> sockets,
         uint32_t socket_page_size,
-        uint32_t num_socket_pages);
+        uint32_t num_socket_pages,
+        std::string completion_shm_name,
+        uint64_t completion_shm_size,
+        uint32_t completion_issued_offset,
+        uint32_t completion_completed_offset,
+        uint32_t completion_completed_stride);
 
     // Flip the termination signal 0 -> 1 so each persistent receiver kernel exits
     // on its next poll. Idempotent.
     void signal_termination();
+
+    // Block until the reader has ACKed every in-flight socket write (data staged in
+    // L1). This is the socket-only half of barrier(); the destructor uses it rather
+    // than the full barrier() because wait_done() -- not the writer DRAM-completion
+    // counters -- is what guarantees the DRAM scatter finished at teardown, and
+    // waiting on those counters during teardown would hang if a worker-sync wait is
+    // still outstanding.
+    void drain_socket_acks();
 
     // True for owner services (own all device-side resources), false for
     // connector services. The dtor branches on it.
@@ -228,6 +251,30 @@ private:
     // the service's lifetime.
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
+
+    // Writer DRAM-completion tracking. The owner creates one shared completion
+    // region and maps it to every participating coord; connectors map the same
+    // SHM through the exported descriptor. Layout:
+    //
+    //   issued:        uint32_t, incremented once per logical forward_to_tensor
+    //   completed[i]:  uint32_t, pushed by writer i after DRAM commit
+    //
+    // Completed slots are spaced by host PCIe alignment because device PCIe
+    // writes have stricter target alignment requirements than host reads.
+    //
+    // uint32_t modulo equality is intentional: barrier correctness requires
+    // fewer than 2^32 uncompleted logical transfers outstanding.
+    std::unique_ptr<distributed::NamedShm> completion_shm_;
+    std::shared_ptr<uint32_t[]> completion_host_mem_;
+    std::shared_ptr<experimental::PinnedMemory> completion_pinned_;
+    volatile uint32_t* completion_issued_ = nullptr;
+    std::vector<volatile uint32_t*> completion_counters_;
+    uint64_t completion_shm_size_ = 0;
+    uint32_t completion_issued_offset_ = 0;
+    uint32_t completion_completed_offset_ = 0;
+    uint32_t completion_completed_stride_ = sizeof(uint32_t);
+    // Per-coord L1 scratch word the writer stages the count in before pushing it.
+    std::map<distributed::MeshCoordinate, DeviceAddr> completion_src_addrs_;
 };
 
 }  // namespace tt::tt_metal

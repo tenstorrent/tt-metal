@@ -118,8 +118,8 @@ void py_module_types(nb::module_& mod) {
             // Distributed host-tensor path. Tensor must already be distributed by a
             // mapper equivalent to the one the service was constructed with (i.e.
             // its per-shard spec must equal get_per_shard_spec()). Returns once the
-            // bytes are in the socket FIFOs; call barrier() to wait for the device
-            // to drain them.
+            // bytes are in the socket FIFOs; call barrier() to wait for the device to
+            // drain them all the way into the backing tensor (DRAM).
             //
             // `metadata` must be exactly `metadata_size_bytes` bytes long when the
             // service was constructed with metadata enabled; empty otherwise. An
@@ -182,7 +182,12 @@ void py_module_types(nb::module_& mod) {
             "barrier",
             &tt::tt_metal::H2DStreamService::barrier,
             R"doc(
-                Block until the device has acknowledged every in-flight host write.
+                Block until every forwarded transfer has fully landed in the backing
+                tensor (committed to DRAM), then return. Safe to read the backing
+                tensor afterward. The device-side reader acknowledges each socket page
+                as soon as it is staged in L1 -- which recycles the host FIFO slot
+                early but does not mean the data has reached DRAM -- so barrier() also
+                waits on the writer's DRAM-completion signal, not just the socket acks.
                 Call before reading the backing tensor or destroying the service.
             )doc")
         .def(
