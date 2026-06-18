@@ -71,7 +71,16 @@ struct BinaryNgDeviceOperation {
             tensor_return_value_t& c);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    // Quasar (metal 2.0) program factory variant.
+    struct ProgramFactoryQsr {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& c);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory, ProgramFactoryQsr>;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

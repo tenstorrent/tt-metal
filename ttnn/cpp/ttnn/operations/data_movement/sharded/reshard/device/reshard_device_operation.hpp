@@ -10,6 +10,12 @@
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_generic.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_pages.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_local.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_same_width_qsr.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_same_height_qsr.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_generic_qsr.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_pages_qsr.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_local_qsr.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -30,7 +36,16 @@ struct ReshardDeviceOperation {
         ReshardGenericFactory,
         NdReshardCopyPagesFactory,
         NdReshardCopyLocalShardFactory</*local_is_input*/ true>,
-        NdReshardCopyLocalShardFactory</*local_is_input*/ false>>;
+        NdReshardCopyLocalShardFactory</*local_is_input*/ false>,
+        // Quasar (metal 2.0) variants.
+        ReshardSameWidthFactoryQsr</*local_is_output*/ true>,
+        ReshardSameWidthFactoryQsr</*local_is_output*/ false>,
+        ReshardSameHeightFactoryQsr</*local_is_output*/ true>,
+        ReshardSameHeightFactoryQsr</*local_is_output*/ false>,
+        ReshardGenericFactoryQsr,
+        NdReshardCopyPagesFactoryQsr,
+        NdReshardCopyLocalShardFactoryQsr</*local_is_input*/ true>,
+        NdReshardCopyLocalShardFactoryQsr</*local_is_input*/ false>>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

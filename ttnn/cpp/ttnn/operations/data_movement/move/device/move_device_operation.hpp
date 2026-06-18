@@ -10,6 +10,10 @@
 #include "move_program_factory.hpp"
 #include "move_overlap_program_factory.hpp"
 #include "move_sharded_program_factory.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "move_program_factory_qsr.hpp"
+#include "move_overlap_program_factory_qsr.hpp"
+#include "move_sharded_program_factory_qsr.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
@@ -21,7 +25,14 @@ struct MoveDeviceOperation {
     using tensor_return_value_t = Tensor;
     using spec_return_value_t = ttnn::TensorSpec;
 
-    using program_factory_t = std::variant<MoveProgramFactory, MoveOverlapProgramFactory, MoveShardedProgramFactory>;
+    using program_factory_t = std::variant<
+        MoveProgramFactory,
+        MoveOverlapProgramFactory,
+        MoveShardedProgramFactory,
+        // Quasar (metal 2.0) variants.
+        MoveProgramFactoryQsr,
+        MoveOverlapProgramFactoryQsr,
+        MoveShardedProgramFactoryQsr>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

@@ -147,6 +147,9 @@ target_sources(
             move/device/move_overlap_program_factory.hpp
             move/device/move_program_factory.hpp
             move/device/move_sharded_program_factory.hpp
+            move/device/move_program_factory_qsr.hpp
+            move/device/move_overlap_program_factory_qsr.hpp
+            move/device/move_sharded_program_factory_qsr.hpp
             # non_zero_indices/
             non_zero_indices/non_zero_indices.hpp
             non_zero_indices/non_zero_indices_nanobind.hpp
@@ -164,6 +167,13 @@ target_sources(
             pad/device/pad_rm_sharded_width_only_program_factory.hpp
             pad/device/pad_tile_multicore_program_factory.hpp
             pad/device/pad_tile_program_factory.hpp
+            pad/device/pad_rm_reader_writer_multi_core_program_factory_qsr.hpp
+            pad/device/pad_rm_reader_writer_multi_core_default_program_factory_qsr.hpp
+            pad/device/pad_rm_reader_writer_program_factory_qsr.hpp
+            pad/device/pad_rm_sharded_height_only_program_factory_qsr.hpp
+            pad/device/pad_rm_sharded_width_only_program_factory_qsr.hpp
+            pad/device/pad_tile_multicore_program_factory_qsr.hpp
+            pad/device/pad_tile_program_factory_qsr.hpp
             # permute/
             permute/permute_nanobind.hpp
             permute/device/permute_device_operation.hpp
@@ -218,6 +228,11 @@ target_sources(
             sharded/reshard/device/reshard_program_factory_same_width.hpp
             sharded/reshard/device/nd_reshard_program_factory_copy_local.hpp
             sharded/reshard/device/nd_reshard_program_factory_copy_pages.hpp
+            sharded/reshard/device/reshard_program_factory_same_width_qsr.hpp
+            sharded/reshard/device/reshard_program_factory_same_height_qsr.hpp
+            sharded/reshard/device/reshard_program_factory_generic_qsr.hpp
+            sharded/reshard/device/nd_reshard_program_factory_copy_local_qsr.hpp
+            sharded/reshard/device/nd_reshard_program_factory_copy_pages_qsr.hpp
             sharded/sharded_to_interleaved/sharded_to_interleaved.hpp
             sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp
             # sharded_partial/
@@ -240,6 +255,11 @@ target_sources(
             slice/device/slice_program_factory_rm_stride.hpp
             slice/device/slice_program_factory_tile.hpp
             slice/device/slice_program_factory_tile_tensor_args.hpp
+            slice/device/slice_program_factory_rm_qsr.hpp
+            slice/device/slice_program_factory_rm_sharded_qsr.hpp
+            slice/device/slice_program_factory_rm_stride_qsr.hpp
+            slice/device/slice_program_factory_tile_qsr.hpp
+            slice/device/slice_program_factory_tile_tensor_args_qsr.hpp
             # sort/
             sort/sort.hpp
             sort/sort_nanobind.hpp
@@ -268,6 +288,11 @@ target_sources(
             tilize/device/tilize_multi_core_sharded_program_factory.hpp
             tilize/device/tilize_multi_core_width_sharded_program_factory.hpp
             tilize/device/tilize_single_core_program_factory.hpp
+            tilize/device/tilize_multi_core_default_program_factory_qsr.hpp
+            tilize/device/tilize_multi_core_block_program_factory_qsr.hpp
+            tilize/device/tilize_multi_core_sharded_program_factory_qsr.hpp
+            tilize/device/tilize_multi_core_width_sharded_program_factory_qsr.hpp
+            tilize/device/tilize_single_core_program_factory_qsr.hpp
             # tilize_with_val_padding/
             tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp
             tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp
@@ -288,6 +313,14 @@ target_sources(
             transpose/device/transpose_hc_tiled_program_factory.hpp
             transpose/device/transpose_wh_program_factory.hpp
             transpose/device/transpose_wh_sharded_program_factory.hpp
+            transpose/device/transpose_cn_program_factory_qsr.hpp
+            transpose/device/transpose_hc_rm_program_factory_qsr.hpp
+            transpose/device/transpose_hc_sharded_program_factory_qsr.hpp
+            transpose/device/transpose_hc_tiled_interleaved_program_factory_qsr.hpp
+            transpose/device/transpose_hc_tiled_program_factory_qsr.hpp
+            transpose/device/transpose_wh_program_factory_qsr.hpp
+            transpose/device/transpose_wh_sharded_program_factory_qsr.hpp
+            transpose/device/transpose_wh_sharded_rm_program_factory_qsr.hpp
             transpose/device/transpose_utils.hpp
             transpose/device/transpose_wh_sharded_rm_program_factory.hpp
             # unsqueeze/
@@ -316,6 +349,12 @@ target_sources(
             untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_shared_variables.hpp
             untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.hpp
             untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp
+            untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory_qsr.hpp
+            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_interleaved_program_factory_qsr.hpp
+            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory_qsr.hpp
+            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory_qsr.hpp
+            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory_qsr.hpp
+            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory_qsr.hpp
             # view/
             view/view.hpp
             view/view_nanobind.hpp
@@ -339,3 +378,50 @@ install(
 )
 
 install(TARGETS ttnn_op_data_movement LIBRARY COMPONENT tar)
+
+# Quasar (_qsr) factory copies are byte-near-identical clones of the originals; exclude them
+# from unity build so duplicated file-local helpers don't collide in a shared translation unit.
+set_source_files_properties(
+    pad/device/pad_rm_reader_writer_multi_core_default_program_factory_qsr.cpp
+    pad/device/pad_rm_reader_writer_multi_core_program_factory_qsr.cpp
+    pad/device/pad_rm_reader_writer_program_factory_qsr.cpp
+    pad/device/pad_rm_sharded_height_only_program_factory_qsr.cpp
+    pad/device/pad_rm_sharded_width_only_program_factory_qsr.cpp
+    pad/device/pad_tile_multicore_program_factory_qsr.cpp
+    pad/device/pad_tile_program_factory_qsr.cpp
+    sharded/reshard/device/nd_reshard_program_factory_copy_local_qsr.cpp
+    sharded/reshard/device/nd_reshard_program_factory_copy_pages_qsr.cpp
+    sharded/reshard/device/reshard_program_factory_generic_qsr.cpp
+    sharded/reshard/device/reshard_program_factory_same_height_qsr.cpp
+    sharded/reshard/device/reshard_program_factory_same_width_qsr.cpp
+    slice/device/slice_program_factory_rm_qsr.cpp
+    slice/device/slice_program_factory_rm_sharded_qsr.cpp
+    slice/device/slice_program_factory_rm_stride_qsr.cpp
+    slice/device/slice_program_factory_tile_qsr.cpp
+    slice/device/slice_program_factory_tile_tensor_args_qsr.cpp
+    tilize/device/tilize_multi_core_block_program_factory_qsr.cpp
+    tilize/device/tilize_multi_core_default_program_factory_qsr.cpp
+    tilize/device/tilize_multi_core_sharded_program_factory_qsr.cpp
+    tilize/device/tilize_multi_core_width_sharded_program_factory_qsr.cpp
+    tilize/device/tilize_single_core_program_factory_qsr.cpp
+    transpose/device/transpose_cn_program_factory_qsr.cpp
+    transpose/device/transpose_hc_rm_program_factory_qsr.cpp
+    transpose/device/transpose_hc_sharded_program_factory_qsr.cpp
+    transpose/device/transpose_hc_tiled_interleaved_program_factory_qsr.cpp
+    transpose/device/transpose_hc_tiled_program_factory_qsr.cpp
+    transpose/device/transpose_wh_program_factory_qsr.cpp
+    transpose/device/transpose_wh_sharded_program_factory_qsr.cpp
+    transpose/device/transpose_wh_sharded_rm_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_interleaved_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory_qsr.cpp
+    move/device/move_program_factory_qsr.cpp
+    move/device/move_overlap_program_factory_qsr.cpp
+    move/device/move_sharded_program_factory_qsr.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)

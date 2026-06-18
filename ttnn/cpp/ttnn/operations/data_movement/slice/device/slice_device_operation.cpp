@@ -263,9 +263,45 @@ Tensor SliceDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, input.device());
 }
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() but returns the *Qsr
+// program factory variants (new metal 2.0 kernels). Keeping it separate leaves the
+// Wormhole/Blackhole path untouched.
+static SliceDeviceOperation::program_factory_t select_program_factory_qsr(
+    const SliceDeviceOperation::operation_attributes_t& args, const SliceDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+
+    if (args.use_tensor_args) {
+        return SliceTileTensorArgsProgramFactoryQsr{};
+    }
+
+    // Check if we have step != 1
+    bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
+
+    if (input.layout() == Layout::ROW_MAJOR) {
+        const bool height_sharded_in_out_no_step =
+            input.is_sharded() &&
+            input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            args.output_mem_config.is_sharded() &&
+            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step;
+        if (height_sharded_in_out_no_step) {
+            return SliceRmShardedProgramFactoryQsr{};
+        }
+        if (has_step) {
+            return SliceRmStrideProgramFactoryQsr{};
+        }
+        return SliceRmProgramFactoryQsr{};
+    }
+    return SliceTileProgramFactoryQsr{};
+}
+
 SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
+
+    bool is_quasar = input.device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return select_program_factory_qsr(args, tensor_args);
+    }
 
     if (args.use_tensor_args) {
         return SliceTileTensorArgsProgramFactory{};

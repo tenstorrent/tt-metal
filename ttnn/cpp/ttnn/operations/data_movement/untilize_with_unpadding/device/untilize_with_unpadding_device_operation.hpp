@@ -11,6 +11,13 @@
 #include "factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "factories/untilize_with_unpadding_single_core_program_factory_qsr.hpp"
+#include "factories/untilize_with_unpadding_multi_core_interleaved_program_factory_qsr.hpp"
+#include "factories/untilize_with_unpadding_multi_core_sharded_program_factory_qsr.hpp"
+#include "factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory_qsr.hpp"
+#include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory_qsr.hpp"
+#include "factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory_qsr.hpp"
 #include <variant>
 #include "ttnn/operation.hpp"
 
@@ -28,7 +35,14 @@ struct UntilizeWithUnpaddingDeviceOperation {
         UntilizeWithUnpaddingMultiCoreShardedProgramFactory,
         UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory,
         UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory,
-        UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory>;
+        UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory,
+        // Quasar (metal 2.0) variants.
+        UntilizeWithUnpaddingSingleCoreProgramFactoryQsr,
+        UntilizeWithUnpaddingMultiCoreInterleavedProgramFactoryQsr,
+        UntilizeWithUnpaddingMultiCoreShardedProgramFactoryQsr,
+        UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactoryQsr,
+        UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactoryQsr,
+        UntilizeWithUnpaddingMultiCoreNDShardedProgramFactoryQsr>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const Tensor& input);

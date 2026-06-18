@@ -19,6 +19,15 @@
 #include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
 
+// Quasar (metal 2.0) program factory variants.
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_default_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_height_only_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory_qsr.hpp"
+
 using namespace tt::tt_metal;
 namespace ttnn::prim {
 using ttnn::operations::data_movement::common_tm_bw_model;
@@ -67,9 +76,61 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> PadDevic
     return result;
 }
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() below but returns the
+// *Qsr program factory variants, which use the new metal 2.0 kernels. Keeping this separate leaves
+// the Wormhole/Blackhole selection path untouched.
+static PadDeviceOperation::program_factory_t select_program_factory_qsr(
+    const PadDeviceOperation::operation_attributes_t& operation_attributes,
+    const PadDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        if (input_tensor.is_sharded()) {
+            if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+                uint32_t input_w = input_tensor.logical_shape()[3];
+                uint32_t output_w = operation_attributes.output_logical_shape[3];
+                uint32_t input_tot_h = std::accumulate(
+                    input_tensor.logical_shape().view().begin(),
+                    input_tensor.logical_shape().view().end() - 1,
+                    1,
+                    std::multiplies<uint32_t>());
+                uint32_t output_tot_h = std::accumulate(
+                    operation_attributes.output_logical_shape.view().begin(),
+                    operation_attributes.output_logical_shape.view().end() - 1,
+                    1,
+                    std::multiplies<uint32_t>());
+
+                if (input_w != output_w && input_tot_h == output_tot_h) {
+                    return PadRmShardedWidthOnlyProgramFactoryQsr{};
+                }
+                if (input_w == output_w) {
+                    return PadRmShardedHeightOnlyProgramFactoryQsr{};
+                }
+                // Combined width+height padding: fall through to the default factory
+            }
+            return PadRmReaderWriterMultiCoreDefaultProgramFactoryQsr{};
+        }
+        if (operation_attributes.use_multicore) {
+            return PadRmReaderWriterMultiCoreDefaultProgramFactoryQsr{};
+        }
+        return PadRmReaderWriterProgramFactoryQsr{};
+    }
+    if (input_tensor.layout() == Layout::TILE) {
+        if (operation_attributes.use_multicore) {
+            return PadTileMulticoreProgramFactoryQsr{};
+        }
+        return PadTileCoreProgramFactoryQsr{};
+    }
+    TT_THROW("Unsupported layout for pad");
+    return {};
+}
+
 PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
+    bool is_quasar = input_tensor.device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return select_program_factory_qsr(operation_attributes, tensor_args);
+    }
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         if (input_tensor.is_sharded()) {
             if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {

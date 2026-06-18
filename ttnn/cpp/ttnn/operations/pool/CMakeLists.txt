@@ -50,3 +50,12 @@ install(
 )
 
 install(TARGETS ttnn_op_pool FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+# Quasar (_qsr) factory copies are byte-near-identical clones of the originals; exclude them
+# from unity build so duplicated file-local helpers don't collide in a shared translation unit.
+set_source_files_properties(
+    generic/device/pool_multi_core_program_factory_qsr.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)

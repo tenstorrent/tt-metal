@@ -15,8 +15,63 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() but returns the *Qsr
+// program factory variants (new metal 2.0 kernels). Keeping it separate leaves the
+// Wormhole/Blackhole path untouched.
+static UntilizeWithUnpaddingDeviceOperation::program_factory_t select_program_factory_qsr(
+    const UntilizeWithUnpaddingDeviceOperation::operation_attributes_t& operation_attributes,
+    const UntilizeWithUnpaddingDeviceOperation::tensor_args_t& input) {
+    if (input.memory_config().is_sharded()) {
+        TT_FATAL(
+            !operation_attributes.sub_core_grids.has_value(),
+            "Sharded untilize does not support sub core grid specification");
+        if (input.shard_spec().has_value()) {
+            return UntilizeWithUnpaddingMultiCoreShardedProgramFactoryQsr{};
+        }
+        return UntilizeWithUnpaddingMultiCoreNDShardedProgramFactoryQsr{};
+    }
+    if (!operation_attributes.use_multicore) {
+        return UntilizeWithUnpaddingSingleCoreProgramFactoryQsr{};
+    }
+    if (!operation_attributes.enough_space_height) {
+        return UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactoryQsr{};
+    }
+    const auto& a = input;
+    const auto& input_shape = a.padded_shape();
+    auto* device = a.device();
+    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid =
+        operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
+
+    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+
+    size_t grid_area = available_grid.num_cores();
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
+        uint32_t num_blocks_block =
+            (a.padded_shape()[-1] * a.padded_shape()[-2]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+
+        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+        if (ncores < ncores_wh.ncores) {
+            return UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactoryQsr{};
+        }
+    }
+    return UntilizeWithUnpaddingMultiCoreInterleavedProgramFactoryQsr{};
+}
+
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    bool is_quasar = input.device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return select_program_factory_qsr(operation_attributes, input);
+    }
     if (input.memory_config().is_sharded()) {
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),

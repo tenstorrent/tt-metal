@@ -13,6 +13,8 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
+// Quasar (metal 2.0) program factory variant.
+#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory_qsr.hpp"
 
 namespace ttnn::prim {
 
@@ -22,7 +24,9 @@ struct HaloDeviceOperation {
     using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<UntilizeWithHaloProgramFactory>;
+    using program_factory_t = std::variant<UntilizeWithHaloProgramFactory, UntilizeWithHaloProgramFactoryQsr>;
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);

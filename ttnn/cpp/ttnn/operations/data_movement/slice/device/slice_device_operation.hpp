@@ -10,6 +10,12 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_qsr.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded_qsr.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride_qsr.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_qsr.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args_qsr.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -38,7 +44,13 @@ struct SliceDeviceOperation {
         SliceRmShardedProgramFactory,
         SliceRmStrideProgramFactory,
         SliceTileProgramFactory,
-        SliceTileTensorArgsProgramFactory>;
+        SliceTileTensorArgsProgramFactory,
+        // Quasar (metal 2.0) variants.
+        SliceRmProgramFactoryQsr,
+        SliceRmShardedProgramFactoryQsr,
+        SliceRmStrideProgramFactoryQsr,
+        SliceTileProgramFactoryQsr,
+        SliceTileTensorArgsProgramFactoryQsr>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

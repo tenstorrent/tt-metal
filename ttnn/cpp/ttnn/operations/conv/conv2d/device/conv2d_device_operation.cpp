@@ -5,6 +5,9 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory_qsr.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory_qsr.hpp"
 
 #include <array>
 #include <cstdint>
@@ -30,8 +33,25 @@ namespace ttnn::prim {
 
 using ttnn::operations::conv::calculate_output_image_size;
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() below but returns the
+// *Qsr program factory variants, which use the new metal 2.0 kernels. Keeping this separate leaves
+// the Wormhole/Blackhole selection path untouched.
+static Conv2dDeviceOperation::program_factory_t select_program_factory_qsr(
+    const Conv2dDeviceOperation::operation_attributes_t& /*args*/,
+    const Conv2dDeviceOperation::tensor_args_t& tensor_args) {
+    if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        // Use width sharded implementation
+        return Conv2dWidthShardedProgramFactoryQsr{};
+    }  // Use regular sharded implementation
+    return Conv2dShardedProgramFactoryQsr{};
+}
+
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    bool is_quasar = tensor_args.a.device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return select_program_factory_qsr(args, tensor_args);
+    }
     if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         // Use width sharded implementation
         return Conv2dWidthShardedProgramFactory{};

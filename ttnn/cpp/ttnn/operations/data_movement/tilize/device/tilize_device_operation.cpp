@@ -9,6 +9,12 @@
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_multi_core_width_sharded_program_factory.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "tilize_multi_core_default_program_factory_qsr.hpp"
+#include "tilize_multi_core_block_program_factory_qsr.hpp"
+#include "tilize_single_core_program_factory_qsr.hpp"
+#include "tilize_multi_core_sharded_program_factory_qsr.hpp"
+#include "tilize_multi_core_width_sharded_program_factory_qsr.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
@@ -172,10 +178,73 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
 }
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() but returns the *Qsr
+// program factory variants (new metal 2.0 kernels). Keeping it separate leaves the
+// Wormhole/Blackhole path untouched.
+static TilizeDeviceOperation::program_factory_t select_program_factory_qsr(
+    const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor_a = tensor_args.input_tensor;
+
+    bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
+                           (operation_attributes.sub_core_grids.has_value() &&
+                            (operation_attributes.sub_core_grids.value().num_cores() < 2));
+    if (use_single_core) {
+        return ttnn::prim::TilizeSingleCoreProgramFactoryQsr{};
+    }
+
+    if (input_tensor_a.memory_config().is_sharded()) {
+        if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+            if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+                return ttnn::prim::TilizeMultiCoreWidthShardedProgramFactoryQsr{};
+            }
+            return ttnn::prim::TilizeMultiCoreShardedProgramFactoryQsr{};
+        }
+        return ttnn::prim::TilizeMultiCoreDefaultProgramFactoryQsr{};
+    }
+    if (!operation_attributes.enough_space_height) {
+        return ttnn::prim::TilizeMultiCoreBlockProgramFactoryQsr{};
+    }
+    auto sub_core_grids = operation_attributes.sub_core_grids;
+
+    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
+    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+
+    int32_t ntiles = input_tensor_a.physical_volume() / tt::constants::TILE_HW;
+    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t nblocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_block);
+
+    auto* device = input_tensor_a.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+
+    size_t grid_area = available_grid.num_cores();
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
+        uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
+                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+        if (ncores < ncores_wh.ncores) {
+            return ttnn::prim::TilizeMultiCoreBlockProgramFactoryQsr{};
+        }
+    }
+    return ttnn::prim::TilizeMultiCoreDefaultProgramFactoryQsr{};
+}
+
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
+
+    bool is_quasar = input_tensor_a.device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return select_program_factory_qsr(operation_attributes, tensor_args);
+    }
 
     bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
                            (operation_attributes.sub_core_grids.has_value() &&

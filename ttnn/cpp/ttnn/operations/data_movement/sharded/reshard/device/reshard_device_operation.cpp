@@ -51,9 +51,79 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() but returns the *Qsr
+// program factory variants (new metal 2.0 kernels). Keeping it separate leaves the
+// Wormhole/Blackhole path untouched.
+static ReshardDeviceOperation::program_factory_t select_program_factory_qsr(
+    const ReshardDeviceOperation::operation_attributes_t& args,
+    const ReshardDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+    auto output_tensor_spec = ReshardDeviceOperation::compute_output_specs(args, tensor_args);
+    const auto& out_mem_config = output_tensor_spec.memory_config();
+
+    if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, out_mem_config)) {
+        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+            out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+            if (out_mem_config.buffer_type() == BufferType::L1) {
+                return ReshardSameWidthFactoryQsr</*local_is_output*/ true>{};
+            }
+            return ReshardSameWidthFactoryQsr</*local_is_output*/ false>{};
+        }
+        if (input_tensor.layout() == Layout::ROW_MAJOR &&
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            if (out_mem_config.buffer_type() == BufferType::L1) {
+                bool has_padding = false;
+                CoreCoord input_shard_grid = input_tensor.buffer()->shard_spec().grid().ranges()[0].grid_size();
+                CoreCoord output_shard_grid = out_mem_config.shard_spec().value().grid.ranges()[0].grid_size();
+                uint32_t input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
+                uint32_t output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
+                uint32_t input_shard_width = input_tensor.buffer()->shard_spec().shape()[1];
+                uint32_t output_shard_width = out_mem_config.shard_spec().value().shape[1];
+                has_padding = input_num_shard_cores * input_shard_width > input_tensor.logical_shape()[-1];
+                has_padding =
+                    has_padding || output_num_shard_cores * output_shard_width > input_tensor.logical_shape()[-1];
+                if (has_padding) {
+                    return ReshardGenericFactoryQsr{};
+                }
+                return ReshardSameHeightFactoryQsr</*local_is_output*/ true>{};
+            }
+            return ReshardSameHeightFactoryQsr</*local_is_output*/ false>{};
+        }
+        return ReshardGenericFactoryQsr{};
+    }
+    auto input_buffer_type = input_tensor.memory_config().buffer_type();
+    auto output_buffer_type = out_mem_config.buffer_type();
+    auto input_page_size = input_tensor.buffer()->page_size();
+    auto output_page_size = output_tensor_spec.compute_page_size_bytes();
+
+    TT_FATAL(
+        input_buffer_type == BufferType::DRAM || input_buffer_type == BufferType::L1,
+        "Input buffer type must be DRAM or L1");
+    TT_FATAL(
+        output_buffer_type == BufferType::DRAM || output_buffer_type == BufferType::L1,
+        "Output buffer type must be DRAM or L1");
+
+    if (input_buffer_type == BufferType::DRAM && output_buffer_type == BufferType::DRAM) {
+        return NdReshardCopyPagesFactoryQsr{};
+    }
+    if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
+        input_page_size != output_page_size) {
+        return NdReshardCopyLocalShardFactoryQsr</*local_is_input*/ true>{};
+    }
+
+    if (input_buffer_type == BufferType::DRAM) {
+        return NdReshardCopyLocalShardFactoryQsr</*local_is_input*/ false>{};
+    }
+    return NdReshardCopyLocalShardFactoryQsr</*local_is_input*/ true>{};
+}
+
 ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
+    if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+        return select_program_factory_qsr(args, tensor_args);
+    }
     auto output_tensor_spec = compute_output_specs(args, tensor_args);
     const auto& out_mem_config = output_tensor_spec.memory_config();
 

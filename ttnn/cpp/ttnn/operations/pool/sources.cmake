@@ -11,6 +11,7 @@ set(TTNN_OP_POOL_API_HEADERS
 
 set(TTNN_OP_POOL_SRCS
     generic/device/pool_multi_core_program_factory.cpp
+    generic/device/pool_multi_core_program_factory_qsr.cpp
     generic/device/pool_op.cpp
     generic/generic_pools.cpp
     grid_sample/device/grid_sample_device_operation.cpp

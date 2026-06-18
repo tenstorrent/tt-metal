@@ -96,9 +96,76 @@ MemoryConfig derive_effective_output_memory_config(
 
 }  // namespace
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() but returns the *Qsr
+// program factory variants (new metal 2.0 kernels). Keeping it separate leaves the
+// Wormhole/Blackhole path untouched.
+static TransposeDeviceOperation::program_factory_t select_program_factory_qsr(
+    const TransposeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TransposeDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+    const auto output_memory_config = derive_effective_output_memory_config(operation_attributes, tensor_args);
+    const auto& dim = operation_attributes.dim;
+    bool is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
+
+    bool native = is_native_transpose_sharding(input_tensor.tensor_spec(), output_memory_config);
+
+    const auto& input_padded_shape = input_tensor.padded_shape();
+    const auto output_padded_shape = transposed_shapes(input_tensor, dim).padded;
+    uint32_t N = input_padded_shape[0], C = input_padded_shape[1];
+    uint32_t output_width = output_padded_shape[-1];
+    uint32_t output_height = output_padded_shape[-2];
+
+    bool input_height_sharded = native && input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
+                                input_tensor.shard_spec()->shape[1] == input_padded_shape[-1];
+    bool input_width_and_height_fully_in_shard =
+        input_height_sharded && input_tensor.shard_spec()->shape[0] % input_padded_shape[-2] == 0;
+    bool output_height_sharded = native && output_memory_config.is_sharded() &&
+                                 output_memory_config.shard_spec().has_value() &&
+                                 output_memory_config.shard_spec()->shape[1] == output_width;
+    bool output_width_sharded = native && output_memory_config.is_sharded() &&
+                                output_memory_config.shard_spec().has_value() &&
+                                output_memory_config.shard_spec()->shape[0] == output_height;
+    bool output_width_and_height_fully_in_shard =
+        output_height_sharded && output_memory_config.shard_spec()->shape[0] % output_height == 0;
+    bool use_sharded_wh =
+        native && ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
+                   (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
+    bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
+
+    auto parallelization_strategy =
+        TransposeDeviceOperation::get_parallelization_strategy(operation_attributes, tensor_args);
+
+    switch (parallelization_strategy) {
+        case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
+            if (use_sharded_wh) {
+                if (is_row_major) {
+                    return TransposeWHShardedRMProgramFactoryQsr{};
+                }
+                return TransposeWHShardedProgramFactoryQsr{};
+            }
+            return TransposeWHProgramFactoryQsr{};
+
+        case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
+            if (use_sharded_hc) {
+                return TransposeHCShardedProgramFactoryQsr{};
+            }
+            if (is_row_major) {
+                return TransposeHCRMProgramFactoryQsr{};
+            }
+            return TransposeHCTiledInterleavedProgramFactoryQsr{};
+
+        case TransposeOpParallelizationStrategy::MULTI_CORE_CN: return TransposeCNProgramFactoryQsr{};
+
+        default: TT_THROW("Unsupported parallelization strategy");
+    }
+}
+
 TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
+    if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+        return select_program_factory_qsr(operation_attributes, tensor_args);
+    }
     const auto output_memory_config = derive_effective_output_memory_config(operation_attributes, tensor_args);
     const auto& dim = operation_attributes.dim;
     bool is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
@@ -131,7 +198,8 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
                    (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
     bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
 
-    auto parallelization_strategy = get_parallelization_strategy(operation_attributes, tensor_args);
+    auto parallelization_strategy =
+        TransposeDeviceOperation::get_parallelization_strategy(operation_attributes, tensor_args);
 
     switch (parallelization_strategy) {
         case TransposeOpParallelizationStrategy::MULTI_CORE_WH:

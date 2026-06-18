@@ -52,6 +52,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     move/device/move_program_factory.cpp
     move/device/move_overlap_program_factory.cpp
     move/device/move_sharded_program_factory.cpp
+    move/device/move_program_factory_qsr.cpp
+    move/device/move_overlap_program_factory_qsr.cpp
+    move/device/move_sharded_program_factory_qsr.cpp
     move/move.cpp
     narrow/narrow.cpp
     non_zero_indices/device/non_zero_indices_device_operation.cpp
@@ -65,6 +68,13 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     pad/device/pad_rm_sharded_width_only_program_factory.cpp
     pad/device/pad_tile_multicore_program_factory.cpp
     pad/device/pad_tile_program_factory.cpp
+    pad/device/pad_rm_reader_writer_multi_core_program_factory_qsr.cpp
+    pad/device/pad_rm_reader_writer_multi_core_default_program_factory_qsr.cpp
+    pad/device/pad_rm_reader_writer_program_factory_qsr.cpp
+    pad/device/pad_rm_sharded_height_only_program_factory_qsr.cpp
+    pad/device/pad_rm_sharded_width_only_program_factory_qsr.cpp
+    pad/device/pad_tile_multicore_program_factory_qsr.cpp
+    pad/device/pad_tile_program_factory_qsr.cpp
     pad/pad.cpp
     permute/device/permute_device_operation.cpp
     permute/device/permute_rm_program_factory.cpp
@@ -98,6 +108,11 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     sharded/reshard/device/reshard_program_factory_generic.cpp
     sharded/reshard/device/nd_reshard_program_factory_copy_pages.cpp
     sharded/reshard/device/nd_reshard_program_factory_copy_local.cpp
+    sharded/reshard/device/reshard_program_factory_same_width_qsr.cpp
+    sharded/reshard/device/reshard_program_factory_same_height_qsr.cpp
+    sharded/reshard/device/reshard_program_factory_generic_qsr.cpp
+    sharded/reshard/device/nd_reshard_program_factory_copy_pages_qsr.cpp
+    sharded/reshard/device/nd_reshard_program_factory_copy_local_qsr.cpp
     sharded/reshard/reshard.cpp
     sharded/sharded_common.cpp
     sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.cpp
@@ -115,6 +130,11 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     slice/device/slice_program_factory_rm_stride.cpp
     slice/device/slice_program_factory_tile.cpp
     slice/device/slice_program_factory_tile_tensor_args.cpp
+    slice/device/slice_program_factory_rm_qsr.cpp
+    slice/device/slice_program_factory_rm_sharded_qsr.cpp
+    slice/device/slice_program_factory_rm_stride_qsr.cpp
+    slice/device/slice_program_factory_tile_qsr.cpp
+    slice/device/slice_program_factory_tile_tensor_args_qsr.cpp
     slice/slice.cpp
     split/device/split_device_operation.cpp
     split/device/split_program_factory.cpp
@@ -127,6 +147,11 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     tilize/device/tilize_single_core_program_factory.cpp
     tilize/device/tilize_multi_core_sharded_program_factory.cpp
     tilize/device/tilize_multi_core_width_sharded_program_factory.cpp
+    tilize/device/tilize_multi_core_default_program_factory_qsr.cpp
+    tilize/device/tilize_multi_core_block_program_factory_qsr.cpp
+    tilize/device/tilize_single_core_program_factory_qsr.cpp
+    tilize/device/tilize_multi_core_sharded_program_factory_qsr.cpp
+    tilize/device/tilize_multi_core_width_sharded_program_factory_qsr.cpp
     tilize/tilize.cpp
     tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
@@ -144,6 +169,14 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     transpose/device/transpose_wh_program_factory.cpp
     transpose/device/transpose_wh_sharded_program_factory.cpp
     transpose/device/transpose_wh_sharded_rm_program_factory.cpp
+    transpose/device/transpose_cn_program_factory_qsr.cpp
+    transpose/device/transpose_hc_rm_program_factory_qsr.cpp
+    transpose/device/transpose_hc_sharded_program_factory_qsr.cpp
+    transpose/device/transpose_hc_tiled_interleaved_program_factory_qsr.cpp
+    transpose/device/transpose_hc_tiled_program_factory_qsr.cpp
+    transpose/device/transpose_wh_program_factory_qsr.cpp
+    transpose/device/transpose_wh_sharded_program_factory_qsr.cpp
+    transpose/device/transpose_wh_sharded_rm_program_factory_qsr.cpp
     transpose/device/transpose_utils.cpp
     transpose/transpose.cpp
     unsqueeze/unsqueeze.cpp
@@ -165,6 +198,12 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.cpp
     untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.cpp
     untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_interleaved_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory_qsr.cpp
+    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory_qsr.cpp
     untilize_with_unpadding/untilize_with_unpadding.cpp
     view/view.cpp
     sort/sort.cpp

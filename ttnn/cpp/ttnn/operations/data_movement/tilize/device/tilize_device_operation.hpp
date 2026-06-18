@@ -11,6 +11,12 @@
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_multi_core_width_sharded_program_factory.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "tilize_multi_core_default_program_factory_qsr.hpp"
+#include "tilize_multi_core_block_program_factory_qsr.hpp"
+#include "tilize_single_core_program_factory_qsr.hpp"
+#include "tilize_multi_core_sharded_program_factory_qsr.hpp"
+#include "tilize_multi_core_width_sharded_program_factory_qsr.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/types.hpp"
 
@@ -26,7 +32,13 @@ struct TilizeDeviceOperation {
         TilizeMultiCoreBlockProgramFactory,
         TilizeSingleCoreProgramFactory,
         TilizeMultiCoreShardedProgramFactory,
-        TilizeMultiCoreWidthShardedProgramFactory>;
+        TilizeMultiCoreWidthShardedProgramFactory,
+        // Quasar (metal 2.0) variants.
+        TilizeMultiCoreDefaultProgramFactoryQsr,
+        TilizeMultiCoreBlockProgramFactoryQsr,
+        TilizeSingleCoreProgramFactoryQsr,
+        TilizeMultiCoreShardedProgramFactoryQsr,
+        TilizeMultiCoreWidthShardedProgramFactoryQsr>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

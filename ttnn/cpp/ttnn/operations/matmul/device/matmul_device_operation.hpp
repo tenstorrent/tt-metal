@@ -13,6 +13,14 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 
+// Quasar (metal 2.0) program factory variants.
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory_qsr.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory_qsr.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory_qsr.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory_qsr.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory_qsr.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory_qsr.hpp"
+
 namespace ttnn::prim {
 
 struct MatmulDeviceOperation {
@@ -28,7 +36,15 @@ struct MatmulDeviceOperation {
         MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory,  // gather_in0 legacy path
         MatmulMultiCoreReuseMcast2DProgramFactory,
         MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory,
-        MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>;
+        MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory,
+        // Quasar (metal 2.0) variants.
+        MatmulMultiCoreProgramFactoryQsr,
+        MatmulMultiCoreReuseOptimizedProgramFactoryQsr,
+        MatmulMultiCoreReuseMcast1DProgramFactoryQsr,
+        MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactoryQsr,  // gather_in0 legacy path
+        MatmulMultiCoreReuseMcast2DProgramFactoryQsr,
+        MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactoryQsr,
+        MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactoryQsr>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

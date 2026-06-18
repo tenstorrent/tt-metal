@@ -12,6 +12,15 @@
 #include "transpose_wh_program_factory.hpp"
 #include "transpose_wh_sharded_program_factory.hpp"
 #include "transpose_wh_sharded_rm_program_factory.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "transpose_cn_program_factory_qsr.hpp"
+#include "transpose_hc_rm_program_factory_qsr.hpp"
+#include "transpose_hc_sharded_program_factory_qsr.hpp"
+#include "transpose_hc_tiled_interleaved_program_factory_qsr.hpp"
+#include "transpose_hc_tiled_program_factory_qsr.hpp"
+#include "transpose_wh_program_factory_qsr.hpp"
+#include "transpose_wh_sharded_program_factory_qsr.hpp"
+#include "transpose_wh_sharded_rm_program_factory_qsr.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -33,7 +42,16 @@ struct TransposeDeviceOperation {
         TransposeHCTiledProgramFactory,
         TransposeHCRMProgramFactory,
         TransposeHCShardedProgramFactory,
-        TransposeCNProgramFactory>;
+        TransposeCNProgramFactory,
+        // Quasar (metal 2.0) variants.
+        TransposeWHProgramFactoryQsr,
+        TransposeWHShardedProgramFactoryQsr,
+        TransposeWHShardedRMProgramFactoryQsr,
+        TransposeHCTiledInterleavedProgramFactoryQsr,
+        TransposeHCTiledProgramFactoryQsr,
+        TransposeHCRMProgramFactoryQsr,
+        TransposeHCShardedProgramFactoryQsr,
+        TransposeCNProgramFactoryQsr>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

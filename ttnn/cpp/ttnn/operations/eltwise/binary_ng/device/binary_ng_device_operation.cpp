@@ -255,6 +255,16 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
+BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // On Quasar use the metal 2.0 (_qsr) program factory; otherwise keep the existing path.
+    bool is_quasar = tensor_args.input_tensor_a.device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return ProgramFactoryQsr{};
+    }
+    return ProgramFactory{};
+}
+
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // We don't support sharding for now

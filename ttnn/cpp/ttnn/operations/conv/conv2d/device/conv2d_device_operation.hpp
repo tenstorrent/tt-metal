@@ -13,6 +13,9 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
+// Quasar (metal 2.0) program factory variants.
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory_qsr.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory_qsr.hpp"
 
 #include <string>
 #include <utility>
@@ -32,7 +35,12 @@ struct Conv2dDeviceOperation {
     using tensor_args_t = Conv2dInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<Conv2dShardedProgramFactory, Conv2dWidthShardedProgramFactory>;
+    using program_factory_t = std::variant<
+        Conv2dShardedProgramFactory,
+        Conv2dWidthShardedProgramFactory,
+        // Quasar (metal 2.0) variants.
+        Conv2dShardedProgramFactoryQsr,
+        Conv2dWidthShardedProgramFactoryQsr>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);

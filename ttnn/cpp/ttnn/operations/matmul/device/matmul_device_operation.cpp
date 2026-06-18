@@ -684,8 +684,49 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
 
 }  // namespace
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() below but returns the
+// *Qsr program factory variants, which use the new metal 2.0 kernels. Keeping this separate leaves
+// the Wormhole/Blackhole selection path untouched.
+static MatmulDeviceOperation::program_factory_t select_program_factory_qsr(
+    const MatmulDeviceOperation::operation_attributes_t& operation_attributes,
+    const MatmulDeviceOperation::tensor_args_t& /*tensor_args*/) {
+    const auto& config = operation_attributes.program_config.value();
+
+    return std::visit(
+        [](const auto& c) -> MatmulDeviceOperation::program_factory_t {
+            using T = std::decay_t<decltype(c)>;
+            if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
+                return MatmulMultiCoreProgramFactoryQsr{};
+            } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                return MatmulMultiCoreReuseOptimizedProgramFactoryQsr{};
+            } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                return MatmulMultiCoreReuseMcast2DProgramFactoryQsr{};
+            } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                // gather_in0 uses the legacy MeshWorkload path (create_descriptor not yet supported)
+                if (c.gather_in0) {
+                    return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactoryQsr{};
+                }
+                return MatmulMultiCoreReuseMcast1DProgramFactoryQsr{};
+            } else if constexpr (std::is_same_v<
+                                     T,
+                                     operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
+                return MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactoryQsr{};
+            } else if constexpr (
+                std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                return MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactoryQsr{};
+            } else {
+                TT_THROW("Unknown program config type");
+            }
+        },
+        config);
+}
+
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    bool is_quasar = tensor_args.input_tensors.at(0).device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return select_program_factory_qsr(operation_attributes, tensor_args);
+    }
     const auto& config = operation_attributes.program_config.value();
 
     return std::visit(

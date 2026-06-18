@@ -20,6 +20,15 @@
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
+
+// Quasar (metal 2.0) program factory variants.
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_default_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_height_only_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory_qsr.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory_qsr.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
@@ -35,7 +44,15 @@ struct PadDeviceOperation {
         PadRmShardedHeightOnlyProgramFactory,
         PadRmShardedWidthOnlyProgramFactory,
         PadTileMulticoreProgramFactory,
-        PadTileCoreProgramFactory>;
+        PadTileCoreProgramFactory,
+        // Quasar (metal 2.0) variants.
+        PadRmReaderWriterMultiCoreProgramFactoryQsr,
+        PadRmReaderWriterMultiCoreDefaultProgramFactoryQsr,
+        PadRmReaderWriterProgramFactoryQsr,
+        PadRmShardedHeightOnlyProgramFactoryQsr,
+        PadRmShardedWidthOnlyProgramFactoryQsr,
+        PadTileMulticoreProgramFactoryQsr,
+        PadTileCoreProgramFactoryQsr>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

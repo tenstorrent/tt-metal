@@ -4,6 +4,7 @@
 set(TTNN_OP_SLIDING_WINDOW_SRCS
     halo/device/halo_device_operation.cpp
     halo/device/untilize_with_halo_program_factory.cpp
+    halo/device/untilize_with_halo_program_factory_qsr.cpp
     halo/halo.cpp
     sliding_window.cpp
     op_slicing/op_slicing.cpp

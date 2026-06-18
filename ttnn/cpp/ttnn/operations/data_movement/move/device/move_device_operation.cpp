@@ -9,8 +9,24 @@
 
 namespace ttnn::prim {
 
+// Quasar (metal 2.0) factory selection. Mirrors select_program_factory() below but returns the
+// *Qsr program factory variants. Keeping this separate leaves the Wormhole/Blackhole path untouched.
+static MoveDeviceOperation::program_factory_t select_program_factory_qsr(
+    const MoveDeviceOperation::operation_attributes_t& operation_attributes) {
+    switch (operation_attributes.move_op_parallelization_strategy) {
+        case MoveOpParallelizationStrategy::MULTI_CORE_SHARDED: return MoveShardedProgramFactoryQsr{};
+        case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP: return MoveOverlapProgramFactoryQsr{};
+        case MoveOpParallelizationStrategy::MULTI_CORE: return MoveProgramFactoryQsr{};
+        default: TT_FATAL(false, "Invalid move operation parallelization strategy");
+    }
+}
+
 MoveDeviceOperation::program_factory_t MoveDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    bool is_quasar = tensor_args.input_tensor.device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return select_program_factory_qsr(operation_attributes);
+    }
     switch (operation_attributes.move_op_parallelization_strategy) {
         case MoveOpParallelizationStrategy::MULTI_CORE_SHARDED: return MoveShardedProgramFactory{};
         case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP: return MoveOverlapProgramFactory{};

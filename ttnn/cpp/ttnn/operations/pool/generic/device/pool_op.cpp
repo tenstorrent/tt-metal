@@ -76,6 +76,15 @@ static void validate_pool2d_operation(
         op_attr.output_layout_);
 }
 
+Pool2D::program_factory_t Pool2D::select_program_factory(
+    const operation_attributes_t& /*op_attr*/, const tensor_args_t& tensor_args) {
+    bool is_quasar = tensor_args.input_tensor_.device()->arch() == tt::ARCH::QUASAR;
+    if (is_quasar) {
+        return MultiCoreQsr{};
+    }
+    return MultiCore{};
+}
+
 void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
     validate_pool2d_operation(op_attr, tensor);
 }
