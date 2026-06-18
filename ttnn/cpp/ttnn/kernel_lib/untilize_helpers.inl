@@ -36,10 +36,20 @@ constexpr bool has_supported_fast_untilize_format() {
     return supported_input && supported_output;
 }
 
+// Maximum row width (in tiles) the BH fast-untilize path can produce correctly.
+// The strided packer (llk_pack_fast_untilize_block_strided, templated on full_ct_dim)
+// corrupts output once full_ct_dim exceeds this; empirically full_ct_dim <= 132 is
+// correct and >= 133 produces garbage (verified on Blackhole, bf16). Wider rows fall
+// back to the block-based pack_untilize path, which sub-blocks to the DEST limit and
+// is correct for any width. The underlying LLK limit should be lifted separately so
+// the fast path can cover wide rows too.
+constexpr uint32_t FAST_UNTILIZE_MAX_BLOCK_WIDTH_TILES = 132;
+
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_untilize() {
 #ifdef ARCH_BLACKHOLE
-    return block_width_tiles >= 2 && dfb_has_32x32_tiles<input_dfb>() && dfb_has_32x32_tiles<output_dfb>() &&
+    return block_width_tiles >= 2 && block_width_tiles <= FAST_UNTILIZE_MAX_BLOCK_WIDTH_TILES &&
+           dfb_has_32x32_tiles<input_dfb>() && dfb_has_32x32_tiles<output_dfb>() &&
            has_supported_fast_untilize_format<input_dfb, output_dfb>();
 #else
     return false;
