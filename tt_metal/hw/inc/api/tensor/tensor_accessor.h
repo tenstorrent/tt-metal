@@ -318,15 +318,33 @@ private:
         size_t shard_in_bank = 0;  // index of the shard within its bank
     };
 
-    // Maps a flattened shard id to its bank and its slot within that bank, honoring the
-    // distribution strategy. Round-robin spreads consecutive shards across banks; block
-    // (CONTIGUOUS_1D) packs shards_per_core consecutive shards into one bank before advancing.
+    // Round-robin spreads consecutive shards across banks; block (CONTIGUOUS_1D) packs shards_per_bank
+    // consecutive shards into one bank before advancing.
+    FORCE_INLINE BankShard block_mapping(size_t flattened_shard_id) const {
+        const size_t shards_per_bank = dspec().num_shards() / dspec().num_banks();
+        return {flattened_shard_id / shards_per_bank, flattened_shard_id % shards_per_bank};
+    }
+    FORCE_INLINE BankShard round_robin_mapping(size_t flattened_shard_id) const {
+        return {flattened_shard_id % dspec().num_banks(), flattened_shard_id / dspec().num_banks()};
+    }
+
+    // Maps a flattened shard id to its bank and its slot within that bank, honoring the distribution
+    // strategy. When num_banks is compile-time, the strategy is too (DSpec::is_block) and the branch is
+    // resolved at compile time, keeping these accessors byte-identical to round-robin-only builds. When
+    // num_banks is runtime, the block flag rides in the runtime num_banks word and is read per dispatch.
+    // NOTE: keep the nested `if constexpr` rather than a single `is_block_distribution() ? ...` ternary --
+    // the ternary would ODR-use (instantiate) both mappings even for static round-robin accessors, losing
+    // that byte-identical guarantee.
     FORCE_INLINE BankShard shard_to_bank(size_t flattened_shard_id) const {
-        if constexpr (DSpec::is_block) {
-            const size_t shards_per_bank = dspec().num_shards() / dspec().num_banks();
-            return {flattened_shard_id / shards_per_bank, flattened_shard_id % shards_per_bank};
+        if constexpr (DSpec::has_static_num_banks) {
+            if constexpr (DSpec::is_block) {
+                return block_mapping(flattened_shard_id);
+            } else {
+                return round_robin_mapping(flattened_shard_id);
+            }
         } else {
-            return {flattened_shard_id % dspec().num_banks(), flattened_shard_id / dspec().num_banks()};
+            return dspec().is_block_distribution() ? block_mapping(flattened_shard_id)
+                                                   : round_robin_mapping(flattened_shard_id);
         }
     }
 

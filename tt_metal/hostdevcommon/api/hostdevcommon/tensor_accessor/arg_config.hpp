@@ -24,7 +24,10 @@ enum class ArgConfig : uint8_t {
     RuntimeShardShape = 1 << 5,
     RuntimeBankCoords = 1 << 6,
     // Shards are distributed block-contiguously across banks (ShardDistributionStrategy::CONTIGUOUS_1D)
-    // rather than round-robin. Affects only the on-device shard->bank math; carries no extra args.
+    // rather than round-robin. This bit is the *compile-time* default, used only when num_banks is also
+    // compile-time. When num_banks is runtime (RuntimeNumBanks), the block flag instead rides in the top
+    // bit of the runtime num_banks word (see BlockDistributionBit), so it can vary per dispatch without
+    // recompiling. Either way the flag carries no extra args/slots; it only changes the shard->bank math.
     IsBlockDistribution = 1 << 7,
     Runtime = RuntimeRank | RuntimeNumBanks | RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
 };
@@ -32,5 +35,21 @@ enum class ArgConfig : uint8_t {
 using ArgsConfig = Flags<ArgConfig>;
 constexpr ArgsConfig operator|(ArgConfig a, ArgConfig b) noexcept { return ArgsConfig(a) | b; }
 constexpr ArgsConfig operator|(ArgConfig a, ArgsConfig b) noexcept { return ArgsConfig(a) | b; }
+
+// When num_banks is a common runtime arg, its CRTA word doubles as the carrier for the block-distribution
+// flag: the value lives in the low bits and the block flag in the top bit. num_banks is tiny (number of
+// DRAM/L1 banks), so this never collides with a real bank count. This lets the distribution strategy vary
+// at runtime without adding a CRTA slot or a new ArgConfig bit, gated on RuntimeNumBanks being set.
+//
+// pack/unpack are the single source of truth for this layout, so the host encoder and the device decoders
+// cannot drift. Callers must ensure num_banks < BlockDistributionBit (always true for real bank counts).
+inline constexpr uint32_t BlockDistributionBit = 1u << 31;
+constexpr uint32_t pack_num_banks(uint32_t num_banks, bool is_block_distribution) {
+    return num_banks | (is_block_distribution ? BlockDistributionBit : 0u);
+}
+constexpr uint32_t unpack_num_banks(uint32_t packed_num_banks) { return packed_num_banks & ~BlockDistributionBit; }
+constexpr bool unpack_is_block_distribution(uint32_t packed_num_banks) {
+    return (packed_num_banks & BlockDistributionBit) != 0;
+}
 
 }  // namespace tensor_accessor

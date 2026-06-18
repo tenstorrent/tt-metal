@@ -56,7 +56,16 @@ void append_sharded_args(
         args.push_back(rank);
     }
     if (add_num_banks) {
-        args.push_back(n_banks);
+        // When num_banks is a runtime arg, its top bit carries the block-distribution flag so the strategy
+        // can vary per dispatch without recompiling (no extra CRTA slot). Compile-time num_banks instead
+        // relies on the ArgConfig::IsBlockDistribution bit.
+        const bool pack_block = is_runtime && buffer_distribution_spec.shard_distribution_strategy() ==
+                                                  ShardDistributionStrategy::CONTIGUOUS_1D;
+        TT_FATAL(
+            n_banks < tensor_accessor::BlockDistributionBit,
+            "num_banks {} is too large to pack the block-distribution flag",
+            n_banks);
+        args.push_back(tensor_accessor::pack_num_banks(static_cast<uint32_t>(n_banks), pack_block));
     }
     if (add_tensor_shape) {
         args.insert(args.end(), tensor_shape.cbegin(), tensor_shape.cend());
@@ -142,10 +151,14 @@ void TensorAccessorArgs::update_args_config() {
 
     if (buffer_->buffer_distribution_spec().has_value()) {
         args_config_.set(tensor_accessor::ArgConfig::Sharded);
+        // Block distribution is baked into the compile-time config bit only when num_banks is compile-time.
+        // When num_banks is runtime, the flag rides in the runtime num_banks word instead, so the same
+        // binary serves both strategies; leave the config bit clear to keep the IsBlock template fixed.
+        const bool is_block = buffer_->buffer_distribution_spec()->shard_distribution_strategy() ==
+                              ShardDistributionStrategy::CONTIGUOUS_1D;
         args_config_.set(
             tensor_accessor::ArgConfig::IsBlockDistribution,
-            buffer_->buffer_distribution_spec()->shard_distribution_strategy() ==
-                ShardDistributionStrategy::CONTIGUOUS_1D);
+            is_block && !args_config_.test(tensor_accessor::ArgConfig::RuntimeNumBanks));
     } else {
         args_config_ = tensor_accessor::ArgConfig::None;
     }

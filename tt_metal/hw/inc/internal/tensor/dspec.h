@@ -79,6 +79,7 @@ struct DistributionSpec {
     DistributionSpec(const DistributionSpec& other) :
         rank_rt(other.rank_rt),
         num_banks_rt(other.num_banks_rt),
+        is_block_rt(other.is_block_rt),
         tensor_shape_rt(other.tensor_shape_rt),
         shard_shape_rt(other.shard_shape_rt),
         bank_coords_rt(other.bank_coords_rt),
@@ -112,6 +113,7 @@ struct DistributionSpec {
     DistributionSpec(DistributionSpec&& other) noexcept :
         rank_rt(other.rank_rt),
         num_banks_rt(other.num_banks_rt),
+        is_block_rt(other.is_block_rt),
         tensor_shape_rt(std::move(other.tensor_shape_rt)),
         shard_shape_rt(std::move(other.shard_shape_rt)),
         bank_coords_rt(std::move(other.bank_coords_rt)),
@@ -147,7 +149,11 @@ struct DistributionSpec {
         typename BankCoords = BankCoords,
         typename = std::enable_if_t<!std::is_same_v<std::decay_t<TensorShape>, DistributionSpec>>>
     constexpr DistributionSpec(
-        TensorShape&& tensor_shape_arr, ShardShape&& shard_shape_arr = {}, BankCoords&& bank_coords_arr = {}) :
+        TensorShape&& tensor_shape_arr,
+        ShardShape&& shard_shape_arr = {},
+        BankCoords&& bank_coords_arr = {},
+        bool is_block_param = IsBlock) :
+        is_block_rt(is_block_param),
         tensor_shape_rt(std::forward<TensorShape>(tensor_shape_arr)),
         shard_shape_rt(std::forward<ShardShape>(shard_shape_arr)),
         bank_coords_rt(std::forward<BankCoords>(bank_coords_arr)) {
@@ -174,7 +180,9 @@ struct DistributionSpec {
         uint32_t num_banks_rt_param = 0,
         uint32_t* tensor_shape_ptr = nullptr,
         uint32_t* shard_shape_ptr = nullptr,
-        uint16_t* bank_coords_ptr = nullptr) :
+        uint16_t* bank_coords_ptr = nullptr,
+        bool is_block_param = IsBlock) :
+        is_block_rt(is_block_param),
         tensor_shape_rt(init_tensor_shape(tensor_shape_ptr, rank_rt_param)),
         shard_shape_rt(init_shard_shape(shard_shape_ptr, rank_rt_param)),
         bank_coords_rt(init_bank_coords(bank_coords_ptr, num_banks_rt_param)) {
@@ -227,7 +235,8 @@ struct DistributionSpec {
             args.get_num_banks(),
             Args::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.tensor_shape_crta_offset()) : nullptr,
             Args::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.shard_shape_crta_offset()) : nullptr,
-            Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr) {
+            Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr,
+            args.get_is_block_distribution()) {
         static_assert(
             !Args::rank_is_crta or Args::tensor_shape_is_crta,
             "Tensor shape must be CRTA if rank is not known at compile time!");
@@ -252,6 +261,11 @@ struct DistributionSpec {
     FORCE_INLINE constexpr uint32_t rank() const {getter_helper(has_static_rank, rank_ct, rank_rt)}
 
     FORCE_INLINE constexpr uint32_t num_banks() const {getter_helper(has_static_num_banks, num_banks_ct, num_banks_rt)}
+
+    // Block (CONTIGUOUS_1D) vs. round-robin shard->bank placement. Compile-time (IsBlock) when num_banks is
+    // compile-time; otherwise the runtime value carried alongside the runtime num_banks word.
+    FORCE_INLINE
+        constexpr bool is_block_distribution() const {getter_helper(has_static_num_banks, IsBlock, is_block_rt)}
 
     FORCE_INLINE constexpr const
         auto& tensor_shape() const {getter_helper(tensor_shape_static, TensorShapeWrapper::elements, tensor_shape_rt)}
@@ -343,6 +357,7 @@ private:
     void swap(DistributionSpec& other) noexcept {
         std::swap(rank_rt, other.rank_rt);
         std::swap(num_banks_rt, other.num_banks_rt);
+        std::swap(is_block_rt, other.is_block_rt);
         std::swap(tensor_shape_rt, other.tensor_shape_rt);
         std::swap(shard_shape_rt, other.shard_shape_rt);
         std::swap(bank_coords_rt, other.bank_coords_rt);
@@ -465,6 +480,8 @@ private:
 
     uint32_t rank_rt = 0;
     uint32_t num_banks_rt = 0;
+    // Runtime block-distribution flag; only consulted when num_banks is runtime (!has_static_num_banks).
+    bool is_block_rt = false;
 
     Shape tensor_shape_rt = {};
     Shape shard_shape_rt = {};
