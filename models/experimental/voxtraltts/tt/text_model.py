@@ -11,6 +11,10 @@ from models.tt_transformers.tt.model_config import TensorGroup
 
 from models.experimental.voxtraltts.tt.rmsnorm import VoxtralTextRMSNorm
 from models.experimental.voxtraltts.tt.text_decoder_layer import remap_voxtral_text_state_dict
+from models.experimental.voxtraltts.utils.mesh import (
+    voxtral_replicate_mesh_mapper,
+    voxtral_tp_shard_last_dim_mapper,
+)
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     get_VoxtralTTArgs,
     voxtral_text_default_optimizations,
@@ -26,6 +30,12 @@ def patch_text_model_fp32_rms_norms(
     norm_eps: float,
 ) -> None:
     """Swap tt_transformers DistributedNorm/RMSNorm with HF-faithful fp32-promoting norms."""
+    args = text.inner.args
+    norm_kwargs = {
+        "args": args,
+        "tt_ccl": text.inner.tt_ccl,
+        "prefetcher": text.inner.prefetcher,
+    }
     remapped = remap_voxtral_text_state_dict(state_dict)
     for layer_idx, layer_block in enumerate(text.inner.layers):
         layer_block.attention_norm = VoxtralTextRMSNorm(
@@ -34,6 +44,8 @@ def patch_text_model_fp32_rms_norms(
             state_dict=remapped,
             weight_key=f"layers.{layer_idx}.attention_norm",
             eps=norm_eps,
+            ag_config_key="ATTN_LN_AG_CONFIG",
+            **norm_kwargs,
         )
         layer_block.ff_norm = VoxtralTextRMSNorm(
             device=mesh_device,
@@ -41,6 +53,8 @@ def patch_text_model_fp32_rms_norms(
             state_dict=remapped,
             weight_key=f"layers.{layer_idx}.ffn_norm",
             eps=norm_eps,
+            ag_config_key="FFN_LN_AG_CONFIG",
+            **norm_kwargs,
         )
     text.inner.norm = VoxtralTextRMSNorm(
         device=mesh_device,
@@ -48,11 +62,29 @@ def patch_text_model_fp32_rms_norms(
         state_dict=remapped,
         weight_key="norm",
         eps=norm_eps,
+        **norm_kwargs,
     )
 
 
 def _decode_activation_dtype(args) -> ttnn.DataType | None:
     return args.decoders_optimizations.get_tensor_dtype(decoder_id=0, tensor=TensorGroup.ACTIVATION)
+
+
+def _decode_replicated_embed_mem_cfg(args) -> ttnn.MemoryConfig:
+    """Width-sharded decode input layout for replicated ``[1, 1, 1, dim]`` embeddings.
+
+    ``get_residual_mem_config(DECODE)`` assumes tensor-parallel activations with width
+    ``dim // num_devices`` per chip. Prompt/MM embeds are replicated with the full ``dim``
+    on every device and must shard as ``dim // num_cores`` instead.
+    """
+    grid = args.dram_shard_core_grid_for_k(args.dim)
+    return ttnn.create_sharded_memory_config(
+        (args.tile_padded_batch_rows, args.dim // grid.num_cores),
+        grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
 
 class VoxtralTTTextModel:
@@ -62,6 +94,12 @@ class VoxtralTTTextModel:
         self.inner = inner_transformer
         # Pre-compute static decode configs once — args and prefetcher are fixed after init.
         self._decode_mem_cfg = inner_transformer.args.get_residual_mem_config(Mode.DECODE, inner_transformer.prefetcher)
+        # TP text keeps column-sharded ``[*, local_dim]`` activations; only 1×1 uses replicated full dim.
+        self._decode_embed_input_mem_cfg = (
+            self._decode_mem_cfg
+            if inner_transformer.args.num_devices > 1
+            else _decode_replicated_embed_mem_cfg(inner_transformer.args)
+        )
         self._lm_norm_cfg = inner_transformer.args.get_norm_config("lm_head", Mode.DECODE, inner_transformer.prefetcher)
 
     @classmethod
@@ -189,19 +227,23 @@ class VoxtralTTTextModel:
         if isinstance(x_embed, ttnn.Tensor):
             # Embed already on device (from mm_audio_encode_tokens_summed_forward).
             # Convert layout + memory config in one call — no host round-trip.
+            embed_mem_cfg = self._decode_embed_input_mem_cfg
             if x_embed.layout != ttnn.TILE_LAYOUT:
-                x_tt = ttnn.to_layout(x_embed, ttnn.TILE_LAYOUT, memory_config=self._decode_mem_cfg)
+                x_tt = ttnn.to_layout(x_embed, ttnn.TILE_LAYOUT, memory_config=embed_mem_cfg)
             else:
-                x_tt = ttnn.to_memory_config(x_embed, self._decode_mem_cfg)
+                x_tt = ttnn.to_memory_config(x_embed, embed_mem_cfg)
         else:
             x_4d = x_embed.reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
+            mesh_mapper = voxtral_tp_shard_last_dim_mapper(self.inner.mesh_device, self.inner.args.cluster_shape)
+            if mesh_mapper is None:
+                mesh_mapper = voxtral_replicate_mesh_mapper(self.inner.mesh_device)
             x_tt = ttnn.from_torch(
                 x_4d,
                 device=self.inner.mesh_device,
                 dtype=activation_dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=self._decode_mem_cfg,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.inner.mesh_device),
+                memory_config=self._decode_embed_input_mem_cfg,
+                mesh_mapper=mesh_mapper,
             )
 
         layer_hiddens: dict[str, torch.Tensor] = {}
@@ -270,6 +312,10 @@ class VoxtralTTTextModel:
         follow-on task.
         """
         dim = self.inner.args.dim
+        # Per-device hidden width: full ``dim`` on 1x1, ``dim // num_devices`` when the embeds are
+        # column-sharded for tensor-parallel text. Slicing/reshaping must use this local width, not
+        # the full ``dim`` (otherwise a 1x4 mesh slices [..., 768] tensors to [..., 3072] and TT_FATALs).
+        embed_dim = int(inputs_embeds.shape[-1])
         activation_dtype = _decode_activation_dtype(self.inner.args) or ttnn.bfloat16
 
         # ── SINGLE TT UPLOAD ─────────────────────────────────────────────────
@@ -285,7 +331,7 @@ class VoxtralTTTextModel:
                 embeds_tt = inputs_embeds
             # Ensure shape is [S, 1, 1, dim] for uniform slice coordinates.
             if len(embeds_tt.shape) != 4:
-                reshaped = ttnn.reshape(embeds_tt, (S, 1, 1, dim))
+                reshaped = ttnn.reshape(embeds_tt, (S, 1, 1, embed_dim))
                 if owns_embeds_tt and embeds_tt.is_allocated():
                     ttnn.deallocate(embeds_tt)  # free intermediate layout-converted tensor
                 embeds_tt = reshaped
@@ -293,7 +339,7 @@ class VoxtralTTTextModel:
         else:
             S = int(inputs_embeds.shape[0])
             owns_embeds_tt = True
-            embeds_4d = inputs_embeds.reshape(S, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
+            embeds_4d = inputs_embeds.reshape(S, 1, 1, embed_dim).to(dtype=torch.bfloat16).contiguous()
             embeds_tt = ttnn.from_torch(
                 embeds_4d,
                 device=self.inner.mesh_device,
@@ -313,9 +359,9 @@ class VoxtralTTTextModel:
             collect_this = collect_layer_hiddens and is_last
 
             # Slice token i on device — zero host round-trips for the embedding data.
-            embed_i_rm = ttnn.slice(embeds_tt, (i, 0, 0, 0), (i + 1, 1, 1, dim))
+            embed_i_rm = ttnn.slice(embeds_tt, (i, 0, 0, 0), (i + 1, 1, 1, embed_dim))
             # Convert to TILE_LAYOUT + decode shard in one call.
-            embed_i_tt = ttnn.to_layout(embed_i_rm, ttnn.TILE_LAYOUT, memory_config=self._decode_mem_cfg)
+            embed_i_tt = ttnn.to_layout(embed_i_rm, ttnn.TILE_LAYOUT, memory_config=self._decode_embed_input_mem_cfg)
             if embed_i_rm.is_allocated():
                 ttnn.deallocate(embed_i_rm)
 
@@ -424,10 +470,11 @@ class VoxtralTTTextModel:
     ) -> ttnn.Tensor:
         """One DECODE step for trace replay; returns device hidden (post-norm) without host readback."""
         activation_dtype = _decode_activation_dtype(self.inner.args)
+        embed_mem_cfg = self._decode_embed_input_mem_cfg
         if activation_dtype is not None and x_embed_tt.dtype != activation_dtype:
-            x_tt = ttnn.to_memory_config(x_embed_tt, self._decode_mem_cfg, activation_dtype)
+            x_tt = ttnn.to_memory_config(x_embed_tt, embed_mem_cfg, activation_dtype)
         else:
-            x_tt = ttnn.to_memory_config(x_embed_tt, self._decode_mem_cfg)
+            x_tt = ttnn.to_memory_config(x_embed_tt, embed_mem_cfg)
 
         for i, layer in enumerate(self.inner.layers):
             x_tt = layer(
