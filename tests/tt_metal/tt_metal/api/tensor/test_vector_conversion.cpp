@@ -1,62 +1,63 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <xtensor/generators/xbuilder.hpp>
-#include <xtensor/core/xiterator.hpp>
-#include <xtensor/core/xlayout.hpp>
-#include <xtensor/utils/xtensor_simd.hpp>
-#include <xtl/xiterator_base.hpp>
+#include <gmock/gmock.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
 #include <optional>
+#include <span>
 #include <vector>
 
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include "gmock/gmock.h"
+#include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/shape.hpp>
-#include <tt_stl/span.hpp>
-#include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 #include <tt-metalium/tile.hpp>
-#include "ttnn/tensor/layout/page_config.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/types.hpp"
+#include <tt_stl/span.hpp>
 
-namespace ttnn {
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
+namespace tt::tt_metal {
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 using ::testing::Eq;
 using ::testing::FloatNear;
 using ::testing::Pointwise;
 
 template <typename... Args>
-testing::Matcher<ttnn::Shape> ShapeIs(Args... args) {
-    return testing::Eq(ttnn::Shape({args...}));
+testing::Matcher<Shape> ShapeIs(Args... args) {
+    return testing::Eq(Shape({args...}));
 }
 
-const std::vector<ttnn::Shape>& get_shapes_for_test() {
-    static auto* shapes = new std::vector<ttnn::Shape>{
-        ttnn::Shape{1},
-        ttnn::Shape{1, 1, 1, 1},
-        ttnn::Shape{1, 1, 1, 10},
-        ttnn::Shape{1, 32, 32, 16},
-        ttnn::Shape{1, 40, 3, 128},
-        ttnn::Shape{2, 2},
-        ttnn::Shape{1, 1, 1, 1, 10},
+const std::vector<Shape>& get_shapes_for_test() {
+    static auto* shapes = new std::vector<Shape>{
+        Shape{1},
+        Shape{1, 1, 1, 1},
+        Shape{1, 1, 1, 10},
+        Shape{1, 32, 32, 16},
+        Shape{1, 40, 3, 128},
+        Shape{2, 2},
+        Shape{1, 1, 1, 1, 10},
     };
     return *shapes;
 }
 
 TensorSpec get_tensor_spec(
-    const ttnn::Shape& shape,
+    const Shape& shape,
     DataType dtype,
     Layout layout = Layout::ROW_MAJOR,
     const MemoryConfig& memory_config = MemoryConfig{}) {
@@ -66,8 +67,8 @@ TensorSpec get_tensor_spec(
 template <typename T>
 std::vector<T> arange(int64_t start, int64_t end, int64_t step, std::optional<int64_t> cap = std::nullopt) {
     std::vector<T> result;
-    for (int el : xt::arange<int64_t>(start, end, step)) {
-        int capped_el = cap ? el % *cap : el;
+    for (int64_t el = start; el < end; el += step) {
+        int64_t capped_el = cap ? el % *cap : el;
         result.push_back(static_cast<T>(capped_el));
     }
     return result;
@@ -80,17 +81,17 @@ using TestTypes = ::testing::Types<float, bfloat16, uint8_t, uint16_t, uint32_t,
 TYPED_TEST_SUITE(VectorConversionTest, TestTypes);
 
 TYPED_TEST(VectorConversionTest, InvalidSize) {
-    ttnn::Shape shape{32, 32};
+    Shape shape{32, 32};
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW((void)Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
+    EXPECT_ANY_THROW((void)HostTensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
 }
 
 TYPED_TEST(VectorConversionTest, Roundtrip) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input = arange<TypeParam>(0, shape.volume(), 1);
-        auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()));
+        auto tensor = HostTensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()));
 
         EXPECT_THAT(tensor.logical_shape(), Eq(shape)) << "for shape: " << shape;
         EXPECT_THAT(tensor.dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
@@ -102,9 +103,10 @@ TYPED_TEST(VectorConversionTest, Roundtrip) {
 }
 
 TYPED_TEST(VectorConversionTest, RoundtripTilizedLayout) {
-    ttnn::Shape shape{128, 128};
+    Shape shape{128, 128};
     auto input = arange<TypeParam>(0, shape.volume(), 1);
-    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
+    auto tensor =
+        HostTensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
 
     EXPECT_THAT(tensor.logical_shape(), ShapeIs(128, 128));
     EXPECT_THAT(tensor.padded_shape(), ShapeIs(128, 128));
@@ -115,9 +117,10 @@ TYPED_TEST(VectorConversionTest, RoundtripTilizedLayout) {
 }
 
 TYPED_TEST(VectorConversionTest, RoundtripTilizedLayoutOddShape) {
-    ttnn::Shape shape{1, 40, 3, 121};
+    Shape shape{1, 40, 3, 121};
     auto input = arange<TypeParam>(0, shape.volume(), 1);
-    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
+    auto tensor =
+        HostTensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
 
     EXPECT_THAT(tensor.logical_shape(), ShapeIs(1, 40, 3, 121));
     EXPECT_THAT(tensor.padded_shape(), ShapeIs(1, 40, 32, 128));
@@ -137,10 +140,11 @@ TEST(FloatVectorConversionTest, Float32Bfloat16Interop) {
         });
 
         auto output_bf16 =
-            Tensor::from_vector(input_ft, get_tensor_spec(shape, DataType::BFLOAT16)).to_vector<bfloat16>();
+            HostTensor::from_vector(input_ft, get_tensor_spec(shape, DataType::BFLOAT16)).to_vector<bfloat16>();
         EXPECT_THAT(output_bf16, Pointwise(Eq(), input_bf16)) << "for shape: " << shape;
 
-        auto output_ft = Tensor::from_vector(input_bf16, get_tensor_spec(shape, DataType::BFLOAT16)).to_vector<float>();
+        auto output_ft =
+            HostTensor::from_vector(input_bf16, get_tensor_spec(shape, DataType::BFLOAT16)).to_vector<float>();
         EXPECT_THAT(output_ft, Pointwise(Eq(), input_ft)) << "for shape: " << shape;
     }
 }
@@ -151,15 +155,14 @@ class BorrowedStorageVectorConversionTest : public ::testing::Test {};
 TYPED_TEST_SUITE(BorrowedStorageVectorConversionTest, TestTypes);
 
 TYPED_TEST(BorrowedStorageVectorConversionTest, InvalidSize) {
-    ttnn::Shape shape{32, 32};
+    Shape shape{32, 32};
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW((void)Tensor::from_borrowed_data(
-        tt::stl::Span<TypeParam>(input),
+    EXPECT_ANY_THROW((void)HostTensor::from_borrowed_data(
+        std::span<TypeParam>(input),
         shape,
-        /*on_creation_callback=*/[]() {},
-        /*on_destruction_callback=*/[]() {}));
+        MemoryPin(/*increment_ref_count=*/[]() {}, /*decrement_ref_count=*/[]() {})));
 }
 
 TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
@@ -168,17 +171,17 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
 
         int ctor_count = 0;
         int dtor_count = 0;
-        auto tensor = Tensor::from_borrowed_data(
-            tt::stl::Span<TypeParam>(input),
+        auto tensor = HostTensor::from_borrowed_data(
+            std::span<TypeParam>(input),
             shape,
-            /*on_creation_callback=*/[&]() { ctor_count++; },
-            /*on_destruction_callback=*/[&]() { dtor_count++; });
+            MemoryPin(
+                /*increment_ref_count=*/[&]() { ctor_count++; },
+                /*decrement_ref_count=*/[&]() { dtor_count++; }));
 
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            Tensor copy(tt::tt_metal::HostTensor(
-                tensor.host_storage().buffer(), tensor.tensor_spec(), tensor.tensor_topology()));
+            HostTensor copy(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -196,22 +199,22 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
 }
 
 TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
-    ttnn::Shape shape{32, 32};
+    Shape shape{32, 32};
     auto input = arange<TypeParam>(0, shape.volume(), 1);
 
     int ctor_count = 0;
     int dtor_count = 0;
-    auto tensor = Tensor::from_borrowed_data(
-        tt::stl::Span<TypeParam>(input),
+    auto tensor = HostTensor::from_borrowed_data(
+        std::span<TypeParam>(input),
         shape,
-        /*on_creation_callback=*/[&]() { ctor_count++; },
-        /*on_destruction_callback=*/[&]() { dtor_count++; });
+        MemoryPin(
+            /*increment_ref_count=*/[&]() { ctor_count++; },
+            /*decrement_ref_count=*/[&]() { dtor_count++; }));
 
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        Tensor copy(
-            tt::tt_metal::HostTensor(tensor.host_storage().buffer(), tensor.tensor_spec(), tensor.tensor_topology()));
+        HostTensor copy(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }
@@ -220,14 +223,13 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
 }
 
 TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
-    ttnn::Shape shape{32, 32};
+    Shape shape{32, 32};
     auto input = arange<TypeParam>(0, shape.volume(), 1);
 
-    auto tensor = Tensor::from_borrowed_data(
-        tt::stl::Span<TypeParam>(input),
+    auto tensor = HostTensor::from_borrowed_data(
+        std::span<TypeParam>(input),
         shape,
-        /*on_creation_callback=*/[]() {},
-        /*on_destruction_callback=*/[]() {},
+        MemoryPin(/*increment_ref_count=*/[]() {}, /*decrement_ref_count=*/[]() {}),
         /*tile=*/Tile({16, 16}));
 
     // Retain row major layout, but use custom tile.
@@ -239,17 +241,17 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};
 
 TEST_P(BlockFloatVectorConversionTest, InvalidLayout) {
-    ttnn::Shape shape{32, 32};
+    Shape shape{32, 32};
     // Block float types are only supported in TILE layout.
-    EXPECT_ANY_THROW((void)Tensor::from_vector(
+    EXPECT_ANY_THROW((void)HostTensor::from_vector(
         std::vector<float>(shape.volume()), get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
 }
 
 TEST_P(BlockFloatVectorConversionTest, Roundtrip) {
-    ttnn::Shape shape{32, 32};
+    Shape shape{32, 32};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
-    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
+    auto tensor = HostTensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
 
     EXPECT_THAT(tensor.logical_shape(), Eq(shape));
     EXPECT_THAT(tensor.dtype(), Eq(GetParam()));
@@ -257,10 +259,10 @@ TEST_P(BlockFloatVectorConversionTest, Roundtrip) {
 }
 
 TEST_P(BlockFloatVectorConversionTest, RoundtripWithPadding) {
-    ttnn::Shape shape{14, 47};
+    Shape shape{14, 47};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
-    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
+    auto tensor = HostTensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
 
     EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
     EXPECT_THAT(tensor.padded_shape(), ShapeIs(32, 64));
@@ -268,11 +270,11 @@ TEST_P(BlockFloatVectorConversionTest, RoundtripWithPadding) {
 }
 
 TEST_P(BlockFloatVectorConversionTest, RoundtripWithPaddingAndCustomTile) {
-    ttnn::Shape shape{14, 47};
+    Shape shape{14, 47};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
     TensorSpec spec(shape, TensorLayout(GetParam(), PageConfig(Layout::TILE, Tile({16, 16})), MemoryConfig{}));
-    auto tensor = Tensor::from_vector(input, spec);
+    auto tensor = HostTensor::from_vector(input, spec);
 
     EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
     EXPECT_THAT(tensor.padded_shape(), ShapeIs(16, 48));
@@ -284,10 +286,10 @@ INSTANTIATE_TEST_SUITE_P(
     BlockFloatVectorConversionTest,
     ::testing::Values(DataType::BFLOAT4_B, DataType::BFLOAT8_B));
 
-using DeviceVectorConversionTest = TTNNFixtureWithDevice;
+using DeviceVectorConversionTest = MeshDevice1x1Fixture;
 
 TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
-    ttnn::Shape shape{128, 128};
+    Shape shape{128, 128};
 
     auto input = arange<float>(0, shape.volume(), 1);
 
@@ -295,14 +297,18 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
         shape,
         TensorLayout(
             DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
-    auto output = Tensor::from_vector(input, spec, device_);
+    MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
 
-    EXPECT_TRUE(is_device_tensor(output));
-    EXPECT_TRUE(output.memory_config().is_l1());
+    auto host = HostTensor::from_vector(input, spec);
+    auto mesh = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host, *mesh_device_, mem_cfg);
 
-    EXPECT_THAT(output.to_vector<float>(), Pointwise(Eq(), input));
+    EXPECT_TRUE(mesh.memory_config().is_l1());
+
+    auto readback = enqueue_read_tensor(mesh_device_->mesh_command_queue(), mesh);
+
+    EXPECT_THAT(readback.to_vector<float>(), Pointwise(Eq(), input));
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
-
-}  // namespace ttnn
+}  // namespace tt::tt_metal
