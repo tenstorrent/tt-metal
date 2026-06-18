@@ -1279,8 +1279,8 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     distributed::MeshSocket socket,
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
-    std::map<distributed::MeshCoordinate, DeviceAddr> receiver_tensor_addrs,
-    Tensor backing,
+    const std::map<distributed::MeshCoordinate, DeviceAddr>& receiver_tensor_addrs,
+    const Tensor& backing,
     const D2DStreamConfig& cfg) {
     // Release the claimed cores if we throw before the handle owns them; on success
     // `ok` disarms the guard and the handle destructor owns teardown.
@@ -1326,7 +1326,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     distributed::MeshSocket socket,
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
-    Tensor backing,
+    const Tensor& backing,
     const D2DStreamConfig& cfg) {
     bool ok = false;
     CMAKE_UNIQUE_NAMESPACE::ServiceCoreReleaseGuard guard{mesh, service_cores, ok};
