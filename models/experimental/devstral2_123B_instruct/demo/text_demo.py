@@ -104,9 +104,6 @@ from models.experimental.devstral2_123B_instruct.tt.weight_loading import DEVSTR
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
-_DEFAULT_MESSAGES_JSON = "messages_256k_text (1).json"
-
-
 def _repo_root() -> Path:
     return Path(os.environ.get("TT_METAL_HOME", Path(__file__).resolve().parents[4]))
 
