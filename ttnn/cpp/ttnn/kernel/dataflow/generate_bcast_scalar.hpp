@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 
 // W-bcast scalar
@@ -44,6 +45,6 @@ FORCE_INLINE void generate_bcast_unary_scalar(CircularBuffer cb, uint32_t scalar
     const uint32_t scalar_val = scalar >> 16;
     cb.reserve_back(1);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
-    ptr[0] = scalar >> 16;
+    ptr[0] = scalar_val;
     cb.push_back(1);
 }

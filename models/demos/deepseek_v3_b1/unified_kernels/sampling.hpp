@@ -1660,7 +1660,8 @@ struct TopKSampling {
                         {
                             DeviceZoneScopedN("SP-FC-STAGE");
 
-                            generate_bcast_col_scalar(CTArgs::p_bcast_cb, bf16_pack_to_uint32(float_to_bf16_rne(p)));
+                            generate_bcast_col_scalar(
+                                CircularBuffer(CTArgs::p_bcast_cb), bf16_pack_to_uint32(float_to_bf16_rne(p)));
 
                             cb_reserve_back(CTArgs::softmax_in_cb, 1);
                             auto tile_u32 =
@@ -1694,7 +1695,7 @@ struct TopKSampling {
                             auto rand_u16 =
                                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::rand_cb));
                             rand = rand_u16[0];
-                            generate_bcast_col_scalar(CTArgs::rand_bcast_cb, bf16_pack_to_uint32(rand));
+                            generate_bcast_col_scalar(CircularBuffer(CTArgs::rand_bcast_cb), bf16_pack_to_uint32(rand));
                         }
 
                         {
