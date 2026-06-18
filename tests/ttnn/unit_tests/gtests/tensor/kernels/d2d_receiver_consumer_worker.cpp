@@ -13,6 +13,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 constexpr uint32_t data_ready_sem_addr = get_compile_time_arg_val(0);
 constexpr uint32_t input_tensor_addr = get_compile_time_arg_val(1);
@@ -33,7 +37,12 @@ void kernel_main() {
 
     auto input = TensorAccessor(acc_args, input_tensor_addr);
     auto output = TensorAccessor(acc_args, output_tensor_addr);
-    const uint32_t cb_l1 = get_write_ptr(scratch_cb_index);
+
+    // 2.0 NoC interface for the bulk DRAM<->L1 copy. The relay reuses a single CB
+    // staging slot's address as both read-dest and write-src, as the legacy code did.
+    Noc noc;
+    CircularBuffer scratch_cb(scratch_cb_index);
+    CoreLocalMem<uint32_t> scratch(scratch_cb.get_write_ptr());
 
     volatile tt_l1_ptr uint32_t* data_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_sem_addr);
     const uint64_t consumed_counter_noc = get_noc_addr(service_noc_x, service_noc_y, consumed_counter_addr);
@@ -48,14 +57,14 @@ void kernel_main() {
         // 2. Copy this worker's assigned page range backing -> output through the
         //    single-slot scratch CB. Empty range => loop body skipped.
         for (uint32_t p = start_page; p < end_page; ++p) {
-            noc_async_read(input.get_noc_addr(p), cb_l1, page_size);
-            noc_async_read_barrier();
-            noc_async_write<page_size>(cb_l1, output.get_noc_addr(p), page_size);
+            noc.async_read(input, scratch, page_size, {.page_id = p}, {});
+            noc.async_read_barrier();
+            noc.async_write<NocOptions::DEFAULT, page_size>(scratch, output, page_size, {}, {.page_id = p});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // 3. Ack into consumed_counter — the service waits for num_workers.
         noc_semaphore_inc(consumed_counter_noc, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 }

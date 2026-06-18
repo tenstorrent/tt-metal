@@ -30,6 +30,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
 
 // CT-arg layout (must stay in sync with build_receiver_program in
 // ttnn/core/tensor/d2d_stream_service.cpp).
@@ -81,8 +85,9 @@ void kernel_main() {
 
     // The socket packet header lives in the fabric packet-header CB; it's used
     // only for the per-transfer overwrite-OK atomic-inc sent upstream to the sender.
+    CircularBuffer fabric_hdr_cb(fabric_packet_header_cb_index);
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_index));
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(fabric_hdr_cb.get_write_ptr());
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, socket_page_size);
@@ -129,17 +134,11 @@ void kernel_main() {
         consumed_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_counter_addr);
     }
 
-    // Metadata multicast destination — same worker bbox as data_ready_sem, a
-    // different in-core L1 address. Hoisted out of the per-transfer loop.
-    uint64_t metadata_mcast_addr = 0;
-    if constexpr (metadata_enabled) {
-        metadata_mcast_addr = get_noc_multicast_addr(
-            worker_mcast_noc_x_start,
-            worker_mcast_noc_y_start,
-            worker_mcast_noc_x_end,
-            worker_mcast_noc_y_end,
-            metadata_l1_addr);
-    }
+    // 2.0 NoC interface + multicast endpoint for the metadata fan-out. The endpoint is
+    // stateless; the worker bbox + metadata_l1_addr are supplied per call below (same
+    // worker bbox as data_ready_sem, a different in-core L1 address).
+    Noc noc;
+    MulticastEndpoint metadata_mcast;
 
     // Last observed value of the receiver's bytes_sent counter (the sender's
     // data-landed signal); advances by kIncsPerTransfer each transfer.
@@ -196,12 +195,18 @@ void kernel_main() {
         //    core's L1. The barrier must complete BEFORE the data_ready_sem mcast below
         //    so workers observing data_ready see consistent (DRAM + metadata-L1) state.
         if constexpr (metadata_enabled) {
-            noc_async_write_multicast(
-                receiver_socket.read_ptr,
-                metadata_mcast_addr,
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(receiver_socket.read_ptr),
+                metadata_mcast,
                 metadata_size_bytes,
-                /*num_dests=*/num_workers);
-            noc_async_write_barrier();
+                /*num_dsts=*/num_workers,
+                {},
+                {.noc_x_start = worker_mcast_noc_x_start,
+                 .noc_y_start = worker_mcast_noc_y_start,
+                 .noc_x_end = worker_mcast_noc_x_end,
+                 .noc_y_end = worker_mcast_noc_y_end,
+                 .addr = metadata_l1_addr});
+            noc.async_write_barrier();
         }
 
         // 3. Receiver-side worker handshake. Compile-time-gated.
@@ -251,8 +256,8 @@ void kernel_main() {
         }
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
     update_socket_config(receiver_socket);
     // In LEASE mode the connection is already closed between transfers (and on the
     // termination path, which only fires from an idle wait); in OWN mode it is held

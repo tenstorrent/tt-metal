@@ -38,6 +38,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 // CT layout (must stay in sync with build_relay_workload in test_stream_pipeline.cpp).
 constexpr uint32_t upstream_data_ready_sem_addr = get_compile_time_arg_val(0);  // local worker L1
@@ -74,7 +79,13 @@ void kernel_main() {
 
     auto upstream = TensorAccessor(acc_args, upstream_backing_addr);
     auto downstream = TensorAccessor(acc_args, downstream_dest_addr);
-    const uint32_t cb_l1 = get_write_ptr(scratch_cb_index);
+
+    // 2.0 NoC interface for the bulk DRAM<->L1 relay and the unicast metadata forward.
+    Noc noc;
+    CircularBuffer scratch_cb(scratch_cb_index);
+    // Fixed scratch L1 staging slot (the relay never push/pop_front's the CB; it reuses
+    // this single entry's address as both read-dest and write-src, as the legacy code did).
+    CoreLocalMem<uint32_t> scratch(scratch_cb.get_write_ptr());
 
     volatile tt_l1_ptr uint32_t* up_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(upstream_data_ready_sem_addr);
     const uint64_t up_consumed_noc =
@@ -100,11 +111,11 @@ void kernel_main() {
         // 2. Relay this worker's assigned pages upstream_backing -> downstream_dest
         //    (local DRAM -> scratch -> local DRAM), page by page.
         for (uint32_t p = start_page; p < end_page; ++p) {
-            noc_async_read(upstream.get_noc_addr(p), cb_l1, page_size);
-            noc_async_read_barrier();
-            noc_async_write<page_size>(cb_l1, downstream.get_noc_addr(p), page_size);
+            noc.async_read(upstream, scratch, page_size, {.page_id = p}, {});
+            noc.async_read_barrier();
+            noc.async_write<NocOptions::DEFAULT, page_size>(scratch, downstream, page_size, {}, {.page_id = p});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // 2b. (designated producer worker only) forward the metadata the upstream
         //     service multicast into this core's L1 to the downstream D2D sender
@@ -115,16 +126,21 @@ void kernel_main() {
         //     worker L1 from the upstream receiver's multicast (verified by the host).
         if constexpr (produce_downstream && metadata_enabled) {
             if (is_metadata_writer != 0) {
-                const uint64_t md_noc =
-                    get_noc_addr(downstream_service_noc_x, downstream_service_noc_y, downstream_metadata_l1_addr);
-                noc_async_write(upstream_metadata_l1_addr, md_noc, metadata_size_bytes);
-                noc_async_write_barrier();
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(upstream_metadata_l1_addr),
+                    UnicastEndpoint{},
+                    metadata_size_bytes,
+                    {},
+                    {.noc_x = downstream_service_noc_x,
+                     .noc_y = downstream_service_noc_y,
+                     .addr = downstream_metadata_l1_addr});
+                noc.async_write_barrier();
             }
         }
 
         // 3. Ack the upstream: it may now refill upstream_backing with the next iter.
         noc_semaphore_inc(up_consumed_noc, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
 
         // 4. Producer half (every stage except the last): signal the downstream D2D
         //    sender there's data to forward, then RETURN — do NOT wait for the D2D to
@@ -137,7 +153,7 @@ void kernel_main() {
         //    before re-launching this stage next iter.
         if constexpr (produce_downstream) {
             noc_semaphore_inc(down_data_ready_noc, 1);
-            noc_async_atomic_barrier();
+            noc.async_atomic_barrier();
         }
     }
 }

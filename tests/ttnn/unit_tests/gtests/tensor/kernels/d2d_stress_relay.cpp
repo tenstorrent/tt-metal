@@ -32,6 +32,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 #define STRESS_MODE_COMPUTE 0
 #define STRESS_MODE_SIGNAL 1
@@ -117,18 +122,23 @@ void kernel_main() {
     //     delta (+1 per stage) so the end value is a function of every hop.
     auto upstream = TensorAccessor(acc_args, upstream_backing_addr);
     auto downstream = TensorAccessor(acc_args, dest_addr);
-    const uint32_t cb_l1 = get_write_ptr(scratch_cb_index);
+    Noc noc;
+    CircularBuffer scratch_cb(scratch_cb_index);
+    const uint32_t cb_l1 = scratch_cb.get_write_ptr();
+    // Raw volatile view for the in-place += delta (an L1 read-modify-write, not a NoC
+    // op); CoreLocalMem view is the NoC read-dest / write-src.
     volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1);
+    CoreLocalMem<uint32_t> scratch_mem(cb_l1);
     constexpr uint32_t page_elems = page_size / sizeof(uint32_t);
     for (uint32_t p = start_page; p < end_page; ++p) {
-        noc_async_read(upstream.get_noc_addr(p), cb_l1, page_size);
-        noc_async_read_barrier();
+        noc.async_read(upstream, scratch_mem, page_size, {.page_id = p}, {});
+        noc.async_read_barrier();
         for (uint32_t e = 0; e < page_elems; ++e) {
             scratch[e] += delta;
         }
-        noc_async_write<page_size>(cb_l1, downstream.get_noc_addr(p), page_size);
+        noc.async_write<NocOptions::DEFAULT, page_size>(scratch_mem, downstream, page_size, {}, {.page_id = p});
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 
     // (c2) Propagate the metadata downstream: the designated producing core copies the
     //      blob it received (this core's L1) into the outbound D2D sender's service-core
@@ -136,17 +146,20 @@ void kernel_main() {
     //      bridge worker. Only the producing designated core does this (is_metadata_writer).
     if constexpr (metadata_enabled) {
         if (is_metadata_writer != 0) {
-            const uint64_t md_noc =
-                get_noc_addr(outbound_service_noc_x, outbound_service_noc_y, outbound_metadata_l1_addr);
-            noc_async_write(inbound_metadata_l1_addr, md_noc, metadata_size_bytes);
-            noc_async_write_barrier();
+            noc.async_write(
+                CoreLocalMem<uint32_t>(inbound_metadata_l1_addr),
+                UnicastEndpoint{},
+                metadata_size_bytes,
+                {},
+                {.noc_x = outbound_service_noc_x, .noc_y = outbound_service_noc_y, .addr = outbound_metadata_l1_addr});
+            noc.async_write_barrier();
         }
     }
 
     // (d) Ack the inbound: it may refill its backing with the next iter.
     const uint64_t consumed_noc = get_noc_addr(service_noc_x, service_noc_y, consumed_counter_addr);
     noc_semaphore_inc(consumed_noc, 1);
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
 }
 
 #else  // STRESS_MODE == STRESS_MODE_SIGNAL
@@ -157,8 +170,9 @@ void kernel_main() {
     const uint32_t service_noc_x = get_arg_val<uint32_t>(1);
     const uint32_t service_noc_y = get_arg_val<uint32_t>(2);
     const uint64_t data_ready_noc = get_noc_addr(service_noc_x, service_noc_y, data_ready_counter_addr);
+    Noc noc;
     noc_semaphore_inc(data_ready_noc, 1);
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
 }
 
 #endif

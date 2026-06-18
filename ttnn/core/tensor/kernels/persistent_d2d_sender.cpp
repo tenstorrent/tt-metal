@@ -47,6 +47,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // CT-arg layout (must stay in sync with build_sender_program in
 // ttnn/core/tensor/d2d_stream_service.cpp). The SAME full layout is passed to both
@@ -162,6 +166,7 @@ using ReadRing = TridRing<kRingDepth, kTridBase>;
 // (same accessor args, different base address).
 template <typename Acc>
 FORCE_INLINE void stream_half(
+    const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
     const Acc& in_acc,
     const Acc& out_acc,
@@ -171,20 +176,31 @@ FORCE_INLINE void stream_half(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
     const uint32_t n = page_end_ - page_start_;
     const uint32_t prime = (ReadRing::depth < n) ? ReadRing::depth : n;
+    CoreLocalMem<uint32_t> scratch(cb_l1_addr);
     for (uint32_t i = 0; i < prime; ++i) {
-        noc_async_read_set_trid(ReadRing::trid(i));
-        noc_async_read(in_acc.get_noc_addr(page_start_ + i), cb_l1_addr + i * tensor_page_size, tensor_page_size);
+        noc.async_read<NocOptions::TXN_ID>(
+            in_acc,
+            scratch,
+            tensor_page_size,
+            {.page_id = page_start_ + i},
+            {.offset_bytes = i * tensor_page_size},
+            NocOptVals{.trid = ReadRing::trid(i)});
     }
     for (uint32_t k = 0; k < n; ++k) {
         const uint32_t slot = ReadRing::slot(k);
         const uint32_t trid = ReadRing::trid(k);
         const uint32_t src = cb_l1_addr + slot * tensor_page_size;
-        noc_async_read_barrier_with_trid(trid);
+        noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = trid});
         fabric_write_bytes(conn, out_acc.get_noc_addr(page_start_ + k), src, tensor_page_size, data_packet_header_addr);
         const uint32_t next = k + ReadRing::depth;
         if (next < n) {
-            noc_async_read_set_trid(trid);
-            noc_async_read(in_acc.get_noc_addr(page_start_ + next), src, tensor_page_size);
+            noc.async_read<NocOptions::TXN_ID>(
+                in_acc,
+                scratch,
+                tensor_page_size,
+                {.page_id = page_start_ + next},
+                {.offset_bytes = slot * tensor_page_size},
+                NocOptVals{.trid = trid});
         }
     }
 }
@@ -214,11 +230,12 @@ void kernel_main() {
 
     // This lane's two fabric headers (its own header CB): one for the bulk page
     // writes, one for the data-landed atomic-inc. Routed once below (L1 writes only).
+    CircularBuffer fabric_hdr_cb(fabric_packet_header_cb_index);
+    const uint32_t fabric_hdr_l1 = fabric_hdr_cb.get_write_ptr();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_index));
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(fabric_hdr_l1);
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            get_write_ptr(fabric_packet_header_cb_index) + sizeof(PACKET_HEADER_TYPE));
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(fabric_hdr_l1 + sizeof(PACKET_HEADER_TYPE));
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, socket_page_size);
@@ -233,7 +250,9 @@ void kernel_main() {
     // share the per-shard spec: one set of accessor args, two base addresses.
     auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_addr);
     auto output_tensor_accessor = TensorAccessor(input_tensor_accessor_args, receiver_tensor_addr);
-    const uint32_t cb_l1_addr = get_write_ptr(scratch_cb_index);
+    Noc noc(noc_index);
+    CircularBuffer scratch_cb(scratch_cb_index);
+    const uint32_t cb_l1_addr = scratch_cb.get_write_ptr();
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
@@ -329,6 +348,7 @@ void kernel_main() {
 
             // 4. Stream the master's half directly into the receiver DRAM tensor.
             stream_half(
+                noc,
                 fabric_connection,
                 input_tensor_accessor,
                 output_tensor_accessor,
@@ -414,6 +434,7 @@ void kernel_main() {
             }
 
             stream_half(
+                noc,
                 fabric_connection,
                 input_tensor_accessor,
                 output_tensor_accessor,

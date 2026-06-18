@@ -23,6 +23,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 constexpr uint32_t consumed_sem_addr = get_compile_time_arg_val(0);
 constexpr uint32_t backing_tensor_addr = get_compile_time_arg_val(1);
@@ -50,8 +55,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* consumed_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sem_addr);
     const uint64_t data_ready_counter_noc = get_noc_addr(service_noc_x, service_noc_y, data_ready_counter_addr);
 
-    const uint32_t cb_l1_addr = get_write_ptr(scratch_cb_index);
+    // 2.0 NoC interface for the L1->DRAM backing fill and the unicast metadata write.
+    Noc noc;
+    CircularBuffer scratch_cb(scratch_cb_index);
+    const uint32_t cb_l1_addr = scratch_cb.get_write_ptr();
+    // Raw volatile view for the CPU-side L1 fill loop (kept as-is: that is an L1
+    // store loop, not a NoC data-movement op). CoreLocalMem view is the NoC source.
     volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1_addr);
+    CoreLocalMem<uint32_t> scratch_src(cb_l1_addr);
     const uint32_t page_elems = tensor_page_size / sizeof(uint32_t);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
@@ -67,8 +78,8 @@ void kernel_main() {
             for (uint32_t e = 0; e < page_elems; ++e) {
                 scratch[e] = page_base + e;
             }
-            noc_async_write(cb_l1_addr, backing.get_noc_addr(p), tensor_page_size);
-            noc_async_write_barrier();
+            noc.async_write(scratch_src, backing, tensor_page_size, {}, {.page_id = p});
+            noc.async_write_barrier();
         }
 
         // 1b. (Designated core only) write this iter's metadata blob to the sender
@@ -81,15 +92,19 @@ void kernel_main() {
                 scratch[0] = static_cast<uint32_t>(-1);
                 scratch[1] = 0u;
                 scratch[2] = base;
-                const uint64_t md_noc = get_noc_addr(service_noc_x, service_noc_y, sender_metadata_l1_addr);
-                noc_async_write(cb_l1_addr, md_noc, metadata_size_bytes);
-                noc_async_write_barrier();
+                noc.async_write(
+                    scratch_src,
+                    UnicastEndpoint{},
+                    metadata_size_bytes,
+                    {},
+                    {.noc_x = service_noc_x, .noc_y = service_noc_y, .addr = sender_metadata_l1_addr});
+                noc.async_write_barrier();
             }
         }
 
         // 2. Ack into data_ready_counter — the service kernel waits for num_workers.
         noc_semaphore_inc(data_ready_counter_noc, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
 
         // 3. Wait for the service to confirm the transfer drained, then reset.
         while (*consumed_sem == 0) {

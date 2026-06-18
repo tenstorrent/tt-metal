@@ -12,6 +12,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 constexpr uint32_t h2d_data_ready_sem_addr = get_compile_time_arg_val(0);
 constexpr uint32_t h2d_input_addr = get_compile_time_arg_val(1);
@@ -41,7 +46,13 @@ void kernel_main() {
 
     auto h2d_input = TensorAccessor(acc_args, h2d_input_addr);
     auto d2d_output = TensorAccessor(acc_args, d2d_sender_backing_addr);
-    const uint32_t cb_l1 = get_write_ptr(scratch_cb_index);
+
+    // 2.0 NoC interface for the bulk DRAM<->L1 copy and the unicast metadata forward.
+    // The relay reuses a single CB staging slot's address for both read-dest and
+    // write-src, as the legacy code did.
+    Noc noc;
+    CircularBuffer scratch_cb(scratch_cb_index);
+    CoreLocalMem<uint32_t> scratch(scratch_cb.get_write_ptr());
 
     volatile tt_l1_ptr uint32_t* h2d_data_ready_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h2d_data_ready_sem_addr);
@@ -61,30 +72,34 @@ void kernel_main() {
 
         // 2. Copy this worker's page range H2D backing -> D2D sender backing.
         for (uint32_t p = start_page; p < end_page; ++p) {
-            noc_async_read(h2d_input.get_noc_addr(p), cb_l1, page_size);
-            noc_async_read_barrier();
-            noc_async_write<page_size>(cb_l1, d2d_output.get_noc_addr(p), page_size);
+            noc.async_read(h2d_input, scratch, page_size, {.page_id = p}, {});
+            noc.async_read_barrier();
+            noc.async_write<NocOptions::DEFAULT, page_size>(scratch, d2d_output, page_size, {}, {.page_id = p});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // 3. (designated core) forward the metadata the H2D service multicast into
         //    this core's L1 to the D2D sender service core. Unicast NoC write from
         //    an allocated L1 buffer source — valid (not a stack-local).
         if constexpr (metadata_enabled) {
             if (is_metadata_writer != 0) {
-                const uint64_t md_noc = get_noc_addr(d2d_service_noc_x, d2d_service_noc_y, d2d_sender_metadata_l1_addr);
-                noc_async_write(h2d_metadata_l1_addr, md_noc, metadata_size_bytes);
-                noc_async_write_barrier();
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(h2d_metadata_l1_addr),
+                    UnicastEndpoint{},
+                    metadata_size_bytes,
+                    {},
+                    {.noc_x = d2d_service_noc_x, .noc_y = d2d_service_noc_y, .addr = d2d_sender_metadata_l1_addr});
+                noc.async_write_barrier();
             }
         }
 
         // 4. Ack H2D consumption: frees the H2D service to stream the next token.
         noc_semaphore_inc(h2d_consumed_counter_noc, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
 
         // 5. Trigger the D2D forward (data + metadata are now in place).
         noc_semaphore_inc(d2d_data_ready_counter_noc, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
 
         // 6. Wait for the D2D service to confirm the transfer drained, then reset.
         //    Gates the next iteration's step-2 overwrite of the D2D sender backing.

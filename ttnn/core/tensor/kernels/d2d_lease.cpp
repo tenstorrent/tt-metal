@@ -27,6 +27,10 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 #define LEASE_MODE_WAIT 0
 #define LEASE_MODE_RELEASE 1
@@ -44,19 +48,30 @@ void kernel_main() {
     const uint32_t svc_noc_x = get_arg_val<uint32_t>(0);
     const uint32_t svc_noc_y = get_arg_val<uint32_t>(1);
     const uint32_t link_grant_addr = get_arg_val<uint32_t>(2);
-    const uint64_t link_grant_noc = get_noc_addr(svc_noc_x, svc_noc_y, link_grant_addr);
+
+    Noc noc;
+    UnicastEndpoint service;  // service-core link_grant word, addressed via RT args below
 
 #if LEASE_MODE == LEASE_MODE_WAIT
     // Spin until the service core has dropped the link (link_grant == 0).
-    const uint32_t scratch = get_write_ptr(scratch_cb_index);
+    CircularBuffer scratch_cb(scratch_cb_index);
+    const uint32_t scratch = scratch_cb.get_write_ptr();
+    CoreLocalMem<uint32_t> scratch_mem(scratch);
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     do {
-        noc_async_read(link_grant_noc, scratch, sizeof(uint32_t));
-        noc_async_read_barrier();
+        noc.async_read(
+            service,
+            scratch_mem,
+            sizeof(uint32_t),
+            {.noc_x = svc_noc_x, .noc_y = svc_noc_y, .addr = link_grant_addr},
+            {});
+        noc.async_read_barrier();
     } while (*p != 0u);
 #else
-    // Grant the service core one transfer (link_grant = 1).
-    noc_inline_dw_write(link_grant_noc, 1u);
-    noc_async_writes_flushed();
+    // Grant the service core one transfer (link_grant = 1). INLINE_L1: the target is an
+    // L1 word (the 2.0 wrapper handles the Blackhole inline-L1 scratch quirk internally).
+    noc.inline_dw_write<NocOptions::INLINE_L1>(
+        service, 1u, {.noc_x = svc_noc_x, .noc_y = svc_noc_y, .addr = link_grant_addr});
+    noc.async_writes_flushed();
 #endif
 }

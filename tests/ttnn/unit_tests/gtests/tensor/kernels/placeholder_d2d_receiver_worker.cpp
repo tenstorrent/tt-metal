@@ -20,6 +20,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 
 constexpr uint32_t data_ready_sem_addr = get_compile_time_arg_val(0);
 constexpr uint32_t num_iters = get_compile_time_arg_val(1);
@@ -31,6 +32,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* data_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_sem_addr);
     const uint64_t consumed_counter_noc = get_noc_addr(service_noc_x, service_noc_y, consumed_counter_addr);
+    Noc noc;
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         // 1. Wait for the service to signal the transfer landed, then reset.
@@ -43,6 +45,6 @@ void kernel_main() {
 
         // 3. Ack into consumed_counter — the service kernel waits for num_workers.
         noc_semaphore_inc(consumed_counter_noc, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 }
