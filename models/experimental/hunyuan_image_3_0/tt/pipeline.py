@@ -232,6 +232,9 @@ def decode_latent(
     scaling_factor: float = 0.562679178327931,  # config.json vae.scaling_factor
     decoder=None,  # optional prebuilt VAEDecoderTTNN (reuse across calls)
     dtype=ttnn.bfloat16,
+    ccl_manager=None,  # set (with h/w_mesh_axis) to run the decoder H/W-spatial-parallel
+    h_mesh_axis=None,
+    w_mesh_axis=None,
 ):
     """Decode a diffusion latent to an RGB image in [0, 1] via the TTNN VAE.
 
@@ -249,6 +252,19 @@ def decode_latent(
 
     if decoder is None:
         decoder = VAEDecoderTTNN(mesh_device, dtype=dtype)
+
+    spatial = ccl_manager is not None and (h_mesh_axis is not None or w_mesh_axis is not None)
+    if spatial:
+        return _decode_latent_spatial(
+            mesh_device,
+            latent,
+            decoder,
+            ccl_manager,
+            h_mesh_axis,
+            w_mesh_axis,
+            scaling_factor=scaling_factor,
+            dtype=dtype,
+        )
 
     # [B, C, h, w] -> scaled BCTHW [B, C, 1, h, w]
     z = (latent / scaling_factor).unsqueeze(2)
@@ -276,3 +292,45 @@ def decode_latent(
     img = img[: img.shape[0] // mesh_device.get_num_devices()].float()  # [B, 3, 1, H, W]
 
     return (img[:, :, 0] / 2 + 0.5).clamp(0, 1)  # drop T=1 -> [B, 3, H, W] in [0, 1]
+
+
+def _decode_latent_spatial(mesh_device, latent, decoder, ccl, h_mesh_axis, w_mesh_axis, *, scaling_factor, dtype):
+    """H/W-spatial-parallel decode: shard the latent across the mesh (H->axis0,
+    W->axis1), run the spatially-sharded decoder (convs keep a halo, norms/attn
+    gather), then ConcatMesh2dToTensor the output back to full resolution."""
+    from .vae.spatial import enable_vae_spatial
+
+    enable_vae_spatial(decoder, ccl, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
+    mesh_shape = tuple(mesh_device.shape)
+
+    # [B,C,h,w] -> BTHWC [B,1,h,w,C] on host; H,W must divide the axis sizes (64 / 2 ok).
+    z = (latent / scaling_factor).unsqueeze(2)  # [B,C,1,h,w]
+    host = (z.bfloat16() if dtype == ttnn.bfloat16 else z.float()).permute(0, 2, 3, 4, 1).contiguous()  # BTHWC
+
+    # ShardTensor2dMesh dims: index = mesh_axis, value = tensor dim. H=dim2, W=dim3.
+    dims = [None, None]
+    if h_mesh_axis is not None:
+        dims[h_mesh_axis] = 2
+    if w_mesh_axis is not None:
+        dims[w_mesh_axis] = 3
+    dims = [d if d is not None else (3 if 2 in dims else 2) for d in dims]  # fill unused axis w/ a unique dummy dim
+    x_bthwc = ttnn.from_torch(
+        host,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+
+    out_bthwc = decoder(x_bthwc)  # sharded [B,T,H_out/h,W_out/w,3]
+    ttnn.deallocate(x_bthwc, force=False)
+
+    img_bthwc = ttnn.to_torch(
+        ttnn.from_device(out_bthwc),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    ).float()  # [B,T,H_out,W_out,3]
+    ttnn.deallocate(out_bthwc, force=False)
+
+    img = img_bthwc.permute(0, 4, 1, 2, 3)  # [B,3,T,H_out,W_out]
+    return (img[:, :, 0] / 2 + 0.5).clamp(0, 1)  # [B,3,H_out,W_out] in [0,1]

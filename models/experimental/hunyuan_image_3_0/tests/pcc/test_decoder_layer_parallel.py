@@ -68,7 +68,7 @@ def device_params(request):
     return {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 
-def _build(device, sd, c, dtype, ccl):
+def _build(device, sd, c, dtype, ccl, tp_factor=1):
     return HunyuanTtDecoderLayer(
         device,
         sd,
@@ -87,10 +87,15 @@ def _build(device, sd, c, dtype, ccl):
         stream_experts=False,
         ccl_manager=ccl,
         expert_mesh_axis=1,
+        tp_axis=1,
+        tp_factor=tp_factor,
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+# 2x2 sp0tp1 layout: TP=2 on axis 1 + 4-way EP across the mesh. (SP shards the
+# sequence and lives in HunyuanTtModel.forward, so it is exercised by the full-model
+# tests / test_parallel_2x2.py, not by this single-layer component test.)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_decoder_layer_parallel_vs_dense(mesh_device):
     mesh_device.enable_program_cache()
     c = _cfg()
@@ -117,7 +122,7 @@ def test_decoder_layer_parallel_vs_dense(mesh_device):
     y_dense = dense.forward(_upload(), seq_len=S, image_infos=None, attention_mask=None)
 
     ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    par = _build(mesh_device, sd, c, ttnn.bfloat8_b, ccl)
+    par = _build(mesh_device, sd, c, ttnn.bfloat8_b, ccl, tp_factor=2)
     y_par = par.forward(_upload(), seq_len=S, image_infos=None, attention_mask=None)
 
     d0 = ttnn.to_torch(y_dense, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:B].float()

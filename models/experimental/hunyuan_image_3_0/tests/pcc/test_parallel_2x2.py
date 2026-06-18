@@ -346,3 +346,71 @@ def test_sp_model_2x2_unaligned_seq(mesh_device):
     passing, pcc = comp_pcc(y_ref, y_sp, 0.99)
     logger.info(f"SP unaligned(S=200->256) sp=2 vs sp=1 PCC: {pcc:.6f}  shape {tuple(y_sp.shape)}")
     assert passing, f"PCC {pcc:.6f} < 0.99 — SP sequence padding/unpad is wrong"
+
+
+# --------------------------------------------------------------------------- F
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+def test_full_sp_tp_ep_2x2(mesh_device):
+    """Combined config: SP=2 (axis0) + TP=2 (axis1) + 4-way EP, the recommended
+    2x2 sp0tp1 layout, vs the sp=1/tp=1 (EP-only) reference on the same mesh.
+    This is the single test that exercises all three parallel axes together."""
+    from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+
+    mesh_device.enable_program_cache()
+    c = _cfg()
+    H = c["H"]
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    NL = 2
+
+    def layer_loader(i):
+        return _sd(f"model.layers.{i}")
+
+    def build(sp_factor, tp_factor):
+        return HunyuanTtModel(
+            mesh_device,
+            num_layers=NL,
+            hidden_size=H,
+            num_heads=c["HEADS"],
+            num_kv_heads=c["KV"],
+            head_dim=c["HD"],
+            num_experts=c["E"],
+            moe_topk=c["K"],
+            use_qk_norm=c["QKN"],
+            use_mixed_mlp_moe=c["MIXED"],
+            norm_topk_prob=c["NORM"],
+            rms_norm_eps=c["EPS"],
+            weight_dtype=ttnn.bfloat16,
+            stream_experts=False,
+            layer_loader=layer_loader,
+            apply_final_norm=False,
+            ccl_manager=ccl,
+            tp_axis=1,
+            tp_factor=tp_factor,
+            sp_axis=0,
+            sp_factor=sp_factor,
+        )
+
+    torch.manual_seed(0)
+    B, S = 1, 256
+    x = torch.randn(B, S, H) * 0.05
+    m = torch.triu(torch.full((S, S), -1.0e30), diagonal=1).reshape(1, 1, S, S)
+
+    def up(t):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    def run(model):
+        out = model.forward(inputs_embeds=up(x), seq_len=S, attention_mask=up(m))
+        return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:B].float()
+
+    y_ref = run(build(1, 1))  # EP only
+    y_full = run(build(2, 2))  # SP=2 + TP=2 + EP — the recommended layout
+    passing, pcc = comp_pcc(y_ref, y_full, 0.99)
+    logger.info(f"FULL sp2tp2+EP vs EP-only PCC: {pcc:.6f}  shape {tuple(y_full.shape)}")
+    assert passing, f"PCC {pcc:.6f} < 0.99 — combined SP+TP+EP diverges from EP-only"
