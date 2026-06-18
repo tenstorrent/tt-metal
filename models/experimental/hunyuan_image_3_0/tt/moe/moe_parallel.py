@@ -21,6 +21,7 @@ from models.common.lightweightmodule import LightweightModule
 
 from .gate import HunyuanTtTopKGate
 from .mlp import HunyuanTtMLP
+from ..parallel_utils import sp_gather, sp_shard
 
 
 class HunyuanTtMoEParallel(LightweightModule):
@@ -40,19 +41,39 @@ class HunyuanTtMoEParallel(LightweightModule):
         mesh_axis: int = 0,
         weight_dtype=ttnn.bfloat8_b,
         gate_dtype=ttnn.float32,
+        sp_axis: int = 0,
+        sp_factor: int = 1,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.ccl = ccl_manager
         self.mesh_axis = mesh_axis
+        # SP: tokens arrive sequence-sharded on sp_axis. Experts live on all 4
+        # devices, so a local token may route to a remote expert — rather than an
+        # all-to-all, we gather tokens to the full sequence (replicated), run the
+        # existing full-mesh EP, then reshard the combined output back to S/sp. The
+        # EP all-reduce is unchanged (its precondition — replicated tokens — holds
+        # after the gather).
+        self.sp_axis = sp_axis
+        self.sp_factor = sp_factor
         self.hidden_size = hidden_size
         self.num_experts = num_experts
         self.use_mixed_mlp_moe = use_mixed_mlp_moe
 
-        ndev = mesh_device.shape[mesh_axis]
-        assert num_experts % ndev == 0, f"{num_experts} experts not divisible by mesh axis {mesh_axis} size {ndev}"
+        # Expert parallel spans the FULL mesh: ShardTensorToMesh(dim=0) below splits
+        # the 64 experts row-major across every device, so on a 1x4 mesh each device
+        # holds 16 experts and on a 2x2 mesh each device ALSO holds 16 (4-way EP) —
+        # this is the only layout that fits the 80GB bf8 model (16 experts ~= 19GB).
+        # The partial sum is therefore reduced over every non-trivial mesh axis (the
+        # `mesh_axis` arg is retained for API compatibility but no longer gates the
+        # shard — see forward()). On a 1x4 mesh only axis 1 is non-trivial, so this
+        # reduces to the original single-axis behavior.
+        ndev = mesh_device.get_num_devices()
+        assert num_experts % ndev == 0, f"{num_experts} experts not divisible by mesh device count {ndev}"
         self.ndev = ndev
         self.experts_per_dev = num_experts // ndev
+        mesh_shape = tuple(mesh_device.shape)
+        self.ep_reduce_axes = [a for a, n in enumerate(mesh_shape) if n > 1]
 
         # --- stacked expert weights, sharded along the expert dim ------------
         # gate_and_up: [E, H, 2I]  down: [E, I, H]  (transposed for ttnn.linear)
@@ -151,7 +172,39 @@ class HunyuanTtMoEParallel(LightweightModule):
         ttnn.deallocate(wdn)
         return out
 
+    def _ep_all_reduce(self, partial: ttnn.Tensor) -> ttnn.Tensor:
+        """Sum a [B,S,H] per-device partial over every non-trivial mesh axis.
+
+        Each device computed the partial sum over ITS local experts; reducing over
+        the axes the experts are sharded on yields the full combined output on
+        every device. Done as all-gather(dim=0)+sum per axis.
+        """
+        out = partial
+        for axis in self.ep_reduce_axes:
+            n = self.mesh_device.shape[axis]
+            gathered = self.ccl.all_gather(out, dim=0, mesh_axis=axis, use_hyperparams=False)  # [n*B,S,H]
+            ttnn.deallocate(out)
+            B = gathered.shape[0] // n
+            S, H = gathered.shape[1], gathered.shape[2]
+            gathered = ttnn.reshape(gathered, (n, B, S, H))
+            out = ttnn.sum(gathered, dim=0)  # [B,S,H]
+            ttnn.deallocate(gathered)
+        return out
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # SP: gather the sequence-sharded tokens to the full (replicated) sequence so
+        # the full-mesh EP below is valid; reshard the combined output back at the end.
+        # `xf` is a fresh tensor — the caller-owned `x` is left untouched.
+        sp = self.sp_factor > 1
+        xf = sp_gather(self.ccl, x, dim=1, mesh_axis=self.sp_axis, n=self.sp_factor) if sp else x
+
+        out = self._forward_full(xf)
+        if sp:
+            ttnn.deallocate(xf)
+            out = sp_shard(self.ccl, out, dim=1, mesh_axis=self.sp_axis, n=self.sp_factor)
+        return out
+
+    def _forward_full(self, x: ttnn.Tensor) -> ttnn.Tensor:
         topk_w, topk_idx_raw = self.gate(x)  # [B,S,k] each, replicated
         topk_idx = ttnn.typecast(topk_idx_raw, ttnn.bfloat16)  # ids <= 63 exact in bf16
         ttnn.deallocate(topk_idx_raw)
@@ -180,17 +233,12 @@ class HunyuanTtMoEParallel(LightweightModule):
         ttnn.deallocate(topk_w)
         ttnn.deallocate(topk_idx)
 
-        # All-reduce the partial sums across the expert-shard axis: all-gather the
-        # ndev partials then sum them (gives the full combined output everywhere).
-        gathered = self.ccl.all_gather(
-            partial, dim=0, mesh_axis=self.mesh_axis, use_hyperparams=False
-        )  # [ndev*B, S, H]
-        ttnn.deallocate(partial)
-        B = gathered.shape[0] // self.ndev
-        S, H = gathered.shape[1], gathered.shape[2]
-        gathered = ttnn.reshape(gathered, (self.ndev, B, S, H))
-        combined = ttnn.sum(gathered, dim=0)  # [B,S,H]
-        ttnn.deallocate(gathered)
+        # All-reduce the per-device partial sums over the full expert-shard mesh.
+        # Experts are split across EVERY non-trivial mesh axis (4-way on a 2x2,
+        # 4-way on a 1x4), so we reduce over each such axis in turn: all-gather the
+        # partials along the axis and sum. After the final axis every device holds
+        # the full combined output. (On a 1x4 this is a single reduce over axis 1.)
+        combined = self._ep_all_reduce(partial)
 
         if self.shared_mlp is not None:
             shared = self.shared_mlp(x)

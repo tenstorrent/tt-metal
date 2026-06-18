@@ -108,7 +108,10 @@ def main():
     emb = torch.nn.functional.embedding(ids, wte)  # [2, S, H]
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), l1_small_size=32768)
+    # 2x2 mesh (full QB2): SP=axis0 / TP=axis1 layout. Phase 1 wires 4-way expert
+    # parallelism across BOTH axes (16 experts/device, ~19GB bf8) so the 80GB model
+    # fits; attention/dense stay replicated until the TP and SP phases land.
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
     try:
         mesh_device.enable_program_cache()
         ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
@@ -159,6 +162,10 @@ def main():
             weight_dtype=ttnn.bfloat8_b,
             ccl_manager=ccl,
             expert_mesh_axis=1,
+            tp_axis=1,  # TP=2 on axis 1: column-parallel qkv, row-parallel o_proj
+            tp_factor=2,
+            sp_axis=0,  # SP=2 on axis 0: sequence sharded across rows (gather-KV attn)
+            sp_factor=2,
             bf16_layers=bf16_layers,
         )
         te1 = HunyuanTtTimestepEmbedder(
