@@ -75,6 +75,7 @@ def run_full_ttnn_tts(
     ref_cache: str = None,
     trim_frames: int = 4,
     load_cpu_inputs: str = None,
+    pre_measurement_warmup: bool = False,
 ):
     """Run full TTNN TTS pipeline (CLI orchestrator)."""
     demo_start = time.time()
@@ -216,6 +217,7 @@ def run_full_ttnn_tts(
             code_pred_embeds=code_pred_embeds,
             config=config,
             streaming_decoder=streaming_decoder,
+            pre_measurement_warmup=pre_measurement_warmup,
         )
         timings["generation"] = time.time() - gen_start
         timings["warmup"] = compile_timings["warmup"]

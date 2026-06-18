@@ -833,6 +833,7 @@ def generate_codes_ttnn(
     code_pred_embeds: list,
     config: TTSConfig,
     streaming_decoder=None,
+    pre_measurement_warmup: bool = False,
 ) -> Union[Tuple[torch.Tensor, dict], Tuple[None, dict]]:
     """
     Generate codec tokens autoregressively using TTNN Talker and CodePredictor.
@@ -1168,6 +1169,15 @@ def generate_codes_ttnn(
     prefill_cos_tt, prefill_sin_tt = get_rope_tensors(
         device, head_dim, padded_seq_len, prefill_pos, model.talker_config.rope_theta
     )
+
+    # Pre-measurement warmup: fire the prefill trace once (with existing zero embed
+    # buffer) to ensure device execution is hot before the timed measurement.
+    # The measured run copies real embeddings and overwrites the same KV positions,
+    # so correctness is preserved.
+    if pre_measurement_warmup and padded_seq_len in talker_prefill_traces:
+        _pf_wu = talker_prefill_traces[padded_seq_len]
+        ttnn.execute_trace(device, _pf_wu["trace_id"], cq_id=0, blocking=True)
+        ttnn.synchronize_device(device)
 
     ttnn.synchronize_device(device)
     t_prefill_start = time.time()
