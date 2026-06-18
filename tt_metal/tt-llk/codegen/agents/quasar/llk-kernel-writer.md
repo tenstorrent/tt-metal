@@ -25,6 +25,14 @@ These are non-negotiable. Every kernel you write must follow them.
 
 Take the analysis from `llk-analyzer` and generate the actual kernel code.
 
+### Style: mirror the Blackhole reference (TTI vs SFPI)
+
+Write the kernel in whatever style the Blackhole reference uses, as the analysis prescribes:
+- Reference is raw `TTI_` intrinsics → write a raw-`TTI_` Quasar kernel.
+- Reference is the `sfpi::` C++ DSL → carry the SFPI constructs over directly (SFPI is available on Quasar).
+
+**Do this even when the user explicitly asked for an "SFPI version."** The explicit-SFPI request does **not** change your job — you still produce the reference-style kernel (the working, tested baseline). The SFPI *conversion* of a raw-`TTI_` kernel is the **optimizer's** job (it reimplements in SFPI and keeps it only if the generated instruction count is no worse than the intrinsics). Do not preemptively rewrite a `TTI_` reference in SFPI yourself — that would bypass the instruction-count gate.
+
 ## Input
 
 You will receive:
@@ -75,7 +83,12 @@ python -m scripts.agent_tools.kernel_template {op} --type {kernel_type} --arch {
 ```
 
 This produces a file with the correct:
-- Path (e.g. `tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_{op}.h` for SFPU)
+- Path. `kernel_template.py` resolves the destination via `get_kernel_dest(...)`:
+  **Quasar SFPU kernels land in `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h`**
+  (the CKernels LLK API folder, outside tt-llk), and are pulled into the C++ test
+  via the `llk_sfpu/` include prefix. Non-SFPU / non-quasar kernels land under
+  `tt_llk_{target_arch}/` (e.g. `llk_lib/llk_math_{op}.h`). Trust the path the
+  scaffold prints — do not relocate the file.
 - Includes for the kernel type
 - Namespace / using-declarations
 - Empty `{init,impl,uninit}` function stubs with the right names
@@ -84,7 +97,7 @@ Do NOT hand-write includes or the namespace preamble — the template is the sou
 
 ### Step 2b: Scope & Harness Discipline (MANDATORY — read before compiling)
 
-**Before you scaffold or run any compile, vet the test source the analysis cites and fix your scope boundary.** A surprising amount of time has been lost historically to writers that made a foreign-arch test harness *compile* on the target by bolting on no-op shims — the compile then passes, the tester spends its full 10-attempt budget on runtime timeouts, and the refiner mis-classifies the failure as an ISA bug. Avoid this entirely.
+**Before you scaffold or run any compile, vet the test source the analysis cites and fix your scope boundary.** A surprising amount of time has been lost historically to writers that made a foreign-arch test harness *compile* on the target by bolting on no-op shims — the compile then passes, the tester spends its full 5-attempt budget on runtime timeouts, and the refiner mis-classifies the failure as an ISA bug. Avoid this entirely.
 
 #### 2b.1 — Harness-fitness check
 
@@ -102,16 +115,16 @@ HARNESS_GAP
                do NOT proceed by shimming.
 ```
 
-Do not proceed to Step 3. The tester agent has a native-test-writing path (`new-kernel` flow, Step 1A.4) and will own creating the harness.
+Do not proceed to Step 3. The tester agent owns the harness in the `new-kernel` flow (Step 1A) — for SFPU ops it appends to the unified, target-native test (1A.1–1A.3); for non-SFPU kernels it writes/extends a sibling test (1A.4).
 
 #### 2b.2 — Scope boundary (non-negotiable)
 
 The writer touches:
 
-- The kernel file itself (`tt_llk_{target_arch}/common/inc/{family}/ckernel_*_{op}.h` or equivalent for math/pack/unpack).
+- The kernel file itself — the path `kernel_template.py` chose. For **Quasar SFPU** that is `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` (the CKernels LLK API folder, outside tt-llk); for math/pack/unpack it is `tt_llk_{target_arch}/llk_lib/llk_*.h` (or the SFPU lib path on non-quasar arches).
 - Its direct LLK wrapper if the wrapper for this op family doesn't yet exist (`tt_llk_{target_arch}/llk_lib/llk_*.h`). New wrappers must use target-native sync primitives — they are not allowed to delegate to `#ifdef ARCH_*` branches for sibling architectures.
 - The single enum line in `tt_llk_{target_arch}/llk_lib/llk_defs.h` that registers the kernel's `SfpuType::{Op}` / equivalent.
-- The single `#include` line in the kernel-family dispatch header (e.g. `tt_llk_{target_arch}/common/inc/ckernel_sfpu.h`).
+- The single `#include` line in the kernel-family dispatch header (e.g. `tt_llk_{target_arch}/common/inc/ckernel_sfpu.h`) — **for non-SFPU kernels**. For Quasar SFPU the test-facing registration (the `#include "llk_sfpu/ckernel_sfpu_{op}.h"` line plus the dispatch branch) lives in `tests/helpers/include/sfpu_operations_quasar.h` and is owned by the **tester**, not the writer — leave it alone.
 
 The writer **never** touches — under any circumstance, to make a foreign-arch test harness compile — the following files. If you believe any of them must change, that is evidence you are on the wrong path; stop and report `HARNESS_GAP`:
 

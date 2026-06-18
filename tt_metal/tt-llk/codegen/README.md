@@ -163,7 +163,7 @@ The MCP server is pre-configured in `.mcp.json`.
 | **Planner** | `llk-planner.md` | Design implementation spec with instruction mappings | Analysis, arch research | `artifacts/{op}_phase{N}_spec.md` |
 | **Writer** | `llk-kernel-writer.md` | Generate kernel code from spec, run compile check | Phase spec | `tt_llk_{arch}/.../ckernel_sfpu_{op}.h` |
 | **Debugger** | `llk-debugger.md` | Fix compilation or runtime errors (max 5 attempts) | Kernel + error output | Fixed kernel file |
-| **Test Writer** | `llk-test-writer.md` | Create C++ + Python test (or extend existing multi-op test) | Kernel file | Test files in `tests/` |
+| **Test Writer** | `llk-test-writer.md` | SFPU: append the op to the unified test for its category; non-SFPU: create/extend a sibling C++ + Python test | Kernel file | Test files in `tests/` |
 | **Phase Tester** | `llk-phase-tester.md` | Run per-phase simulator tests | Compiled kernel | Test pass/fail |
 | **Regression Tester** | `llk-regression-tester.md` | Run full test suite after all phases complete | Complete kernel | Final pass/fail |
 | **Optimizer** | `llk-optimizer.md` | Add replay buffers for SFPU kernels | Tested kernel | Optimized kernel |
@@ -257,4 +257,4 @@ All runs are also indexed in `runs.jsonl` (one JSON line per run) for dashboardi
 2. **Incremental phases** -- Write one sub-kernel, compile, test, repeat. Never write the whole file at once.
 3. **Instruction encoding drives API** -- `TTI_` macros require compile-time constants; function parameter types must preserve constexpr-ness
 4. **Target-first design** -- Use reference for semantics only; derive implementation patterns from existing target code
-5. **Prefer extending existing tests** -- Add to multi-op tests (e.g., `test_sfpu_nonlinear_quasar.py`) rather than creating new test files when compatible
+5. **Append SFPU ops to the unified test** -- New SFPU ops register into the consolidated test for their category (`test_eltwise_unary_sfpu_quasar.py`, `test_eltwise_binary_sfpu_quasar.py`, or the ternary `test_sfpu_where_quasar.py`) rather than getting their own per-op files; non-SFPU kernels extend a sibling test
