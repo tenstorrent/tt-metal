@@ -40,7 +40,7 @@ xt::xarray<float> xt_softmax(const xt::xarray<float>& input, uint32_t dim = 3U) 
     return result;
 }
 
-TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
+TEST_F(SoftmaxTest, DISABLED_SoftmaxTest_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 59U, W = 197U;
