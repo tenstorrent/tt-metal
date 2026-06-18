@@ -17,6 +17,22 @@ MATH_FIDELITY = {
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
+# Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
+# mapped to the (UnaryOpType, param0_float) tuples the matmul fused-activation
+# path expects. Centralised here so the variants live in one place.
+#
+# "gelu":      exact GELU (piecewise CDF / FP32 erf), matches F.gelu().
+# "gelu_fast": 6-segment piecewise-linear LUT, ~1% absolute error vs exact GELU.
+# "gelu_tanh": FP32 tanh approximation, matches F.gelu(approximate="tanh"). NaN-safe
+#              (kernel uses x*x*x for the cube, no exp/log path), so it does not
+#              repro the audio-decoder "mesh of 4 voices" artifact that bit a prior
+#              hand-rolled ttnn.pow(x, 3.0) decomposition.
+_FUSED_GELU_VARIANTS = {
+    "gelu": (ttnn.UnaryOpType.GELU, False),
+    "gelu_fast": (ttnn.UnaryOpType.GELU, True),
+    "gelu_tanh": (ttnn.UnaryOpType.GELU_TANH, 0.0),
+}
+
 
 class Linear(Module):
     """
@@ -33,17 +49,9 @@ class Linear(Module):
             self.out_features = self.out_features * 2
         self.activation_fn = activation_fn
         self.fused_activation_fn = None
-        if self.activation_fn == "gelu":
+        if self.activation_fn in _FUSED_GELU_VARIANTS:
+            self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        elif self.activation_fn == "gelu_tanh":
-            # FP32 fused tanh-GELU: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))).
-            # Bit-identical to F.gelu(approximate="tanh") computed at FP32. NaN-safe:
-            # the kernel uses x*x*x for the cube (no exp/log path), so it does not
-            # repro the audio-decoder "mesh of 4 voices" artifact that bit a prior
-            # hand-rolled ttnn.pow(x, 3.0) decomposition.
-            self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU_TANH, 0.0)
         self.mesh_device = mesh_device
 
         """
@@ -137,17 +145,9 @@ class ColParallelLinear(Module):
             # Double out features for fused swiglu activation
             self.out_features = self.out_features * 2
         self.fused_activation_fn = None
-        if self.activation_fn == "gelu":
+        if self.activation_fn in _FUSED_GELU_VARIANTS:
+            self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        elif self.activation_fn == "gelu_tanh":
-            # FP32 fused tanh-GELU: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))).
-            # Bit-identical to F.gelu(approximate="tanh") computed at FP32. NaN-safe:
-            # the kernel uses x*x*x for the cube (no exp/log path), so it does not
-            # repro the audio-decoder "mesh of 4 voices" artifact that bit a prior
-            # hand-rolled ttnn.pow(x, 3.0) decomposition.
-            self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU_TANH, 0.0)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis

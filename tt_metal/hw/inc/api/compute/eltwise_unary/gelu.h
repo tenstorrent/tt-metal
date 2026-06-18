@@ -59,6 +59,8 @@ ALWI void gelu_tile_pack(uint32_t idst) {
  */
 ALWI void gelu_tanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::gelu_tanh_init, (DST_ACCUM_MODE))); }
 
+ALWI void gelu_tanh_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::gelu_tanh_init, (DST_ACCUM_MODE))); }
+
 // clang-format off
 /**
  * Element-wise GELU using the tanh approximation, computed in FP32:
@@ -79,6 +81,10 @@ ALWI void gelu_tanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::gelu_
 // clang-format on
 ALWI void gelu_tanh_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (DST_ACCUM_MODE), idst, VectorMode::RC));
+}
+
+ALWI void gelu_tanh_tile_pack(uint32_t idst) {
+    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
