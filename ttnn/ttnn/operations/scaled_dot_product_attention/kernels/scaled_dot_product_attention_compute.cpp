@@ -165,17 +165,30 @@ void kernel_main() {
             if (first) {
                 ckl::copy<cb_m_blk, cb_m_run>(B_q);
             } else {
+                // m_prev is HELD (not popped — reused by phase 4). A held operand
+                // MUST use OperandKind::Block (per-row tile index i) + HeldBulk; a
+                // Scalar index on a non-popped operand reads tile 0 every iter,
+                // which is wrong for B_q > 1. m_blk is popped → Scalar+Streaming
+                // (front advances per pop) reads the correct per-row tile.
                 ckl::binary_sfpu<
                     ckl::BinaryMax<>,
                     cb_m_prev,
                     cb_m_blk,
                     cb_m_run,
-                    ckl::InputLifecycle::HeldStream,  // m_prev: keep for alpha
-                    ckl::InputLifecycle::Streaming>(B_q);
+                    ckl::InputLifecycle::HeldBulk,   // m_prev: held, Block-indexed
+                    ckl::InputLifecycle::Streaming,  // m_blk: popped
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Block,         // A (m_prev) index = i
+                    ckl::OperandKind::Scalar>(B_q);  // B (m_blk) index = front
             }
 
             if (!first) {
                 // ---------- Phase 4: alpha = exp(m_prev - m_run) ----------
+                // m_prev is popped (last use) → Scalar+Streaming reads per-row tile i.
+                // m_run is HELD (reused by phase 7) → Block+HeldBulk reads per-row
+                // tile i; a Scalar index on the held operand would read tile 0 for
+                // every row (wrong for B_q > 1).
                 ckl::eltwise_chain(
                     ckl::EltwiseShape(B_q),
                     ckl::BinaryFpu<
@@ -183,12 +196,12 @@ void kernel_main() {
                         cb_m_run,
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::None,
-                        ckl::InputLifecycle::Streaming,   // m_prev: pop (last use)
-                        ckl::InputLifecycle::HeldStream,  // m_run: keep
+                        ckl::InputLifecycle::Streaming,  // m_prev: pop (last use)
+                        ckl::InputLifecycle::HeldBulk,   // m_run: held, Block-indexed
                         ckl::BinaryDataFormatReconfig::Input,
                         ckl::Dst::D0,
                         ckl::OperandKind::Scalar,
-                        ckl::OperandKind::Scalar>{},
+                        ckl::OperandKind::Block>{},
                     ckl::Exp<>{},
                     ckl::PackTile<
                         cb_alpha,
@@ -197,18 +210,21 @@ void kernel_main() {
                         ckl::Dst::D0>{});
 
                 // ---------- Phase 5: l_run = alpha * l_run ----------
+                // l_run is in-place (Scalar+Streaming, 1x, front advances per pop).
+                // alpha is HELD (reused by phase 6) → Block+HeldBulk reads per-row
+                // tile i (Scalar on the held operand would read tile 0 for all rows).
                 ckl::mul<
                     cb_l_run,
                     cb_alpha,
                     cb_l_run,
                     ckl::BroadcastDim::None,
                     ckl::InputLifecycle::Streaming,
-                    ckl::InputLifecycle::HeldStream,
+                    ckl::InputLifecycle::HeldBulk,
                     ckl::OutputLifecycle::Streaming,
                     ckl::BinaryDataFormatReconfig::Input,
                     ckl::PackTileReconfig::Output,
                     ckl::OperandKind::Scalar,
-                    ckl::OperandKind::Scalar>(B_q);
+                    ckl::OperandKind::Block>(B_q);
 
                 // ---------- Phase 6: O_run = alpha * O_run (Col bcast) ----------
                 ckl::mul<
