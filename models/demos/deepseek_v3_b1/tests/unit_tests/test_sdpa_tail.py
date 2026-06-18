@@ -135,13 +135,15 @@ def test_sdpa_tail(device, width, block_size, num_blocks, dense, final_reduction
 
     # Create output tensors sharded on same core
     torch_l_out = torch.zeros(l_shape, dtype=torch.bfloat16)
+    # When untilize_out, l_out is row-major and must not carry a tile (see #18536); the op sets
+    # the CB tile/page geometry explicitly from the tiled inputs regardless.
     ttnn_l_out = ttnn.from_torch(
         torch_l_out,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT if not untilize_out else ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=l_mem_config,
-        tile=tile,
+        tile=None if untilize_out else tile,
     )
     torch_ms_out = torch.zeros(ms_shape, dtype=torch.bfloat16)
     ttnn_ms_out = ttnn.from_torch(
