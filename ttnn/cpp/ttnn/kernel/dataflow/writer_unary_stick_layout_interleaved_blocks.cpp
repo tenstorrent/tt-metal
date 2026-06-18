@@ -4,11 +4,16 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 // #include "api/debug/dprint.h"
 
 template <typename DSpec>
 inline void write_tiles_in_block(
-    uint32_t cb_id_out0,
+    Noc& noc,
+    CircularBuffer& cb_out0,
     uint32_t block_height_ntiles,
     uint32_t block_width_ntiles,
     uint32_t block_start_row_id,
@@ -21,19 +26,24 @@ inline void write_tiles_in_block(
     uint32_t block_row_id = block_start_row_id;
     for (uint32_t tile_row_id = 0; tile_row_id < block_height_ntiles; tile_row_id++) {
         // We reserve back an entire row of tiles in a block and issue a bunch of reads
-        cb_wait_front(cb_id_out0, block_width_ntiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb_out0.wait_front(block_width_ntiles);
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         for (uint32_t j = 0; j < TILE_HEIGHT; j++) {
             if (block_row_id >= num_rows_unpadded) {
                 break;
             }
-            uint64_t dst_noc_addr = s.get_noc_addr(block_row_id, block_row_offset);
-            noc_async_write(l1_read_addr, dst_noc_addr, block_row_size_unpadded);
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(
+                src,
+                s,
+                block_row_size_unpadded,
+                {.offset_bytes = 0},
+                {.page_id = block_row_id, .offset_bytes = block_row_offset});
             l1_read_addr += block_row_size;
             block_row_id++;
         }  // for tile_nrows
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, block_width_ntiles);
+        noc.async_write_barrier();
+        cb_out0.pop_front(block_width_ntiles);
     }  // for block_height_ntiles
 }
 void kernel_main() {
@@ -62,6 +72,10 @@ void kernel_main() {
     const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
 
     const auto s = TensorAccessor(dst_args, dst_addr);
+
+    Noc noc;
+    CircularBuffer cb_out0(cb_id_out0);
+
     uint32_t num_rows_unpadded = num_output_rows_unpadded + block_start_row_id;
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {
@@ -72,7 +86,8 @@ void kernel_main() {
                     current_block_row_size_unpadded = last_block_row_size_unpadded;
                 }
                 write_tiles_in_block(
-                    cb_id_out0,
+                    noc,
+                    cb_out0,
                     block_height_ntiles,
                     block_width_ntiles,
                     block_start_row_id,
