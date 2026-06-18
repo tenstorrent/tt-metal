@@ -8,6 +8,7 @@ import torch
 import ttnn
 
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import semantic_codebook_centroids_bf16
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
 
 
 class VoxtralTTSemanticCodebookQuantizer:
@@ -27,25 +28,22 @@ class VoxtralTTSemanticCodebookQuantizer:
         self.n_codes = int(c_bf16.shape[0])
         self.semantic_dim = int(c_bf16.shape[1])
         self._c_norm_f32 = (c_bf16.float().pow(2).sum(-1)).view(1, -1)
-        self._c_norm_f32_tt = ttnn.from_torch(
+        self._c_norm_f32_tt = voxtral_from_torch(
             self._c_norm_f32.to(torch.float32).contiguous(),
-            device=mesh_device,
+            mesh_device,
             dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.centroids_sn_tile = ttnn.from_torch(
+        self.centroids_sn_tile = voxtral_from_torch(
             c_bf16.transpose(0, 1).contiguous(),
-            device=mesh_device,
+            mesh_device,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.centroid_embedding_weight_tt = ttnn.from_torch(
+        self.centroid_embedding_weight_tt = voxtral_from_torch(
             c_bf16.contiguous(),
-            device=mesh_device,
+            mesh_device,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

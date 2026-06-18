@@ -7,6 +7,8 @@ from __future__ import annotations
 import torch
 import ttnn
 
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
+
 
 class VoxtralTTAudioCodebookEmbedding:
     """``F.embedding``-compatible lookup: 2D int indices ``[B, T]`` → ``[B, T, dim]`` (tile BF16)."""
@@ -24,11 +26,10 @@ class VoxtralTTAudioCodebookEmbedding:
         self.num_embeddings = int(weight_bf16.shape[0])
         self.embedding_dim = int(weight_bf16.shape[1])
         w = weight_bf16.to(torch.bfloat16).contiguous()
-        self.weight_tt = ttnn.from_torch(
+        self.weight_tt = voxtral_from_torch(
             w,
-            device=mesh_device,
+            mesh_device,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
