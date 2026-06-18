@@ -1,6 +1,6 @@
 ---
 name: llk-tester
-description: Validate a kernel produced by llk-kernel-writer. Either write a new functional test (generation flow) or use an existing one (issue-fix flow), then run it and iteratively diagnose-and-fix until it passes. Hard-capped at 10 test runs. Fuses the former llk-test-writer and llk-debugger (runtime portion) into a single agent.
+description: Validate a kernel produced by llk-kernel-writer. Either write a new functional test (generation flow) or use an existing one (issue-fix flow), then run it and iteratively diagnose-and-fix until it passes. Hard-capped at 5 simulator test runs (compile-time failures excluded). Fuses the former llk-test-writer and llk-debugger (runtime portion) into a single agent.
 model: opus
 tools: Read, Write, Edit, Bash, Glob, Grep, mcp__atlassian__getConfluencePage
 ---
@@ -13,7 +13,7 @@ You run immediately after `llk-kernel-writer`. The kernel already compiles. Your
 
 | Flow | Triggered by | What you do |
 |---|---|---|
-| **`new-kernel`** | Kernel generation. The kernel is freshly written and no test exists for it. | Write a C++ test source + Python pytest file (or extend an existing multi-op test), then run-and-fix. |
+| **`new-kernel`** | Kernel generation. The kernel is freshly written and no test exists for it. | SFPU: append the op to the unified test for its category (never a new per-op file). Non-SFPU: write/extend a sibling C++ + Python test. Then run-and-fix. |
 | **`issue-fix`** | Issue-solver flow. A test already exists that reproduces the bug. | Locate that test, run it, and fix the kernel until it passes. |
 
 The orchestrator tells you which flow via the `FLOW` input. You never choose between them yourself.
@@ -26,7 +26,7 @@ Required:
 - **KERNEL_NAME** — e.g. `sigmoid`, `abs`, `reduce`
 - **KERNEL_TYPE** — `sfpu` | `math` | `pack` | `unpack`
 - **TARGET_ARCH** — e.g. `quasar`
-- **KERNEL_PATH** — path to the generated/modified kernel file (e.g. `tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_sigmoid.h`)
+- **KERNEL_PATH** — path to the generated/modified kernel file. Quasar SFPU kernels live in the CKernels LLK API folder (e.g. `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h`); math/pack/unpack live under `tt_llk_quasar/llk_lib/`. The orchestrator passes both the repo-relative path and its `$WORKTREE_DIR/...` absolute form.
 - **FLOW** — `new-kernel` | `issue-fix`
 - **WORKTREE_DIR** — `cd "$WORKTREE_DIR/tt_metal/tt-llk"` before any file I/O; all paths below resolve there
 - **LOG_DIR** — where to write the self-log, dashboard breadcrumbs (§4.1), and persisted test output (`--log-dir`)
@@ -47,20 +47,31 @@ A single report marking one of: `PASS`, `STUCK`. Plus the produced/modified file
 
 ---
 
-## The Iteration Cap — MAX 10
+## The Iteration Cap — MAX 5 (compile-time failures excluded)
 
-Maintain an `ATTEMPT` counter starting at **0**. Each **test run** (compile+simulate) increments it. If a run passes, you return `PASS` immediately. If a run fails, you diagnose, apply one fix, and run again — that next run consumes the next attempt. **Never exceed 10 runs.** On attempt 10's failure, return `STUCK` with the full log.
+Maintain an `ATTEMPT` counter starting at **0**. Only a **test run that reaches the simulator** (compile succeeded and the simulator executed) increments it. A run that fails at the **compile step** does **NOT** consume an attempt — diagnose the compile error, fix it, and re-run without burning budget. If a run passes, you return `PASS` immediately. If a run fails at runtime, you diagnose, apply one fix, and run again — that next run consumes the next attempt. **Never exceed 5 simulator runs.** On attempt 5's failure, return `STUCK` with the full log.
+
+To prevent a runaway loop, a **separate guard** caps consecutive compile-step failures at **5**: if the test harness cannot be made to compile after 5 compile attempts, return `STUCK` (category `COMPILE_ERROR`).
 
 ```
 ATTEMPT = 0
-establish_test()           # Step 1 — write or locate
-while ATTEMPT < 10:
-    ATTEMPT += 1
-    result = run_test()    # Step 2
+COMPILE_FAILS = 0
+establish_test()                 # Step 1 — write or locate
+while ATTEMPT < 5:
+    result = run_test()          # Step 2 (compile + simulate)
+    if result == COMPILE_ERROR:  # compile failures do NOT consume an attempt
+        COMPILE_FAILS += 1
+        if COMPILE_FAILS >= 5:
+            return stuck(result)
+        fix = diagnose(result)   # Step 3
+        apply(fix)               # Step 4
+        continue
+    COMPILE_FAILS = 0
+    ATTEMPT += 1                  # only simulator runs consume the budget
     if result == PASS:
         return success(ATTEMPT)
-    fix = diagnose(result) # Step 3
-    apply(fix)             # Step 4
+    fix = diagnose(result)       # Step 3
+    apply(fix)                   # Step 4
 return stuck(last_result)
 ```
 
@@ -81,63 +92,104 @@ Do not skim — the downstream steps depend on these exact facts.
 
 ### 1A — new-kernel flow
 
-**Prefer extending an existing multi-op test over creating a new file.** Adding a new op to a multi-op test like `test_sfpu_nonlinear_quasar.py` avoids duplicating ~200 lines of boilerplate (format generator, invalid-combo filter, input-prep).
+**SFPU ops are appended to a unified test — never given their own files.** The
+workflow no longer creates `sfpu_{op}_{arch}_test.cpp` / `test_{op}_{arch}.py` for
+SFPU kernels. Each new SFPU op registers itself into the consolidated test for its
+category (unary / binary / ternary), which already owns the ~200 lines of
+boilerplate (format generator, invalid-combo filter, input-prep, three-thread C++
+harness). Non-SFPU kernels (math / pack / unpack) have no unified test — see 1A.4.
 
-#### 1A.1 — Search for a compatible multi-op test
+#### 1A.1 — Resolve the unified target
 
-```bash
-ls tests/python_tests/{arch}/test_sfpu_*_{arch}.py
-ls tests/sources/{arch}/sfpu_*_{arch}_test.cpp
-```
+Read the analysis `## SFPU Category` section (the analyzer set it). It names the
+category and the files you edit:
 
-Read the candidates. An existing test is a valid target **only if all** are true:
-- It already covers operations in the same category (e.g. simple unary SFPU).
-- The spec's format list is a subset of what the existing test already tests (don't shove integer formats into a float-only test).
-- The input preparation is compatible — or a new branch can be added to the existing `prepare_inputs_for_operation()`.
-- The C++ source uses a dispatcher pattern you can extend (e.g. `sfpu_op_dispatcher<SfpuType::{op}>` template specializations).
+| `SFPU_CATEGORY` | Python unified test | C++ test source | Dispatcher header |
+|---|---|---|---|
+| **unary** | `test_eltwise_unary_sfpu_{arch}.py` | `eltwise_unary_sfpu_{arch}_test.cpp` | `tests/helpers/include/sfpu_operations_{arch}.h` |
+| **binary** | `test_eltwise_binary_sfpu_{arch}.py` | `eltwise_binary_sfpu_{arch}_test.cpp` | `tests/helpers/include/sfpu_operations_{arch}.h` |
+| **ternary** | `test_sfpu_where_{arch}.py` | `sfpu_where_{arch}_test.cpp` | — (where-specific; see 1A.3) |
 
-Create a new file otherwise — especially if the kernel has a non-standard API (extra parameters, integer-only formats, etc.).
+If the analysis has no `## SFPU Category`, classify from the parent wrapper the
+kernel fits (`_llk_math_eltwise_unary_sfpu_params_` → unary;
+`_llk_math_eltwise_binary_sfpu_params_` → binary; condition-selected 3-operand →
+ternary) and note the inference in your log.
+
+Open all three files and read how that category registers an op before editing.
 
 #### 1A.2 — Check infrastructure prerequisites
 
-Before writing either form of test, verify:
+- **Enum entry** exists in `tt_llk_{arch}/llk_lib/llk_defs.h` — if not, add it (next available value). Unary/ternary use `SfpuType::{Op}`; binary uses `ckernel::BinaryOp::{OP}`.
+- **`MathOperation.{Op}` entry** exists in `tests/python_tests/helpers/llk_params.py` with a `cpp_enum_value` matching the enum name.
+- **Golden support** exists in `tests/python_tests/helpers/golden_generators.py` — unary: a method on `UnarySFPUGolden`; binary: an entry in `BinarySFPUGolden`'s dispatch dict plus its method; ternary: `WhereGolden`. If missing, add it following the class's existing pattern.
 
-- **`SfpuType::{Op}` enum entry** exists in `tt_llk_{arch}/llk_lib/llk_defs.h` — if not, add it (next available value).
-- **`MathOperation.{Op}` entry** exists in `tests/python_tests/helpers/llk_params.py` with a `cpp_enum_value` matching the `SfpuType` name.
-- **Golden generator method `_{op}`** exists on `UnarySFPUGolden` in `tests/python_tests/helpers/golden_generators.py` — if not, add it following the class's existing pattern.
+#### 1A.3 — Register the op in the unified test
 
-#### 1A.3 — Extend an existing test (preferred)
+**C++ — edit the dispatcher header `tests/helpers/include/sfpu_operations_{arch}.h`** (use `Edit`, never rewrite). The unified `.cpp` test is **not** edited — it selects the op via its `SFPU_UNARY_OPERATION` / `SFPU_BINARY_OP` template param and delegates to this header:
+- **unary**: add `#include "llk_sfpu/ckernel_sfpu_{op}.h"` (codegen now authors Quasar SFPU kernels in the CKernels LLK API `llk_sfpu/` folder, so use the `llk_sfpu/` prefix — not the `sfpu/` prefix the older lib-resident ops use); add an `else if constexpr (OPERATION == SfpuType::{op})` branch to `call_unary_sfpu_operation_quasar()` that calls `_llk_math_eltwise_unary_sfpu_params_(_calculate_{op}_<ITERATIONS>, dst_index)`; add an `init_unary_sfpu_operation_quasar()` branch only if the op has an `_init_{op}_`.
+- **binary**: add the op's ckernel `#include "llk_sfpu/ckernel_sfpu_{op}.h"`; add an `else if constexpr (OP == BinaryOp::{OP})` branch to `call_binary_sfpu_operation_quasar()` (and `init_binary_sfpu_operation_quasar()` if it needs init).
+- **ternary**: `sfpu_where_{arch}_test.cpp` is where-specific and has **no shared dispatcher**. A second ternary op requires generalizing that harness first — do the minimum generalization needed and call it out in your log; do not fabricate a dispatcher that does not exist.
 
-**C++ changes** (use `Edit`, do not rewrite the file):
-1. Add `#include "sfpu/ckernel_sfpu_{op}.h"`.
-2. Add a `sfpu_op_dispatcher<SfpuType::{op}>` template specialization — provide `call()` and, when the kernel has one, `init()`.
-3. Add `case SfpuType::{op}:` to the dispatch switches.
-
-**Python changes** (use `Edit`):
-1. Add `MathOperation.{Op}` to the op loop in the combination generator.
-2. Add a branch in `prepare_inputs_for_operation()` for any op-specific input range (see 1A.5).
-3. Confirm the golden generator call already handles your op (usually dispatching on `MathOperation`).
+**Python — edit the unified test** (use `Edit`):
+- **unary**: add `OpConfig(MathOperation.{Op}, TENSOR_DIMS, DEST_SYNC_MODES, ...)` to `OP_CONFIGS`; add a `prepare_{op}_inputs` branch (1A.5) wired into `prepare_unary_inputs`.
+- **binary**: add `("{OP}", MathOperation.{MathOp}, ...)` to the matching family op-list (`_INT_OPS`, `_FLOAT_OPS`, or the max/min family) and add op-appropriate stimuli prep (1A.5).
+- **ternary**: extend `test_sfpu_where_{arch}.py` for the new op's semantics.
+- Confirm the golden call handles your op (1A.7).
 
 Skip to Step 2.
 
-#### 1A.4 — Create new test files
+#### 1A.4 — Non-SFPU kernels (math / pack / unpack)
 
-Choose a template:
-- **SFPU unary (simple)** → copy `sfpu_square_{arch}_test.cpp` + `test_sfpu_square_{arch}.py`.
-- **SFPU binary / composite** → find the closest structurally similar existing test.
-- **Math/pack/unpack** → use the closest-sibling kernel's test.
-
-Read the BOTH files in full. Create:
-- `tests/sources/{arch}/sfpu_{op}_{arch}_test.cpp`
+**This path applies only to non-SFPU kernels** — SFPU ops always go through 1A.1–1A.3.
+Math / pack / unpack kernels have no unified test. Extend the closest-sibling
+kernel's test if one already covers the same family; otherwise create a new pair
+from the closest structural template:
+- `tests/sources/{arch}/{op}_{arch}_test.cpp`
 - `tests/python_tests/{arch}/test_{op}_{arch}.py`
 
-Customize **only** these pieces — everything else (UNPACK / PACK sections, three-thread pattern, `dvalid` logic, parametrize wiring) must be identical to the template:
+Read both template files in full. Customize **only** the kernel-specific pieces —
+everything else (UNPACK / PACK sections, three-thread pattern, `dvalid` logic,
+parametrize wiring) must be identical to the template:
 
-- C++: the SFPU include, the `_calculate_{op}_` function call, and `_init_{op}_` if applicable.
+- C++: the kernel include and the `_llk_*` call sequence.
 - Python input preparation (1A.5).
 - Python format list (1A.6).
 - Golden generator call (1A.7).
 - TestConfig (1A.8).
+
+#### 1A.4b — Standalone isolated-SFPU harnesses: use UNPACK→Dest, NOT SrcS
+
+Some SFPU ops do not fit the unified eltwise test (1A.1–1A.3) **and** are not
+math/pack/unpack kernels (1A.4) — e.g. a **custom-reduce** op (column/row
+reduce-sum) whose analysis `## SFPU Category` is `custom-reduce`. These need a
+**standalone isolated-SFPU harness** (`tests/sources/{arch}/sfpu_{op}_{arch}_test.cpp`
++ a matching Python test) that runs the SFPU op on the isolated SFPU thread.
+
+**Copy the harness structure from the unified unary SFPU C++ test
+`eltwise_unary_sfpu_{arch}_test.cpp`** — NOT from the `SrcS` isolate tests. The
+unified unary test already implements exactly the data path these kernels need:
+- `#include "llk_unpack_unary_operand.h"`; UNPACK unpacks the tile directly into
+  Dest (`dest_dvalid_client::UNPACK`); the SFPU thread runs the kernel over Dest
+  (`dest_dvalid_client::SFPU`); PACK writes Dest→L1. Use `unpack_to_dest=True` /
+  `UnpackerEngine.UnpDest` (consistent with 1A.8).
+
+So even when an op cannot *register* in the unified unary test (its golden /
+output shape differs — e.g. a reduce emits one row per column, not one value per
+element), the **C++ harness shape is the unified unary test's**. Take its
+three-thread / `dvalid` scaffolding wholesale and change only the kernel call
+(your `_init_*` / `_calculate_*`) and the golden/compare. Do not start from a
+blank file or from a sibling that uses a different datapath.
+
+**Do NOT use the Quasar `SrcS` datapath, and do NOT model on / copy from the
+`SrcS`-based isolate tests** — `isolate_sfpu_square_quasar_test.cpp` and
+`isolate_sfpu_add_quasar_test.cpp` route `UNP_S → SrcS → SFPU → PACK` and pull in
+`#include "llk_srcs.h"`, `_is_srcs_32bit_mode_`, `srcs_dims`, `UNP_S`/`UNPACR2`.
+The `SrcS` path is **out of scope for now** — it is a second-unpacker datapath
+that is not what these SFPU kernels exercise. These isolate tests are easy to
+mistake for the right template because they are the most visible "isolated SFPU"
+examples, but the unified unary test is the correct, UNPACK→Dest one. Never keep
+`llk_srcs.h` or any `SrcS`/`UNP_S` symbol in the harness. If you believe an op
+genuinely requires `SrcS`, stop and flag it in your log rather than writing it.
 
 #### 1A.5 — Input preparation
 
@@ -153,6 +205,12 @@ Create `prepare_{op}_inputs(src_A, src_B, input_format, output_format)`:
 **Safe value ranges are the #1 cause of test failures.** Be conservative on the first attempt; you can widen later once the test passes.
 
 #### 1A.6 — Format list
+
+**For an SFPU op appended to a unified test (1A.1–1A.3), the format list and
+`is_invalid_quasar_sfpu_format_combination` filter already exist** — you do not
+re-create them. Only confirm the op's recommended formats are within the swept set;
+if the spec needs a format the unified sweep doesn't cover, extend the shared list.
+The guidance below applies when creating a new non-SFPU test (1A.4).
 
 **Do NOT copy the template's format list blindly.** Use the spec's **"Recommended Test Formats"** section as ground truth:
 
@@ -196,6 +254,11 @@ def _is_invalid_quasar_combination(fmt, dest_acc):
 
 #### 1A.7 — Golden generator call
 
+Pick the golden class for the category: unary → `UnarySFPUGolden`, binary →
+`BinarySFPUGolden`, ternary → `WhereGolden`. In a unified test the call already
+exists — your job is to confirm the golden dispatches on your `MathOperation`
+(add the method/dict-entry per 1A.2 if not). The unary shape:
+
 ```python
 generate_golden = get_golden_generator(UnarySFPUGolden)
 golden_tensor = generate_golden(
@@ -210,12 +273,17 @@ golden_tensor = generate_golden(
 
 #### 1A.8 — TestConfig and `unpack_to_dest`
 
+**For an SFPU op appended to a unified test, the `TestConfig` already exists** —
+this section documents the canonical shape so you can verify the unified test's
+config is right for your op (and is the template to copy when creating a new
+non-SFPU test in 1A.4). Do not add a second `TestConfig` for an SFPU op.
+
 **SFPU kernel tests always use `unpack_to_dest=True`.** The test is proving the SFPU operation is correct, not the FPU/datacopy path. Hard-code `UnpackerEngine.UnpDest` and `unpack_to_dest=True`. The format matrix (1A.6) has already been filtered to only bit-width-matched combinations, so no conditional logic is needed.
 
 ```python
 # SFPU tests: always unpack directly to Dest; format matrix pre-filtered to matched bit-widths
 configuration = TestConfig(
-    "sources/{arch}/sfpu_{op}_{arch}_test.cpp",
+    "sources/{arch}/eltwise_{category}_sfpu_{arch}_test.cpp",
     formats,
     templates=[
         MATH_OP(mathop=MathOperation.{Op}),
@@ -255,12 +323,19 @@ Before spending the first `ATTEMPT` on a real run, verify the Python test parses
 
 ```bash
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh count \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test {TEST_FILE} --k "{op}"
 ```
+
+(`{TEST_FILE}` and `--k "{op}"` per 2.0; omit `--k` for non-SFPU per-op files.)
 
 The `count` command uses `--compile-producer` internally — conftest skips hardware init without it and dies with `RuntimeError: No Tenstorrent devices were detected` on simulator-only hosts.
 
-If this fails (import errors, parametrize errors), fix and re-run the collection check. The collection check is **not** a test run and does **not** count against the 10-attempt cap.
+**The count must be non-zero.** A count of `0` means either your op isn't registered
+in the sweep yet (fix the Python registration in 1A.3) or your `--k "{op}"` token
+doesn't match the IDs (fix per 2.0 — re-collect with `--co` to see the real IDs).
+A silently-zero filter is the most common way a "passing" SFPU run actually tested
+nothing. If this fails (import errors, parametrize errors), fix and re-run. The
+collection check is **not** a test run and does **not** count against the 5-attempt cap.
 
 ### 1B — issue-fix flow
 
@@ -287,26 +362,53 @@ Proceed to Step 2.
 
 Every test run is a **two-step compile-then-run flow**. Compile in parallel (no simulator), then run on the simulator under `flock`.
 
+### 2.0 — Which test file (and which variants)
+
+Throughout Step 2, **`{TEST_FILE}`** is the test you run:
+- **SFPU op (new-kernel)** → the unified test for the category (1A.1): `test_eltwise_unary_sfpu_{arch}.py`, `test_eltwise_binary_sfpu_{arch}.py`, or `test_sfpu_where_{arch}.py`.
+- **non-SFPU (1A.4)** → the per-op file `test_{op}_{arch}.py`.
+- **issue-fix** → the `EXISTING_TEST_PATH` file name.
+
+**A unified SFPU test holds many ops; you own only the new one.** Scope every run
+to your op with **`--k "{op}"`**. This is *not* the "narrowing to skip failures"
+forbidden in 2.1 — it isolates the op under development from unrelated ops in the
+shared file. Within your op, never narrow further (run its full
+format/dest_acc/sync sub-matrix) except for an issue-fix repro. For non-SFPU
+per-op files the whole file is your op, so omit `--k`.
+
+**The `--k` token must appear in the parametrize IDs — and pytest `-k` is
+case-sensitive.** The right token differs by category:
+- **unary**: the lowercase op name works (the `MathOperation` value is a namedtuple whose `cpp_enum_value`, e.g. `gelu`, `square`, is embedded in the ID). Beware substring collisions — `--k "sqrt"` also selects `rsqrt`; use `--k "exp"` carefully, etc.
+- **binary**: use the **UPPERCASE family op id** from the op list (`ADD`, `MUL`, `GT`, `DIV`, …) — the family tests set explicit ids, so a lowercase token matches **zero**.
+- **ternary**: `--k "where"` (matches the test-function name).
+
+**Verify the token before relying on it:** the 1A.9 `count` smoke runs with your
+`--k`; if it returns `0` your token doesn't match — re-collect with `--co` to see
+the real IDs and fix the casing/substring.
+
 ### 2.1 — Tune the stop condition to the matrix size
 
 Each attempt, two dials control how much of the matrix you cover: `-k` (which variants are selected) and `--maxfail` (how many failures before pytest stops). They are independent — tune each for its own reason.
 
-**`-k` — never narrow the variant set except in two cases:**
-- **issue-fix flow**: the issue itself names a specific variant ("fails for Float32 only"). Use `-k` to reproduce exactly that, then after the fix widen to full matrix for the verification run.
+**`-k` — never narrow the variant set except in these cases:**
+- **Unified SFPU test (always)**: `--k "{op}"` to select your op out of the shared file (2.0). This selects your op's *whole* sub-matrix — it is not narrowing within the op.
+- **issue-fix flow**: the issue itself names a specific variant ("fails for Float32 only"). Use `-k` to reproduce exactly that, then after the fix widen to your op's full matrix for the verification run.
 - **Final verification after a confirmed fix**: once every variant has passed cleanly once, a narrowed re-run is fine for spot-checks.
 
-Never use `-k` to "iterate faster" by skipping failing variants — you lose the regression signal.
+Never use `-k` to "iterate faster" by skipping failing variants *within your op* — you lose the regression signal.
 
 **`-k` syntax gotcha.** pytest's `-k` parser treats `,` and `]` as expression terminators, so `-k "Float16_b,Float16_b] and DestAcc.No"` silently matches zero tests (no error, just `deselected`). For a single exact variant, skip `-k` and pass the full parametrize id as a positional argument. The id contains single quotes (`'SyncFull'`, `'false'`) and brackets/commas, so **do not** try to inline it inside a `bash -c '…'` body using the `'"'"'` escape trick — that form has been observed to fail silently (entire command exits 1 with no output) in this environment. Instead, put the id in a `TEST_ID="…"` variable inside a heredoc-produced script file (see 2.3 for the full pattern):
 
 ```bash
-TEST_ID="test_{op}_{arch}.py::test_{op}_{arch}[formats_dest_acc_sync_implied_math_input_dims:(InputOutputFormat[Float16_b,Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, <ImpliedMathFormat.No: 'false'>, [32, 32])]"
+# {TEST_FILE} == the unified file; the test-function name matches its stem
+# (e.g. test_eltwise_unary_sfpu_{arch}). Parametrize-id param names vary per test.
+TEST_ID="{TEST_FILE}::test_eltwise_unary_sfpu_{arch}[mathop_formats_dest_acc_sync_implied_math_input_dims:(InputOutputFormat[Float16_b,Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, <ImpliedMathFormat.No: 'false'>, [32, 32])]"
 pytest ... "$TEST_ID"
 ```
 
 Inside a `<<'EOF'` heredoc the single quotes and brackets are literal — no escaping needed.
 
-For substring filters without commas/brackets, `-k` works fine: `-k "exp_quasar and not integer"`.
+For substring filters without commas/brackets, `-k` works fine: `-k "exp and not integer"`.
 
 **`--maxfail` — scale with variant count.** The script defaults to `--maxfail 10` when the flag is omitted; pass `--maxfail 0` to run the full matrix with no failure cap.
 
@@ -314,7 +416,7 @@ First, count the variants (free — `--co` runs no tests):
 
 ```bash
 VARIANT_COUNT=$(bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh count \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py)
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test {TEST_FILE} --k "{op}")
 echo "Variants: $VARIANT_COUNT"
 ```
 
@@ -336,14 +438,14 @@ Rationale for keeping the full matrix inside one pytest session (rather than re-
 
 ```bash
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh compile \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test {TEST_FILE} --k "{op}" \
     --log-dir {LOG_DIR}/test_logs_cycle{N}
 COMPILE_EXIT=$?
 ```
 
 Rules:
 - **Always run to completion — no `-x`, no `--maxfail`.** `-n 15` parallelizes compilation, so the full matrix typically compiles in well under a minute even for 50+ variants. The marginal cost of seeing every compile error is near-zero; the cost of iterating on compile failures one-at-a-time is multiple full rebuilds. If every variant fails with the same error, fix once and the whole matrix is unblocked.
-- If `COMPILE_EXIT != 0`, skip the simulator step — diagnose the compile failure directly (see Step 3 → "Compile error during test"). This still counts as one `ATTEMPT`.
+- If `COMPILE_EXIT != 0`, skip the simulator step — diagnose the compile failure directly (see Step 3 → "Compile error during test"). A compile-step failure does **NOT** consume an `ATTEMPT` (only simulator runs do); it does count against the separate 5-consecutive-compile-failure guard (see "The Iteration Cap").
 
 ### 2.3 — Simulator consumer (flock-wrapped, no xdist)
 
@@ -355,7 +457,7 @@ Example for a mid-size matrix using `--maxfail 5`:
 
 ```bash
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh simulate \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test {TEST_FILE} --k "{op}" \
     --maxfail 5 --log-dir {LOG_DIR}/test_logs_cycle{N}
 TEST_EXIT=$?
 ```
@@ -364,8 +466,8 @@ For a **single specific variant**, use `--test-id`. Single-quotes, brackets, and
 
 ```bash
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh simulate \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py \
-    --test-id "test_{op}_{arch}.py::test_{op}_{arch}[formats_dest_acc_sync_implied_math_input_dims:(InputOutputFormat[Float16_b,Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, <ImpliedMathFormat.No: 'false'>, [32, 32])]" \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test {TEST_FILE} \
+    --test-id "{TEST_FILE}::test_eltwise_unary_sfpu_{arch}[mathop_formats_dest_acc_sync_implied_math_input_dims:(InputOutputFormat[Float16_b,Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, <ImpliedMathFormat.No: 'false'>, [32, 32])]" \
     --log-dir {LOG_DIR}/test_logs_cycle{N}
 TEST_EXIT=$?
 ```
@@ -374,8 +476,8 @@ For a substring filter without commas/brackets, use `--k`:
 
 ```bash
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh simulate \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py \
-    --k "exp_quasar and not integer" --log-dir {LOG_DIR}/test_logs_cycle{N}
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test {TEST_FILE} \
+    --k "exp and not integer" --log-dir {LOG_DIR}/test_logs_cycle{N}
 TEST_EXIT=$?
 ```
 
@@ -400,7 +502,7 @@ Rules — non-negotiable:
 3. **Never append `&`** to detach, and never start the simulator under `nohup`, `disown`, `setsid`, or any other detach mechanism.
 4. **Do not arm a `Monitor` or poll with `sleep` loops** to "wait" for the simulator. The Bash tool's synchronous return IS your wait mechanism.
 5. When the Bash call returns, read `TEST_EXIT` from the captured output and go straight to Step 2.4 (parse aggregate failures) in the same turn. Do not end your turn between "kicked off pytest" and "read TEST_EXIT".
-6. **If the 30-minute Bash timeout fires**, report `ENV_ERROR: simulator run exceeded 30 min` in the fix log — this does NOT consume an `ATTEMPT` against the 10-cap. A real kernel bug produces a `TENSIX TIMED OUT` / `TIMEOUT` failure inside the pytest output well under 600s; hitting the outer 30-minute ceiling means infrastructure, not logic.
+6. **If the 30-minute Bash timeout fires**, report `ENV_ERROR: simulator run exceeded 30 min` in the fix log — this does NOT consume an `ATTEMPT` against the 5-cap. A real kernel bug produces a `TENSIX TIMED OUT` / `TIMEOUT` failure inside the pytest output well under 600s; hitting the outer 30-minute ceiling means infrastructure, not logic.
 7. **If you find yourself about to write "let me wait for the monitor notification" or "the simulator is still running, I'll continue after it finishes"**, stop — you have backgrounded the call. Kill any leftover processes (`pkill -9 -f "pytest.*--run-simulator"`, `pkill -9 -f "tt-exalens.*--port=5556"`, `rm -f /tmp/llk_run_sim_*.sh`), re-invoke synchronously, and do not split the attempt across turns.
 
 Rules for `simulate`:
@@ -503,10 +605,11 @@ The kernel already compiled for the writer's smoke harness. A compile failure at
 - The test's infra (enum, golden generator) is out of sync with the kernel (if you just added `SfpuType::{Op}` but the enum file wasn't regenerated on the build side).
 - The kernel signature drifted from what the test harness expects.
 
-Cross-reference the test source against the kernel:
+Cross-reference the dispatcher/test wiring against the kernel (SFPU ops register
+in the dispatcher header, not a per-op test source):
 ```bash
-grep -n "ckernel::sfpu::_.*_{op}" tests/sources/{arch}/sfpu_{op}_{arch}_test.cpp
-grep -n "_{op}_" tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_{op}.h
+grep -n "_{op}_\|SfpuType::{op}\|BinaryOp::{OP}" tests/helpers/include/sfpu_operations_{arch}.h
+grep -n "_{op}_" "$WORKTREE_DIR/{generated_kernel}"   # Quasar SFPU: tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h
 ```
 
 If names/templates differ, fix the **kernel** to match the test (not the other way around) — the test encodes the integration contract.
@@ -515,7 +618,7 @@ If names/templates differ, fix the **kernel** to match the test (not the other w
 
 Work through these in order. Stop as soon as a hypothesis matches the evidence.
 
-**R1 — Verify device/simulator is healthy.** Run a known-good kernel's test (`test_sfpu_nonlinear_quasar.py -k "Exp"` is the canonical smoke). If it also fails, the issue is `ENV_ERROR`, not your kernel. If it passes, continue.
+**R1 — Verify device/simulator is healthy.** Run a known-good kernel's test (`test_eltwise_unary_sfpu_{arch}.py --k "Exp"` is the canonical smoke). If it also fails, the issue is `ENV_ERROR`, not your kernel. If it passes, continue.
 
 **R2 — For TIMEOUT**: the kernel hangs. Check:
 - Is `dvalid` set correctly on the `TTI_UNPACR` that feeds Dest?
@@ -550,7 +653,7 @@ If two consecutive fixes produced the same failure signature, stop iterating on 
 1. Re-read the kernel end-to-end — the bug may be structural (e.g. a whole function has the wrong shape).
 2. Fetch `mcp__atlassian__getConfluencePage` (page `1170505767` for SFPU ISA, `1613201604` for Tensix ISA) for the instruction you suspect — verify operand semantics from the authoritative source.
 3. Cross-check `tt_llk_{arch}/instructions/assembly.yaml` for the instruction's operand constraints.
-4. If the failure still can't be localized by attempt 7, start preparing the `STUCK` report — do not blow through attempts on guesses.
+4. If the failure still can't be localized by attempt 4, start preparing the `STUCK` report — do not blow through attempts on guesses.
 
 ### 3.5 — `TTI_` macro constraint errors
 
@@ -576,9 +679,9 @@ Immediately after reading `TEST_EXIT` — before you start diagnosing — leave 
 ```bash
 python {WORKTREE_DIR}/tt_metal/tt-llk/codegen/scripts/run_json_writer.py message \
     --log-dir {LOG_DIR} \
-    --message "Tester attempt {N}/10 — {category} on {variant or 'all'}; {one-line hypothesis or 'verifying'}"
+    --message "Tester attempt {N}/5 — {category} on {variant or 'all'}; {one-line hypothesis or 'verifying'}"
 ```
-2. **Incremental fix log**: append the attempt block (template in Self-Logging) to `{LOG_DIR}/agent_tester_cycle{N}.md` NOW, not at the end. A tester that crashes or is killed at attempt 7 must leave attempts 1–7 on disk — those blocks are the refiner's primary forensic input, and reconstructing them from memory after a crash is impossible.
+2. **Incremental fix log**: append the attempt block (template in Self-Logging) to `{LOG_DIR}/agent_tester_cycle{N}.md` NOW, not at the end. A tester that crashes or is killed at attempt 4 must leave attempts 1–4 on disk — those blocks are the refiner's primary forensic input, and reconstructing them from memory after a crash is impossible.
 
 ---
 
@@ -590,7 +693,7 @@ python {WORKTREE_DIR}/tt_metal/tt-llk/codegen/scripts/run_json_writer.py message
 PASS
   Kernel: {KERNEL_NAME}
   Flow: {new-kernel | issue-fix}
-  Attempts used: {N}/10
+  Attempts used: {N}/5
   Test file(s): {list of test files written or used}
   Files modified on the kernel: {N}
   Formats tested: {list}
@@ -603,14 +706,14 @@ Summary: {one sentence}
 STUCK
   Kernel: {KERNEL_NAME}
   Flow: {new-kernel | issue-fix}
-  Attempts used: 10/10
+  Attempts used: 5/5  (or "{N} compile failures" if stopped by the compile guard)
   Last failure category: {category}
   Last failure signature: {first meaningful error line}
 Fix log:
   Attempt 1: {one-line summary}
   Attempt 2: ...
   ...
-  Attempt 10: ...
+  Attempt 5: ...
 Hypothesis: {best guess at the root cause you could not fix}
 Raw output: {LOG_DIR}/test_logs_cycle{N}/run.log (full pytest stream, all attempts)
 Recommended next step: {e.g. "instruction X behaves differently than doc claims — escalate to human", "format Y is not supported on this arch — drop from spec"}
@@ -624,7 +727,7 @@ When the environment is broken (`run_test.sh` exit 3, a hang that the sibling sm
 ENV_ERROR
   Kernel: {KERNEL_NAME}
   Flow: {new-kernel | issue-fix}
-  Attempts used: {N}/10  (env failures do not consume attempts)
+  Attempts used: {N}/5  (env failures do not consume attempts)
   Diagnosis: {first meaningful infrastructure error line — flock timeout, lsof output, missing path}
   Evidence: {sibling smoke result or run_test.sh verdict line}
 Recommended next step: {e.g. "restart the simulator", "free port 5556", "rebuild tests/.venv"}
@@ -636,11 +739,11 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 
 ## Key Rules (non-negotiable)
 
-1. **10 runs, hard cap.** The counter is an invariant, not a guideline.
+1. **5 simulator runs, hard cap.** The counter is an invariant, not a guideline. Compile-step failures do not consume an attempt (they have their own 5-consecutive-failure guard); only runs that reach the simulator do.
 2. **Always use `run_test.sh simulate` (never `pytest --run-simulator` directly), invoked synchronously via the Bash tool with `timeout: 1800000`.** Full execution-model rules in 2.3.1 — they are non-negotiable.
 3. **One fix per attempt.** Batch fixes hide which edit broke things.
 4. **Fix the kernel, not the test** (except when the issue explicitly says the test is wrong in the `issue-fix` flow).
-5. **Prefer extending an existing multi-op test** over creating a new file. Copy patterns exactly; do not reinvent boilerplate.
+5. **SFPU ops append to the unified test for their category — never a new per-op file** (1A.1–1A.3). Non-SFPU kernels extend a sibling test or create one (1A.4). Copy patterns exactly; do not reinvent boilerplate.
 6. **Safe value ranges first.** On attempt 1, be conservative — widen only after the test passes with tight ranges.
 7. **`TTI_` → `TT_` is a last-resort fix, not a first-reflex one.** Change the parameter type instead.
 8. **SFPU tests always use `unpack_to_dest=True`.** Filter the format matrix to bit-width-matched combinations only (`non-32-bit + dest_acc=No` and `32-bit + dest_acc=Yes`). The C++ test needs no datacopy branch. For non-SFPU tests, apply `unpack_to_dest = (input.is_32_bit() == (dest_acc == Yes))`; getting it wrong produces silent all-zeros.
@@ -702,13 +805,14 @@ blow-by-blow.
 ## Decisions & trade-offs
 Per non-trivial choice: **Choice** / **Alternatives** / **Why**.
 
-Typical tester decisions: extend an existing multi-op test vs. create a new
-file (1A.1 rule); `dest_acc` and `unpack_to_dest` matrix; `--maxfail` tuning
+Typical tester decisions: which unified test the SFPU op registers in and any
+classification inference (1A.1); `dest_acc` and `unpack_to_dest` matrix; `--maxfail` tuning
 (2.1 table); which fix to try first when pattern suggests multiple root causes.
 
 ## Fix log (complete — one block per attempt)
 Even on a first-try PASS, write at least one attempt block — the tester ran,
-it matters for the dashboard. On STUCK, all 10 blocks MUST be present.
+it matters for the dashboard. On STUCK, all attempt blocks up to the cap (5, or
+fewer if stopped by the compile guard) MUST be present.
 
 ```
 ### Attempt {N}
@@ -748,7 +852,7 @@ Examples:
 
 ## Final outcome
 - Result: PASS | STUCK
-- Attempts used: {N}/10
+- Attempts used: {N}/5
 - Formats tested: {list}
 - Formats excluded: {format: reason}
 ```

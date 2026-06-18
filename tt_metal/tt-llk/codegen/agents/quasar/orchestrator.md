@@ -16,7 +16,7 @@ analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimiz
 
 - **analyzer** (`llk-analyzer.md`) — one-shot. Produces `codegen/artifacts/{op}_analysis.md` covering arch research, target-pattern survey, instruction mapping, solution approach, and format applicability.
 - **writer** (`llk-kernel-writer.md`) — transcribes the analysis into a kernel file and compile-checks.
-- **tester** (`llk-tester.md`) — writes/extends tests and runs them, with an **internal 10-attempt** compile+test fix loop. Returns `PASS`, `STUCK`, or `ENV_ERROR` (infrastructure broken — never routed to the refiner).
+- **tester** (`llk-tester.md`) — writes/extends tests and runs them, with an **internal 5-attempt** test fix loop (simulator runs only; compile-time failures are excluded from the cap). Returns `PASS`, `STUCK`, or `ENV_ERROR` (infrastructure broken — never routed to the refiner).
 - **refiner** (`llk-analysis-refiner.md`) — invoked only when the writer fails compile or the tester returns `STUCK`. Archives the failed attempt, rewrites the analysis in place, returns `REFINED` or `ESCALATE`.
 - **Loop cap: 3 writer-tester cycles**. Cycles 1 and 2 can hand off to the refiner; cycle 3 cannot (the refiner itself caps at v2 = 2 refinements = 3 total cycles). If cycle 3 still fails, the run is reported `failed`.
 - **optimizer** and **format** only run on success.
@@ -31,6 +31,7 @@ The top-level routing (`codegen/CLAUDE.md`) creates an isolated worktree and pas
 
 - **KERNEL_NAME** — the kernel to generate (e.g., `gelu`)
 - **TARGET_ARCH** — target architecture (default: `quasar`)
+- **SFPI_MODE** — `true` if the user explicitly requested an SFPI version, else `false` (default). When `true` the optimizer runs in SFPI Conversion Mode instead of Replay Mode (see Step 3). Only meaningful for SFPU kernels.
 - **WORKTREE_DIR** — absolute path to the isolated git worktree (e.g., `/tmp/codegen_worktree_generate-gelu-quasar`)
 - **WORKTREE_BRANCH** — the branch name (e.g., `ai-code-gen/generate-gelu-quasar-v1`)
 
@@ -138,7 +139,7 @@ Example call:
 ```bash
 python codegen/scripts/run_json_writer.py message \
     --log-dir "$LOG_DIR" \
-    --message "Tester attempt 4/10 — DATA_MISMATCH on Int32 dest_acc=Yes; fixing LREG1 init ordering"
+    --message "Tester attempt 4/5 — DATA_MISMATCH on Int32 dest_acc=Yes; fixing LREG1 init ordering"
 ```
 
 ### Step 0a: Write the initial run.json
@@ -150,7 +151,7 @@ dashboard immediately picks up this run as "running":
 export PIPELINE_STEPS_JSON='[
   {"id":"analyzer","name":"Analyze","desc":"Research arch + analyze reference, produce solution approach"},
   {"id":"writer","name":"Write","desc":"Scaffold + fill kernel, compile-check"},
-  {"id":"tester","name":"Test","desc":"Write/extend tests, run, internal 10-attempt fix loop"},
+  {"id":"tester","name":"Test","desc":"Write/extend tests, run, internal 5-attempt fix loop"},
   {"id":"refiner","name":"Refine","desc":"Rewrite analysis after writer/tester failure (max 2 refinements)"},
   {"id":"optimizer","name":"Optimize","desc":"Replay-buffer optimization (success only)"},
   {"id":"format","name":"Format","desc":"Run pre-commit formatters on generated files"}
@@ -164,7 +165,7 @@ python codegen/scripts/run_json_writer.py init \
     --arch "{target_arch}" \
     --reference-arch "{ref_arch}" \
     --reference-file "tt_llk_{ref_arch}/{kernel_path}" \
-    --generated-file "tt_llk_{target_arch}/{kernel_path}" \
+    --generated-file "{generated_kernel}" \
     --start-time "$START_TIME" \
     --first-step "analyzer" \
     --first-message "Analyzing {ref_arch} reference and producing solution approach for {op}" \
@@ -228,7 +229,7 @@ export TESTS_PASSED=0
 export LINES_GENERATED=0
 export TESTS_GENERATED=false                        # true if the tester created new test files
 export OPTIMIZED=false                              # true if optimizer applied a change
-export OPTIMIZATION_TYPE=none                       # replay | none
+export OPTIMIZATION_TYPE=none                       # replay | sfpi | none
 export FORMATS_TESTED_JSON='[]'
 export FORMATS_EXCLUDED_JSON='{}'
 export AGENTS_JSON='[]'
@@ -320,7 +321,7 @@ with Claude Code writing new turns.
 
 Determine the kernel category and architecture from the request:
 
-| Category | Keywords | Path Pattern |
+| Category | Keywords | `{kernel_path}` (relative to the arch's tt-llk dir) |
 |----------|----------|--------------|
 | **SFPU** | sigmoid, relu, exp, gelu, tanh, sqrt, recip | `common/inc/sfpu/ckernel_sfpu_{op}.h` |
 | **Math** | matmul, reduce, eltwise, binary, unary | `llk_lib/llk_math_{op}.h` |
@@ -330,6 +331,29 @@ Determine the kernel category and architecture from the request:
 Determine:
 - **Reference architecture** (default: blackhole) — the existing implementation to port from
 - **Target architecture** (default: quasar) — where the kernel needs to run
+
+### Where the generated kernel is written — `{generated_kernel}`
+
+The **reference** always lives in the tt-llk library at `tt_llk_{ref_arch}/{kernel_path}`.
+The **generated** target file path depends on category and arch, captured once as
+`{generated_kernel}` (a **repo-root-relative** path — i.e. relative to `$WORKTREE_DIR`):
+
+| Category + arch | `{generated_kernel}` |
+|---|---|
+| **SFPU + quasar** | `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` |
+| everything else | `tt_metal/tt-llk/tt_llk_{target_arch}/{kernel_path}` |
+
+Quasar SFPU kernels are authored directly in the tt-metal **CKernels LLK API**
+folder (`llk_sfpu/`), not in the tt-llk library, and are pulled into the C++ test
+via the `llk_sfpu/` include prefix (see the tester's dispatcher registration). The
+kernel still defines `_calculate_{op}_` / `_init_{op}_` and the dispatcher still
+calls `_calculate_{op}_<ITERATIONS>` — only the file location and include prefix
+differ from a tt-llk-lib kernel. `kernel_template.py` already writes to the right
+place via `get_kernel_dest(...)`; you do not compute the path by hand.
+
+**Whenever a bash command below reads or writes the generated kernel, reference it
+as `$WORKTREE_DIR/{generated_kernel}`** (absolute, CWD-independent — the orchestrator
+CWD is `$WORKTREE_DIR/tt_metal/tt-llk`, and the SFPU target sits outside it).
 
 ---
 
@@ -468,7 +492,7 @@ Agent tool:
     Kernel type: {kernel_type}
     Target architecture: {target_arch}
     Analysis: codegen/artifacts/{op}_analysis.md
-    Output to: tt_llk_{target_arch}/{kernel_path}
+    Output to: {generated_kernel} (absolute: $WORKTREE_DIR/{generated_kernel})
 
     You are running inside cycle ${CYCLE} of a max-3 writer-tester loop. If your
     compile check fails, report FAILED and return — do NOT iterate internally.
@@ -525,7 +549,7 @@ Otherwise: go to Step 2c (refiner).
 python codegen/scripts/run_json_writer.py advance \
     --log-dir "$LOG_DIR" \
     --new-step "tester" \
-    --new-message "Cycle ${CYCLE} — writing/running tests (internal 10-attempt loop)" \
+    --new-message "Cycle ${CYCLE} — writing/running tests (internal 5-attempt loop)" \
     --prev-result "success" \
     --prev-message "Cycle ${CYCLE} writer compiled" \
     --agent "tester"
@@ -546,15 +570,15 @@ Agent tool:
     Kernel: {op}
     Kernel type: {kernel_type}
     Target architecture: {target_arch}
-    Kernel path: tt_llk_{target_arch}/{kernel_path}
+    Kernel path: {generated_kernel} (absolute: $WORKTREE_DIR/{generated_kernel})
     Flow: new-kernel
     Spec: codegen/artifacts/{op}_analysis.md
     Cycle: ${CYCLE}
 
-    You own the full test-and-fix loop with a hard cap of 10 test runs. Each
-    run = compile-producer + simulator-consumer. Diagnose and fix between runs.
-    On attempt 10's failure, return STUCK — the orchestrator will route to the
-    refiner.
+    You own the full test-and-fix loop with a hard cap of 5 simulator test runs
+    (compile-time failures are excluded from the cap). Each run = compile-producer
+    + simulator-consumer. Diagnose and fix between runs. On attempt 5's failure,
+    return STUCK — the orchestrator will route to the refiner.
 
     WORKTREE_DIR: {WORKTREE_DIR} — cd into {WORKTREE_DIR}/tt_metal/tt-llk before any file I/O.
     LOG_DIR: {LOG_DIR}
@@ -565,7 +589,7 @@ Wait for the tester to return `PASS`, `STUCK`, or `ENV_ERROR`.
 **Metrics from the tester's report** (the agent reports attempts used, variants, formats tested, test files created):
 - `COMPILATION_ATTEMPTS += tester_compile_count`
 - `PHASE_COMPILES += tester_compile_count`
-- `PHASE_DEBUGS = tester_attempts_used` (the tester's 10-attempt loop is effectively the per-cycle debug count)
+- `PHASE_DEBUGS = tester_attempts_used` (the tester's 5-attempt loop is effectively the per-cycle debug count)
 - `TESTS_TOTAL = variants_reported`
 - `TESTS_PASSED = variants_passed_on_final_run`
 - `TESTS_GENERATED = true` (set once, stays true)
@@ -603,7 +627,7 @@ python codegen/scripts/run_json_writer.py phase-end \
     --test-result "failed" \
     --compilation-attempts "${PHASE_COMPILES}" \
     --debug-cycles "${PHASE_DEBUGS}" \
-    --test-details "tester STUCK after 10 attempts: ${TESTER_LAST_FAILURE_LINE}" \
+    --test-details "tester STUCK after 5 attempts: ${TESTER_LAST_FAILURE_LINE}" \
     --compile-errors-json "${PHASE_COMPILE_ERRORS_JSON}"
 
 bash codegen/scripts/refresh_cost.sh
@@ -649,16 +673,29 @@ python codegen/scripts/run_json_writer.py advance \
 ```
 (`PREV_RESULT` is `compile_error` if the writer failed, `test_failure` if the tester failed.)
 
-Collect inputs for the refiner. The test files the tester used must be passed verbatim so the refiner can archive them:
+Collect inputs for the refiner. The test files the tester used must be passed verbatim so the refiner can archive them. SFPU ops are appended to a unified test (resolved by category from the analysis); non-SFPU kernels still use per-op files:
 ```bash
 TEST_FILES=""
-for candidate in \
-    "tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp" \
-    "tests/sources/{target_arch}/{op}_{target_arch}_test.cpp" \
-    "tests/python_tests/{target_arch}/test_{op}_{target_arch}.py" \
-    "tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py"; do
-    [ -f "$candidate" ] && TEST_FILES="$TEST_FILES $candidate"
-done
+add_if_exists() { for f in "$@"; do [ -f "$f" ] && TEST_FILES="$TEST_FILES $f"; done; }
+
+if [ "{kernel_type}" = "sfpu" ]; then
+    # Category written by the analyzer in the `## SFPU Category` section.
+    SFPU_CATEGORY=$(awk '/^## SFPU Category/{f=1;next} f&&/^## /{exit} f' \
+        codegen/artifacts/{op}_analysis.md 2>/dev/null | grep -oiE 'unary|binary|ternary' | head -1)
+    case "$SFPU_CATEGORY" in
+        binary)  add_if_exists "tests/sources/{target_arch}/eltwise_binary_sfpu_{target_arch}_test.cpp" \
+                                "tests/python_tests/{target_arch}/test_eltwise_binary_sfpu_{target_arch}.py" ;;
+        ternary) add_if_exists "tests/sources/{target_arch}/sfpu_where_{target_arch}_test.cpp" \
+                                "tests/python_tests/{target_arch}/test_sfpu_where_{target_arch}.py" ;;
+        *)       add_if_exists "tests/sources/{target_arch}/eltwise_unary_sfpu_{target_arch}_test.cpp" \
+                                "tests/python_tests/{target_arch}/test_eltwise_unary_sfpu_{target_arch}.py" ;;  # default: unary
+    esac
+    # The tester registers the op in the shared dispatcher header — archive it too.
+    add_if_exists "tests/helpers/include/sfpu_operations_{target_arch}.h"
+else
+    add_if_exists "tests/sources/{target_arch}/{op}_{target_arch}_test.cpp" \
+                  "tests/python_tests/{target_arch}/test_{op}_{target_arch}.py"
+fi
 ```
 
 Spawn the refiner:
@@ -671,7 +708,7 @@ Agent tool:
     Kernel: {op}
     Kernel type: {kernel_type}
     Target architecture: {target_arch}
-    Kernel path: tt_llk_{target_arch}/{kernel_path}
+    Kernel path: {generated_kernel} (absolute: $WORKTREE_DIR/{generated_kernel})
     Original analysis: codegen/artifacts/{op}_analysis.md
     Tester log: {LOG_DIR}/agent_tester_cycle${CYCLE}.md
     Writer log: {LOG_DIR}/agent_writer_cycle${CYCLE}.md
@@ -739,9 +776,11 @@ Loop back to Step 2a.
 
 Only run after a cycle returned `PASS`. Skip if the tester never passed.
 
-### Step 3a: Check whether optimization is applicable
+### Step 3a: Decide which optimization mode applies
 
-Only SFPU kernels whose Blackhole reference uses replay buffers are candidates:
+**If `SFPI_MODE=true` and the kernel is SFPU** → run the optimizer in **SFPI Conversion Mode** (Step 3b with `SFPI_MODE=true`), regardless of whether the reference uses replay buffers. The user explicitly opted into the SFPI rewrite and opted out of replay; do **not** run the replay applicability check below and do **not** apply replay. Skip to Step 3b.
+
+Otherwise (default → **Replay Mode**): only SFPU kernels whose Blackhole reference uses replay buffers are candidates:
 
 ```bash
 REPLAY_USES=$(grep -c "replay\|load_replay_buf" "tt_llk_{ref_arch}/{kernel_path}" || echo 0)
@@ -753,28 +792,36 @@ If `REPLAY_USES == 0` or the kernel is not SFPU: set `OPTIMIZED=false`, `OPTIMIZ
 
 Snapshot the pre-optimization kernel (for comparison / rollback reporting):
 ```bash
-cp "tt_llk_{target_arch}/{kernel_path}" "$LOG_DIR/pre_opt_$(basename tt_llk_{target_arch}/{kernel_path})"
+cp "$WORKTREE_DIR/{generated_kernel}" "$LOG_DIR/pre_opt_$(basename {generated_kernel})"
 ```
 
 **LIVE LOG — advance to optimizer:**
 ```bash
+OPT_MSG=$([ "$SFPI_MODE" = "true" ] \
+    && echo "Reimplementing {op} in SFPI and comparing instruction count vs the TTI baseline" \
+    || echo "Applying replay-buffer optimization to {op}")
 python codegen/scripts/run_json_writer.py advance \
     --log-dir "$LOG_DIR" \
     --new-step "optimizer" \
-    --new-message "Applying replay-buffer optimization to {op}" \
+    --new-message "$OPT_MSG" \
     --prev-result "success" \
     --prev-message "Cycle ${CYCLE} passed — entering optimization" \
     --agent "optimizer"
 ```
 
-Spawn the optimizer:
+For SFPI mode the optimizer needs the unified test file/source for its count-compiles. Resolve them by SFPU category (same resolution as Step 4 / refiner): `{TEST_FILE}` is the unified Python test (e.g. `test_eltwise_unary_sfpu_quasar.py`) and `{TEST_CPP}` its C++ sibling (e.g. `eltwise_unary_sfpu_quasar_test.cpp`).
+
+Spawn the optimizer (the prompt differs by mode — send the SFPI block when `SFPI_MODE=true`, else the replay block):
+
+**Replay Mode prompt:**
 ```
 Agent tool:
   subagent_type: "general-purpose"
   description: "Optimize {op}"
   prompt: |
     Read and follow codegen/agents/quasar/llk-optimizer.md to optimize the "{op}" kernel.
-    Kernel path: tt_llk_{target_arch}/{kernel_path}
+    SFPI_MODE: false
+    Kernel path: {generated_kernel} (absolute: $WORKTREE_DIR/{generated_kernel})
     Reference path: tt_llk_{ref_arch}/{kernel_path}
     Analysis: codegen/artifacts/{op}_analysis.md
     Kernel type: {kernel_type}
@@ -788,9 +835,36 @@ Agent tool:
     LOG_DIR: {LOG_DIR}
 ```
 
-Wait for completion. The optimizer either:
-- Applied a change (compile + tests re-verified) → `OPTIMIZED=true`, `OPTIMIZATION_TYPE=replay`
-- Reverted → `OPTIMIZED=false`, `OPTIMIZATION_TYPE=none`
+**SFPI Mode prompt (`SFPI_MODE=true`):**
+```
+Agent tool:
+  subagent_type: "general-purpose"
+  description: "SFPI-optimize {op}"
+  prompt: |
+    Read and follow codegen/agents/quasar/llk-optimizer.md to optimize the "{op}" kernel.
+    SFPI_MODE: true
+    Kernel path: {generated_kernel} (absolute: $WORKTREE_DIR/{generated_kernel})
+    Reference path: tt_llk_{ref_arch}/{kernel_path}
+    Analysis: codegen/artifacts/{op}_analysis.md
+    Kernel type: {kernel_type}
+    Target architecture: {target_arch}
+    TEST_FILE: {TEST_FILE}    # unified SFPU Python test for the category
+    TEST_CPP: {TEST_CPP}      # its C++ source (for invalidating the build cache)
+
+    Run SFPI Conversion Mode: the working kernel is the raw-TTI baseline (or
+    already SFPI — handle per Step S1). Reimplement it in the sfpi:: DSL, compare
+    generated-instruction count against the TTI baseline with
+    codegen/scripts/sfpi_instr_count.py, and KEEP SFPI only if it is no worse
+    (sfpi <= tti). Verify correctness with run_test.sh. Do NOT apply replay
+    buffers. Emit the op | TTI | SFPI comparison table.
+
+    WORKTREE_DIR: {WORKTREE_DIR} — cd into {WORKTREE_DIR}/tt_metal/tt-llk before any file I/O.
+    LOG_DIR: {LOG_DIR}
+```
+
+Wait for completion. Record the outcome:
+- **Replay Mode** — applied a change (compile + tests re-verified) → `OPTIMIZED=true`, `OPTIMIZATION_TYPE=replay`; reverted → `OPTIMIZED=false`, `OPTIMIZATION_TYPE=none`.
+- **SFPI Mode** — SFPI kept (no worse than TTI, tests pass) → `OPTIMIZED=true`, `OPTIMIZATION_TYPE=sfpi`; SFPI rejected (worse instruction count, or compile/test failure) or kernel was already SFPI → `OPTIMIZED=false`, `OPTIMIZATION_TYPE=none`. Capture the `op | TTI | SFPI` table from the optimizer's report and surface it in the final report (Step 5).
 
 ```bash
 bash codegen/scripts/refresh_cost.sh   # capture optimizer spend
@@ -817,11 +891,29 @@ python codegen/scripts/run_json_writer.py advance \
 ```bash
 source tests/.venv/bin/activate 2>/dev/null || true
 
-FILES="tt_llk_{target_arch}/{kernel_path}"
-[ -f "tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp" ]  && FILES="$FILES tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp"
-[ -f "tests/sources/{target_arch}/{op}_{target_arch}_test.cpp" ]       && FILES="$FILES tests/sources/{target_arch}/{op}_{target_arch}_test.cpp"
-[ -f "tests/python_tests/{target_arch}/test_{op}_{target_arch}.py" ]   && FILES="$FILES tests/python_tests/{target_arch}/test_{op}_{target_arch}.py"
-[ -f "tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py" ] && FILES="$FILES tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py"
+# Format the kernel plus the test files the run touched. SFPU ops live in a
+# unified test (resolved by category from the analysis) + the shared dispatcher
+# header; non-SFPU kernels use per-op files. Formatting the whole unified file is
+# safe — pre-commit is idempotent and only rewrites what actually changed.
+FILES="$WORKTREE_DIR/{generated_kernel}"
+add_if_exists() { for f in "$@"; do [ -f "$f" ] && FILES="$FILES $f"; done; }
+
+if [ "{kernel_type}" = "sfpu" ]; then
+    SFPU_CATEGORY=$(awk '/^## SFPU Category/{f=1;next} f&&/^## /{exit} f' \
+        codegen/artifacts/{op}_analysis.md 2>/dev/null | grep -oiE 'unary|binary|ternary' | head -1)
+    case "$SFPU_CATEGORY" in
+        binary)  add_if_exists "tests/sources/{target_arch}/eltwise_binary_sfpu_{target_arch}_test.cpp" \
+                                "tests/python_tests/{target_arch}/test_eltwise_binary_sfpu_{target_arch}.py" ;;
+        ternary) add_if_exists "tests/sources/{target_arch}/sfpu_where_{target_arch}_test.cpp" \
+                                "tests/python_tests/{target_arch}/test_sfpu_where_{target_arch}.py" ;;
+        *)       add_if_exists "tests/sources/{target_arch}/eltwise_unary_sfpu_{target_arch}_test.cpp" \
+                                "tests/python_tests/{target_arch}/test_eltwise_unary_sfpu_{target_arch}.py" ;;
+    esac
+    add_if_exists "tests/helpers/include/sfpu_operations_{target_arch}.h"
+else
+    add_if_exists "tests/sources/{target_arch}/{op}_{target_arch}_test.cpp" \
+                  "tests/python_tests/{target_arch}/test_{op}_{target_arch}.py"
+fi
 
 # Run pre-commit twice — some hooks need a second pass (e.g. trailing-whitespace after clang-format)
 pre-commit run --files $FILES || true
@@ -845,7 +937,7 @@ Set `FORMATTED=true` in the finalize patch.
 
 ```bash
 export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-export LINES_GENERATED=$(wc -l < tt_llk_{target_arch}/{kernel_path})
+export LINES_GENERATED=$(wc -l < "$WORKTREE_DIR/{generated_kernel}")
 ```
 
 Determine the terminal status:
@@ -932,14 +1024,29 @@ cp codegen/artifacts/{op}_analysis.md       "$LOG_DIR/" 2>/dev/null || true
 cp codegen/artifacts/{op}_arch_research.md  "$LOG_DIR/" 2>/dev/null || true   # present only if analyzer produced a separate file
 cp codegen/artifacts/{op}_refinement_v*.md  "$LOG_DIR/" 2>/dev/null || true
 cp -r codegen/artifacts/{op}_failed_attempt_v*  "$LOG_DIR/" 2>/dev/null || true
-cp tt_llk_{target_arch}/{kernel_path}       "$LOG_DIR/"
+cp "$WORKTREE_DIR/{generated_kernel}"       "$LOG_DIR/"
 cp tt_llk_{ref_arch}/{kernel_path}          "$LOG_DIR/ref_$(basename tt_llk_{ref_arch}/{kernel_path})"
 
-# Test files (both naming patterns, silent-fail if absent)
-cp tests/sources/{target_arch}/sfpu_{op}_{target_arch}_test.cpp       "$LOG_DIR/" 2>/dev/null || true
-cp tests/sources/{target_arch}/{op}_{target_arch}_test.cpp            "$LOG_DIR/" 2>/dev/null || true
-cp tests/python_tests/{target_arch}/test_{op}_{target_arch}.py        "$LOG_DIR/" 2>/dev/null || true
-cp tests/python_tests/{target_arch}/test_sfpu_{op}_{target_arch}.py   "$LOG_DIR/" 2>/dev/null || true
+# Test files snapshot for easy reading (silent-fail if absent). For SFPU ops the
+# unified test + dispatcher are modified in place — the patch capture below is the
+# authoritative record; these copies are just convenience reads of the relevant
+# unified file. Non-SFPU kernels use per-op files.
+if [ "{kernel_type}" = "sfpu" ]; then
+    SFPU_CATEGORY=$(awk '/^## SFPU Category/{f=1;next} f&&/^## /{exit} f' \
+        codegen/artifacts/{op}_analysis.md 2>/dev/null | grep -oiE 'unary|binary|ternary' | head -1)
+    case "$SFPU_CATEGORY" in
+        binary)  cp tests/sources/{target_arch}/eltwise_binary_sfpu_{target_arch}_test.cpp "$LOG_DIR/" 2>/dev/null || true
+                 cp tests/python_tests/{target_arch}/test_eltwise_binary_sfpu_{target_arch}.py "$LOG_DIR/" 2>/dev/null || true ;;
+        ternary) cp tests/sources/{target_arch}/sfpu_where_{target_arch}_test.cpp "$LOG_DIR/" 2>/dev/null || true
+                 cp tests/python_tests/{target_arch}/test_sfpu_where_{target_arch}.py "$LOG_DIR/" 2>/dev/null || true ;;
+        *)       cp tests/sources/{target_arch}/eltwise_unary_sfpu_{target_arch}_test.cpp "$LOG_DIR/" 2>/dev/null || true
+                 cp tests/python_tests/{target_arch}/test_eltwise_unary_sfpu_{target_arch}.py "$LOG_DIR/" 2>/dev/null || true ;;
+    esac
+    cp tests/helpers/include/sfpu_operations_{target_arch}.h "$LOG_DIR/" 2>/dev/null || true
+else
+    cp tests/sources/{target_arch}/{op}_{target_arch}_test.cpp     "$LOG_DIR/" 2>/dev/null || true
+    cp tests/python_tests/{target_arch}/test_{op}_{target_arch}.py "$LOG_DIR/" 2>/dev/null || true
+fi
 
 # Simulator logs — copy BEFORE cleanup_worktree or they are gone permanently
 cp tests/python_tests/{target_arch}/emu_*_.log      "$LOG_DIR/" 2>/dev/null || true
@@ -949,7 +1056,8 @@ cp tests/python_tests/{target_arch}/tt-exalens.log  "$LOG_DIR/" 2>/dev/null || t
 The copies above snapshot the **new** files (kernel + tests) for easy reading,
 but they do **not** capture changes to files the run *modified in place* —
 shared helpers like `tests/python_tests/helpers/golden_generators.py`,
-`tests/python_tests/helpers/llk_params.py`, and `tt_llk_{target_arch}/llk_lib/llk_defs.h`.
+`tests/python_tests/helpers/llk_params.py`, `tt_llk_{target_arch}/llk_lib/llk_defs.h`,
+the unified SFPU test files, and the `tests/helpers/include/sfpu_operations_{target_arch}.h` dispatcher.
 Copying those whole is wrong: it duplicates a large shared file and, on re-apply
 over a newer `origin/main`, would clobber unrelated upstream edits.
 
@@ -968,7 +1076,11 @@ not predict. The worktree is dedicated to this single run and was branched from
 # `git reset` reverses the intent-to-add — this only ever touches the throwaway
 # per-run worktree index (never committed, never pushed), so the
 # read-only-source-branch policy is not violated.
-PATHSPEC="tt_llk_{target_arch} tests :(exclude)tests/.venv :(exclude)tests/sfpi :(exclude)**/__pycache__/**"
+# `:(top)...` anchors at the worktree (tt-metal) root regardless of CWD, so the
+# CKernels LLK API folder is captured even though it lives outside tt-llk — this
+# is where Quasar SFPU kernels are now authored. For non-SFPU runs nothing changes
+# there, so it contributes an empty diff.
+PATHSPEC="tt_llk_{target_arch} tests :(top)tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu :(exclude)tests/.venv :(exclude)tests/sfpi :(exclude)**/__pycache__/**"
 git add -AN -- $PATHSPEC 2>/dev/null || true
 git diff --binary HEAD -- $PATHSPEC > "$LOG_DIR/generated.patch"
 git reset -q -- $PATHSPEC 2>/dev/null || true
@@ -1082,7 +1194,7 @@ Kernel:           {op}
 Kernel Type:      {kernel_type}
 Target Arch:      {target_arch}
 Reference:        tt_llk_{ref_arch}/{kernel_path}
-Generated File:   tt_llk_{target_arch}/{kernel_path}
+Generated File:   {generated_kernel}
 Lines Generated:  {N}
 ----------------------------------------
 Timing:
@@ -1110,6 +1222,12 @@ Quality:
   Tests Source:      GENERATED/PRE-EXISTING/NONE
   Formatted:         YES/NO
   Optimized:         YES/NO ({OPTIMIZATION_TYPE})
+----------------------------------------
+SFPI vs TTI:   (include this block only when SFPI_MODE was true; copy the
+               optimizer's op | TTI | SFPI table and keep/reject verdict)
+  | op    | TTI (original) | SFPI (implementation) | kept |
+  |-------|----------------|-----------------------|------|
+  | {op}  | {TTI_COUNT}    | {SFPI_COUNT}          | SFPI \| TTI |
 ----------------------------------------
 Per Cycle:
   Cycle 1 ({name}): compiles={N}, tester_attempts={N}, result={passed/failed}
@@ -1156,8 +1274,8 @@ Commands & tools summary:
   tester:
     Tool histogram: Bash×28, Read×14, Edit×6, Write×2
     Key bash:
-      - bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" compile --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test test_fill_quasar.py
-      - bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" simulate --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test test_fill_quasar.py --maxfail 0
+      - bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" compile --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test test_eltwise_unary_sfpu_quasar.py --k "gelu"
+      - bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" simulate --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test test_eltwise_unary_sfpu_quasar.py --k "gelu" --maxfail 0
   (full per-agent detail in {LOG_DIR}/transcripts/NN_{slug}_{tools,commands}.md)
 ----------------------------------------
 Formats Tested:
@@ -1165,7 +1283,7 @@ Formats Tested:
   Excluded: UInt16 (not in VALID_QUASAR_DEST_REG_FORMATS — infrastructure limit, not kernel defect)
 ----------------------------------------
 Key Changes:
-  1. tt_llk_{target_arch}/{kernel_path} — NEW ({N} helpers)
+  1. {generated_kernel} — NEW ({N} helpers)
   2. {additional files touched}
 ----------------------------------------
 Artifacts:
@@ -1185,7 +1303,7 @@ Artifacts:
     - {LOG_DIR}/transcripts/NN_{slug}_tools.md       (one per agent)
     - {LOG_DIR}/transcripts/NN_{slug}_commands.md    (one per agent)
   Generated File:
-    - tt_llk_{target_arch}/{kernel_path}
+    - {generated_kernel}
 Metrics:
   - /proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl
   - {LOG_DIR}/
@@ -1206,10 +1324,10 @@ cp codegen/artifacts/{op}_report.md "$LOG_DIR/"
 | From → To | Artifact | Required Contents |
 |-----------|----------|-------------------|
 | Analyzer → Writer, Tester, Refiner | `artifacts/{op}_analysis.md` | Problem Statement, Target Pattern Survey, Available Instructions, Semantic→Instruction Mapping, Instruction Encoding Constraints, Solution Approach (§6a–§6e), Format Applicability, Complexity & Phases |
-| Writer → Tester | kernel file at `tt_llk_{target_arch}/{kernel_path}` | File must exist and compile successfully |
+| Writer → Tester | kernel file at `{generated_kernel}` (Quasar SFPU: `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h`) | File must exist and compile successfully |
 | Writer → Refiner (on compile failure) | kernel file + `$LOG_DIR/agent_writer_cycle{N}.md` + compile stderr | Refiner reads the writer log to distinguish faithful-writer-bad-plan from unfaithful-writer-OK-plan |
 | Tester → Optimizer (on PASS) | tested kernel + test files | Kernel passes every variant |
-| Tester → Refiner (on STUCK) | `$LOG_DIR/agent_tester_cycle{N}.md` (10-attempt fix log) + test files | Refiner forensically reconstructs what structural assumption in the analysis misled the writer |
+| Tester → Refiner (on STUCK) | `$LOG_DIR/agent_tester_cycle{N}.md` (5-attempt fix log) + test files | Refiner forensically reconstructs what structural assumption in the analysis misled the writer |
 | Refiner → Writer | `artifacts/{op}_analysis.md` overwritten in place, with `Refinement History` section at the top | Writer follows the refined plan; prior attempt archived under `artifacts/{op}_failed_attempt_v*/` |
 | Optimizer → Report | optimized (or reverted) kernel file | Kernel compiles and all tests still pass |
 
@@ -1242,18 +1360,22 @@ CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
 # Functional tests — use .claude/scripts/run_test.sh (handles flock, venv,
 # simulator path, stale-process cleanup, and a hang watchdog). Never call
 # pytest or flock directly.
+# SFPU ops live in a unified test selected by category; {TEST_FILE} is
+# test_eltwise_unary_sfpu_quasar.py / test_eltwise_binary_sfpu_quasar.py /
+# test_sfpu_where_quasar.py, and --k "{op}" isolates the op (see llk-tester.md 2.0).
+# Non-SFPU kernels use the per-op file test_{kernel_name}_quasar.py and omit --k.
 # Count variants (determines --maxfail from the 2.1 table in llk-tester.md).
 VARIANT_COUNT=$(bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh count \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{kernel_name}_quasar.py)
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test {TEST_FILE} --k "{op}")
 
 # Compile-producer step (parallel, no flock).
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh compile \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{kernel_name}_quasar.py
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test {TEST_FILE} --k "{op}"
 
 # Simulator-consumer step (flock-serialised per arch, blocks until done).
 # Invoke via Bash tool with timeout: 1800000 — never run_in_background.
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh simulate \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{kernel_name}_quasar.py \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test {TEST_FILE} --k "{op}" \
     --maxfail 5 \
     --log-dir "$LOG_DIR/test_logs_cycle${CYCLE}"   # --maxfail 0 for verification runs; --log-dir
                                                    # persists the full pytest stream under LOG_DIR
@@ -1263,7 +1385,7 @@ TEST_EXIT=$?
 # exit 0=pass, 1=test fail, 2=compile fail, 3=env error, 5=hang (watchdog).
 # The script tails with a "=== RUN_LLK_TESTS_VERDICT ===" line on stderr.
 bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh run \
-    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{kernel_name}_quasar.py
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test {TEST_FILE} --k "{op}"
 
 # List available tests
 ls ../tests/python_tests/quasar/test_*_quasar.py
