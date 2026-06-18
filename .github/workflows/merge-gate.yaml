@@ -266,18 +266,12 @@ jobs:
         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
     needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","P150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
       per-test-timeout: 11
-      runner: ${{ matrix.platform }}
       product: tt-metalium
 
   ttnn-basic-tests:
@@ -288,18 +282,12 @@ jobs:
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","P150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
       per-test-timeout: 11
-      runner: ${{ matrix.platform }}
       product: tt-nn
 
   resolve-docker-pull-refs:
