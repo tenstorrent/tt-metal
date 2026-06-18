@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/sub_device_types.hpp>
@@ -69,6 +70,39 @@ struct AllReduceAsyncParams {
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
+    }
+
+    // Compile-time attributes drive the default program-cache reflection hash and the canonical key
+    // (ttsl::hash::hash_objects_with_default_seed + ttsl::hash::canonical_key). They list exactly the
+    // structure-affecting fields, mirroring the set the (now-removed) custom compute_program_hash used:
+    //   - `semaphore` (GlobalSemaphore) is excluded: it is runtime-only (its address is passed to
+    //     runtime args) and was never part of the old custom hash.
+    //   - `mesh_device` (raw MeshDevice*) is excluded: a runtime pointer; the program cache is per-device.
+    //   - `sub_device_id` is included: the old hash hashed the derived subdevice worker-core range
+    //     (mesh_device->worker_cores(TENSIX, sub_device_id...)), which is per-device-constant given the
+    //     sub-device id. `sub_device_id` is the structural input of that computation (see
+    //     all_reduce_async_program_factory.cpp worker-core selection).
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "num_links",
+        "ring_size",
+        "dtype",
+        "output_mem_config",
+        "topology",
+        "use_noc1_only",
+        "use_optimal_ccl_for_llama",
+        "cluster_axis",
+        "sub_device_id");
+    auto attribute_values() const {
+        return std::make_tuple(
+            num_links,
+            ring_size,
+            dtype,
+            output_mem_config,
+            topology,
+            use_noc1_only,
+            use_optimal_ccl_for_llama,
+            cluster_axis,
+            sub_device_id);
     }
 };
 
