@@ -46,7 +46,6 @@ ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
-    const uint32_t hidden_size,
-    const uint32_t bh_ring_size = 12);
+    const uint32_t hidden_size);
 
 }  // namespace ttnn::experimental

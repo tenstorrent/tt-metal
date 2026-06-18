@@ -68,7 +68,7 @@ _MESH_PARAM_1x16 = (
     ),
 )
 
-MESH_PARAMS = [_MESH_PARAM_8x4, _MESH_PARAM_1x16]
+MESH_PARAMS = [*_MESH_PARAM_8x4, *_MESH_PARAM_1x16]
 
 # (hidden_size, intermediate_size) — DeepSeek matches the production layout; the
 # small config catches edge cases in the shard formulas (Nt = num_cores, etc.).

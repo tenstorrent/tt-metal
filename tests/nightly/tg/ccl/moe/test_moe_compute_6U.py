@@ -2157,7 +2157,6 @@ def _run_moe_compute_impl(
         output_height_shard_dim,
         output_width_shard_dim,
         hidden_size,
-        effective_matmul_ring_size(mesh_device),
     )
     per_expert_tokens_all_passed = True
     activation_all_passed = True

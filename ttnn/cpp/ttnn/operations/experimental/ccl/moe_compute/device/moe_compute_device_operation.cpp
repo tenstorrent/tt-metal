@@ -441,6 +441,13 @@ std::vector<ttnn::Tensor> moe_compute(
     }
 
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
+
+    TT_FATAL(
+        !(compute_only && cluster_axis.has_value()),
+        "moe_compute: compute_only=True is incompatible with cluster_axis (got cluster_axis={}). "
+        "compute_only skips the combine path, so cluster_axis has no meaning.",
+        cluster_axis.value_or(0));
+
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
         // see #27196 for potential limitations

@@ -223,13 +223,12 @@ This matches the `all_worker_cores_bounding_box` used by the tilize kernel's per
         mod,
         bbox_doc,
         ttnn::overload_t(
-            nb::overload_cast<ttnn::MeshDevice*, const uint32_t, const uint32_t, const uint32_t, const uint32_t>(
+            nb::overload_cast<ttnn::MeshDevice*, const uint32_t, const uint32_t, const uint32_t>(
                 &ttnn::experimental::get_moe_worker_mcast_bounding_box),
             nb::arg("mesh_device"),
             nb::arg("combine_token_parallel_cores"),
             nb::arg("combine_data_parallel_cores"),
-            nb::arg("hidden_size"),
-            nb::arg("bh_ring_size") = 12));
+            nb::arg("hidden_size")));
 }
 
 void bind_moe_compute_utils(nb::module_& mod) {

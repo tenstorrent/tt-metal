@@ -242,10 +242,6 @@ def _run_moe_compute_single_card_test(
     # CREATE MATMUL INPUT TENSORS
     #########################################
 
-    # Ring size the op (and the weight-prep helpers) auto-detect from the arch (8 on BH,
-    # 12 on WH); used here for the ring-aware width-parallel derivation and the mcast bbox.
-    ring_n = effective_matmul_ring_size(mesh_device)
-
     w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
@@ -403,7 +399,7 @@ def _run_moe_compute_single_card_test(
         mesh_device, output_height_shard_dim, output_width_shard_dim
     )
     worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
-        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size, ring_n
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
     )
 
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
