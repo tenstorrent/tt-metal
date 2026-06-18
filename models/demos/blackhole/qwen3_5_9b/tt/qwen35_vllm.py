@@ -34,6 +34,7 @@ import math
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.common import create_tt_model
@@ -114,11 +115,14 @@ class Qwen35ForCausalLM(Generator):
         model = self.model[0]
         if model.num_devices > 1:
             return self._prefill_forward_tp(model, tokens, page_table, prompt_lens)
+        seq_len = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
+        logger.info(f"Prefilling User 1 up to {seq_len} tokens")
         logits = prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace=kwargs.get("enable_trace", False))
         logits = ttnn.to_torch(logits)
         # The vLLM runner unpacks (logits, rope_deltas) because the HF config has mrope_section;
         # zero deltas are correct for our text-only port.
         rope_deltas = torch.zeros(logits.shape[0], dtype=torch.long)
+        logger.info(f"Finished prefill up to {seq_len} tokens, starting decode...")
         return logits, rope_deltas
 
     def _prefill_forward_tp(self, model, tokens, page_table, prompt_lens):
@@ -132,6 +136,7 @@ class Qwen35ForCausalLM(Generator):
         T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
         if tokens.shape[1] > T:
             tokens = tokens[:, :T]
+        logger.info(f"Prefilling User 1 up to {T} tokens (TP masked-bucket/chunked)")
         logits = model.prefill_traced_chunked(tokens, page_table, actual_len=T)  # [1,1,vocab] replicated
         logits = (
             ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
@@ -139,6 +144,7 @@ class Qwen35ForCausalLM(Generator):
             .float()
             .view(1, 1, -1)
         )
+        logger.info(f"Finished prefill up to {T} tokens, starting decode...")
         return logits, torch.zeros(1, dtype=torch.long)
 
     def decode_forward(self, *args, **kwargs):
@@ -168,6 +174,9 @@ class Qwen35ForCausalLM(Generator):
             start_pos = args[1] if len(args) > 1 else kwargs.get("start_pos")
             prime_decode_trace(self, self.model[0], tokens, start_pos, kwargs.get("page_table"))
 
+        if not getattr(self, "_decode_logged", False):
+            self._decode_logged = True
+            logger.info("Decode trace replay active (Qwen)")
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
@@ -205,6 +214,10 @@ class Qwen35ForCausalLM(Generator):
         else:
             num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+        logger.info(
+            f"Starting Qwen prefill warmup: capturing chunk-prefill trace "
+            f"(chunk={_PREFILL_WARMUP_CHUNK}, page_table_blocks={num_blocks})..."
+        )
         self.model[0].capture_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
 
     def warmup_model_decode(self, *args, **kwargs):
