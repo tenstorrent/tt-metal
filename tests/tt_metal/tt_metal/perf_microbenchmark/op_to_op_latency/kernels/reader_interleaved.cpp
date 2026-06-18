@@ -66,121 +66,105 @@ void kernel_main() {
     // src accessor is configured with the matching page_size at build time.
     const uint32_t start_page_id = effective_start_tile_id / tiles_per_page;
     const uint32_t n_pages = n_tiles / tiles_per_page;
-    const uint32_t end_page_id = start_page_id + n_pages;
 
     if constexpr (READER_MODE == 2) {
-        // Per-trid double-buffer with N = TRID_IN_FLIGHT reads in flight per TRID.
+        // Per-trid double buffer, N = TRID_IN_FLIGHT reads in flight per side.
         //
-        // Slot layout (depth = 2*N*tiles_per_page, asserted on host):
-        //   slots [0..N-1]     are owned by TRID_A
-        //   slots [N..2N-1]    are owned by TRID_B
+        // We are only measuring NoC read bandwidth: results are dummy and the compute
+        // side is a NOP. We STRIDE the source page_id across [start_page_id, +n_pages)
+        // (one increment per read) so consecutive transactions land on different DRAM
+        // banks -- the interleaved buffer maps page k to bank k % num_banks. Reading a
+        // single page pins every transaction to one bank and caps a single core at the
+        // single-bank ceiling (~22 GB/s on WH); striding across all banks reaches the
+        // ~30 GB/s all-bank ceiling (matches test_bw_and_latency -m 3 vs -m 1). Total
+        // reads already equal n_pages, so the stride sweeps the core's slice exactly
+        // once with no wrap. The L1 destination stays fixed at cb_base (dummy data; the
+        // single-bank reference shows distinct L1 is not what gates BW).
         //
-        // Why this works with the CB:
-        //   cb_reserve_back / cb_push_back only track a FIFO count (depth - filled);
-        //   they don't know which physical slot we're writing. But since we always
-        //   push in strict A, B, A, B, ... order, the consumer pops in that same
-        //   order. So when cb_reserve_back(N*tpp) unblocks we know the N "oldest"
-        //   slots have been freed - and those are exactly the slots of whichever
-        //   side we are about to refill.
+        // cb_reserve_back / cb_push_back are kept purely for flow control so the
+        // consumer pipeline advances; host guarantees depth >= 2*N*tiles_per_page.
         //
-        // Sequence:
-        //   1. cb_reserve_back(2*N*tpp), issue N TRID_A reads to slots 0..N-1,
-        //      issue N TRID_B reads to slots N..2N-1.
-        //   2. barrier(A), push N tiles_per_page pages.   <-- consumer starts eating A
-        //   3. barrier(B), push N tiles_per_page pages.   <-- consumer keeps eating
-        //   4. Steady loop:
-        //        cb_reserve_back(N*tpp)  // wait for consumer to free A's slots
-        //        refill N TRID_A reads to slots 0..N-1
-        //        barrier(A), push N
-        //        cb_reserve_back(N*tpp)  // wait for consumer to free B's slots
-        //        refill N TRID_B reads to slots N..2N-1
-        //        barrier(B), push N
-        constexpr uint32_t TRID_A = 1;
-        constexpr uint32_t TRID_B = 2;
+        // Pipeline (one batch always in flight while we stall on the other):
+        //   prologue: issue batch 0 on TRID_A.
+        //   head    : prefetch batch 1 on TRID_B, then barrier+push batch 0 (one-shot,
+        //             so the first-read profiler marker lives outside the hot loop).
+        //   hot loop: prefetch the NEXT batch on the other trid, then barrier+push the
+        //             oldest in-flight batch. The loop condition guarantees a next
+        //             batch exists, so there is no per-iteration have_next branch, and
+        //             the drained batch is always a full N (only the last batch can be
+        //             partial). Static branch prediction on this arch makes the
+        //             data-dependent branch worth eliminating.
+        //   tail    : drain the final lone in-flight batch (may be < N).
+        //
+        // TRID_A ^ 1 == TRID_B and vice versa, so a single xor toggles sides.
+        constexpr uint32_t TRID_A = 2;
+        constexpr uint32_t TRID_B = 3;
         constexpr uint32_t N = trid_in_flight;
+        const uint32_t batch_tiles = N * tiles_per_page;
 
-        const uint32_t page_bytes = tiles_per_page * tile_bytes;
-
-        // Initial reservation: up to 2N pages worth (clipped by what we'll actually fill).
-        const uint32_t initial_fill_pages = (n_pages < 2u * N) ? n_pages : (2u * N);
-        cb_reserve_back(cb_in, initial_fill_pages * tiles_per_page);
+        // Reserve room for both in-flight batches up front (covers prologue + head).
+        cb_reserve_back(cb_in, 2 * batch_tiles);
         const uint32_t cb_base = get_write_ptr(cb_in);
 
         DeviceTimestampedData("READ_BEFORE_BARRIER", effective_start_tile_id);
 
-        uint32_t next_page_id = start_page_id;
-        uint32_t pages_pushed = 0;
-
-        // Initial fill: up to N TRID_A reads to slots 0..N-1.
-        uint32_t a_count = 0;
-        noc_async_read_set_trid(TRID_A);
-        while (a_count < N && next_page_id < end_page_id) {
-            noc_async_read_tile(next_page_id, src, cb_base + a_count * page_bytes);
-            ++next_page_id;
-            ++a_count;
+        // Prologue: issue batch 0 on TRID_A.
+        uint32_t issue_trid = TRID_A;
+        uint32_t drain_trid = TRID_A;
+        uint32_t page_id = start_page_id;  // strides across banks, one bump per read
+        uint32_t issued = n_pages < N ? n_pages : N;
+        noc_async_read_set_trid(issue_trid);
+        for (uint32_t i = 0; i < issued; ++i) {
+            noc_async_read_tile(page_id++, src, cb_base);
         }
-        // Initial fill: up to N TRID_B reads to slots N..2N-1.
-        uint32_t b_count = 0;
-        noc_async_read_set_trid(TRID_B);
-        while (b_count < N && next_page_id < end_page_id) {
-            noc_async_read_tile(next_page_id, src, cb_base + (N + b_count) * page_bytes);
-            ++next_page_id;
-            ++b_count;
-        }
+        uint32_t pushed = 0;
 
-        // Push initial A, then initial B (consumer can start at full bandwidth).
-        if (a_count > 0) {
-            noc_async_read_barrier_with_trid(TRID_A);
+        // Head: if a second batch exists, prefetch it on the other trid (so two batches
+        // are in flight), then drain batch 0. The first-read marker is emitted here,
+        // once, so it never enters the hot loop.
+        if (issued < n_pages) {
+            issue_trid ^= 1u;
+            const uint32_t remaining = n_pages - issued;
+            const uint32_t nb = remaining < N ? remaining : N;
+            noc_async_read_set_trid(issue_trid);
+            for (uint32_t i = 0; i < nb; ++i) {
+                noc_async_read_tile(page_id++, src, cb_base);
+            }
+            issued += nb;
+
+            noc_async_read_barrier_with_trid(drain_trid);
             DeviceTimestampedData("READ_AFTER_BARRIER", effective_start_tile_id);
-            cb_push_back(cb_in, a_count * tiles_per_page);
-            pages_pushed += a_count;
-        } else {
+            cb_push_back(cb_in, batch_tiles);
+            pushed += N;
+            drain_trid ^= 1u;
+        }
+
+        // Hot loop: uniform prefetch-then-drain, no data-dependent branch. The reserve
+        // gates reuse of the region the oldest batch just vacated.
+        while (issued < n_pages) {
+            issue_trid ^= 1u;
+            const uint32_t remaining = n_pages - issued;
+            const uint32_t nb = remaining < N ? remaining : N;
+            cb_reserve_back(cb_in, batch_tiles);
+            noc_async_read_set_trid(issue_trid);
+            for (uint32_t i = 0; i < nb; ++i) {
+                noc_async_read_tile(page_id++, src, cb_base);
+            }
+            issued += nb;
+
+            noc_async_read_barrier_with_trid(drain_trid);
+            cb_push_back(cb_in, batch_tiles);
+            pushed += N;
+            drain_trid ^= 1u;
+        }
+
+        // Tail: drain the final in-flight batch (may be partial).
+        noc_async_read_barrier_with_trid(drain_trid);
+        if (pushed == 0) {
+            // n_pages <= N: head never ran, so emit the first-read marker here.
             DeviceTimestampedData("READ_AFTER_BARRIER", effective_start_tile_id);
         }
-        if (b_count > 0) {
-            noc_async_read_barrier_with_trid(TRID_B);
-            cb_push_back(cb_in, b_count * tiles_per_page);
-            pages_pushed += b_count;
-        }
-
-        // Steady-state: alternately refill A, push A, refill B, push B.
-        // Each refill issues up to N more reads on its TRID, overlapping with the
-        // other TRID's in-flight reads and the consumer's pop on the previous batch.
-        while (pages_pushed < n_pages) {
-            // Refill A. cb_reserve_back blocks until consumer has popped at least N
-            // tiles past the previous A push, freeing slots 0..N-1.
-            cb_reserve_back(cb_in, N * tiles_per_page);
-            uint32_t a_refill = 0;
-            noc_async_read_set_trid(TRID_A);
-            while (a_refill < N && next_page_id < end_page_id) {
-                noc_async_read_tile(next_page_id, src, cb_base + a_refill * page_bytes);
-                ++next_page_id;
-                ++a_refill;
-            }
-            if (a_refill > 0) {
-                noc_async_read_barrier_with_trid(TRID_A);
-                cb_push_back(cb_in, a_refill * tiles_per_page);
-                pages_pushed += a_refill;
-            }
-            if (pages_pushed >= n_pages) {
-                break;
-            }
-
-            // Refill B. Same idea on slots N..2N-1.
-            cb_reserve_back(cb_in, N * tiles_per_page);
-            uint32_t b_refill = 0;
-            noc_async_read_set_trid(TRID_B);
-            while (b_refill < N && next_page_id < end_page_id) {
-                noc_async_read_tile(next_page_id, src, cb_base + (N + b_refill) * page_bytes);
-                ++next_page_id;
-                ++b_refill;
-            }
-            if (b_refill > 0) {
-                noc_async_read_barrier_with_trid(TRID_B);
-                cb_push_back(cb_in, b_refill * tiles_per_page);
-                pages_pushed += b_refill;
-            }
-        }
+        cb_push_back(cb_in, (n_pages - pushed) * tiles_per_page);
 
         DeviceTimestampedData("NCRISC_DONE", program_id);
         return;
