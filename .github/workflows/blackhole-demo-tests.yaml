@@ -17,6 +17,7 @@ on:
           - all
           - stable_diffusion_xl
           - mistral-small-3.1-24b
+          - mistral-small-4-119b
           - mochi
           - flux.1-dev
           - wan2.2-t2v-a14b
