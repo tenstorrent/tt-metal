@@ -511,6 +511,67 @@ un-rotate contiguity fix. Two configs are skipped for unrelated reasons: <b>seq2
 kvpe ND-shard minimum) and <b>chunked at TP=1</b> (the 128-head <code>nlp_concat_heads</code> epilogue overflows L1 without
 TP head-sharding).</p>
 
+<h2>10. Where the time goes (measured — sp4×tp2 chunked DSA layer)</h2>
+<p>Per-op device timing from <code>test_mla_perf.py</code> under tracy (Blackhole p150, the §7 scenario:
+5120-token chunk @ 51200 cached, <b>sp4×tp2</b> — so 32 indexer heads/chip, <i>not</i> the §7 sp8×tp4 numbers).
+<b>Device-collapsed critical path = 62.7 ms.</b> Convention: compute ops take the <b>max</b> across the 8 chips,
+collectives the <b>mean</b>. <b>Math-util</b> = perf-model ideal ÷ actual (meaningful only for matmul-bound ops;
+<code>top-k</code>/<code>sparse_sdpa</code> ship no perf model). <b>CCL throughput</b> = wire bytes
+(<code>(N−1)/N × buffer</code>) ÷ time, against the <b>512 GB/s</b> per-link peak.</p>
+
+<div class="fr"><pre class="mermaid">
+flowchart TD
+  H["hidden_states"]:::io
+  STEMS["indexer stems + RoPE<br/>K/Q/W linears · gathers · rope<br/><b>2.62 ms · 4%</b>"]:::tp
+  ISCORE["indexer_score (HB=0)<br/><b>9.86 ms · 16%</b><br/>75% math-util"]:::tp
+  AR["logits all-reduce<br/>tilize → RS → AG → untilize<br/><b>19.5 ms · 31%</b><br/>RS/AG ≈ 43 GB/s = 8% of 512"]:::comm
+  TOPK["topk_large_indices<br/><b>15.0 ms · 24%</b><br/>no perf model"]:::rep
+  QPATH["attn Q-path<br/>q_a · q_b · wkv_b1 · rope<br/><b>2.50 ms · 4%</b><br/>matmuls 17–44% util"]:::tp
+  KVPATH["attn KV-path + cache write<br/><b>0.22 ms</b>"]:::sp
+  GATHER["latent gather (SP)<br/>all_gather + un-rotate<br/><b>2.17 ms · 4%</b><br/>AG ≈ 77 GB/s = 15%"]:::comm
+  RESHARD["indices reshard<br/>mesh_partition · <b>0.06 ms</b>"]:::comm
+  SDPA["sparse_sdpa<br/><b>9.12 ms · 15%</b><br/>no perf model"]:::tp
+  EPI["epilogue<br/>wkv_b2 · concat · o_proj · RS<br/><b>1.66 ms · 3%</b><br/>o_proj 69% util"]:::tp
+  OUT["out [1,1,S/sp,dim/tp]"]:::io
+
+  H --> STEMS --> ISCORE --> AR --> TOPK --> RESHARD
+  H --> QPATH --> SDPA
+  H --> KVPATH --> GATHER --> SDPA
+  RESHARD --> SDPA --> EPI --> OUT
+
+  classDef io fill:#fff,stroke:#555,stroke-width:2px,color:#000;
+  classDef rep fill:#e6ffe6,stroke:#2e7d32,color:#000;
+  classDef tp fill:#e3f2fd,stroke:#1565c0,color:#000;
+  classDef sp fill:#fff3e0,stroke:#e65100,color:#000;
+  classDef comm fill:#ffebee,stroke:#c62828,color:#000;
+</pre></div>
+
+<table>
+<tr><th>Stage</th><th>Device time</th><th>% of layer</th><th>Note</th></tr>
+<tr><td><b>logits all-reduce</b></td><td>19.50 ms</td><td><b>31.1%</b></td><td>the cost change B adds; RS+AG ≈ 13.4 ms @ ~43 GB/s (<b>8% of link</b> → overhead-bound, not saturated) + ~6 ms RM↔TILE round-trip</td></tr>
+<tr><td><b>top-k</b> (<code>topk_large_indices</code>)</td><td>15.00 ms</td><td><b>23.9%</b></td><td>now the single largest op; next op-level target</td></tr>
+<tr><td><b>indexer_score</b></td><td>9.86 ms</td><td>15.7%</td><td><b>75% math-util</b> (HB=0, heads resident) — the win from change B</td></tr>
+<tr><td><b>sparse_sdpa</b></td><td>9.12 ms</td><td>14.5%</td><td>gather 2048 keys/row + online-softmax; no perf model</td></tr>
+<tr><td>indexer stems + RoPE</td><td>2.62 ms</td><td>4.2%</td><td>K/Q/W linears (24–44% util), SP/TP gathers, device RoPE</td></tr>
+<tr><td>attn Q-path</td><td>2.50 ms</td><td>4.0%</td><td>q_a/q_b/wkv_b1 matmuls (17–44% util), heads, rope, concat</td></tr>
+<tr><td>latent gather (SP)</td><td>2.17 ms</td><td>3.5%</td><td>SP all_gather (~77 GB/s = 15%) + block-cyclic un-rotate</td></tr>
+<tr><td>epilogue</td><td>1.66 ms</td><td>2.6%</td><td>wkv_b2, concat_heads, o_proj (69% util), reduce_scatter</td></tr>
+<tr><td>attn KV-path + cache</td><td>0.22 ms</td><td>0.4%</td><td>kv_a, TP all-gather+reduce, norm, rope, bf8 cache write</td></tr>
+<tr><td>indices reshard</td><td>0.06 ms</td><td>0.1%</td><td><code>mesh_partition</code> replicated → SP-sharded</td></tr>
+<tr><td><b>DSA layer critical path</b></td><td><b>62.70 ms</b></td><td><b>100%</b></td><td>compute=max, collectives=mean across 8 chips</td></tr>
+</table>
+
+<div class="note"><b>Read-out.</b> After change B the indexer matmul is no longer the bottleneck (75% util, 16%). The layer is
+now gated by <b>data movement and the unmodeled ops</b>: the <b>logits all-reduce (31%)</b> and <b>top-k (24%)</b>
+together are 55% of the layer. The all-reduce runs at only ~8% of link BW (it's latency/launch-bound at this size, not
+bandwidth-bound) and pays ~6 ms to round-trip ROW_MAJOR↔TILE (the op emits RM, the CCL runs in TILE). Passing the RM
+logits straight to the CCL does <i>not</i> help — measured ~10 ms <b>slower</b>, because ttnn's RM reduce_scatter/all_gather
+tilize-with-padding internally and add RM concats; the explicit TILE round-trip is the cheaper path today. The TP matmuls
+are small per chip (skinny GEMMs, 17–69% util) but a tiny slice of the layer. <b>Highest-leverage next steps:</b>
+(1) SP-shard the indexer queries — shrinks the all-reduce buffer to <code>1/sp</code> and turns the indexer multicast ON
+at sp=8 (needs <code>groups==grid.y</code>); (2) a fused/RM-native CCL that avoids the padded-tilize + concats (naive RM
+is slower); (3) attack <code>top-k</code>, now the largest single op.</div>
+
 <p class="ctrl"><button onclick="document.body.classList.toggle('still')">⏸ toggle animation</button>
 &nbsp;(also respects your OS “reduce motion” setting)</p>
 <style>body.still .edgePaths path, body.still .flowchart-link, body.still .bar { animation:none!important; }</style>
