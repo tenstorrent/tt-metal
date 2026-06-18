@@ -253,15 +253,23 @@ ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, 
 // normalization path.
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
 ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifdef ARCH_BLACKHOLE
+    // BH REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
+    // Reconfig formats to match: SrcA=scaler format, SrcB=data
+    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
+    if constexpr (swap_operands) {
+        state_configure(icb_scaler, icb, ocb, call_line);
+        reconfig_data_format(icb_scaler, icb);
+    } else {
+        state_configure(icb, icb_scaler, ocb, call_line);
+    }
+#else
     state_configure(icb, icb_scaler, ocb, call_line);
+#endif
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity, enforce_fp32_accumulation>(
         icb, icb_scaler)));
-    if constexpr (enforce_fp32_accumulation) {
-        MATH((tensix_sync()));
-        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
-    }
 #else
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, math_fidelity>(icb)));
