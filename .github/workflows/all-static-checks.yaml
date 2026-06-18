@@ -80,6 +80,11 @@ jobs:
         with:
           ignore_config_file: ".github/spdx_ignore.yaml"
           verbose: "true"
+  check-metal-kernel-count:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Do Nothing
+        run: echo "tt_metal/kernels/ guard removed in #44980 (kernels moved to tests/). Placeholder until branch restrictions are updated."
   check-doc:
     runs-on: ubuntu-latest
     steps:
