@@ -67,7 +67,7 @@ _THRESHOLDS = {
     ("fast_lut", "bf16"): (30_000, []),
     ("fast_lut", "fp32"): (2_000_000_000, []),
     ("tanh", "bf16"): (0, [-4.625, -4.8125]),
-    ("tanh", "fp32"): (500, []),
+    ("tanh", "fp32"): (400, []),
 }
 
 # Tile-aligned input grid size. 256x256 = 65536 elements, 8x8 tiles.
