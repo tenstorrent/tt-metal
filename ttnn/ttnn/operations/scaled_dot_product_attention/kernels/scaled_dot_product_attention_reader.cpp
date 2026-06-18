@@ -74,6 +74,10 @@ void kernel_main() {
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto v_acc = TensorAccessor(v_args, v_addr, v_tile_bytes);
+    // Mask accessor + tile size are loop-invariant — build once, not per
+    // KV-block (a TensorAccessor and get_tile_size both recompute otherwise).
+    const uint32_t mask_tile_bytes = has_mask ? get_tile_size(cb_mask_in) : 0;
+    const auto mask_acc = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
 
     constexpr uint32_t q_block_tiles = B_q * DHt;
     constexpr uint32_t k_block_tiles = B_kv * DHt;
@@ -140,8 +144,6 @@ void kernel_main() {
 
             // --- mask block: natural [B_q, B_kv] ---
             if constexpr (has_mask) {
-                const auto mask_acc = TensorAccessor(mask_args, mask_addr, get_tile_size(cb_mask_in));
-                const uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
                 cb_reserve_back(cb_mask_in, mask_block_tiles);
                 const uint32_t wptr = get_write_ptr(cb_mask_in);
                 for (uint32_t qr = 0; qr < B_q; ++qr) {
