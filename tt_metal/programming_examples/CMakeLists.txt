@@ -16,6 +16,8 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_compute)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_riscv)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary)
+# UNVERIFIED ON QUASAR: Metal 2.0 ProgramSpec/DFB single-tile bf16 add demo (bring-up).
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/quasar_eltwise_binary)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eltwise_sfpu)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_compute_kernel)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datamovement_kernel)
