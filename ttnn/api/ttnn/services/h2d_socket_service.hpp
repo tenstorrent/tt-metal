@@ -67,6 +67,13 @@ public:
         // <= the socket page size. Per-call metadata must be exactly this size.
         uint32_t metadata_size_bytes = 0;
 
+        // When true, the service core is claimed ISOLATED (excluded from the per-op EnqueueMeshWorkload
+        // no-mixing routing via has_any_non_isolated_claims()) and the persistent receiver program is
+        // launched via direct slow-dispatch instead of EnqueueMeshWorkload — so a resident H2D service no
+        // longer adds a ~per-op host-side dispatch tax to concurrent model workloads. Pure optimization;
+        // default false preserves the legacy claim + EnqueueMeshWorkload path.
+        bool isolated_claim = false;
+
         // Optional host-side hook applied in place to a copy of `bytes` before the
         // mapper runs (raw-bytes overload only). Must be length-preserving.
         std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor;
