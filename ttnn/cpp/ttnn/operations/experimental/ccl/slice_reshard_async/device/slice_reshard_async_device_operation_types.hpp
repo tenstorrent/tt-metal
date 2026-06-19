@@ -93,14 +93,7 @@ struct SliceReshardAsyncParams {
 
     auto attribute_values() const {
         return std::forward_as_tuple(
-            this->dim,
-            this->output_dim_offset,
-            this->output_dim_shape,
-            this->cluster_axis,
-            this->num_links,
-            this->output_mem_config,
-            this->topology,
-            this->ring_size);
+            dim, output_dim_offset, output_dim_shape, cluster_axis, num_links, output_mem_config, topology, ring_size);
     }
 };
 
