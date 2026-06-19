@@ -10,10 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.model_targets import normalize_sku
-from models.demos.utils.trace_region_sizes import (
-    hf_model_name_candidates,
-    resolve_trace_region_size_for_candidates,
-)
+from models.demos.utils.trace_region_sizes import hf_model_name_candidates, resolve_trace_region_size_for_candidates
 
 # NOTE: We need to override trace_region_size before the mesh device is opened
 # NOTE: When using DP, we need to have the imlpemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
