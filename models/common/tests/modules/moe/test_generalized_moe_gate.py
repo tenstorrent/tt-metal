@@ -72,7 +72,7 @@ def _grouped_golden(input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, en
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
-@pytest.mark.parametrize("seed", [42])
+@pytest.mark.parametrize("seed", [42, 201])
 # logit_scale only matters on the raw-logit softmax path (see input gen): 1.0 = small/realistic regime,
 # 100.0 = past the bf16 exp ceiling (overflow stress). Other paths ignore it and run once (scale 1.0).
 @pytest.mark.parametrize("logit_scale", [1.0, 100.0])
@@ -262,13 +262,14 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
 
 
 @skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
+@pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
-@pytest.mark.parametrize("seed", [42])
+@pytest.mark.parametrize("seed", [42, 201])
 # logit_scale only matters on the raw-logit softmax path: 1.0 = small/realistic, 100.0 = overflow stress.
 @pytest.mark.parametrize("logit_scale", [1.0, 100.0])
-def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, output_softmax, logit_scale):
+def test_generalized_moe_gate_512_global(device, batch_size, enable_sigmoid, seed, topk, output_softmax, logit_scale):
     """512-expert true GLOBAL top-8 (A2 combine). Each of the 2 blocks produces a re-mergeable top-8
     RUN (idx made global via +b*256), stashed to L1; the combine places run0 at {0,2} and run1 at
     {4,6} and finalizes -> the global top-8 over all 512 experts (indices 0-511). GMG_DIAG_BLOCK must
@@ -278,7 +279,6 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
         pytest.skip("logit_scale only varies the raw-logit softmax path")
     num_experts = 512
     num_blocks = num_experts // 256
-    batch_size = 1
     eps, scaling_factor = 1e-20, 2.5
     tile = ttnn.Tile((32, 32))
 
@@ -331,6 +331,9 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
     ar = torch.arange(256, dtype=torch.int32).reshape(1, 1, 16, 16)
     offs = (torch.arange(num_blocks, dtype=torch.int32) * 256).reshape(1, num_blocks, 1, 1)
     idx_blocks = torch.transpose(ar + offs, -2, -1).contiguous().to(torch.uint16)  # (1, num_blocks, 16, 16)
+    # The ids are batch-independent (arange + block offset), but the shard grid has one core per batch row,
+    # so replicate to batch_size — otherwise rows >0 get an unfilled (zero) index shard and route on id 0.
+    idx_blocks = idx_blocks.expand(batch_size, -1, -1, -1).contiguous()  # (batch_size, num_blocks, 16, 16)
     ttnn_input_indices = ttnn.from_torch(
         idx_blocks, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(multi), tile=tile
     )
@@ -406,7 +409,7 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
 @skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
-@pytest.mark.parametrize("seed", [42])
+@pytest.mark.parametrize("seed", [42, 201])
 def test_generalized_moe_gate_grouped(device, batch_size, enable_sigmoid, seed):
     """DeepSeek GROUPED gate via ``generalized_moe_gate(grouped=True)``: 256 experts = 8 groups × 32 ->
     top-2-sum per group -> top-4 groups -> top-8, linear renorm + scale. Confirms the unified op's grouped
