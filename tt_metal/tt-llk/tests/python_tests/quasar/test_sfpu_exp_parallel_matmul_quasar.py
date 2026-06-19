@@ -29,6 +29,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
     generate_sfpu_format_dest_acc_combinations,
     parametrize,
 )
@@ -48,14 +49,28 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-from test_eltwise_unary_sfpu_quasar import SFPU_UNARY_FORMATS as SFPU_NONLINEAR_FORMATS
 from test_eltwise_unary_sfpu_quasar import (
+    SFPU_UNARY_FORMATS,
     prepare_inputs_for_operation,
 )
 
-EXP_INPUT_DIMENSIONS = [32, 32]
-MATMUL_A_DIMENSIONS = [32, 32]
-MATMUL_B_DIMENSIONS = [32, 32]
+# (exp_dims, matmul_a_dims, matmul_b_dims)
+DIMENSION_PROFILES = (
+    ([32, 32], [32, 32], [32, 32]),
+    ([32, 256], [64, 64], [64, 128]),
+)
+
+
+def _matmul_output_fits_dest(
+    matmul_a_dimensions: list[int],
+    matmul_b_dimensions: list[int],
+    dest_acc: DestAccumulation,
+    dest_sync: DestSync,
+) -> bool:
+    matmul_dims = generate_tile_dims((matmul_a_dimensions, matmul_b_dimensions))
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    return matmul_dims.output_tile_cnt <= max_tiles
 
 
 def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
@@ -68,12 +83,34 @@ def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
                 ImpliedMathFormat.No,
                 ImpliedMathFormat.Yes,
             ):
-                combinations.append((fmt, dest_acc, dest_sync, implied_math_format))
+                for (
+                    exp_input_dimensions,
+                    matmul_a_dimensions,
+                    matmul_b_dimensions,
+                ) in DIMENSION_PROFILES:
+                    if not _matmul_output_fits_dest(
+                        matmul_a_dimensions,
+                        matmul_b_dimensions,
+                        dest_acc,
+                        dest_sync,
+                    ):
+                        continue
+                    combinations.append(
+                        (
+                            fmt,
+                            dest_acc,
+                            dest_sync,
+                            implied_math_format,
+                            exp_input_dimensions,
+                            matmul_a_dimensions,
+                            matmul_b_dimensions,
+                        )
+                    )
     return combinations
 
 
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
-    SFPU_NONLINEAR_FORMATS
+    SFPU_UNARY_FORMATS
 )
 
 
@@ -82,16 +119,22 @@ PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
     format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_COMBINATIONS,
 )
 def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
-    (formats, dest_acc, dest_sync, implied_math_format) = (
-        format_dest_acc_sync_implied_math[0]
-    )
+    (
+        formats,
+        dest_acc,
+        dest_sync,
+        implied_math_format,
+        exp_input_dimensions,
+        matmul_a_dimensions,
+        matmul_b_dimensions,
+    ) = format_dest_acc_sync_implied_math[0]
 
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=MATMUL_A_DIMENSIONS,
+        input_dimensions_A=matmul_a_dimensions,
         stimuli_format_B=formats.input_format,
-        input_dimensions_B=MATMUL_B_DIMENSIONS,
+        input_dimensions_B=matmul_b_dimensions,
         spec_A=matmul_spec,
         spec_B=matmul_spec,
         output_format=formats.output_format,
@@ -100,9 +143,9 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     exp_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_exp, tile_cnt_exp, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=EXP_INPUT_DIMENSIONS,
+        input_dimensions_A=exp_input_dimensions,
         stimuli_format_B=formats.input_format,
-        input_dimensions_B=EXP_INPUT_DIMENSIONS,
+        input_dimensions_B=exp_input_dimensions,
         spec_A=exp_spec,
         spec_B=exp_spec,
         output_format=formats.output_format,
@@ -112,13 +155,13 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     )
 
     tilized_A = tilize_block(
-        src_A, dimensions=MATMUL_A_DIMENSIONS, stimuli_format=formats.input_format
+        src_A, dimensions=matmul_a_dimensions, stimuli_format=formats.input_format
     )
     tilized_B = tilize_block(
-        src_B, dimensions=MATMUL_B_DIMENSIONS, stimuli_format=formats.input_format
+        src_B, dimensions=matmul_b_dimensions, stimuli_format=formats.input_format
     )
 
-    matmul_dims = generate_tile_dims((MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS))
+    matmul_dims = generate_tile_dims((matmul_a_dimensions, matmul_b_dimensions))
 
     formats_config = data_formats(
         input_format=formats.input_format,
@@ -137,8 +180,8 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         src_B,
         formats.output_format,
         MathFidelity.LoFi,
-        input_A_dimensions=MATMUL_A_DIMENSIONS,
-        input_B_dimensions=MATMUL_B_DIMENSIONS,
+        input_A_dimensions=matmul_a_dimensions,
+        input_B_dimensions=matmul_b_dimensions,
         tilize=True,
         input_A_format=formats.input_format,
         input_B_format=formats.input_format,
@@ -153,7 +196,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         formats.output_format,
         dest_acc,
         formats.input_format,
-        EXP_INPUT_DIMENSIONS,
+        exp_input_dimensions,
     )
 
     num_faces = 4
@@ -204,7 +247,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     res_exp = torch.tensor(outcome.result, dtype=torch_format)
     res_matmul = torch.tensor(stimuli.collect_buffer_c_results(), dtype=torch_format)
 
-    assert len(res_exp) == len(golden_exp)
-    assert len(res_matmul) == len(golden_matmul)
-    assert passed_test(golden_exp, res_exp, formats.output_format)
-    assert passed_test(golden_matmul, res_matmul, formats.output_format)
+    assert len(res_exp) == len(golden_exp), "exp"
+    assert len(res_matmul) == len(golden_matmul), "matmul"
+    assert passed_test(golden_exp, res_exp, formats.output_format), "exp"
+    assert passed_test(golden_matmul, res_matmul, formats.output_format), "matmul"
