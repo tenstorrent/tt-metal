@@ -38,7 +38,7 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
-from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand
+from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, _subtract_intervals
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -90,25 +90,6 @@ plt.rcParams.update(
 # ---------------------------------------------------------------------------
 
 
-def _complement_in_range(
-    intervals: List[Tuple[float, float]],
-    x_min: float,
-    x_max: float,
-) -> List[Tuple[float, float]]:
-    """Parts of [x_min, x_max] not covered by any interval."""
-    result, cursor = [], x_min
-    for lo, hi in sorted(intervals):
-        lo, hi = max(lo, x_min), min(hi, x_max)
-        if hi <= cursor:
-            continue
-        if lo > cursor:
-            result.append((cursor, lo))
-        cursor = max(cursor, hi)
-    if cursor < x_max:
-        result.append((cursor, x_max))
-    return result
-
-
 def _intersect_segment(
     a: float,
     b: float,
@@ -116,25 +97,6 @@ def _intersect_segment(
 ) -> List[Tuple[float, float]]:
     """Parts of [a, b] that overlap any interval."""
     return [(max(a, lo), min(b, hi)) for lo, hi in intervals if max(a, lo) < min(b, hi)]
-
-
-def _subtract_from_segment(
-    a: float,
-    b: float,
-    holes: List[Tuple[float, float]],
-) -> List[Tuple[float, float]]:
-    """Parts of [a, b] not covered by any hole."""
-    result, cursor = [], a
-    for lo, hi in sorted(holes):
-        lo, hi = max(lo, a), min(hi, b)
-        if hi <= cursor:
-            continue
-        if lo > cursor:
-            result.append((cursor, lo))
-        cursor = max(cursor, hi)
-    if cursor < b:
-        result.append((cursor, b))
-    return result
 
 
 # Distributions whose sweep range is given by spec.low/spec.high. Others
@@ -555,14 +517,14 @@ def _plot_and_print(
 
     if allowed_intervals is not None and len(x):
         x_min, x_max = float(x.min()), float(x.max())
-        complement = _complement_in_range(allowed_intervals, x_min, x_max)
+        complement = _subtract_intervals([(x_min, x_max)], allowed_intervals)
         # Collect the actual visible ranges so the legend tells the user which
         # x-spans are shaded, not just the registry/spec inputs.
         all_undef_parts: List[Tuple[float, float]] = []
         all_excl_parts: List[Tuple[float, float]] = []
         for seg_lo, seg_hi in complement:
             up = _intersect_segment(seg_lo, seg_hi, undefined_ranges or [])
-            ep = _subtract_from_segment(seg_lo, seg_hi, up)
+            ep = _subtract_intervals([(seg_lo, seg_hi)], up)
             all_undef_parts.extend(up)
             all_excl_parts.extend(ep)
 
@@ -1326,6 +1288,16 @@ CASES = [
         op=MathOperation.Reciprocal,
         spec=StimuliSpec.uniform(intervals=[(-10.0, -0.01), (0.01, 10.0)]),
     ),
+    # Intervals (excluded-by-intervals shading): log sampled over two positive
+    # in-domain bands with a gap (2, 5) that is skipped on purpose. The gap is
+    # well-defined for log, so it renders as a grey "excluded by intervals"
+    # region — exercising the _subtract_intervals complement/subtract path the
+    # plot uses for shading.
+    Case(
+        op=MathOperation.Log,
+        spec=StimuliSpec.uniform(intervals=[(0.5, 2.0), (5.0, 9.0)]),
+        name="Log-intervals",
+    ),
     # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
     # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-13.0, high=13.0), expect_pass=False),
 ]
@@ -1432,9 +1404,14 @@ def run_case(case: Case) -> bool:
             _SFPU_UNDEFINED_RANGES.get(mathop, {}).get(Operand.A, [])
         )
 
+    # ULP/eps spacing in _plot_and_print is taken from this format, so it must
+    # match the format the compared values live in: golden and hw are produced
+    # in output_format, so pass output_format (not input_format). Identical for
+    # symmetric cases; for a mixed case like (Float32, Float16_b), using the
+    # input format would measure ULP on the wrong (finer) grid and under-report.
     _plot_and_print(
         mathop,
-        formats.input_format,
+        formats.output_format,
         x,
         y_golden,
         y_hw,
@@ -1468,6 +1445,7 @@ def run_case(case: Case) -> bool:
     return test_passed
 
 
+@pytest.mark.accuracy
 @pytest.mark.parametrize("case", CASES, ids=[c.test_id for c in CASES])
 def test_sfpu_stress(case: Case):
     passed = run_case(case)
