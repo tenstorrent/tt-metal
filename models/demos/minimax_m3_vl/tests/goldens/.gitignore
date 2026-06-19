@@ -1,0 +1,3 @@
+# Reference activation goldens are large binaries — regenerate, don't commit.
+# See README.md (run gen_goldens.py in the transformers-5.12 venv).
+*.safetensors
