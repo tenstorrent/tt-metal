@@ -379,10 +379,9 @@ inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t inp
  * @param data_format: L1 data encoding format
  * @param buf_desc_id: buffer descriptor table ID
  * @param reg_data_format: Register data encoding format
- * @param end_l1_16B: end address of the buffer in L1 (defaults to 0 in .cpp tests)
  */
 inline tdma_descriptor_t construct_tdma_desc(
-    const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format, unsigned end_l1_16B = 0)
+    const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
 {
     buffer_descriptor_u buf_desc = {0};
     buf_desc.f.x_dim             = tensor_shape.face_c_dim;
@@ -396,10 +395,11 @@ inline tdma_descriptor_t construct_tdma_desc(
         buf_desc.f.z_dim = static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
     }
     buf_desc.f.l1_addr_16B  = base_l1_16B;
-    buf_desc.f.lmt_addr_16B = end_l1_16B;
     buf_desc.f.format       = static_cast<std::uint8_t>(data_format);
 
-    return {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
+    tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
+
+    return tdma_desc;
 }
 
 } // namespace ckernel::trisc

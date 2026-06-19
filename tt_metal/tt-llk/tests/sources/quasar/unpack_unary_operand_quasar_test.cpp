@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
 #include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
@@ -46,11 +47,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     unsigned l1_addr_16B;
     if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_A || UNPACKER_ENGINE_SEL == p_unpacr::UNP_DEST)
     {
-        l1_addr_16B = params.buffer_A[0] / 16;
+        l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
     }
     else if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
     {
-        l1_addr_16B = params.buffer_B[0] / 16;
+        l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
     }
 
     tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc(tensor_shape_A, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
@@ -141,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
     tdma_descriptor_t tdma_desc =
-        ckernel::trisc::construct_tdma_desc(tensor_shape_A, (params.buffer_Res[0] / 16), formats.pack_dst, buf_desc_id, formats.pack_src);
+        ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
