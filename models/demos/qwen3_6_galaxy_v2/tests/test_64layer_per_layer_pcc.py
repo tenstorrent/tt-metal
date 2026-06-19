@@ -187,10 +187,11 @@ def _cpu_reference_per_layer(state_dict_hf, x, capture_intermediates: bool = Fal
                 _kv_cache=None,
                 _conv_state=None,
                 _recurrent_state=None,
-                *,
+                *args,
                 _layer=layer,
                 _cap=_captured,
                 _orig=_orig_forward,
+                **kwargs,
             ):
                 """Instrumented forward: capture intermediates at each sub-step.
 
@@ -199,6 +200,9 @@ def _cpu_reference_per_layer(state_dict_hf, x, capture_intermediates: bool = Fal
                 production reference module.
                 """
 
+                # Handle attention_mask passed as keyword arg
+                if _attention_mask is None and "attention_mask" in kwargs:
+                    _attention_mask = kwargs["attention_mask"]
                 residual = _x
                 # Step 1: pre-attention norm
                 x_normed = _layer.input_layernorm(_x)
