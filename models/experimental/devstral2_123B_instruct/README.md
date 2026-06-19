@@ -292,19 +292,6 @@ pytest models/experimental/devstral2_123B_instruct/tests/perf/test_device_perf_s
 
 Analyze ops CSV with ``tt-perf-report`` using ``--start-signpost start --end-signpost stop``.
 
-### Results
-
-``test_e2e_performant.py -k L88``, 2CQ decode trace on, 128-token prefill, 32 decode iters:
-
-| Test | System | Mesh | TTFT (ms) | Prefill tok/s | Steady-state tok/s/user | End-to-end tok/s/user |
-|:-----|:-------|:-----|----------:|--------------:|------------------------:|----------------------:|
-| E2E L88 (2CQ traced) | BH Loudbox | 1×8 | 102.2 | 1262 | 14.02 | 8.81 |
-
-- **TTFT** — prefill trace replay after capture.
-- **Prefill tok/s** — ``prompt_len / prefill_trace_replay_time`` (compile excluded).
-- **Steady-state tok/s/user** — ``decode_iters / decode_trace_replay_total``.
-- **End-to-end tok/s/user** — includes TTFT and decode compile/capture.
-
 ## Repository layout
 
 
