@@ -53,9 +53,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig(&formats_array)[2] = params.formats;
 #endif
     // Polluter (run-0) tilize geometry: face_r_dim=16 -> regular, <16 -> tiny.
-    const std::uint32_t pol_face_r_dim                    = params.TEST_FACE_R_DIM;
-    const std::uint32_t pol_num_faces                     = params.num_faces;
-    [[maybe_unused]] constexpr std::uint32_t mm_num_faces = 4; // regular matmul operands
+    const std::uint32_t pol_face_r_dim   = params.TEST_FACE_R_DIM;
+    const std::uint32_t pol_num_faces    = params.num_faces;
+    constexpr std::uint32_t mm_num_faces = 4; // regular matmul operands
 
     // ---- Run 0: tilize "polluter" (output discarded) ----
     int run                              = 0;
@@ -91,20 +91,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1;
     if constexpr (DO_RESTORE)
     {
-        // Restore the canonical SrcA baseline mutated by the (tiny) tilize, then re-commit
-        // the regular SrcA strides. `_llk_unpack_AB_matmul_init_` only reprograms x-end and
-        // the ZW counter (see its uninit doc) -- it does NOT reset the SrcA Y/Z strides or
-        // Tile_x_dim, so without this restore the tilize-polluted strides leak into the matmul.
-        // SrcB is untouched by tilize, so its reconfig uses the proven IGNORE form.
+        // Tear down the tilize-mutated SrcA state (PR C1) and then re-establish the regular
+        // 32x32 operand baseline for BOTH operands before the matmul.
+        //
+        // `_llk_unpack_AB_matmul_init_` only reprograms x-end and the ZW counter (see its
+        // uninit doc) -- it does NOT reset the SrcA Y/Z strides, Tile_x_dim, or the operand
+        // tile descriptors, so without an explicit restore the polluter tilize state leaks
+        // into the matmul.
+        //
+        // A *geometry change* (tiny polluter -> regular matmul) cannot be undone by
+        // uninit + a stride-only reconfig alone: `_llk_unpack_reconfig_data_format_srca_impl_`
+        // re-commits the SrcA Z-stride / Y-stride / Tile_x_dim_cntx0 and descriptor Z-dim, but
+        // not the SrcA tile-descriptor X/Y-dim, which uninit left at the tiny geometry. The
+        // idiomatic full reconfigure for a geometry change is `_llk_unpack_hw_configure_`
+        // (configure_unpack_AB), which reprograms both descriptors to the regular baseline.
+        // (For a geometry-matched polluter, face_r_dim==16, uninit alone already suffices.)
 #ifdef ARCH_WORMHOLE
         _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, pol_num_faces, pol_face_r_dim);
 #else
         _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, pol_num_faces);
 #endif
-        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, false>(
-            formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, tile_size, FACE_R_DIM, mm_num_faces);
-        _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
-            formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats_array[run].unpack_A_src,
+            formats_array[run].unpack_B_src,
+            formats_array[run].unpack_A_dst,
+            formats_array[run].unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            mm_num_faces,
+            mm_num_faces,
+            tile_size,
+            tile_size);
     }
     _llk_unpack_AB_matmul_init_<>();
     _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, tile_size, tile_size);
@@ -195,13 +212,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_post<>(semaphore::PACK_DONE);
 
     // ---- Run 1: pack the matmul result to the output buffer ----
-    run = 1;
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, tile_size);
-
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
-        formats_array[run].pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
-#endif
+    // The matmul output is a regular 32x32 (4-face) tile. Run-0 configured the packer for the
+    // (possibly tiny) polluter geometry (pol_num_faces / pol_face_r_dim), so a data-format-only
+    // reconfig would pack the regular result with a tiny face layout. Re-run the full pack
+    // hw_configure + init for the regular geometry (Default mode). NOTE: deliberately NO
+    // `_llk_pack_dest_init_` here -- the SyncHalf dest-bank counter is initialised once in run-0.
+    run                                   = 1;
+    constexpr std::uint32_t mm_num_faces  = 4;
+    const std::uint32_t mm_pack_tile_size = FACE_R_DIM * TILE_C_DIM * mm_num_faces;
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+        formats_array[run].pack_src, formats_array[run].pack_dst, mm_pack_tile_size, FACE_R_DIM, TILE_C_DIM, mm_num_faces);
+    _llk_pack_init_wrapper_<ckernel::PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst, FACE_R_DIM, TILE_C_DIM, mm_num_faces);
 
     _llk_packer_wait_for_math_done_();
     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(res_dst_idx, L1_ADDRESS(params.buffer_Res[0]));

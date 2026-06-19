@@ -9,8 +9,9 @@ cannot mix tile geometries, so this uses a **state-leak** design instead:
 
     run 0: `unpack_tilize` at geometry G0 (the polluter; output discarded to scratch).
            G0 = tiny when face_r_dim < 16, regular when face_r_dim == 16.
-    transition (only when do_restore=True): `_llk_unpack_tilize_uninit_` +
-           `_llk_unpack_reconfig_data_format_srca_impl_<.. FACE_ROW_MAJOR>`.
+    transition (only when do_restore=True): `_llk_unpack_tilize_uninit_` (PR C1) +
+           `_llk_unpack_hw_configure_` re-establishing the regular 32x32 operand baseline
+           (a tiny->regular geometry change needs a full reconfigure, not a stride-only one).
     run 1: a REGULAR 32x32 `_llk_unpack_AB_matmul_` on independent, pre-tilized
            operands read directly from buffer_A[0] / buffer_B[0].
 
@@ -55,10 +56,11 @@ REGULAR_FACE_R_DIM = 16
 
 @dataclass
 class DO_RESTORE(TemplateParameter):
-    """Whether the run-0 -> run-1 transition restores the tilize-mutated SrcA baseline.
+    """Whether the run-0 -> run-1 transition restores the tilize-mutated operand baseline.
 
-    True  -> `_llk_unpack_tilize_uninit_` + reconfig<FACE_ROW_MAJOR> before the matmul.
-    False -> nothing; the (possibly tiny) tilize strides leak straight into the matmul.
+    True  -> `_llk_unpack_tilize_uninit_` + `_llk_unpack_hw_configure_` (regular baseline)
+             before the matmul, so it reads correct operands.
+    False -> nothing; the (possibly tiny) tilize state leaks straight into the matmul.
     """
 
     do_restore: bool = True
@@ -180,9 +182,25 @@ def test_tilize_polluter_matmul(
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(
+    result_matches = passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
         L1_to_L1_iterations=L1_to_L1_iterations,
-    ), "Assert against golden failed"
+    )
+
+    if do_restore:
+        # Correct path: uninit + FACE_ROW_MAJOR reconfig on BOTH operands re-establishes
+        # the regular 32x32 baseline, so the matmul reads its operands correctly.
+        assert (
+            result_matches
+        ), "restore (uninit + reconfig) failed: matmul diverged from golden"
+    else:
+        # Negative control: run-1 performs NO hw_configure and relies entirely on the
+        # restore that we skipped here, so the polluter tilize state (tilize_mode, mutated
+        # Tile_x_dim / Y-stride, and — for tiny polluters — a <4-face descriptor) leaks into
+        # the regular matmul and MUST corrupt the result. This proves the restore is
+        # load-bearing (and that _llk_unpack_AB_matmul_init_ does not reset that state).
+        assert (
+            not result_matches
+        ), "expected a state leak without restore, but the matmul matched golden"
