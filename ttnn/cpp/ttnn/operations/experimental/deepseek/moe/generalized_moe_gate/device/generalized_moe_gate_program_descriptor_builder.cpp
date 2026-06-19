@@ -45,7 +45,6 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     using tt::tt_metal::CoreRangeSet;
     using tt::tt_metal::DataMovementConfigDescriptor;
     using tt::tt_metal::DataMovementProcessor;
-    using tt::tt_metal::DataType;
     using tt::tt_metal::KernelDescriptor;
     using tt::tt_metal::NOC;
     using tt::tt_metal::NOC_MODE;
@@ -56,54 +55,15 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     const auto& output_tensor = tensor_args.output_tensor;
     const auto& output_indices_tensor = tensor_args.output_indices_tensor;
 
-    TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "input_tensor must be BFLOAT16");
-    TT_FATAL(bias_tensor.dtype() == DataType::BFLOAT16, "bias_tensor must be BFLOAT16");
-    TT_FATAL(output_tensor.dtype() == DataType::BFLOAT16, "output_tensor must be BFLOAT16");
-
-    TT_FATAL(input_tensor.is_sharded(), "input_tensor must be sharded");
-    TT_FATAL(bias_tensor.is_sharded(), "bias_tensor must be sharded");
-    TT_FATAL(input_indices_tensor.is_sharded(), "input_indices_tensor must be sharded");
-    TT_FATAL(output_tensor.is_sharded(), "output_tensor must be sharded");
-    TT_FATAL(output_indices_tensor.is_sharded(), "output_indices_tensor must be sharded");
-
+    // Inputs are already validated in validate_on_program_cache_miss (dtypes, sharding, shard shapes/grids/
+    // orientations, tiles, num_blocks bounds, grouped→single-block), which the framework runs before this
+    // builder on a cache miss. So this function assumes valid inputs and only constructs the descriptor —
+    // keep just the values the construction needs.
     const auto& input_shard = input_tensor.shard_spec().value();
-    const auto& bias_shard = bias_tensor.memory_config().shard_spec().value();
-    const auto& in_indices_shard = input_indices_tensor.memory_config().shard_spec().value();
-    const auto& output_shard = output_tensor.shard_spec().value();
-    const auto& out_indices_shard = output_indices_tensor.memory_config().shard_spec().value();
-
     CoreRangeSet all_cores = input_shard.grid;
 
     // num_blocks = how many 32x32 tiles per input shard (one 256-expert block per tile). 256->1, 512->2.
     const uint32_t num_blocks = (input_shard.shape[0] / 32) * (input_shard.shape[1] / 32);
-    TT_FATAL(num_blocks >= 1, "input shard must hold at least one 32x32 tile");
-    TT_FATAL(num_blocks <= 2, "generalized_moe_gate supports up to 2 blocks (<=512 experts), got {}", num_blocks);
-    // Grouped (DeepSeek) mode runs the single-256-block grouped gate only; the 2-block combine is ungrouped.
-    TT_FATAL(
-        !operation_attrs.grouped || num_blocks == 1,
-        "grouped mode (DeepSeek gate) is single-256-block only; got num_blocks={}",
-        num_blocks);
-
-    TT_FATAL(input_shard.shape == bias_shard.shape, "Input and bias shard shapes must match");
-    TT_FATAL(input_shard.orientation == bias_shard.orientation, "Input and bias shard orientations must match");
-    TT_FATAL(bias_shard.grid.contains(all_cores), "Bias shard grid must contain input shard grid");
-
-    TT_FATAL(
-        in_indices_shard.shape[0] % 32 == 0 && in_indices_shard.shape[1] == 32,
-        "Input-indices shard must be tile-aligned (one 32x32 tile per block; block b holds global ids)");
-    TT_FATAL(
-        input_shard.orientation == in_indices_shard.orientation,
-        "Input and input-indices shard orientations must match");
-    TT_FATAL(in_indices_shard.grid.contains(all_cores), "Input-indices shard grid must contain input shard grid");
-
-    TT_FATAL(output_shard.grid == out_indices_shard.grid, "Output and output-indices shard grids must match");
-    TT_FATAL(output_shard.grid.contains(all_cores), "Output shard grid must contain input compute grid");
-
-    const auto& in_tile = input_tensor.tensor_spec().tile();
-    const auto& out_tile = output_tensor.tensor_spec().tile();
-    TT_FATAL(in_tile == bias_tensor.tensor_spec().tile(), "Input and bias tiles must match");
-    TT_FATAL(in_tile == input_indices_tensor.tensor_spec().tile(), "Input and input-indices tiles must match");
-    TT_FATAL(out_tile == output_indices_tensor.tensor_spec().tile(), "Output tiles must match");
 
     constexpr uint8_t input_cb = 0;
     constexpr uint8_t bias_cb = 1;

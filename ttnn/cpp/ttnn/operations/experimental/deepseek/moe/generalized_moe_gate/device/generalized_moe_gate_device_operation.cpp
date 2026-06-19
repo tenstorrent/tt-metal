@@ -133,6 +133,17 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
         input_shard.shape[0] % 32 == 0 && input_shard.shape[1] % 32 == 0,
         "Input shard must be 32x32 tile-aligned (num_blocks tiles per core)");
     TT_FATAL(output_shard.shape[0] == 32 && output_shard.shape[1] == 32, "Output shard shape must be 32x32");
+
+    // num_blocks = 32x32 tiles per input shard (one 256-expert block per tile): 1 (≤256 experts) or 2 (≤512,
+    // the 2-block combine). The kernel handles at most 2; grouped (DeepSeek) is single-256-block only. The
+    // descriptor builder derives num_blocks the same way for CB sizing and assumes these bounds hold.
+    const uint32_t num_blocks = (input_shard.shape[0] / 32) * (input_shard.shape[1] / 32);
+    TT_FATAL(num_blocks >= 1, "input shard must hold at least one 32x32 tile");
+    TT_FATAL(num_blocks <= 2, "generalized_moe_gate supports up to 2 blocks (<=512 experts), got {}", num_blocks);
+    TT_FATAL(
+        !attrs.grouped || num_blocks == 1,
+        "grouped mode (DeepSeek gate) is single-256-block only; got num_blocks={}",
+        num_blocks);
 }
 
 GeneralizedMoeGateDeviceOperation::spec_return_value_t GeneralizedMoeGateDeviceOperation::compute_output_specs(
