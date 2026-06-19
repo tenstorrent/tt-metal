@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -46,6 +49,7 @@ void kernel_main() {
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
+    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
@@ -56,6 +60,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
@@ -69,16 +74,20 @@ void kernel_main() {
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
 
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb0(cb0_id);
+
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_forward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_backward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_seminc = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -114,6 +123,7 @@ void kernel_main() {
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
 
+        // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
@@ -125,8 +135,8 @@ void kernel_main() {
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
-        cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(num_tiles_to_read_this_core);
+        size_t l1_read_addr = cb0.get_read_ptr();
 
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
@@ -141,7 +151,7 @@ void kernel_main() {
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
 
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
+        cb0.pop_front(num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
         if (shard_tile_id >= num_tiles_per_core) {
@@ -173,18 +183,21 @@ void kernel_main() {
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
+        // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address
         noc_semaphore_wait_min(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
     }
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
+        // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
-    noc_async_full_barrier();
+    noc_obj.async_full_barrier();
 }
