@@ -59,12 +59,20 @@ _TP4_MESH_SHAPE = (1, 4)
 @pytest.fixture(scope="module")
 def tp4_mesh():
     """Open a (1,4) mesh on chips 8-11 for the TP=4 reference run."""
+    ttnn.set_fabric_config(
+        ttnn.FabricConfig.FABRIC_1D,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+    )
     mesh = ttnn.open_mesh_device(
         ttnn.MeshShape(*_TP4_MESH_SHAPE),
-        mesh_type=ttnn.MeshType.Ring,
+        l1_small_size=24576,
+        num_command_queues=2,
     )
     yield mesh
     ttnn.close_mesh_device(mesh)
+    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 # ---------------------------------------------------------------------------
