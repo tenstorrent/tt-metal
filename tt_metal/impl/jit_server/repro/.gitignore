@@ -1,11 +1,6 @@
-# Transient per-run cold JIT cache (multi-GB, recreated each run by repro_warmpass.sh).
-cold_cache_*/
-
-# Raw warm-pass run logs (1-2.5MB each of pytest node-id spam). The committed
-# evidence_*.txt extracts carry the meaningful markers; regenerate raw logs by re-running.
-run_all_*.log
-verify_*.log
-
-# Full 5041-case node-id list (1.2MB, >500KB hook limit). Regenerated on demand by
-# repro_warmpass.sh via collect_ids.py. first500_nodeids.txt (committed) is the small sample.
+# Transient outputs of repro_farm_vs_inline.sh — regenerated each run, never commit.
+# The committed-ready evidence lives in the *_results.csv files.
+fvi_cache/
+fvi_ccache_probe/
+*.log
 all_golden_nodeids.txt
