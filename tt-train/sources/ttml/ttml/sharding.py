@@ -41,23 +41,24 @@ class Sharding:
         return self._placements is None or not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)
 
     def derive_mapper(self):
-        """`TensorToMesh` distributing a full host array onto the mesh, or None if fully replicated."""
-        if self.is_fully_replicated:
+        """`TensorToMesh` distributing a full host array onto the mesh, or None on a unit mesh."""
+        if self._placements is None:
             return None
         return ttnn.create_mesh_mapper(_mesh_device(), ttnn.MeshMapperConfig(self._placements))
 
     def gather(self, tensor: ttml.autograd.Tensor):
-        """Full float32 host array for `tensor`: gather the shards, then drop the replicate dups.
+        """Full host array for `tensor` in its native dtype: gather the shards, then drop the replicate dups.
 
         The mesh composer concatenates every axis (no replicate concept; see `_compose_dims`), so a
         replicated axis comes back duplicated and must be sliced down to one copy here. That coupling
         is why the composer isn't exposed on its own — its raw output is wrong without this slice.
         """
-        if self.is_fully_replicated:
-            return tensor.to_numpy(ttnn.DataType.FLOAT32)
+        dtype = tensor.get_value().dtype
+        if self._placements is None:
+            return tensor.to_numpy(dtype)
         concat_dims, replicate_dims = self._compose_dims()
         composer = ttnn.create_mesh_composer(_mesh_device(), ttnn.MeshComposerConfig(concat_dims))
-        arr = tensor.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+        arr = tensor.to_numpy(dtype, composer=composer)
         if replicate_dims:  # keep one canonical copy of each stacked replicate axis
             slicer = [slice(None)] * arr.ndim
             for dim, size in replicate_dims:
