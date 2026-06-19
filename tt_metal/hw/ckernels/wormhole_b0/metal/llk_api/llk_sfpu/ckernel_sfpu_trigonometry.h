@@ -880,16 +880,13 @@ inline void calculate_acosh() {
         //
         // arg = x - 1 is the common term in every region, so it is computed once
         // and the per-region sqrt term is accumulated onto it:
-        //   x >= 2^28   -> arg = x - 1            (large; acosh ~= LN2 + log1p(x-1),
-        //                                          the +LN2 is added after log1p)
-        //   1 < x < 1.5 -> arg += sqrt((x-1)(x+1))  (small; avoids x^2-1 cancellation)
-        //   else        -> arg += sqrt(x^2 - 1)     (safe reconstruction)
-        // The large region falls through both predicated blocks and keeps arg = x-1.
+        //   x >= 2^28        -> arg = x - 1                 (large; acosh ~= LN2 +
+        //                                                    log1p(x-1), +LN2 added later)
+        //   1 < x < 2^28     -> arg += sqrt((x-1)(x+1))     (sqrt(x^2-1) without the
+        //                                                    x^2-1 cancellation)
+        // The large region falls through the predicated block and keeps arg = x-1.
         sfpi::vFloat arg = inp - sfpi::vConst1;
-        v_if(inp < 1.5f) {
-            arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(arg * (inp + sfpi::vConst1));
-        }
-        v_elseif(inp < LOG1P_LARGE) {
+        v_if(inp < LOG1P_LARGE) {
             arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>((inp + sfpi::vConst1) * arg);
         }
         v_endif;
