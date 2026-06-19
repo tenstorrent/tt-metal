@@ -6,6 +6,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <umd/device/cluster.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -157,27 +158,92 @@ void send_eth_msg_to_links(const std::vector<ResetLink>& links, const BHEthMsg& 
     }
 }
 
-void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-
+void down_links_bh(const std::vector<ResetLink>& links_to_reset) {
     const BHEthMsg ETH_MSG_PORT_DOWN = {
         tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION,
         {2, 0, 0},
         "Sending ETH_MSG_PORT_ACTION to bring ports down on all links"};
 
+    // Send port down messages to all links. Ports stay down until reinitialized or the chip is reset.
+    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_DOWN);
+}
+
+void up_links_bh(const std::vector<ResetLink>& links_to_reset) {
     const BHEthMsg ETH_MSG_PORT_REINIT = {
         tt_metal::FWMailboxMsg::ETH_MSG_PORT_REINIT_MACPCS,
         {1, 2, 0},
         "Sending ETH_MSG_PORT_REINIT_MACPCS to reinitialize MAC/PCS on all links"};
 
+    // Send port reinit messages to all links
+    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_REINIT);
+}
+
+void down_links_bh_unsafe() {
+    // Build a standalone HAL purely to resolve the Blackhole ETH FW mailbox layout and message
+    // encodings. This touches no device -- it is host-side architecture description only.
+    const tt::tt_metal::Hal hal(
+        tt::ARCH::BLACKHOLE,
+        /*is_base_routing_fw_enabled=*/false,
+        /*enable_2_erisc_mode=*/false,
+        /*profiler_dram_bank_size_per_risc_bytes=*/0,
+        /*enable_dram_backed_cq=*/false);
+
+    // Construct our own UMD cluster. The constructor maps the device BARs and sets up read/write
+    // access, but does NOT call start_device(), so it never takes the CHIP_IN_USE mutex that gates
+    // the safe path. That is exactly what lets this run while a test process holds the chip.
+    tt::umd::Cluster cluster;
+
+    // Mirror the ETH_MSG_PORT_DOWN message used by down_links_bh(): ETH_MSG_PORT_ACTION with the
+    // "bring port down" argument. The links stay down until reinitialized or the chip is reset.
+    const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
+    const auto msg_val = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION);
+    const auto mailbox_addr = hal.get_eth_fw_mailbox_address(0);
+    const auto first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(0, 0);
+    const std::size_t mailbox_arg_count = hal.get_eth_fw_mailbox_arg_count();
+
+    std::vector<uint32_t> args = {2, 0, 0};
+    args.resize(mailbox_arg_count, 0);
+    const std::vector<uint32_t> msg_vec = {call | msg_val};
+
+    log_warning(
+        tt::LogDistributed,
+        "UNSAFE: writing ETH_MSG_PORT_ACTION (port down) directly to all links without acquiring the "
+        "CHIP_IN_USE lock");
+
+    // Only target local MMIO chips: without start_device() there is no ethernet routing, so remote
+    // chips are unreachable from here anyway.
+    for (auto chip_id : cluster.get_target_mmio_device_ids()) {
+        const auto& soc_desc = cluster.get_soc_descriptor(chip_id);
+        TT_FATAL(
+            soc_desc.arch == tt::ARCH::BLACKHOLE,
+            "down_links_bh_unsafe only supports Blackhole (chip {} arch: {})",
+            chip_id,
+            soc_desc.arch);
+        const uint32_t num_eth_channels = soc_desc.get_num_eth_channels();
+        for (uint32_t channel = 0; channel < num_eth_channels; channel++) {
+            const auto core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::TRANSLATED);
+            log_warning(
+                tt::LogDistributed,
+                "  UNSAFE port-down chip " + std::to_string(chip_id) + " channel " + std::to_string(channel));
+            // Write args first, then the call word, matching send_eth_msg() ordering so the FW never
+            // acts on a half-populated arg window. No wait-for-ready/done: this is fire-and-forget.
+            cluster.write_to_device(args.data(), args.size() * sizeof(uint32_t), chip_id, core, first_arg_addr);
+            cluster.write_to_device(msg_vec.data(), msg_vec.size() * sizeof(uint32_t), chip_id, core, mailbox_addr);
+        }
+    }
+}
+
+void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
     // Send port down messages to all links
-    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_DOWN);
+    down_links_bh(links_to_reset);
 
     // Barrier to ensure all hosts have brought their links down before reinitialization
     distributed_context.barrier();
 
     // Send port reinit messages to all links
-    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_REINIT);
+    up_links_bh(links_to_reset);
 }
 
 // ============================================================================

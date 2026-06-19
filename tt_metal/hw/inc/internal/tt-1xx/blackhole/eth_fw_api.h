@@ -7,6 +7,14 @@
 #include <cstddef>
 #include <cstdint>
 
+#if defined(COMPILE_FOR_AERISC)
+// For WATCHER_RING_BUFFER_PUSH(), used by recover_eth_link_if_down(). The macro is a no-op unless the
+// watcher is enabled (TT_METAL_WATCHER), so this costs nothing in production. Guarded to device builds
+// because host translation units (e.g. the HAL) also include this header and lack the ring-buffer
+// include path / build flags.
+#include "api/debug/ring_buffer.h"
+#endif
+
 #define MEM_SYSENG_ETH_MSG_STATUS_MASK 0xFFFF0000
 #define MEM_SYSENG_ETH_MSG_CALL 0xCA110000
 #define MEM_SYSENG_ETH_MSG_DONE 0xD0E50000
@@ -352,10 +360,19 @@ static void update_boot_results_eth_link_status_check() {
 #endif
 }
 
+// Marker pushed to the watcher ring buffer when ERISC0 detects its link is down and invokes FW
+// recovery. The 0xD0... prefix reads as "link DOWN" in the watcher dump (cf. the existing
+// MEM_SYSENG_ETH_MSG_DONE 0xD0E5 convention). One entry is pushed per recovery invocation, so a
+// persistently-down link shows repeated codes. The ring buffer is per-eth-core, so the watcher log
+// already identifies which core observed the down event.
+constexpr uint32_t ETH_LINK_DOWN_RING_BUF_CODE = 0xD09D0000;
+
 // This should only be run on ERISC0, and ERISC1 should not be sending/receiving traffic while this is called.
 static void recover_eth_link_if_down() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     if (!is_link_up()) {
+        // Record the down-link/recovery event for the watcher (no-op unless the watcher is enabled).
+        WATCHER_RING_BUFFER_PUSH(ETH_LINK_DOWN_RING_BUF_CODE);
         reinterpret_cast<void (*)()>(
             (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr))();
     }

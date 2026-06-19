@@ -31,6 +31,27 @@ struct ResetLink {
 };
 
 // ============================================================================
+// Blackhole-specific helpers (write to mailbox)
+// ============================================================================
+
+// Bring Blackhole ethernet ports DOWN and leave them down (no reinit). The links stay down until
+// up_links_bh() / reset_links_bh() is called or the chip is reset (e.g. tt-smi -r).
+void down_links_bh(const std::vector<ResetLink>& links_to_reset);
+
+// Bring previously-downed Blackhole ethernet ports back UP by reinitializing MAC/PCS.
+void up_links_bh(const std::vector<ResetLink>& links_to_reset);
+
+// UNSAFE: Bring every local Blackhole ethernet link DOWN by writing the port-down message directly
+// through a private UMD cluster, WITHOUT acquiring UMD's CHIP_IN_USE lock. This is a deliberate
+// fault-injection tool: it lets links be brought down while another process (e.g. a running fabric
+// test) already holds the chip. Because two processes then poke the same chip concurrently this is
+// inherently racy and must only be used for exercising link recovery, never in normal operation.
+// Unlike down_links_bh(), this constructs its own cluster (no MetalContext), enumerates links from
+// the SoC descriptor, and only fires the port-down message -- it does not wait for completion or
+// reinitialize anything.
+void down_links_bh_unsafe();
+
+// ============================================================================
 // Consolidated helpers (should be arch agnostic)
 // ============================================================================
 

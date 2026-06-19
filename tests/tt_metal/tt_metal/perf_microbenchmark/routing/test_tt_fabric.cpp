@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <map>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <random>
@@ -16,9 +17,14 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
+#include <thread>
 
 #include "tt_fabric_test_context.hpp"
 #include "tt_fabric_test_constants.hpp"
+
+#include "tt_metal/impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
+#include <llrt/hal.hpp>
 
 using tt::tt_fabric::fabric_tests::DEFAULT_BUILT_TESTS_DUMP_FILE;
 using tt::tt_fabric::fabric_tests::OUTPUT_DIR;
@@ -36,6 +42,105 @@ const std::unordered_map<std::pair<Topology, std::string>, FabricConfig, tt::tt_
         {{Topology::Torus, "Y"}, FabricConfig::FABRIC_2D_TORUS_Y},
         {{Topology::Torus, "XY"}, FabricConfig::FABRIC_2D_TORUS_XY},
 };
+
+namespace {
+
+// Host-side ethernet link monitor. While a test runs, a background thread polls the PCS_STATUS debug
+// register of every active ethernet core and logs up<->down transitions, giving a host-side timeline
+// of link drops to correlate with the device-side watcher ring buffer (ETH_LINK_DOWN_RING_BUF_CODE).
+//
+// Opt-in via TT_FABRIC_MONITOR_ETH_LINKS, since the extra register reads can perturb the bandwidth
+// numbers this perf benchmark measures. The thread lives entirely inside this process: killing the
+// test (Ctrl-C / SIGKILL) tears it down with the process, so it can never leak or hold the chip.
+class EthLinkMonitor {
+public:
+    // Reads PCS_STATUS the same way the device's is_link_up() does (eth_fw_api.h): value 1 == link up.
+    static constexpr uint32_t PCS_STATUS_LINK_UP = 1;
+
+    void start() {
+        if (getenv("TT_FABRIC_MONITOR_ETH_LINKS") == nullptr) {
+            return;
+        }
+        stop_.store(false);
+        thread_ = std::thread([this] { run(); });
+    }
+
+    void stop_and_join() {
+        if (thread_.joinable()) {
+            stop_.store(true);
+            thread_.join();
+        }
+    }
+
+    ~EthLinkMonitor() { stop_and_join(); }
+
+private:
+    struct MonitoredCore {
+        tt::ChipId chip_id;
+        CoreCoord virtual_core;
+        CoreCoord logical_core;
+    };
+
+    void run() {
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+        if (!hal.get_supports_eth_debug_regs()) {
+            log_warning(tt::LogTest, "EthLinkMonitor: PCS_STATUS debug reg unsupported on this arch; disabled.");
+            return;
+        }
+        const uint32_t pcs_status_addr = hal.get_eth_debug_reg_addr(tt::tt_metal::EthDebugReg::PCS_STATUS);
+
+        // Enumerate active eth cores once and seed state as "unknown" so the first sample isn't logged.
+        std::vector<MonitoredCore> cores;
+        for (auto chip_id : cluster.all_chip_ids()) {
+            for (const auto& logical_core : control_plane.get_active_ethernet_cores(chip_id)) {
+                const auto virtual_core =
+                    cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, tt::CoreType::ETH);
+                cores.push_back({chip_id, virtual_core, logical_core});
+            }
+        }
+        log_info(tt::LogTest, "EthLinkMonitor: polling PCS_STATUS on {} active ethernet core(s).", cores.size());
+
+        std::vector<int> prev_up(cores.size(), -1);  // -1 unknown, 1 up, 0 down
+        while (!stop_.load()) {
+            for (size_t i = 0; i < cores.size(); ++i) {
+                uint32_t pcs_status = 0;
+                try {
+                    cluster.read_reg(
+                        &pcs_status, tt_cxy_pair(cores[i].chip_id, cores[i].virtual_core), pcs_status_addr);
+                } catch (...) {
+                    continue;  // Core temporarily unreachable (e.g. remote over a downed link); skip this round.
+                }
+                const int up = (pcs_status == PCS_STATUS_LINK_UP) ? 1 : 0;
+                if (prev_up[i] != -1 && up != prev_up[i]) {
+                    log_warning(
+                        tt::LogTest,
+                        "ETH LINK {}: device {} eth core {} (logical {}), PCS_STATUS={:#x}",
+                        up ? "UP (recovered)" : "DOWN",
+                        cores[i].chip_id,
+                        cores[i].virtual_core.str(),
+                        cores[i].logical_core.str(),
+                        pcs_status);
+                }
+                prev_up[i] = up;
+            }
+            // Sleep in small slices so stop_ is observed promptly.
+            for (int slept_ms = 0; slept_ms < kPollIntervalMs && !stop_.load(); slept_ms += kSleepSliceMs) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kSleepSliceMs));
+            }
+        }
+    }
+
+    static constexpr int kPollIntervalMs = 200;
+    static constexpr int kSleepSliceMs = 20;
+
+    std::atomic<bool> stop_{false};
+    std::thread thread_;
+};
+
+}  // namespace
 
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -267,11 +372,18 @@ int main(int argc, char** argv) {
                 // multi-host barrier to synchronize before starting the test (as we could be clearing out addresses)
                 fixture->barrier();
 
+                // Watch ethernet links for the duration of this test (opt-in via TT_FABRIC_MONITOR_ETH_LINKS).
+                // Devices/fabric are up by now, so active eth cores can be enumerated and polled.
+                EthLinkMonitor eth_link_monitor;
+                eth_link_monitor.start();
+
                 log_info(tt::LogTest, "Launching programs");
                 test_context.launch_programs();
 
                 log_info(tt::LogTest, "Waiting for programs");
                 test_context.wait_for_programs_with_progress();
+
+                eth_link_monitor.stop_and_join();
 
                 if (test_context.did_last_test_hang()) {
                     log_error(

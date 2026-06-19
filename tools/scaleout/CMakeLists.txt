@@ -14,6 +14,12 @@ add_executable(
     fabric_manager/utils/fabric_manager_utils.cpp
 )
 
+add_executable(
+    run_link_control
+    validation/run_link_control.cpp
+    validation/utils/ethernet_link_api.cpp
+)
+
 # Library target
 add_library(scaleout_tools OBJECT)
 add_library(TT::ScaleoutTools ALIAS scaleout_tools)
@@ -70,6 +76,23 @@ target_include_directories(run_cluster_validation SYSTEM PRIVATE ${CMAKE_CURRENT
 target_include_directories(run_fabric_manager PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_include_directories(run_fabric_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(run_fabric_manager SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_include_directories(run_link_control PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
+# PROJECT_SOURCE_DIR is the repo root, needed for the "tools/scaleout/..." style include.
+target_include_directories(
+    run_link_control
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_include_directories(run_link_control SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    run_link_control
+    PRIVATE
+        enchantum::enchantum
+        tt_metal
+)
 
 target_link_libraries(
     scaleout_tools

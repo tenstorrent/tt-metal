@@ -1,0 +1,23 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 4
+
+Tests:
+  ### NEIGHBOR EXCHANGE BANDWIDTH TESTS ###
+  - name: "NeighborExchangeUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+
+    parametrization_params:
+      num_links: [2]
+      ntype: [unicast_write]
+      size: [4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 4294967295
+
+    patterns:
+      - type: neighbor_exchange
