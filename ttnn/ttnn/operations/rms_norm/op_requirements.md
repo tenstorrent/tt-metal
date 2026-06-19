@@ -323,7 +323,7 @@ the per-core PASS-1 reduce is a single `square` + single `reduce` over the full
 shard (no `num_chunks` / `reduce_block` / `Accumulate` loop), the kernel is simpler,
 and the full suite is non-regressed.
 
-### [ ] Refinement 6 — Performance: measure (tracy), tune the heuristic, exploit the forgotten knob
+### [~] Refinement 6 — Performance: measure (tracy), tune the heuristic, exploit the forgotten knob
 
 **Goal**: make the op **fast**, measured, not assumed. Concretely:
 **minimize per-kernel device time, maximize active cores** (subject to that
@@ -405,3 +405,42 @@ documented and reproducible; (b) a perf-test/baseline table exists for both regi
 OOM kept as a hard floor; (e) measured per-kernel device time improves over the
 R5 baseline on the wide-W and many-row representative shapes, with numbers in
 `changelog.md`.
+
+### [ ] Refinement 7 — Row-blocking (BLOCK_HEIGHT>1) for Regime A many-row, behind a `bh` CT arg
+
+**Goal**: implement the deferred "forgotten knob" from Refinement 6 — process `bh`
+tile-rows per work-unit in Regime A (the grid-saturated many-row case), to amortize
+per-row helper init over a taller block. **No SUPPORTED axis** (non-registry, perf).
+
+**What R6 already established (don't re-measure from scratch)**:
+- Measured ceiling is **~10%** on the current kernel: a Regime-A rows/core scaling
+  sweep (W=256) showed a near-flat marginal ~10-11us/row — the per-row cost is
+  data-movement/compute bound, not init bound, so row-blocking only recovers the
+  per-helper init overhead. (This is why R6 prioritized K-tuning, which gave 2-6x,
+  over row-blocking.)
+- Hard design constraint (op_design.md:229-232): `BLOCK_HEIGHT` may grow **only after
+  every core already has work** — it must NOT reduce active core count. So it applies
+  to Regime A when `Ht_total > total_cores` (cores already saturated, each owns
+  multiple rows); group a core's owned rows into blocks of `bh`.
+
+**Exact next levers for the implementer**:
+1. Thread a `bh` compile-time arg through the unified compute kernel
+   (`rms_norm_compute.cpp`), defaulting to 1 so all existing paths are byte-identical.
+   The reduce `ckl::reduce<SUM,REDUCE_ROW>` over a `bh×Wt` block must emit `bh` output
+   tiles (one Σx² column-vector per row) via `ReduceInputBlockShape::of(bh, Wt)`;
+   FINALIZE produces `bh` recip tiles; PASS-2's Col-broadcast multiply must index the
+   per-row recip with a `TileOffset` (row r uses recip tile r).
+2. Size `cb_input_resident` / `cb_squared` / `cb_partial_sumsq` / `cb_recip_rms` to
+   `bh*` their current page counts in `_regime_a_descriptor` (and Regime B's
+   `cb_partials_gathered`/`cb_local_sumsq` if extending there). Verify against the
+   byte-aware `L1_RESIDENT_BUDGET_BYTES` floor R6 added.
+3. Host heuristic: pick `bh` = rows-per-core (or a divisor) only when
+   `Ht_total > total_cores`, bounded by L1 (the byte budget) AND by DEST capacity
+   (`_dest_limit(cfg)`, halved when fp32_dest_acc_en). Measure with
+   `test_rms_norm_perf.py` (extend it with a bh sweep).
+4. Bound the blast radius: land it for **TILE Regime A no-gamma first** (simplest),
+   keep `bh=1` everywhere else, and gate every change on golden staying **1683/1683**.
+
+**Done when**: row-blocking implemented behind `bh`, active core count never reduced,
+golden 1683/1683 preserved, and the measured many-row Regime-A device time improves
+(expected modest, ~10%, per R6's ceiling measurement) — numbers in changelog.md.

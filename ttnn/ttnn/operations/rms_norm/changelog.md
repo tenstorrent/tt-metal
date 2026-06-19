@@ -283,3 +283,87 @@
   - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_reduce_simplification.py` — 32
     cases targeting shards WIDER than DEST_AUTO_LIMIT (the shapes the old kernel chunked):
     all-ones exactness + random-vs-torch PCC across both regimes, TILE + ROW_MAJOR, ±gamma.
+
+## Refinement 6 — Performance: measure (tracy), tune the heuristic, exploit the forgotten knob
+- **Date**: 2026-06-19
+- **Status**: PARTIAL (`[~]`). Sub-tasks 1, 2, 4, 5 fully landed with large measured
+  wins; sub-task 3 (row-blocking / "the forgotten knob") characterized at depth and
+  deferred with a precise follow-up (Refinement 7 below). The measured wins from the
+  heuristic + K tuning (up to 6.1x) substantially exceed row-blocking's measured
+  ceiling (~10%), so the high-value work is done; row-blocking remains for full [x].
+- **What was done**:
+  - **(1) Tracy / device-profiler measurement flow (documented + reproducible).**
+    Per-op on-device kernel time is read with `ttnn.ReadDeviceProfiler(device)` (which
+    finishes the command queue) followed by `ttnn.get_latest_programs_perf_data()`,
+    summing each program's `"DEVICE KERNEL DURATION [ns]"` — exactly what the eval
+    harness's `eval/profiling.py` does. Requires a profiler build and, set BEFORE
+    device init: `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+    TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1`.
+    Run: `TT_METAL_DEVICE_PROFILER=1 ... scripts/run_safe_pytest.sh
+    tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf.py` (the test skips
+    cleanly when the profiler env is absent).
+  - **(2) Perf tests + baseline table.** `test_rms_norm_perf.py` sweeps Regime A/B ×
+    {bf16, fp32} × {±gamma} × {TILE, ROW_MAJOR}, writes `perf_results.md`, and validates
+    the A/B crossover via the `_FORCE_REGIME` measurement hook (both layouts).
+  - **(4) A/B crossover — measured, with a hard OOM floor (replaces "B whenever it
+    adds cores").** Two-tier decision: (a) OOM floor — a row that does NOT fit one
+    core's L1 MUST W-split (Regime B); made **byte-aware** (`_row_fits_l1` counts
+    input + R5-enlarged cb_squared + gamma in their actual tile-byte formats — the old
+    560-*tile* count was bf16-only and undercounted fp32 by 2x; this also fixed a
+    latent fp32+gamma single-core OOM the crossover exposed). (b) Perf crossover — a
+    row that fits L1 goes B only if the split adds cores AND `Wt >= REGIME_B_MIN_WT`.
+    Also fp32_acc-aware (a precision floor): with `fp32_dest_acc_en=False` Regime A's
+    single wide reduce accumulates in bf16 DEST and loses precision, so wide rows are
+    kept in B (root-caused on a test_translated Frobenius near-miss at Wt=128).
+  - **(5) In-op tuning of the W-split factor K — the largest single win.** `_select_k`
+    no longer **maximizes** K. The all-gather cost grows ~O(K) (K mcasts + a K-tile
+    combine) while the per-core reduce shrinks ~O(Wt/K), so device time ≈ Wt/K + c·K;
+    "maximize K" was the WORST choice (measured (1,1,32,8192): K=64→109.8us vs
+    K=16→33.9us, **3.2x**). `_select_k` now picks the K minimizing the proxy
+    `(Wt//K + K)` among byte-budget-feasible, grid-fitting, full-width-rectangular
+    candidates (tie-break smaller K). Because K-tuned B is ~6x faster, the crossover
+    collapsed from ~160 to **16** for both layouts (B wins from Wt>=16; Regime A only
+    wins for a single-tile-wide row, Wt=8/W=256).
+- **Measured device-kernel-time improvement (R5 baseline → R6 final, bf16, best of 7,
+  8x8 Wormhole, no_gamma)**:
+
+  | shape | TILE R5 → R6 | speedup | RM R5 → R6 | speedup |
+  |-------|--------------|---------|------------|---------|
+  | (1,1,32,2048)  | 103.8 → 17.0 us | 6.1x | 107.1 → 20.4 us | 5.3x |
+  | (1,1,32,4096)  | 104.7 → 23.0 us | 4.6x | 108.7 → 29.1 us | 3.7x |
+  | (1,1,32,8192)  | 109.9 → 34.1 us | 3.2x | 111.1 → 38.7 us | 2.9x |
+  | (1,1,32,16384) | 117.4 → 48.0 us | 2.4x | 118.5 → 56.5 us | 2.1x |
+  | (1,1,2048,256) | 17.8 → 17.8 us  | 1.0x | 19.0 → 18.9 us  | 1.0x |
+  | (1024,1024)    | 38.4 → 38.2 us  | 1.0x | 41.9 → 41.9 us  | 1.0x |
+
+  Wide-W (Regime B) shapes are 2.1–6.1x faster; many-row Regime A shapes are unchanged
+  (no regression). The win is dominated by K-tuning + the lowered crossover.
+- **Accuracy / non-regression**: SUPPORTED unchanged (non-registry refinement). Golden
+  **1683/1683** (1782 with regression+translated), `test_rms_norm_precision_matrix`
+  **649/649** (+128 skipped), `test_rms_norm_layout_matrix`/`regime_b`/`rm_regime_b`/
+  `acceptance`/`reduce_simplification` all green (251), `test_rms_norm_perf` 5/5.
+  0 xpass-drift, 0 supported_fail.
+- **Sub-task 3 deferred — row-blocking (BLOCK_HEIGHT>1), characterized at depth**:
+  Measured the ceiling with an isolated Regime-A rows/core scaling sweep (W=256,Wt=8):
+  1 row/core=17.8us, then a near-FLAT marginal ~10-11us/row (2→13.3, 4→10.0, 8→10.4,
+  16→11.1). The per-row cost is dominated by data movement + compute over the row's
+  tiles, NOT by per-helper init, so row-blocking (which only amortizes init across a
+  taller block) has a **~10% ceiling** on this kernel — far below the 2-6x already won
+  by K-tuning. It is also a real kernel rewrite (the unified compute's reduce must
+  emit `bh` output tiles and PASS-2 must broadcast a per-row recip), with golden-1683
+  regression risk. Given the poor ROI vs the delivered wins, it is deferred to
+  Refinement 7 (filed in op_requirements.md) rather than rushed. Hard design
+  constraint preserved for that work: BLOCK_HEIGHT may grow only AFTER every core has
+  work (must not reduce active cores).
+- **Issues encountered (all root-caused + fixed)**:
+  - fp32+gamma single-core OOM exposed by the crossover → byte-aware OOM floor
+    (`_row_fits_l1`, counting cb_squared + dtype bytes).
+  - test_translated Frobenius near-miss (Wt=128 TILE, fp32_acc=False) when a wide row
+    landed in Regime A → fp32_acc-aware precision floor in the crossover.
+  - Discovered "maximize K" was pessimal (3x slower than K=16) → proxy-min-K tuning.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf.py` — device-time
+    sweep → `perf_results.md`, plus A/B crossover validation (both layouts) via the
+    `_FORCE_REGIME` hook.
+  - `tests/ttnn/unit_tests/operations/rms_norm/perf_results.md` — committed baseline
+    table (regenerated by the test).

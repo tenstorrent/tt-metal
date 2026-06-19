@@ -44,6 +44,10 @@ CB_LOCAL_SUMSQ = 28
 CB_GAMMA_RM = 3
 
 # Resident budget in tiles (≈1.12 MB for bf16), per op_design.md P3.
+# SUPERSEDED by the byte-aware L1_RESIDENT_BUDGET_BYTES (Refinement 6): the OOM floor
+# and _select_k now bound the resident footprint in *bytes* (dtype-correct, and
+# including R5's enlarged cb_squared) rather than a bf16-only tile count. Kept only as
+# documentation of the original P3 budget; no longer consulted by any decision.
 RESIDENT_BUDGET_TILES = 560
 
 # --- Refinement 6: A-vs-B crossover (measured, not assumed) ---------------------
