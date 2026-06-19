@@ -614,7 +614,7 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     return s;
 }
 
-// Emits args::/dfb::/sem::/ta:: namespaces into the JIT wrapper, replacing
+// Emits args::/dfb::/sem::/tensor:: namespaces into the JIT wrapper, replacing
 // kernel_args_generated.h + kernel_bindings_generated.h that upstream's JIT
 // build produces. Must stay text-equivalent to genfiles.cpp's
 // write_kernel_{args,bindings}_generated_header.
@@ -673,13 +673,13 @@ static void emit_metal2_namespaces(
         f << "}  // namespace sem\n";
     }
     if (!s.ta_accessors.empty()) {
-        f << "namespace ta {\n";
+        f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {
             f << "using " << ta.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
               << ta.cta_offset << "u, " << ta.addr_crta_offset << "u>;\n";
             f << "constexpr " << ta.name << "_t " << ta.name << "{};\n";
         }
-        f << "}  // namespace ta\n";
+        f << "}  // namespace tensor\n";
     }
 
     // Vararg helpers — always emitted for Metal 2.0 kernels (mirrors

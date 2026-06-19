@@ -100,6 +100,8 @@ run_t3000_ttnn_tests() {
   # Disabled by issue #45305: DistributedTensorOpIfTest and MatmulOpIfTest failing deterministically
   ./build/test/ttnn/unit_tests_ttnn --gtest_filter="-DistributedTensorOpIfTest/*:QueryOpConstraints/MatmulOpIfTest.Matmul/2"
   ./build/test/ttnn/unit_tests_ttnn_tensor
+  # Runtime tensor (HostTensor/MeshTensor) tests migrated out of unit_tests_ttnn_tensor into the dedicated tt_metal unit_tests_tensor binary
+  ./build/test/tt_metal/unit_tests_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
