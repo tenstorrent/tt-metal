@@ -178,7 +178,7 @@
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-4-119B-2603
     export MESH_DEVICE=P150x8
     python models/experimental/mistral_small_4_119b/demo/demo_multimodal.py \
-      --n-text-layers 36 --n-vision-layers 24 --image-max-side 512 --max-new-tokens 512
+      --warmup --n-text-layers 36 --n-vision-layers 24 --image-max-side 512 --max-new-tokens 512
   skus:
     bh_loudbox:
       timeout: 60
