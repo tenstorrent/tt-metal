@@ -92,33 +92,33 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     eps_bits = _f32_bits(epsilon)
 
     resident_tiles = Wt + (Wt if has_gamma else 0)
-    regime_a = resident_tiles <= RESIDENT_BUDGET_TILES
+    row_fits = resident_tiles <= RESIDENT_BUDGET_TILES
 
-    if regime_a:
+    # Grid-aware heuristic (op_design.md "Grid-aware host heuristic"):
+    #   - Regime A only when it already saturates the grid (Ht_total >= total_cores)
+    #     AND a full row fits L1.
+    #   - Otherwise prefer Regime B (W-split) when a rectangular partition exists that
+    #     ADDS cores over what Regime A would use; else fall back to Regime A.
+    if Ht_total >= total_cores and row_fits:
         return _regime_a_descriptor(
-            input_tensor,
-            output_tensor,
-            gamma,
-            has_gamma,
-            cfg,
-            Wt,
-            Ht_total,
-            total_cores,
-            inv_W_bits,
-            eps_bits,
+            input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, total_cores, inv_W_bits, eps_bits
         )
-    return _regime_b_descriptor(
-        input_tensor,
-        output_tensor,
-        gamma,
-        has_gamma,
-        cfg,
-        Wt,
-        Ht_total,
-        grid,
-        total_cores,
-        inv_W_bits,
-        eps_bits,
+
+    K = _select_k(Wt, Ht_total, grid, total_cores, has_gamma)
+    regime_a_cores = min(Ht_total, total_cores)
+    if K is not None and Ht_total * K > regime_a_cores:
+        return _regime_b_descriptor(
+            input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, grid, total_cores, inv_W_bits, eps_bits
+        )
+
+    # Documented clean fallback: row-parallel on min(Ht_total, total_cores) cores.
+    if not row_fits:
+        raise NotImplementedError(
+            f"rms_norm: row (Wt={Wt}, gamma={has_gamma}) exceeds L1 budget and no rectangular "
+            f"Regime B partition exists for row_groups={Ht_total}, grid=({grid.x},{grid.y})."
+        )
+    return _regime_a_descriptor(
+        input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, total_cores, inv_W_bits, eps_bits
     )
 
 
