@@ -41,8 +41,8 @@ FORCE_INLINE void enhanced_noc_async_read(
         {.offset_bytes = 0});
 }
 
-[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
 template <uint32_t max_transfer_size, bool only_reads>
+[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
 FORCE_INLINE void enhanced_noc_async_read(
     const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
     Noc noc;
