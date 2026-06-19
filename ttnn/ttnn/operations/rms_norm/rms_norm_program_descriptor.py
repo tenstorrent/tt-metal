@@ -241,19 +241,28 @@ def _regime_a_descriptor(
         if gamma_is_rm:
             cbs.append(cb(CB_GAMMA_RM, gamma_dt, 2 * reduce_block))
 
-    # ---------- reader ----------
+    # ---------- reader (unified; layout_is_rm=0, num_partials=1) ----------
     reader_ct = [
         CB_INPUT_RESIDENT,
         CB_GAMMA,
         CB_SCALER,
+        CB_PARTIAL_SUMSQ,  # cb_local_sumsq (unused; num_partials==1)
+        CB_PARTIALS_GATHERED,  # (unused; num_partials==1)
         Wt,
+        Wt,  # Wt_gamma_resident (== Wt for TILE; no synthetic gamma padding)
         int(has_gamma),
+        1,  # num_partials = 1 (Regime A: no gather)
+        0,  # data_ready_sem_id (unused)
+        0,  # consumed_sem_id (unused)
         gamma_is_rm,
         CB_GAMMA_RM,
         reduce_block,
         num_chunks,
         W,
+        0,  # in_elem (TILE: unused)
         gamma_elem,
+        0,  # layout_is_rm = 0 (TILE)
+        CB_INPUT_RESIDENT,  # cb_rm_in (unused)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -268,8 +277,18 @@ def _regime_a_descriptor(
     gamma_addr = gamma.buffer_address() if has_gamma else 0
 
     for core, (start, count) in zip(cores, splits):
-        reader_rt[core.x][core.y] = [input_tensor.buffer_address(), gamma_addr, start, count]
-        writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start * Wt, count * Wt]
+        # reader: input_addr, gamma_addr, input_page_base, gamma_page_base, start_unit,
+        #         num_units, total_sticks
+        reader_rt[core.x][core.y] = [
+            input_tensor.buffer_address(),
+            gamma_addr,
+            start * Wt,  # input_page_base of first owned row
+            0,  # gamma_page_base (full gamma, no shard)
+            start,  # start_unit (unused for TILE)
+            count,  # num_units = owned rows
+            0,  # total_sticks (RM only)
+        ]
+        writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start * Wt, count * Wt, 0]
         compute_rt[core.x][core.y] = [count]
 
     reader_kernel = ttnn.KernelDescriptor(
@@ -280,8 +299,8 @@ def _regime_a_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # ---------- writer ----------
-    writer_ct = [CB_OUTPUT]
+    # ---------- writer (unified; layout_is_rm=0) ----------
+    writer_ct = [CB_OUTPUT, 0, 0, 0, 0, 0, 0]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
@@ -453,21 +472,26 @@ def _regime_b_descriptor(
             input_page_base = g * Wt + r * Wt_s
             gamma_page_base = r * Wt_s
 
+            # unified reader RT: input_addr, gamma_addr, input_page_base, gamma_page_base,
+            # start_unit(0), num_units(1), total_sticks(0), my_rank, rect(4), sender_coords
             reader_rt[lx][ly] = [
-                r,
                 input_tensor.buffer_address(),
                 gamma_addr,
                 input_page_base,
                 gamma_page_base,
+                0,  # start_unit (unused for TILE)
+                1,  # num_units = 1 row-group per core
+                0,  # total_sticks (RM only)
+                r,  # my_rank
                 vrx0,
                 vry0,
                 vrx1,
                 vry1,
             ] + sender_coords
-            writer_rt[lx][ly] = [output_tensor.buffer_address(), input_page_base, Wt_s]
+            writer_rt[lx][ly] = [output_tensor.buffer_address(), input_page_base, Wt_s, 0]
             compute_rt[lx][ly] = [1]  # one tile-row group per core
 
-    # ---------- reader (mcast all-gather) ----------
+    # ---------- reader (unified; layout_is_rm=0, num_partials=K -> mcast all-gather) ----------
     reader_ct = [
         CB_INPUT_RESIDENT,
         CB_GAMMA,
@@ -475,8 +499,9 @@ def _regime_b_descriptor(
         CB_LOCAL_SUMSQ,
         CB_PARTIALS_GATHERED,
         Wt_s,
+        Wt_s,  # Wt_gamma_resident (== Wt_s for TILE)
         int(has_gamma),
-        K,
+        K,  # num_partials
         DATA_READY,
         CONSUMED,
         gamma_is_rm,
@@ -484,7 +509,10 @@ def _regime_b_descriptor(
         reduce_block,
         num_chunks,
         W,
+        0,  # in_elem (TILE: unused)
         gamma_elem,
+        0,  # layout_is_rm = 0 (TILE)
+        CB_INPUT_RESIDENT,  # cb_rm_in (unused)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -493,15 +521,15 @@ def _regime_b_descriptor(
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
     reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_reader_mcast.cpp"),
+        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
         core_ranges=core_ranges,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # ---------- writer ----------
-    writer_ct = [CB_OUTPUT]
+    # ---------- writer (unified; layout_is_rm=0) ----------
+    writer_ct = [CB_OUTPUT, 0, 0, 0, 0, 0, 0]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
@@ -588,6 +616,7 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
     in_elem = input_tensor.element_size()  # RM input is never bf8b ({bf8b, RM} INVALID)
     out_elem = output_tensor.element_size()
     gamma_is_tile = 1 if (has_gamma and gamma.layout == ttnn.TILE_LAYOUT) else 0
+    gamma_is_rm = 1 if (has_gamma and not gamma_is_tile) else 0
     # gamma_elem only feeds the reader's ROW_MAJOR-gamma path (gamma non-bf8b there;
     # bf8b gamma is always TILE). Avoid element_size() on a bf8b TILE gamma.
     gamma_elem = gamma.element_size() if (has_gamma and not gamma_is_tile) else in_elem
@@ -626,20 +655,28 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         cbs.append(cb(CB_RM_GAMMA_TILED, gamma_dt, Wt_padded))
         cbs.append(cb(CB_RM_NORMALIZED, inter, reduce_block))
 
-    # ---------- reader ----------
+    # ---------- reader (unified; layout_is_rm=1, num_partials=1) ----------
     reader_ct = [
-        CB_RM_IN,
-        CB_RM_GAMMA,
-        CB_RM_GAMMA_TILED,
+        CB_RM_INPUT_RESIDENT,  # cb_input_resident (unused by RM reader)
+        CB_RM_GAMMA_TILED,  # cb_gamma (resident tiled gamma)
         CB_SCALER,
+        CB_RM_PARTIAL_SUMSQ,  # cb_local_sumsq (unused; num_partials==1)
+        CB_PARTIALS_GATHERED,  # (unused; num_partials==1)
+        Wt,  # real tiles along W (ceil(W/32))
+        Wt_padded,  # Wt_gamma_resident (padded so each pass-2 chunk reads a full block)
         int(has_gamma),
-        gamma_is_tile,
-        Wt,
+        1,  # num_partials = 1 (row-parallel RM)
+        0,  # data_ready_sem_id (unused)
+        0,  # consumed_sem_id (unused)
+        gamma_is_rm,
+        CB_RM_GAMMA,  # cb_gamma_rm (stick staging)
         reduce_block,
         num_chunks,
         W,
         in_elem,
         gamma_elem,
+        1,  # layout_is_rm = 1 (ROW_MAJOR input)
+        CB_RM_IN,  # cb_rm_in
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -654,23 +691,33 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
     gamma_addr = gamma.buffer_address() if has_gamma else 0
 
     for core, (start, count) in zip(cores, splits):
-        reader_rt[core.x][core.y] = [input_tensor.buffer_address(), gamma_addr, start, count, total_sticks]
+        # reader: input_addr, gamma_addr, input_page_base(0), gamma_page_base(0),
+        #         start_unit=start_block, num_units=count blocks, total_sticks
+        reader_rt[core.x][core.y] = [
+            input_tensor.buffer_address(),
+            gamma_addr,
+            0,  # input_page_base (RM uses start_unit)
+            0,  # gamma_page_base (full gamma)
+            start,  # start_unit = start_block
+            count,  # num_units = owned blocks
+            total_sticks,
+        ]
         writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start, count, total_sticks]
         compute_rt[core.x][core.y] = [count]
 
     reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_reader_rm.cpp"),
+        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
         core_ranges=core_ranges,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # ---------- writer ----------
-    writer_ct = [CB_RM_OUT, Wt, reduce_block, num_chunks, W, out_elem]
+    # ---------- writer (unified; layout_is_rm=1) ----------
+    writer_ct = [CB_RM_OUT, 1, Wt, reduce_block, num_chunks, W, out_elem]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_writer_rm.cpp"),
+        kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
         core_ranges=core_ranges,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
@@ -678,7 +725,6 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
     )
 
     # ---------- compute (unified kernel; layout_is_rm = 1) ----------
-    gamma_is_rm = 1 if (has_gamma and not gamma_is_tile) else 0
     compute_ct = [
         CB_RM_INPUT_RESIDENT,  # cb_input_resident (tilize dest, resident)
         CB_RM_GAMMA_TILED,  # cb_gamma (resident tiled gamma)

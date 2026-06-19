@@ -35,3 +35,4 @@
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-06-19T19:11:57+00:00"}
 {"event":"test_run","status":"pass","tests":"test_rms_norm.py + test_rms_norm_layout_matrix.py","detail":"baseline green 140 passed before R4 refactor","ts":"2026-06-19T19:16:38+00:00"}
 {"event":"test_run","status":"pass","tests":"layout_matrix(120)+acceptance+regime_b","detail":"Phase 1: unified single compute kernel, RM resident-gamma model; TILE byte-identical, no regression","ts":"2026-06-19T19:24:45+00:00"}
+{"event":"test_run","status":"pass","tests":"acceptance+layout_matrix+regime_b (179)","detail":"Phase 2: unified to 3 kernels (reader/compute/writer); all 4 paths green","ts":"2026-06-19T19:31:40+00:00"}
