@@ -4,17 +4,17 @@
 
 #pragma once
 
-// Match tensor_shape.h's gate so production kernel builds do not see this table.
+#include "tensor_shape_coverage.h"
+
+// Match tensor_shape_coverage.h's gate so production kernel builds do not see this table.
 #if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
 
 #include <array>
 
-#include "tensor_shape_coverage.h"
-
 namespace ckernel::coverage
 {
 
-inline constexpr std::array<TensorShape, 8> covered_shapes_llk_math_eltwise_binary_standard = {{
+inline std::array<TensorShape, 8> covered_shapes_llk_math_eltwise_binary_standard = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -25,7 +25,7 @@ inline constexpr std::array<TensorShape, 8> covered_shapes_llk_math_eltwise_bina
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 8> covered_shapes_llk_math_eltwise_binary_standard_init = {{
+inline std::array<TensorShape, 8> covered_shapes_llk_math_eltwise_binary_standard_init = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -36,17 +36,17 @@ inline constexpr std::array<TensorShape, 8> covered_shapes_llk_math_eltwise_bina
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 2> covered_shapes_llk_math_eltwise_binary_with_dest_reuse = {{
+inline std::array<TensorShape, 2> covered_shapes_llk_math_eltwise_binary_with_dest_reuse = {{
     TENSOR_SHAPE_FR16_NF1x2,
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 2> covered_shapes_llk_math_eltwise_binary_with_dest_reuse_init = {{
+inline std::array<TensorShape, 2> covered_shapes_llk_math_eltwise_binary_with_dest_reuse_init = {{
     TENSOR_SHAPE_FR16_NF1x2,
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 7> covered_shapes_llk_math_reduce = {{
+inline std::array<TensorShape, 7> covered_shapes_llk_math_reduce = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -56,7 +56,7 @@ inline constexpr std::array<TensorShape, 7> covered_shapes_llk_math_reduce = {{
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 8> covered_shapes_eltwise_binary_configure_mop_standard = {{
+inline std::array<TensorShape, 8> covered_shapes_eltwise_binary_configure_mop_standard = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -67,7 +67,7 @@ inline constexpr std::array<TensorShape, 8> covered_shapes_eltwise_binary_config
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 2> covered_shapes_eltwise_binary_configure_mop_with_dest_reuse = {{
+inline std::array<TensorShape, 2> covered_shapes_eltwise_binary_configure_mop_with_dest_reuse = {{
     TENSOR_SHAPE_FR16_NF1x2,
     TENSOR_SHAPE_FR16_NF2x2,
 }};

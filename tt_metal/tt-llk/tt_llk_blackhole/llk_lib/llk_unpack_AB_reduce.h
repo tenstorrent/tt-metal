@@ -35,7 +35,6 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
 {
     // Validate tensor shape for tile-dependent operations
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_AB_reduce_mop_config_, tensor_shape);
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     // Data valid for clear instructions is set to 0 since the MATH kernel should not process this data.
     // pool_type == PoolType::MAX sets the clear value to neginf if the pool-type is MAX and 0 if the pool-type is AVG/SUM
@@ -109,7 +108,6 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
 {
     // Validate tensor shape for tile-dependent operations
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK(ckernel::coverage::TensorShapeFunctionCoverage::_llk_unpack_AB_reduce_init_, tensor_shape);
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     if constexpr (enforce_fp32_accumulation)
     {

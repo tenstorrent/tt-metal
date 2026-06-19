@@ -4,10 +4,10 @@
 
 #pragma once
 
-// Match tensor_shape.h's gate so production kernel builds do not see this table.
-#if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
-
 #include "tensor_shape_coverage.h"
+
+// Match tensor_shape_coverage.h's gate so production kernel builds do not see this table.
+#if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
 
 namespace ckernel::coverage
 {

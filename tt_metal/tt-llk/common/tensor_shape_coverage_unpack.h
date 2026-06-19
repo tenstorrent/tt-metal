@@ -4,17 +4,17 @@
 
 #pragma once
 
-// Match tensor_shape.h's gate so production kernel builds do not see this table.
+#include "tensor_shape_coverage.h"
+
+// Match tensor_shape_coverage.h's gate so production kernel builds do not see this table.
 #if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
 
 #include <array>
 
-#include "tensor_shape_coverage.h"
-
 namespace ckernel::coverage
 {
 
-inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_init = {{
+inline std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_init = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -26,7 +26,7 @@ inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_init = 
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_mop_config = {{
+inline std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_mop_config = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -38,7 +38,7 @@ inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_AB_mop_con
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 7> covered_shapes_llk_unpack_AB_reduce_init = {{
+inline std::array<TensorShape, 7> covered_shapes_llk_unpack_AB_reduce_init = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -48,7 +48,7 @@ inline constexpr std::array<TensorShape, 7> covered_shapes_llk_unpack_AB_reduce_
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 7> covered_shapes_llk_unpack_AB_reduce_mop_config = {{
+inline std::array<TensorShape, 7> covered_shapes_llk_unpack_AB_reduce_mop_config = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -58,7 +58,7 @@ inline constexpr std::array<TensorShape, 7> covered_shapes_llk_unpack_AB_reduce_
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_A_init = {{
+inline std::array<TensorShape, 9> covered_shapes_llk_unpack_A_init = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
@@ -70,7 +70,7 @@ inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_A_init = {
     TENSOR_SHAPE_FR16_NF2x2,
 }};
 
-inline constexpr std::array<TensorShape, 9> covered_shapes_llk_unpack_A_mop_config = {{
+inline std::array<TensorShape, 9> covered_shapes_llk_unpack_A_mop_config = {{
     TENSOR_SHAPE_FR1_NF1x2,
     TENSOR_SHAPE_FR2_NF1x2,
     TENSOR_SHAPE_FR4_NF1x2,
