@@ -44,7 +44,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces);
 
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
-        0, 0, params.TEST_FACE_R_DIM, params.num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+        0 /* transpose_of_faces */,
+        0 /* within_face_16x16_transpose */,
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
+        formats.unpack_A_src,
+        formats.unpack_A_dst);
 
     const int total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
     for (int i = 0; i < total_tiles; ++i)
@@ -123,17 +127,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_blocks         = params.NUM_BLOCKS;
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces);
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4, ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces));
 
     // Standard init sets addr_mods and strides for the tile shape.
     _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_src,
         formats.pack_dst,
-        params.TEST_FACE_R_DIM,
-        params.in0_tile_c_dim,
-        params.num_faces,
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
         false /* partial_face */,
-        false /* narrow_tile */,
         1 /* num_tiles */);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

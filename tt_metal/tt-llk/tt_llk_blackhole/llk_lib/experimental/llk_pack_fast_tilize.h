@@ -268,16 +268,15 @@ inline void _llk_pack_fast_tilize_block_(
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_uninit_(
     const std::uint32_t pack_dst_format,
-    [[maybe_unused]] const std::uint32_t face_r_dim,
-    [[maybe_unused]] const std::uint32_t num_faces,
-    const std::uint32_t pack_src_format = (std::uint32_t)DataFormat::Float16_b)
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const std::uint32_t pack_src_format      = (std::uint32_t)DataFormat::Float16_b)
 {
     if constexpr (is_fp32_dest_acc_en)
     {
         // Mirror of init: restore caller's pack_src_format via reconfig, which also
         // sets Read_32b correctly (=1 for fp32/dest_acc per cpack_common logic).
         const std::uint32_t tile_size = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
-        reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, TILE_C_DIM, num_faces, /*partial_face=*/false);
+        reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tensor_shape, /*partial_face=*/false);
     }
     // DEST remap is NOT cleared here — set/owned by the math thread (see init comment).
     // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them).
@@ -286,5 +285,5 @@ inline void _llk_pack_fast_tilize_uninit_(
     // Restore X counter, addr_mods, and MOP via _llk_pack_init_ (aligned with WH approach); init owns
     // the X counter and sets it itself. Strides are restored just above, so skip them in init.
     _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
-        pack_src_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+        pack_src_format, tensor_shape, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 }

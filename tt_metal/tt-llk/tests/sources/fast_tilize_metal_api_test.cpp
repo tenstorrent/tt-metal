@@ -200,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // fast_tilize_uninit
-    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4);
+    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, ckernel::DEFAULT_TENSOR_SHAPE);
 }
 
 #endif

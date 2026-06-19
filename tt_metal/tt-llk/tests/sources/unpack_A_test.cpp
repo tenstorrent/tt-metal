@@ -41,13 +41,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces,
         params.num_faces);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_unpack_A_init_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
-        params.UNPACK_TRANSPOSE_FACES,
-        params.UNPACK_TRANSPOSE_WITHIN_FACE,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        formats.unpack_A_src,
-        formats.unpack_A_dst);
+        params.UNPACK_TRANSPOSE_FACES, params.UNPACK_TRANSPOSE_WITHIN_FACE, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
     for (std::uint32_t i = 0; i < num_tiles_in_block * num_blocks; ++i)
     {
@@ -125,8 +121,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Test configuration constants
     constexpr DstSync sync_mode = DstSync::SyncHalf;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
+        formats.pack_src,
+        formats.pack_dst,
+        params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * 4,
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces));
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
+        formats.pack_dst, ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces));
 
     _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, PackMode::Default>();
 
