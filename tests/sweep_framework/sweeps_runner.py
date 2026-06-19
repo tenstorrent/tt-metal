@@ -1002,6 +1002,23 @@ def run_sweeps(
                     f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})"
                 )
 
+    # Derive failure from actual per-test statuses, not from export_results() return value
+    # (export_results unconditionally returns "success" for file-based destinations).
+    if config.fail_on_test_failure and status_counts:
+        from tests.sweep_framework.framework.statuses import TestStatus
+
+        fail_status_names = {
+            TestStatus.FAIL_ASSERT_EXCEPTION.name,
+            TestStatus.FAIL_CRASH_HANG.name,
+            TestStatus.FAIL_L1_OUT_OF_MEM.name,
+            TestStatus.FAIL_WATCHER.name,
+            TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF.name,
+        }
+        failed_count = sum(count for name, count in status_counts.items() if name in fail_status_names)
+        if failed_count > 0:
+            final_status = "failure"
+            logger.error(f"{failed_count} test case(s) failed/crashed/hung")
+
     return final_status
 
 
