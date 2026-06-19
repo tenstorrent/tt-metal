@@ -4,16 +4,16 @@
 # Required TRAY groupings
 groupings {
   name: "tray_1"
-  preset_type: TRAY_1
+  custom_type: "tray_1"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 },
-    { id: 4 asic_location: ASIC_LOCATION_5 },
-    { id: 5 asic_location: ASIC_LOCATION_6 },
-    { id: 6 asic_location: ASIC_LOCATION_7 },
-    { id: 7 asic_location: ASIC_LOCATION_8 }
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { asic_location: ASIC_LOCATION_5 } },
+    { id: 5 location { asic_location: ASIC_LOCATION_6 } },
+    { id: 6 location { asic_location: ASIC_LOCATION_7 } },
+    { id: 7 location { asic_location: ASIC_LOCATION_8 } }
   ]
   row_major_mesh {
     dims: [2, 4]
@@ -22,16 +22,16 @@ groupings {
 
 groupings {
   name: "tray_2"
-  preset_type: TRAY_2
+  custom_type: "tray_2"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 },
-    { id: 4 asic_location: ASIC_LOCATION_5 },
-    { id: 5 asic_location: ASIC_LOCATION_6 },
-    { id: 6 asic_location: ASIC_LOCATION_7 },
-    { id: 7 asic_location: ASIC_LOCATION_8 }
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { asic_location: ASIC_LOCATION_5 } },
+    { id: 5 location { asic_location: ASIC_LOCATION_6 } },
+    { id: 6 location { asic_location: ASIC_LOCATION_7 } },
+    { id: 7 location { asic_location: ASIC_LOCATION_8 } }
   ]
   row_major_mesh {
     dims: [2, 4]
@@ -40,16 +40,16 @@ groupings {
 
 groupings {
   name: "tray_3"
-  preset_type: TRAY_3
+  custom_type: "tray_3"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 },
-    { id: 4 asic_location: ASIC_LOCATION_5 },
-    { id: 5 asic_location: ASIC_LOCATION_6 },
-    { id: 6 asic_location: ASIC_LOCATION_7 },
-    { id: 7 asic_location: ASIC_LOCATION_8 }
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { asic_location: ASIC_LOCATION_5 } },
+    { id: 5 location { asic_location: ASIC_LOCATION_6 } },
+    { id: 6 location { asic_location: ASIC_LOCATION_7 } },
+    { id: 7 location { asic_location: ASIC_LOCATION_8 } }
   ]
   row_major_mesh {
     dims: [2, 4]
@@ -58,16 +58,16 @@ groupings {
 
 groupings {
   name: "tray_4"
-  preset_type: TRAY_4
+  custom_type: "tray_4"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 },
-    { id: 4 asic_location: ASIC_LOCATION_5 },
-    { id: 5 asic_location: ASIC_LOCATION_6 },
-    { id: 6 asic_location: ASIC_LOCATION_7 },
-    { id: 7 asic_location: ASIC_LOCATION_8 }
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { asic_location: ASIC_LOCATION_5 } },
+    { id: 5 location { asic_location: ASIC_LOCATION_6 } },
+    { id: 6 location { asic_location: ASIC_LOCATION_7 } },
+    { id: 7 location { asic_location: ASIC_LOCATION_8 } }
   ]
   row_major_mesh {
     dims: [2, 4]
@@ -79,7 +79,7 @@ groupings {
   name: "hosts_custom"
   custom_type: "hosts"
   instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_1 } }
+    { id: 0 grouping_ref { custom_type: "tray_1" } }
   ]
 }
 
@@ -97,14 +97,14 @@ groupings {
   name: "rect_2x4"
   custom_type: "rect_2x4"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 },
-    { id: 4 asic_location: ASIC_LOCATION_5 },
-    { id: 5 asic_location: ASIC_LOCATION_6 },
-    { id: 6 asic_location: ASIC_LOCATION_7 },
-    { id: 7 asic_location: ASIC_LOCATION_8 }
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { asic_location: ASIC_LOCATION_5 } },
+    { id: 5 location { asic_location: ASIC_LOCATION_6 } },
+    { id: 6 location { asic_location: ASIC_LOCATION_7 } },
+    { id: 7 location { asic_location: ASIC_LOCATION_8 } }
   ]
   row_major_mesh {
     dims: [2, 4]
@@ -115,14 +115,14 @@ groupings {
   name: "rect_4x2"
   custom_type: "rect_4x2"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 },
-    { id: 4 asic_location: ASIC_LOCATION_5 },
-    { id: 5 asic_location: ASIC_LOCATION_6 },
-    { id: 6 asic_location: ASIC_LOCATION_7 },
-    { id: 7 asic_location: ASIC_LOCATION_8 }
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { asic_location: ASIC_LOCATION_5 } },
+    { id: 5 location { asic_location: ASIC_LOCATION_6 } },
+    { id: 6 location { asic_location: ASIC_LOCATION_7 } },
+    { id: 7 location { asic_location: ASIC_LOCATION_8 } }
   ]
   row_major_mesh {
     dims: [4, 2]
@@ -151,7 +151,7 @@ groupings {
   name: "test_mesh"
   preset_type: MESH
   instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_1 } }
+    { id: 0 grouping_ref { custom_type: "tray_1" } }
   ]
 }
 
@@ -217,10 +217,10 @@ groupings {
   name: "superpods"
   custom_type: "superpods"
   instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_1 } },
-    { id: 1 grouping_ref { preset_type: TRAY_2 } },
-    { id: 2 grouping_ref { preset_type: TRAY_3 } },
-    { id: 3 grouping_ref { preset_type: TRAY_4 } }
+    { id: 0 grouping_ref { custom_type: "tray_1" } },
+    { id: 1 grouping_ref { custom_type: "tray_2" } },
+    { id: 2 grouping_ref { custom_type: "tray_3" } },
+    { id: 3 grouping_ref { custom_type: "tray_4" } }
   ]
   all_to_all {}
 }

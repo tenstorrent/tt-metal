@@ -45,7 +45,7 @@ struct GroupingItemInfo {
 
     ItemType type;
     tt::tt_metal::ASICLocation asic_location{0};  // Only valid if type == ASIC_LOCATION
-    tt::tt_metal::TrayID tray_id{0};              // Tray ID (1-4) if available, 0 otherwise
+    tt::tt_metal::TrayID tray_id{0};              // From optional instance tray_id (asic_location only); 0 = UNSET
 
     std::string grouping_name;   // Only valid if type == GROUPING_REF
     std::vector<CornerOrientation>
@@ -59,11 +59,19 @@ struct GroupingItemInfo {
 // Grouping information
 struct GroupingInfo {
     std::string name;  // Unique identifier/name for this specific grouping instance
-    std::string type;  // Type of grouping (e.g., "MESH", "TRAY_1", "meshes", "pods")
+    std::string type;  // Type of grouping (e.g., "MESH", "tray", "meshes", "pods")
     // items[node_id] is the item for graph node node_id. Flattened meshes may use non-contiguous IDs;
     // in that case size is max_node_id+1 (only indices present in adjacency_graph are meaningful).
     std::vector<GroupingItemInfo> items;
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
+
+    // How PGD instances (sub-groupings) tile in row-major order, from row_major_mesh { dims: [...] }.
+    // Empty for all_to_all/custom/no connection. Used when joining sub-meshes during flattening.
+    std::vector<int32_t> instance_tile_layout_dims;
+
+    // Row-major [rows, cols] of all ASIC nodes after flattening (e.g. [32, 4] for a 128-ASIC mesh).
+    // Empty until flattening completes. Used for MGD topology matching and torus variant rebuild.
+    std::vector<int32_t> flattened_node_grid_dims;
 
     // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
     // Empty graph if no connection type is specified.
@@ -118,6 +126,12 @@ public:
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
+    // Build one GroupingInfo per MGD mesh instance for PSD placement fallback when PGD groupings fail to embed.
+    // Includes torus wrap-around edges when the MGD device topology uses RING dimensions.
+    // Intended for use by topology_mapper_utils when no PGD grouping successfully embeds into the PSD.
+    static std::vector<GroupingInfo> get_mgd_mesh_groupings_for_placement(
+        const MeshGraphDescriptor& mesh_graph_descriptor);
+
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
@@ -133,11 +147,11 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>& errors_out) const;
 
-    // Find all possible ASIC IDs that could appear in any valid mapping of the input `groupings` to the physical
-    // system descriptor.
-    // Returns a vector of unordered_sets. Each element is one complete valid mapping: the set of ASIC IDs used
-    // across all of the input groupings for that mapping (grouping type is not distinguished in the set).
-    // Returns an empty vector if no valid combined mapping exists.
+    // Find one maximal disjoint packing of the input `groupings` on the physical system descriptor.
+    // Returns a vector of unordered_sets. Each element is one mesh footprint (ASIC IDs for a single placement).
+    // No two elements share an ASIC. When multiple PGD grouping variants are provided, the variant with the
+    // highest total ASIC coverage is chosen; alternatives are not mixed in the same packing.
+    // Returns an empty vector if no valid packing exists.
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
