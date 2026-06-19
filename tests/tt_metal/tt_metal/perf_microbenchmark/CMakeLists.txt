@@ -51,6 +51,10 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
                 yaml-cpp::yaml-cpp
                 TT::ScaleoutTools
         )
+        list(APPEND FABRIC_TEST_TARGETS ${TEST_TARGET})
+    endif()
+    if(${TEST_SRC} STREQUAL "routing/test_tt_fabric_mux_bandwidth.cpp")
+        list(APPEND FABRIC_TEST_TARGETS ${TEST_TARGET})
     endif()
     target_include_directories(
         ${TEST_TARGET}
@@ -73,3 +77,25 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
 endforeach()
 
 add_custom_target(metal_perf_microbenchmark_tests DEPENDS ${PERF_MICROBENCH_TEST_TARGETS})
+
+# Install fabric test binaries with relocatable RPATH
+if(FABRIC_TEST_TARGETS)
+    set_target_properties(
+        ${FABRIC_TEST_TARGETS}
+        PROPERTIES
+            INSTALL_RPATH
+                "$ORIGIN/../lib"
+    )
+    install(TARGETS ${FABRIC_TEST_TARGETS} RUNTIME COMPONENT metalium-validation)
+
+    # Install test YAML configurations
+    install(
+        DIRECTORY
+            ${CMAKE_CURRENT_SOURCE_DIR}/routing/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium/tests/tt_metal/tt_metal/perf_microbenchmark/routing
+        COMPONENT metalium-validation
+        FILES_MATCHING
+        PATTERN
+        "*.yaml"
+    )
+endif()
