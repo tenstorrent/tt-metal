@@ -203,7 +203,8 @@
     <code>H_idx=64</code> heads, which forced head-streaming (<code>HB=16</code>) and ~1.85% matmul util (802 ms, 96% of the
     layer at sp4×tp2). Sharding heads across TP and all-reducing the partial logits keeps them L1-resident
     (<code>HB=0</code>) → <b>util 75.2%, indexer 9.9 ms, layer 839→~63 ms</b>; gate green (PCC 0.96–0.99 at tp=2/4). The
-    partial-logit all-reduce is the new sub-cost (~19.5 ms) — see §4 and <code>INDEXER_B_REPORT.md</code>.</p>
+    partial-logit all-reduce was the new sub-cost (~19.5 ms) but SP-sharding the queries since shrank it to ~4.8 ms
+    (buffer 1/sp) — see §4 and <code>INDEXER_B_REPORT.md</code>.</p>
   </details>
 
   <h3><span class="n">1.1</span>Symbols &amp; dimensions</h3>
@@ -260,7 +261,8 @@
   <b>partial</b> logit; the partials are <b>all-reduced (SUM)</b> over <code>tp_axis</code> before top-k (the head-sum is
   separable, and the <code>−inf</code> causal mask is head-independent so it survives). Keeping all <code>H_idx/tp</code> heads
   L1-resident (<code>HB=0</code>) lifts <b class="hl">indexer math-util 1.85% → 75.2% and device time 802 → 9.9 ms</b>
-  (sp4×tp2). The trade-off — the partial-logit all-reduce — is the layer's new largest cost (~19.5 ms); see §4.</div>
+  (sp4×tp2). The trade-off — the partial-logit all-reduce — cost ~19.5 ms until SP-sharding the queries cut it to ~4.8 ms
+  (its buffer is now 1/sp; see §4 / §5).</div>
 
   <div class="fig"><div class="cybox" id="cy-indexer"></div></div>
   <p class="dhint">drag to pan · scroll to zoom</p>
@@ -377,7 +379,7 @@
 <section class="tab" data-tab="timing">
   <h2><span class="n">§4</span>Where the time goes <span style="font-size:.6em;color:var(--dim);font-weight:600">measured · sp4×tp2</span></h2>
   <p class="lede">Per-op device timing from <code>test_mla_perf.py</code> under tracy (Blackhole p150, the §3.3 scenario at
-  <b>sp4×tp2</b> — 32 indexer heads/chip). <b class="hl">Device-collapsed critical path = 61.8 ms.</b> Convention: compute ops
+  <b>sp4×tp2</b> — 32 indexer heads/chip). <b class="hl">Device-collapsed critical path = 27.2 ms.</b> Convention: compute ops
   take the <b>max</b> across the 8 chips, collectives the <b>mean</b>. Math-util = perf-model ideal ÷ actual (meaningful only
   for matmul-bound ops). CCL throughput = wire bytes <code>(N−1)/N × buffer</code> ÷ time, against the <b>512 GB/s</b>
   per-link peak.</p>
@@ -397,17 +399,16 @@
       <span class="small" style="margin-left:auto">hover / tap a bar for detail · bar length ∝ device time</span>
     </div>
     <div class="tchart" id="tchart"></div>
-    <div class="tcap" id="tcap"><span class="lbl">layer</span><b>61.78 ms</b> critical path · after change B the indexer is no longer the bottleneck — the <b>logits all-reduce (32%)</b> and <b>top-k (24%)</b> now dominate. See the Bottlenecks tab for per-op analysis.</div>
+    <div class="tcap" id="tcap"><span class="lbl">layer</span><b>27.21 ms</b> critical path · after SP-sharding the indexer queries (indexer_score, logits all-reduce and top-k all cut ~4× = sp), <b>sparse_sdpa's latent gather (27%)</b> is now the single largest op. See the Bottlenecks tab for per-op analysis.</div>
   </div>
 
   <div class="callout warn"><span class="who">read-out</span>
-  The layer is now gated by <b>data movement and the unmodeled ops</b>: the logits all-reduce (32%) and top-k (24%) are ~55%
-  combined. The all-reduce runs at only ~8% of link BW (latency/launch-bound, not saturated) and pays ~6 ms to round-trip
-  ROW_MAJOR↔TILE. Passing the RM logits straight to the CCL does <i>not</i> help — measured ~10 ms <b>slower</b>, since ttnn's
-  RM reduce_scatter/all_gather tilize-with-padding internally and add RM concats. The TP matmuls are small per chip (17–69%
-  util) but a tiny slice. <b>Highest-leverage next steps:</b> (1) SP-shard the indexer queries — shrinks the all-reduce buffer
-  to <code>1/sp</code> and turns the indexer multicast ON at sp=8; (2) a fused/RM-native CCL; (3) attack <code>top-k</code>,
-  the largest single op.</div>
+  <b>SP-sharding the indexer queries is now done</b> (each chip scores only its <code>S/sp</code> rows; no Q/W all-gather, a
+  per-device causal offset, SP-sharded top-k straight into sparse_sdpa). That cut <code>indexer_score</code> 9.86→2.68 ms,
+  <code>top-k</code> 14.7→3.77 ms and the <b>logits all-reduce block 19.5→4.8 ms</b> (its buffer is now <code>1/sp</code>) — and
+  dropped the layer from <b>61.8→27.2 ms (2.3×)</b>. The new largest op is <code>sparse_sdpa</code> (27%, latent gather, ~unchanged).
+  <b>Highest-leverage next steps:</b> (1) <b>fp8 kv for sparse_sdpa</b> — ~halves its ~3 GB gather (the op already supports it);
+  (2) a fused/RM-native CCL to drop the residual ~1.4 ms tilize/untilize round-trip; (3) <code>top-k</code> still has no perf model.</div>
 
   <h3><span class="n">4.3</span>Dataflow timeline (steady state, one chunk)</h3>
   <p class="sub">Relative ordering of the three indexer stems (parallel) → logits / top-k → attention front-end →
@@ -426,64 +427,62 @@
 <!-- ============================ 5 · BOTTLENECKS ============================ -->
 <section class="tab" data-tab="bottlenecks">
   <h2><span class="n">§5</span>Bottleneck analysis — the five longest ops</h2>
-  <p class="lede">From the §4 run (sp4×tp2, 50k cache + 5k chunk, critical path <b>61.8 ms</b>), on the <b>latest <code>topk_large_indices</code></b>
-  (main, INT32 index-correctness fix) and <b>Pavle's rewritten <code>sparse_sdpa</code></b> (which cut that op 8.73→7.48 ms). For
-  each of the five longest ops: what bounds it, the data type it operates on, and a napkin estimate of the floor. Yardsticks:
-  <b>~70% math-util is healthy</b> for compute ops; <b>DRAM bandwidth upper bound is 512 GB/s</b>.</p>
+  <p class="lede">From the §4 run (sp4×tp2, 50k cache + 5k chunk, critical path <b>27.2 ms</b> — down from 61.8 ms after
+  <b>SP-sharding the indexer queries</b>, which cut <code>indexer_score</code>, the logits all-reduce and <code>top-k</code> each
+  ~4× = sp). For each of the five longest ops: what bounds it, the data type it operates on, and a napkin estimate of the floor.
+  Yardsticks: <b>~70% math-util is healthy</b> for compute ops; <b>DRAM bandwidth upper bound is 512 GB/s</b>.</p>
 
   <table>
    <tr><th>#</th><th>Op</th><th>Time</th><th>Dtype</th><th>Bound by</th><th>Napkin estimate</th><th>Verdict</th></tr>
-   <tr><td>1</td><td><code>topk_large_indices</code></td><td><b>14.7 ms · 24%</b></td><td>bf16 logits → uint32 idx</td><td>compute / partial-sort</td><td>reads 577 MB → BW floor 1.1 ms, but runs <b>13× that</b> → not BW-bound; it's the top-2048-of-56320 selection × 5120 rows. No perf model.</td><td>⚠ #1 target</td></tr>
-   <tr><td>2</td><td><code>indexer_score</code></td><td>9.86 ms · 16%</td><td>bf16 q·kᵀ (HiFi2)</td><td>compute (matmul)</td><td>perf-model ideal 7.42 ms → <b>75% math-util</b></td><td>✓ healthy (≥70%)</td></tr>
-   <tr><td>3</td><td><code>sparse_sdpa</code></td><td>7.48 ms · 12%</td><td>bf16</td><td>DRAM gather BW</td><td>gathers ~3.0 GB of latents (2048/query × 576, MQA-shared) → 5.9 ms BW floor (now <b>79%</b> of it, up from 68%); compute only ~0.6 ms</td><td>⚠ gather-BW-bound</td></tr>
-   <tr><td>4</td><td><code>reduce_scatter</code> (logits)</td><td>6.80 ms</td><td>bf16 · 577 MB</td><td>CCL overhead</td><td>~42 GB/s = <b>8% of 512</b> link; 43% of the CCL perf-model ideal (2.9 ms)</td><td>⚠ overhead-bound</td></tr>
-   <tr><td>5</td><td><code>all_gather</code> (logits)</td><td>6.66 ms</td><td>bf16 · 577 MB</td><td>CCL overhead</td><td>~43 GB/s = 8% of 512 link; 43% of ideal (2.9 ms)</td><td>⚠ overhead-bound</td></tr>
+   <tr><td>1</td><td><code>sparse_sdpa</code></td><td><b>7.48 ms · 28%</b></td><td>bf16 (fp8-capable)</td><td>DRAM gather BW</td><td>gathers ~3.0 GB of latents (2048/query × 576, MQA-shared) → 5.9 ms BW floor (~<b>79%</b> of it); compute only ~0.6 ms. Untouched by SP-shard.</td><td>⚠ #1 · gather-bound</td></tr>
+   <tr><td>2</td><td><code>topk_large_indices</code></td><td>3.77 ms · 14%</td><td>bf16 logits → uint32 idx</td><td>compute / partial-sort</td><td>top-2048-of-56320 × <b>1280</b> rows (was 5120 → cut ~4× by SP-shard). No perf model.</td><td>⚠ sort-bound</td></tr>
+   <tr><td>3</td><td>attn matmuls (×10)</td><td>3.25 ms · 12%</td><td>bf16 (HiFi2)</td><td>compute (matmul)</td><td>q_a / q_b / wkv_b1·b2 / o_proj / kv_a linears, 17–69% util; per-chip, small</td><td>✓ healthy</td></tr>
+   <tr><td>4</td><td><code>indexer_score</code></td><td>2.68 ms · 10%</td><td>bf16 q·kᵀ (HiFi2)</td><td>compute (matmul)</td><td>was 9.86 ms → cut ~4× (each chip scores only its S/sp rows); <b>75% math-util</b></td><td>✓ healthy</td></tr>
+   <tr><td>5</td><td>logits all-reduce</td><td>4.8 ms · 18%</td><td>bf16 · 144 MB</td><td>CCL + RM↔TILE</td><td>RS 1.73 + AG 1.67 (buffer now <b>1/sp</b>, was 577 MB) + tilize/untilize 1.4; still overhead-bound at this size</td><td>⚠ overhead-bound</td></tr>
   </table>
 
-  <h3><span class="n">5.1</span><code>topk_large_indices</code> — 14.7 ms (compute / sort-bound)</h3>
-  <div class="callout warn"><span class="who">not bandwidth-bound</span>
-  Selects the top <b>2048</b> of <b>56320</b> keys for each of <b>5120</b> rows. It reads the 577 MB bf16 logits and writes
-  42 MB of uint32 indices — a single read+write pass is only a <b>1.1 ms</b> DRAM floor at 512 GB/s, yet the op runs
-  <b>13× that</b>, so it is <b>compute/selection-bound</b>, not bandwidth-bound. This run is on the <b>latest main kernel</b> (INT32
-  fused index load/store fixing a denormal-flush index-corruption bug) — a correctness fix, so the timing is unchanged from 15.0 ms.
-  It ships <b>no perf model</b>, so there is no
-  util to compare against. As the single largest op (24%), it is the <b>#1 optimization target</b>: a faster windowed-top-k
-  kernel, and/or shrinking its input — SP-sharding the indexer queries (§4 read-out) would cut the rows it scans by
-  <code>1/sp</code>.</div>
-
-  <h3><span class="n">5.2</span><code>indexer_score</code> — 9.86 ms (healthy compute)</h3>
-  <div class="callout"><span class="who">at target</span>
-  The bf16 q·kᵀ matmul (HiFi2) runs at <b>75% math-util</b> against its perf-model ideal of 7.42 ms — above the ~70%
-  yardstick. This is a near-optimal compute-bound op, <b>not a slowdown</b>; the change-B head-sharding already put it here
-  (it was 1.85% when replicated at 64 heads). Little headroom left in the op itself.</div>
-
-  <h3><span class="n">5.3</span><code>sparse_sdpa</code> — 7.48 ms (gather-bandwidth-bound)</h3>
+  <h3><span class="n">5.1</span><code>sparse_sdpa</code> — 7.48 ms (gather-bandwidth-bound · the new #1)</h3>
   <div class="callout warn"><span class="who">DRAM-bound on the latent gather</span>
   Per chip it gathers, for each of 1280 queries, its 2048 selected 576-wide bf16 latents — <b>~3.0 GB</b> of
-  random-access DRAM reads (MQA: shared across the 64 heads). At 512 GB/s that is a <b>5.9 ms</b> floor. The attention
-  arithmetic is tiny by comparison — ~365 GFLOP, ≈ <b>0.6 ms</b> at HiFi2 — so the op is <b>bandwidth-bound on the gather</b>,
-  not compute-bound. <b>Pavle's rewritten kernel</b> cut this op <b>8.73 → 7.48 ms</b>: the gather efficiency rose from ~68% to
-  <b>~79% of the 5.9 ms floor</b> (better overlap of the gather with the softmax/PV compute). The remaining lever is fewer
-  gathered bytes — the rewritten op now accepts <b>fp8 q/kv, which would roughly halve the gather</b> (→ ~3.0 ms floor) — or
-  better gather locality; compute-side tuning won't help.</div>
+  random-access DRAM reads (MQA: shared across the 64 heads). At 512 GB/s that is a <b>5.9 ms</b> floor; the attention
+  arithmetic is tiny (~365 GFLOP ≈ <b>0.6 ms</b>) — so it is <b>bandwidth-bound on the gather</b> at ~<b>79% of the floor</b>.
+  SP-sharding did <i>not</i> touch it (the queries were already SP-sharded here), so as the others shrank ~4× it became the
+  <b>single largest op (28%)</b>. Lever: the op now accepts <b>fp8 q/kv, which roughly halves the gather</b> (→ ~3.0 ms floor);
+  compute-side tuning won't help.</div>
 
-  <h3><span class="n">5.4 / 5.5</span>logits all-reduce — <code>reduce_scatter</code> 6.80 ms + <code>all_gather</code> 6.66 ms (overhead-bound)</h3>
-  <div class="callout warn"><span class="who">far below the link, not BW-saturated</span>
-  The TP all-reduce of the 577 MB bf16 logits (change B) moves ~288 MB/chip per stage over the tp=2 link at only
-  <b>~42–43 GB/s = 8% of the 512 GB/s</b> peak, i.e. <b>43% of the CCL perf-model ideal</b> — so it is
-  <b>launch/latency/overhead-bound at this message size and tp</b>, not bandwidth-saturated. Wrapped around it, the
-  <code>Tilize</code> (2.9 ms) + <code>Untilize</code> (3.1 ms) RM↔TILE conversions (each ≈ its 1.1 ms read+write DRAM floor)
-  push the whole <b>all-reduce block to ≈ 19.5 ms (32%)</b> — the largest cost <i>area</i> in the layer. Levers:
-  <b>SP-shard the indexer queries</b> (the all-reduce buffer shrinks to <code>1/sp</code> and the indexer multicast turns on),
-  and a fused/RM-native CCL to drop the round-trip.</div>
+  <h3><span class="n">5.2</span><code>topk_large_indices</code> — 3.77 ms (compute / sort-bound)</h3>
+  <div class="callout warn"><span class="who">cut ~4× by SP-sharding</span>
+  Selects the top <b>2048</b> of <b>56320</b> keys for each of its <b>1280</b> query rows (was 5120 — SP-sharding the queries
+  cut the rows it scans by <code>1/sp</code>, so the op dropped <b>14.7 → 3.77 ms</b>). Still <b>compute/selection-bound</b>
+  (no DRAM floor in sight) and it ships <b>no perf model</b>, so there's no util to compare against — but it is no longer the
+  dominant op. Further headroom is a faster windowed-top-k kernel.</div>
 
-  <div class="callout"><span class="who">summary</span>
-  Compute is <b>healthy</b>: <code>indexer_score</code> is at 75% util and <code>sparse_sdpa</code>'s arithmetic is trivial
-  (~0.6 ms). The layer is gated by <b>three non-compute fronts</b>: (1) <b>top-k</b> (24%, compute/sort-bound, <i>no perf
-  model</i>) — the single biggest op and prime target; (2) the <b>logits all-reduce block</b> (~32%, overhead-bound CCL +
-  the RM↔TILE round-trip) — addressed by SP-sharding the queries; (3) <b>sparse_sdpa's latent gather</b> (12%, ~79% of its DRAM
-  floor after Pavle's rewrite) — further addressed by fp8 latents. Only top-k and the CCL block have real headroom; the gather
-  is close to the 512 GB/s wall and the indexer matmul is already near-optimal.</div>
+  <h3><span class="n">5.3</span>attn matmuls (×10) — 3.25 ms (healthy compute)</h3>
+  <div class="callout"><span class="who">at/near target</span>
+  The attention + indexer linears — <code>q_a</code>, <code>q_b</code>, <code>wkv_b1/b2</code>, <code>o_proj</code>,
+  <code>kv_a</code> — at <b>17–69% math-util</b>. Per-chip and small (12% combined); unchanged by SP-sharding. Modest headroom
+  on the lower-util matmuls, but not a primary target.</div>
+
+  <h3><span class="n">5.4</span><code>indexer_score</code> — 2.68 ms (healthy compute)</h3>
+  <div class="callout"><span class="who">cut ~4× by SP-sharding</span>
+  The bf16 q·kᵀ matmul (HiFi2) at <b>75% math-util</b> — above the ~70% yardstick. SP-sharding the queries dropped it
+  <b>9.86 → 2.68 ms</b>: each chip now scores only its <code>S/sp</code> query rows against the full key cache instead of
+  recomputing the full <code>glob</code> logits redundantly on every SP chip. Near-optimal; little headroom left in the op.</div>
+
+  <h3><span class="n">5.5</span>logits all-reduce — 4.8 ms (overhead-bound, was 19.5)</h3>
+  <div class="callout warn"><span class="who">buffer now 1/sp</span>
+  SP-sharding shrank the logits to <code>[1,1,S/sp,end_pos]</code> = 144 MB (was 577 MB), so the TP all-reduce dropped to
+  <code>reduce_scatter</code> <b>1.73 ms</b> (was 6.80) + <code>all_gather</code> <b>1.67 ms</b> (was 6.66), and the RM↔TILE
+  round-trip (tilize + untilize) to <b>~1.4 ms</b> (was ~6) — the whole block <b>19.5 → 4.8 ms</b>. It is still
+  <b>overhead/latency-bound</b> at this message size and tp=2 (well under the fabric link), not BW-saturated. Remaining lever:
+  a fused / RM-native CCL to drop the round-trip.</div>
+
+  <div class="callout key"><span class="who">summary</span>
+  <b>SP-sharding the indexer queries took the layer 61.8 → 27.2 ms (2.3×)</b>, cutting <code>indexer_score</code>, <code>top-k</code>
+  and the logits all-reduce each ~4× = sp. Compute is healthy (indexer_score 75% util; attn matmuls 17–69%). The new gate is
+  <b>sparse_sdpa's latent gather</b> (28%, ~79% of its 512 GB/s DRAM floor) — the only remaining big single op, and its lever is
+  <b>fp8 kv</b> (~halves the gather). After that the residual costs (top-k, the all-reduce block, matmuls) are all small and
+  comparable; the next structural win would be fp8 throughout.</div>
 </section>
 
 <!-- ============================ 6 · TESTS ============================ -->
@@ -607,14 +606,14 @@
         {id:'WK0', cls:'comm',label:'_indexer_write_k\n(device K-cache warm)'},
         {id:'V3',  cls:'tp',  label:'super().forward\n(v3 dense ring SDPA)'},
         {id:'OUT1',cls:'io',  label:'out'},
-        {id:'TOPK',cls:'rep', label:'_indexer_topk (device)\n→ indices [1,1,glob,k]\n↳ [1,1,5120,2048] replicated'},
+        {id:'TOPK',cls:'rep', label:'_indexer_topk (device)\n→ indices [1,1,S/sp,k]\n↳ [1,1,640,2048] SP-sharded'},
         {id:'DSA', cls:'tp',  label:'_dsa_forward\n(sparse_mla over selected latents)'},
         {id:'OUT2',cls:'io',  label:'out'},
       ],
       edges:[
         {f:'X',t:'DEC',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,640,1792]'},
         {f:'DEC',t:'WK0',l:'no — dense (chunked)'}, {f:'WK0',t:'V3',l:'K appended'}, {f:'V3',t:'OUT1',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,640,1792]'},
-        {f:'DEC',t:'TOPK',l:'yes — sparse (DSA)'}, {f:'TOPK',t:'DSA',l:'🟫 indices [1,1,glob,k] RM\n↳ [1,1,5120,2048]',rm:1}, {f:'DSA',t:'OUT2',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,640,1792]'},
+        {f:'DEC',t:'TOPK',l:'yes — sparse (DSA)'}, {f:'TOPK',t:'DSA',l:'🟫 indices [1,1,S/sp,k] RM\n↳ [1,1,640,2048]',rm:1}, {f:'DSA',t:'OUT2',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,640,1792]'},
       ],
     },
     indexer: {
@@ -693,39 +692,38 @@
     timing: {
       nodes:[
         {id:'H',     cls:'io',  label:'hidden_states'},
-        {id:'STEMS', cls:'tp',  label:'indexer stems + RoPE\nK/Q/W linears · gathers · rope\n2.62 ms · 4%'},
-        {id:'ISCORE',cls:'tp',  label:'indexer_score (HB=0)\n9.86 ms · 16% · 75% util'},
-        {id:'AR',    cls:'comm',label:'logits all-reduce\ntilize → RS → AG → untilize\n19.5 ms · 32% · RS/AG ≈43 GB/s = 8%'},
-        {id:'TOPK',  cls:'rep', label:'topk_large_indices\n14.7 ms · 24% · no perf model'},
-        {id:'QPATH', cls:'tp',  label:'attn Q-path\nq_a · q_b · wkv_b1 · rope\n2.50 ms · 4% · 17–44% util'},
+        {id:'STEMS', cls:'tp',  label:'indexer stems + RoPE\nK/Q/W linears · K gather · per-chip rope\n~2.0 ms · 7% (no Q/W SP gather)'},
+        {id:'ISCORE',cls:'tp',  label:'indexer_score (HB=0)\n2.68 ms · 10% · 75% util (S/sp rows)'},
+        {id:'AR',    cls:'comm',label:'logits all-reduce\ntilize → RS → AG → untilize\n4.8 ms · 18% · buffer now 1/sp'},
+        {id:'TOPK',  cls:'rep', label:'topk_large_indices\n3.77 ms · 14% · no perf model (S/sp rows)'},
+        {id:'QPATH', cls:'tp',  label:'attn Q-path\nq_a · q_b · wkv_b1 · rope\n2.5 ms · 9% · 17–44% util'},
         {id:'KVPATH',cls:'sp',  label:'attn KV-path + cache write\n0.22 ms'},
-        {id:'GATHER',cls:'comm',label:'latent gather (SP)\nall_gather + un-rotate\n2.17 ms · 4% · AG ≈77 GB/s = 15%'},
-        {id:'RESHARD',cls:'comm',label:'indices reshard\nmesh_partition · 0.06 ms'},
-        {id:'SDPA',  cls:'tp',  label:'sparse_sdpa\n7.48 ms · 12% · gather-BW-bound'},
-        {id:'EPI',   cls:'tp',  label:'epilogue\nwkv_b2 · concat · o_proj · RS\n1.66 ms · 3% · o_proj 69%'},
+        {id:'GATHER',cls:'comm',label:'latent gather (SP)\nall_gather + un-rotate\n2.17 ms · 8% · AG ≈77 GB/s = 15%'},
+        {id:'SDPA',  cls:'tp',  label:'sparse_sdpa\n7.48 ms · 28% · gather-BW-bound (NEW #1)'},
+        {id:'EPI',   cls:'tp',  label:'epilogue\nwkv_b2 · concat · o_proj · RS\n1.66 ms · 6% · o_proj 69%'},
         {id:'OUT',   cls:'io',  label:'out [1,1,1280,3584]'},
       ],
       edges:[
-        {f:'H',t:'STEMS',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,1280,3584]'}, {f:'STEMS',t:'ISCORE',l:'q_dev [1,H_idx/tp,glob,128]\n↳ [1,32,5120,128]'}, {f:'ISCORE',t:'AR',l:'partial logits [1,1,glob,end_pos]\n↳ [1,1,5120,56320]'}, {f:'AR',t:'TOPK',l:'full logits [1,1,glob,end_pos]\n↳ [1,1,5120,56320]'}, {f:'TOPK',t:'RESHARD',l:'indices [1,1,glob,k]\n↳ [1,1,5120,2048]'},
+        {f:'H',t:'STEMS',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,1280,3584]'}, {f:'STEMS',t:'ISCORE',l:'q_dev [1,H_idx/tp,S/sp,128]\n↳ [1,32,1280,128]'}, {f:'ISCORE',t:'AR',l:'partial logits [1,1,S/sp,end_pos]\n↳ [1,1,1280,56320]'}, {f:'AR',t:'TOPK',l:'full logits [1,1,S/sp,end_pos]\n↳ [1,1,1280,56320]'}, {f:'TOPK',t:'SDPA',l:'idx [1,1,S/sp,k]\n↳ [1,1,1280,2048] (SP-sharded, no reshard)'},
         {f:'H',t:'QPATH',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,1280,3584]'}, {f:'QPATH',t:'SDPA',l:'tt_q [1,H/tp,S/sp,576]\n↳ [1,64,1280,576]'},
         {f:'H',t:'KVPATH',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,1280,3584]'}, {f:'KVPATH',t:'GATHER',l:'kvpe [1,1,S/sp,576] bf8\n↳ [1,1,1280,576]'}, {f:'GATHER',t:'SDPA',l:'kv [1,1,end_pos,576]\n↳ [1,1,56320,576]'},
-        {f:'RESHARD',t:'SDPA',l:'idx [1,1,S/sp,k]\n↳ [1,1,1280,2048]'}, {f:'SDPA',t:'EPI',l:'attn_out [1,H/tp,S/sp,512]\n↳ [1,64,1280,512]'}, {f:'EPI',t:'OUT',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,1280,3584]'},
+        {f:'SDPA',t:'EPI',l:'attn_out [1,H/tp,S/sp,512]\n↳ [1,64,1280,512]'}, {f:'EPI',t:'OUT',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,1280,3584]'},
       ],
     },
   };
 
   // ===================== interactive timing chart (§4.2) =====================
   const TIMING = [
-    {nm:'logits all-reduce', ms:19.47, pct:31.5, cls:'ccl',     note:'RS+AG ≈ 13.5 ms @ ~43 GB/s (8% of the 512 GB/s link — overhead-bound) + ~6 ms (tilize 2.9 + untilize 3.1) RM↔TILE round-trip. The cost change B adds.'},
-    {nm:'top-k',             ms:14.74, pct:23.9, cls:'compute', note:'topk_large_indices (latest main, INT32 index-correctness fix) — still the single largest op. No perf model. Next op-level optimization target.'},
-    {nm:'indexer_score',     ms:9.86,  pct:16.0, cls:'compute', note:'75% math-util at HB=0 (all H_idx/tp heads L1-resident). The win from change B (was 1.85% / 802 ms when replicated at 64 heads).'},
-    {nm:'sparse_sdpa',       ms:7.48,  pct:12.1, cls:'compute', note:"Compute op, but DRAM-bound on the latent gather: ~3.0 GB of random-access reads (2048 latents/query × 576, MQA-shared) → 5.9 ms floor; arithmetic only ~0.6 ms. Pavle's rewritten kernel cut it 8.73→7.48 ms (≈79% of the gather floor, was 68%). fp8 latents (now supported by the op) would ~halve the gather."},
-    {nm:'indexer stems + RoPE', ms:2.62, pct:4.2, cls:'compute', note:'K/Q/W linears (24–44% util) + SP/TP gathers + on-device RoPE.'},
-    {nm:'attn Q-path',       ms:2.50,  pct:4.0, cls:'compute', note:'q_a / q_b / wkv_b1 matmuls (17–44% util), create-heads, rope, concat → absorbed tt_q.'},
-    {nm:'latent gather (SP)',ms:2.17,  pct:3.5, cls:'ccl',     note:'SP all_gather (~77 GB/s = 15% of link) + block-cyclic un-rotate (concat → contiguous).'},
-    {nm:'epilogue',          ms:1.66,  pct:2.6, cls:'compute', note:'wkv_b2, nlp_concat_heads, o_proj (69% util), reduce_scatter.'},
-    {nm:'attn KV-path + cache', ms:0.22, pct:0.4, cls:'other', note:'kv_a, TP all-gather+reduce, norm, rope, bf8 cache write (update_padded_kv_cache).'},
-    {nm:'indices reshard',   ms:0.06,  pct:0.1, cls:'other',   note:'ttnn.mesh_partition: replicated indices → SP-sharded to match q.'},
+    {nm:'sparse_sdpa',       ms:7.48,  pct:27.5, cls:'compute', note:"NEW #1. DRAM-bound on the latent gather: ~3.0 GB of random-access reads (2048 latents/query × 576, MQA-shared) → 5.9 ms floor; arithmetic only ~0.6 ms. Untouched by SP-sharding (it was already SP-sharded). Lever: fp8 kv (op supports it) ~halves the gather."},
+    {nm:'top-k',             ms:3.77,  pct:13.9, cls:'compute', note:'topk_large_indices — was 14.7 ms, cut ~4× (=sp) now that each chip selects over only its S/sp=1280 query rows. No perf model.'},
+    {nm:'attn matmuls (×10)',ms:3.25,  pct:12.0, cls:'compute', note:'q_a / q_b / wkv_b1 / wkv_b2 / o_proj / kv_a indexer+attention linears (17–69% util). Per-chip, small; unchanged by SP-sharding.'},
+    {nm:'indexer_score',     ms:2.68,  pct:9.8,  cls:'compute', note:'was 9.86 ms, cut ~4× (=sp): each chip now scores only its S/sp query rows instead of recomputing the full glob logits. 75% math-util.'},
+    {nm:'all_gather (×7)',   ms:2.52,  pct:9.3,  cls:'ccl',     note:'Dominated by the logits all-reduce AG (1.67 ms, was 6.66) — its buffer is now 1/sp (144 MB). Plus the SP kvpe gather + small TP gathers. The 2 indexer Q/W SP all-gathers are gone.'},
+    {nm:'reduce_scatter (×6)',ms:2.12, pct:7.8,  cls:'ccl',     note:'Logits all-reduce RS (1.73 ms, was 6.80; buffer now 1/sp) + the TP reduce-scatters (q/kv/weights/o_proj).'},
+    {nm:'untilize (×3)',     ms:1.58,  pct:5.8,  cls:'other',   note:'Logits all-reduce RM→TILE round-trip (0.73 ms, was 3.1) + kvpe-prefix untilize. Shrank with the 1/sp logits buffer.'},
+    {nm:'tilize (×2)',       ms:1.09,  pct:4.0,  cls:'other',   note:'Logits TILE→RM (0.68 ms, was 2.9) + one more. Shrank with the 1/sp logits buffer.'},
+    {nm:'concat (×6)',       ms:0.96,  pct:3.5,  cls:'other',   note:'kvpe-prefix un-rotate (block-cyclic→contiguous) + q/kv rope concats.'},
+    {nm:'slice + other',     ms:1.58,  pct:5.8,  cls:'other',   note:'slice (×56, 0.64), typecast, nlp_create/concat_heads, rope, layer_norm, copy, mesh_partition (now ~0). The SP-sharded indexer dropped the post-topk indices mesh_partition entirely.'},
   ];
   const maxMs = Math.max.apply(null, TIMING.map(t=>t.ms));
   const cap = document.getElementById('tcap');
