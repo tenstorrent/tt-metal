@@ -30,10 +30,18 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 # toolchain matching the LLK source (>= 7.60.0, which adds sfpi::ShiftMode); an
 # older sfpi fails dispatch-kernel compile at device open. Gated so the default
 # CPU suite never tries to open a device.
-pytestmark = pytest.mark.skipif(
-    os.environ.get("DG_RUN_DEVICE") != "1",
-    reason="set DG_RUN_DEVICE=1 to run on a Tenstorrent device (needs sfpi >= 7.60.0)",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("DG_RUN_DEVICE") != "1",
+        reason="set DG_RUN_DEVICE=1 to run on a Tenstorrent device (needs sfpi >= 7.60.0)",
+    ),
+    # Share ONE device across all tests in this module. Repeated per-test
+    # CreateDevice/teardown on QB2 (4x Blackhole) can hang an active-erisc core
+    # ("Timed out while waiting for active ethernet core ... to become active
+    # again"), bricking the board until a reset. Module scope does a single
+    # open + single teardown for the whole file.
+    pytest.mark.use_module_device,
+]
 
 # Device-friendly large-negative (bf16-representable) stand-in for -inf in the mask.
 NEG = -1.0e9
