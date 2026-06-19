@@ -632,6 +632,19 @@ The report is read by the kernel-lib / API owners (for handoff points), by the d
 
 Structure the report with the following sections. Each section may be empty (write "none" with a one-line note); do not omit sections.
 
+### Provenance
+
+Record which version of the recipe docs this port ran against, so a reviewer can reconstruct the exact guidance you followed. Run this from your checkout root and paste the output verbatim — do not hand-edit it:
+
+```
+git log -1 --format='%h %cs %s' -- docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/
+```
+
+- **Recipe docs (this port):** `<hash> <date> <subject>`
+- **Audit docs (inherited):** `<the provenance line copied from METAL2_PORT_BRIEF.md>`
+
+If the command prints nothing, the recipe docs are not from a tracked doc-branch checkout, so the version can't be pinned — record that fact instead.
+
 ### TTNN ProgramFactory
 
 Confirms the realized factory shape against the audit's decision, and records the device-op-class edits the port forced. Filled out per the [TTNN integration doc — Port report deliverable](port_op_to_metal2_ttnn_factory.md#port-report-deliverable-porter-facing): concept realized, custom-hash deletion (file:line or none), pybind entry points removed (or none), and open items (relaxation candidates, capabilities not yet on main the op would benefit from, friction with the concept fit).

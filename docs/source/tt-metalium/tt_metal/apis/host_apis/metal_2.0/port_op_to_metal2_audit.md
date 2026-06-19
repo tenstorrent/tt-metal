@@ -314,6 +314,14 @@ The audit emits up to **two** files, by audience. Write them to the **op's root 
 
 Findings route to these documents by role (per the [finding-roles routing table](#feasibility-audit) at the top of the audit): the **brief** carries GATE-cleared one-liners + all PORT WORK + all FYI-P; the **team doc** carries everything, including FYI-U.
 
+**Provenance line.** Both files open with a one-line record of the recipe-doc version this audit ran against, so a reviewer can pin the exact guidance. Generate it from the checkout root and paste it verbatim:
+
+```
+git log -1 --format='%h %cs %s' -- docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/
+```
+
+If the command prints nothing, the docs aren't from a tracked doc-branch checkout — record that instead, since the version can't be pinned.
+
 **Cross-references inside the generated files name the doc plainly** (e.g. `port_op_to_metal2_ttnn_factory.md`) rather than using a markdown link. These files live in the *op directory*, where a doc-relative link (`](port_op_to_metal2_ttnn_factory.md)`) doesn't resolve, and op directories sit at varying depths — so a hardcoded relative path is fragile. The porter has the repo open; a plain doc name is enough.
 
 **In chat, surface only the Result line plus the file path(s)** so the user can open the files when ready. Do not paste a full report inline — an audit of any non-trivial op runs to dozens or hundreds of lines, and chat-scrollback isn't the right home for it. Markdown formatting in the files is required, not optional: the headers, tables, and inline-`code` spans are what make a sizeable report skim-friendly.
@@ -339,6 +347,8 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 >
 
 **Scope:** TTNN op, Gen1 (WH/BH) target — within scope of `port_op_to_metal2_audit.md`.
+
+**Recipe docs:** `<hash> <date> <subject>`
 
 ## Status summary
 
@@ -435,6 +445,8 @@ Ordered by the porter's workflow: plan → construct → watch-for. Issued when 
 > Audit cleared all gates. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
 
 **Gates cleared:** ProgramDescriptor ✓ · Device 2.0 ✓ *(or ▲ if holdovers — see Blocked-until)* · Features ✓
+
+**Recipe docs:** `<hash> <date> <subject>` *(carry this line into the port report's Provenance section)*
 
 <Include this block prominently **only** when the Device 2.0 gate cleared as YELLOW (isolated holdovers); omit it on a fully clean port:>
 > ⚠ **BLOCKED until Device 2.0 cleanup.** This port **cannot begin** until these isolated Device 2.0 holdovers are fixed — *separately, on the Device 2.0 track; never in the port diff*: `<kernel:file:line — call → member-form>`, … Once they're clean, proceed with this brief as-is — **no re-audit needed.**
