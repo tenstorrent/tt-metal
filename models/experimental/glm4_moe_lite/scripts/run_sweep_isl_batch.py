@@ -95,6 +95,14 @@ def run_one(
     env["GLM4_MOE_LITE_MOE_SPARSE_DEBUG"] = "1"
     env["GLM4_MOE_LITE_MOE_DISPATCH_IMPL"] = "all_to_all"
     env["GLM4_MOE_LITE_SHARDED_DECODE_NORM"] = "1"
+    env["GLM4_MOE_LITE_HEAD_PARALLEL_ATTN"] = "1"
+    env["GLM4_MOE_LITE_MOE_FAST_REMAP"] = "1"
+    env["GLM4_MOE_LITE_DECODE_FUSE_QA_NORM"] = "0"
+    env["GLM4_MOE_LITE_DECODE_Q_DIRECT_RESHAPE"] = "1"
+    env["GLM4_MOE_LITE_DECODE_SAMPLING_ALLGATHER"] = "1"
+    # Scale decode FlashMLA cores with KV length (long-context decode is otherwise serialized
+    # on 16 cores). Measured: 16K -5%, 32K -10% at batch=1; bit-identical greedy output.
+    env["GLM4_MOE_LITE_DECODE_MLA_CORE_SCALE"] = "1"
 
     result = {
         "isl": isl,

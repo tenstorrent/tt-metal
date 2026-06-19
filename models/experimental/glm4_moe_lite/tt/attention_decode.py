@@ -393,11 +393,35 @@ def flash_mla_and_output(
     else:
         scale = float(int(hparams.qk_head_dim) ** -0.5)
 
+    # FlashMLA decode caps work at max_cores_per_head_batch=16 cores per (kv_head, batch).
+    # With a single latent KV head this serializes the growing KV read on 16 cores, so long
+    # context leaves most of the grid idle (e.g. ~125 k-chunks/core at 128K). Scale cores with
+    # the allocated KV length: derive the chunk count from the cache shape (static → trace-safe)
+    # and cap at grid/batch and DECODE_MLA_MAX_CORES.
+    #   - 32 is the measured sweet spot at batch=1 (16/32K: -5%/-10% vs 16; 48 regresses past the
+    #     peak as tree-reduction overhead outgrows the serial savings).
+    #   - Hard ceilings: FlashMLA tree-reduction allows ≤6 rounds → ≤64 cores/head, and with
+    #     DECODE_L1_ACT the per-core CBs exceed L1 at 64 (48 is the highest that fits).
+    DECODE_MLA_MAX_CORES = 32
+    mla_max_cores = 16
+    if cfg.mla_max_cores > 0:
+        mla_max_cores = cfg.mla_max_cores
+    elif cfg.decode_mla_core_scale:
+        grid_size = device.compute_with_storage_grid_size()
+        avail_cores = int(grid_size.x) * int(grid_size.y)
+        block_size = int(kvpe_cache.shape[2])
+        blocks_per_seq = max(1, int(kvpe_cache.shape[0]) // max(1, batch))
+        max_kv_tokens = blocks_per_seq * block_size
+        num_chunks = max(1, (max_kv_tokens + cfg.mla_k_chunk_size - 1) // cfg.mla_k_chunk_size)
+        cores_cap = max(1, avail_cores // max(1, batch))  # num_kv_heads == 1 for MLA latent cache
+        mla_max_cores = max(16, min(num_chunks, cores_cap, DECODE_MLA_MAX_CORES))
+
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=0,
         k_chunk_size=cfg.mla_k_chunk_size,
         exp_approx_mode=False,
+        max_cores_per_head_batch=mla_max_cores,
     )
     compute_kernel_config = cfg.mla_compute_kernel_config()
     # If DECODE_L1_ACT=1 → decode_act_mc is L1_MEMORY_CONFIG → FlashMLA output goes to L1; otherwise DRAM.

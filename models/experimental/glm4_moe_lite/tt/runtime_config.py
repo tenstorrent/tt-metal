@@ -89,6 +89,8 @@ class Glm4RuntimeConfig:
     mla_fp32_acc: bool
     mla_scale_mode: str
     mla_k_chunk_size: int
+    decode_mla_core_scale: bool
+    mla_max_cores: int
     packer_l1_acc: bool
     skip_typecast: bool
 
@@ -168,6 +170,12 @@ class Glm4RuntimeConfig:
             mla_fp32_acc=mla_fp32,
             mla_scale_mode=_env_str("GLM4_MOE_LITE_MLA_SCALE_MODE", default="qk").lower(),
             mla_k_chunk_size=_env_int("GLM4_MOE_LITE_MLA_K_CHUNK_SIZE", default=64),
+            # Scale decode FlashMLA cores with KV length (default-off): the op caps at
+            # max_cores_per_head_batch=16, which serializes the growing KV read at long
+            # context. When enabled, cores are derived from the allocated cache size.
+            decode_mla_core_scale=_env_bool("GLM4_MOE_LITE_DECODE_MLA_CORE_SCALE"),
+            # Hard override for max_cores_per_head_batch (0 = auto/struct default).
+            mla_max_cores=_env_int("GLM4_MOE_LITE_MLA_MAX_CORES", default=0),
             packer_l1_acc=_env_bool("GLM4_MOE_LITE_PACKER_L1_ACC"),
             skip_typecast=_env_bool("GLM4_MOE_LITE_SKIP_TYPECAST"),
             # Memory layout
