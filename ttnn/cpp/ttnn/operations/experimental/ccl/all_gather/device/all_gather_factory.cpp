@@ -63,8 +63,8 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
         log_warning(
             tt::LogOp,
-            "Allocating semaphores in L1, which may fragment L1 and cause allocation failures for subsequent "
-            "operations. Configure an L1_SMALL region to avoid this.");
+            "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
+            "allocations. Configure an L1_SMALL region to mitigate this.");
     }
     auto barrier_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
