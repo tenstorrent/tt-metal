@@ -5,10 +5,14 @@
 #include "impl/jit_server/jit_compile_rpc_client.hpp"
 
 #include <capnp/ez-rpc.h>
+#include <capnp/rpc-twoparty.h>
 #include <kj/async.h>
 #include <kj/async-io.h>
 #include <kj/time.h>
 #include <kj/timer.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
@@ -48,6 +52,57 @@ unsigned compile_timeout_seconds() {
     } catch (const std::exception&) {
         return kDefaultCompileTimeoutSeconds;
     }
+}
+
+// TCP keepalive on the client connection: a genuinely-dead (half-open) connection is detected by
+// the kernel in ~idle + cnt*intvl seconds and surfaces as a disconnect — regardless of how long a
+// legitimate slow response takes. This decouples dead-detection from the latency-tuned app timeout
+// (which had to exceed the whole-batch latency to avoid false positives). A slow-but-alive
+// connection keeps ACKing probes and is never killed.
+constexpr const char* kKeepaliveEnableEnv = "TT_METAL_JIT_SERVER_KEEPALIVE";         // default on (1)
+constexpr const char* kKeepaliveIdleEnv = "TT_METAL_JIT_SERVER_KEEPALIVE_IDLE_S";    // default 5
+constexpr const char* kKeepaliveIntvlEnv = "TT_METAL_JIT_SERVER_KEEPALIVE_INTVL_S";  // default 2
+constexpr const char* kKeepaliveCntEnv = "TT_METAL_JIT_SERVER_KEEPALIVE_CNT";        // default 3
+constexpr const char* kUserTimeoutMsEnv = "TT_METAL_JIT_SERVER_USER_TIMEOUT_MS";     // default 15000
+
+int env_int(const char* name, int fallback) {
+    const char* v = std::getenv(name);
+    if (v == nullptr || *v == '\0') {
+        return fallback;
+    }
+    try {
+        return static_cast<int>(std::stol(v));
+    } catch (const std::exception&) {
+        return fallback;
+    }
+}
+
+// Connect to `endpoint` and arm TCP keepalive + user-timeout so a dead connection breaks fast.
+kj::Own<kj::AsyncIoStream> connect_with_keepalive(kj::AsyncIoContext& io, const std::string& endpoint) {
+    auto addr = io.provider->getNetwork().parseAddress(endpoint).wait(io.waitScope);
+    auto stream = addr->connect().wait(io.waitScope);
+    if (env_int(kKeepaliveEnableEnv, 1) != 0) {
+        const int idle = env_int(kKeepaliveIdleEnv, 5);
+        const int intvl = env_int(kKeepaliveIntvlEnv, 2);
+        const int cnt = env_int(kKeepaliveCntEnv, 3);
+        const int user_to = env_int(kUserTimeoutMsEnv, 15000);
+        const int on = 1;
+        try {
+            stream->setsockopt(SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+            stream->setsockopt(IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+            stream->setsockopt(IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+            stream->setsockopt(IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+#ifdef TCP_USER_TIMEOUT
+            if (user_to > 0) {
+                stream->setsockopt(IPPROTO_TCP, TCP_USER_TIMEOUT, &user_to, sizeof(user_to));
+            }
+#endif
+        } catch (const kj::Exception&) {
+            // Best-effort: if a sockopt isn't supported, fall back to the app-level timeout in
+            // wait_all(). Never fail the connection over keepalive tuning.
+        }
+    }
+    return stream;
 }
 
 std::string trim_ascii_whitespace(std::string_view input) {
@@ -270,12 +325,20 @@ std::vector<CompileResponse> JitCompileRpcClient::compile_batch(const std::vecto
 // -- JitCompileRpcSession --
 
 struct JitCompileRpcSession::Impl {
-    capnp::EzRpcClient client;
+    // Manual two-party setup (not EzRpcClient) so we can arm TCP keepalive on the socket before
+    // wrapping it in the RPC client — EzRpcClient hides the connection.
+    kj::AsyncIoContext io;
+    kj::Own<kj::AsyncIoStream> stream;
+    capnp::TwoPartyClient rpc_client;
     rpc::JitCompile::Client cap;
     using CompilePromise = capnp::RemotePromise<rpc::JitCompile::CompileResults>;
     std::vector<CompilePromise> promises;
 
-    explicit Impl(const std::string& endpoint) : client(endpoint), cap(client.getMain<rpc::JitCompile>()) {}
+    explicit Impl(const std::string& endpoint) :
+        io(kj::setupAsyncIo()),
+        stream(connect_with_keepalive(io, endpoint)),
+        rpc_client(*stream),
+        cap(rpc_client.bootstrap().castAs<rpc::JitCompile>()) {}
 };
 
 JitCompileRpcSession::JitCompileRpcSession(const std::string& endpoint) : impl_(std::make_unique<Impl>(endpoint)) {}
@@ -286,7 +349,7 @@ CompileResponse JitCompileRpcSession::send_and_wait(const CompileRequest& reques
     auto rpc_request = impl_->cap.compileRequest();
     auto builder = rpc_request.initRequest();
     fill_compile_request(builder, request);
-    auto result = rpc_request.send().wait(impl_->client.getWaitScope());
+    auto result = rpc_request.send().wait(impl_->io.waitScope);
     return read_compile_response(result.getResponse());
 }
 
@@ -302,7 +365,7 @@ std::vector<CompileResponse> JitCompileRpcSession::wait_all() {
     responses.reserve(impl_->promises.size());
 
     const unsigned timeout_s = compile_timeout_seconds();
-    auto& wait_scope = impl_->client.getWaitScope();
+    auto& wait_scope = impl_->io.waitScope;
 
     try {
         for (auto& promise : impl_->promises) {
@@ -316,7 +379,7 @@ std::vector<CompileResponse> JitCompileRpcSession::wait_all() {
             // Race the RPC response against a timer. If the timer wins (the response never
             // arrived — connection wedged / half-open), it throws and we surface a transport
             // error so the caller can fall back to a local compile instead of hanging forever.
-            kj::Timer& timer = impl_->client.getIoProvider().getTimer();
+            kj::Timer& timer = impl_->io.provider->getTimer();
             kj::Promise<capnp::Response<rpc::JitCompile::CompileResults>> rpc = kj::mv(promise);
             auto timed_out =
                 timer.afterDelay(timeout_s * kj::SECONDS)
@@ -345,7 +408,7 @@ UploadFirmwareResponse JitCompileRpcSession::upload_firmware(const UploadFirmwar
     auto rpc_request = impl_->cap.uploadFirmwareRequest();
     auto builder = rpc_request.initRequest();
     fill_upload_firmware_request(builder, request);
-    auto result = rpc_request.send().wait(impl_->client.getWaitScope());
+    auto result = rpc_request.send().wait(impl_->io.waitScope);
     return read_upload_firmware_response(result.getResponse());
 }
 
