@@ -47,7 +47,7 @@
 - **Compute config**: hard-coded `MathFidelity.HiFi2`, `fp32_dest_acc_en` off (avoids the HiFi4+fp32+bf16 SUM-reduce combo). Not caller-configurable.
 - **Golden baseline**: 207 / 208 supported cells passing (per verifier CLI); 536 correctly xfailed; the 1 failing cell is the `Q1x1x128x1024` bf16 explicit-scale precision near-miss (category `numerical-precision`).
 
-### [ ] Refinement 1 — Numerical configurability expansion
+### [x] Refinement 1 — Numerical configurability expansion
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`,
 expose `compute_kernel_config: ttnn.ComputeKernelConfig` on the entry point
