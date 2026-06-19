@@ -975,6 +975,10 @@ static std::function<void()> jit_compile_kernel(
     std::string full_cmd = cmd.str();
     log_debug(tt::LogMetal, "JIT compile: {}", full_cmd);
 
+    // Ensure the output dir exists right before linking: on a cold JIT cache the
+    // shared cache dir may not be present yet when ld writes its output.
+    std::filesystem::create_directories(std::filesystem::path(so_path).parent_path());
+
     // Safety: all path/flag inputs are derived from tt-metal internals and CMake
     // constants, not from untrusted user input. Kernel defines are written as
     // #define in the wrapper file, not as -D shell flags.

@@ -22,12 +22,14 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 **Where checks live (the three layers)**
 - **Host-side** — `[metal] tt_metal/impl/emulation/host_sanitizers.hpp` + call
   sites in `[metal] tt_metal/impl/host_api/tt_metal.cpp`.
-- **Kernel-side** — the JIT headers in `[emule]`:
-  `include/jit_hw/api/dataflow/dataflow_api.h`, `include/jit_hw/jit_kernel_stubs.hpp`,
-  `include/jit_hw/api/cb_api.h`. Every kernel L1 access flows through
-  `__emule_local_l1_to_ptr` (duplicated in `dataflow_api.h` and the stub; the JIT
-  wrapper includes the stub first, so the **stub's copy is the one that runs** —
-  kernel-side edits must be made in both).
+- **Kernel-side** — the JIT headers in `[emule] include/jit_hw/`. Every kernel L1
+  access flows through `__emule_local_l1_to_ptr`, which has a **single** definition
+  in `internal/emule_l1_to_ptr.h` (included by both `jit_kernel_stubs.hpp` and
+  `api/dataflow/dataflow_api.h`). It early-outs when ASAN is off; otherwise it
+  dispatches to the per-access check bodies in `asan/asan_l1_checks.h`. The CB-op
+  checks live in `asan/asan_cb.h` (called from `api/cb_api.h`), NoC alignment in
+  `api/dataflow/asan/asan_dataflow.h`, and the master switch + diagnostic trace in
+  `asan/emule_asan.h`.
 - **Runner / post-launch** — `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp` (+ `emule_sanitizers.cpp` for Dirty CB / Object Intent)
   (runs after all kernel threads join). The live-buffer extents it relies on are
   registered in `[metal] tt_metal/impl/emulation/emule_live_ranges.{hpp,cpp}`,
@@ -39,7 +41,7 @@ Every `[ASAN ERROR]` is followed by a unified trace, emitted by
 `__emule_asan_panic()`. libtt_metal carries its own libc/POSIX-only definition in
 **`[metal] tt_metal/impl/emulation/emule_asan_panic.cpp`** — a faithful mirror of
 the tt-emule runtime's copy (declared, with the standalone-runtime definition, in
-`[emule] include/jit_hw/emule_asan.h`). The host-API checks call it directly and
+`[emule] include/jit_hw/asan/emule_asan.h`). The host-API checks call it directly and
 JIT kernel `.so` files resolve it at dlopen, so metal pulls nothing from `jit_hw`.
 It prints:
 
@@ -70,14 +72,14 @@ the offending kernel line.
 | Use-After-Free | host | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host access through a deallocated `Buffer` |
 | Host L1 / DRAM Alignment | host | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host poke address not aligned to the transfer's real requirement |
 | Metadata Overflow | host | `[metal] host_api/tt_metal.cpp` | program's static CB region overruns the reserved L1 window |
-| Out-of-Bounds Write (L1/DRAM) | kernel + runner | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (L1); `[metal] emulated_program_runner.cpp` (`__emule_dram_ptr`) | access lands in no live buffer extent |
-| Tensor Padding Violation *(test skipped — see §5)* | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | write into a buffer's `[logical_end, physical_end)` pad band |
-| Illegal Semaphore Access | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | scalar access into the reserved semaphore region |
-| CB Boundary Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (counters in `api/cb_api.h`) | access to a CB page outside an **active** reserve/wait window |
-| CB Reservation Overflow | kernel | `[emule] include/jit_hw/api/cb_api.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
-| NoC-read-pending on pop | kernel | `[emule] api/cb_api.h` (pop) + `api/dataflow/dataflow_api.h` (read counter) | `cb_pop_front` while a `noc_async_read` is unbarriered |
-| NOC Transfer Alignment | kernel | `[emule] include/jit_hw/api/dataflow/dataflow_api.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
-| Dirty CB Detected | runner | `[metal] emule_sanitizers.cpp` (counters in `[emule] api/cb_api.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
+| Out-of-Bounds Write (L1/DRAM) | kernel + runner | `[emule] asan/asan_l1_checks.h` (L1); `[metal] emulated_program_runner.cpp` (`__emule_dram_ptr`) | access lands in no live buffer extent |
+| Tensor Padding Violation *(test skipped — see §5)* | kernel | `[emule] asan/asan_l1_checks.h` | write into a buffer's `[logical_end, physical_end)` pad band |
+| Illegal Semaphore Access | kernel | `[emule] asan/asan_l1_checks.h` | scalar access into the reserved semaphore region |
+| CB Boundary Violation | kernel | `[emule] asan/asan_l1_checks.h` (window counters in `asan/asan_cb.h`) | access to a CB page outside an **active** reserve/wait window |
+| CB Reservation Overflow | kernel | `[emule] asan/asan_cb.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
+| NoC-read-pending on pop | kernel | `[emule] asan/asan_cb.h` (pop) + `api/dataflow/dataflow_api.h` (read counter) | `cb_pop_front` while a `noc_async_read` is unbarriered |
+| NOC Transfer Alignment | kernel | `[emule] api/dataflow/asan/asan_dataflow.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
+| Dirty CB Detected | runner | `[metal] emule_sanitizers.cpp` (counters in `[emule] asan/asan_cb.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
 | Object Intent Violation | runner | `[metal] emule_sanitizers.cpp` | a kernel changed a buffer it never resolved a pointer into |
 
 ---
@@ -137,16 +139,19 @@ fitting-CB positive control).
 
 ## Kernel-side checks
 
-> All of these run inside `__emule_local_l1_to_ptr` (the chokepoint every kernel
-> L1 access passes through — duplicated in `[emule] jit_kernel_stubs.hpp` and
-> `[emule] include/jit_hw/api/dataflow/dataflow_api.h`) or inside the CB/NoC API
-> shims (`[emule] include/jit_hw/api/cb_api.h`, `…/dataflow/dataflow_api.h`). The
+> The per-access L1 checks run inside `__emule_local_l1_to_ptr` (the chokepoint
+> every kernel L1 access passes through, single definition in
+> `[emule] include/jit_hw/internal/emule_l1_to_ptr.h`), which dispatches to the
+> check bodies in `[emule] include/jit_hw/asan/asan_l1_checks.h`. The CB-op checks
+> live in `[emule] include/jit_hw/asan/asan_cb.h` (called from `api/cb_api.h`) and
+> the NoC alignment check in `[emule] include/jit_hw/api/dataflow/asan/asan_dataflow.h`. The
 > host snapshots the relevant state at launch and threads it into per-kernel
-> thread-locals; with the flag off those pointers are null and the checks vanish.
+> thread-locals; with the flag off the chokepoint early-outs and the checks vanish.
 
 ### 4. Out-of-Bounds Write (L1 and DRAM)
-**Lives in:** L1 — `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
-`[emule] include/jit_hw/api/dataflow/dataflow_api.h`. DRAM — `__emule_dram_ptr` in
+**Lives in:** L1 — `__emule_asan_check_oob_tensor` in
+`[emule] include/jit_hw/asan/asan_l1_checks.h` (dispatched by the
+`__emule_local_l1_to_ptr` chokepoint, `internal/emule_l1_to_ptr.h`). DRAM — `__emule_dram_ptr` in
 `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`. Live extents:
 `[metal] emule_live_ranges.{hpp,cpp}`, fed from `[metal] tt_metal/impl/buffers/buffer.cpp`.
 **What it catches:** a kernel writing to L1/DRAM at or above the unreserved base
@@ -163,8 +168,8 @@ that offset against the live extents. In none → abort.
 in-bounds L1 and DRAM positive controls).
 
 ### 5. Tensor Padding Violation
-**Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
-`dataflow_api.h`; padding bands registered in `[metal] emule_live_ranges.{hpp,cpp}`
+**Lives in:** `__emule_asan_check_padding` in
+`[emule] include/jit_hw/asan/asan_l1_checks.h`; padding bands registered in `[metal] emule_live_ranges.{hpp,cpp}`
 (`LiveL1PaddingRanges`) from `Buffer::set_logical_size` in `[metal] buffers/buffer.cpp`.
 **What it catches:** a kernel writing into the padding gap
 `[logical_end, physical_end)` of a buffer whose logical size is smaller than its
@@ -182,8 +187,8 @@ risks false-positiving legitimate writes. The check needs to be reworked to mode
 the actual (row-major / tiled face-aware) pad layout before the test is re-enabled.
 
 ### 6. Illegal Semaphore Access
-**Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
-`dataflow_api.h`; the reserved range is set by the runner
+**Lives in:** `__emule_asan_check_semaphore` in
+`[emule] include/jit_hw/asan/asan_l1_checks.h`; the reserved range is set by the runner
 (`[metal] emulated_program_runner.cpp`).
 **What it catches:** a kernel doing a raw scalar L1 access into the reserved
 semaphore region (semaphores must go through the semaphore API).
@@ -195,9 +200,10 @@ semaphore region (semaphores must go through the semaphore API).
 outside-region positive control).
 
 ### 7. CB Boundary Violation
-**Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
-`dataflow_api.h`; the `reserved`/`waited` page counters are maintained in
-`[emule] include/jit_hw/api/cb_api.h`.
+**Lives in:** `__emule_asan_cb_resolve` in
+`[emule] include/jit_hw/asan/asan_l1_checks.h`; the `reserved`/`waited` page
+counters are maintained by the `__emule_asan_cb_on_*` helpers in
+`[emule] include/jit_hw/asan/asan_cb.h`.
 **What it catches:** a kernel reading/writing a circular-buffer page **outside the
 window it actually reserved/waited for**.
 **How it works:** when an access lands inside a CB's backing memory, the check
@@ -215,7 +221,7 @@ wraparound positive control + a wraparound violation that confirms the modular
 window stays active through a wrap, and a no-active-window control).
 
 ### 8. CB Reservation Overflow  *(always on)*
-**Lives in:** `cb_reserve_back` in `[emule] include/jit_hw/api/cb_api.h`.
+**Lives in:** `__emule_asan_cb_on_reserve` in `[emule] include/jit_hw/asan/asan_cb.h` (called from `cb_reserve_back`).
 **What it catches:** `cb_reserve_back(cb, n)` asking for more pages than the CB
 holds in total.
 **How it works:** before blocking to wait for free space, compare `n` against the
@@ -228,8 +234,9 @@ exact-capacity positive control for the `>` boundary, and an always-on death
 test with the master switch explicitly cleared).
 
 ### 9. NoC Read Pending on `cb_pop_front`
-**Lives in:** `cb_pop_front` in `[emule] include/jit_hw/api/cb_api.h`; the pending
-counter is incremented/cleared in `noc_async_read` / `noc_async_read_barrier` in
+**Lives in:** `__emule_asan_cb_on_pop` in `[emule] include/jit_hw/asan/asan_cb.h`
+(called from `cb_pop_front`); the pending counter is incremented/cleared in
+`noc_async_read` / `noc_async_read_barrier` in
 `[emule] include/jit_hw/api/dataflow/dataflow_api.h`.
 **What it catches:** popping (freeing) a CB page while a `noc_async_read` hasn't
 been barriered — the pop releases the page for the producer to refill, and a read
@@ -246,8 +253,8 @@ barrier-present positive control confirming the barrier clears the counter).
 
 ### 10. NOC Transfer Alignment
 **Lives in:** `__emule_check_noc_read_alignment` / `__emule_check_noc_write_alignment`
-in `[emule] include/jit_hw/api/dataflow/dataflow_api.h`, called at the top of
-`noc_async_read`/`noc_async_write` in the same file. (DRAM-vs-L1 is decided by
+in `[emule] include/jit_hw/api/dataflow/asan/asan_dataflow.h`, called at the top of
+`noc_async_read`/`noc_async_write` in `dataflow_api.h`. (DRAM-vs-L1 is decided by
 `__emule_noc_addr_is_dram` in `[metal] emulated_program_runner.cpp`.)
 **What it catches:** a NoC read/write whose endpoint isn't aligned to its memory
 type's requirement.
@@ -273,8 +280,9 @@ their low bits differ.
 **Lives in:** `sweep_per_kernel_dirty_cbs` (abort in `abort_if_dirty_cb`) in
 `[metal] emule_sanitizers.cpp`. Reads the per-kernel thread-local
 *trailing-dangling* flags `__emule_cb_reserve_dangling[]` /
-`__emule_cb_wait_dangling[]` (maintained by `cb_reserve_back`/`cb_push_back` and
-`cb_wait_front`/`cb_pop_front` in `[emule] include/jit_hw/api/cb_api.h`).
+`__emule_cb_wait_dangling[]` (maintained by the `__emule_asan_cb_on_*` helpers in
+`[emule] include/jit_hw/asan/asan_cb.h`, called from `cb_reserve_back`/`cb_push_back`
+and `cb_wait_front`/`cb_pop_front` in `api/cb_api.h`).
 **What it catches:** a kernel that exits with a `cb_reserve_back` that **no**
 `cb_push_back` ever followed, or a `cb_wait_front` that **no** `cb_pop_front` ever
 followed — the producer/consumer claimed the handshake but never handed off, so on
@@ -331,8 +339,9 @@ no-violation control, and the per-check opt-out env test).
 ### 12. Object Intent Violation
 **Lives in:** `[metal] tt_metal/impl/emulation/emule_sanitizers.cpp` (the
 pre-launch byte snapshot + post-join `memcmp`); the per-kernel "resolved set"
-(`__emule_l1_resolved_ranges`) is recorded inside `__emule_local_l1_to_ptr`
-(`[emule] jit_kernel_stubs.hpp` & `dataflow_api.h`).
+(`__emule_l1_resolved_ranges`) is recorded by `__emule_asan_check_oob_tensor`
+(`[emule] include/jit_hw/asan/asan_l1_checks.h`), reached via the
+`__emule_local_l1_to_ptr` chokepoint.
 **What it catches:** a kernel that scribbles on *another* buffer's bytes — valid,
 allocated L1, but a buffer it never took a pointer into via the public API (a
 provenance/aliasing bug).
@@ -367,12 +376,12 @@ the violation.
 | Use-After-Free | `[metal] host_sanitizers.hpp` | `buffer.is_allocated()` at host entry |
 | Host L1/DRAM Alignment | `[metal] host_sanitizers.hpp` | `address % get_alignment_requirements(device, size)` (1 ⇒ no-op on emule) |
 | Metadata Overflow | `[metal] host_api/tt_metal.cpp` | static CB region vs lowest L1 alloc, at configure time |
-| Out-of-Bounds Write | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h`; `[metal] emulated_program_runner.cpp` | normalized offset ∉ any live `LiveL1Ranges`/`LiveDramRanges` extent |
-| Tensor Padding *(test skipped — see §5)* | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ `[logical_end, physical_end)` padding band |
-| Illegal Semaphore | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ reserved semaphore L1 range |
-| CB Boundary | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | accessed page outside an **active** reserve/wait window |
-| CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
-| NoC pending on pop | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
-| NOC Transfer Alignment | `[emule] api/dataflow/dataflow_api.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
-| Dirty CB | `[metal] emule_sanitizers.cpp` (+ `[emule] api/cb_api.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; opt out with `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` |
+| Out-of-Bounds Write | `[emule] asan/asan_l1_checks.h`; `[metal] emulated_program_runner.cpp` | normalized offset ∉ any live `LiveL1Ranges`/`LiveDramRanges` extent |
+| Tensor Padding *(test skipped — see §5)* | `[emule] asan/asan_l1_checks.h` | offset ∈ `[logical_end, physical_end)` padding band |
+| Illegal Semaphore | `[emule] asan/asan_l1_checks.h` | offset ∈ reserved semaphore L1 range |
+| CB Boundary | `[emule] asan/asan_l1_checks.h` (counters in `asan/asan_cb.h`) | accessed page outside an **active** reserve/wait window |
+| CB Reservation Overflow | `[emule] asan/asan_cb.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
+| NoC pending on pop | `[emule] asan/asan_cb.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
+| NOC Transfer Alignment | `[emule] api/dataflow/asan/asan_dataflow.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
+| Dirty CB | `[metal] emule_sanitizers.cpp` (+ `[emule] asan/asan_cb.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; opt out with `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` |
 | Object Intent | `[metal] emule_sanitizers.cpp` | post-launch `memcmp` of buffers never resolved into |
