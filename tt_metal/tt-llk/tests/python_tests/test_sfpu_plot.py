@@ -808,7 +808,7 @@ def _plot_and_print(
             max_ulp = float(sorted_ulp.max())
             visible_thresholds = _visible_ulp_thresholds(max_ulp)
             for threshold, color in visible_thresholds:
-                frac = float(np.searchsorted(sorted_ulp, threshold)) / n
+                frac = float(np.searchsorted(sorted_ulp, threshold, side="right")) / n
                 axes[3].axvline(
                     threshold,
                     color=color,
