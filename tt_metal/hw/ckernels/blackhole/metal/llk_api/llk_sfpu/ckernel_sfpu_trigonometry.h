@@ -861,7 +861,7 @@ inline void calculate_acosh() {
             arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(arg * (inp + sfpi::vConst1));
         }
         v_elseif(inp < LOG1P_LARGE) {
-            arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(inp * inp - sfpi::vConst1);
+            arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>((inp + sfpi::vConst1) * arg);
         }
         v_endif;
         sfpi::dst_reg[0] = arg;
@@ -902,13 +902,14 @@ inline void calculate_asinh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // Keep only the original input live across the body (matching calculate_acosh,
-        // which compiles within the SFPU reload budget). a = |x| is recomputed inline
-        // rather than held in its own long-lived register: an earlier revision that
-        // hoisted it into a vFloat pushed the allocator past the reload budget and the
-        // kernel failed to compile, so the recompute is deliberate. Build the per-region
-        // log1p argument over |x|, clamp |x| < 0.75 lanes to a safe value, materialise
-        // to DST, run the shared log1p, then overwrite the |x| < 0.75 lanes with the
-        // direct polynomial. Sign is restored at the very end from inp.
+        // which compiles within the SFPU reload budget). a = |x| and x2 = x*x are
+        // recomputed inline rather than held in their own long-lived registers:
+        // hoisting them into vFloats pushes the SFPU register allocator past its
+        // reload budget and the kernel fails to compile (internal compiler error:
+        // maximum number of generated reload insns), so the recompute is deliberate.
+        // Build the per-region log1p argument over |x|, clamp |x| < 0.75 lanes to a
+        // safe value, materialise to DST, run the shared log1p, then overwrite the
+        // |x| < 0.75 lanes with the direct polynomial. Sign is restored from inp.
         sfpi::vFloat inp = sfpi::dst_reg[0];
 
         // Mid/large region (|x| >= 0.75): asinh(|x|) = log1p(arg). The large
