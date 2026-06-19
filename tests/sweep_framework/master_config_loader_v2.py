@@ -307,12 +307,32 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
         exp_val = False
         if exp_m:
             exp_val = exp_m.group(1).lower() not in ("false", "0")
-        return ttnn.SDPAProgramConfig(
+        # sub_core_grids: the explicit kernel-placement grid ({[x1-y1 - x2-y2], ...}).
+        # It MUST be reconstructed: without it the op falls back to the full
+        # compute_with_storage_grid_size (e.g. width 8 -> x=7), which lands a kernel
+        # on a WORKER dispatch core ("not on_dispatch_core"). std::nullopt when absent.
+        sub_core_grids = None
+        if "sub_core_grids=std::nullopt" not in value_str:
+            _ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", value_str)
+            if _ranges:
+                sub_core_grids = ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(ttnn.CoreCoord(int(a), int(b)), ttnn.CoreCoord(int(c), int(d)))
+                        for a, b, c, d in _ranges
+                    }
+                )
+        mcphb_m = re.search(r"max_cores_per_head_batch=(\d+)", value_str)
+        _sdpa_kwargs = dict(
             compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
             q_chunk_size=int(q_chunk_m.group(1)),
             k_chunk_size=int(k_chunk_m.group(1)),
             exp_approx_mode=exp_val,
         )
+        if sub_core_grids is not None:
+            _sdpa_kwargs["sub_core_grids"] = sub_core_grids
+        if mcphb_m:
+            _sdpa_kwargs["max_cores_per_head_batch"] = int(mcphb_m.group(1))
+        return ttnn.SDPAProgramConfig(**_sdpa_kwargs)
 
     if "LayerNormShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)

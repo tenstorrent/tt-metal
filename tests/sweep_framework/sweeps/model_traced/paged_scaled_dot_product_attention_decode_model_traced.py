@@ -476,13 +476,44 @@ def run(
         except Exception:
             return False
 
+    # --- paged_sdpa decode Q padding fix --------------------------------------
+    # The decode kernel reads padded_num_heads (= nearest_pow_2(nearest_n(H_q,32)))
+    # rows per core. The master trace records Q as ROW_MAJOR with shard height =
+    # H_q (e.g. 8), so only user 0 aligns and the rest read padding (PCC ~0.06).
+    # Rebuild Q as TILE with shard height = padded_num_heads so all users align,
+    # then take the direct from_torch path (which pads heads up to the shard height).
+    _q_pad_override = False
+    try:
+        if len(shape_a) == 4 and _is_sharded_memory_config(mem_config_a):
+            _spec = mem_config_a.shard_spec
+            _hq = int(shape_a[2])
+
+            def _nn(x, n):
+                return ((x + n - 1) // n) * n
+
+            def _np2(x):
+                p = 1
+                while p < x:
+                    p *= 2
+                return p
+
+            _padded = _np2(_nn(_hq, 32))
+            if int(_spec.shape[0]) < _padded:
+                _new_spec = ttnn.ShardSpec(_spec.grid, [_padded, int(_spec.shape[1])], _spec.orientation)
+                mem_config_a = ttnn.MemoryConfig(mem_config_a.memory_layout, mem_config_a.buffer_type, _new_spec)
+                layout_a = ttnn.TILE_LAYOUT
+                _q_pad_override = True
+    except Exception:
+        _q_pad_override = False
+    # --------------------------------------------------------------------------
+
     if is_mesh_device and input_a_tensor_placement:
         # When the destination memory_config is sharded, ttnn.from_torch
         # promotes the per-chip logical shape to the shard height (e.g. 8 -> 32).
         # The master trace records the production logical shape (8), so we
         # create the tensor in DRAM first and then to_memory_config into the
         # sharded L1 layout to preserve the logical shape.
-        if _is_sharded_memory_config(mem_config_a):
+        if _is_sharded_memory_config(mem_config_a) and not _q_pad_override:
             tensor_a_dram = create_tensor_on_mesh(
                 torch_input_a, device, dtype_a, layout_a, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
             )
