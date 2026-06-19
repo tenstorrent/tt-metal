@@ -13,9 +13,10 @@ mesh (4,8); `cluster_axis=0` → 4 dispatch devices, 8 replicated cols; 160 expe
 experts_per_device=5, H=5120, N(moe_intermediate)=1536, K=8, tokens_per_device=16,
 COL dispatch (`DispatchCoreAxis.COL`), `FABRIC_1D_RING`, bf4 experts.
 
-## Build
-Build-tree tt-metal HEAD `027d0f97b19` (latest-main + the **#46863** "moe_compute dynamic
-core placement" cherry-pick series; reflog HEAD@{0..5}). `.so` built 2026-06-18 13:04.
+## Build / version
+Smoke repro run on build-tree tt-metal HEAD `027d0f97b19`. **The deadlock is
+version-independent**: the full GLM-4.7 model hangs in the fused combine on base
+`dev20260519`, latest-main `6008ff55566`, AND `027d0f97b19` — it is NOT a recent regression.
 Run with `USE_TORCH_XLA=0 ACCELERATE_USE_XLA=false` (the rebuilt tt-metal is ABI-incompatible
 with the venv's torch_xla; the repro doesn't need it).
 
@@ -58,11 +59,12 @@ differences are in **moe_compute's fused setup of the combine**:
 - topology resolution: fused path resolves from the fabric default (FABRIC_1D_RING→Ring) at
   `moe_compute_device_operation.cpp:482-494`; passing `topology=Linear` explicitly did NOT help.
 
-Likely culprit: **#46863 (dynamic core placement)** — the pre-#46863 latest-main smoke passed
-(`logs/`), the current #46863 build hangs. (Not definitively confirmed: a `.so`-only swap to a
-pre-#46863 build is ABI-incompatible with the current python tree; needs a full pre-#46863
-checkout+rebuild.) Note the *full-model* hang predates #46863, so there may be two related
-combine-integration issues.
+**Version-independent — NOT a recent regression.** The full-model fused-combine hang occurs
+on base `dev20260519`, latest-main `6008ff55566`, and `027d0f97b19` alike. (Separately: an
+isolated *smoke* of the fused combine passed on a pre-`027d0f97b19` build but hangs on the
+current one; unconfirmed — a `.so`-only downgrade is ABI-incompatible with the current python
+tree. This is secondary; the underlying full-model deadlock predates any recent core-placement
+change.) So the suspect is moe_compute's fused combine setup in general, not a specific PR.
 
 ## Workaround status (honest)
 `moe_compute(compute_only=True)` (matmul only; `cluster_axis=None`, no combine) passes, and
@@ -92,7 +94,8 @@ Given the standalone `selective_reduce_combine` works (both topologies) but the 
 `moe_compute` combine deadlocks on this exact (4,8)/cluster_axis=0 config: (a) what is the
 intended supported way to run `compute_only` → standalone combine (the exact output→input
 tensor mapping/format)? and (b) why does the fused integration deadlock where the standalone
-op does not — is it the #46863 core placement / mux / handoff?
+op does not — in moe_compute's combine/mux core placement, the matmul→combine handoff, or the
+fabric-default topology resolution? (version-independent; reproduces on base / latest-main / 027d0f97b19)
 
 ## How to run
 ```bash
