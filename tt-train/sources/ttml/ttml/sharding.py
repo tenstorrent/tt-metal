@@ -2,14 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""A tensor's mesh layout: the ttnn objects needed to move a (possibly sharded) tensor on/off the mesh.
-
-Shared by checkpoint save/load and by callers that just need to ask "is this tensor sharded?"
-(e.g. the trainer's clip-grad-norm guard). The layout is read from a live tensor's placements; nothing
-is stored on the side.
-"""
+"""A tensor's mesh layout: the ttnn composer/mapper for moving a (possibly sharded) tensor on/off the mesh."""
 
 from __future__ import annotations
+
+from math import prod
 
 import ttnn
 import ttml
@@ -21,74 +18,63 @@ def _mesh_device():
 
 
 class Sharding:
-    """A tensor's mesh layout, read from its live placements."""
+    """A tensor's mesh layout (placements + distribution shape), read from its live topology."""
 
-    def __init__(self, placements: list | None, shape: list[int]) -> None:
+    def __init__(self, placements: list | None, dist_shape: list[int] | None) -> None:
         self._placements = placements
-        self._shape = shape
+        self._dist_shape = dist_shape
 
     @classmethod
     def from_tensor(cls, tensor: ttml.autograd.Tensor) -> Sharding:
         try:
-            placements = list(tensor.get_value().tensor_topology().placements())
+            # NATIVE: read topology without coercing precision (avoids a float32/bf16 typecast + cache).
+            topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
+            placements = list(topology.placements())
+            dist_shape = list(topology.distribution_shape())
         except Exception:
-            placements = None  # unit mesh / no topology
-        return cls(placements, list(tensor.shape()))
+            placements, dist_shape = None, None  # no topology (unit mesh / older ttnn build)
+        return cls(placements, dist_shape)
 
     @property
     def is_fully_replicated(self) -> bool:
         """True if no mesh axis shards this tensor (single device, or replicated on every axis)."""
         return self._placements is None or not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)
 
+    def _is_single_device(self) -> bool:
+        """True when the tensor isn't really distributed (no topology, or a 1-device distribution) → one
+        host buffer, readable/placeable without a composer/mapper."""
+        return self._dist_shape is None or prod(self._dist_shape) <= 1
+
     def derive_mapper(self):
-        """`TensorToMesh` distributing a full host array onto the mesh, or None on a unit mesh."""
-        if self._placements is None:
+        """``TensorToMesh`` redistributing a host array onto the mesh exactly as the tensor was distributed,
+        or None on a single device. Placements + ``mesh_shape_override`` mirror the live topology
+        (cf. ``distribute_as._map_nd``); replicate axes keep their full size so the host copy fans out."""
+        if self._is_single_device():
             return None
-        return ttnn.create_mesh_mapper(_mesh_device(), ttnn.MeshMapperConfig(self._placements))
+        config = ttnn.MeshMapperConfig(
+            placements=self._placements, mesh_shape_override=ttnn.MeshShape(self._dist_shape)
+        )
+        return ttnn.create_mesh_mapper(_mesh_device(), config)
 
     def gather(self, tensor: ttml.autograd.Tensor):
-        """Full host array for `tensor` in its native dtype: gather the shards, then drop the replicate dups.
+        """Full host array for ``tensor`` in its native dtype, gathered into a single copy.
 
-        The mesh composer concatenates every axis (no replicate concept; see `_compose_dims`), so a
-        replicated axis comes back duplicated and must be sliced down to one copy here. That coupling
-        is why the composer isn't exposed on its own — its raw output is wrong without this slice.
-        """
-        dtype = tensor.get_value().dtype
-        if self._placements is None:
-            return tensor.to_numpy(dtype)
-        concat_dims, replicate_dims = self._compose_dims()
-        composer = ttnn.create_mesh_composer(_mesh_device(), ttnn.MeshComposerConfig(concat_dims))
-        arr = tensor.to_numpy(dtype, composer=composer)
-        if replicate_dims:  # keep one canonical copy of each stacked replicate axis
-            slicer = [slice(None)] * arr.ndim
-            for dim, size in replicate_dims:
-                slicer[dim] = slice(0, size)
-            arr = arr[tuple(slicer)]
-        return arr
-
-    def _compose_dims(self) -> tuple[list[int], list[tuple[int, int]]]:
-        """Per-mesh-axis concat dims for the gather composer, plus replicate copies to slice off.
-
-        Returns ``(concat_dims, replicate)``. ``concat_dims[i]`` is the tensor dim the composer
-        concatenates mesh axis ``i`` along: a Shard axis uses the dim it sharded (so concatenating
-        the shards rebuilds it); a Replicate axis has no such dim, so it borrows a spare (unsharded)
-        one — concatenating the identical copies there inflates that dim, so its
-        ``(tensor_dim, original_size)`` is recorded in ``replicate`` for the caller to slice back to a
-        single copy. Mirrors `ttml.fsdp._shard_replicated_param` in reverse.
-        """
-        rank = len(self._shape)
-        sharded = {p.dim for p in self._placements if isinstance(p, ttnn.PlacementShard)}
-        spare = [d for d in range(rank) if d not in sharded]
-        dims: list = []
-        replicate: list = []  # (tensor_dim, original_size)
-        next_spare = 0
-        for p in self._placements:
+        On a single device the tensor is one host buffer, read directly. Otherwise a composer keyed on the
+        tensor's own topology rebuilds it (cf. ``auto_compose._compose_nd_sharded``): a Shard axis
+        concatenates its shards along the sharded dim; a Replicate axis is given ``mesh_shape_override``
+        size 1 so the composer takes a single copy instead of duplicating it."""
+        dtype = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype
+        if self._is_single_device():
+            return tensor.to_numpy(dtype, precision=ttml.autograd.PreferredPrecision.NATIVE)
+        dims: list[int] = []
+        shape_override: list[int] = []
+        for axis, p in enumerate(self._placements):
             if isinstance(p, ttnn.PlacementShard):
                 dims.append(p.dim)
-            else:
-                if next_spare >= len(spare):
-                    raise RuntimeError("checkpointing: too many replicate mesh axes to assign compose dims")
-                dims.append(spare[next_spare])
-                replicate.append((spare[next_spare], self._shape[spare[next_spare]]))
-                next_spare += 1
-        return dims, replicate
+                shape_override.append(self._dist_shape[axis])
+            else:  # Replicate: size-1 override → one copy, no duplication to slice off
+                dims.append(0)
+                shape_override.append(1)
+        config = ttnn.MeshComposerConfig(dims=dims, mesh_shape_override=ttnn.MeshShape(shape_override))
+        composer = ttnn.create_mesh_composer(_mesh_device(), config)
+        return tensor.to_numpy(dtype, composer=composer, precision=ttml.autograd.PreferredPrecision.NATIVE)
