@@ -5,16 +5,17 @@ directory. Updated as work lands so progress is trackable per commit.
 
 ## Environment constraints (read first)
 
-This dev environment **cannot run weight-validated bring-up**:
+This box is **`bh-qbge-06` — a QB2 (4× Blackhole `p300c`, `/dev/tenstorrent/0..3`)**, so **device work is NOT blocked on hardware**. The remaining gates are software + data:
 
 - `transformers` here is **4.53.0**; `gemma4` needs **5.10.2** and
   **`diffusion_gemma` is in neither** → the HF torch reference (#47468) is not
   importable yet.
-- The gated **~46 GB** checkpoints and **T3K / QB2** hardware are not present.
+- **Gated checkpoints not downloaded** — HF cache has only `gemma-3-12b-it-qat`; no `gemma-4-26B-A4B` / `diffusiongemma` (disk has ~2.4 TB free — fits the ~51.7 GB bf16 — but Gemma is gated, needs HF auth + license).
+- **QB2 is present** (4× Blackhole, this box); **T3K (WH 1×8) is not** — but fitting 26B-A4B on QB2 (1×4) is itself net-new (#47487), and the in-repo gemma4 **12B** path is QB2-supported and can validate the on-device flow on this exact HW first.
 
 So work proceeds **env-independent-first**: pure-torch reference logic + config
-+ tests that run on CPU, with checkpoint/HW/transformers-gated pieces scaffolded
-and marked `TODO(env)`.
++ tests that run on CPU, with checkpoint/transformers-gated pieces scaffolded
+and marked `TODO(env)`. **HW is no longer a blocker — QB2 is local.**
 
 ## Status by workstream
 
@@ -63,4 +64,4 @@ environment-gated:
    `diffusion_gemma` (then plug it into the trajectory harness).
 6. ⛔ Device (`tt/`) implementation — backbone reuse (#47461), KV phase machine
    (#47474), bidirectional SDPA (#47462), device decode loop (#47463),
-   on-device sampling (#47472) — unblocks on T3K/QB2 + checkpoints.
+   on-device sampling (#47472) — **QB2 hardware is present (this box)**; unblocks on transformers-5.x + checkpoint download (no longer waiting on HW).
