@@ -20,6 +20,7 @@ Env: ``VOXTRAL_PERF_DECODE_T`` (default 1600), ``VOXTRAL_PERF_WARMUP_T`` (defaul
 from __future__ import annotations
 
 import pytest
+from loguru import logger
 
 from models.experimental.voxtraltts.tests.audio_tokenizer_workload import (
     run_voxtral_audio_tokenizer_decode_benchmark,
@@ -37,4 +38,4 @@ def test_voxtral_audio_tokenizer_opt(voxtral_runtime_mesh_device, reset_seeds):
     assert result.timed_frames >= 1
     assert result.wav_shape[0] == 1
     if result.waveform_pcc is not None:
-        print(f"\n[test_audio_tokenizer_opt] waveform PCC vs CPU golden: {result.waveform_pcc:.6f}\n")
+        logger.info(f"waveform PCC vs CPU golden: {result.waveform_pcc:.6f}")

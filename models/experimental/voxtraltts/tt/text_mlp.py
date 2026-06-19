@@ -1,17 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Voxtral text-model MLP: tt_transformers ``MLP`` + the interleaved-weight / fused-SiLU
-decode optimizations, kept OUT of the shared tt_transformers file so it stays untouched.
-
-The class is intentionally named ``MLP`` (the base is imported as ``_BaseMLP``) so
-``self.__class__.__name__`` still resolves the state-dict prefix ("MLP" -> "feed_forward").
-There is no MLP injection hook in tt_transformers' decoder, so this is swapped onto each
-decoder block post-construction (see text_model.py ``_swap_text_mlps``).
-
-``__init__`` / ``forward`` are verbatim copies of the optimized tt_transformers methods, with
-the single change that ``__init__``'s ``super().__init__()`` (which would re-run the base MLP
-build) is redirected to ``LightweightModule.__init__`` since the base is now the real ``MLP``.
-"""
+"""Voxtral text-model MLP: tt_transformers fork with interleaved-weight / fused-SiLU decode opts."""
 from __future__ import annotations
 
 import torch
@@ -209,9 +198,6 @@ class MLP(_BaseMLP):
         ttnn.deallocate(x)
 
         if TG:
-            # if mode == "decode" and self.dim!=8192:
-            #     w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
-            #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             if self.dim == 8192 or mode == Mode.PREFILL:
                 input_mem_cfg = w1_out.memory_config()
 
