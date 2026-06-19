@@ -216,28 +216,24 @@ inline void bitonic_top8_ph0_to_ph3()
     {
         constexpr bool start_transpose   = true;
         constexpr bool end_transpose     = false;
-        constexpr int phase_replay_count = 2 + (int)start_transpose + (int)end_transpose;
         bitonic_topk_ph0_st1_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 1
     {
         constexpr bool start_transpose   = false;
         constexpr bool end_transpose     = true;
-        constexpr int phase_replay_count = 4 + (int)start_transpose + (int)end_transpose;
         // Odd Columns
         bitonic_topk_ph1_st2_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 2
     {
-        constexpr bool end_transpose     = true;
-        constexpr int phase_replay_count = 7 + (int)end_transpose;
+        constexpr bool end_transpose = true;
         // Even Columns
         bitonic_topk_ph2_st3_to_1_single_face<end_transpose>();
     }
     // Modified Phase 3 for top8
     {
-        constexpr bool end_transpose     = true;
-        constexpr int phase_replay_count = 8 + (int)end_transpose;
+        constexpr bool end_transpose = true;
         bitonic_top8_ph3_st4_to_1<idir, end_transpose>();
     }
 }
@@ -643,6 +639,13 @@ inline void _gmg_merge16_to_run()
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false>
 inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uint32_t scale)
 {
+    // topk is restricted to {4, 6, 8}: the rank-mask below is correct only for these. topk 1-3 fall into the
+    // `topk <= 4` branch, which drops the offset-4 half but does NOT mask within offset-0, so they would
+    // silently keep 4 ranks; topk 5/7 take the masked branch but are untested. The metal path already guards
+    // this (host TT_FATAL + the unified kernel static_assert), but a direct LLK caller has no other gate --
+    // fail loudly here too rather than emit silently-wrong output.
+    static_assert(topk == 4 || topk == 6 || topk == 8, "topk must be one of {4, 6, 8} (rank-mask is correct only for these)");
+
     // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
     // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
     _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();

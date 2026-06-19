@@ -77,6 +77,9 @@ inline void _llk_math_generalized_moe_gate_eltwise_binary_(const std::uint32_t n
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     constexpr bool high_fidelity          = is_high_fidelity(math_fidelity);
+    // `clear_fp32_dst_acc` / ZERO_ACC_MODE are intentionally unused: this is a bf16-only gate op (the
+    // downstream topk static_asserts !is_fp32_dest_acc_en, and the idx|score 16-bit packing needs bf16 DEST),
+    // so there is no fp32 accumulator to clear. Both are kept for parity with the standard eltwise_binary.
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
     static_assert(!(eltwise_binary_type == EltwiseBinaryType::ELWMUL && high_fidelity), "High fidelity is not supported for ELWMUL");
 

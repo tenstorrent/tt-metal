@@ -5,6 +5,7 @@
 #include "generalized_moe_gate_device_operation.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/buffer.hpp>
 
@@ -148,8 +149,26 @@ GeneralizedMoeGateDeviceOperation::tensor_return_value_t GeneralizedMoeGateDevic
 
 std::uint64_t GeneralizedMoeGateDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    auto program_descriptor = build_moe_gate_program_descriptor(tensor_args, attrs);
-    return hash_moe_gate_program_structure(program_descriptor);
+    // Cheap structural hash. Everything that changes the compiled program — the kernel compile-time args
+    // (eps/scaling/enable_sigmoid/topk/output_softmax), the GMG_UNGROUPED_TOP8 define (grouped), and the
+    // CB sizes/grids — is a function of the op attributes plus the tensor specs (dtype + tile + shard
+    // grid/shape; num_blocks is derived from the input shard shape). Everything else the builder emits is
+    // constant (kernel path, CB indices, HiFi4, configs). So hash those inputs directly instead of building
+    // the full ProgramDescriptor: that path runs the builder's TT_FATALs + constructs every CB/kernel
+    // descriptor + strings on EVERY dispatch (including cache hits) just to derive a key. Validation lives in
+    // validate_on_program_cache_{hit,miss}; the build happens in create_program.
+    return ttsl::hash::hash_objects_with_default_seed(
+        attrs.eps,
+        attrs.scaling_factor,
+        attrs.enable_sigmoid,
+        attrs.topk,
+        attrs.output_softmax,
+        attrs.grouped,
+        tensor_args.input_tensor.tensor_spec(),
+        tensor_args.bias_tensor.tensor_spec(),
+        tensor_args.input_indices_tensor.tensor_spec(),
+        tensor_args.output_tensor.tensor_spec(),
+        tensor_args.output_indices_tensor.tensor_spec());
 }
 
 std::tuple<GeneralizedMoeGateDeviceOperation::operation_attributes_t, GeneralizedMoeGateDeviceOperation::tensor_args_t>

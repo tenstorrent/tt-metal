@@ -12,11 +12,10 @@
 
 namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate {
 
-// Build executable program descriptor from current tensors / scalars (used on cache hit and miss).
+// Build the executable program descriptor from the current tensors / scalars. Called by create_program
+// (cache miss); the program-cache key is a cheap structural hash in compute_program_hash, so this is no
+// longer on the cache-hit path.
 tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     const tensor_args_t& tensor_args, const operation_attributes_t& operation_attrs);
-
-// Structural hash excluding buffer addresses (matches generic_op program-cache semantics).
-[[nodiscard]] std::uint64_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescriptor&);
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate
