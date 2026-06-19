@@ -31,7 +31,7 @@ void kernel_main() {
         // Restored native sharded multi-page split (see common.hpp helper).
         // RM-only: see reader kernel for rationale; TILE-layout below uses original API.
         const uint32_t cb_read_ptr = cb.get_read_ptr();
-        tt::data_movement::common::noc_async_write_sharded(cb_read_ptr, s, i, 0, write_size);
+        tt::data_movement::common::noc_async_write_sharded(noc, cb_read_ptr, s, i, 0, write_size);
 #else
         noc.async_write(cb, s, page_size, {.offset_bytes = 0}, {.page_id = i});
 #endif

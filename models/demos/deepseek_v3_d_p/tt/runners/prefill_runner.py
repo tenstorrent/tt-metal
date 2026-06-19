@@ -65,7 +65,18 @@ CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 4 * CHUNK_SIZE))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
-_gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_gate_mode)
+# Model-agnostic gate-mode default comes from the active variant (DEVICE_FP32 for the
+# deepseek_v3_d_p variant; HOST_ALL source default is much slower).
+GATE_FALLBACK_MODE = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_gate_mode)
+# When on (default), the last transformer layer runs kv-only: it fills the KV
+# cache for migration and skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head.
+KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+PREFILL_DEBUG = os.environ.get("PREFILL_DEBUG", "0") == "1"
+# Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
+# L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs. This
+# requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
+_ROUTING_USE_L1_SMALL_SEMAPHORES = VARIANT.name == "kimi_k2_6"
+_L1_SMALL_SIZE = 512 if _ROUTING_USE_L1_SMALL_SEMAPHORES else 0
 
 _shutdown = False
 
@@ -84,6 +95,9 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     KV cache. No H2D socket, no SHM, no external producer — single process, for local bring-up / perf.
     Chunked prefill does not sample; the populated KV cache is the output. With PREFILL_STANDALONE_PCC
     the same trace supplies the golden kv_post_transform for validation.
+
+    The pipeline runs the kv-only last layer (no first_token, no LM head); the runner just logs
+    per-iter timing.
 
     Env:
       PREFILL_TRACE_DIR golden trace dir (default: this variant's prefill_trace_default)
@@ -225,7 +239,6 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
 
 def _print_config() -> None:
     """Print all env var values at startup so the config is visible in logs."""
-    UNSET = "<NOT SET>"
     rows = [
         ("PREFILL_MODEL_VARIANT", VARIANT.name),
         ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", VARIANT.hf_model_default)),
@@ -238,7 +251,8 @@ def _print_config() -> None:
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
-        ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
+        ("PREFILL_GATE_FALLBACK_MODE", GATE_FALLBACK_MODE),
+        ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
         ("PREFILL_STANDALONE", os.environ.get("PREFILL_STANDALONE", "0")),
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default)),
         ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<trace default>")),
@@ -275,7 +289,7 @@ def main() -> None:
         f"migration={'ON (KV chunk table publish)' if enable_migration else 'OFF'}"
     )
 
-    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG)
+    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE)
 
     hf_config = load_hf_config(VARIANT)
     hf_config.max_seq_len = MAX_SEQ_LEN
@@ -289,9 +303,11 @@ def main() -> None:
         num_users=NUM_USERS,
         num_links=2,
         capacity_factor=CAPACITY_FACTOR,
-        gate_fallback_mode=GateComputeMode[_gate_mode_name],
+        gate_fallback_mode=GateComputeMode[GATE_FALLBACK_MODE],
         weight_cache_path=cache_path,
         model_cfg=MODEL_CFG,
+        kv_only_last_layer=KV_ONLY_LAST_LAYER,
+        routing_use_l1_small_for_semaphores=_ROUTING_USE_L1_SMALL_SEMAPHORES,
     )
 
     pipeline = TtDeepSeekPrefillPipeline(

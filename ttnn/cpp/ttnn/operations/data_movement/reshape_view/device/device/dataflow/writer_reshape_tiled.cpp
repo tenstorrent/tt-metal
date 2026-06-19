@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
@@ -27,6 +28,7 @@ void kernel_main() {
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
+    Noc noc;
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
     cb_reserve_back(cb_id_working, 1);
@@ -62,12 +64,12 @@ void kernel_main() {
             const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
             const uint32_t input_addr = input_base_addr + map_ptr[seg_idx].input_page_offset * element_sz_bytes;
             const uint32_t szbytes = map_ptr[seg_idx].num_elements * element_sz_bytes;
-            tt_memmove<false, true, false, Tile_size_bytes>(output_addr, input_addr, szbytes);
+            tt_memmove<false, true, false, Tile_size_bytes>(noc, output_addr, input_addr, szbytes);
         }
         noc_async_write_barrier();
 
         const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
-        enhanced_noc_async_write<Tile_size_bytes, true>(working_write_addr, output_noc_addr, Tile_size_bytes);
+        enhanced_noc_async_write<Tile_size_bytes, true>(noc, working_write_addr, output_noc_addr, Tile_size_bytes);
         noc_async_write_barrier();
 
         cb_pop_front(cb_id_mapping, 1);

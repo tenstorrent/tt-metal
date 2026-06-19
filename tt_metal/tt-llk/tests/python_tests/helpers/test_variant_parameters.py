@@ -967,3 +967,23 @@ class FILL_INT_FORMAT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"
+
+
+@dataclass
+class TYPECAST_FORMATS(TemplateParameter):
+    """Compile-time config for the SFPU typecast test kernel.
+
+    Emits the logical input/output ``DataFormat`` enum values consumed by
+    ``typecast_tile<IN, OUT>`` (mirrored by the typecast dispatch in
+    ``sfpu_operations.h``, reached via ``SfpuType::typecast``).
+    """
+
+    input_format: DataFormat = DataFormat.Float32
+    output_format: DataFormat = DataFormat.Float16_b
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr auto TYPECAST_IN_FORMAT = DataFormat::{self.input_format.name};",
+            f"constexpr auto TYPECAST_OUT_FORMAT = DataFormat::{self.output_format.name};",
+        ]
+        return "\n".join(lines)

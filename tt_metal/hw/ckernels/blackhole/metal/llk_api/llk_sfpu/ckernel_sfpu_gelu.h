@@ -11,7 +11,7 @@
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
@@ -493,7 +493,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             result = x_exp * INV_SQRT_2PI;
         } else {
             // 1 NR step suffices for BF16 (7 mantissa bits); FP32 needs 2 steps (23 bits).
-            sfpi::vFloat inv_x2 = _sfpu_reciprocal_<is_fp32_dest_acc_en ? 2 : 1>(x2);
+            sfpi::vFloat inv_x2 = sfpu_reciprocal_iter<is_fp32_dest_acc_en ? 2 : 1>(x2);  // 1/x²
             sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
             result = x_exp * INV_SQRT_2PI * correction;
@@ -522,18 +522,18 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        // Call _init_sfpu_reciprocal_ directly: gelu derivative uses _sfpu_reciprocal_
+        // Call sfpu_reciprocal_init directly: gelu derivative uses sfpu_reciprocal_iter
         // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
-        // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
+        // not needed. On BH, _init_reciprocal_ omits sfpu_reciprocal_init (it only
         // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
         //
-        // Not keyed on is_fp32_dest_acc_en: the template arg to _sfpu_reciprocal_<N>
+        // Not keyed on is_fp32_dest_acc_en: the template arg to sfpu_reciprocal_iter<N>
         // selects the Newton-Raphson step count (2 for FP32, 1 for BF16), but
-        // _init_sfpu_reciprocal_ only seeds the initial estimate and does not vary
+        // sfpu_reciprocal_init only seeds the initial estimate and does not vary
         // with N. A single <false> call therefore covers both precisions. The
         // asymmetry vs gelu_init() (which gained an fp32-specific branch) is
         // intentional — the derivative path has no LUT to load.
-        _init_sfpu_reciprocal_<false>();
+        sfpu_reciprocal_init<false>();
     }
 }
 

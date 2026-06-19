@@ -103,6 +103,44 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     return caches_4d, caches_2d
 
 
+def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared_layer_map):
+    """Add placeholder K/V tensors for checkpoint-omitted kv-shared layers.
+
+    Gemma4 E2B/E4B checkpoints can omit K/V projections for layers that reuse a
+    source layer's KV cache. The runtime correctly skips K/V work for those
+    layers, but the constructor still builds a fused QKV tensor before that
+    runtime flag is known. Zero K/V placeholders make weight loading complete;
+    they are discarded under ``is_kv_shared=True``.
+    """
+    if not state_dict or not kv_shared_layer_map:
+        return
+
+    for layer_idx in kv_shared_layer_map:
+        cfg = Gemma4AttentionConfig(hf_config, layer_idx)
+        kv_size = cfg.num_key_value_heads * cfg.head_dim
+        for prefix in ("model.language_model.", "model."):
+            attn_prefix = f"{prefix}layers.{layer_idx}.self_attn"
+            q_key = f"{attn_prefix}.q_proj.weight"
+            if q_key not in state_dict:
+                continue
+
+            weight_dtype = state_dict[q_key].dtype
+            norm_dtype = state_dict.get(f"{attn_prefix}.q_norm.weight", state_dict[q_key]).dtype
+            state_dict.setdefault(
+                f"{attn_prefix}.k_proj.weight",
+                torch.zeros((kv_size, hf_config.hidden_size), dtype=weight_dtype),
+            )
+            if not cfg.use_kv_tying:
+                state_dict.setdefault(
+                    f"{attn_prefix}.v_proj.weight",
+                    torch.zeros((kv_size, hf_config.hidden_size), dtype=weight_dtype),
+                )
+            state_dict.setdefault(
+                f"{attn_prefix}.k_norm.weight",
+                torch.ones((cfg.head_dim,), dtype=norm_dtype),
+            )
+
+
 class Gemma4Model:
     # Generator-interface flags. Decode refreshes host-staged token IDs (+ PLI
     # when enabled) every step, so trace input buffers are updated on every
@@ -175,6 +213,8 @@ class Gemma4Model:
                         self.kv_shared_layer_map[i] = source
             if self.kv_shared_layer_map:
                 logger.info(f"KV sharing enabled: {len(self.kv_shared_layer_map)} layers share KV from earlier layers")
+
+        _inject_missing_kv_shared_attention_weights(state_dict, hf_config, self.kv_shared_layer_map)
 
         # RoPE caches per layer type (sliding vs global)
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
@@ -553,7 +593,17 @@ class Gemma4Model:
         if pli_combined is not None:
             pli_combined_tt = pli_combined
         elif pli_device_tensors is not None:
-            pass  # Pre-computed device tensors provided externally
+            # Pre-computed device tensors provided externally (legacy trace mode).
+            # For PLI models every layer must receive its per-layer input: a short
+            # list would silently run the remaining layers with pli_tt=None, which
+            # drops PLI and produces bad output with no other failure signal. The
+            # normal _compute_per_layer_inputs path treats missing PLI as a hard
+            # error, so enforce the same invariant at this boundary.
+            if self.hidden_size_per_layer_input and len(pli_device_tensors) != len(self.layers):
+                raise ValueError(
+                    f"pli_device_tensors has {len(pli_device_tensors)} entries "
+                    f"but PLI model has {len(self.layers)} layers"
+                )
         else:
             per_layer_inputs = self._compute_per_layer_inputs(input_ids_torch, embeds_torch)
 
@@ -584,8 +634,9 @@ class Gemma4Model:
             if pli_combined_tt is not None:
                 # On-device decode: slice layer i from combined [1, 1, n_layers, pli_size]
                 pli_tt = pli_combined_tt[:, :, i : i + 1, :]
-            elif pli_device_tensors is not None and i < len(pli_device_tensors):
-                # Pre-computed device tensors (legacy trace mode)
+            elif pli_device_tensors is not None:
+                # Pre-computed device tensors (legacy trace mode). Length was
+                # validated to match len(self.layers) for PLI models above.
                 pli_tt = pli_device_tensors[i]
             elif per_layer_inputs is not None and i < len(per_layer_inputs):
                 pli_layer = per_layer_inputs[i]
@@ -1100,6 +1151,7 @@ class Gemma4Model:
         batch_size=1,
         input_ids_torch=None,
         embeds_torch=None,
+        pli_device_tensors=None,
         page_tables_per_layer=None,
         **kwargs,
     ):
@@ -1140,6 +1192,7 @@ class Gemma4Model:
             is_decode=False,
             input_ids_torch=input_ids_torch,
             embeds_torch=embeds_torch,
+            pli_device_tensors=pli_device_tensors,
             get_last_token=get_last_token,
             page_tables_per_layer=page_tables_per_layer,
             batch_size=batch_size,
