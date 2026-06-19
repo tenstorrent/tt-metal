@@ -80,9 +80,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Copy SrcA to Dest (datacopy A2D). Integer inputs always run with 32-bit
-    // Dest (dest_acc=Yes), which already routes the copy so the raw bits land in
-    // Dest unmodified; no separate integer-FPU flag is needed here.
+    // Copy SrcA to Dest (datacopy A2D). The A2D copy preserves the raw datum
+    // bits in Dest (the SFPU below interprets/converts them), so no separate
+    // integer-FPU flag is needed here. dest_acc follows production
+    // (fp32_dest_acc_en): integer pairs that production runs in 16-bit Dest stay
+    // in 16-bit Dest here too.
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
