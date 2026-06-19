@@ -38,12 +38,14 @@ from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
 from .fpu.reduce_block_max import ReduceBlockMaxFpu
+from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
 from .packer.packer import Packer
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
 from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
+from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
@@ -104,6 +106,10 @@ UNPACKER_MAP = {
     ),
     "ReduceBlockMaxUnpacker": (
         lambda s: ReduceBlockMaxUnpacker(),
+        None,
+    ),
+    "ReduceBlockMaxRuntimeUnpacker": (
+        lambda s: ReduceBlockMaxRuntimeUnpacker(),
         None,
     ),
 }
@@ -195,6 +201,10 @@ FPU_MAP = {
         lambda s: ReduceBlockMaxFpu(),
         [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker")],
     ),
+    "ReduceBlockMaxRuntime": (
+        lambda s: ReduceBlockMaxRuntimeFpu(),
+        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxRuntimeUnpacker")],
+    ),
 }
 
 _l1_acc_format = (
@@ -219,6 +229,7 @@ OUTPUT_DIMS = {
     "Matmul": _matmul_dims,
     "Reduce": _src_a_dims,
     "ReduceBlockMax": _src_a_dims,
+    "ReduceBlockMaxRuntime": _src_a_dims,
 }
 
 UNARY_SFPU_OPS = {

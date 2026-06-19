@@ -119,8 +119,13 @@ jobs:
       llk-ci-docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
 
   asan-build:
-    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    needs: [resolve-docker-pull-refs, build-docker-images]
+    if: >-
+      ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.event_name != 'pull_request' || needs.find-changed-files.outputs.any-code-changed == 'true')
+      }}
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -435,13 +440,16 @@ jobs:
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-build-quasar.yaml
-    secrets: inherit
-    with:
-      docker_image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      runs_on: tt-ubuntu-2204-xlarge-stable
-      test_splits: 1
-      pytest_markers: "quasar"
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 80
+    container:
+      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - uses: ./.github/actions/llk-compile-quasar
+        with:
+          pytest-markers: "quasar"
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -469,12 +477,16 @@ jobs:
       - llk-build-quasar
     runs-on: ubuntu-latest
     steps:
-      - name: Check if all jobs passed
-        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
         with:
-          required-jobs: "asan-build"
+          sparse-checkout: .github
+      - name: Check if all jobs passed
+        uses: ./.github/actions/workflow-status
+        with:
+          required-jobs: ""
           optional-jobs: >-
-            code-analysis,
+            asan-build, code-analysis,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
             llk-test-wormhole, llk-test-blackhole, llk-build-quasar

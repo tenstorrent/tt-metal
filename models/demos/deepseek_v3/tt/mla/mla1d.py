@@ -11,7 +11,6 @@ import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
-import models.experimental.ops.descriptors as descriptors
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.tt.ccl import CCL
@@ -49,7 +48,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -2281,21 +2279,10 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Parallel Q and KV Norms — persistent Parallel (reuse OpDescriptors + update).
         # Q: 1,1,32,1536, width sharded 4x4 [32,96]
         # KV: 1,1,32,512, width sharded 2x8 [32,32]
-        fused = cfg.get("fused_qkv_norm")
-        if fused is None:
-            q_pc = RMSNorm._get_pc(tt_q.memory_config())
-            kv_pc = RMSNorm._get_pc(tt_kv_nope.memory_config())
-            fused = Parallel(
-                q=descriptors.rms_norm(program_config=q_pc, **cfg["q_norm"]),
-                kv=descriptors.rms_norm(program_config=kv_pc, **cfg["kv_norm"]),
-            )
-            cfg["fused_qkv_norm"] = fused
-        fused.q.update(tt_q)
-        fused.kv.update(tt_kv_nope)
-        tt_q, tt_kv_nope = fused.run()
+        tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
+        tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE

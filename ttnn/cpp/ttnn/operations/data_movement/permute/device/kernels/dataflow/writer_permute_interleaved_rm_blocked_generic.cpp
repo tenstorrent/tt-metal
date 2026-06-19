@@ -156,7 +156,7 @@ void kernel_main() {
 
             uint32_t l1_addr = transposed_buffer_read_addr + (w - w_start) * output_cb_page_size;
             tt::data_movement::common::noc_async_write_sharded(
-                l1_addr, s0, dest_linear_idx, x_offset, x_read_size_bytes);
+                noc, l1_addr, s0, dest_linear_idx, x_offset, x_read_size_bytes);
         }
 
         // Wait until all writes are completed before proceeding to the next block

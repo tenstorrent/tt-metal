@@ -526,14 +526,14 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 //      (page size, args_config, bank coords, alignment).
 //   2. Each binding's slot in the kernel's TensorBinding address section is filled with
 //      MeshTensor::address() at enqueue.
-//   3. kernel_bindings_generated.h emits a `ta::` namespace with a working type alias + token.
-//   4. TensorAccessor(ta::name) constructs an accessor whose get_noc_addr returns
+//   3. kernel_bindings_generated.h emits a `tensor::` namespace with a working type alias + token.
+//   4. TensorAccessor(tensor::name) constructs an accessor whose get_noc_addr returns
 //      addresses that NoC reads/writes actually use correctly.
 //
 // Pipeline:
 //   Host writes known data → input MeshTensor (DRAM)
-//   Producer DM kernel (BRISC):  input MeshTensor → DFB,  via TensorAccessor(ta::input_tensor)
-//   Consumer DM kernel (NCRISC): DFB → output MeshTensor, via TensorAccessor(ta::output_tensor)
+//   Producer DM kernel (BRISC):  input MeshTensor → DFB,  via TensorAccessor(tensor::input_tensor)
+//   Consumer DM kernel (NCRISC): DFB → output MeshTensor, via TensorAccessor(tensor::output_tensor)
 //   Host reads output MeshTensor and verifies match
 //
 // DM-only on purpose. The TensorAccessor library is currently DM-only (TRISC builds don't
