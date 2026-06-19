@@ -406,7 +406,7 @@ OOM kept as a hard floor; (e) measured per-kernel device time improves over the
 R5 baseline on the wide-W and many-row representative shapes, with numbers in
 `changelog.md`.
 
-### [ ] Refinement 7 — Row-blocking (BLOCK_HEIGHT>1) for Regime A many-row, behind a `bh` CT arg
+### [~] Refinement 7 — Row-blocking (BLOCK_HEIGHT>1) for Regime A many-row, behind a `bh` CT arg
 
 **Goal**: implement the deferred "forgotten knob" from Refinement 6 — process `bh`
 tile-rows per work-unit in Regime A (the grid-saturated many-row case), to amortize
@@ -444,3 +444,54 @@ per-row helper init over a taller block. **No SUPPORTED axis** (non-registry, pe
 **Done when**: row-blocking implemented behind `bh`, active core count never reduced,
 golden 1683/1683 preserved, and the measured many-row Regime-A device time improves
 (expected modest, ~10%, per R6's ceiling measurement) — numbers in changelog.md.
+
+**Outcome (`[~]` partial)**: the `bh` knob is fully implemented, correct (golden
+1683/1683 with it forced on; PCC ≥ 0.99999), and active-core-count-safe, BUT
+measurement shows it is **net-negative** on Regime A (0.83–0.96x of bh=1 across
+(1,1,{4096,8192,16384},256) and (1,1,{4096,8192},512)) — so it is **disabled by
+default** (`_ENABLE_ROW_BLOCKING = False`) to avoid a production regression. Root
+cause: `rms_norm` Regime A is **DRAM-bandwidth-bound** (~10us/tile-row read+write),
+and row-blocking only amortizes per-row **compute init**, which is not the
+bottleneck. Confirmed fundamental, not an impl defect: `ttnn-static-analyzer`
+findings F1 (redundant per-row PASS-2 reconfig → fixed with `Reconfig::None`) and F3
+(single-buffer serialization → fixed with a `2*bh*Wt` double buffer) were both
+applied and re-measured — **still net-negative**. The "device time improves" clause
+is therefore NOT met on Regime A. See changelog.md for the table. Follow-up below
+redirects row-blocking to the place it can actually pay off (Regime B mcast
+coalescing), per op_design.md:229-232 ("bigger coalesced mcasts").
+
+### [ ] Refinement 8 — Row-blocking for **Regime B** (coalesced mcast all-gather), not Regime A
+
+**Goal**: realize the design's OTHER row-blocking benefit — **bigger (coalesced)
+mcasts** (op_design.md:229-232) — in **Regime B**, where the cross-core all-gather has
+a real fixed cost (R6: K mcasts + a K-tile combine, the dominant non-reduce term).
+Regime A row-blocking is a confirmed dead end (R7: memory-bound, net-negative even
+after the F1/F3 fixes), so do **not** revisit it; the win, if any, is in amortizing
+the **mcast/semaphore fixed cost** over a taller block of rows in Regime B.
+
+**Why this is the right target**: R7 proved row-blocking cannot help a memory-bound
+phase (Regime A is pure read→compute→write). Regime B additionally pays a
+per-row-group all-gather (semaphore handshake + K mcast rounds + K-tile combine) whose
+**fixed** cost does NOT scale with the data — so grouping `bh` row-groups per core and
+issuing ONE coalesced mcast of `bh` partials (instead of `bh` separate K-round
+gathers) could amortize that fixed cost. This is the "bigger coalesced mcasts" the
+design names, and it is structurally distinct from R7's compute-init amortization.
+
+**Exact next levers for the implementer**:
+1. The `bh` compute CT arg, `_regime_a_block_height`, the `_FORCE_BH` hook, and the
+   row-blocked PASS-1/FINALIZE/PASS-2 structure already exist (R7) and are correct —
+   reuse them. The new work is **host-side (Regime B band grouping)** + **reader-side
+   (coalesced all-gather of `bh*K` partials)**, NOT new compute math.
+2. In `_regime_b_descriptor` / `_regime_rm_b_descriptor`: group `bh` row-groups into one
+   core's work-unit (each core then owns `bh` shards along H × one W-column shard),
+   bounded by L1 (`cb_partials_gathered` grows to `bh*K`, `cb_local_sumsq`/`cb_input_resident`
+   to `bh*`) and DEST. Keep active-core-count unchanged (bh only after the grid is full).
+3. In `rms_norm_reader.cpp` (`num_partials > 1` path): issue ONE mcast carrying the
+   `bh` local partials per round instead of `bh` separate gathers — coalesce the
+   `sender.send` / `receiver.receive` payload to `bh * partial_tile_bytes`. Measure the
+   mcast-round count and per-op device time vs the current per-row-group gather.
+4. Measure with `test_rms_norm_perf.py` (extend the `_FORCE_BH` sweep to Regime B
+   shapes: (1,1,32,8192), (1,1,32,16384), etc.). **Done when** the coalesced-mcast
+   Regime-B device time improves over the R6/R7 baseline on wide-W shapes (or, if it
+   too proves net-negative, document that row-blocking is fully exhausted as a lever and
+   close it). Golden stays 1683/1683.
