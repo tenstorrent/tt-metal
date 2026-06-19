@@ -201,7 +201,7 @@ void kernel_main() {
         stats_set_sem.set(VALID);
         // num_dests counts the multicast bounding-box cells (loopback includes
         // self), not the worker count.
-        stats_set_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+        stats_set_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
             noc_obj,
             mcast_dest_noc_start_x,
             mcast_dest_noc_start_y,
