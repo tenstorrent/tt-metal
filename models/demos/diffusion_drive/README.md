@@ -49,14 +49,14 @@ Model checkpoint: `hustvl/DiffusionDrive` — 60 M parameters.
 
 ```
 Camera (B,3,256,1024)
-  └─► conv1+bn1+maxpool (PyTorch stem)
+  └─► conv1+bn1+relu+maxpool (TTNN stem)
        └─► layer1…layer4 (TTNN — 16 BasicBlocks) ──────────────────────┐
                                                                          │
 LiDAR (B,1,256,256)                                                      │
-  └─► conv1+bn1+maxpool (PyTorch stem)                         GPT fusion
+  └─► conv1+bn1+relu+maxpool (TTNN stem)                       GPT fusion
        └─► layer1…layer4 (TTNN — 16 BasicBlocks) ──────────── ×4 scales │
-                                                   (PyTorch ← AdaptiveAvgPool +
-                                                    2-layer GPT + F.interpolate)
+                                              (TTNN ← avg_pool2d + 1×1 linear +
+                                               2-layer GPT + ttnn.upsample)
                                                                          │
                                                               lidar_feats (B,512,8,8)
                                                                          │
@@ -71,31 +71,37 @@ LiDAR (B,1,256,256)                                                      │
                                        │                                 │
                                 bev_upscale (B,64,64,64)                │
                                                                          │
-                           _bev_downscale (PyTorch 1×1 Conv2d)         │
-                           _status_encoding (PyTorch Linear)            │
-                           _keyval_embedding (PyTorch add)              │
+                           _bev_downscale (TTNN 1×1 conv)              │
+                           _status_encoding (TTNN Linear)              │
+                           _keyval_embedding (host add — glue)          │
                            F.interpolate + cat bev_upscale              │
-                           bev_proj: Linear(320,256)+ReLU+LN (PyTorch) │
+                           bev_proj: Linear(320,256)+ReLU+LN (TTNN)    │
                                        │                                 │
-                           _tf_decoder (PyTorch TransformerDecoder)    │
+                           _tf_decoder (TTNN TransformerDecoder)       │
                                        │                                 │
                            TrajectoryHead DDIM ◄──────────── bev_feature┘
+                           (TTNN denoiser + ttnn.grid_sample;
+                            DDIM schedule arithmetic on host)
                                        │
                              trajectory (B,8,3)  scores (B,20)
 ```
 
-### TTNN vs PyTorch per submodule
+### TTNN vs PyTorch per submodule (after `build_stage3_7`)
 
-| Submodule | Stage 3.1 execution | Reason for placement |
-|---|---|---|
-| ResNet-34 stems (conv1+bn1+maxpool) | PyTorch | Small one-time cost; deferred |
-| ResNet-34 BasicBlocks ×32 | **TTNN** | High FLOP density; BN-fold enables weight-only conv |
-| GPT cross-modal fusion ×4 | PyTorch | `AdaptiveAvgPool2d` + `F.interpolate` interleaved with attention; mixed-mode migration complex |
-| FPN conv layers ×3 | **TTNN** | Plain `nn.Conv2d`, no BN; direct weight cast |
-| FPN bilinear upsample ×2 | **TTNN** | `ttnn.upsample(mode="bilinear")` matches torch `align_corners=False` to PCC ≥ 0.99999 at the ×2/×4 integer scales |
-| `_bev_downscale` 1×1 conv | PyTorch | Deferred to Stage 3.4 |
-| Perception TransformerDecoder | PyTorch | Deferred to Stage 3.4 |
-| TrajectoryHead DDIM + grid_sample | PyTorch | denoiser still host; `ttnn.grid_sample` itself is validated (see `tt/ttnn_grid_sample_attention.py`) |
+Every **weight-bearing** op runs on TTNN. The host residue is non-weight scalar
+glue (see `01_plan.md` §8).
+
+| Submodule | Execution | Stage | Notes |
+|---|---|---|---|
+| ResNet-34 stems (conv1+bn1+relu+maxpool) ×2 | **TTNN** | 3.6 | `TtnnStem`: BN-fold conv + `ttnn.max_pool2d` |
+| ResNet-34 BasicBlocks ×32 | **TTNN** | 2 | BN-fold enables weight-only conv |
+| GPT cross-modal fusion ×4 | **TTNN** | 3.6 | `avg_pool2d` + 1×1 `linear` channel proj + GPT (LN/attn/MLP) + bilinear `upsample` + residual; integer ratios at production res |
+| FPN conv ×3 + bilinear upsample ×2 | **TTNN** | 3 | `ttnn.upsample(bilinear)` matches `align_corners=False` to PCC ≥ 0.99999 |
+| `_bev_downscale`, `_status_encoding`, `bev_proj` | **TTNN** | 3.4 | 1×1 conv + Linears |
+| Perception TransformerDecoder ×3 | **TTNN** | 3.4 | SDPA + FFN + LN |
+| TrajectoryHead DDIM denoiser (incl. `grid_sample`) | **TTNN** | 3.5 | plan_anchor_encoder, time_mlp, grid-sample cross-attn, 2× MHA, FFN, norms, FiLM, task heads |
+| `_agent_head` MLPs | **TTNN** | 3.7 | `_mlp_states`, `_mlp_label` |
+| DDIM `scheduler.step`, `gen_sineembed`, norm/denorm, argmax/gather, embedding-add | host (glue) | — | scalar/indexing on ≤320-elt tensors; not kernel-worthy (`01_plan.md` §8) |
 
 ---
 
@@ -203,10 +209,16 @@ new full-model tests.
 | 2 | All 32 ResNet-34 BasicBlock conv layers on TTNN | +70 | 15/15 | `a72716b165` |
 | 3 | FPN 3 conv layers on TTNN (`TtnnFPN`) | +3 | 18/18 | `edd70f9e9f` |
 | 3.1 | Review fixes: 2-ch DDIM noise (upstream match), FPN bilinear upsample on TTNN, `ttnn.grid_sample` validated, conv-weight caching | +0 conv (+2 upsample) | 24/24 | `4b07970` |
+| 3.4 | Perception head on TTNN (`_bev_downscale`, `_status_encoding`, `bev_proj`, 3-layer `_tf_decoder`) | +1 conv | — | `ca36c5b0` |
+| 3.5 | DDIM denoiser on TTNN (plan_anchor_encoder, time_mlp, grid-sample cross-attn, 2× MHA, FFN, norms, FiLM, task heads) | — | — | `ca36c5b0` |
+| 3.6 | Backbone completion: ResNet stems ×2 + GPT cross-modal fusion ×4 on TTNN (`build_stage3_6`) | +grid/pool/upsample | — | *(uncommitted)* |
+| 3.7 | Agent head MLPs on TTNN (`build_stage3_7`) — **every weight op now on TTNN** | — | — | *(uncommitted)* |
 
-**Current total: 24 tests pass** (21 PCC + 3 sanity).  73 `ttnn.conv2d` ops + 2
-`ttnn.upsample` (bilinear) ops run on device per forward pass (each BasicBlock
-runs 2 conv ops + optional 1×1 downsample).  See §10 for the Stage-3.1 fixes.
+**Current total: 26 PCC tests pass.**  After `build_stage3_7` every
+weight-bearing op runs on TTNN; `test_pcc_stage3_6.py` validates the whole
+on-device model at production resolution (trajectory PCC 1.0 random / 0.9998
+real-checkpoint).  Remaining host code is documented scalar glue (`01_plan.md`
+§8).  See §10 for the Stage-3.1 fixes.
 
 ### TTNN ops on-device at Stage 3
 
@@ -246,9 +258,13 @@ Each figure is the minimum over 5 runs after 2 warm-up calls.
 | Stage 2 — TTNN backbone | 540 ms | **−17%** | 70 |
 | Stage 3 — TTNN backbone + FPN | 486 ms | **−25%** | 73 |
 
-The remaining ~486 ms is dominated by the GPT cross-modal fusion (4 × 2-layer
-transformer + pooling) and the TrajectoryHead DDIM denoiser, both still in PyTorch.
-These are the primary targets for Stages 4 and 5.
+The latency figures above are from Stage 3 (backbone + FPN on-device, fusion and
+denoiser still host).  As of Stage 3.6/3.7 the GPT cross-modal fusion and the
+DDIM denoiser also run on TTNN, but each on-device submodule still does its own
+host↔device round-trip (the staged drop-in approach), so wall-clock is not yet
+representative of a fused graph.  Collapsing those hops into a single TTNN graph
+(and enabling trace capture) is the Stage-3.7 single-graph consolidation — a
+performance refactor tracked in `01_plan.md` §8, not required for the PDM score.
 
 ### Accuracy (PCC vs PyTorch reference)
 
