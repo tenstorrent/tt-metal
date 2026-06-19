@@ -53,6 +53,13 @@ Optional:
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
+    --num-packets <N>                   Number of packets each sender sends (test_tt_fabric --num-packets).
+                                        This is the knob to shorten a run: the heavy all_to_all tests
+                                        (the bulk of the runtime) scale ~linearly with it, and every
+                                        sender stays active so all cables are still exercised. The script
+                                        reads the config's baseline counts and prints what fraction of the
+                                        default per-sender packet volume you're running. e.g. 1000 for a
+                                        quick run.
     --mpi-if <interface>                Network interface for MPI TCP transport
                                         (auto-detected if not specified)
     --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
@@ -100,6 +107,7 @@ TEST_CONFIG_EXPLICIT=false
 # datamover buffer-index assert), so it must not be the default here.
 TEST_CONFIG_Z="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
 FILTER=""
+NUM_PACKETS=""
 MPI_IF=""
 MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
@@ -178,6 +186,18 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             FILTER="$2"
+            shift 2
+            ;;
+        --num-packets)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --num-packets requires a non-empty value"
+                exit 1
+            fi
+            if [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --num-packets must be a positive integer (got '$2')"
+                exit 1
+            fi
+            NUM_PACKETS="$2"
             shift 2
             ;;
         --mpi-if)
@@ -406,6 +426,22 @@ echo "Test config: $TEST_CONFIG"
 if [[ -n "$FILTER" ]]; then
     echo "Filter: $FILTER"
 fi
+if [[ -n "$NUM_PACKETS" ]]; then
+    echo "Num packets per sender: $NUM_PACKETS"
+    # Read the config's baseline num_packets so the operator sees how much shorter
+    # this run is. Counts are per-sender; sender/iteration counts are unchanged, so
+    # runtime scales ~linearly with the per-sender packet volume.
+    if [[ -f "$TEST_CONFIG" ]]; then
+        mapfile -t _baselines < <(grep -oE 'num_packets:[[:space:]]*[0-9]+' "$TEST_CONFIG" | grep -oE '[0-9]+$')
+        if [[ ${#_baselines[@]} -gt 0 ]]; then
+            _baseline_sum=0
+            for _b in "${_baselines[@]}"; do _baseline_sum=$((_baseline_sum + _b)); done
+            _new_sum=$((NUM_PACKETS * ${#_baselines[@]}))
+            _pct=$(awk -v n="$_new_sum" -v o="$_baseline_sum" 'BEGIN { if (o > 0) printf "%.1f", 100.0 * n / o; else printf "n/a" }')
+            echo "  -> ~${_pct}% of the default per-sender packet volume across ${#_baselines[@]} pattern group(s) (baseline sum ${_baseline_sum} -> ${_new_sum})"
+        fi
+    fi
+fi
 echo "MPI interface: $MPI_IF"
 if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
@@ -423,6 +459,9 @@ if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
 fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS+=(--filter "$FILTER")
+fi
+if [[ -n "$NUM_PACKETS" ]]; then
+    EXTRA_BINARY_ARGS+=(--num-packets "$NUM_PACKETS")
 fi
 
 # Non-Z multi-host configs are a single mesh (TT_MESH_ID=0) that spans several
