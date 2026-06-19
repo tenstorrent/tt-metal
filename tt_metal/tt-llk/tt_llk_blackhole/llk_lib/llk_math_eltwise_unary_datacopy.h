@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 
@@ -43,6 +44,16 @@ inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    if constexpr (type == DataCopyType::A2D)
+    {
+        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
+    }
+    else
+    {
+        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
+    }
+    llk::san::operation_check<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
 
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
@@ -461,6 +472,16 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
     constexpr bool tilize = (pack_mode == PackMode::Tilize);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    if constexpr (type == DataCopyType::A2D)
+    {
+        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
+    }
+    else
+    {
+        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
+    }
+    llk::san::operation_init<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
+
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
