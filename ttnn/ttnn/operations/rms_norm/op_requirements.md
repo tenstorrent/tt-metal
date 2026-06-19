@@ -197,7 +197,7 @@ bf16 tolerance band, output layout matching input.
 >   **last**, on the clean unified base, so its measurements reflect the final
 >   structure.
 
-### [ ] Refinement 4 — Unify the kernel set (7 → 3–4 max; single compute non-negotiable)
+### [x] Refinement 4 — Unify the kernel set (7 → 3–4 max; single compute non-negotiable)
 
 **Goal**: collapse the current **7 kernels** to **3–4 total**. The **one
 non-negotiable** is a **single compute kernel** — the two computes must merge.

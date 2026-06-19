@@ -186,3 +186,51 @@
     authoritative layout matrix: 10 shapes (aligned + W/H/both non-aligned, 2D/3D/4D) ×
     {bf16, fp32} × {TILE->TILE, RM->RM} × {no_gamma, gamma_tile, gamma_rm} = 120 cases, all
     asserting output-layout-matches-input + PCC/relRMS. All pass.
+
+## Refinement 4 — Unify the kernel set (7 → 3–4 max; single compute non-negotiable)
+- **Date**: 2026-06-19
+- **What was done**: Collapsed the **7-kernel set to 3** — exactly one of each
+  (`rms_norm_reader.cpp`, `rms_norm_compute.cpp`, `rms_norm_writer.cpp`) — beating
+  the ≤4 budget and meeting the single-compute non-negotiable. Done in three
+  validated phases:
+  1. **Single compute** (defect #1): merged `rms_norm_compute_rm.cpp` into
+     `rms_norm_compute.cpp` gated by a `layout_is_rm` constexpr — RM is the shared
+     TILE math with a tilize prologue + untilize epilogue. RM adopted the
+     resident-gamma model (gamma fed/tilized once, indexed by per-chunk
+     `TileOffset` in PASS-2) so pass-2 is byte-for-byte shared with TILE. The
+     bf16/TILE Phase-0 anchor is numerically byte-identical (no-gamma TILE keeps
+     the single whole-shard `mul`).
+  2. **Unified reader + writer** (defect #2): one reader gated by
+     `(layout_is_rm, num_partials)` — TILE tile-read vs RM stick-read, with the
+     Regime-B `SenderPipe`/`ReceiverPipe` all-gather gated by `num_partials>1`
+     (mcast RT args read only under that constexpr via a superset RT layout). One
+     writer gated by `layout_is_rm`. Deleted `reader_mcast.cpp`, `reader_rm.cpp`,
+     `writer_rm.cpp`.
+  3. **ROW_MAJOR through mcast** (defect #3): RM dispatch now runs the same A/B
+     L1-fit heuristic as TILE. New `_regime_rm_b_descriptor` mirrors TILE Regime B
+     — each core owns one 32-stick block-group × one W-column shard (offset
+     `shard_col0`), all-gathers the K shard partials to the GLOBAL Σx²
+     (`inv_W = 1/W` over the full row), normalizes its shard, untilizes, writes
+     its columns. Wide-W RM no longer single-cores / OOMs.
+- **Kernel count**: 7 → 3 (reader, compute, writer); **exactly one compute**.
+- **Accuracy achieved** (RM Regime B mcast path, measured):
+  - bf16 wide-W (incl. (1,1,32,8192), (1,1,64,8192), (1,32,8192), W-non-aligned
+    (1,1,32,8190)): PCC ≥ 0.999, relRMS ≤ 0.0083.
+  - fp32 wide-W: PCC ≥ 0.9999, relRMS ≤ 0.02.
+  - TILE bf16 anchor byte-identical (regression anchor preserved).
+- **Golden test progress**: **1683/1683 supported passing** (2940 skipped, 420
+  xfailed) — identical to the Refinement 3 baseline, no regression. SUPPORTED
+  unchanged (this is a non-registry structural refinement: 0 xpass-drift, 0
+  supported_fail). test_regression.py + test_translated.py: 99/99.
+- **Issues encountered**: None blocking. One test-only bug (asserted `.layout` on a
+  torch tensor instead of the ttnn tensor) — fixed. The clean single-`eltwise_chain`
+  pass-2 fusion the design references is still not expressible with the current
+  helper library (noted in Refinement 1); the bounded chunked-streaming form is
+  retained, now shared by both layouts.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_rm_regime_b.py` — 40
+    cases proving wide-W ROW_MAJOR routes through the Regime B mcast all-gather
+    (descriptor carries 2 semaphores) AND is numerically correct vs torch
+    (bf16/fp32 × {no_gamma, gamma_tile, gamma_rm} × 5 wide shapes incl.
+    W-non-aligned). All other suites (acceptance, layout_matrix 120, regime_b,
+    precision_matrix 641) re-run green against the unified 3-kernel set.

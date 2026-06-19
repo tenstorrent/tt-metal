@@ -39,3 +39,4 @@
 {"event":"test_run","status":"timeout","tests":"precision_matrix(641)+baseline","detail":"bash 120s timeout (SIGTERM 143) — matrix too large for 2min, not a device hang; re-running with longer timeout","ts":"2026-06-19T19:34:10+00:00"}
 {"event":"test_run","status":"pass","tests":"probe_019 RM Regime B (1,1,32,8192)","detail":"wide-W RM routes through mcast (2 semaphores), PCC=0.999989 relRMS=0.0083","ts":"2026-06-19T19:49:16+00:00"}
 {"event":"test_run","status":"pass","tests":"rm_regime_b(40)+acceptance+layout_matrix+regime_b","detail":"Phase 3: wide-W RM routes through mcast all-gather; correctness PCC>=0.999; no regression","ts":"2026-06-19T19:53:10+00:00"}
+{"event":"test_run","status":"pass","tests":"golden test_golden(1683)+regression+translated(99)","detail":"R4 complete: golden 1683/1683 non-regressed; 7->3 kernels, single compute, RM-through-mcast proven","ts":"2026-06-19T20:01:19+00:00"}
