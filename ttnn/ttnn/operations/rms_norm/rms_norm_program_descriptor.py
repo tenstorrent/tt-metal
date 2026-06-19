@@ -148,6 +148,42 @@ def _tile_bytes(dtype) -> int:
     return ttnn.tile_size(dtype)
 
 
+# --- Refinement 6: byte-aware Regime-A resident footprint (the OOM floor) -------
+# The OOM floor decides whether a full row can stay resident on ONE core (Regime A)
+# or must be W-split across cores (Regime B). The original check counted only
+# `input + gamma` tiles against RESIDENT_BUDGET_TILES (560, a bf16-tuned *tile
+# count*). Two things make that unsound:
+#   1. dtype: a tile is 2048 B (bf16) / 4096 B (fp32) / 1088 B (bf8b) — a tile
+#      count cannot bound bytes across dtypes (fp32 doubles the footprint).
+#   2. Refinement 5 grew `cb_squared` from one reduce_block to the *whole* shard
+#      (Wt tiles), so it is now a third resident CB the count omitted.
+# Pre-R6 this was masked because wide rows always took Regime B (it "added cores");
+# Refinement 6's crossover deliberately keeps moderate rows in Regime A, which
+# surfaced an fp32+gamma OOM (input+squared+gamma all resident in 4096 B tiles).
+#
+# Real Regime-A peak resident = cb_input_resident (Wt, input dtype)
+#                             + cb_squared        (Wt, intermediate dtype)
+#                             + cb_gamma          (Wt, gamma dtype, if present).
+# The remaining CBs (output, recip, partial, normalized, scaler, RM streaming
+# double-buffers) are small constants (≈ tens of KB), covered by the headroom
+# between this budget and the 1.5 MB L1.
+L1_RESIDENT_BUDGET_BYTES = 1_340_000
+
+
+def _regime_a_resident_bytes(Wt_resident, input_dtype, inter_dtype, gamma_dtype, has_gamma) -> int:
+    b = Wt_resident * _tile_bytes(input_dtype) + Wt_resident * _tile_bytes(inter_dtype)
+    if has_gamma:
+        b += Wt_resident * _tile_bytes(gamma_dtype)
+    return b
+
+
+def _row_fits_l1(Wt_resident, input_dtype, fp32_acc, gamma, has_gamma) -> bool:
+    """True iff a full row (input + squared + gamma) stays resident on one core."""
+    inter = _intermediate_dtype(input_dtype, fp32_acc)
+    gamma_dt = gamma.dtype if has_gamma else input_dtype
+    return _regime_a_resident_bytes(Wt_resident, input_dtype, inter, gamma_dt, has_gamma) <= L1_RESIDENT_BUDGET_BYTES
+
+
 def _even_split(total, num_cores):
     """Return a list of (start, count) contiguous chunks summing to `total`."""
     base = total // num_cores
@@ -185,8 +221,10 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         reduce_block = min(Wt, _dest_limit(cfg))
         num_chunks = (Wt + reduce_block - 1) // reduce_block
         Wt_padded = num_chunks * reduce_block
-        resident_tiles = Wt_padded + (Wt_padded if has_gamma else 0)
-        row_fits = resident_tiles <= RESIDENT_BUDGET_TILES
+        fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
+        # Byte-aware OOM floor (Refinement 6): RM Regime A holds the whole tilized
+        # row (Wt_padded) resident, so its footprint is identical in shape to TILE.
+        row_fits = _row_fits_l1(Wt_padded, input_tensor.dtype, fp32_acc, gamma, has_gamma)
 
         K = _select_k(Wt, num_blocks_total, grid, total_cores, has_gamma)
         regime_a_cores = min(num_blocks_total, total_cores)
@@ -228,8 +266,11 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     inv_W_bits = _f32_bits(1.0 / W)
     eps_bits = _f32_bits(epsilon)
 
-    resident_tiles = Wt + (Wt if has_gamma else 0)
-    row_fits = resident_tiles <= RESIDENT_BUDGET_TILES
+    # Byte-aware OOM floor (Refinement 6): counts input + squared + gamma in their
+    # actual tile-byte formats, so fp32 (4096 B/tile) and the R5-enlarged cb_squared
+    # are no longer undercounted (was a bf16-only tile count of input + gamma).
+    fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
+    row_fits = _row_fits_l1(Wt, input_tensor.dtype, fp32_acc, gamma, has_gamma)
 
     def _make_a():
         return _regime_a_descriptor(
