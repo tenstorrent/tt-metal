@@ -63,7 +63,7 @@ hidden 4096). They differ only at the edges:
 
 | Variant | Adds over base | Incremental port cost |
 |---|---|---|
-| **HunyuanImage-3.0** (base, text→image) | — | the bulk of the work; in progress |
+| **HunyuanImage-3.0** (base, text→image) | — | runs end-to-end on the 2×2 mesh (`demo/demo.py`); accuracy/scale hardening remains |
 | **HunyuanImage-3.0-Instruct** (image→image, reasoning) | SigLIP2 vision encoder, image-input preprocessing, recaption/think token generation | **large** — net-new vision + AR-text path |
 | **HunyuanImage-3.0-Instruct-Distil** | 8-step sampling schedule only | **small** — config/scheduler reuse |
 
@@ -85,7 +85,10 @@ hidden 4096). They differ only at the edges:
 - Patch embed `UNetDown` / final layer `UNetUp` — `tt/image_gen/patch_embed.py`
 - Timestep embedder — `tt/image_gen/timestep_embedder.py`
 - Flow-matching scheduler — `tt/scheduler.py`
-- VAE encoder / decoder blocks (Conv3D) — `tt/vae/` (block-level PCC only — see blocker)
+- VAE encoder / decoder blocks (Conv3D) — `tt/vae/`
+- **Full-res VAE decode on device** — `tt/vae/spatial.py` H/W-spatial-parallel
+  (each device a 512² quadrant of 1024²); `tests/vae/test_decode_latent_spatial.py`
+  vs fp32 reference: PCC 0.999489, no OOM. (Resolves the former full-res OOM blocker.)
 - **On-device single denoise step** — `tt/pipeline.py` `HunyuanTtDenoiseStep`
   (`tests/pcc/test_pipeline_step.py`): 4-layer PCC 0.99999, full 32-layer PCC 0.983.
   Device-side scatter (concat) + image-span slice; no host round-trips.
@@ -96,12 +99,10 @@ hidden 4096). They differ only at the edges:
   scaling / temporal-dim / denormalize wiring verified with an injected decoder.
 
 ### Known issues / blockers
-- **VAE full-res decode OOMs (BLOCKER).** The real decoder runs only at its built-in
-  resolution (64×64 latent → 1024×1024 image); the DCAE upsample needs a ~16 GB DRAM
-  intermediate, but a single Blackhole device has ~2 GB free per the allocator. The
-  upstream `tests/vae/test_decoder.py::test_full_decoder_vs_pytorch` OOMs identically,
-  and `GroupNorm3D` bakes in `input_nhw=4096` at construction so it can't be shrunk.
-  Needs chunked/sharded/streamed upsample (or a multi-device mesh). Blocks latent→image.
+- ~~**VAE full-res decode OOMs.**~~ RESOLVED — the decoder is now H/W-spatial-parallel
+  across the 2×2 mesh (`tt/vae/spatial.py`), so each device holds a 512² quadrant and the
+  conv im2col is 4× smaller per shard. Full 1024² decode runs with no OOM, PCC 0.999489 vs
+  fp32 reference (`tests/vae/test_decode_latent_spatial.py`). See MEMORY_FIT_PLAN.md.
 - **32-layer backbone drift:** free-running PCC ≈ 0.88 (bf16) for the standalone backbone;
   the full denoise step composes to 0.983. Audit before final image fidelity.
 - **Host RAM:** 32 layers resident with `stream_experts=True` ≈ 150 GB host RAM
@@ -113,23 +114,26 @@ hidden 4096). They differ only at the edges:
 
 ## Pending work
 
-### Phase 1 — Base T2I end-to-end (critical path)
+### Phase 1 — Base T2I end-to-end (critical path) — COMPLETE
 1. ~~**On-device single denoise step**~~ — DONE (`HunyuanTtDenoiseStep`).
 2. ~~**Multi-step denoise loop** with CFG~~ — DONE (`denoise_loop`).
-3. **VAE decode (BLOCKED on memory)** — `decode_latent` glue is done and verified, but
-   the real decoder OOMs at full res (see blockers). Unblocking it = chunked/sharded
-   upsample so latent → image actually runs on device.
-4. **Tokenizer + input construction** — prompt → input_ids and the
-   `[text | image-token span | text]` sequence (`prepare_model_inputs` /
-   `prepare_message_list`). Current tests use synthetic embeddings. (Independent of the
-   VAE blocker — can proceed in parallel.)
-5. **Runnable `demo/demo.py`** (currently empty) producing an image from a prompt.
+3. ~~**VAE decode**~~ — DONE on device, H/W-spatial-parallel (`tt/vae/spatial.py`,
+   `decode_latent`); full-res 1024² runs with no OOM (PCC 0.999489).
+4. ~~**Tokenizer + input construction**~~ — DONE. `HunyuanTokenizer` +
+   `prepare_gen_image_inputs` build input_ids and the `[text | image span | text]`
+   sequence; `demo/demo.py` runs from a real prompt (host wte embed; on-device embed via
+   `HunyuanTtModel(embed_state_dict=...)` is also supported).
+5. ~~**Runnable `demo/demo.py`**~~ — DONE: prompt → tokenizer → resident bf8 2×2 backbone
+   → on-device VAE → PNG (`HY_STEPS=8 HY_NUM_LAYERS=32 demo/demo.py "a photo of a cat"`).
 
 ### Phase 2 — Accuracy & scale
 6. **VAE upsample memory** — chunk/shard/stream the DCAE upsample (the Phase-1 VAE
    blocker is really this work).
-7. Resolve 32-layer bf16 drift (per-op precision audit; candidate ops: MoE accumulation,
-   RMSNorm, attention softmax).
+7. Resolve 32-layer bf16 drift (precision audit; candidate ops: MoE accumulation,
+   RMSNorm, attention softmax). **Instrument:** `tests/pcc/test_model_teacher_forced.py::
+   test_bf8_mixed_precision_audit` sweeps each layer at bf16 vs bf8 against the fp32 golden
+   and prints the recommended `bf16_layers` set (layers whose bf8 per-layer PCC < 0.99).
+   Run it on the box, then feed the result into `HunyuanTtModel(bf16_layers=...)` / `demo.py`.
 8. On-demand layer/expert weight streaming from disk.
 9. **Device-resident experts** (stop re-uploading per forward) + **sparse top-8 routed
    MoE** (replace the dense-over-64 correctness path) — `tt/moe/moe.py`.
@@ -138,10 +142,21 @@ hidden 4096). They differ only at the edges:
 10. 8-step sampling schedule + config plumbing (`--diff-infer-steps 8`). Reuses Phase 1.
 
 ### Phase 4 — Instruct (I2I) variant
-11. **SigLIP2 vision encoder** port (`ref/`+`tt/`) — reference `siglip2.py` (570 lines).
-12. Image preprocessing (`image_processor.py`) and input-image embedding into the sequence.
-13. Reasoning/recaption **autoregressive text generation** path (token sampling) for the
-    `think_recaption` bot-task.
+Vision input path — device pieces DONE, host glue remaining:
+11. ~~**SigLIP2 vision encoder** (`tt/vision/siglip2.py`) + vision→4096 `LightProjector`~~ —
+    ported + PCC-tested (`tests/vision/test_siglip2_ttnn.py`, `forward_vision_with_aligner`).
+12. ~~**Cond-vision sequence injection**~~ — DONE: `tt/vision/inject.py`
+    `scatter_cond_vision_embeddings` writes projected vision features into the contiguous
+    `<img>` span (device `concat`, mirrors the T2I scatter). `tests/vision/test_cond_vision_inject.py`
+    vs the reference masked scatter: PCC 0.999999 (4 cases incl. span-at-start/end).
+13. **Host glue (remaining):** wrap `ref` `HunyuanImage3ImageProcessor.vit_process_image`
+    (PIL → pixel_values/spatial_shapes/mask) and surface a `cond_image_mask` / `<img>` slice
+    from the `cond_vit_image` chat-template section, then assemble an I2I pipeline:
+    image → processor → vision+aligner → `scatter_cond_vision_embeddings` → `model.forward`.
+14. Reasoning/recaption **autoregressive text generation** path (token sampling) for the
+    `think_recaption` bot-task — no AR sampling loop exists yet (codebase is diffusion-only).
+15. Ragged / multi-image scatter (`scatter_on_host` fallback) — `scatter_cond_vision_embeddings`
+    handles a single contiguous TILE-aligned `<img>` span; multi-image layouts need host-scatter.
 
 ---
 

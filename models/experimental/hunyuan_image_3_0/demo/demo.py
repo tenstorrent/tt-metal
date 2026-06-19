@@ -8,13 +8,13 @@
 #   noise latent --[ patch_embed -> RESIDENT bf8 sharded backbone -> final_layer ]
 #                  x N scheduler steps with CFG (denoise_loop on the 2x2 sp0tp1 mesh)
 #          --> denoised latent
-#          --VAE decode (PyTorch reference, CPU)--> RGB image  [*]
+#          --VAE decode (TTNN, on device, 2x2 H/W-spatial-parallel)--> RGB image
 #
-# [*] The TTNN VAE decode is the one unbuilt block (full-res OOM; HW-parallel is
-#     future work — see MEMORY_FIT_PLAN.md). We fall back to the fp32 reference
-#     VAE on CPU so the pipeline produces a viewable image end to end. Everything
-#     else runs on the TT mesh with the model that fits DRAM (bf8 + 4-way expert
-#     sharding, first/last 4 layers bf16).
+# The whole pipeline runs on the TT mesh: the backbone with the model that fits
+# DRAM (bf8 + 4-way expert sharding, first/last 4 layers bf16), and the VAE decode
+# sharded H/W-spatial across the 2x2 mesh (each device a 512x512 quadrant of the
+# 1024x1024 image; validated end-to-end vs the fp32 reference — see
+# MEMORY_FIT_PLAN.md). No host round-trip for the VAE.
 #
 # Run:
 #   HY_STEPS=8 HY_NUM_LAYERS=32 python_env/bin/python \
