@@ -62,6 +62,10 @@ void init_unary_sfpu_operation_quasar()
     {
         _init_gelu_();
     }
+    else if constexpr (OPERATION == SfpuType::square)
+    {
+        _init_square_();
+    }
 }
 
 /**
