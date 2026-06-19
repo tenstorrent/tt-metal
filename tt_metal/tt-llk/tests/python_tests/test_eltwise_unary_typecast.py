@@ -112,22 +112,32 @@ def _whole_number_float_spec(high: int) -> StimuliSpec:
     return StimuliSpec(distribution=dist, seed=0)
 
 
+def _preserve_fp32_precision(formats: InputOutputFormat) -> bool:
+    """preserve_fp32_precision exactly as ttnn.typecast computes it.
+
+    ttnn uses this single flag for two things: it forces fp32 dest acc (see
+    _production_dest_acc) and it selects UnpackToDestFp32 in the program
+    factories, so the test reuses it for both.
+    """
+    in_fmt = formats.input_format
+    out_fmt = formats.output_format
+    # bf16 / block-float inputs that promote to 32-bit Dest when packed to UInt8.
+    bf_family = (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+    return (
+        in_fmt == DataFormat.Float32
+        or (out_fmt == DataFormat.UInt8 and in_fmt in bf_family)
+        or (in_fmt == DataFormat.UInt16 and out_fmt == DataFormat.UInt8)
+        or (in_fmt == DataFormat.UInt8 and out_fmt != DataFormat.Float16_b)
+    )
+
+
 def _production_dest_acc(formats: InputOutputFormat) -> list[DestAccumulation]:
     """Pick dest_acc the way ttnn.typecast does."""
 
     in_fmt = formats.input_format
     out_fmt = formats.output_format
-
-    # bf16 / block-float inputs that promote to 32-bit Dest when packed to UInt8.
-    _bf_family = (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b)
-    preserve_fp32_precision = (
-        in_fmt == DataFormat.Float32
-        or (out_fmt == DataFormat.UInt8 and in_fmt in _bf_family)
-        or (in_fmt == DataFormat.UInt16 and out_fmt == DataFormat.UInt8)
-        or (in_fmt == DataFormat.UInt8 and out_fmt != DataFormat.Float16_b)
-    )
     fp32_dest_acc_en = (
-        preserve_fp32_precision
+        _preserve_fp32_precision(formats)
         or out_fmt in (DataFormat.UInt32, DataFormat.Int32, DataFormat.Float32)
         or in_fmt in (DataFormat.UInt32, DataFormat.Int32)
         or out_fmt == DataFormat.Fp8_e4m3
@@ -182,9 +192,16 @@ def test_eltwise_unary_typecast(
         input_dimensions,
     )
 
-    # 32-bit inputs are unpacked straight into Dest (no Src-register staging).
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    # Unpack straight into Dest when either:
+    #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
+    #    Int32/UInt32/Float32, so is_unpacker_format_conversion_supported_dest
+    #    (cunpack_common.h) asserts unpack_to_dest for them; or
+    #  * production would, i.e. preserve_fp32_precision drives UnpackToDestFp32 in
+    #    the ttnn program factories.
+    # For non-32-bit inputs the unpack MOP still gates on is_32bit_input(), so the
+    # flag only actually changes the datapath for genuine 32-bit inputs.
+    unpack_to_dest = formats.input_format.is_32_bit() or _preserve_fp32_precision(
+        formats
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
