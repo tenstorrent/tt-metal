@@ -95,3 +95,61 @@
     (18: config-knob plumbing), test_scaled_dot_product_attention_precision_matrix (90).
   - tests/.../test_sdpa_dtype_probe.py — minimal isolated dtype smoke test.
   - tests/.../precision_matrix_results.md — characterization table + observations.
+
+## Refinement 2 — GQA / MQA (kv_heads_mode)
+- **Date**: 2026-06-19
+- **What was done** (op-file gate only — zero kernel / descriptor changes):
+  - `SUPPORTED["kv_heads_mode"]` += `"gqa"`, `"mqa"`. This is the *only* change.
+    The Flash-Attention pipeline already supported GQA/MQA end-to-end:
+    - **Reader**: `head_group = H / H_kv`, `h_kv = h / head_group`,
+      `kv_head_base = (b*H_kv + h_kv)*Skv_t` — each Q head reads its grouped KV
+      head. Work split is per Q head (`B·H·Sq_t`), so GQA/MQA is embarrassingly
+      parallel — no new distribution, no inter-core comm.
+    - **Writer**: indexes output purely by Q head (`(b*H + h)*Sq_t + q`).
+    - **`_check_structural`**: already enforces `H_q % H_kv == 0`.
+    - **Mask head index**: `mh = (mask_H == 1) ? 0 : h` already handles
+      `mask_H ∈ {1, H_q}` (broadcast and per-head masks).
+  - No EXCLUSIONS change (stays `[]`), no compute/program-descriptor edit.
+- **Accuracy achieved** (golden + new R2 unit tests, randn, TILE):
+  - bf16  GQA/MQA: PCC ≥ 0.995, rel-RMS within 0.05 target across 8:2, 32:8,
+    32:1, 12:4, 16:4 ratios, self + cross, none/causal/per-head masks.
+  - fp32  GQA/MQA: PCC ≥ 0.999 (target 0.02 rms) on all tile-aligned shapes
+    **except** the one long-context corner below.
+  - bf8b  GQA/MQA: PCC ≥ 0.99, rel-RMS within 0.12 target (incl. causal).
+- **Golden test progress**: **203 / 204** supported gqa/mqa cells pass; **24**
+  non-aligned gqa/mqa cells correctly xfail (toward R3); registry total now
+  624 expected-pass (was 420 at R1) + 120 xfail. The 140 Phase-0 bf16 cells
+  stay green (MHA `validate()` byte-identical — widening SUPPORTED cannot
+  regress MHA). `test_gqa_mqa_forward` (4 cases) now passes (were
+  `UnsupportedAxisValue` rejections).
+- **Issues encountered** (1 deferred corner, NOT silenced in EXCLUSIONS, per the
+  precision-near-miss protocol):
+  - `float32 + Q1x8x4096x128 (GQA) + no-mask + explicit-scale` — rms=0.0222 >
+    0.02 fp32 target, PCC=0.99988. **Bounded precisely**: the same shape passes
+    at bf16 (4/4), bf8b (4/4), fp32+causal (2/2), and fp32+none+auto — only
+    fp32+none+explicit tips over the tight 0.02 target. This is **not** a
+    head-remapping gap (GQA is bit-exact); it is the *identical* bf16-CB
+    softmax-accumulator limitation (Issue #13364) that R1 already declared
+    lever-less for the MHA equivalent (`Q1x1x8192x64` fp32 no-mask, rms=0.0206).
+    Surfaced on one additional GQA long-context shape. **Lever-less** for the
+    default-config golden: fp32 CBs hang the LLK (#13364); math_fidelity is
+    accumulation-dominated, not matmul-dominated, and the default must stay
+    HiFi2; the golden harness uses the default compute_kernel_config so the R1
+    config surface can't reach it. Left red; tracked in op_requirements.md's
+    bottom "Not a refinement" note (now lists both the R1-MHA and R2-GQA data
+    points). **Not** filed as a standalone refinement — no in-scope lever, same
+    rationale as R1/R4.
+  - The 14 `test_regression.py` failures (large_magnitude / uniform / negative,
+    all MHA) are pre-existing adversarial-distribution precision limits from
+    Phase 0 — unaffected by R2 (those inputs are MHA, whose `validate()` path is
+    unchanged).
+- **Tests added**:
+  - tests/.../test_scaled_dot_product_attention_gqa_mqa.py (50 cases):
+    test_gqa_mqa_forward (27: {bf16,fp32,bf8b} × 9 LLM ratios), causal-mask (9),
+    per-head-mask (9), cross-attention (3), non-divisible-heads structural
+    rejection (1), MHA regression guard (1).
+- **Checkbox**: `[~]` partial — both named axis values (gqa, mqa) fully landed
+  and confirmed by 203 passing golden cells; one inherited fp32-no-mask-
+  long-context precision corner (Issue #13364, lever-less) left red rather than
+  excluded, so the literal "every gqa/mqa cell at supported dtype passes"
+  Done-when is not 100% met.

@@ -107,7 +107,28 @@ Cells that fail out of the box (typically `bfloat8_b + non_tile_aligned`, and po
 
 ---
 
-### [ ] Refinement 2 — GQA / MQA (kv_heads_mode)
+### [~] Refinement 2 — GQA / MQA (kv_heads_mode)
+
+> **R2 outcome (partial)**: `gqa` and `mqa` both **fully landed** in
+> `SUPPORTED["kv_heads_mode"]` — the reader's existing Q-head→KV-head remapping
+> is bit-exact correct across every supported dtype. Golden: **203 / 204**
+> tile-aligned gqa/mqa cells pass (the 24 non-aligned gqa/mqa cells stay xfail
+> toward R3; total 228 gqa/mqa cells). `test_gqa_mqa_forward` (4 cases, were
+> `UnsupportedAxisValue` rejections) now passes; all 24 acceptance + 50 new
+> R2-unit cases pass; the 140 Phase-0 bf16 golden cells stay green (MHA
+> `validate()` is byte-identical — widening SUPPORTED cannot regress MHA).
+> **One red corner, NOT silenced in EXCLUSIONS** (precision-near-miss protocol):
+> `float32 + Q1x8x4096x128 (GQA) + no-mask + explicit-scale` — rms=0.0222 > 0.02
+> fp32 target, PCC=0.9999. Bounded precisely: the *same* shape passes at
+> bf16 (4/4), bf8b (4/4), fp32+causal (2/2), and fp32+none+auto — only
+> fp32+none+explicit tips over the tight 0.02 target. This is **not** a
+> head-remapping gap; it is the identical **bf16-CB softmax-accumulator
+> limitation (Issue #13364)** that R1 already declared lever-less for the MHA
+> equivalent (`Q1x1x8192x64` fp32 no-mask, rms=0.0206), now surfacing on one
+> GQA long-context shape. Lever-less for the default-config golden (fp32 CBs
+> hang; math_fidelity is accumulation-dominated; default must stay HiFi2).
+> Tracked in the bottom "Not a refinement" note below, **not** filed as a
+> standalone refinement (no in-scope lever — same rationale as R1/R4).
 
 **Goal**: add `"gqa"` and `"mqa"` to `SUPPORTED["kv_heads_mode"]`. Unblocks the 132
 `kv_heads_mode=gqa` and 96 `kv_heads_mode=mqa` xfail cells (Q has more heads than
@@ -211,10 +232,20 @@ Dt=32), pushing static CBs to 2,767,616 B > the 1,572,864 B L1 ceiling.
 **Done when**: the 6 `float32 + Q1x1x128x1024` golden cells pass; the 414 R1-passing
 golden cells and 24 acceptance tests stay green; no new OOM on any supported shape.
 
-> **Not a refinement — tracked separately**: `float32 + S=8192 + no-mask` (2 golden
-> cells, rms=0.0206 > 0.02 target, PCC=0.9999) is the bf16-CB softmax-accumulator
-> precision limitation (running `l`/`O` round-tripped through bf16 across 2048 KV
-> chunks; fp32 CBs hang this LLK — Issue #13364). No in-scope lever (math_fidelity
-> is accumulation-dominated here, not matmul-dominated; the default must stay HiFi2).
-> Documented in `verification_report.md` and R1's `changelog.md`. Revisit when
-> Issue #13364 is resolved, not as a standalone refinement.
+> **Not a refinement — tracked separately**: the bf16-CB softmax-accumulator
+> precision limitation (running `l`/`O` round-tripped through bf16 across the KV
+> chunks; fp32 CBs hang this LLK — Issue #13364) surfaces on every `float32 +
+> long-context + no-mask` shape whose accumulation depth pushes rms just over the
+> tight fp32 0.02 target. Known data points:
+> - R1 (MHA): `float32 + Q1x1x8192x64 + no-mask` (2 cells), rms=0.0206, PCC=0.9999.
+> - R2 (GQA): `float32 + Q1x8x4096x128 + no-mask + explicit-scale` (1 cell),
+>   rms=0.0222, PCC=0.9999. (Same shape passes at bf16/bf8b/fp32-causal/
+>   fp32-none-auto — only the explicit-scale variant of the no-mask fp32 case
+>   tips over; explicit 0.125 > auto 0.0884 ⇒ sharper scores ⇒ marginally more
+>   accumulation error.)
+>
+> No in-scope lever (math_fidelity is accumulation-dominated here, not
+> matmul-dominated; the default must stay HiFi2; the golden harness uses the
+> default config so the R1 `compute_kernel_config` surface can't help these
+> cells). Documented in `verification_report.md` and R1/R2 `changelog.md`.
+> Revisit when Issue #13364 is resolved, not as a standalone refinement.
