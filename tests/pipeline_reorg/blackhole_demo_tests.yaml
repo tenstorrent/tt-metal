@@ -168,7 +168,7 @@
 
 # ─── mistral-small-4-119b ───────────────────────────────────────────────────
 
-- name: mistral-small-4-119b multimodal demo
+- name: mistral-small-4-119b multimodal demo + e2e perf
   cmd: |
     set -e
     # Mistral4/Pixtral support is only on transformers main (not in a release yet).
@@ -179,9 +179,10 @@
     export MESH_DEVICE=P150x8
     python models/experimental/mistral_small_4_119b/demo/demo_multimodal.py \
       --warmup --n-text-layers 36 --n-vision-layers 24 --image-max-side 512 --max-new-tokens 512
+    pytest --timeout 1800 models/experimental/mistral_small_4_119b/tests/perf/test_e2e_performant.py -k L36V24
   skus:
     bh_loudbox:
-      timeout: 60
+      timeout: 90
   owner_id: U09SQ3SP5HV # Moritz Thüning
   team: models
   model-name: mistral-small-4-119b
