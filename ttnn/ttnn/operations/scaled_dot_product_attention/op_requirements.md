@@ -73,7 +73,7 @@ reduce, or the 128×1024 cell stays in `EXCLUSIONS`. (3) Refinement 2 reuses
 the dtype-driven CB-format derivation introduced here, so this must precede
 it.
 
-### [ ] Refinement 2 — Non-tile-aligned shape support
+### [x] Refinement 2 — Non-tile-aligned shape support
 
 **Goal**: add `"w_non_aligned"` (D not %32) and `"h_non_aligned"` (S_q not
 %32, D aligned) to `SUPPORTED["alignment"]` via **in-kernel** data-access

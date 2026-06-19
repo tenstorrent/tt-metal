@@ -118,3 +118,64 @@
   precision characterization: 8 shapes × 3 dtypes × 4 fidelities × 2 fp32_acc ×
   2 distributions = 384 cells), and `precision_matrix_results.md`. All prior op
   tests still green (acceptance 32, debug 2, baseline 4 = 38 passed).
+
+## Refinement 2 — Non-tile-aligned shape support
+- **Date**: 2026-06-19
+- **What was done**:
+  - `SUPPORTED["alignment"]` += `w_non_aligned` (D not %32), `h_non_aligned`
+    (S_q not %32, D aligned). EXCLUSIONS stays `[]` — every non-aligned cell
+    passes, including bf8b × non-aligned (the refinement had pre-authorized an
+    EXCLUSION for it; not needed).
+  - **Program-descriptor tile-count fix (load-bearing bug)**: `DHt`, `Sq_t`,
+    `Sk_t` were computed with FLOOR division, silently dropping the partial last
+    tile and processing only the tile-aligned prefix. Switched to CEIL division
+    (`_ceil_div`). For tile-aligned dims ceil == floor, so this is a no-op on the
+    aligned path. Added `kv_partial = S_kv % 32` as the masking trigger.
+  - **KV-column softmax-denominator masking** (the `h_non_aligned` core change):
+    K's padded rows are zero, so the padded KV columns of the last score
+    tile-column score 0; without masking, the row-max can latch onto 0 and the
+    row-sum gains `exp(0 - m)` per padded column — both corrupt the softmax.
+    The reader now generates a persistent additive `-inf` pad-mask block (one
+    `B_q × B_kv` block, acc_dtype, face-major element fill, dtype-aware fp32/bf16)
+    ONCE at startup and never pops it. The compute (Phase 2c) adds it held
+    (Block-indexed, mirroring the proven Phase-5 operand structure) on the LAST
+    kv block, before the row-max. The whole path is gated on
+    `if constexpr (kv_partial != 0)`, so tile-aligned inputs compile it out
+    entirely (the pad-mask CB is not even allocated).
+  - **`w_non_aligned` needs nothing beyond the ceil fix**: from_torch zero-pads
+    the TILE inputs, so the QK contraction and PV matmul over the partial D-tile's
+    padded lanes contribute `0·x = 0`. The masking is keyed on `S_kv % 32 != 0`,
+    independent of the alignment tag, so `both`-non-aligned and cross-attention
+    with aligned-S_q-but-non-aligned-S_kv are covered too.
+  - **`h_non_aligned` S_q (output) padding**: the last seq tile is partial; the
+    writer writes full tiles and ttnn's logical-shape slicing drops the padding
+    output rows. Padded Q rows produce finite garbage (softmax of zero-scores =
+    uniform over valid columns; denominator ≥ 1), never NaN, and are discarded.
+  - bf8b × non-aligned reuses R1's dtype-aware CB derivation: bf8b forces
+    fp32 dest acc + fp32 intermediates, so the pad mask is fp32 and the
+    block-float input's zero-padding survives the matmul cleanly.
+- **Accuracy achieved** (fp32 reference; probe + golden + unit tests):
+  - bf16: PCC = 1.00000, max_abs ≤ 0.008, norm-RMS ≤ 0.05 across the non-aligned
+    shape sweep.
+  - fp32: PCC = 1.00000, max_abs ≤ 0.008, norm-RMS ≤ 0.02.
+  - bf8b: PCC ≥ 0.9999, max_abs ≤ 0.029, norm-RMS ≈ 0.015 (well under the 0.12
+    bf8b tolerance).
+  - Direct before/after on `h_non_aligned`: PCC 0.99926 → **1.00000**, max_abs
+    **0.153 → 0.003** (the pad mask removing the polluted denominator).
+- **Golden test progress**: **744 passed, 1 skipped, 0 failed, 0 xfailed**
+  (Refinement 1 was 624 passed + 120 xfailed). All 120 previously-xfailed
+  non-aligned cells (10 shapes × 3 dtypes × mask × scale) now pass. The full
+  TARGET × INPUTS cartesian is supported; xpass_drift = 0.
+- **Issues encountered**: None blocking. The only subtlety was the face-major
+  tile element layout for the in-reader mask fill (a 32×32 tile is 4 row-major
+  16×16 faces ordered TL/TR/BL/BR; element (r,c) lives at
+  `face*256 + (r%16)*16 + (c%16)`) — verified correct by the PCC jump to 1.0.
+  bf8b × non-aligned passed out of the box, so the pre-authorized EXCLUSION was
+  not needed.
+- **Tests added**:
+  `test_scaled_dot_product_attention_non_aligned.py` — 11 non-aligned shapes
+  (w / h / both / cross-attn-non-aligned-S_kv, across MHA/GQA/MQA/multi-batch)
+  × bf16/fp32/bf8b × mask none/causal × scale auto/explicit (132 cells) + a
+  3-dtype aligned no-regression guard (135 passed under --dev, 135 non-dev).
+  All prior op tests still green (acceptance 32, debug 2, baseline 4,
+  precision matrix 384 = 422 passed).
