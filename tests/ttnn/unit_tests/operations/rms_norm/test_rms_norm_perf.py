@@ -125,7 +125,8 @@ def test_rms_norm_perf_baseline_table(device):
         "",
         "Per-op on-device kernel time in microseconds (best of 7), 8x8 Wormhole grid.",
         "Measured via ttnn.ReadDeviceProfiler + get_latest_programs_perf_data",
-        "(DEVICE KERNEL DURATION [ns]). Heuristic-selected regime (REGIME_B_MIN_WT=" f"{desc.REGIME_B_MIN_WT}).",
+        "(DEVICE KERNEL DURATION [ns]). Heuristic regime: "
+        f"REGIME_B_MIN_WT_TILE={desc.REGIME_B_MIN_WT_TILE}, REGIME_B_MIN_WT_RM={desc.REGIME_B_MIN_WT_RM}.",
         "",
         "| shape | dtype | layout | no_gamma (us) | gamma (us) |",
         "|-------|-------|--------|---------------|------------|",
@@ -147,23 +148,29 @@ def _measure_forced(device, x, regime, **kw):
 
 
 @pytest.mark.parametrize(
-    "W, expect_winner",
+    "layout, W, expect_winner",
     [
-        (2048, "A"),  # Wt=64  — A decisively faster (below crossover)
-        (8192, "B"),  # Wt=256 — B decisively faster (above crossover)
+        # TILE crossover ~160: A decisive at Wt=64, B decisive at Wt=256.
+        (ttnn.TILE_LAYOUT, 2048, "A"),  # Wt=64
+        (ttnn.TILE_LAYOUT, 8192, "B"),  # Wt=256
+        # ROW_MAJOR crossover ~96 (lower: RM Regime A tilizes the whole row on one
+        # core): A at Wt=64, B already winning at Wt=128.
+        (ttnn.ROW_MAJOR_LAYOUT, 2048, "A"),  # Wt=64
+        (ttnn.ROW_MAJOR_LAYOUT, 4096, "B"),  # Wt=128
     ],
+    ids=["TILE-Wt64", "TILE-Wt256", "RM-Wt64", "RM-Wt128"],
 )
-def test_rms_norm_ab_crossover(device, W, expect_winner):
-    """Force A and B on the same single-tile-row shape; the measured crossover
-    (REGIME_B_MIN_WT) must agree with which regime is actually faster."""
+def test_rms_norm_ab_crossover(device, layout, W, expect_winner):
+    """Force A and B on the same single-tile-row shape; the measured layout-aware
+    crossover (REGIME_B_MIN_WT_TILE / _RM) must agree with which regime is faster."""
     x = torch.randn(1, 1, 32, W)
-    a = _measure_forced(device, x, "A")
-    b = _measure_forced(device, x, "B")
+    a = _measure_forced(device, x, "A", layout=layout)
+    b = _measure_forced(device, x, "B", layout=layout)
     assert a is not None and b is not None, (a, b)
     winner = "A" if a < b else "B"
-    assert winner == expect_winner, f"W={W}: A={a/1000:.1f}us B={b/1000:.1f}us, expected {expect_winner} to win"
+    assert winner == expect_winner, f"W={W} {layout}: A={a/1000:.1f}us B={b/1000:.1f}us, expected {expect_winner}"
 
     # The production heuristic must select the faster regime within a noise band.
-    chosen = measure_device_kernel_ns(device, x)
+    chosen = measure_device_kernel_ns(device, x, layout=layout)
     best = min(a, b)
-    assert chosen <= best * 1.20, f"W={W}: heuristic chose {chosen/1000:.1f}us, best regime {best/1000:.1f}us"
+    assert chosen <= best * 1.20, f"W={W} {layout}: heuristic {chosen/1000:.1f}us, best {best/1000:.1f}us"

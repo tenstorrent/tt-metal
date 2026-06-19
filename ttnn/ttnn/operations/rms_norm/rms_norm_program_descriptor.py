@@ -61,16 +61,27 @@ RESIDENT_BUDGET_TILES = 560
 #      AND Wt >= REGIME_B_MIN_WT. Below the crossover, Regime A's single/few-core
 #      run beats B's mcast setup cost.
 #
-# REGIME_B_MIN_WT was measured on an 8x8 Wormhole grid (see changelog Refinement 6
-# and tests/.../test_rms_norm_perf.py): A-forced vs B-forced device-kernel-ns for
-# single-tile-row shapes (1,1,32,W) that all fit L1. Regime A device time scales
-# linearly with Wt (one core does the whole row): ~27.7us @ Wt=32 -> 196us @ Wt=256.
-# Regime B is roughly flat (~71-110us) — it splits W across K cores but pays a fixed
-# mcast all-gather cost. The two cross near Wt ~= 96-128 (a wash), with A decisively
-# faster below (1.5-2x @ Wt<=64) and B decisively faster above (1.4-1.8x @ Wt>=192).
-# 160 sits just past the wash: it keeps the clear A wins (Wt<=128) in A and routes
-# the clear B wins (Wt>=160) to B.
-REGIME_B_MIN_WT = 160
+# The crossover is LAYOUT-AWARE — measured separately for TILE and ROW_MAJOR on an
+# 8x8 Wormhole grid (see changelog Refinement 6 and tests/.../test_rms_norm_perf.py),
+# A-forced vs B-forced device-kernel-ns for single-tile-row shapes (1,1,32,W) that
+# all fit L1. In both layouts Regime A device time scales ~linearly with Wt (one core
+# does the whole row) while Regime B is roughly flat (~70-110us: it splits W across K
+# cores but pays a fixed mcast all-gather cost). The crossover differs by layout:
+#
+#   TILE: A ~27.7us@Wt32 -> 196us@Wt256; B ~71-110us. Cross near Wt 96-128 (a wash);
+#         A decisive <=64 (1.5-2x), B decisive >=192 (1.4-1.8x). Threshold 160 keeps
+#         the clear A wins (Wt<=128) in A and routes the clear B wins (>=160) to B.
+#   ROW_MAJOR: Regime A additionally tilizes the whole row on ONE core, so A is much
+#         steeper: A 75us@Wt64 -> 151us@Wt128 -> 297us@Wt256; B ~108-111us. A wins
+#         only at Wt<=64, B wins from Wt=128 (40% faster). Threshold 96 sits in the
+#         64..128 gap. (A single TILE-tuned 160 would wrongly keep RM Wt=128 in A.)
+REGIME_B_MIN_WT_TILE = 160
+REGIME_B_MIN_WT_RM = 96
+
+
+def _b_min_wt(layout_is_rm: bool) -> int:
+    return REGIME_B_MIN_WT_RM if layout_is_rm else REGIME_B_MIN_WT_TILE
+
 
 # Measurement-only hook (perf tests). None -> use the heuristic. "A"/"B" -> force
 # that regime for an apples-to-apples A-vs-B crossover measurement on one shape.
@@ -249,7 +260,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             if adds_cores:
                 return _rm_b()
             return _rm_a()  # bounded-streaming fallback (matches prior behavior)
-        if adds_cores and Wt >= REGIME_B_MIN_WT:
+        if adds_cores and Wt >= _b_min_wt(layout_is_rm=True):
             return _rm_b()
         return _rm_a()
 
@@ -310,7 +321,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             f"rms_norm: row (Wt={Wt}, gamma={has_gamma}) exceeds L1 budget and no rectangular "
             f"Regime B partition exists for row_groups={Ht_total}, grid=({grid.x},{grid.y})."
         )
-    if adds_cores and Wt >= REGIME_B_MIN_WT:
+    if adds_cores and Wt >= _b_min_wt(layout_is_rm=False):
         return _make_b()
     return _make_a()
 
