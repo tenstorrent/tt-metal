@@ -34,10 +34,14 @@ testl1datacmp = re.compile(
     f"({timeregex}).*Test \|       \[device: (.*), core: (.*)\] (.*) "
     + "mismatched words starting at (.*), ending at (.*), out of (.*) .*"
 )
+testmissinglinks = re.compile(
+    f"({timeregex}).*Test \| missing links: chip\[(.*) \((.*)\), ubb: (.*), chip: (.*)\]: expected (\d*) links, got (\d*) .*"
+)
 locinfo = "sdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], rdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\], link: \[(.*)\]"
 testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
 
 print_logs = True
+missing_links: dict[str, dict] = {}
 
 
 class TestCase(str, Enum):
@@ -109,6 +113,7 @@ class EventType(Enum):
     TESTSETUP = auto()
     TESTCHECK = auto()
     TESTDONE = auto()
+    MISSINGLINKS = auto()
 
 
 @dataclass
@@ -316,6 +321,23 @@ def parse_done(l: str) -> Optional[Event]:
     return Event(EventType.TESTDONE, {})
 
 
+def parse_missinglinks(l: str) -> Optional[Event]:
+    m = testmissinglinks.match(l)
+    if m is None:
+        return None
+
+    extra = {
+        "id": m.group(2),
+        "bdf": m.group(3),
+        "ubb": m.group(4),
+        "chip": m.group(5),
+        "expected": m.group(6),
+        "got": m.group(7),
+    }
+    print(f"\tMISSINGLINKS {extra}")
+    return Event(EventType.MISSINGLINKS, extra)
+
+
 def parse_line(l: str, logf: Optional[TextIO]) -> Optional[Event]:
     if print_logs:
         print(f"l: {l}")
@@ -324,6 +346,7 @@ def parse_line(l: str, logf: Optional[TextIO]) -> Optional[Event]:
         print(f"l: {l}", file=logf)
 
     parsers = [
+        parse_missinglinks,
         parse_testdevices,
         parse_teststart,
         parse_l1datacmp,
@@ -477,6 +500,9 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
                     errors,
                 )
             )
+        elif e.typ == EventType.MISSINGLINKS:
+            global missing_links
+            missing_links[e.extra["id"]] = e.extra
 
     yield from runs
 
@@ -679,7 +705,33 @@ def print_failing(runs: list[TestRun], logf: TextIO):
     print_table(table("Failing tests/links", headers, rows), logf)
 
 
+def print_missing_links(logf: TextIO = stdout):
+    global missing_links
+    links = sorted([v for v in missing_links.values()], key=lambda x: x["bdf"])
+
+    headers = ["chip id", "bdf", "ubb", "chip number", "expected", "found"]
+    rows = []
+    for l in links:
+        rows.append(
+            [
+                l["id"],
+                l["bdf"],
+                l["ubb"],
+                l["chip"],
+                l["expected"],
+                l["got"],
+            ]
+        )
+    print_table(table("Missing links", headers, rows), logf)
+
+
 def print_results(runs: list[TestRun], logf: TextIO = stdout):
+    global missing_links
+    if len(missing_links):
+        print_missing_links(logf)
+        print_summary(runs, logf)
+        return
+
     print_failing(runs, logf)
     for t in TestCase:
         print_test_summary(t, runs, logf)
@@ -762,6 +814,7 @@ async def main():
         args = [f"--gtest_filter={filters}"]
 
         env = os.environ
+        env["ETH_TEST_EXPECTED_LINKS"] = str(10)
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 
