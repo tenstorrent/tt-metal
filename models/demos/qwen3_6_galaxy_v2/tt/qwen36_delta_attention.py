@@ -1289,11 +1289,21 @@ class TtQwen36DeltaAttention(LightweightModule):
         if self.use_tt_lang_beta_g and T == 1 and self._beta_g_kernel_state is not None:
             return self._compute_beta_g_tt_lang(b, a)
         mem = ttnn.DRAM_MEMORY_CONFIG
-        beta = ttnn.sigmoid(b, memory_config=mem)
-        a_biased = ttnn.add(a, self.dt_bias, memory_config=mem)
+        # Cast to fp32 so sigmoid/softplus/exp match the fp32 CPU reference.
+        # The inputs b, a are bf16 (BA projection output); the unary ops have
+        # measurable precision difference in bf16 vs fp32 over 48 GDN layers.
+        b_fp32 = ttnn.typecast(b, dtype=ttnn.float32)
+        a_fp32 = ttnn.typecast(a, dtype=ttnn.float32)
+        beta = ttnn.sigmoid(b_fp32, memory_config=mem)
+        ttnn.deallocate(b_fp32)
+        a_biased = ttnn.add(a_fp32, ttnn.typecast(self.dt_bias, dtype=ttnn.float32), memory_config=mem)
+        ttnn.deallocate(a_fp32)
         sp = ttnn.softplus(a_biased, memory_config=mem)
-        A_exp = ttnn.exp(self.A_log, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(a_biased)
+        A_exp = ttnn.exp(ttnn.typecast(self.A_log, dtype=ttnn.float32), memory_config=ttnn.L1_MEMORY_CONFIG)
         g = ttnn.multiply(ttnn.neg(A_exp, memory_config=mem), sp, memory_config=mem)
+        ttnn.deallocate(A_exp)
+        ttnn.deallocate(sp)
         return beta, g
 
     # ------------------------------------------------------------------
