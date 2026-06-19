@@ -26,16 +26,6 @@ def _pos(p, mesh):
     )
 
 
-@pytest.mark.xfail(
-    reason="A6 model-level compressed-latent decode: (1) inherits the compile/device-state "
-    "nondeterminism of forward_decode_mla (see test_m4_mla_compressed_decode — bimodal ~0.9997/0.0205, "
-    "suspected uninitialized read in paged_flash_multi_latent_attention_decode); (2) even on good "
-    "compiles, the bf16 weight-absorption (q_nope@wkv_b1, ctx@wkv_b2) has a small per-layer precision "
-    "deficit vs the expanded path that MoE expert-selection amplifies over depth (2-layer logits 0.92 "
-    "vs expanded-kv baseline 0.99779; HiFi4 on the absorption matmuls corrupts them, so no clean precision "
-    "lever). Expanded-kv decode is the verified-quality DEFAULT. See MISTRAL4_DESIGN.md (A6).",
-    strict=False,
-)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",

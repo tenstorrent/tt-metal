@@ -87,11 +87,20 @@ class TtMistral4MLA(LightweightModule):
             P[p, i] = 1.0
         self.P = _lin(P.T, mesh)  # _lin transposes; we want the matrix itself, so pass P.T
 
-        # === A6 compressed-latent paged flash-MLA (XFAIL / NOT in the production path) ===
-        # The op (paged_flash_multi_latent_attention_decode) is compile/device-state NONDETERMINISTIC on
-        # this BH build (test_m4_mla_compressed_decode xfail); forward_decode_mla + these weights are kept
-        # for the (proven-correct) recipe but UNUSED by the verified expanded-kv decode. Cheap to build
-        # (wkv_b1/wkv_b2 are small per-head splits of kv_b), so left unconditional rather than flag-gated.
+        # === A6 compressed-latent paged flash-MLA (now CORRECT; expanded-kv remains the wired default) ===
+        # forward_decode_mla caches only the kv_a latent (kvl+rope=320/token, 25.6x smaller than the
+        # expanded k+v = 2*n_heads*qk = 8192/token) and absorbs kv_b into q (wkv_b1) + output (wkv_b2).
+        # It is numerically verified:
+        # op-isolation 0.99+ (test_m4_flash_mla_correctness), live single-MLA 0.99974 (test_m4_mla_compressed_
+        # decode), 2-layer model 0.9978 (test_m4_text_decode_compressed). The earlier "0.02/bimodal/
+        # nondeterministic" failure was an UNDERSIZED KV CACHE: init_compressed_cache built one block sized to
+        # max_seq, which for short max_seq was < the op's k_chunk_size (128); the decode op reads a full
+        # k_chunk per step, so a too-small block makes it read out-of-bounds past the page and corrupts the
+        # output (the OOB region's stale L1 contents varied -> looked nondeterministic). Fixed by flooring the
+        # block at 128 (see init_compressed_cache). The op itself is correct here (head_dim_v=kvl=256, vDHt=8).
+        # Expanded-kv decode stays the wired default until the compressed path is full-depth + trace validated;
+        # wiring it in is the long-context follow-up (25.6x smaller KV). Weights cheap to build, unconditional.
+        # Split kv_b -> wkv_b1 (absorb into q) + wkv_b2 (output). kv_b [H*(nope+vd), kvl] -> [H, nope+vd, kvl].
         # Split kv_b -> wkv_b1 (absorb into q) + wkv_b2 (output). kv_b [H*(nope+vd), kvl] -> [H, nope+vd, kvl].
         def _batched(w):  # [H, m, n] per-head batched-matmul weight, replicated, TILE
             return ttnn.from_torch(
@@ -249,8 +258,13 @@ class TtMistral4MLA(LightweightModule):
         """Compressed-latent KV cache [batch,1,block,kvl+rope] + page_table [batch,1]. One block per
         user sized to max_seq (tile-aligned) — the layout the flash-MLA decode op reads correctly. The
         12.8x compression comes from the latent dim (kvl+rope=320 vs expanded n_heads*qk=4096); finer
-        block-paging granularity is a separate memory-management follow-up."""
-        block = ((max_seq + 31) // 32) * 32
+        block-paging granularity is a separate memory-management follow-up.
+
+        CRITICAL: the block must be >= k_chunk_size (128) of the SDPA program config. With one block per
+        user, the decode op reads a full k_chunk per step; if block < k_chunk it reads past the page (the
+        rest of the chunk is out-of-bounds), which silently corrupts the output (this was the A6 bug —
+        an undersized cache, NOT an op limit; the op is correct for head_dim_v=kvl=256, vDHt=8)."""
+        block = max(128, ((max_seq + 31) // 32) * 32)
         cache = ttnn.from_torch(
             torch.zeros(batch, 1, block, self.kvl + self.rope, dtype=torch.bfloat16),
             layout=ttnn.TILE_LAYOUT,

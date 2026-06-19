@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """A6 op-only isolation: feed the paged flash-MLA op a torch-built compressed cache (all positions)
 + torch-absorbed q (last position) and check it reproduces the golden MLA output. Isolates the op
-contract from forward_decode_mla's wiring (cache write + absorption matmuls), since the compressed
-decode is PCC 0.03 while the cache-write round-trips (1.0) and the absorption math is CPU-1.0."""
+contract from forward_decode_mla's wiring (cache write + absorption matmuls). Passes at ~0.99.
+
+NOTE: the cache `block` MUST be >= the SDPA program config's k_chunk_size (128). The op reads a full
+k_chunk per step; a smaller block makes it read out-of-bounds past the single page and silently corrupt
+the output (this was the long-standing A6 "failure" / "0.02 nondeterminism" — an undersized cache, NOT
+an op limit; the op is correct for the model's head_dim_v=kvl=256, vDHt=8). See MISTRAL4_DESIGN.md (A6)."""
 import os
 
 import pytest
@@ -77,8 +81,9 @@ def test_m4_flash_mla_correctness(mesh_device, reset_seeds):
         q_lat = torch.cat([torch.einsum("hn,hnk->hk", q_nope[:, -1], Wk), q_rope[:, -1]], dim=-1)  # [H,kvl+rope]
         latent = torch.cat([kv_pass, k_rot], dim=-1)  # [S, kvl+rope]
 
-    # cache [B,1,32,d] (1 block/user, positions 0..S-1), page_table identity
-    block = 32
+    # cache [B,1,block,d]: block MUST cover k_chunk_size (128) or the op reads out-of-bounds past the
+    # single page and corrupts the output (the A6 "failure" was this undersized cache, not an op limit).
+    block = 128
     cache_t = torch.zeros(B, 1, block, d, dtype=torch.bfloat16)
     cache_t[:, 0, :S, :] = latent.to(torch.bfloat16)[None]
     tt_cache = ttnn.from_torch(
