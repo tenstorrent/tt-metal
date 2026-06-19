@@ -78,7 +78,7 @@ atexit.register(_teardown_cached_device)
 
 
 @contextmanager
-def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shape=None):
+def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shape=None, disable_cache=False):
     """Open a mesh (or a submesh of the full galaxy) with the given fabric config.
 
     full_mesh_shape: when set and != mesh_shape, open the FULL galaxy mesh first
@@ -95,7 +95,9 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
     TTNN_SWEEP_DISABLE_DEVICE_CACHE=1.
     """
     device_params = device_params or {}
-    cache_enabled = os.environ.get("TTNN_SWEEP_DISABLE_DEVICE_CACHE", "").strip().lower() not in ("1", "true", "yes")
+    cache_enabled = (not disable_cache) and os.environ.get(
+        "TTNN_SWEEP_DISABLE_DEVICE_CACHE", ""
+    ).strip().lower() not in ("1", "true", "yes")
     key = _device_cache_key(mesh_shape, fabric_config, device_params, full_mesh_shape)
 
     # Fast path: reuse the cached device when the config matches — no teardown, no

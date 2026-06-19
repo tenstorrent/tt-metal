@@ -728,7 +728,9 @@ def run(
     _full_mesh_shape = _full_galaxy_mesh_for(mesh_shape, NUM_DEVICES)
 
     try:
-        with device_context(mesh_shape, fabric_config, _device_params, full_mesh_shape=_full_mesh_shape) as (
+        with device_context(
+            mesh_shape, fabric_config, _device_params, full_mesh_shape=_full_mesh_shape, disable_cache=is_model_traced
+        ) as (
             device,
             device_err,
         ):
