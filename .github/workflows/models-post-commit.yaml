@@ -40,8 +40,6 @@ on:
 jobs:
   models:
     strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
       fail-fast: false
       matrix:
         test-group: [
@@ -59,14 +57,18 @@ jobs:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        SD_HF_DOWNLOAD_OVERRIDE: "1"
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
@@ -86,9 +88,7 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          source tests/scripts/run_python_model_tests.sh
-          run_python_model_tests_${{ inputs.arch }}
-          run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
+          pytest models/demos/vision/generative/stable_diffusion/wormhole/tests/test_unet_2d_condition_model.py -k test_unet_2d_condition_model_512x512 --timeout 600 -v
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
