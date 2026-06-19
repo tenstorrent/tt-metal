@@ -277,12 +277,12 @@ Prefill chunk progress logs every 32 chunks by default (``DEVSTRAL2_ISL_PERF_CHU
 | 131072 | 445 | 295 | 10.59 |
 | 262144 | 1581† | 166† | *pending* |
 
-† **262144 (256K) — prefill only.** Traced chunked prefill completed (2048 chunks:
-~27 min compile, ~26 min replay, TTFT 1581 s). The sweep then entered decode
-warm/compile at ``current_pos=262144`` and had not finished after several hours
-(no completion log or per-ISL JSON); 131072 decode finishes in ~5 s on the same
-run. Likely a 256K-specific decode-path issue (KV at max context, trace capture,
-or compile hang) — needs follow-up before marking the sweep complete.
+† **262144 (256K) — prefill only (pre-fix run).** Traced chunked prefill completed (2048 chunks:
+~27 min compile, ~26 min replay, TTFT 1581 s). Decode then hung because on-disk RoPE/page-table
+caches under ``seq_262144`` were keyed without ``max_seq_len``; at runtime ``max_seq_len=263168``
+decode at pos 262144 needs logical KV block 2048 and RoPE row 262144, which do not exist in
+262144-sized cached tensors. Fixed by sizing the KV floor with decode headroom and scoping
+seq-dependent cache keys to ``max_seq_len``. Re-run the sweep to validate 256K decode.
 
 **Single-layer wall-clock perf:**
 
