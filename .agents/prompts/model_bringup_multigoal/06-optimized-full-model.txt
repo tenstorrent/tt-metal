@@ -9,7 +9,7 @@ Goal completion requirements:
 - Preserve canonical split-sampling token-out from $full-model/$tt-enable-tracing: sampler-ready logits, `tt_out_tok` feedback, device-side position/RoPE advance, changed-only page tables, and traced greedy plus top-k/top-p-capable sampling.
 - Greedy decode must stay on device. Benchmark correct greedy sampler choices for this mesh. Do not accept force-argmax just because an incorrectly shaped generic sampled path is slower; fix split greedy or leave a repro.
 - Preserve the decoder stack's selected dtype/fidelity/KV-cache/activation/CCL policy, rejection ledger, and inter-layer residual layout. Do not switch to a faster rejected policy or replicated stream.
-- Preserve or improve doc/context_contract.json. Keep HF-advertised context unless device DRAM evidence proves a smaller largest-feasible context.
+- Preserve or improve doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
 - Refresh AIME24 chat-template prefill, teacher-forcing decode, and autoregressive evidence. run_prefill_check and run_teacher_forcing meet top-5 >= 98% and top-100 = 100%.
 - Measure before/after warmed batch-1 TTFT and trace-verified decode t/s/u and report them at the top of README.md. Keep traced teacher-forcing decode and token-out decode as separate numbers when sampling/token feedback/readback are included.
 - Compute the decoder-layer stack lower bound from optimized multichip layer latencies. Token-out decode uses persistent token/position/RoPE/page-table inputs, nonblocking trace replay, no per-token host sync/readback, and enabled persistent-buffer/CCL optimizations.
