@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .inject import contiguous_image_mask, scatter_vit_image_tokens
+from .preprocess import IMAGE_TOKEN_ID, build_cond_image_processor, vit_process_image
 from .siglip2 import (
     ALIGNER_CONFIG,
     VIT_CONFIG,
@@ -34,4 +35,7 @@ __all__ = [
     "load_aligner",
     "scatter_vit_image_tokens",
     "contiguous_image_mask",
+    "IMAGE_TOKEN_ID",
+    "build_cond_image_processor",
+    "vit_process_image",
 ]
