@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -15,6 +16,23 @@ from ttml.common.data import CharTokenizer
 from ttml.trainers import SFTTrainer
 
 from model_builders import Model, ModelConfig, create_model
+
+
+def _human_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if round(size, 1) < 1024.0:  # compare the rounded value so we never display "1024.0 KB"
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TB"
+
+
+def _human_time(seconds: float) -> str:
+    if seconds < 60.0:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m {secs:02d}s" if hours else f"{minutes}m {secs:02d}s"
 
 
 def build_checkpoint_io(
@@ -27,13 +45,16 @@ def build_checkpoint_io(
     def saver(trainer: SFTTrainer, path: str) -> None:
         if not path.endswith(".pkl"):
             path = path + ".pkl"
+        print(f"  Saving checkpoint to {path} (gathering to host, may take a while)...", flush=True)
+        start = time.perf_counter()
         save_checkpoint(
             path,
             header={"step": trainer.step, "tokenizer": tokenizer, "model_config": model_cfg},
             model_params=trainer.model.parameters(),
             optimizer=trainer.optimizer,
         )
-        print(f"  Saved checkpoint to {path}")
+        elapsed = time.perf_counter() - start
+        print(f"  Saved checkpoint to {path} ({_human_size(Path(path).stat().st_size)} in {_human_time(elapsed)})")
 
     def loader(trainer: SFTTrainer, path: str) -> int:
         header = load_checkpoint(path, model_params=trainer.model.parameters(), optimizer=trainer.optimizer)
