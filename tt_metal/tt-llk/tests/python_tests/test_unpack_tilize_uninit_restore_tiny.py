@@ -38,10 +38,17 @@ from helpers.test_variant_parameters import NUM_FACES, TEST_FACE_DIMS
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
+from conftest import skip_for_blackhole
+
 # Tiny tiles are always 2 horizontal faces ([face_r_dim, 32] => f0 | f1).
 TINY_NUM_FACES = 2
 
 
+# Blackhole's `_llk_unpack_tilize_uninit_` has no `face_r_dim` argument (2-arg
+# signature), so the tiny-tile (face_r_dim < 16) restore branch under test here
+# cannot be expressed on BH. The num_faces axis (face_r_dim=16) still runs on BH
+# via test_unpack_tilize_uninit_restore.py.
+@skip_for_blackhole
 @parametrize(
     # Same input/output format for both ops so the second op needs NO data-format
     # reconfig — isolating the uninit restore as the only state reset.
