@@ -183,7 +183,7 @@ test_suite_wh_6u_llama_demo_tests() {
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+    CI=true pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
