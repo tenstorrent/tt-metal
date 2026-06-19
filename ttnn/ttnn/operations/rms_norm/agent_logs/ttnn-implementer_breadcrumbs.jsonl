@@ -47,3 +47,4 @@
 {"event":"test_run","status":"pass","test":"precision_matrix","detail":"passed","ts":"2026-06-19T20:35:56+00:00"}
 {"event":"test_run","status":"pass","test":"golden test_golden.py","detail":"1683 passed, 2940 skipped, 420 xfailed — no regression vs R4 baseline","ts":"2026-06-19T20:44:20+00:00"}
 {"event":"test_run","status":"pass","test":"golden regression + translated","detail":"passed","ts":"2026-06-19T20:45:04+00:00"}
+{"event":"refinement_complete","phase":"Refinement 5","outcome":"full [x]","detail":"PASS-1 single square+reduce; cb_squared=shard width; golden 1683/1683, all aux suites green","ts":"2026-06-19T20:45:51+00:00"}
