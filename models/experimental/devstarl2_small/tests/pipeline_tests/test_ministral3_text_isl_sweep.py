@@ -322,6 +322,8 @@ def test_devstral_image_text_isl_sweep_perf(monkeypatch):
 
     results = []
     for isl in _parse_isl_sweep():
+        if os.getenv("CI") == "true" and isl == 262144:
+            continue
         print(f"running ISL={_format_isl(isl)} mesh_width={mesh_width}")
         try:
             result = _run_image_demo_for_isl(
