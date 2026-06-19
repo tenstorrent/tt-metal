@@ -47,11 +47,25 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
     # ---------------- 1. Tensor metadata ----------------
     B, H, S_q, D = (int(x) for x in Q.shape)
     H_kv, S_kv = int(K.shape[1]), int(K.shape[2])
-    assert S_q % 32 == 0 and S_kv % 32 == 0 and D % 32 == 0, "Phase 0 is tile-aligned"
 
-    Sq_t = S_q // 32
-    Skv_t = S_kv // 32
-    Dt = D // 32
+    # R3: non-tile-aligned shapes. Tile counts round UP — the DRAM tensor is
+    # padded to the tile grid by ttnn.from_torch (TILE_LAYOUT zero-fills the
+    # padded region). The padding is handled in-kernel:
+    #   - w_non_aligned (D not %32): padded D-columns of Q/K are zero, so they
+    #     contribute 0 to Q·Kᵀ; the padded D-columns of the PV output are zero
+    #     (V padding is zero) and are dropped on read-back (logical shape slice).
+    #   - h_non_aligned (S_q not %32): padded query rows are zero → per-row math
+    #     is independent and the writer's padded rows are dropped on read-back.
+    #   - S_kv not %32: the padded KEY columns of the last KV tile must be −inf
+    #     BEFORE the row-max/row-sum, else the softmax denominator over-counts.
+    #     The reader generates a persistent additive padding mask (cb_pad_mask,
+    #     valid cols = 0, padded cols = −inf) added to the last KV block's scores.
+    Sq_t = (S_q + 31) // 32
+    Skv_t = (S_kv + 31) // 32
+    Dt = (D + 31) // 32
+
+    # Valid columns inside the last KV tile (0 ⇒ S_kv is tile-aligned, no edge).
+    kv_partial_cols = S_kv % 32  # 0 when aligned
 
     use_mask = 1 if attention_mask is not None else 0
     mask_H = int(attention_mask.shape[1]) if use_mask else 1

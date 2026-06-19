@@ -88,7 +88,11 @@ SUPPORTED = {
     # srcA/srcB (→ TF32) for the matmuls, which is production SDPA behavior.
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    # R3: non-tile-aligned shapes via in-kernel edge handling (the program
+    # descriptor rounds tile counts up; from_torch zero-pads the padded region;
+    # the reader generates an additive −inf padding mask for non-aligned S_kv).
+    # SDPA stays TILE-layout — only the alignment axis expands.
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     # R2: gqa + mqa added. The reader already remaps Q-head → KV-head
     # (head_group = H/H_kv, h_kv = h/head_group, kv_head_base = (b*H_kv +
