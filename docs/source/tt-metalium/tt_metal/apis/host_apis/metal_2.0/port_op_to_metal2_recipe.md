@@ -41,7 +41,7 @@ If either condition is unmet, stop. Return to the audit document. Do not improvi
 - **Time budget on stuck points.** If you spend more than ~30 minutes on a single stuck point with no traction, **stop**. Capture what you tried, what failed, and your current hypothesis in `METAL2_PORT_REPORT.md` under "Friction" or "Open items," then move on or surface the question to the invoker. Burning the day powering through a stuck point is not the assignment.
 - **Do not 'fix' the legacy kernel.** If the legacy kernel does something you don't understand or that seems wrong, the legacy kernel is the source of truth for what the op does. Surface kernel-level questions as questions in the report; do not modify the kernel's logic to match what you think Metal 2.0 wants. (Mechanical edits to make the kernel build against Metal 2.0 APIs — named handles, generated headers, etc. — are a different category and are expected.)
 
-**Scope boundary — read carefully.** The porter's writeable surface is the **op's own directory** (the device-op factory, its kernels, its tests, the three `METAL2_*.md` artifacts). Files outside that directory — shared kernel-lib headers under `ttnn/cpp/ttnn/kernel_lib/`, LLKs under `tt_metal/`, framework primitives — are out of scope. The port respects this boundary; it does not propose changes to those files.
+**Scope boundary — read carefully.** The porter's writeable surface is the **op's own directory** (the device-op factory, its kernels, its tests, the four `METAL2_*.md` artifacts). Files outside that directory — shared kernel-lib headers under `ttnn/cpp/ttnn/kernel_lib/`, LLKs under `tt_metal/`, framework primitives — are out of scope. The port respects this boundary; it does not propose changes to those files.
 
 **The atomic unit of a port is one ProgramFactory — not the whole device-operation.** A device-op may hold several factories in its `program_factory_t` variant (e.g. an interleaved factory and a sharded factory). You port **one factory together with the kernel entry points it binds**, as a unit; you do *not* have to convert the whole op at once. A `program_factory_t` variant is valid with its factories on *different* concepts — one on Metal 2.0's `MetalV2FactoryConcept`, the others still on the legacy `ProgramDescriptorFactoryConcept` — and the framework dispatches per-factory at runtime, so a half-ported op builds and runs correctly. For a large multi-factory op this is the lever that keeps the port tractable: port one factory now, the rest later. **When handed a multi-factory op, default to porting the factories one at a time, autonomously — don't raise a "which factory?" question.** Each factory is a complete sub-port: a finished factory with its other factories cleanly reported as remaining work is a valid, shippable deliverable, not a partial failure. Port one factory fully (its own `METAL2_PORT_PLAN.md` / `METAL2_PORT_REPORT.md` entries), then continue to the next only if it's clearly tractable in the same pass; stopping after one with the rest enumerated for the next pass is the expected shape for a large op. The variant's other factories stay on their legacy concept meanwhile, and the op keeps building and running.
 
@@ -59,13 +59,14 @@ If either condition is unmet, stop. Return to the audit document. Do not improvi
 - **Cross-op kernel files** — some ops share dataflow kernels that live in another op's directory (e.g., `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` reused by many ops). The legacy inventory step flags these; modifying them is porter-touchable with caution per [Caution: Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel). These are *peer ops*, not framework callees. Document the changes you found necessary in the `METAL2_PORT_REPORT.md`.
 - **Framework primitives the porter uses directly** — `noc.async_read(...)`, `dfb.wait_front(...)` on a `DataflowBuffer` the porter constructs locally from `dfb::name`, the `TensorAccessor(ta::name)` constructor, etc. These are *consumed by* the porter's kernel code (named handles flow in via the documented constructors); they are not handoffs to out-of-op code.
 
-**Generated docs in the op directory.** This recipe directs you to write three files into the op's directory, alongside the program factory `.cpp` files:
+**Generated docs in the op directory.** Four `METAL2_*.md` files live in the op's directory alongside the program factory `.cpp` files — two written by the audit (your inputs), two you write during the port:
 
-- `METAL2_PREPORT_AUDIT.md` — the audit report. (Written by the [audit doc](port_op_to_metal2_audit.md), not this one; included here so you know it's expected to be present as input.)
+- `METAL2_PORT_BRIEF.md` — **the porter-facing audit brief: your actionable input** (the inherited factory concept, tensor-binding cases, and watch-fors). Written by the [audit doc](port_op_to_metal2_audit.md), not this one; present as input.
+- `METAL2_PREPORT_AUDIT.md` — the team-facing full audit record, present alongside the brief. The brief mirrors its porter-relevant items; consult the team doc only for detail the brief doesn't carry (e.g. the complete legacy factory / kernel inventory).
 - `METAL2_PORT_PLAN.md` — the port plan (this recipe's load-bearing artifact). Externalizes structural decisions before mechanical translation begins. Read by you during construction and verification, by human reviewers during PR review, and by future debuggers. See [Appendix A](#appendix-a--metal2_port_planmd-template) for the template.
 - `METAL2_PORT_REPORT.md` — the post-port report. Records handoff points, successes, friction, and open items observed during the port. Written at the end of the port; feeds doc evolution and informs the kernel-lib / API teams. See [Capture the port report](#capture-the-port-report) for the structure.
 
-All three are committed alongside the port.
+All four are committed alongside the port.
 
 **Workflow at a glance**:
 
@@ -91,7 +92,7 @@ Before starting, confirm you have the following. If any is missing or unclear, a
 
 - **Legacy op source path** — the directory containing the op's legacy program-factory `.cpp`/`.hpp` files and kernel sources.
 - **Tests directory** — the path under `tests/ttnn/unit_tests/operations/<op-family-slug>/` where the op's pytests live. Note that the directory uses the **op-family slug**, not always the literal op name (e.g., reduction's tests live at `tests/ttnn/unit_tests/operations/reduce/`, not `reduction/`). If the invoker didn't supply this, discover it with `find tests/ttnn -path '*operations*' -name 'test_*.py' | grep -i <op>`.
-- **`METAL2_PREPORT_AUDIT.md`** — present in the op directory with overall GREEN status (precondition above). The audit includes a **TTNN ProgramFactory** section recording the Metal 2.0 factory concept the port targets; that decision is inherited, not re-derived. See the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md) for the concept and the device-op-class edits the port forces.
+- **`METAL2_PORT_BRIEF.md`** (with the team-facing **`METAL2_PREPORT_AUDIT.md`** alongside it) — present in the op directory; the brief is issued only when the audit cleared (precondition above). The brief is your actionable input: its **TTNN factory analysis** section records the Metal 2.0 factory concept the port targets, inherited not re-derived. See the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md) for the concept and the device-op-class edits the port forces.
 - **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker. The first worked end-to-end `create_program_artifacts` port is **accumulation** (cumsum/cumprod) on branch `akertesz/porting-experiment-accumulation-jun10` — a small single-program op exercising tensor bindings, a self-loop DFB, work-split multiplicity, and the custom-hash deletion. A good shape reference when no closer op exists. It lives on that sibling branch, **not** your port branch — read it with `git show akertesz/porting-experiment-accumulation-jun10:<path>` rather than expecting it in your working tree.
 
 ### Workspace bootstrap
@@ -137,13 +138,13 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 *This is an observation step. No decisions yet.*
 
 **Inputs**:
-- The audit report (`METAL2_PREPORT_AUDIT.md` in the op directory). The audit's "kernels referenced" and "factory shape" sections are the starting point for the inventory.
+- The audit artifacts in the op directory: the **brief** (`METAL2_PORT_BRIEF.md`, your actionable input) and the team-facing **`METAL2_PREPORT_AUDIT.md`**, whose identifying section and gate detail name the factories and kernel files — the starting point for the inventory.
 - The op's program-factory `.cpp` / `.hpp` files.
 - The kernel sources referenced by the factories.
 
 **Output**: write the **Legacy Inventory** section of `METAL2_PORT_PLAN.md` to the op's directory. Record:
 
-- **Legacy factory shape**: which `ttnn::device_operation` concept the legacy factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MeshWorkloadFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately. *(The Metal 2.0 factory concept the port lands on was chosen during the audit — see the audit report's TTNN ProgramFactory section. The recipe inherits that decision; carry it forward to the [TTNN ProgramFactory port-plan section](#ttnn-programfactory) below.)*
+- **Legacy factory shape**: which `ttnn::device_operation` concept the legacy factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MeshWorkloadFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately. *(The Metal 2.0 factory concept the port lands on was chosen during the audit — see the brief's TTNN factory analysis section. The recipe inherits that decision; carry it forward to the [TTNN ProgramFactory port-plan section](#ttnn-programfactory) below.)*
 - **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash)? If yes, record file:line — **the port deletes it**, reverting to the default hash. This is one of the two sanctioned device-op-class edits the port forces; the rationale and procedure live in the [TTNN integration doc — Delete a custom `compute_program_hash`](port_op_to_metal2_ttnn_factory.md#1-delete-a-custom-compute_program_hash). Record the deletion in the port report.
 - **Kernels**: every `KernelDescriptor` (one row per descriptor):
   - `kernel_source` (file path; flag any path outside the op's own directory — cross-op kernels are a Caution case).
@@ -178,11 +179,11 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 
 **Inputs**:
 - The Legacy Inventory written in the previous step.
-- **The audit report's TTNN ProgramFactory section** — the Metal 2.0 factory concept your port targets was confirmed during the audit. Plan against it; do not re-derive it.
+- **The brief's TTNN factory analysis section** — the Metal 2.0 factory concept your port targets was confirmed during the audit. Plan against it; do not re-derive it.
 - The [migration guide — Design Principles](metal2_migration_guide.md#design-principles), especially Principle 2 (named bindings) which drives the "Dropped Plumbing" section below.
 - The [TTNN integration doc](port_op_to_metal2_ttnn_factory.md#the-metal-20-factory-concept) for the factory concept the ported op will satisfy and the entry point that returns the spec.
 - The [patterns catalog](metal2_port_patterns.md).
-- Any yellow-tier items from the audit (apply per the catalog's override guidance for each).
+- Any yellow-tier items flagged in the brief — its **Watch for** notable constructs and the **Blocked-until** Device 2.0 holdover notice (apply per the catalog's override guidance for each).
 
 **Output**: extend `METAL2_PORT_PLAN.md` with the following sections (see [Appendix A](#appendix-a--metal2_port_planmd-template) for the template). Each section may say "none" with a one-line justification when no items apply.
 
@@ -190,7 +191,7 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 
 Carry forward the audit's factory decision. This section is brief — the audit confirmed the concept and the recipe inherits the result; the recipe is *not* the place to re-derive the choice.
 
-- **Concept (inherited from audit)**: copy the concept name from the audit report's TTNN ProgramFactory section (`MetalV2FactoryConcept` for every portable op today).
+- **Concept (inherited from audit)**: copy the concept name from the brief's TTNN factory analysis section (`MetalV2FactoryConcept` for every portable op today).
 - **Custom `compute_program_hash`**: note whether the audit flagged one for deletion (carried from the Legacy Inventory).
 - **Implementation notes** (optional): anything specific to how this op will realize the concept that's worth surfacing before construction. Most ports don't need this.
 
@@ -625,7 +626,7 @@ If any checklist item fails, return to planning / construction to fix. Do not pa
 
 **Open `METAL2_PORT_REPORT.md` at the start of the port and update as you go** — do not write it retrospectively. Add a one-line note the moment something surprises you, even rough. Polish entries at the end; capture in the moment. A friction note written when it happened is worth more than a paragraph reconstructed two hours later.
 
-The final report is committed when the port reaches its stopping point — whether that's "all factories ported and tests pass" or "stuck on issue X and cannot proceed" — alongside `METAL2_PREPORT_AUDIT.md` and `METAL2_PORT_PLAN.md` in the op directory. The report captures what happened during the port: things that need handoff to other teams, things the docs got right, things the docs missed, and things the next porter or doc maintainer should know.
+The final report is committed when the port reaches its stopping point — whether that's "all factories ported and tests pass" or "stuck on issue X and cannot proceed" — alongside `METAL2_PORT_BRIEF.md`, `METAL2_PREPORT_AUDIT.md`, and `METAL2_PORT_PLAN.md` in the op directory. The report captures what happened during the port: things that need handoff to other teams, things the docs got right, things the docs missed, and things the next porter or doc maintainer should know.
 
 The report is read by the kernel-lib / API owners (for handoff points), by the doc maintainers (for friction-driven evolution of the audit / recipe / catalog / migration guide), and by future porters of related ops.
 
@@ -679,7 +680,7 @@ Anything the porter discovered that is in scope for *some* future work but not t
 
 **Substance over comprehensiveness** — 5–15 well-targeted entries across the four sections beats 30 shallow ones. Be specific: cite file paths, line numbers, doc sections.
 
-Commit `METAL2_PORT_REPORT.md` alongside the port code, audit report, and port plan. All four artifacts (port code + the three `METAL2_*.md` files) form the port's PR.
+Commit `METAL2_PORT_REPORT.md` alongside the port code, audit brief, audit report, and port plan. All five artifacts (port code + the four `METAL2_*.md` files) form the port's PR.
 
 ---
 
@@ -702,7 +703,7 @@ Written during the inventory and planning steps; committed alongside the port fo
 - Variants: <list, or "single">
 - Custom `compute_program_hash`: <deleted → default (sanctioned exception), was at file:line | none — already default reflection-based hash>
 
-*(The Metal 2.0 factory concept the port targets was chosen during the audit — see the audit report's TTNN ProgramFactory section. Carried forward in the [TTNN ProgramFactory](#ttnn-programfactory) section below.)*
+*(The Metal 2.0 factory concept the port targets was chosen during the audit — see the brief's TTNN factory analysis section. Carried forward in the [TTNN ProgramFactory](#ttnn-programfactory) section below.)*
 
 > **Multi-variant ops** (e.g., Welford W/H/HW; Reduce W/H/HW): repeat the Kernels / CBs / Semaphores / Tensor accessors / Work split sub-sections **per variant**. Nest the per-variant blocks under a `### Variant: <name>` heading and downshift the per-resource headings to `####`. Cross-op kernels and Flags stay top-level — they typically apply across variants. The single-variant skeleton below is the inner shape of each variant block.
 
