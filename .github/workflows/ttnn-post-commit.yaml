@@ -121,7 +121,7 @@ jobs:
         PYTHONPATH: /work
         TT_LOGGER_LEVEL: warn
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -136,9 +136,8 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
           submodules: recursive
-          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -175,10 +174,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: power-report-${{ matrix.test-group.name }}
-          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
           # The sidecar writes --out /work/power_report.json inside the container;
           # this host path is what the upload-artifact action reads.
-          path: ${{ github.workspace }}/docker-job/power_report.json
+          path: ${{ github.workspace }}/power_report.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -198,7 +196,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: profdata-ttnn-${{ matrix.test-group.name }}
-          path: ${{ github.workspace }}/docker-job/coverage/job.profdata
+          path: ${{ github.workspace }}/coverage/job.profdata
           if-no-files-found: ignore
           retention-days: 1
 

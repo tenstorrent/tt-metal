@@ -134,7 +134,7 @@ jobs:
         # Only the workspace mount is unconditional. Hugepages and MLPerf are
         # threaded through container.options below so sim_* SKUs on ubuntu-latest
         # can omit them.
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
       options: >-
         ${{ startsWith(matrix.test-group.sku, 'sim_')
             && '--label runner-mode=sim'
@@ -149,9 +149,8 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
-          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -163,7 +162,7 @@ jobs:
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
       - name: ⬇️  Setup TTSim
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
-        uses: ./docker-job/.github/actions/setup-ttsim
+        uses: ./.github/actions/setup-ttsim
         timeout-minutes: 5
         with:
           sku: ${{ matrix.test-group.sku }}

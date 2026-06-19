@@ -67,7 +67,7 @@ jobs:
         ARCH_NAME: ${{ startsWith(matrix.test-group.sku, 'wh_') && 'wormhole_b0' || 'blackhole' }}
         LOGURU_LEVEL: INFO
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -80,12 +80,11 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          path: docker-job
       - name: Mark repository as safe directory
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

@@ -777,7 +777,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "$GITHUB_WORKSPACE",
               "input_dirs": ["output"],
               "output_dir": "ai_summaries"
             }

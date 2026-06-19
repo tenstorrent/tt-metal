@@ -232,7 +232,7 @@ jobs:
         # + LFC so HF_HOME is left unset (falls back to the container default).
         HF_HOME: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >-
@@ -256,10 +256,9 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          path: docker-job
 
       - name: Setup job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

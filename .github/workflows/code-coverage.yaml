@@ -206,10 +206,10 @@ jobs:
           metal_runtime_objects=()
           while IFS= read -r -d '' obj; do
             metal_runtime_objects+=("$obj")
-          done < <(find /work/docker-job/build/test/tt_metal -name "unit_tests_*" -type f -executable -print0 2>/dev/null)
+          done < <(find /work/build/test/tt_metal -name "unit_tests_*" -type f -executable -print0 2>/dev/null)
           while IFS= read -r -d '' obj; do
             metal_runtime_objects+=("$obj")
-          done < <(find /work/docker-job/build/lib -name "libtt_metal*.so" -type f -print0 2>/dev/null)
+          done < <(find /work/build/lib -name "libtt_metal*.so" -type f -print0 2>/dev/null)
           generate_area "metal-runtime" "${metal_runtime_objects[@]}" \
             || echo "::warning::metal-runtime coverage generation failed — continuing with remaining areas"
 

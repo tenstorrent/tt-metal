@@ -126,10 +126,9 @@ jobs:
         PYTHONPATH: /work
         # Tracy device-perf tests (e.g. the SDXL group) resolve the profiler
         # binaries at $TT_METAL_HOME/build/tools/profiler/bin. Pin it to /work to
-        # match where the build artifact is extracted (setup-job path: docker-job below).
         TT_METAL_HOME: /work
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -143,14 +142,13 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
-          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           # Extract the build artifact into the repo checkout (= /work) so the
           # profiler binaries land under $TT_METAL_HOME/build, where tracy looks.
-          path: docker-job
+          path: .
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -185,10 +183,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: power-report-${{ matrix.test-group.name }}
-          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
           # The sidecar writes --out /work/power_report.json inside the container;
           # this host path is what the upload-artifact action reads.
-          path: ${{ github.workspace }}/docker-job/power_report.json
+          path: ${{ github.workspace }}/power_report.json
           if-no-files-found: warn
           retention-days: 30
 

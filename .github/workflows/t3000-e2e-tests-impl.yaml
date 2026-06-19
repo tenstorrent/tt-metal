@@ -131,7 +131,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "$GITHUB_WORKSPACE",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries"
             }
