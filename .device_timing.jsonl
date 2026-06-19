@@ -62,3 +62,6 @@
 {"source":"tt-probe","pid":2941752,"started_at_ms":1781889004773,"wait_ms":241,"run_ms":29469,"test_path":"rms_norm","exit_code":0}
 {"source":"run_safe_pytest","pid":2942994,"started_at_ms":1781889053209,"wait_ms":2,"run_ms":22489,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0}
 {"source":"run_safe_pytest","pid":2944002,"started_at_ms":1781889081171,"wait_ms":2,"run_ms":25269,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_regime_b.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2946104,"started_at_ms":1781889139425,"wait_ms":2,"run_ms":120025,"test_path":"eval/golden_tests/rms_norm/","exit_code":143}
+{"source":"run_safe_pytest","pid":2948868,"started_at_ms":1781889284203,"wait_ms":2,"run_ms":104210,"test_path":"eval/golden_tests/rms_norm/","exit_code":1}
+{"source":"tt-probe","pid":2953215,"started_at_ms":1781889513330,"wait_ms":284,"run_ms":22858,"test_path":"rms_norm","exit_code":0}

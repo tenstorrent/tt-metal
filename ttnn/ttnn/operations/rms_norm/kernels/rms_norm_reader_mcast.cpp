@@ -104,12 +104,19 @@ void kernel_main() {
     const uint32_t partial_l1 = get_read_ptr(cb_local_sumsq);
 
     // ---- all-gather K partials over the group rectangle ----
+    // The gathered partials carry the INTERMEDIATE format (Float32 when
+    // fp32_dest_acc_en), which can differ from the input format (e.g. bf8b
+    // input -> fp32 partials). Slot striding and the cross-core transfer MUST
+    // use the partials' own tile size, NOT the input tile size — conflating
+    // the two (they only coincide when input == intermediate, the old bf16
+    // case) strides/copies the wrong byte count and corrupts the gather.
+    const uint32_t partial_tile_bytes = get_tile_size(cb_partials_gathered);
     cb_reserve_back(cb_partials_gathered, num_partials);
     const uint32_t gathered_base = get_write_ptr(cb_partials_gathered);
-    const uint32_t my_slot = gathered_base + my_rank * tile_bytes;
+    const uint32_t my_slot = gathered_base + my_rank * partial_tile_bytes;
 
     // Fill my own slot locally (lets the sender use src == dst -> EXCLUDE_SRC).
-    noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], partial_l1), my_slot, tile_bytes);
+    noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], partial_l1), my_slot, partial_tile_bytes);
     noc_async_read_barrier();
 
     Noc noc;
@@ -122,7 +129,7 @@ void kernel_main() {
         if (j == my_rank) {
             // src == dst -> no loopback -> EXCLUDE_SRC: write my partial to the OTHER cores'
             // slot j; my own slot j is already filled by the local copy above.
-            sender.send(my_slot, my_slot, tile_bytes);
+            sender.send(my_slot, my_slot, partial_tile_bytes);
         } else {
             const uint32_t sx = get_arg_val<uint32_t>(9 + 2 * j);
             const uint32_t sy = get_arg_val<uint32_t>(9 + 2 * j + 1);
