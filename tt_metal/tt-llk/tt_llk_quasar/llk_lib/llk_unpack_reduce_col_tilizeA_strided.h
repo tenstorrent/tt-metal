@@ -13,7 +13,7 @@
 #include "tensor_shape.h"
 
 /**
- * @brief Configures MOP for binary unpack where one operand (-> SRCA) is tilized, compatible with math reduce operations.
+ * @brief Configures MOP for binary unpack where one operand (-> SRCA) is tilized, compatible with math reduce column operations.
  *
  * Unpacks a single face for SrcB (scalar) and tilizes a full tile into SrcA. InputA tile is tilized face by face, and the
  * L1 index is set to each face in the tile. The L1 index is in units derived from the x/y/z dimensions of the
@@ -24,7 +24,7 @@
  * @param full_ct_dim: Number of tiles in a row of the input tensor
  * @param tensor_shape: Contains all the information of the tile shape for the input that will be tilized: num faces, face row/col dim, etc
  */
-inline void _llk_unpack_reduce_tilizeA_strided_mop_config_(
+inline void _llk_unpack_reduce_col_tilizeA_strided_mop_config_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t full_ct_dim, const TensorShape& tensor_shape)
 {
     const std::uint32_t idx_inc = ckernel::unpack::UNPACR_STRIDE_MAX_ROWS * tensor_shape.num_faces_c_dim * full_ct_dim;
@@ -71,14 +71,14 @@ inline void _llk_unpack_reduce_tilizeA_strided_mop_config_(
 }
 
 /**
- * @brief Initializes unpacker to tilize a full tile for SrcA and unpack a single face for SrcB (scalar), compatible with math reduce kernels.
+ * @brief Initializes unpacker to tilize a full tile for SrcA and unpack a single face for SrcB (scalar), compatible with math reduce column kernels.
  *
  * @param buf_desc_id_0: Buffer descriptor ID for the operand that will be tilized into srcA
  * @param buf_desc_id_1: Buffer descriptor ID for scaler operand that will be unpacked into srcB
  * @param full_ct_dim: Number of tiles in a row of the input tensor
  * @param tensor_shape: Contains all the information of the tile shape for the input that will be tilized: num faces, face row/col dim, etc
  */
-inline void _llk_unpack_reduce_tilizeA_strided_init_(
+inline void _llk_unpack_reduce_col_tilizeA_strided_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t full_ct_dim, const TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -93,17 +93,17 @@ inline void _llk_unpack_reduce_tilizeA_strided_init_(
     cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
     cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
 
-    _llk_unpack_reduce_tilizeA_strided_mop_config_(buf_desc_id_0, buf_desc_id_1, full_ct_dim, tensor_shape);
+    _llk_unpack_reduce_col_tilizeA_strided_mop_config_(buf_desc_id_0, buf_desc_id_1, full_ct_dim, tensor_shape);
 }
 
 /**
- * @brief Unpacks and tilizes a full tile for SrcA and unpacks a single face for SrcB (scalar), compatible with math reduce kernels.
+ * @brief Unpacks and tilizes a full tile for SrcA and unpacks a single face for SrcB (scalar), compatible with math reduce column kernels.
  *
  * @param tensor_shape: Contains all the information of the tile shape for the input that will be tilized: num faces, face row/col dim, etc
  * @param start_l1_tile_idx_0: L1 index for UNPACKER0, unpacks to SrcA
  * @param start_l1_tile_idx_1: L1 index for UNPACKER1, unpacks to SrcB
  */
-inline void _llk_unpack_reduce_tilizeA_strided_(
+inline void _llk_unpack_reduce_col_tilizeA_strided_(
     const TensorShape& tensor_shape, const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0 * tensor_shape.num_faces_c_dim);

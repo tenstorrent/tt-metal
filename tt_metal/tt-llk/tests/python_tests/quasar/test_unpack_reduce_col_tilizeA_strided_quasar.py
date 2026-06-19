@@ -46,17 +46,17 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-def generate_unpack_reduce_tilizeA_strided_combinations(
+def generate_unpack_reduce_col_tilizeA_strided_combinations(
     formats_list: List[FormatConfig],
 ):
     """
-    Generate unpack_reduce_tilizeA_strided test combinations for Quasar.
+    Generate unpack_reduce_col_tilizeA_strided test combinations for Quasar.
 
     Args:
         formats_list: List of input/output format pairs
 
     Returns:
-        List of (format, dest_acc, dest_sync, input_dimensions) tuples
+        List of (format, dest_acc, dest_sync, input_dimensions, pool_type) tuples
     """
 
     def _requires_dest_acc_for_reduce(in_fmt, out_fmt):
@@ -68,7 +68,7 @@ def generate_unpack_reduce_tilizeA_strided_combinations(
     # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
     # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
     # and max-square (both loops at capacity).
-    unpack_reduce_tilizeA_strided_dims = {
+    unpack_reduce_col_tilizeA_strided_dims = {
         (DestSync.Half, DestAccumulation.No): [
             [32, 32],
             [32, 256],
@@ -110,13 +110,22 @@ def generate_unpack_reduce_tilizeA_strided_combinations(
             ):
                 continue
             for dest_sync in (DestSync.Half, DestSync.Full):
-                for dimensions in unpack_reduce_tilizeA_strided_dims[(dest_sync, acc)]:
-                    combinations.append((fmt, acc, dest_sync, dimensions))
+                for dimensions in unpack_reduce_col_tilizeA_strided_dims[
+                    (dest_sync, acc)
+                ]:
+                    for pool_type in (
+                        ReducePool.Max,
+                        ReducePool.Sum,
+                        ReducePool.Average,
+                    ):
+                        combinations.append(
+                            (fmt, acc, dest_sync, dimensions, pool_type)
+                        )
 
     return combinations
 
 
-UNPACK_REDUCE_TILIZEA_STRIDED_FORMATS = input_output_formats(
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
         DataFormat.Float16_b,
@@ -126,28 +135,27 @@ UNPACK_REDUCE_TILIZEA_STRIDED_FORMATS = input_output_formats(
         DataFormat.Int32,
     ],
 )
-ALL_UNPACK_REDUCE_TILIZEA_STRIDED_COMBINATIONS = (
-    generate_unpack_reduce_tilizeA_strided_combinations(
-        UNPACK_REDUCE_TILIZEA_STRIDED_FORMATS
+ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
+    generate_unpack_reduce_col_tilizeA_strided_combinations(
+        UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS
     )
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_reduce_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_TILIZEA_STRIDED_COMBINATIONS,
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
 )
-def test_unpack_reduce_tilizeA_strided_quasar(
-    formats_dest_acc_sync_unpack_reduce_tilizeA_strided_sel_dims,
+def test_unpack_reduce_col_tilizeA_strided_quasar(
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
     boot_mode=BootMode.DEFAULT,
 ):
-    (formats, dest_acc, dest_sync_mode, input_dimensions) = (
-        formats_dest_acc_sync_unpack_reduce_tilizeA_strided_sel_dims[0]
+    (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
+        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims[0]
     )
 
     num_faces = 4
     reduce_dim = ReduceDimension.Column
-    pool_type = ReducePool.Max
     math_fidelity = MathFidelity.LoFi
 
     src_A, tile_cnt_A, _, _ = generate_stimuli(
@@ -157,10 +165,12 @@ def test_unpack_reduce_tilizeA_strided_quasar(
         input_dimensions_B=input_dimensions,
     )
 
-    src_B = torch.full((1024,), 1)
+    if pool_type == ReducePool.Average:
+        src_B = torch.full((1024,), 1.0 / 32)
+    else:
+        src_B = torch.full((1024,), 1)
 
     tilize_gen = get_golden_generator(TilizeGolden)
-    reduce_gen = get_golden_generator(ReduceGolden)
 
     golden_src_A = src_A
     input_fmt = formats.input_format
@@ -173,6 +183,7 @@ def test_unpack_reduce_tilizeA_strided_quasar(
         golden_src_A, input_dimensions, formats.input_format, num_faces=num_faces
     )
 
+    reduce_gen = get_golden_generator(ReduceGolden)
     golden_tensor = reduce_gen(
         golden_A,
         reduce_dim,
@@ -189,7 +200,7 @@ def test_unpack_reduce_tilizeA_strided_quasar(
     }[reduce_dim]
 
     configuration = TestConfig(
-        "sources/quasar/unpack_reduce_tilizeA_strided_quasar_test.cpp",
+        "sources/quasar/unpack_reduce_col_tilizeA_strided_quasar_test.cpp",
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),

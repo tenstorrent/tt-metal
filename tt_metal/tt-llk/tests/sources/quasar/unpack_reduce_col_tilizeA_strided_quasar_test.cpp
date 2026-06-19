@@ -13,7 +13,7 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_common.h"
-#include "llk_unpack_reduce_tilizeA_strided.h"
+#include "llk_unpack_reduce_col_tilizeA_strided.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -55,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 
     constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
-    _llk_unpack_reduce_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, FULL_CT_DIM, tensor_shape);
+    _llk_unpack_reduce_col_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, FULL_CT_DIM, tensor_shape);
 
     std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
@@ -64,7 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
         {
             const std::uint32_t l1_unpack_tilize_idx = offset + block_ct;
-            _llk_unpack_reduce_tilizeA_strided_(tensor_shape, l1_unpack_tilize_idx, 0);
+            _llk_unpack_reduce_col_tilizeA_strided_(tensor_shape, l1_unpack_tilize_idx, 0);
         }
     }
 }
