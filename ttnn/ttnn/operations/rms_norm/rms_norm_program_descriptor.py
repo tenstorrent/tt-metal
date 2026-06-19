@@ -229,6 +229,53 @@ def _row_fits_l1(Wt_resident, input_dtype, fp32_acc, gamma, has_gamma) -> bool:
     return _regime_a_resident_bytes(Wt_resident, input_dtype, inter, gamma_dt, has_gamma) <= L1_RESIDENT_BUDGET_BYTES
 
 
+# --- Refinement 7: row-blocking (BLOCK_HEIGHT > 1) -----------------------------
+# The "forgotten knob" from op_design.md:229-232 / Refinement 6: process `bh`
+# tile-rows per work-unit in Regime A so the per-row PASS-1 reduce / FINALIZE
+# helper init amortizes over a taller block (R6 measured a ~10% ceiling on this
+# kernel — the per-row cost is data-movement/compute bound, not init bound, so
+# row-blocking only recovers the init overhead).
+#
+# Hard design constraint (op_design.md:229-232): BLOCK_HEIGHT may grow ONLY AFTER
+# every core already has work — it must NOT reduce active cores. So it applies only
+# to the grid-saturated many-row case (Ht_total > total_cores, each core owns
+# multiple rows); we group a core's owned rows into blocks of `bh`.
+#
+# Blast-radius bound (Refinement 7 scope): TILE Regime A no-gamma only. Every other
+# path (gamma, ROW_MAJOR, Regime B) keeps bh==1 and is byte-identical to pre-R7.
+#
+# `bh` must divide each core's row count with no remainder (the kernel has no
+# remainder loop), so we enable bh>1 only when Ht_total % total_cores == 0 (every
+# core gets exactly Ht_total//total_cores rows) and pick bh as a divisor of that
+# per-core count. It is further bounded by:
+#   - DEST capacity (_dest_limit, halved when fp32_dest_acc_en): the FINALIZE chain
+#     and any DEST batching stay within the register file.
+#   - L1: cb_input_resident and cb_squared both grow to bh*Wt tiles.
+def _regime_a_block_height(Ht_total, num_cores, has_gamma, gamma_is_rm, Wt, input_dtype, fp32_acc, cfg):
+    """Row-blocking factor for TILE Regime A no-gamma. Returns 1 (no blocking) for
+    every other case or when the grid is not yet saturated."""
+    if has_gamma or gamma_is_rm:
+        return 1
+    if Ht_total <= num_cores:  # not many-row: each core owns <= 1 row group
+        return 1
+    if Ht_total % num_cores != 0:  # uneven split -> keep bh=1 (no remainder handling)
+        return 1
+    rows_per_core = Ht_total // num_cores
+    dest = _dest_limit(cfg)
+    inter = _intermediate_dtype(input_dtype, fp32_acc)
+    in_b = _tile_bytes(input_dtype)
+    inter_b = _tile_bytes(inter)
+    bh = 1
+    # Largest divisor of rows_per_core that fits both the DEST cap and the L1 budget.
+    for cand in range(2, min(rows_per_core, dest) + 1):
+        if rows_per_core % cand != 0:
+            continue
+        resident = cand * Wt * in_b + cand * Wt * inter_b
+        if resident <= L1_RESIDENT_BUDGET_BYTES:
+            bh = cand
+    return bh
+
+
 def _even_split(total, num_cores):
     """Return a list of (start, count) contiguous chunks summing to `total`."""
     base = total // num_cores
@@ -409,17 +456,25 @@ def _regime_a_descriptor(
     # element_size() on a block format (bf8b) — it raises "datum invalid".
     gamma_elem = gamma.element_size() if gamma_is_rm else 0
     cb_gamma_pages = (num_chunks * reduce_block) if gamma_is_rm else Wt
+
+    # Refinement 7: row-blocking factor (TILE Regime A no-gamma, grid-saturated). 1 in
+    # every other case -> byte-identical to pre-R7. When bh>1 the compute processes bh
+    # rows per block, so the resident input + squared CBs hold bh*Wt tiles and the
+    # per-row partial-Σx² / recip CBs hold bh tiles (one per row).
+    bh = _regime_a_block_height(Ht_total, num_cores, has_gamma, gamma_is_rm, Wt, dt, fp32_acc, cfg)
+    sumsq_pages = max(2, bh)
     cbs = [
-        cb(CB_INPUT_RESIDENT, dt, Wt),
+        cb(CB_INPUT_RESIDENT, dt, bh * Wt),
         cb(CB_SCALER, inter, 1),
         cb(CB_OUTPUT, dt, 2),
         # Refinement 5: PASS-1 is now a single square + single reduce over the whole
         # resident shard, so cb_squared holds the full shard (Wt tiles) rather than one
         # reduce_block chunk. Wt is host-bounded by the same A/B heuristic that bounds
         # cb_input_resident (≤32 tiles for every routed shape), so this stays well within L1.
-        cb(CB_SQUARED, inter, Wt),
-        cb(CB_PARTIAL_SUMSQ, inter, 2),
-        cb(CB_RECIP_RMS, inter, 2),
+        # Refinement 7: bh*Wt when row-blocked (one squared block per bh-row work-unit).
+        cb(CB_SQUARED, inter, bh * Wt),
+        cb(CB_PARTIAL_SUMSQ, inter, sumsq_pages),
+        cb(CB_RECIP_RMS, inter, sumsq_pages),
     ]
     if has_gamma:
         cbs.append(cb(CB_GAMMA, gamma_dt, cb_gamma_pages))
@@ -522,6 +577,7 @@ def _regime_a_descriptor(
         0,  # layout_is_rm = 0 (TILE input)
         CB_INPUT_RESIDENT,  # cb_rm_in (unused for TILE)
         CB_OUTPUT,  # cb_rm_out (unused for TILE)
+        bh,  # Refinement 7: BLOCK_HEIGHT (rows per work-unit; 1 = no row-blocking)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -776,6 +832,7 @@ def _regime_b_descriptor(
         0,  # layout_is_rm = 0 (TILE input)
         CB_INPUT_RESIDENT,  # cb_rm_in (unused for TILE)
         CB_OUTPUT,  # cb_rm_out (unused for TILE)
+        1,  # Refinement 7: BLOCK_HEIGHT = 1 (Regime B is not row-blocked)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -963,6 +1020,7 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         1,  # layout_is_rm = 1 (ROW_MAJOR input)
         CB_RM_IN,  # cb_rm_in (input stick source -> tilize)
         CB_RM_OUT,  # cb_rm_out (untilize dest)
+        1,  # Refinement 7: BLOCK_HEIGHT = 1 (ROW_MAJOR is not row-blocked)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -1189,6 +1247,7 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
         1,  # layout_is_rm = 1
         CB_RM_IN,
         CB_RM_OUT,
+        1,  # Refinement 7: BLOCK_HEIGHT = 1 (Regime B RM is not row-blocked)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),

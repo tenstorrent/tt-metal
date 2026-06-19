@@ -78,6 +78,12 @@ void kernel_main() {
     constexpr uint32_t layout_is_rm = get_compile_time_arg_val(18);
     constexpr uint32_t cb_rm_in = get_compile_time_arg_val(19);
     constexpr uint32_t cb_rm_out = get_compile_time_arg_val(20);
+    // Refinement 7: row-blocking. Process BLOCK_HEIGHT tile-rows per work-unit so the
+    // PASS-1 reduce / FINALIZE per-row helper init amortizes over a taller block. Only
+    // set > 1 by the host for TILE Regime A no-gamma (layout_is_rm==0, has_gamma==0,
+    // num_partials==1) with a grid already saturated (Ht_total > total_cores) — every
+    // other path keeps BLOCK_HEIGHT==1 and is byte-identical to the pre-R7 kernel.
+    constexpr uint32_t BLOCK_HEIGHT = get_compile_time_arg_val(21);
 
     // ---- runtime args ----
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // RM: number of 32-stick blocks
@@ -113,6 +119,80 @@ void kernel_main() {
         for (uint32_t c = 0; c < num_chunks; ++c) {
             ckl::tilize<reduce_block, cb_gamma_rm, cb_gamma>(1);
         }
+    }
+
+    // =====================================================================
+    // Refinement 7: row-blocked path (BLOCK_HEIGHT > 1). TILE Regime A no-gamma
+    // only — process BLOCK_HEIGHT rows per block so PASS-1 reduce + FINALIZE init
+    // amortize over the taller block. The host guarantees num_rows % BLOCK_HEIGHT
+    // == 0 (it only enables bh>1 when every core owns the same, bh-divisible row
+    // count), so there is no remainder to handle.
+    // =====================================================================
+    if constexpr (BLOCK_HEIGHT > 1) {
+        const uint32_t num_blocks = num_rows / BLOCK_HEIGHT;
+        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+            // ---------- PASS 1: square the WHOLE BLOCK_HEIGHT*Wt resident block ----------
+            // x*x over the bh-row block (no pop; reused in PASS-2). Block walk 0..bh*Wt.
+            ckl::eltwise_chain(
+                EltwiseShape::tiles(BLOCK_HEIGHT * Wt),
+                BinaryFpu<
+                    cb_input_resident,
+                    cb_input_resident,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    InputLifecycle::HeldBulk,
+                    InputLifecycle::HeldBulk,
+                    BinaryDataFormatReconfig::Input,
+                    Dst::D0,
+                    OperandKind::Block,
+                    OperandKind::Block,
+                    TileOffset::Set,
+                    TileOffset::Set>{0, 0},
+                PackTile<cb_squared, OutputLifecycle::Streaming>{});
+
+            // reduce each of BLOCK_HEIGHT rows over Wt -> BLOCK_HEIGHT partial Σx² tiles
+            // (REDUCE_ROW emits `rows` output tiles; BulkWaitBulkPop waits/pops Wt/row).
+            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, ReduceInputPolicy::BulkWaitBulkPop>(
+                cb_squared,
+                cb_scaler,
+                cb_partial_sumsq,
+                ReduceInputBlockShape::of(BLOCK_HEIGHT, Wt),
+                ckl::ReduceInputMemoryLayout::contiguous());
+
+            // ---------- FINALIZE: rsqrt(sum * inv_W + eps) for all BLOCK_HEIGHT rows ----------
+            ckl::eltwise_chain(
+                EltwiseShape::tiles(BLOCK_HEIGHT),
+                CopyTile<cb_partial_sumsq, Dst::D0, InputLifecycle::Streaming>{},
+                ckl::MulUnary<>{inv_W_bits},
+                ckl::AddUnary<>{eps_bits},
+                ckl::Rsqrt<>{},
+                PackTile<cb_recip_rms, OutputLifecycle::Streaming>{});
+
+            // ---------- PASS 2: per-row Col-bcast normalize x * recip[row] ----------
+            // recip held resident across the bh rows, indexed by a per-row TileOffset
+            // (row r uses recip tile r); input streams Wt tiles/row in order and pops.
+            for (uint32_t r = 0; r < BLOCK_HEIGHT; ++r) {
+                ckl::eltwise_chain(
+                    EltwiseShape::tiles(Wt),
+                    BinaryFpu<
+                        cb_input_resident,
+                        cb_recip_rms,
+                        BinaryFpuOp::Mul,
+                        BroadcastDim::Col,
+                        InputLifecycle::Streaming,  // x streams Wt/row, pops
+                        InputLifecycle::HeldBulk,   // recip held, indexed by TileOffset r
+                        BinaryDataFormatReconfig::Input,
+                        Dst::D0,
+                        OperandKind::Scalar,
+                        OperandKind::Scalar,
+                        TileOffset::Unset,
+                        TileOffset::Set>{0, r},
+                    PackTile<cb_pass2_out, OutputLifecycle::Streaming>{});
+            }
+            // recip was held across the row loop; free this block's bh tiles.
+            cb_pop_front(cb_recip_rms, BLOCK_HEIGHT);
+        }
+        return;
     }
 
     for (uint32_t row = 0; row < num_rows; ++row) {
