@@ -669,15 +669,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // A Program needs at least one kernel
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
 
-    // Validate no per-node thread maps are used (not yet implemented)
-    for (const auto& kernel : spec.kernels) {
-        const bool has_node_specific = !kernel.advanced_options.node_specific_thread_counts.empty();
-        TT_FATAL(
-            !has_node_specific,
-            "KernelSpec '{}' specifies node_specific_thread_counts, but per-node thread counts are not implemented.",
-            kernel.unique_id);
-    }
-
     // Validate named RTA/CRTA schema and named CTAs
     for (const auto& kernel : spec.kernels) {
         // All three kinds share the args:: namespace — their names must be mutually unique.
