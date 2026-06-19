@@ -145,11 +145,11 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
     }
 }
 
+template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
 [[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
-template <uint32_t max_transfer_size, bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover>
 FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     Noc noc;
-    return tt_memmove<max_transfer_size, guaranteed_16B_aligned, copy_async, use_read_datamover>(
+    return tt_memmove<guaranteed_16B_aligned, copy_async, use_read_datamover, max_transfer_size>(
         noc, dst_l1_addr, src_l1_addr, bytes);
 }
 
