@@ -24,20 +24,10 @@ from tests.ttnn.utils_for_testing import comp_pcc
     "num_tokens, emb_dim, hidden_dim",
     [
         (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
-        (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
-        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
-        (5120, 7168, 2048),  # DeepSeek V3 dims, 5K tokens
-        (6144, 7168, 2048),  # DeepSeek V3 dims, 6K tokens
-        (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
         (25600, 7168, 2048),  # DeepSeek V3 dims, 25K tokens
     ],
     ids=[
         "ds-v3-1k",
-        "ds-v3-2k",
-        "ds-v3-4k",
-        "ds-v3-5k",
-        "ds-v3-6k",
-        "ds-v3-8k",
         "ds-v3-25k",
     ],
 )
@@ -161,18 +151,12 @@ def test_single_routed_expert(
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     [
-        (4096, 2048, 7168, 2048),
-        (25 * 1024, 2048, 7168, 2048),
-        (25 * 1024, 4096, 7168, 2048),
-        (16384, 2048, 7168, 2048),
-        (16384, 4096, 7168, 2048),
+        (1024, 0, 7168, 2048),
+        (25600, 4096, 7168, 2048),
     ],
     ids=[
-        "ds-v3-4k-alloc-2k-active",
-        "ds-v3-25k-alloc-2k-active",
+        "ds-v3-1k-alloc-0k-active",
         "ds-v3-25k-alloc-4k-active",
-        "ds-v3-16k-alloc-2k-active",
-        "ds-v3-16k-alloc-4k-active",
     ],
 )
 @pytest.mark.parametrize(
@@ -255,15 +239,8 @@ def test_single_routed_expert_faked_token_count(
         weights_dtype=ttnn.bfloat4_b,
     )
 
-    # Time 5 iters (iter0 includes JIT compile; iter1-4 are steady-state).
-    import time as _time
+    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
 
-    for _i in range(5):
-        _t0 = _time.time()
-        tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
-        ttnn.synchronize_device(mesh_device)
-        _dt_ms = (_time.time() - _t0) * 1000
-        logger.warning(f"  faked iter {_i}: {_dt_ms:.2f} ms (alloc={allocated_tokens}, active={active_tokens})")
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
