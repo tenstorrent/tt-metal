@@ -82,7 +82,11 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    # R1: float32 + bfloat8_b added. Input-side CBs follow the tensor dtype; the
+    # matmul/reduce/eltwise *intermediate* CBs stay bf16 with fp32 DEST accumulation
+    # (Issue #13364 — fp32 CB storage hangs this LLK). fp32 inputs unpack through
+    # srcA/srcB (→ TF32) for the matmuls, which is production SDPA behavior.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
@@ -191,40 +195,66 @@ def scaled_dot_product_attention(
     attention_mask: "ttnn.Tensor" = None,
     scale: float = None,
     memory_config: "ttnn.MemoryConfig" = None,
+    compute_kernel_config: "ttnn.ComputeKernelConfig" = None,
 ) -> "ttnn.Tensor":
     """Flash-Attention SDPA: ``softmax(Q·Kᵀ·scale + mask)·V``.
 
     Args:
-        Q: query  tensor (B, H,    S_q,  D), bf16, TILE.
-        K: key    tensor (B, H_kv, S_kv, D), bf16, TILE.
-        V: value  tensor (B, H_kv, S_kv, D), bf16, TILE.
-        attention_mask: optional additive mask (B, 1|H, S_q, S_kv), bf16, TILE.
+        Q: query  tensor (B, H,    S_q,  D), {bf16, fp32, bf8b}, TILE.
+        K: key    tensor (B, H_kv, S_kv, D), same dtype as Q, TILE.
+        V: value  tensor (B, H_kv, S_kv, D), same dtype as Q, TILE.
+        attention_mask: optional additive mask (B, 1|H, S_q, S_kv), same dtype, TILE.
         scale: optional float; defaults to 1/sqrt(D).
         memory_config: output memory config (default DRAM interleaved).
+        compute_kernel_config: optional ``ttnn.ComputeKernelConfig`` controlling
+            math_fidelity / fp32_dest_acc_en / math_approx_mode / dst_full_sync_en.
+            When None, the Phase-0 defaults (HiFi2, fp32_dest_acc_en=True,
+            math_approx_mode=False, dst_full_sync_en=False) are used — byte-identical
+            to prior behavior.
 
     Returns:
-        Output tensor (B, H, S_q, D), bf16, TILE.
+        Output tensor (B, H, S_q, D), same dtype as Q, TILE.
     """
     validate(Q, K, V, attention_mask=attention_mask, scale=scale)
 
     device = Q.device()
     output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
+    # Resolve compute_kernel_config: None → Phase-0 hard-coded defaults; a user config
+    # overrides per-field. init_device_compute_kernel_config validates against arch and
+    # returns the arch's config type (the Wormhole/Blackhole alias is the same struct).
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        compute_kernel_config,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        dst_full_sync_en=False,
+    )
+
     D = int(Q.shape[-1])
     if scale is None:
         scale = 1.0 / math.sqrt(D)
 
     output_shape = list(Q.shape)  # (B, H, S_q, D) — same as Q
+    # Output dtype follows the input dtype (R1) — the golden contract asserts
+    # output.dtype == input dtype, and the writer drains an out-dtype CB.
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(output_shape),
-        ttnn.bfloat16,
+        Q.dtype,
         ttnn.TILE_LAYOUT,
         device,
         output_memory_config,
     )
 
     program_descriptor = create_program_descriptor(
-        Q, K, V, output_tensor, attention_mask=attention_mask, scale=float(scale)
+        Q,
+        K,
+        V,
+        output_tensor,
+        attention_mask=attention_mask,
+        scale=float(scale),
+        compute_kernel_config=compute_kernel_config,
     )
 
     io_tensors = [Q, K, V]

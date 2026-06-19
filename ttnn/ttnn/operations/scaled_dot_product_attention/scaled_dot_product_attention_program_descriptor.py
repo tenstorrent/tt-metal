@@ -21,8 +21,11 @@ import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-# fp32 + half-sync DEST capacity (must match ComputeConfig fp32_dest_acc_en=True,
-# dst_full_sync_en=False). Bounds matmul out-subblock tile count and kv_chunk_t.
+# fp32 + half-sync DEST capacity = 4 — the SMALLEST DEST across every compute_kernel
+# config (fp32_dest_acc_en={True,False} × dst_full_sync_en={True,False} all give ≥4).
+# Sizing matmul out-subblocks / kv_chunk_t to this lower bound keeps block counts ≤ DEST
+# for any user-supplied config (R1 exposes the config; the default is still HiFi2 +
+# fp32_dest_acc_en=True + half-sync, i.e. exactly 4). Bounds out-subblock + kv_chunk_t.
 DEST_LIMIT = 4
 KV_CHUNK_MAX = DEST_LIMIT  # QK out-subblock = q_chunk_t(1) × kv_chunk_t ≤ DEST_LIMIT
 
@@ -40,7 +43,7 @@ def _f32_to_u32(f):
     return struct.unpack("<I", struct.pack("<f", float(f)))[0]
 
 
-def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, scale=None):
+def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, scale=None, compute_kernel_config=None):
     # ---------------- 1. Tensor metadata ----------------
     B, H, S_q, D = (int(x) for x in Q.shape)
     H_kv, S_kv = int(K.shape[1]), int(K.shape[2])
@@ -64,10 +67,18 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
 
     scale_u32 = _f32_to_u32(scale)
 
+    # Input-side / output-side CB formats follow the *tensor* dtype (R1:
+    # float32 / bfloat16 / bfloat8_b). The DRAM tensor is laid out at its own
+    # dtype's tile stride, so the CB that the NoC reads into must match it byte
+    # for byte. Intermediate (matmul/reduce/eltwise) CBs stay bf16 regardless of
+    # input dtype — see the cbs[] comment below (Issue #13364).
+    in_dtype = Q.dtype
+    out_dtype = output_tensor.dtype
+    tile_in = ttnn.tile_size(in_dtype)
+    tile_out = ttnn.tile_size(out_dtype)
+
     bf16 = ttnn.bfloat16
-    fp32 = ttnn.float32
     tile_bf16 = ttnn.tile_size(bf16)
-    tile_fp32 = ttnn.tile_size(fp32)
 
     # ---------------- 2. Work distribution ----------------
     grid = Q.device().compute_with_storage_grid_size()
@@ -104,22 +115,27 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
             ],
         )
 
-    # All intermediate CBs are bf16 (Float16_b); accumulation precision is kept in
-    # the fp32 DEST register (fp32_dest_acc_en=True). fp32 CB storage is intentionally
-    # avoided: on Blackhole a post-matmul `pack_reconfig_data_format` to/around an fp32
-    # pack format hits a TTI_STALLWAIT(PACK|THCON) that never drains (Issue #13364) →
-    # device hang. Production SDPA (sdpa_program_factory.cpp "need to disable fp32 cbs")
-    # uses the same bf16-CB / fp32-DEST split.
+    # Input-side CBs (cb_q/k/v/mask) carry the user input tensor → format follows
+    # in_dtype. Output CB (cb_out) carries the user output tensor → format follows
+    # out_dtype. ALL intermediate (matmul/reduce/eltwise) CBs stay bf16 (Float16_b);
+    # accumulation precision is kept in the fp32 DEST register (fp32_dest_acc_en).
+    # fp32 CB *storage* is intentionally avoided even for float32 inputs: on Blackhole
+    # a post-matmul `pack_reconfig_data_format` to/around an fp32 pack format hits a
+    # TTI_STALLWAIT(PACK|THCON) that never drains (Issue #13364) → device hang.
+    # Production SDPA (sdpa_program_factory.cpp "need to disable fp32 cbs") uses the
+    # same bf16-CB / fp32-DEST split. For float32 inputs the fp32 input tiles are
+    # unpacked through srcA/srcB (→ TF32) for the matmuls — production behavior, not
+    # a regression; the precision lever is compute_kernel_config (math_fidelity).
     cbs = [
-        cb(CB_Q, bf16, tile_bf16, Dt),  # resident scaled Q
-        cb(CB_K, bf16, tile_bf16, 2 * kv_chunk_t * Dt),  # streaming, double-buffered
-        cb(CB_V, bf16, tile_bf16, 2 * kv_chunk_t * Dt),
+        cb(CB_Q, in_dtype, tile_in, Dt),  # resident Q
+        cb(CB_K, in_dtype, tile_in, 2 * kv_chunk_t * Dt),  # streaming, double-buffered
+        cb(CB_V, in_dtype, tile_in, 2 * kv_chunk_t * Dt),
         cb(CB_SCALER_MAX, bf16, tile_bf16, 1),
         cb(CB_SCALER_SUM, bf16, tile_bf16, 1),
         cb(CB_MBLOCK, bf16, tile_bf16, 1),
         cb(CB_MNEW, bf16, tile_bf16, 1),
         cb(CB_LBLOCK, bf16, tile_bf16, 1),
-        cb(CB_OUT, bf16, tile_bf16, 2 * Dt),  # streaming output, double-buffered
+        cb(CB_OUT, out_dtype, tile_out, 2 * Dt),  # streaming output, double-buffered
         cb(CB_SCORES, bf16, tile_bf16, kv_chunk_t),  # one QK block, held across max+exp
         cb(CB_P, bf16, tile_bf16, kv_chunk_t),  # exp-probabilities (≤1.0), bf16 for PV
         cb(CB_PV, bf16, tile_bf16, Dt),
@@ -130,7 +146,7 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
         cb(CB_RECIP, bf16, tile_bf16, 1),
     ]
     if use_mask:
-        cbs.append(cb(CB_MASK, bf16, tile_bf16, 2 * kv_chunk_t))
+        cbs.append(cb(CB_MASK, in_dtype, tile_in, 2 * kv_chunk_t))
 
     # ---------------- 4. Kernels ----------------
     # ---- Reader ----
@@ -227,11 +243,27 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
         config=ttnn.ReaderConfigDescriptor(),
     )
 
+    # compute_kernel_config is resolved by the public entry point
+    # (init_device_compute_kernel_config: None → the Phase-0 hard-coded defaults
+    # HiFi2 / fp32_dest_acc_en=True / approx=False / full_sync=False, byte-identical
+    # to prior behavior; a user-supplied config overrides per-field). Fall back to a
+    # local resolve only if called directly without one (defensive — entry point
+    # always passes a resolved config).
+    if compute_kernel_config is None:
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            Q.device().arch(),
+            None,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+
     compute_config = ttnn.ComputeConfigDescriptor()
-    compute_config.math_fidelity = ttnn.MathFidelity.HiFi2
-    compute_config.fp32_dest_acc_en = True
-    compute_config.math_approx_mode = False
-    compute_config.dst_full_sync_en = False
+    compute_config.math_fidelity = compute_kernel_config.math_fidelity
+    compute_config.fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en
+    compute_config.math_approx_mode = compute_kernel_config.math_approx_mode
+    compute_config.dst_full_sync_en = compute_kernel_config.dst_full_sync_en
 
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
