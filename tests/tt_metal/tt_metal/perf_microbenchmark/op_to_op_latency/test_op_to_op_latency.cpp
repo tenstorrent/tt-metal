@@ -136,6 +136,14 @@ struct BenchmarkConfig {
     // Cap active core count. 0 = use full grid (default). Used to test whether
     // brisc_done_to_go scales with core count.
     uint32_t num_active_cores = 0;
+    // Core placement for the active set: false = row-major (fill a row then next row),
+    // true = column-major (fix x, vary y first). Lets us probe NoC-direction asymmetry
+    // (a row of cores contends differently on the torus than a column).
+    bool core_layout_col = false;
+    // Swap which NoC reader/writer use. Default: reader=NOC1, writer=NOC0. The two NoCs
+    // route opposite directions on the torus, so one favors the read path and the other
+    // the write path (more so with many cores). Spot-check which assignment is better.
+    bool swap_nocs = false;
     bool buffer_tune = false;
     std::string buffer_tune_input_depths = "2,4,6,8,12,16,24,32";
     std::string buffer_tune_output_depths;
@@ -160,6 +168,10 @@ struct BenchmarkConfig {
     // consumer drains at full speed and does not back-pressure the reader. Use when
     // measuring read bandwidth; compute cost is then copy + NOPs only.
     bool lean_compute = false;
+    // Skip the host output-data check. The BW reader writes dummy data to a fixed L1
+    // address, so the written DRAM won't match the input; for latency/BW measurement
+    // (which needs real DRAM writes, i.e. not --read-only) we don't care about data.
+    bool skip_output_validation = false;
     // Writer: 0 = noc_async_writes_flushed every page; 1 = flush only when output
     // CB back-pressure requires it (recommended back-pressure write path).
     bool writer_flush_on_pressure = false;
@@ -197,6 +209,12 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     cfg.reader_trid_in_flight =
         test_args::get_command_option_uint32(args, "--reader-trid-in-flight", cfg.reader_trid_in_flight);
     cfg.num_active_cores = test_args::get_command_option_uint32(args, "--num-active-cores", cfg.num_active_cores);
+    if (test_args::has_command_option(args, "--core-layout-col")) {
+        cfg.core_layout_col = true;
+    }
+    if (test_args::has_command_option(args, "--swap-nocs")) {
+        cfg.swap_nocs = true;
+    }
     if (test_args::has_command_option(args, "--buffer-tune")) {
         cfg.buffer_tune = true;
     }
@@ -237,6 +255,9 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     }
     if (test_args::has_command_option(args, "--read-only")) {
         cfg.read_only = true;
+    }
+    if (test_args::has_command_option(args, "--skip-output-validation")) {
+        cfg.skip_output_validation = true;
     }
     if (test_args::has_command_option(args, "--lean-compute")) {
         cfg.lean_compute = true;
@@ -532,26 +553,50 @@ BuiltProgram build_program(
     Program program = CreateProgram();
 
     const auto full_grid = mesh_device->compute_with_storage_grid_size();
-    CoreCoord grid = full_grid;
-    if (cfg.num_active_cores > 0 && cfg.num_active_cores < full_grid.x * full_grid.y) {
-        const uint32_t want = cfg.num_active_cores;
-        const uint32_t gx = std::min<uint32_t>(full_grid.x, want);
-        const uint32_t gy = (want + gx - 1) / gx;
-        grid = CoreCoord{gx, std::min<uint32_t>(full_grid.y, gy)};
+    uint32_t want = full_grid.x * full_grid.y;
+    if (cfg.num_active_cores > 0 && cfg.num_active_cores < want) {
+        want = cfg.num_active_cores;
     }
-    constexpr bool kRowMajor = true;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(grid, total_num_tiles, kRowMajor);
+    // Build exactly `want` worker cores. Row-major fills a row before stepping y;
+    // column-major (--core-layout-col) fixes x and varies y first, so e.g. 8 cores
+    // land in a column at x=0 (physical x=1) instead of a single NoC row.
+    std::vector<CoreCoord> core_list;
+    if (cfg.core_layout_col) {
+        for (uint32_t x = 0; x < full_grid.x && core_list.size() < want; ++x) {
+            for (uint32_t y = 0; y < full_grid.y && core_list.size() < want; ++y) {
+                core_list.push_back(CoreCoord{x, y});
+            }
+        }
+    } else {
+        for (uint32_t y = 0; y < full_grid.y && core_list.size() < want; ++y) {
+            for (uint32_t x = 0; x < full_grid.x && core_list.size() < want; ++x) {
+                core_list.push_back(CoreCoord{x, y});
+            }
+        }
+    }
+    const uint32_t num_cores = static_cast<uint32_t>(core_list.size());
+    std::vector<CoreRange> ranges;
+    ranges.reserve(num_cores);
+    for (const auto& c : core_list) {
+        ranges.emplace_back(c, c);
+    }
+    CoreRangeSet all_cores(ranges);
+    CoreRangeSet core_group_1 = all_cores;
+    CoreRangeSet core_group_2;
+    const uint32_t num_tiles_per_core_group_1 = num_cores > 0 ? total_num_tiles / num_cores : 0;
+    const uint32_t num_tiles_per_core_group_2 = 0;
 
     log_info(
         LogTest,
-        "Grid {}x{}, {} cores active, total_num_tiles={} ({} tiles/core in group_1, {} in group_2)",
-        grid.x,
-        grid.y,
+        "Active cores: {} ({}-major), full_grid {}x{}, total_num_tiles={} ({} tiles/core); first={} last={}",
         num_cores,
+        cfg.core_layout_col ? "column" : "row",
+        full_grid.x,
+        full_grid.y,
         total_num_tiles,
         num_tiles_per_core_group_1,
-        num_tiles_per_core_group_2);
+        num_cores ? core_list.front().str() : "none",
+        num_cores ? core_list.back().str() : "none");
 
     // Input CB depth defaults to 2x reader push chunk (e.g. push 2 -> depth 4).
     constexpr uint32_t kInputCbId = tt::CBIndex::c_0;
@@ -642,15 +687,16 @@ BuiltProgram build_program(
     const uint32_t cross_program_offset_tiles = cfg.cross_program_dram_offset ? total_num_tiles : 0u;
     std::vector<uint32_t> reader_compile_time_args = {
         kInputCbId, cfg.reader_mode, push_tiles, page_size_tiles, trid_in_flight, cross_program_offset_tiles};
+    // Default reader=NOC1, writer=NOC0; --swap-nocs flips them.
+    const NOC reader_noc = cfg.swap_nocs ? NOC::NOC_0 : NOC::NOC_1;
+    const NOC writer_noc = cfg.swap_nocs ? NOC::NOC_1 : NOC::NOC_0;
     TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
     auto reader_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/kernels/reader_interleaved.cpp",
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+            .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc, .compile_args = reader_compile_time_args});
 
     // Writer: NOC0 / RISCV0, pushes to interleaved DRAM.
     // Compile-time args order MUST match writer_interleaved.cpp:
@@ -671,9 +717,7 @@ BuiltProgram build_program(
         "tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/kernels/writer_interleaved.cpp",
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+            .processor = DataMovementProcessor::RISCV_0, .noc = writer_noc, .compile_args = writer_compile_time_args});
 
     // Compute: copy_tile + tunable NOP spin.
     std::vector<uint32_t> compute_compile_time_args = {
@@ -1576,7 +1620,7 @@ int main(int argc, char** argv) {
                 "dispatch done/go: --use-realtime-profiler -> profile_log_device_rt.csv).");
         }
 
-        if (!cfg.read_only) {
+        if (!cfg.read_only && !cfg.skip_output_validation) {
             std::vector<uint32_t> output_data;
             distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
 
