@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Message list → full T2I token sequence (pretrain template, gen_image path only).
+# Message list → T2I / I2I token sequence (pretrain template, gen_image + cond paths).
 #
 # Mapping to HF upstream (hunyuan_image_3/tokenization_hunyuan_image_3.py)
 # -------------------------------------------------------------------------
@@ -15,7 +15,7 @@
 #   5   | gen_image_mask + scatter indices           | TokenizerEncodeOutput side tensors
 #   6   | CFG cond/uncond batch stack                | _stack_batch (uncond_p=0 / 1)
 #
-# Scope: mode='gen_image', sequence_template='pretrain' only.
+# Scope: mode='gen_image' (T2I and I2I with cond images), sequence_template='pretrain'.
 #
 # References
 # ----------
@@ -33,7 +33,7 @@ from typing import Any
 import torch
 from transformers import PreTrainedTokenizerFast
 
-from .image_info import ImageInfo
+from .image_info import CondImage, ImageInfo, JointImageInfo
 from .special_tokens import SpecialTokens
 
 
@@ -41,11 +41,17 @@ from .special_tokens import SpecialTokens
 class TokenizerEncodeOutput:
     tokens: torch.Tensor
     gen_image_mask: torch.Tensor | None = None
+    vae_image_mask: torch.Tensor | None = None
+    vit_image_mask: torch.Tensor | None = None
     gen_timestep_scatter_index: torch.Tensor | None = None
     gen_timestep_r_scatter_index: torch.Tensor | None = None
+    cond_timestep_scatter_index: torch.Tensor | None = None
     guidance_scatter_index: torch.Tensor | None = None
     text_slices: list[slice] | None = None
     gen_image_slices: list[slice] | None = None
+    vae_image_slices: list[slice] | None = None
+    vit_image_slices: list[slice] | None = None
+    joint_image_slices: list[slice] | None = None
     all_image_slices: list[slice] | list[list[slice]] | None = None
     real_pos: torch.Tensor | None = None
 
@@ -53,11 +59,17 @@ class TokenizerEncodeOutput:
         return (
             "tokens",
             "gen_image_mask",
+            "vae_image_mask",
+            "vit_image_mask",
             "gen_timestep_scatter_index",
             "gen_timestep_r_scatter_index",
+            "cond_timestep_scatter_index",
             "guidance_scatter_index",
             "text_slices",
             "gen_image_slices",
+            "vae_image_slices",
+            "vit_image_slices",
+            "joint_image_slices",
             "all_image_slices",
             "real_pos",
         )
@@ -155,6 +167,10 @@ class ChatTemplateEncoder:
             extra_token_pos["timestep"].append(token_count)
             if image_type == "gen_image":
                 extra_token_pos["gen_timestep"].append(token_count)
+            elif image_type in ("cond_joint_image", "cond_vae_image"):
+                extra_token_pos["cond_timestep"].append(token_count)
+            elif image_type is not None:
+                raise ValueError(f"Unsupported image_type for timestep: {image_type!r}")
             token_count += 1
         if add_guidance_token:
             token_seq.append(self.special.guidance_token_id)
@@ -241,6 +257,112 @@ class ChatTemplateEncoder:
                 token_seq.append(self.special.eoi_token_id)
                 extra_token_pos["eoi"].append(token_count)
                 token_count += 1
+
+            elif key == "cond_joint_image":
+                assert isinstance(source["length"], list) and len(source["length"]) == 2
+                extra_count = (
+                    2
+                    + 1
+                    + (1 if source.get("timestep", add_timestep_token) else 0)
+                    + (2 if source.get("image_shape", add_image_shape_token) else 0)
+                )
+                if drop_last is True and total_length is not None:
+                    if token_count + extra_count + sum(source["length"]) > total_length:
+                        drop_last_break = True
+                        break
+                token_seq.append(self.special.boi_token_id)
+                extra_token_pos["boi"].append(token_count)
+                token_count += 1
+                token_count = self._add_image_meta_info_token(
+                    token_seq,
+                    token_count,
+                    extra_token_pos,
+                    add_timestep_token=source.get("timestep", add_timestep_token),
+                    add_timestep_r_token=False,
+                    add_image_shape_token=source.get("image_shape", add_image_shape_token),
+                    add_guidance_token=False,
+                    base_size=source.get("base_size"),
+                    ratio_idx=source.get("ratio_idx"),
+                    image_type=key,
+                )
+                token_seq.extend([self.special.img_token_id] * source["length"][0])
+                extra_token_pos["<vae_img>_start"].append(token_count)
+                extra_token_pos["<joint_img>_start"].append(token_count)
+                extra_token_pos["<all_img>_start"].append(token_count)
+                token_count += source["length"][0]
+                extra_token_pos["<vae_img>_end"].append(token_count - 1)
+                extra_token_pos["<all_img>_end"].append(token_count - 1)
+
+                token_seq.append(self.special.joint_img_sep_token_id)
+                extra_token_pos["joint_img_sep"].append(token_count)
+                token_count += 1
+
+                token_seq.extend([self.special.img_token_id] * source["length"][1])
+                extra_token_pos["<vit_img>_start"].append(token_count)
+                extra_token_pos["<all_img>_start"].append(token_count)
+                token_count += source["length"][1]
+                extra_token_pos["<vit_img>_end"].append(token_count - 1)
+                extra_token_pos["<joint_img>_end"].append(token_count - 1)
+                extra_token_pos["<all_img>_end"].append(token_count - 1)
+
+                token_seq.append(self.special.eoi_token_id)
+                extra_token_pos["eoi"].append(token_count)
+                token_count += 1
+
+            elif key == "cond_vae_image":
+                extra_count = (
+                    2
+                    + (1 if source.get("timestep", add_timestep_token) else 0)
+                    + (2 if source.get("image_shape", add_image_shape_token) else 0)
+                )
+                if drop_last is True and total_length is not None:
+                    if token_count + extra_count + source["length"] > total_length:
+                        drop_last_break = True
+                        break
+                token_seq.append(self.special.boi_token_id)
+                extra_token_pos["boi"].append(token_count)
+                token_count += 1
+                token_count = self._add_image_meta_info_token(
+                    token_seq,
+                    token_count,
+                    extra_token_pos,
+                    add_timestep_token=source.get("timestep", add_timestep_token),
+                    add_timestep_r_token=False,
+                    add_image_shape_token=source.get("image_shape", add_image_shape_token),
+                    add_guidance_token=False,
+                    base_size=source.get("base_size"),
+                    ratio_idx=source.get("ratio_idx"),
+                    image_type=key,
+                )
+                token_seq.extend([self.special.img_token_id] * source["length"])
+                extra_token_pos["<vae_img>_start"].append(token_count)
+                extra_token_pos["<all_img>_start"].append(token_count)
+                token_count += source["length"]
+                extra_token_pos["<vae_img>_end"].append(token_count - 1)
+                extra_token_pos["<all_img>_end"].append(token_count - 1)
+                token_seq.append(self.special.eoi_token_id)
+                extra_token_pos["eoi"].append(token_count)
+                token_count += 1
+
+            elif key == "cond_vit_image":
+                extra_count = 2
+                if drop_last is True and total_length is not None:
+                    if token_count + extra_count + source["length"] > total_length:
+                        drop_last_break = True
+                        break
+                token_seq.append(self.special.boi_token_id)
+                extra_token_pos["boi"].append(token_count)
+                token_count += 1
+                token_seq.extend([self.special.img_token_id] * source["length"])
+                extra_token_pos["<vit_img>_start"].append(token_count)
+                extra_token_pos["<all_img>_start"].append(token_count)
+                token_count += source["length"]
+                extra_token_pos["<vit_img>_end"].append(token_count - 1)
+                extra_token_pos["<all_img>_end"].append(token_count - 1)
+                token_seq.append(self.special.eoi_token_id)
+                extra_token_pos["eoi"].append(token_count)
+                token_count += 1
+
             else:
                 raise ValueError(f"Unsupported template key: {key!r}")
 
@@ -294,6 +416,36 @@ class ChatTemplateEncoder:
                         ratio_idx=section.get("ratio_idx"),
                     )
                 )
+            elif section["type"] == "cond_joint_image":
+                token_source["cond_joint_image"].append(
+                    dict(
+                        length=section["token_length"],
+                        timestep=section.get("add_timestep_token", False),
+                        image_shape=section.get("add_image_shape_token", False),
+                        base_size=section.get("base_size"),
+                        ratio_idx=section.get("ratio_idx"),
+                    )
+                )
+            elif section["type"] == "cond_vae_image":
+                token_source["cond_vae_image"].append(
+                    dict(
+                        length=section["token_length"],
+                        timestep=section.get("add_timestep_token", False),
+                        image_shape=section.get("add_image_shape_token", False),
+                        base_size=section.get("base_size"),
+                        ratio_idx=section.get("ratio_idx"),
+                    )
+                )
+            elif section["type"] == "cond_vit_image":
+                token_source["cond_vit_image"].append(
+                    dict(
+                        length=section["token_length"],
+                        timestep=section.get("add_timestep_token", False),
+                        image_shape=section.get("add_image_shape_token", False),
+                        base_size=section.get("base_size"),
+                        ratio_idx=section.get("ratio_idx"),
+                    )
+                )
             else:
                 raise ValueError(f"Unsupported section type: {section['type']!r}")
 
@@ -308,6 +460,9 @@ class ChatTemplateEncoder:
         )
         tokens = torch.tensor(full_token_seq, dtype=torch.long)
         gen_image_slices, gen_image_mask = _parse_extra_token_pos(extra_token_pos, "img", tokens)
+        vae_image_slices, vae_image_mask = _parse_extra_token_pos(extra_token_pos, "vae_img", tokens)
+        vit_image_slices, vit_image_mask = _parse_extra_token_pos(extra_token_pos, "vit_img", tokens)
+        joint_image_slices, _ = _parse_extra_token_pos(extra_token_pos, "joint_img", tokens)
         all_image_slices = [
             slice(start, end + 1)
             for start, end in zip(
@@ -315,6 +470,11 @@ class ChatTemplateEncoder:
                 extra_token_pos.get("<all_img>_end", []),
             )
         ]
+        cond_timestep_scatter_index = (
+            torch.tensor(extra_token_pos["cond_timestep"], dtype=torch.long)
+            if "cond_timestep" in extra_token_pos
+            else None
+        )
         gen_timestep_scatter_index = (
             torch.tensor(extra_token_pos["gen_timestep"], dtype=torch.long)
             if "gen_timestep" in extra_token_pos
@@ -343,11 +503,17 @@ class ChatTemplateEncoder:
         return TokenizerEncodeOutput(
             tokens=tokens,
             gen_image_mask=gen_image_mask,
+            vae_image_mask=vae_image_mask,
+            vit_image_mask=vit_image_mask,
             gen_timestep_scatter_index=gen_timestep_scatter_index,
             gen_timestep_r_scatter_index=gen_timestep_r_scatter_index,
+            cond_timestep_scatter_index=cond_timestep_scatter_index,
             guidance_scatter_index=guidance_scatter_index,
             text_slices=text_slices,
             gen_image_slices=gen_image_slices,
+            vae_image_slices=vae_image_slices,
+            vit_image_slices=vit_image_slices,
+            joint_image_slices=joint_image_slices,
             all_image_slices=all_image_slices,
             real_pos=real_pos,
         )
@@ -388,6 +554,11 @@ class ChatTemplateEncoder:
                     if not isinstance(info, ImageInfo):
                         raise TypeError(f"Expected ImageInfo, got {type(info)}")
                     _sub_sections.append(dict(type="gen_image", **info.meta_info))
+                elif message["type"] in ("cond_joint_image", "cond_vae_image", "cond_vit_image"):
+                    info = message["content"]
+                    if not isinstance(info, (ImageInfo, JointImageInfo)):
+                        raise TypeError(f"Expected ImageInfo or JointImageInfo, got {type(info)}")
+                    _sub_sections.append(dict(type=message["type"], **info.meta_info))
                 else:
                     raise ValueError(f"Unknown message type: {message['type']!r}")
                 _cur_message_idx += 1
@@ -429,6 +600,19 @@ class ChatTemplateEncoder:
                 padded.append(t)
         return padded
 
+    def _stack_optional_masks(
+        self,
+        merged: list[TokenizerEncodeOutput],
+        attr: str,
+    ) -> torch.Tensor | None:
+        masks = [getattr(o, attr) for o in merged]
+        if not all(m is not None for m in masks):
+            return None
+        return torch.stack(
+            self._pad_tensors([m.to(torch.bool) for m in masks], False),
+            dim=0,
+        )
+
     def _stack_batch(
         self,
         cond_outputs: list[TokenizerEncodeOutput],
@@ -439,21 +623,20 @@ class ChatTemplateEncoder:
             self._pad_tensors([o.tokens for o in merged], self.pad_token_id),
             dim=0,
         )
-        masks = [o.gen_image_mask for o in merged]
-        if all(m is not None for m in masks):
-            gen_image_mask = torch.stack(
-                self._pad_tensors([m.to(torch.bool) for m in masks], False),
-                dim=0,
-            )
-        else:
-            gen_image_mask = None
         return TokenizerEncodeOutput(
             tokens=tokens,
-            gen_image_mask=gen_image_mask,
+            gen_image_mask=self._stack_optional_masks(merged, "gen_image_mask"),
+            vae_image_mask=self._stack_optional_masks(merged, "vae_image_mask"),
+            vit_image_mask=self._stack_optional_masks(merged, "vit_image_mask"),
             gen_timestep_scatter_index=_stack_optional_index([o.gen_timestep_scatter_index for o in merged]),
             gen_timestep_r_scatter_index=_stack_optional_index([o.gen_timestep_r_scatter_index for o in merged]),
+            cond_timestep_scatter_index=_stack_optional_index([o.cond_timestep_scatter_index for o in merged]),
             guidance_scatter_index=_stack_optional_index([o.guidance_scatter_index for o in merged]),
+            text_slices=[o.text_slices for o in merged],
             gen_image_slices=[o.gen_image_slices for o in merged],
+            vae_image_slices=[o.vae_image_slices for o in merged],
+            vit_image_slices=[o.vit_image_slices for o in merged],
+            joint_image_slices=[o.joint_image_slices for o in merged],
             all_image_slices=[o.all_image_slices for o in merged],
             real_pos=torch.stack([o.real_pos for o in merged], dim=0) if merged[0].real_pos is not None else None,
         )
@@ -464,6 +647,7 @@ class ChatTemplateEncoder:
         batch_prompt: list[str],
         batch_gen_image_info: list[ImageInfo],
         mode: str = "gen_image",
+        batch_cond_images: list[CondImage] | list[list[CondImage]] | None = None,
         batch_system_prompt: list[str] | None = None,
         batch_cot_text: list[str | None] | None = None,
         max_length: int | None = None,
@@ -482,14 +666,35 @@ class ChatTemplateEncoder:
             batch_cot_text = [None] * batch_size
         if len(batch_gen_image_info) == 1 and batch_size > 1:
             batch_gen_image_info = batch_gen_image_info * batch_size
+        if batch_cond_images is not None:
+            if len(batch_cond_images) != batch_size:
+                raise ValueError(
+                    f"batch_cond_images length ({len(batch_cond_images)}) must match batch_size ({batch_size})"
+                )
+            batch_cond_images = [
+                cond_images if isinstance(cond_images, list) else [cond_images] for cond_images in batch_cond_images
+            ]
+        else:
+            batch_cond_images = [[] for _ in range(batch_size)]
 
         batch_message_list = []
-        for prompt, system_prompt, cot_text, gen_image_info in zip(
-            batch_prompt, batch_system_prompt, batch_cot_text, batch_gen_image_info
+        for prompt, system_prompt, cot_text, gen_image_info, cond_images in zip(
+            batch_prompt,
+            batch_system_prompt,
+            batch_cot_text,
+            batch_gen_image_info,
+            batch_cond_images,
         ):
             message_list: list[dict[str, Any]] = []
             if system_prompt:
                 message_list.append(dict(role="system", type="text", content=system_prompt))
+            if len(cond_images) > 0:
+                message_list.extend(
+                    [
+                        dict(role="user", type=cond_image.section_type, content=cond_image.i)
+                        for cond_image in cond_images
+                    ]
+                )
             message_list.append(dict(role="user", type="text", content=prompt))
             if cot_text is not None:
                 message_list.append(dict(role="assistant", type="text", content=cot_text))
@@ -515,6 +720,8 @@ class ChatTemplateEncoder:
             output = TokenizerEncodeOutput(
                 tokens=output.tokens.unsqueeze(0),
                 gen_image_mask=(output.gen_image_mask.unsqueeze(0) if output.gen_image_mask is not None else None),
+                vae_image_mask=(output.vae_image_mask.unsqueeze(0) if output.vae_image_mask is not None else None),
+                vit_image_mask=(output.vit_image_mask.unsqueeze(0) if output.vit_image_mask is not None else None),
                 gen_timestep_scatter_index=(
                     output.gen_timestep_scatter_index.unsqueeze(0)
                     if output.gen_timestep_scatter_index is not None
@@ -525,11 +732,19 @@ class ChatTemplateEncoder:
                     if output.gen_timestep_r_scatter_index is not None
                     else None
                 ),
+                cond_timestep_scatter_index=(
+                    output.cond_timestep_scatter_index.unsqueeze(0)
+                    if output.cond_timestep_scatter_index is not None
+                    else None
+                ),
                 guidance_scatter_index=(
                     output.guidance_scatter_index.unsqueeze(0) if output.guidance_scatter_index is not None else None
                 ),
                 text_slices=output.text_slices,
                 gen_image_slices=[output.gen_image_slices],
+                vae_image_slices=[output.vae_image_slices],
+                vit_image_slices=[output.vit_image_slices],
+                joint_image_slices=[output.joint_image_slices],
                 all_image_slices=[output.all_image_slices],
                 real_pos=output.real_pos.unsqueeze(0) if output.real_pos is not None else None,
             )
