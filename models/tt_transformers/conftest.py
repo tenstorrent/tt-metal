@@ -6,7 +6,6 @@ import os
 import pytest
 
 import ttnn
-
 from models.demos.utils.trace_region_sizes import apply_trace_model_key
 
 
