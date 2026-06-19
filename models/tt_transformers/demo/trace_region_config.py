@@ -13,10 +13,10 @@ from models.demos.utils.model_targets import normalize_sku
 from models.demos.utils.trace_region_sizes import hf_model_name_candidates, resolve_trace_region_size_for_candidates
 
 # NOTE: We need to override trace_region_size before the mesh device is opened
-# NOTE: When using DP, we need to have the imlpemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
-# example of the above : T3K (DP-8-b1 ; @parametrize(trace_region_size=X) -> we efectivly have 8 N150's with trace_region_size=X which could leed to OOM if X is too large)
+# NOTE: When using DP, we need to have the implemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
+# example of the above : T3K (DP-8-b1 ; @parametrize(trace_region_size=X) -> we effectively have 8 N150's with trace_region_size=X which could lead to OOM if X is too large)
 
-# TODO: For now, each confest.py should call get_supported_trace_region_size if they want to override the trace region size
+# TODO: For now, each conftest.py should call get_supported_trace_region_size if they want to override the trace region size
 
 
 def get_base_model_name(model_name: str) -> str:
