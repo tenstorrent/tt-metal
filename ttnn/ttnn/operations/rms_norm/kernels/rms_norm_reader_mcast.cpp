@@ -45,7 +45,11 @@ void kernel_main() {
     constexpr uint32_t cb_input_resident = get_compile_time_arg_val(0);
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_partial_sumsq = get_compile_time_arg_val(3);
+    // Compute hands its fully-accumulated local Sum(x^2) here via a single push (see
+    // rms_norm_compute.cpp combine block). Distinct from cb_partial_sumsq (the PASS-1
+    // accumulator) so cb_wait_front below observes only the final value, not a transient
+    // mid-accumulation push — the core of the Refinement-1 correctness fix.
+    constexpr uint32_t cb_local_sumsq = get_compile_time_arg_val(3);
     constexpr uint32_t cb_partials_gathered = get_compile_time_arg_val(4);
     constexpr uint32_t Wt_s = get_compile_time_arg_val(5);
     constexpr uint32_t has_gamma = get_compile_time_arg_val(6);
@@ -95,9 +99,9 @@ void kernel_main() {
     }
     cb_push_back(cb_input_resident, Wt_s);
 
-    // ---- wait for compute's local partial Sum(x^2) ----
-    cb_wait_front(cb_partial_sumsq, 1);
-    const uint32_t partial_l1 = get_read_ptr(cb_partial_sumsq);
+    // ---- wait for compute's fully-accumulated local Sum(x^2) (single push) ----
+    cb_wait_front(cb_local_sumsq, 1);
+    const uint32_t partial_l1 = get_read_ptr(cb_local_sumsq);
 
     // ---- all-gather K partials over the group rectangle ----
     cb_reserve_back(cb_partials_gathered, num_partials);
@@ -127,5 +131,5 @@ void kernel_main() {
     }
 
     cb_push_back(cb_partials_gathered, num_partials);
-    cb_pop_front(cb_partial_sumsq, 1);
+    cb_pop_front(cb_local_sumsq, 1);
 }

@@ -33,6 +33,10 @@ CB_SQUARED = 24
 CB_PARTIAL_SUMSQ = 25
 CB_RECIP_RMS = 26
 CB_NORMALIZED = 27
+# Regime B only: single-push handoff of the fully-accumulated local Sum(x^2) from
+# compute (PASS-1) to the mcast reader. Decoupled from CB_PARTIAL_SUMSQ so the reader's
+# cb_wait_front observes only the final value (Refinement 1 correctness fix).
+CB_LOCAL_SUMSQ = 28
 
 # Resident budget in tiles (≈1.12 MB for bf16), per op_design.md P3.
 RESIDENT_BUDGET_TILES = 560
@@ -219,6 +223,7 @@ def _regime_a_descriptor(
         inv_W_bits,
         eps_bits,
         1,  # num_partials = 1
+        CB_PARTIAL_SUMSQ,  # cb_local_sumsq (unused in Regime A; num_partials==1 elides it)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -300,6 +305,7 @@ def _regime_b_descriptor(
         cb(CB_PARTIAL_SUMSQ, 2),
         cb(CB_RECIP_RMS, 2),
         cb(CB_PARTIALS_GATHERED, K),
+        cb(CB_LOCAL_SUMSQ, 2),
     ]
     if has_gamma:
         cbs.append(cb(CB_GAMMA, Wt_s))
@@ -344,15 +350,26 @@ def _regime_b_descriptor(
                 gamma_addr,
                 input_page_base,
                 gamma_page_base,
-                vrx0, vry0, vrx1, vry1,
+                vrx0,
+                vry0,
+                vrx1,
+                vry1,
             ] + sender_coords
             writer_rt[lx][ly] = [output_tensor.buffer_address(), input_page_base, Wt_s]
             compute_rt[lx][ly] = [1]  # one tile-row group per core
 
     # ---------- reader (mcast all-gather) ----------
     reader_ct = [
-        CB_INPUT_RESIDENT, CB_GAMMA, CB_SCALER, CB_PARTIAL_SUMSQ, CB_PARTIALS_GATHERED,
-        Wt_s, int(has_gamma), K, DATA_READY, CONSUMED,
+        CB_INPUT_RESIDENT,
+        CB_GAMMA,
+        CB_SCALER,
+        CB_LOCAL_SUMSQ,
+        CB_PARTIALS_GATHERED,
+        Wt_s,
+        int(has_gamma),
+        K,
+        DATA_READY,
+        CONSUMED,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -381,9 +398,22 @@ def _regime_b_descriptor(
 
     # ---------- compute ----------
     compute_ct = [
-        CB_INPUT_RESIDENT, CB_GAMMA, CB_SCALER, CB_PARTIALS_GATHERED, CB_OUTPUT,
-        CB_SQUARED, CB_PARTIAL_SUMSQ, CB_RECIP_RMS, CB_NORMALIZED,
-        Wt_s, reduce_block, int(has_gamma), inv_W_bits, eps_bits, K,
+        CB_INPUT_RESIDENT,
+        CB_GAMMA,
+        CB_SCALER,
+        CB_PARTIALS_GATHERED,
+        CB_OUTPUT,
+        CB_SQUARED,
+        CB_PARTIAL_SUMSQ,
+        CB_RECIP_RMS,
+        CB_NORMALIZED,
+        Wt_s,
+        reduce_block,
+        int(has_gamma),
+        inv_W_bits,
+        eps_bits,
+        K,
+        CB_LOCAL_SUMSQ,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),

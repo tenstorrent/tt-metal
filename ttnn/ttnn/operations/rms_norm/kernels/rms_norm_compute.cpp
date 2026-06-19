@@ -41,6 +41,11 @@ void kernel_main() {
     constexpr uint32_t inv_W_bits = get_compile_time_arg_val(12);    // fp32 bits of 1/W
     constexpr uint32_t eps_bits = get_compile_time_arg_val(13);      // fp32 bits of epsilon
     constexpr uint32_t num_partials = get_compile_time_arg_val(14);  // K (1 in Regime A)
+    // Regime B only: dedicated single-push CB that hands the fully-accumulated local
+    // Sum(x^2) to the reader's mcast all-gather. Decoupling this from cb_partial_sumsq
+    // (the PASS-1 accumulator, whose front transiently advances mid-accumulation) is the
+    // Refinement-1 correctness fix — see the combine block below. Unused in Regime A.
+    constexpr uint32_t cb_local_sumsq = get_compile_time_arg_val(15);
 
     // ---- runtime args ----
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
@@ -100,12 +105,23 @@ void kernel_main() {
                 Accumulate(cb_partial_sumsq, c));
         }
 
-        // ---------- (Regime B) combine K gathered partials ----------
-        // cb_partials_gathered holds K column-tiles (one local partial per W-shard, gathered
-        // over the mcast rectangle). Their plain elementwise sum is the global Sum(x^2) over
-        // the full W. Stream them: copy slot 0, then in-place add the remaining K-1 slots.
-        // The reader already popped this core's local cb_partial_sumsq, so it is free to reuse.
+        // ---------- (Regime B) cross-core combine ----------
         if constexpr (num_partials > 1) {
+            // (1) Hand the FULLY-accumulated local Sum(x^2) to the reader on a dedicated,
+            //     single-push CB. PASS-1's reduce-accumulate pushes/pops cb_partial_sumsq
+            //     once per W-chunk, so the reader could not safely cb_wait_front it (a wait
+            //     for 1 tile is satisfied after the FIRST chunk, mid-accumulation, and the
+            //     final sum lands in a different physical page). copy<> here pops
+            //     cb_partial_sumsq (Streaming) AND pushes cb_local_sumsq exactly once, after
+            //     the whole accumulation is complete — the reader's wait now observes only
+            //     the final value. Popping cb_partial_sumsq also empties it so the combine
+            //     below can reuse it with no stale-front aliasing.
+            ckl::copy<cb_partial_sumsq, cb_local_sumsq>(EltwiseShape::tiles(1));
+
+            // (2) The reader all-gathers K peer partials into cb_partials_gathered (one
+            //     column-tile per W-shard). Their plain elementwise sum is the global
+            //     Sum(x^2) over the full W. cb_partial_sumsq is now empty, so this stream
+            //     (copy slot 0, then in-place add the remaining K-1) accumulates cleanly.
             ckl::copy<cb_partials_gathered, cb_partial_sumsq>(EltwiseShape::tiles(1));
             for (uint32_t k = 1; k < num_partials; ++k) {
                 ckl::add<cb_partials_gathered, cb_partial_sumsq, cb_partial_sumsq>(EltwiseShape::tiles(1));
