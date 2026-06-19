@@ -105,9 +105,13 @@ def _process_prefill_chunk(
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
     # MiniMax-M2: no gate bias.
 
-    # Partial SwiGLU before the up projection to free memory early (MiniMax-M2 uses
-    # plain SiLU: silu(gate) = gate * sigmoid(gate); no clamp, no alpha, no (up+1)).
-    gate_sigmoid = ttnn.sigmoid(gate)
+    # Partial clamped-swigluoai SwiGLU (M3) before the up projection to free memory early:
+    # glu = clamp(gate, max=limit) * sigmoid(alpha * clamp(gate, max=limit)). The up clamp
+    # and the (up + 1) term are applied in part 2 below. (M2 was plain silu(gate)=gate*sigmoid(gate).)
+    gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
+    gate_alpha = ttnn.mul(gate, config.alpha)
+    gate_sigmoid = ttnn.sigmoid(gate_alpha)
+    gate_alpha.deallocate(True)
     glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
     gate_sigmoid.deallocate(True)
 
@@ -133,7 +137,9 @@ def _process_prefill_chunk(
     up = ttnn.reshape(up, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
     # MiniMax-M2: no up bias.
 
-    # SwiGLU part 2: down_input = silu(gate) * up  (MiniMax-M2: no clamp / no (up+1)).
+    # SwiGLU part 2 (M3 clamped swigluoai): down_input = (clamp(up, ±limit) + 1) * glu.
+    up = ttnn.clamp(up, min=-config.swiglu_limit, max=config.swiglu_limit, output_tensor=up)
+    up = ttnn.add(up, 1, output_tensor=up)
     down_input = ttnn.mul(up, glu, output_tensor=up)
     glu.deallocate(True)
 

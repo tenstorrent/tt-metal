@@ -9,6 +9,7 @@ from models.demos.minimax_m3.tt.expert_configs import MiniMaxM3ExpertProgramConf
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
 
+from .dense_mlp import DenseMLP
 from .experts import ExpertConfig, Experts
 from .experts_throughput import (
     DeepSeekPrefillConfig,
@@ -63,6 +64,25 @@ class MLP:
             hf_config,
             router_state_dict,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
+        )
+
+        # M3: always-on shared expert (block_sparse_moe.shared_experts.{gate,up,down}_proj),
+        # a plain clamped-swigluoai FFN at shared_intermediate_size. Its output is ADDED to the
+        # routed-expert output (the routed side already carries routed_scaling_factor from the
+        # router). Reuses DenseMLP. Absent in M2 -> None. Instantiated before the EP early-return
+        # so every expert backend gets it.
+        shared_state_dict = substate(state_dict, "shared_experts")
+        self.shared_expert = (
+            DenseMLP(
+                mesh_device,
+                hf_config,
+                shared_state_dict,
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "shared_expert"),
+            )
+            if shared_state_dict
+            else None
         )
 
         # Throughput experts rely on all_to_all_dispatch/combine across a mesh axis,
@@ -227,6 +247,10 @@ class MLP:
         Returns:
             Expert output tensor [batch, seq_len, hidden_size]
         """
+        # M3 shared expert runs on the same input as the routed experts; computed up front
+        # (before the routed path consumes/reshapes hidden_states) and added to the routed output.
+        shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
+
         if getattr(self, "use_ep_moe", False):
             # On-device EP bridge (DeepSeek `_moe_path` pattern, fully traceable — no host hop):
             # the decoder hands us per-device [1,1,S,H] (the R prompts/seq-shards live in the MESH
@@ -243,10 +267,16 @@ class MLP:
                 out = ttnn.all_gather(
                     out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
                 )
+            if shared_out is not None:
+                out = ttnn.add(out, shared_out)
+                shared_out.deallocate(True)
             return out
 
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights
         )
+        if shared_out is not None:
+            expert_output = ttnn.add(expert_output, shared_out)
+            shared_out.deallocate(True)
         return expert_output

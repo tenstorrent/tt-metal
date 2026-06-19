@@ -23,8 +23,10 @@ import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 
 
-def route_tokens_to_experts(router_logits, experts_per_token, num_experts, score_bias, use_throughput_experts):
-    """Apply MiniMax-M2 routing to gate logits [tokens, num_experts]."""
+def route_tokens_to_experts(
+    router_logits, experts_per_token, num_experts, score_bias, use_throughput_experts, routed_scaling_factor=1.0
+):
+    """Apply MiniMax-M2/M3 routing to gate logits [tokens, num_experts]."""
     if router_logits.dtype != ttnn.bfloat16:
         router_logits = ttnn.typecast(router_logits, dtype=ttnn.bfloat16)
 
@@ -48,6 +50,11 @@ def route_tokens_to_experts(router_logits, experts_per_token, num_experts, score
     top_k_weights = ttnn.div(top_k_weights, denom)
     denom.deallocate(True)
 
+    # M3: scale the routed weights by routed_scaling_factor (2.0), applied AFTER normalize
+    # (DeepSeek/M3 convention; shared expert is added later, unscaled). M2 uses 1.0 -> no-op.
+    if routed_scaling_factor != 1.0:
+        top_k_weights = ttnn.mul(top_k_weights, routed_scaling_factor)
+
     if use_throughput_experts:
         routing_weights.deallocate(True)
         return expert_indices, top_k_weights
@@ -64,6 +71,8 @@ class TopKRouter:
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
+        # M3: routed-expert output is scaled by routed_scaling_factor (2.0); M2 has no such field.
+        self.routed_scaling_factor = getattr(hf_config, "routed_scaling_factor", 1.0)
         self.tensor_cache_path = tensor_cache_path
 
         # MiniMax-M2 gate Linear has no bias; weight is [num_experts, hidden] -> [hidden, num_experts].
@@ -117,7 +126,12 @@ class TopKRouter:
         )
 
         expert_indices, expert_weights = route_tokens_to_experts(
-            router_logits, self.top_k, self.num_experts, self.score_bias, use_throughput_experts
+            router_logits,
+            self.top_k,
+            self.num_experts,
+            self.score_bias,
+            use_throughput_experts,
+            self.routed_scaling_factor,
         )
         ttnn.deallocate(router_logits)
         return expert_indices, expert_weights
