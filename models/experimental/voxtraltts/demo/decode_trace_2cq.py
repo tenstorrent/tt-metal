@@ -35,7 +35,7 @@ Persistent buffers bound by the decode trace (batch = 1 for TTS):
   - ``pos_dev``      [1]             int32  attention / KV-cache position
   - ``rot_idxs_dev`` [1, 1]          int32  rope cos/sin gather index (= position)
 
-Enable/disable with ``VOXTRAL_DECODE_TRACE_2CQ`` (default on). With 2CQ off, a single CQ is used
+Enable/disable with ``VOXTRAL_DECODE_TRACE_2CQ`` (default on for 1×4 TP; off on 1×1). With 2CQ off, a single CQ is used
 and staging falls back to plain ``copy_host_to_device_tensor`` on CQ0 (still trace-replayed).
 """
 

@@ -33,15 +33,10 @@ export ARCH_NAME=blackhole_140_arch_eth_dispatch.yaml
 
 Use `python_env/bin/python -m pip install` for all installs. The system `pip` does not install into the project virtualenv.
 
-**Core inference packages** — tokenizer, weight loading, audio output:
+**Core inference packages** — tokenizer, weight loading, audio output (from the repo root):
 
 ```bash
-python_env/bin/python -m pip install \
-    "mistral-common==1.11.3" \
-    "safetensors==0.8.0" \
-    "huggingface-hub==0.36.2" \
-    "soundfile==0.14.0" \
-    "scipy==1.15.3"
+python_env/bin/python -m pip install -r models/experimental/voxtraltts/requirements.txt
 ```
 
 **Quality metric packages** — required for `tests/pcc/test_voxtral_e2e_quality_metrics.py`:
@@ -85,6 +80,7 @@ The directory must contain the `.safetensors` files. No download occurs.
 
 ```
 models/experimental/voxtraltts/
+├── requirements.txt             #   Core Python deps (Step 2 install)
 ├── demo/
 │   ├── decode_trace_2cq.py      #   Trace + 2-CQ decode helpers
 │   └── demo.py                  #   Full TT demo: text → WAV (device-resident)
@@ -440,11 +436,17 @@ export VOXTRAL_AUDIO_TOKENIZER_MATMUL_PROGCFG_OFF=1   # disable Tier 1 configs
 
 ---
 
-## 9. Work in Progress
-**not final**
-- **Multi-device scaling (T3K)**: Tensor-parallel dispatch of the text backbone across multiple Tenstorrent cards is planned but not yet implemented.
 
----
+
+## 8. Implementation Update
+
+- Added full support for the model on **P150**, including performance optimizations.
+- Enabled **BH QB2** support, allowing the model to run in a **1×4** mesh configuration.
+
+## 9. Work in progress
+
+- Optimization for **BH QB2** is still in progress.
+- During QB2 testing, audible artifacts/noise are observed near the end of each chunk due to the current chunking mechanism. Root-cause analysis is underway, and a fix will be implemented based on the findings.
 
 ## 10. References
 
