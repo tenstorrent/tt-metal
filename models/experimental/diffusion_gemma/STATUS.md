@@ -26,7 +26,8 @@ and marked `TODO(env)`.
 | Torch reference model (vendored HF) | #47468 | ⛔ blocked: transformers `diffusion_gemma` unavailable |
 | Causal backbone bring-up (gemma4 reuse) | #47461 | ⛔ blocked: ckpt + transformers 5.x + HW |
 | KV-cache phase state machine | #47474 | ⬜ not started |
-| Bidirectional canvas attention | #47462 | ⬜ not started |
+| Canvas mask geometry (reference, pure torch) | #47462 | ✅ done — `reference/attention_mask.py`, 8 tests pass |
+| Bidirectional canvas attention (device SDPA) | #47462 | ⬜ not started (mask reference done; non-causal SDPA path blocked on HW) |
 | Reference denoise trajectory (pure torch) | #47463/#47468 | ✅ done — `reference/denoise_loop.py`, 4 tests pass |
 | Discrete-diffusion decode loop (device) | #47463 | ⬜ not started (reference logic done) |
 | On-device canvas sampling | #47472 | ⬜ not started |
