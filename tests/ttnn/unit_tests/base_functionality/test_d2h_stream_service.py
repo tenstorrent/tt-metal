@@ -8,6 +8,35 @@ import torch
 
 import ttnn
 
+from models.common.utility_functions import skip_for_slow_dispatch
+
+# D2HStreamService claims FD dispatch-column service cores; it is only supported on
+# Blackhole devices and UBB Galaxy clusters. Skip the whole module on any other
+# configuration so unsupported runners skip cleanly instead of hitting the claim TT_FATAL.
+_D2H_SUPPORTED_CLUSTER_TYPES = frozenset(
+    {
+        # Blackhole single/multi-card
+        ttnn.cluster.ClusterType.P100,
+        ttnn.cluster.ClusterType.P150,
+        ttnn.cluster.ClusterType.P150_X2,
+        ttnn.cluster.ClusterType.P150_X4,
+        ttnn.cluster.ClusterType.P150_X8,
+        ttnn.cluster.ClusterType.P300,
+        ttnn.cluster.ClusterType.P300_X2,
+        ttnn.cluster.ClusterType.SIMULATOR_BLACKHOLE,
+        # UBB Galaxy (Wormhole and Blackhole)
+        ttnn.cluster.ClusterType.GALAXY,
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    }
+)
+pytestmark = [
+    skip_for_slow_dispatch(),
+    pytest.mark.skipif(
+        ttnn.cluster.get_cluster_type() not in _D2H_SUPPORTED_CLUSTER_TYPES,
+        reason="D2HStreamService is only supported on Blackhole and UBB Galaxy clusters",
+    ),
+]
+
 _DTYPE_TORCH = torch.int32
 _DTYPE_TTNN = ttnn.uint32
 _DTYPE_SIZE = 4
