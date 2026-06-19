@@ -75,12 +75,12 @@ run_t3000_ttfabric_tests() {
 
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
 
   # Code profiling test
-  TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
+  TT_FABRIC_PROFILE_RX_CH_FWD=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_code_profiling.yaml
 
   # Record the end time
   end_time=$(date +%s)
@@ -100,6 +100,8 @@ run_t3000_ttnn_tests() {
   # Disabled by issue #45305: DistributedTensorOpIfTest and MatmulOpIfTest failing deterministically
   ./build/test/ttnn/unit_tests_ttnn --gtest_filter="-DistributedTensorOpIfTest/*:QueryOpConstraints/MatmulOpIfTest.Matmul/2"
   ./build/test/ttnn/unit_tests_ttnn_tensor
+  # Runtime tensor (HostTensor/MeshTensor) tests migrated out of unit_tests_ttnn_tensor into the dedicated tt_metal unit_tests_tensor binary
+  ./build/test/tt_metal/unit_tests_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
@@ -144,7 +146,7 @@ run_t3000_ttnn_udm_tests() {
 run_t3000_tt_metal_multiprocess_tests() {
   local mpi_args="--allow-run-as-root"
   # Disabled by issue #45305: test_tt_fabric crashes with TT_FATAL (Physical chip id not found for eth coord) on T3K 2x2 config
-  # tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
+  # tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_t3k_2x2.yaml
   # Disabled by issue #45491: IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_* hang/fail with TT_FATAL on T3K 2x2 config (RandomizedInterMeshUnicast re-enabled as of 2026-05-29: now passing on main)
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="-IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_0:IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_1"
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_strict_connection_multi_process_rank_bindings.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="-IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_0:IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_1"

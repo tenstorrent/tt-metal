@@ -1992,15 +1992,25 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
-                    ShardOrientation shard_orientation =
-                        program_config.transpose_mcast ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+                    // The output CB is globally allocated against the output tensor on the factory's
+                    // work grid {start_core, start_core + num_blocks - 1}, so the output shard grid
+                    // computed here must match it exactly. Mirror the factory's start_core derivation
+                    // (allowed_worker_cores is the single source of truth for core placement) rather
+                    // than trusting a user-supplied output shard grid, which need not agree.
+                    const CoreCoord start_core =
+                        program_config.allowed_worker_cores.has_value()
+                            ? program_config.allowed_worker_cores.value().bounding_box().start_coord
+                            : CoreCoord{0, 0};
                     CoreRangeSet all_cores;
-                    if (attributes.output_mem_config.shard_spec().has_value()) {
-                        all_cores = attributes.output_mem_config.shard_spec()->grid;
-                    } else if (program_config.transpose_mcast) {
-                        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_y - 1, num_blocks_x - 1})});
+                    ShardOrientation shard_orientation;
+                    if (program_config.transpose_mcast) {
+                        all_cores = CoreRangeSet({CoreRange(
+                            start_core, {start_core.x + num_blocks_y - 1, start_core.y + num_blocks_x - 1})});
+                        shard_orientation = ShardOrientation::COL_MAJOR;
                     } else {
-                        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_x - 1, num_blocks_y - 1})});
+                        all_cores = CoreRangeSet({CoreRange(
+                            start_core, {start_core.x + num_blocks_x - 1, start_core.y + num_blocks_y - 1})});
+                        shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,

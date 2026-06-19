@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce_custom.h"
 #include "api/compute/binary_max_min.h"
 
@@ -21,7 +22,8 @@ void kernel_main() {
     constexpr uint32_t do_eltwise = get_compile_time_arg_val(6);
 
     // Init compute
-    mm_init(qk_im_cb, qk_im_cb, qk_im_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(qk_im_cb, qk_im_cb, qk_im_cb);
+    matmul_init(qk_im_cb, qk_im_cb);
 
     // Inputs: qk_im (rows * cols tiles), prev_max (rows tiles if used), scale (1 tile)
     cb_push_back(qk_im_cb, Sq_chunk_t * Sk_chunk_t);
