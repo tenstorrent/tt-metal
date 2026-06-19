@@ -142,21 +142,32 @@ hidden 4096). They differ only at the edges:
 10. 8-step sampling schedule + config plumbing (`--diff-infer-steps 8`). Reuses Phase 1.
 
 ### Phase 4 — Instruct (I2I) variant
-Vision input path — device pieces DONE, host glue remaining:
+Vision input path — device pieces + host glue DONE; full on-box AR decode remains:
 11. ~~**SigLIP2 vision encoder** (`tt/vision/siglip2.py`) + vision→4096 `LightProjector`~~ —
     ported + PCC-tested (`tests/vision/test_siglip2_ttnn.py`, `forward_vision_with_aligner`).
-12. ~~**Cond-vision sequence injection**~~ — DONE: `tt/vision/inject.py`
-    `scatter_cond_vision_embeddings` writes projected vision features into the contiguous
-    `<img>` span (device `concat`, mirrors the T2I scatter). `tests/vision/test_cond_vision_inject.py`
-    vs the reference masked scatter: PCC 0.999999 (4 cases incl. span-at-start/end).
-13. **Host glue (remaining):** wrap `ref` `HunyuanImage3ImageProcessor.vit_process_image`
-    (PIL → pixel_values/spatial_shapes/mask) and surface a `cond_image_mask` / `<img>` slice
-    from the `cond_vit_image` chat-template section, then assemble an I2I pipeline:
-    image → processor → vision+aligner → `scatter_cond_vision_embeddings` → `model.forward`.
-14. Reasoning/recaption **autoregressive text generation** path (token sampling) for the
-    `think_recaption` bot-task — no AR sampling loop exists yet (codebase is diffusion-only).
-15. Ragged / multi-image scatter (`scatter_on_host` fallback) — `scatter_cond_vision_embeddings`
-    handles a single contiguous TILE-aligned `<img>` span; multi-image layouts need host-scatter.
+12. ~~**Cond-vision sequence injection**~~ — DONE: `tt/vision/inject.py`. Three paths,
+    all vs the reference masked scatter (`tests/vision/test_cond_vision_inject.py`, PCC 0.999998):
+    `scatter_cond_vision_embeddings` (single contiguous TILE-aligned span),
+    `scatter_cond_vision_embeddings_multi` (several contiguous spans — multi-image, device
+    concat), and `scatter_cond_vision_embeddings_host` (arbitrary / ragged / non-aligned mask).
+13. ~~**Host glue**~~ — DONE. `ref/vision/preprocess.py` extracts
+    `HunyuanImage3ImageProcessor.vit_process_image` (verified **bitwise-equal** to upstream —
+    `test_cond_image_preprocess.py::test_ref_preprocess_bitwise_matches_upstream`). `tt/vision/
+    preprocess.py` adds the device bridge (`to_vision_inputs`) + `<img>` span lookup
+    (`find_image_token_spans`). `tt/vision/i2i.py` assembles the pipeline: image → processor →
+    `Siglip2VisionInputs` → vision+aligner (`encode_cond_vision`) → `inject_cond_vision`
+    (auto device-concat vs host-scatter) → `model.forward(inputs_embeds=)`.
+14. ~~**Autoregressive text generation**~~ — DONE (host loop + device head). `tt/lm_head.py`
+    `HunyuanTtLMHead` projects backbone hidden → vocab logits (real `lm_head.weight`,
+    `test_lm_head.py` PCC 0.99999, both full + last-token paths). `tt/generate.py` is the
+    sampling loop: repetition-penalty → temperature → top-k → top-p → sample, plus a
+    `StageTransitionLogitsProcessor` (recaption/think phase forcing) verified **bitwise-equal**
+    to upstream `_StageTransitionLogitsProcessor` (`test_generate.py`, 7 unit tests). The loop
+    is decoupled via a `forward_logits_fn` callback; `make_backbone_logits_fn` wires the
+    resident backbone + LM head as the device adapter.
+    **Remaining (on-box):** the adapter re-forwards the full sequence each step (no KV cache →
+    O(S²)); a `HunyuanStaticCache`-style incremental decode is the optimization, and a full
+    32-layer end-to-end recaption run on QB2 is the integration check.
 
 ---
 
