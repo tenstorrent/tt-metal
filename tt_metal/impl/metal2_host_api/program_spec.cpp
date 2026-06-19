@@ -2038,14 +2038,14 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 // slot) that this binding occupies, used by the device-side accessor to read
 // runtime-resolved fields. Non-zero when the TensorParameter opts into a dynamic
 // field that lives in CRTAs: either sharded + dynamic_tensor_shape (which puts
-// `rank` shape words in CRTAs), or interleaved + dynamic_page_size (one page-size
-// word). The two are mutually exclusive per binding -- see runtime_field_is_page_size.
+// `rank` shape words in CRTAs), or interleaved row-major + dynamic_tensor_shape (one
+// page-size word). The two are mutually exclusive per binding -- see runtime_field_is_page_size.
 struct ResolvedTensorParameter {
     std::vector<uint32_t> cta_payload;
     uint32_t extra_crta_words = 0;
     // Discriminates which runtime accessor field the extra_crta_words hold: the sharded
-    // dynamic_tensor_shape shape words (false), or the single interleaved dynamic_page_size
-    // word (true). The emitter needs this because an interleaved tensor has no
+    // dynamic_tensor_shape shape words (false), or the single interleaved row-major
+    // page-size word (true). The emitter needs this because an interleaved tensor has no
     // BufferDistributionSpec to source a shape from -- it must take the page-size path instead.
     bool runtime_field_is_page_size = false;
 };
@@ -2079,21 +2079,17 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // the device-side accessor doesn't read it), so the flag is a pure host-side
     // validation loosening and has no effect on the CTA/CRTA layout.
     const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape && is_sharded;
-    // dynamic_page_size carries the page size as a runtime CRTA word so it tracks a width-varying
-    // interleaved row-major tensor across program-cache hits. Interleaved-row-major only: a tiled
-    // page size is dtype/tile-fixed and a sharded page size is spec-fixed, so neither can vary --
-    // setting the flag there is a hard error rather than a silent no-op.
-    const bool dyn_page = tensor_parameter.advanced_options.dynamic_page_size;
-    if (dyn_page) {
-        TT_FATAL(
-            !is_sharded && spec.layout() == Layout::ROW_MAJOR,
-            "TensorParameter '{}' sets dynamic_page_size, which is only supported on interleaved "
-            "row-major tensors (got {}, {}). A tiled page size is fixed by dtype/tile dims and a "
-            "sharded page size is fixed by the spec, so neither can vary at runtime.",
-            tensor_parameter.unique_id,
-            is_sharded ? "sharded" : "interleaved",
-            spec.layout() == Layout::ROW_MAJOR ? "row-major" : "tiled");
-    }
+    // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
+    // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
+    // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
+    // accessor strides by the wrong number of bytes. We fold that in here rather than expose a
+    // separate flag: a useful page-size change is ALWAYS a shape change on row-major (you can't vary
+    // the width without varying the logical shape), so there is no "page size varies but shape
+    // doesn't" case to give a flag to. Tiled page size is dtype-fixed and sharded page size is
+    // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
+    // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
+    const bool dyn_page =
+        tensor_parameter.advanced_options.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2128,9 +2124,9 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     if (!dyn_page) {
         cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
     }
-    // else: under dynamic_page_size the page size lives in a CRTA word (filled per-dispatch from
-    // the bound buffer), not a CTA -- omit the slot (A-collapse), matching the device-side
-    // TensorAccessorArgs layout where the RuntimePageSize bit drops the same word.
+    // else: when dyn_page the page size lives in a CRTA word (filled per-dispatch from the bound
+    // buffer), not a CTA -- omit the slot (A-collapse), matching the device-side TensorAccessorArgs
+    // layout where the RuntimePageSize bit drops the same word.
 
     if (!is_sharded) {
         if (dyn_page) {

@@ -392,7 +392,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
             static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))),
             // Page size: the AlignedPageSize CTA on the common path, or -- under the
-            // dynamic_page_size relaxation -- the per-binding CRTA word the host re-derives from the
+            // page-size relaxation (dynamic_tensor_shape on row-major) -- the per-binding CRTA word the host re-derives from the
             // bound buffer each dispatch, so it stays fresh across program-cache hits. The args
             // getter branches CTA-vs-CRTA internally; without the explicit 3rd arg the delegate
             // would default to the (now zero) AlignedPageSize CTA under the relaxation.

@@ -331,7 +331,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 //   - tensor_shape_in_pages, for sharded TensorParameters with dynamic_tensor_shape=true
 //     (`rank` shape words); or
 //   - the aligned page size, for interleaved row-major TensorParameters with
-//     dynamic_page_size=true (one word).
+//     dynamic_tensor_shape=true (one word).
 //
 // Allocation-free by design: this runs once per binding on every enqueue, so callers
 // emit straight into their destination (push_back onto the assembled CRTA vector on the
@@ -363,7 +363,7 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
         handle.tensor_parameter_name);
 
     if (handle.runtime_field_is_page_size) {
-        // dynamic_page_size (interleaved row-major): emit the buffer's aligned page size, re-derived
+        // Page-size runtime field (interleaved row-major): emit the buffer's aligned page size, re-derived
         // each dispatch so it tracks a width-varying tensor across program-cache hits. Exactly one
         // word by construction (ResolveTensorParameterStaticCTAs reserves a single slot). No
         // BufferDistributionSpec is involved -- interleaved tensors have none, which is exactly why

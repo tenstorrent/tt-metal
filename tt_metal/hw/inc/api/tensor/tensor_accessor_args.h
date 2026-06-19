@@ -44,7 +44,8 @@ struct TensorAccessorArgs {
     // runtime. Enforced here as device-side defense-in-depth; the host spec resolver is the
     // primary gate (it also forbids tiled, where the page size is dtype-fixed).
     static_assert(
-        !is_sharded || !page_size_is_crta, "RuntimePageSize (dynamic_page_size) is not supported on sharded tensors");
+        !is_sharded || !page_size_is_crta,
+        "RuntimePageSize (the runtime page-size relaxation) is not supported on sharded tensors");
 
     // aligned_page_size sits at CTA_OFFSET + 1, UNLESS the page size is a runtime field
     // (RuntimePageSize): then the CTA slot is omitted (A-collapse) and the page size is read from

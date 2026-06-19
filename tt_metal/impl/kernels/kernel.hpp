@@ -107,10 +107,10 @@ struct TensorBindingHandle {
     // Count of runtime accessor field words that immediately follow the address slot
     // in this binding's CRTA section. Non-zero when the TensorParameter opts into a
     // CRTA-resident dynamic field: sharded + dynamic_tensor_shape (the runtime tensor's
-    // shape-in-pages, `rank` words) or interleaved + dynamic_page_size (one page-size word).
+    // shape-in-pages, `rank` words) or interleaved row-major + dynamic_tensor_shape (one page-size word).
     // The first runtime field word lives at byte offset addr_crta_offset + sizeof(uint32_t).
     uint32_t num_runtime_field_crta_words = 0;
-    // Which runtime field the words above hold: the interleaved dynamic_page_size page-size word
+    // Which runtime field the words above hold: the interleaved row-major page-size word
     // (true) or the sharded dynamic_tensor_shape shape words (false). The two are mutually
     // exclusive per binding (page size is interleaved-only, shape is sharded-only); the
     // enqueue-time emitter branches on this because an interleaved tensor has no
