@@ -93,11 +93,14 @@ void kernel_main() {
     DEVICE_PRINT("C:boot num_units={}\n", num_units);
     for (uint32_t u = 0; u < num_units; ++u) {
         // Phase 0: scale Q in-place by `scale`.
+        // DEBUG EXPERIMENT 4: chain with NO SFPU op (copy+pack only) to test whether the
+        // SFPU MulUnary is what clobbers matmul state vs the chain's tile_regs/sync.
+        pack_reconfig_data_format(cb_q);
         eltwise_chain(
             Dt,
             CopyTile<cb_q, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-            MulUnary<Dst::D0>{scale_u32},
             PackTile<cb_q, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        pack_reconfig_data_format(cb_scores);  // DEBUG: restore for phase A
         DEVICE_PRINT_UNPACK("C:scaleQ done UNPACK\n");
         DEVICE_PRINT_MATH("C:scaleQ done MATH\n");
         DEVICE_PRINT_PACK("C:scaleQ done PACK\n");
