@@ -19,7 +19,8 @@
 //            (Refinement 5: the resident shard is already L1-bounded by the host
 //             A/B W-split, so the former DEST-level reduce_block chunking +
 //             reduce-Accumulate loop was redundant and has been removed.)
-//   [B]      combine the K gathered partials (copy slot 0 + K-1 adds) -> cb_partial_sumsq
+//   [B]      combine the K gathered partials in ONE reduce<SUM,REDUCE_ROW> over the
+//            K-tile block (Refinement 9 Part B; replaced the copy + K-1 eltwise adds) -> cb_partial_sumsq
 //   FINALIZE rsqrt(sum * inv_W + eps) -> cb_recip_rms
 //   PASS 2   normalize x * recip (Col bcast) [* gamma (Row bcast)] -> cb_pass2_out
 //   [RM]     untilize cb_pass2_out chunk -> cb_rm_out (writer drains sticks)
@@ -266,12 +267,25 @@ void kernel_main() {
             //     single-push CB (copy also pops cb_partial_sumsq, emptying it).
             ckl::copy<cb_partial_sumsq, cb_local_sumsq>(EltwiseShape::tiles(1));
 
-            // (2) The reader all-gathered K peer partials into cb_partials_gathered;
-            //     their plain elementwise sum is the global Sum(x^2) over the full W.
-            ckl::copy<cb_partials_gathered, cb_partial_sumsq>(EltwiseShape::tiles(1));
-            for (uint32_t k = 1; k < num_partials; ++k) {
-                ckl::add<cb_partials_gathered, cb_partial_sumsq, cb_partial_sumsq>(EltwiseShape::tiles(1));
-            }
+            // (2) Refinement 9 (Part B — combine compute): the reader all-gathered the K peer
+            //     partials CONTIGUOUSLY into cb_partials_gathered; their plain elementwise sum
+            //     is the global Sum(x^2) over the full W. Each partial is a PASS-1 REDUCE_ROW
+            //     output (per-stick sum in column 0, every other column zero), so a SINGLE
+            //     reduce<SUM, REDUCE_ROW> over the K-tile block sums the K tiles' rows into one
+            //     output tile (col 0 = Σ_k partial_k per stick) — expressing the whole combine
+            //     in ONE helper call. This REPLACES the former `copy` + (K-1) eltwise `add`s,
+            //     each of which round-tripped L1 (read two operands, pack the running sum back):
+            //     K-1 unnecessary L1 round-trips to sum K single tiles. The reduce LLK
+            //     accumulates all K gathered tiles in DEST and packs exactly once. It reuses the
+            //     same 1.0 SUM scaler as PASS-1 (cb_scaler). The Refinement-1 correctness
+            //     invariant is preserved: the reader still hands over only the FULLY-accumulated
+            //     local Σx² (via cb_local_sumsq, step 1) before the all-gather.
+            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, ReduceInputPolicy::BulkWaitBulkPop>(
+                cb_partials_gathered,
+                cb_scaler,
+                cb_partial_sumsq,
+                ReduceInputBlockShape::of(1, num_partials),
+                ckl::ReduceInputMemoryLayout::contiguous());
         }
 
         // ---------- FINALIZE: rsqrt(sum * inv_W + eps) ----------
