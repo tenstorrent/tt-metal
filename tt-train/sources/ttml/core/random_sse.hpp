@@ -395,6 +395,15 @@ void generate_normal_simd(std::span<float> output, uint32_t seed, auto dist_fact
     fill_remainder_simd(output, i, seed, dist_factory);
 }
 
+void generate_normal_simd_bfloat16(std::span<bfloat16> output, uint32_t seed, auto dist_factory) {
+    std::vector<float> temp(output.size());
+    generate_normal_simd(std::span<float>{temp}, seed, dist_factory);
+
+    for (size_t i = 0; i < output.size(); ++i) {
+        output[i] = bfloat16(temp[i]);
+    }
+}
+
 // ============================================================================
 // Portable SIMD Generation (bfloat16 - Uniform with Pure SIMD)
 // ============================================================================
@@ -505,15 +514,13 @@ inline void parallel_generate(
                 max_threads);
         } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
             // For normal distribution with bfloat16, generate as float then convert
-            std::vector<float> temp(seq.size());
             ttml::core::rng::generate_parallel_chunks(
-                std::span<float>{temp},
-                [dist_factory](std::span<float> s, uint32_t s_seed) { generate_normal_simd(s, s_seed, dist_factory); },
+                seq,
+                [dist_factory](std::span<bfloat16> s, uint32_t s_seed) {
+                    generate_normal_simd_bfloat16(s, s_seed, dist_factory);
+                },
                 seed,
                 max_threads);
-            for (size_t i = 0; i < seq.size(); ++i) {
-                seq[i] = bfloat16(temp[i]);
-            }
         }
     }
 }
