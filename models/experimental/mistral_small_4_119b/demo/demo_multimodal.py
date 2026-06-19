@@ -118,6 +118,13 @@ def _parse_args() -> argparse.Namespace:
         "(much slower steady-state — useful for debugging or comparing trace vs eager latency).",
     )
     p.add_argument(
+        "--warmup",
+        action="store_true",
+        help="Run one untimed warmup pass (prefill + a few decode steps + trace capture) before the "
+        "measured generation, so reported TTFT / decode tok/s reflect steady state instead of "
+        "including one-time compile + trace-capture cost on the first run.",
+    )
+    p.add_argument(
         "--backend",
         choices=("ttnn", "hf", "both"),
         default="ttnn",
@@ -324,6 +331,7 @@ def generate(
     image_token_id: int,
     max_new_tokens: int,
     use_trace: bool = True,
+    warmup: bool = False,
 ) -> str:
     seq_len = input_ids.shape[-1]
     num_image_tokens = int((input_ids[0] == image_token_id).sum().item())
@@ -360,6 +368,22 @@ def generate(
     model.cache_rope_tables(cos_full, sin_full)
     logger.info(f"load_text/cache_rope done in {time.perf_counter() - t0:.1f}s")
 
+    # Optional warmup: run prefill + a couple decode steps + trace capture once, untimed, so the measured pass below hits the program cache / replays thedecode trace from token 1.
+    # Without this the first run's TTFT and decode tok/s include the one-time compile + trace-capture cost.
+    if warmup:
+        logger.info("Warmup pass (untimed): prefill + decode compile + trace capture…")
+        t0 = time.perf_counter()
+        warm_next = model.prefill_multimodal(img_embeds_host, input_ids)
+        warm_cur = torch.tensor([[warm_next]], dtype=torch.long)
+        # Two decode steps: step 1 compiles the decode kernels eagerly; the second confirms a cache hit.
+        # Capture the trace after the eager step so the measured loop replays it.
+        for warm_step in range(2):
+            warm_next = model.decode_next_token(warm_cur, seq_len + warm_step)
+            if warm_step == 0 and use_trace:
+                model.capture_decode_trace()
+            warm_cur = torch.tensor([[warm_next]], dtype=torch.long)
+        logger.info(f"Warmup done in {time.perf_counter() - t0:.1f}s — measured pass is now steady-state")
+
     logger.info(f"Inference — prefill_multimodal (seq_len={seq_len}) then decode loop…")
     t0 = time.perf_counter()
     next_id = model.prefill_multimodal(img_embeds_host, input_ids)
@@ -377,8 +401,7 @@ def generate(
         tok_id = model.decode_next_token(cur, current_pos)
         decode_times.append((time.perf_counter() - t_dec) * 1000)
 
-        # Step 1 compiles the decode kernels eagerly; capture the trace right
-        # after so steps 2+ replay it instead of re-dispatching from host.
+        # Step 1 compiles the decode kernels eagerly; capture the trace right after so steps 2+ replay it instead of re-dispatching from host.
         if step == 1 and use_trace:
             model.capture_decode_trace()
 
@@ -536,6 +559,7 @@ def main() -> None:
                     image_token_id=image_token_id,
                     max_new_tokens=args.max_new_tokens,
                     use_trace=not args.no_trace,
+                    warmup=args.warmup,
                 )
             del model
         finally:
