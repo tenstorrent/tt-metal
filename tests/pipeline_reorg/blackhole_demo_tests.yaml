@@ -35,7 +35,9 @@
     export TT_CACHE_PATH=/tmp/devstral_tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
     export MESH_DEVICE=P150x4
     uv pip install -r models/experimental/devstarl2_small/requirements.txt
-    pytest models/experimental/devstarl2_small/tests/pipeline_tests
+    pytest models/experimental/devstarl2_small/tests/pipeline_tests &&
+    pytest -p models.experimental.devstarl2_small.demo.tt_image_demo models/experimental/devstarl2_small/demo/tt_image_demo.py --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100 &&
+    pytest -p models.experimental.devstarl2_small.demo.tt_text_demo models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 4
   skus:
     bh_quietbox_2:
       timeout: 120
