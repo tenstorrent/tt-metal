@@ -182,6 +182,110 @@ def test_full_52layer_pcc(mesh_device, weight_cache):
     assert score >= PCC_THRESHOLD, f"PCC {score:.6f} < {PCC_THRESHOLD}"
 
 
+def test_per_layer_pcc(mesh_device, weight_cache):
+    """Per-layer PCC to find which block type accumulates the most error."""
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.reference.functional import (
+        dense_attention,
+        layer_norm,
+        mamba2_layer,
+        moe_experts,
+        moe_gate,
+        shared_expert,
+    )
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.dense_attention import dense_attention_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.embedding import embedding_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_layer import mamba2_layer_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.model import _moe_layer_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _host_rep
+
+    torch.manual_seed(42)
+    input_ids = torch.randint(0, 131072, (1, 1), dtype=torch.long)
+    wc = weight_cache
+    B, S = input_ids.shape
+
+    ref_h = torch.nn.functional.embedding(input_ids, wc["backbone.embeddings.weight"])
+    h = embedding_forward(mesh_device, input_ids, wc["backbone.embeddings.weight"])
+
+    print(f"\n{'Layer':>5}  {'Type':>4}  {'PCC':>9}  {'Delta':>9}")
+    print("-" * 35)
+    prev_score = 1.0
+
+    for li in range(N_LAYERS):
+        lt = PATTERN[li]
+        p = f"backbone.layers.{li}"
+
+        if lt == "M":
+            ref_h = mamba2_layer(
+                hidden_states=ref_h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                in_proj_weight=wc[f"{p}.mixer.in_proj.weight"],
+                conv1d_weight=wc[f"{p}.mixer.conv1d.weight"],
+                conv1d_bias=wc[f"{p}.mixer.conv1d.bias"],
+                dt_bias=wc[f"{p}.mixer.dt_bias"],
+                A_log=wc[f"{p}.mixer.A_log"],
+                norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
+                D=wc[f"{p}.mixer.D"],
+                out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
+            )
+            h, *_ = mamba2_layer_forward(
+                mesh_device,
+                h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                in_proj_weight=wc[f"{p}.mixer.in_proj.weight"],
+                conv1d_weight=wc[f"{p}.mixer.conv1d.weight"],
+                conv1d_bias=wc[f"{p}.mixer.conv1d.bias"],
+                dt_bias=wc[f"{p}.mixer.dt_bias"],
+                A_log=wc[f"{p}.mixer.A_log"],
+                norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
+                D=wc[f"{p}.mixer.D"],
+                out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
+            )
+        elif lt == "E":
+            residual = ref_h
+            normed = layer_norm(ref_h, wc[f"{p}.norm.weight"])
+            flat = normed.reshape(B * S, -1)
+            topk_idx, topk_wts = moe_gate(
+                flat,
+                wc[f"{p}.mixer.gate.weight"],
+                wc[f"{p}.mixer.gate.e_score_correction_bias"],
+            )
+            eu = [wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)]
+            ed = [wc[f"{p}.mixer.experts.{e}.down_proj.weight"] for e in range(128)]
+            ex_out = moe_experts(flat, topk_idx, topk_wts, eu, ed).reshape(B, S, -1)
+            sh_out = shared_expert(
+                normed,
+                wc[f"{p}.mixer.shared_experts.up_proj.weight"],
+                wc[f"{p}.mixer.shared_experts.down_proj.weight"],
+            )
+            ref_h = (residual + ex_out + sh_out).bfloat16()
+            h = _moe_layer_forward(mesh_device, h, li, wc)
+        else:
+            ref_h = dense_attention(
+                ref_h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                wq=wc[f"{p}.mixer.q_proj.weight"],
+                wk=wc[f"{p}.mixer.k_proj.weight"],
+                wv=wc[f"{p}.mixer.v_proj.weight"],
+                wo=wc[f"{p}.mixer.o_proj.weight"],
+            )
+            h = dense_attention_forward(
+                mesh_device,
+                h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                wq=wc[f"{p}.mixer.q_proj.weight"],
+                wk=wc[f"{p}.mixer.k_proj.weight"],
+                wv=wc[f"{p}.mixer.v_proj.weight"],
+                wo=wc[f"{p}.mixer.o_proj.weight"],
+            )
+
+        h_cpu = _host_rep(h, mesh_device, B)
+        score = pcc(h_cpu, ref_h)
+        delta = score - prev_score
+        flag = "  <-- DROP" if delta < -0.01 else ""
+        print(f"{li:>5}  {lt:>4}  {score:>9.6f}  {delta:>+9.6f}{flag}")
+        prev_score = score
+
+
 def test_decode_latency(mesh_device, weight_cache):
     """Decode latency: B=1, S=1 through all 52 layers + LM head on TP=4."""
     from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.model import nemotron_h_forward
@@ -434,6 +538,8 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         verbose=False,
         cpu_gate=False,
         decoder_state=_persistent_state,
+        temperature=1.0,
+        top_p=0.9,
     )
     print("[warmup] Done.", flush=True)
 
@@ -475,6 +581,8 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
             cpu_gate=False,
             return_metrics=True,
             decoder_state=_state,
+            temperature=1.0,
+            top_p=0.9,
         )
 
         metrics.print_summary()
