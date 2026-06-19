@@ -338,13 +338,12 @@ void kernel_main() {
                         InputPolicy::WaitAndPopPerKBlock,  // in1_policy
                         NoPostCompute,                     // PostComputeFn (math-thread; unused)
                         decltype(xpose),                   // PreKBlockFn
-                        /*pin_interm_to_captured_base=*/false,
-                        NoPostKBlock,        // PostKBlockFn
-                        0,                   // untilize_block_ct_dim
-                        NoKBlockInnerDimFn,  // KBlockInnerDimFn
-                        NoIn0Source,         // In0SourceFn
-                        NoIn1BaseOffset,     // In1BaseOffsetFn
-                        false,               // caller_owns_pack_target
+                        NoPostKBlock,                      // PostKBlockFn
+                        0,                                 // untilize_block_ct_dim
+                        NoKBlockInnerDimFn,                // KBlockInnerDimFn
+                        NoIn0Source,                       // In0SourceFn
+                        NoIn1BaseOffset,                   // In1BaseOffsetFn
+                        false,                             // caller_owns_pack_target
                         ActivationOp<matmul_activation, activation_param0, activation_param1, activation_param2>>(
                         in0_buf,
                         in1_buf,
@@ -366,7 +365,6 @@ void kernel_main() {
                         InputPolicy::WaitAndPopPerKBlock,
                         NoPostCompute,
                         NoPreKBlock,
-                        /*pin_interm_to_captured_base=*/false,
                         NoPostKBlock,
                         0,
                         NoKBlockInnerDimFn,
