@@ -234,3 +234,52 @@
     (bf16/fp32 × {no_gamma, gamma_tile, gamma_rm} × 5 wide shapes incl.
     W-non-aligned). All other suites (acceptance, layout_matrix 120, regime_b,
     precision_matrix 641) re-run green against the unified 3-kernel set.
+
+## Refinement 5 — Remove the redundant DEST-level reduce-accumulate chunking
+- **Date**: 2026-06-19
+- **What was done**:
+  - **Removed the PASS-1 `num_chunks` / `reduce_block` / `Accumulate` loop** from the
+    unified compute kernel (`rms_norm_compute.cpp`). PASS-1 sum-of-squares is now a
+    **single `square` (eltwise_chain BinaryFpu Mul over the whole shard) + single
+    `reduce<SUM, REDUCE_ROW, BulkWaitBulkPop>`** producing the local Σx² directly — no
+    cross-chunk accumulation. The `using ckl::Accumulate` import and the header
+    dataflow comment were updated to match.
+  - **Memory-budget reasoning (per /memory-budget-metal)**: the DEST-level chunking was
+    a hand-rolled view of DEST capacity, not a real hardware limit — `ckl::eltwise_chain`
+    and `ckl::reduce` are L1→L1 helpers that tile their own work through DEST internally,
+    so a square / reduce over the full shard is one call regardless of width. The
+    per-core resident shard (`Wt` Regime A, `Wt_s` Regime B, `Wt_padded` RM) is already
+    L1-bounded by the host A/B W-split heuristic, so the second in-kernel chunking was
+    pure redundancy. Confirmed empirically: across **every** golden-routed shape the
+    resident shard is **≤32 tiles** (≤128 KB fp32) — see below — so growing `cb_squared`
+    from `reduce_block` to the full shard width adds ≤32 tiles and never approaches the
+    1.5 MB L1 limit. **Routing (RESIDENT_BUDGET_TILES / `_select_k`) was left unchanged**,
+    so no shape re-routes and golden is unaffected.
+  - **`cb_squared` resized** to the shard width in all four descriptors
+    (`_regime_a_descriptor` → `Wt`, `_regime_b_descriptor` → `Wt_s`,
+    `_regime_rm_descriptor` / `_regime_rm_b_descriptor` → `Wt_padded`).
+  - **PASS-2 kept chunked — deliberate, not an oversight.** PASS-2's `num_chunks` loop is
+    NOT a mirror of PASS-1: it is load-bearing. (a) The gamma path streams `x·recip` →
+    `cb_normalized` → `·gamma` with `cb_normalized` sized to **one** `reduce_block` (the
+    Refinement-1 fix that keeps per-core L1 from scaling with shard width); unchunking it
+    would regrow `cb_normalized` to the full shard. (b) The RM path interleaves a per-chunk
+    `untilize` so the writer can drain sticks block-by-block — the chunk granularity is the
+    untilize granularity. Removing PASS-2 chunking would regress R1's memory bound and the
+    RM untilize pipeline, so only the genuinely-redundant PASS-1 chunking was removed.
+- **Accuracy achieved** (measured): all-ones multi-chunk shards (Regime A/B, TILE/RM,
+  ±gamma) → max|out−1| < 0.05; random vs torch PCC ≥ 0.999 on
+  [(4,1,512,512), (2,512,1024), (1024,1024), (1,1,32,32768), (128,8192), (1,1,64,12288)]
+  (TILE) and [(1,1,32,1024), (1,32,1024), (1,1,32,8192), (1,32,8192)] (RM). Single-chunk
+  (num_chunks==1) Phase-0 corner is byte-identical (single reduce ≡ old `Accumulate(.,0)`);
+  multi-chunk bf16 is if anything slightly *more* precise (no per-chunk pack/reload
+  rounding) and well inside the tolerance band.
+- **Golden test progress**: **1683/1683 supported passing** (2940 skipped, 420 xfailed) —
+  identical to the Refinement 4 baseline, 0 regression, 0 xpass-drift. test_regression.py +
+  test_translated.py green. Non-registry refinement: SUPPORTED unchanged.
+- **Issues encountered**: None. The single reduce over `cols=Wt` is correct for REDUCE_ROW
+  (the LLK accumulates all input tiles into one DST register; output is always 1 tile, so
+  DEST capacity is never the constraint for a row reduction regardless of width).
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_reduce_simplification.py` — 32
+    cases targeting shards WIDER than DEST_AUTO_LIMIT (the shapes the old kernel chunked):
+    all-ones exactness + random-vs-torch PCC across both regimes, TILE + ROW_MAJOR, ±gamma.

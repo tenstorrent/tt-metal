@@ -265,7 +265,7 @@ unified as far as is clean); (b) the ROW_MAJOR path exercises the mcast all-gath
 on a wide-W RM shape (add a probe/test proving a ROW_MAJOR row routes through
 Regime B); (c) the full suite is non-regressed (1683/1683).
 
-### [ ] Refinement 5 — Remove the redundant DEST-level reduce-accumulate chunking
+### [x] Refinement 5 — Remove the redundant DEST-level reduce-accumulate chunking
 
 **Goal**: eliminate the PASS-1 **DEST-level W-chunking + reduce-accumulate**
 pattern from the compute kernel(s). The chunked `Accumulate(cb_partial_sumsq, c)`
