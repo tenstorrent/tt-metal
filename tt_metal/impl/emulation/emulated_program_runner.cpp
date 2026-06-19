@@ -1310,6 +1310,19 @@ static void collect_kernels(
                 }
             }
 
+            // Per-kernel -I paths from the kernel's compiler_include_paths.
+            // Post-#1383 ("Get rid of all relative includes"), blaze kernels
+            // include their headers via repo-root-rooted paths (e.g.
+            // `blaze/kernels/.../op.h`) and pass the tt-blaze root in the
+            // KernelDescriptor's compiler_include_paths so it resolves. The
+            // silicon build feeds these to the kernel compiler; emule must do
+            // the same. process_include_paths() also yields the kernel source
+            // dir for FILE_PATH kernels (harmless duplicate of jit's -I kernel_dir).
+            std::string kernel_extra_inc = extra_inc;
+            kernel->process_include_paths([&kernel_extra_inc](const std::string& p) {
+                kernel_extra_inc += " -I\"" + p + "\"";
+            });
+
             // Helper: compute cache key from a defines map (preserves upstream's sorted
             // iteration of named_compile_args and defines for key stability).
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
@@ -1359,7 +1372,7 @@ static void collect_kernels(
                             named_ct_arg_namespaces,
                             named_runtime_arg_namespaces,
                             defs,
-                            extra_inc,
+                            kernel_extra_inc,
                             bindings};
                     }
                 }
