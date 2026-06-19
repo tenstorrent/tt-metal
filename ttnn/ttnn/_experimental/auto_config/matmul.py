@@ -7,6 +7,7 @@ import dataclasses
 import hashlib
 import io
 import importlib
+import importlib.metadata as importlib_metadata
 import json
 import math
 import os
@@ -26,6 +27,7 @@ _CACHE_FILE_SUFFIX = ".json"
 _DEFAULT_CCL_CHUNKS_PER_SYNC = 10
 _DEFAULT_CCL_NUM_WORKERS_PER_LINK = 2
 _DEFAULT_CCL_NUM_BUFFERS_PER_CHANNEL = 2
+_DEFAULT_CACHE_VERSION_FALLBACK = "unknown"
 
 
 def _ttnn():
@@ -252,7 +254,19 @@ def _get_default_version() -> str:
     override = os.environ.get("TTNN_AUTO_MATMUL_VERSION")
     if override:
         return override
-    return importlib.import_module("ttnn.model_preprocessing").git_hash()
+
+    try:
+        return importlib.import_module("ttnn.model_preprocessing").git_hash()
+    except Exception:
+        for env_var in ("GITHUB_SHA", "CI_COMMIT_SHA", "BUILD_SOURCEVERSION", "GIT_REF"):
+            env_value = os.environ.get(env_var)
+            if env_value:
+                return env_value
+
+        try:
+            return f"ttnn-{importlib_metadata.version('ttnn')}"
+        except Exception:
+            return _DEFAULT_CACHE_VERSION_FALLBACK
 
 
 class AutoMatmulCache:
@@ -1689,7 +1703,6 @@ def dispatch_matmul(
     **kwargs: Any,
 ) -> Any:
     ttnn = _ttnn()
-    cache = AutoMatmulCache()
     if not isinstance(input_tensor_a, ttnn.Tensor):
         return _run_base_operation(
             base_operation=base_operation,
@@ -1702,6 +1715,18 @@ def dispatch_matmul(
 
     prepared = _prepare_inputs(input_tensor_a, input_tensor_b, bias)
     if not auto_config:
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=prepared.input_tensor_a,
+            input_tensor_b=prepared.input_tensor_b,
+            bias=prepared.bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
+
+    # Graph-report capture should reflect the user-visible op, not internal
+    # tuning warmups and candidate sweeps.
+    if getattr(getattr(ttnn, "CONFIG", None), "enable_graph_report", False):
         return _run_base_operation(
             base_operation=base_operation,
             input_tensor_a=prepared.input_tensor_a,
@@ -1752,6 +1777,7 @@ def dispatch_matmul(
             kwargs=kwargs,
         )
 
+    cache = AutoMatmulCache()
     selection = _select_candidate(
         signature,
         prepared,
@@ -1776,7 +1802,7 @@ def dispatch_matmul(
         return result
     except Exception:
         if selection.get("cache_hit"):
-            AutoMatmulCache().invalidate(signature)
+            cache.invalidate(signature)
             cache.invalidate_runtime(signature)
             selection = _select_candidate(
                 signature,

@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from ttnn.decorators import REGISTERED_OPERATIONS
 from ttnn.operations.activations import get_golden_function_for_activation
@@ -114,8 +116,6 @@ ttnn.attach_golden_function(ttnn.addmm, golden_function=_addmm_golden_function)
 
 _CPP_MATMUL = ttnn.matmul
 _CPP_LINEAR = ttnn.linear
-REGISTERED_OPERATIONS.operations.discard(_CPP_MATMUL)
-REGISTERED_OPERATIONS.operations.discard(_CPP_LINEAR)
 _AUTO_CONFIG_DOC_SUFFIX = """
 
 Additional Keyword Args:
@@ -128,8 +128,11 @@ _MATMUL_DOC = f"{_CPP_MATMUL.__doc__}{_AUTO_CONFIG_DOC_SUFFIX}"
 _LINEAR_DOC = f"{_CPP_LINEAR.__doc__}{_AUTO_CONFIG_DOC_SUFFIX}"
 
 
-@ttnn.register_python_operation(name="ttnn.matmul", golden_function=_matmul_golden_function, doc=_MATMUL_DOC)
-def _matmul_wrapper(
+def _slow_dispatch_mode_enabled() -> bool:
+    return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
+
+
+def _matmul_wrapper_impl(
     input_tensor_a,
     input_tensor_b,
     *,
@@ -146,8 +149,16 @@ def _matmul_wrapper(
     global_cb=None,
     sub_device_id=None,
     auto_config=True,
+    queue_id=None,
+    cq_id=None,
 ):
     from ttnn._experimental.auto_config.matmul import dispatch_matmul
+
+    dispatch_kwargs = {}
+    if queue_id is not None:
+        dispatch_kwargs["queue_id"] = queue_id
+    elif cq_id is not None:
+        dispatch_kwargs["cq_id"] = cq_id
 
     return dispatch_matmul(
         base_operation=_CPP_MATMUL,
@@ -168,11 +179,11 @@ def _matmul_wrapper(
         optional_output_tensor=optional_output_tensor,
         global_cb=global_cb,
         sub_device_id=sub_device_id,
+        **dispatch_kwargs,
     )
 
 
-@ttnn.register_python_operation(name="ttnn.linear", golden_function=_linear_golden_function, doc=_LINEAR_DOC)
-def _linear_wrapper(
+def _linear_wrapper_impl(
     input_tensor_a,
     input_tensor_b,
     *,
@@ -190,8 +201,16 @@ def _linear_wrapper(
     global_cb=None,
     sub_device_id=None,
     auto_config=True,
+    queue_id=None,
+    cq_id=None,
 ):
     from ttnn._experimental.auto_config.matmul import dispatch_matmul
+
+    dispatch_kwargs = {}
+    if queue_id is not None:
+        dispatch_kwargs["queue_id"] = queue_id
+    elif cq_id is not None:
+        dispatch_kwargs["cq_id"] = cq_id
 
     return dispatch_matmul(
         base_operation=_CPP_LINEAR,
@@ -212,7 +231,46 @@ def _linear_wrapper(
         optional_output_tensor=optional_output_tensor,
         global_cb=global_cb,
         sub_device_id=sub_device_id,
+        **dispatch_kwargs,
     )
+
+
+def _install_slow_dispatch_wrapper(function, *, doc, golden_function):
+    function.__doc__ = doc
+    ttnn.attach_golden_function(function, golden_function=golden_function)
+    return function
+
+
+if _slow_dispatch_mode_enabled():
+    # Keep the public matmul/linear API available, but avoid wrapping the call
+    # in another registered TTNN operation. Tracy slow-dispatch profiling joins
+    # host/device data using the kernel-backed op identity, so the underlying C++
+    # op must remain the top-level tracked operation.
+    _matmul_wrapper = _install_slow_dispatch_wrapper(
+        _matmul_wrapper_impl,
+        doc=_MATMUL_DOC,
+        golden_function=_matmul_golden_function,
+    )
+    _linear_wrapper = _install_slow_dispatch_wrapper(
+        _linear_wrapper_impl,
+        doc=_LINEAR_DOC,
+        golden_function=_linear_golden_function,
+    )
+    ttnn.matmul = _matmul_wrapper
+    ttnn.linear = _linear_wrapper
+else:
+    REGISTERED_OPERATIONS.operations.discard(_CPP_MATMUL)
+    REGISTERED_OPERATIONS.operations.discard(_CPP_LINEAR)
+    _matmul_wrapper = ttnn.register_python_operation(
+        name="ttnn.matmul",
+        golden_function=_matmul_golden_function,
+        doc=_MATMUL_DOC,
+    )(_matmul_wrapper_impl)
+    _linear_wrapper = ttnn.register_python_operation(
+        name="ttnn.linear",
+        golden_function=_linear_golden_function,
+        doc=_LINEAR_DOC,
+    )(_linear_wrapper_impl)
 
 
 ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: ttnn.matmul(self, *args, **kwargs)

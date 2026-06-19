@@ -134,7 +134,7 @@ def test_candidate_helpers_cover_small_and_large_tiles():
     assert 8 in auto_matmul._get_mn_block_candidates(16)
     assert 4 in auto_matmul._get_k_block_candidates(16)
     assert auto_matmul._pick_subblock(8, 8) == (2, 2)
-    assert auto_matmul._pick_subblock(3, 5) == (1, 1)
+    assert auto_matmul._pick_subblock(3, 5) == (3, 1)
 
 
 def test_host_tensor_cache_name_tracks_tensor_contents(monkeypatch, tmp_path):
@@ -159,6 +159,48 @@ def test_explicit_override_detects_compute_kernel_and_output_tile():
 def test_env_override_skips_git_hash(monkeypatch):
     monkeypatch.setenv("TTNN_AUTO_MATMUL_VERSION", "override-version")
     assert auto_matmul._get_default_version() == "override-version"
+
+
+def test_default_version_falls_back_to_ci_sha_when_git_hash_unavailable(monkeypatch):
+    monkeypatch.delenv("TTNN_AUTO_MATMUL_VERSION", raising=False)
+    monkeypatch.setenv("GITHUB_SHA", "0123456789abcdef")
+
+    def fake_import_module(name):
+        assert name == "ttnn.model_preprocessing"
+
+        def raise_git_hash():
+            raise RuntimeError("Couldn't get git hash!")
+
+        return SimpleNamespace(git_hash=raise_git_hash)
+
+    monkeypatch.setattr(auto_matmul.importlib, "import_module", fake_import_module)
+
+    assert auto_matmul._get_default_version() == "0123456789abcdef"
+
+
+def test_default_version_falls_back_to_unknown_without_git_or_package_metadata(monkeypatch):
+    monkeypatch.delenv("TTNN_AUTO_MATMUL_VERSION", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("CI_COMMIT_SHA", raising=False)
+    monkeypatch.delenv("BUILD_SOURCEVERSION", raising=False)
+    monkeypatch.delenv("GIT_REF", raising=False)
+
+    def fake_import_module(name):
+        assert name == "ttnn.model_preprocessing"
+
+        def raise_git_hash():
+            raise RuntimeError("Couldn't get git hash!")
+
+        return SimpleNamespace(git_hash=raise_git_hash)
+
+    monkeypatch.setattr(auto_matmul.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(
+        auto_matmul.importlib_metadata,
+        "version",
+        lambda package_name: (_ for _ in ()).throw(RuntimeError(f"Missing package metadata for {package_name}")),
+    )
+
+    assert auto_matmul._get_default_version() == "unknown"
 
 
 def test_infer_distributed_plan_for_all_gather():
@@ -323,6 +365,10 @@ def test_dispatch_matmul_stages_host_rhs_even_when_auto_config_disabled(monkeypa
         def device(self):
             return "device"
 
+    class FailingCache:
+        def __init__(self):
+            raise AssertionError("cache should not be constructed when auto_config is disabled")
+
     prepared = auto_matmul.PreparedMatmulInputs(
         input_tensor_a=FakeTensor(),
         input_tensor_b="staged-rhs",
@@ -334,6 +380,7 @@ def test_dispatch_matmul_stages_host_rhs_even_when_auto_config_disabled(monkeypa
 
     monkeypatch.setattr(auto_matmul, "_ttnn", lambda: SimpleNamespace(Tensor=FakeTensor))
     monkeypatch.setattr(auto_matmul, "_prepare_inputs", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(auto_matmul, "AutoMatmulCache", FailingCache)
 
     def base_operation(lhs, rhs, **kwargs):
         calls.append((lhs, rhs, kwargs))
@@ -368,6 +415,50 @@ def test_dispatch_matmul_bypasses_selector_for_unsupported_distributed_plan(monk
     monkeypatch.setattr(auto_matmul, "_ttnn", lambda: SimpleNamespace(Tensor=FakeTensor))
     monkeypatch.setattr(auto_matmul, "_prepare_inputs", lambda *args, **kwargs: prepared)
     monkeypatch.setattr(auto_matmul, "_build_signature", lambda *args, **kwargs: signature)
+    monkeypatch.setattr(
+        auto_matmul,
+        "_select_candidate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("selector should be bypassed")),
+    )
+
+    def base_operation(lhs, rhs, **kwargs):
+        calls.append((lhs, rhs, kwargs))
+        return "base-result"
+
+    result = auto_matmul.dispatch_matmul(
+        base_operation=base_operation,
+        input_tensor_a=FakeTensor(),
+        input_tensor_b=FakeTensor(),
+        bias=None,
+        is_linear=False,
+        auto_config=True,
+    )
+
+    assert result == "base-result"
+    assert calls == [(prepared.input_tensor_a, prepared.input_tensor_b, {})]
+
+
+def test_dispatch_matmul_bypasses_selector_when_graph_report_is_enabled(monkeypatch):
+    class FakeTensor:
+        def device(self):
+            return "device"
+
+    prepared = auto_matmul.PreparedMatmulInputs(
+        input_tensor_a=FakeTensor(),
+        input_tensor_b=FakeTensor(),
+        bias=None,
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        auto_matmul,
+        "_ttnn",
+        lambda: SimpleNamespace(
+            Tensor=FakeTensor,
+            CONFIG=SimpleNamespace(enable_graph_report=True),
+        ),
+    )
+    monkeypatch.setattr(auto_matmul, "_prepare_inputs", lambda *args, **kwargs: prepared)
     monkeypatch.setattr(
         auto_matmul,
         "_select_candidate",

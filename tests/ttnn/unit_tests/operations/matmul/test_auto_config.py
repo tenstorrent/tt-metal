@@ -5,6 +5,7 @@ import pytest
 import torch
 
 import ttnn
+import ttnn.operations.matmul as matmul_ops
 
 from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
@@ -14,6 +15,47 @@ pytestmark = pytest.mark.use_module_device
 
 def _ok_candidate_entries(result):
     return [entry for entry in result["candidate_timings_us"] if entry["status"] == "ok"]
+
+
+def test_slow_dispatch_mode_helper_respects_env(monkeypatch):
+    monkeypatch.delenv("TT_METAL_SLOW_DISPATCH_MODE", raising=False)
+    assert matmul_ops._slow_dispatch_mode_enabled() is False
+
+    monkeypatch.setenv("TT_METAL_SLOW_DISPATCH_MODE", "1")
+    assert matmul_ops._slow_dispatch_mode_enabled() is True
+
+
+def test_install_slow_dispatch_wrapper_preserves_doc_and_golden_function():
+    def wrapper():
+        return None
+
+    wrapped = matmul_ops._install_slow_dispatch_wrapper(
+        wrapper,
+        doc="slow-dispatch-doc",
+        golden_function=_ok_candidate_entries,
+    )
+
+    assert wrapped is wrapper
+    assert wrapped.__doc__ == "slow-dispatch-doc"
+    assert wrapped.golden_function is _ok_candidate_entries
+
+
+def test_matmul_wrapper_impl_prefers_queue_id_over_cq_id(monkeypatch):
+    import ttnn._experimental.auto_config.matmul as auto_matmul_module
+
+    captured_kwargs = {}
+
+    def fake_dispatch_matmul(**kwargs):
+        captured_kwargs.update(kwargs)
+        return "result"
+
+    monkeypatch.setattr(auto_matmul_module, "dispatch_matmul", fake_dispatch_matmul)
+
+    result = matmul_ops._matmul_wrapper_impl("lhs", "rhs", queue_id=3, cq_id=7)
+
+    assert result == "result"
+    assert captured_kwargs["queue_id"] == 3
+    assert "cq_id" not in captured_kwargs
 
 
 def test_linear_auto_config_accepts_host_rhs_and_bias_when_disabled(device):
