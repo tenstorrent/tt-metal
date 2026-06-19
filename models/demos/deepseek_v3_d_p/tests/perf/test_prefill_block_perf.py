@@ -20,12 +20,20 @@ selected mesh topology and `DEEPSEEK_V3_HF_MODEL` pointing to the pretrained che
 """
 
 import os
+import re
 
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_with_merge
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
+
+# Optional ISL sweep override: set DS_PERF_ISL=isl_5k (or isl_1k/isl_6k4/isl_12k8/isl_25k) to
+# retarget EVERY perf entry below to that ISL instead of its native one, to measure device perf at
+# that length. 5120 (5*1024) fits L1 on all meshes (8x4=640/chip, 4x4=1280, 2x4=2560). The per-entry
+# expected_ns stays calibrated for the native ISL, so the threshold check will FAIL under the
+# override — that's expected; the run still surfaces the measured perf. Unset = native ISL + check.
+_ISL_OVERRIDE = os.environ.get("DS_PERF_ISL")
 
 # 4x4 sub-torus carving: 16 of the galaxy's 32 chips + the Ring-4-on-Y graph descriptor.
 # Applied via run_model_device_perf_test_with_merge(extra_env=...) (which sets os.environ
@@ -162,6 +170,49 @@ _SUBTORUS_Y4_ENV = {
             0.5,
             "subtorus_4x4_layer3_moe_real_weights_torus_y_isl12k8",
         ),
+        # Explicit 4x4 sub-torus MoE scenario at 8 experts/chip. On the (4,4) mesh the loop test
+        # auto-halves the routed experts to 128 (128/16=8 per chip, matching the 8x4) and FORCES the
+        # HOST gate, because the device grouped-gate kernels hard-require exactly 256 experts. The
+        # gate_device id is forced to HOST_ALL internally; the gate_host param is skipped to dedupe.
+        # (Same selecting filter as the layer3 entry above, which now also runs 128/host — this row
+        # is kept as a first-class, clearly-labeled perf data point for the 8-experts/chip config.)
+        (
+            f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer3 and gate_device and no_ref and isl_12k8'",
+            87_100_959,  # UNCALIBRATED placeholder; gate runs on HOST here, so recalibrate vs the device-gate rows.
+            "deepseek_v3_prefill_block",
+            "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y_128ec_hostgate",
+            1,
+            1,
+            0.5,
+            "subtorus_4x4_layer3_moe_128experts_8perchip_hostgate_isl12k8",
+        ),
+        # 4x4 sub-torus at isl_2k56 (2560 = half of 5k -> 640 tokens/chip on the 4-wide SP axis).
+        # Gate behavior follows the 4x4 default: 128 experts + HOST gate, unless DS_4X4_FULL_EXPERTS=1
+        # is set (then 256 experts + the device gate, which fits L1 easily at 640 tokens/chip).
+        (
+            f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer3 and gate_device and no_ref and isl_2k56'",
+            45_000_000,  # UNCALIBRATED placeholder (640 tokens/chip); recalibrate after first run.
+            "deepseek_v3_prefill_block",
+            "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y_isl2k56",
+            1,
+            1,
+            0.5,
+            "subtorus_4x4_layer3_moe_torus_y_isl2k56_640perchip",
+        ),
+        # Same 4x4 isl_2k56 (640 tokens/chip), but the 128-expert / HOST-gate variant (8 experts/chip).
+        # Run WITHOUT DS_4X4_FULL_EXPERTS so the loop test auto-halves to 128 and forces HOST_ALL
+        # (the device grouped-gate kernels require exactly 256). Counterpart to the entry above, which
+        # — with DS_4X4_FULL_EXPERTS=1 — runs the full 256 experts on the device gate.
+        (
+            f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer3 and gate_device and no_ref and isl_2k56'",
+            45_000_000,  # UNCALIBRATED placeholder; gate runs on HOST here. Recalibrate after first run.
+            "deepseek_v3_prefill_block",
+            "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y_isl2k56_128ec_hostgate",
+            1,
+            1,
+            0.5,
+            "subtorus_4x4_layer3_moe_128experts_8perchip_hostgate_isl2k56",
+        ),
     ],
     ids=[
         "block_8x4_layer0_dense",
@@ -174,6 +225,9 @@ _SUBTORUS_Y4_ENV = {
         "block_8x4_layer3_moe_torus_y",
         "block_4x4_layer0_dense_torus_y",
         "block_4x4_layer3_moe_torus_y",
+        "block_4x4_layer3_moe_torus_y_128ec_hostgate",
+        "block_4x4_layer3_moe_torus_y_isl2k56",
+        "block_4x4_layer3_moe_torus_y_isl2k56_128ec_hostgate",
     ],
 )
 @pytest.mark.timeout(0)
@@ -190,6 +244,12 @@ def test_deepseek_v3_prefill_block_perf(
     # 4x4 sub-torus variants need 16 specific chips carved out + the Ring-4-on-Y descriptor.
     # These must reach the worker via os.environ (extra_env), not the command string.
     extra_env = _SUBTORUS_Y4_ENV if "_4x4_" in model_name else None
+
+    # DS_PERF_ISL sweep: retarget this entry's ISL to measure perf at a different length. The
+    # per-entry expected_ns is calibrated for the native ISL, so the threshold check will FAIL —
+    # that's fine, the run still surfaces the measured device perf at the new length.
+    if _ISL_OVERRIDE:
+        command = re.sub(r"isl_\w+", _ISL_OVERRIDE, command)
 
     run_model_device_perf_test_with_merge(
         command=command,
