@@ -544,9 +544,11 @@ entry is on the books so it's not forgotten.
 
 Trace buffer sizes live in [`models/model_trace_region_sizes.yaml`](./model_trace_region_sizes.yaml).
 Add a `(model, SKU)` block with `trace_region_size: <bytes>` whenever a
-demo or test needs tracing. Every `(model, SKU)` pair must be configured in
-the YAML; [`resolve_trace_region_size`](./demos/utils/trace_region_sizes.py)
-raises `TraceRegionSizeNotConfiguredError` if an entry is missing.
+demo or test needs a specific reserved trace region. Unconfigured `(model,
+SKU)` pairs are **not** an error: [`resolve_trace_region_size`](./demos/utils/trace_region_sizes.py)
+logs an info message and falls back to `TRACE_REGION_SIZE_DYNAMIC` (`0`,
+dynamic allocation). Add an explicit entry when a model needs a fixed
+reserved size rather than dynamic allocation.
 
 - **Model keys** — same short kebab-case + `aliases` convention as `model_targets.yaml`.
 - **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` / `wh_llmbox` / `bh_galaxy` resolve via `normalize_sku` in [`model_targets.py`](./demos/utils/model_targets.py).
@@ -595,19 +597,22 @@ device_params = build_trace_device_params("deepseek-v3")
 
 #### Dynamic allocation (`trace_region_size: 0`)
 
-Some models let the runtime size trace buffers at launch. Set
-`trace_region_size: 0` in the YAML (see `deepseek-v3`) and use the named
-constant `TRACE_REGION_SIZE_DYNAMIC` from `trace_region_sizes.py` when
-referencing the value in code or comments. Do **not** assign
-`trace_region_size = …` in demo code — always go through the resolver or
-`build_trace_device_params`.
+Dynamic allocation lets the runtime size trace buffers at launch instead of
+reserving a fixed region. It is the **default** for any `(model, SKU)` pair
+not present in the YAML (resolution logs an info message and returns
+`TRACE_REGION_SIZE_DYNAMIC`). A model can also opt in explicitly by setting
+`trace_region_size: 0` (see `deepseek-v3`); use the named constant
+`TRACE_REGION_SIZE_DYNAMIC` from `trace_region_sizes.py` when referencing the
+value in code or comments. Do **not** assign `trace_region_size = …` in demo
+code — always go through the resolver or `build_trace_device_params`.
 
 #### CI coverage test
 
 [`models/tt_transformers/tests/test_trace_region_sizes.py`](./tt_transformers/tests/test_trace_region_sizes.py)
-cross-checks every tiered CI job that sets `HF_MODEL` (including per-SKU
-`hf_model` placeholders in device-perf entries) against the YAML. Run locally
-(without hardware):
+checks that every tiered CI job that sets `HF_MODEL` (including per-SKU
+`hf_model` placeholders in device-perf entries) resolves to a valid size —
+either an explicit YAML entry or the dynamic-allocation fallback (`0`). Run
+locally (without hardware):
 
 ```bash
 pytest models/tt_transformers/tests/test_trace_region_sizes.py --noconftest -v

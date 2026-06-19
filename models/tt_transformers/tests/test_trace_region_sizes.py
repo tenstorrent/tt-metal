@@ -12,10 +12,10 @@ import yaml
 from models.demos.utils.trace_region_sizes import (
     TRACE_REGION_SIZE_DYNAMIC,
     TRACE_REGION_SIZES_YAML_PATH,
-    TraceRegionSizeNotConfiguredError,
     hf_model_name_candidates,
     load_trace_region_sizes,
     resolve_trace_region_size,
+    resolve_trace_region_size_for_candidates,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -91,20 +91,12 @@ def test_resolve_trace_region_size_legacy_sku_aliases(model_name, legacy_sku, ex
     assert resolve_trace_region_size(model_name, legacy_sku) == expected_size
 
 
-def test_resolve_trace_region_size_raises_when_not_configured():
-    with pytest.raises(TraceRegionSizeNotConfiguredError, match="trace_region_size is not configured"):
-        resolve_trace_region_size("unknown-model", "wh_n150")
+def test_resolve_trace_region_size_unconfigured_defaults_to_dynamic():
+    assert resolve_trace_region_size("unknown-model", "wh_n150") == TRACE_REGION_SIZE_DYNAMIC
 
 
 def _resolve_ci_trace_region_size(hf_model: str, sku: str) -> int:
-    last_error: TraceRegionSizeNotConfiguredError | None = None
-    for candidate in hf_model_name_candidates(hf_model):
-        try:
-            return resolve_trace_region_size(candidate, sku)
-        except TraceRegionSizeNotConfiguredError as exc:
-            last_error = exc
-    assert last_error is not None
-    raise last_error
+    return resolve_trace_region_size_for_candidates(hf_model_name_candidates(hf_model), sku)
 
 
 def _iter_ci_trace_region_requirements():
@@ -151,9 +143,12 @@ def test_resolve_deepseek_v3_dynamic_allocation():
     list(_iter_ci_trace_region_requirements()),
     ids=lambda val: str(val).replace("/", "_")[:120],
 )
-def test_ci_hf_model_jobs_have_trace_region_config(job_name, hf_model, sku):
+def test_ci_hf_model_jobs_resolve_trace_region_size(job_name, hf_model, sku):
     del job_name
-    _resolve_ci_trace_region_size(hf_model, sku)
+    # Every CI HF_MODEL job must resolve to a valid size; unconfigured pairs
+    # fall back to dynamic allocation (TRACE_REGION_SIZE_DYNAMIC) rather than erroring.
+    size = _resolve_ci_trace_region_size(hf_model, sku)
+    assert isinstance(size, int) and size >= 0
 
 
 @pytest.mark.parametrize(
@@ -190,15 +185,7 @@ def test_resolve_gemma4_config_path_aliases(model_path, sku, expected_size):
     ],
 )
 def test_resolve_trace_region_size_from_hf_hub_cache_path(hub_path, sku, expected_size):
-    last_error: TraceRegionSizeNotConfiguredError | None = None
-    for candidate in hf_model_name_candidates(hub_path):
-        try:
-            assert resolve_trace_region_size(candidate, sku) == expected_size
-            return
-        except TraceRegionSizeNotConfiguredError as exc:
-            last_error = exc
-    assert last_error is not None
-    raise last_error
+    assert resolve_trace_region_size_for_candidates(hf_model_name_candidates(hub_path), sku) == expected_size
 
 
 def _gpt_oss_trace_model_key_from_env() -> str:

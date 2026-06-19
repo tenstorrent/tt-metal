@@ -28,13 +28,13 @@ Two ways callers consume it:
       ``apply_trace_model_key`` to resolve it to ``trace_region_size`` just
       before the device opens.
 
-Fail-loud by design: if a (model, SKU) pair is not configured, resolution
-raises ``TraceRegionSizeNotConfiguredError`` rather than falling back to a
-default. There is no implicit default size -- a value is only ever returned
-when it is explicitly present in the YAML. The one special value is ``0``
-(``TRACE_REGION_SIZE_DYNAMIC``): when a YAML entry sets it explicitly (e.g.
-``deepseek-v3``), it tells the runtime to allocate trace buffers dynamically
-instead of reserving a fixed region up front.
+Unconfigured pairs default to dynamic allocation: if a (model, SKU) pair is
+not present in the YAML, resolution logs an info message and returns
+``TRACE_REGION_SIZE_DYNAMIC`` (``0``), which tells the runtime to allocate
+trace buffers dynamically instead of reserving a fixed region up front. A
+non-zero size is only ever returned when it is explicitly present in the YAML;
+``deepseek-v3`` also sets ``0`` explicitly to opt into the same dynamic
+behavior.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from loguru import logger
 
 from models.demos.utils.model_targets import _model_matches, normalize_sku
 
@@ -55,10 +56,6 @@ TRACE_REGION_SIZE_DYNAMIC = 0
 
 # Populated from device_params parametrize dict; resolved at fixture time via apply_trace_model_key().
 TRACE_MODEL_KEY_PARAM = "_trace_model_key"
-
-
-class TraceRegionSizeNotConfiguredError(ValueError):
-    """Raised when trace_region_size is missing from model_trace_region_sizes.yaml."""
 
 
 def _append_unique(candidates: list[str], value: str) -> None:
@@ -85,13 +82,6 @@ def hf_model_name_candidates(hf_model: str) -> list[str]:
     return candidates
 
 
-def _missing_trace_region_size_message(model_name: str, sku: str) -> str:
-    return (
-        f"trace_region_size is not configured for model={model_name!r} and SKU={sku!r}. "
-        f"Add a (model, SKU) entry with trace_region_size to {TRACE_REGION_SIZES_YAML_PATH}."
-    )
-
-
 @functools.cache
 def load_trace_region_sizes() -> dict[str, Any]:
     """Load centralized trace region sizes YAML from the configured default path."""
@@ -102,32 +92,67 @@ def load_trace_region_sizes() -> dict[str, Any]:
     return data
 
 
+def _find_configured_trace_region_size(model_name: str, sku_norm: str) -> int | None:
+    """Return the configured trace_region_size for a model/normalized-SKU pair, or None."""
+    sizes = load_trace_region_sizes().get("sizes", {})
+    for model_key, model_block in sizes.items():
+        if not isinstance(model_block, dict) or not _model_matches(model_key, model_name, model_block):
+            continue
+        for sku_key, sku_block in model_block.get("skus", {}).items():
+            if normalize_sku(sku_key) != sku_norm or not isinstance(sku_block, dict):
+                continue
+            value = sku_block.get("trace_region_size")
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+    return None
+
+
 def resolve_trace_region_size(model_name: str | None, sku: str | None) -> int:
-    """Resolve trace region size in bytes for a model/SKU pair from the centralized YAML."""
+    """Resolve trace region size in bytes for a model/SKU pair from the centralized YAML.
+
+    Returns the configured value, or ``TRACE_REGION_SIZE_DYNAMIC`` (0, dynamic
+    allocation) -- with an info log -- when the pair is not configured.
+    """
     if not model_name:
         raise ValueError("model_name is required to resolve trace_region_size")
     if not sku:
         raise ValueError("sku is required to resolve trace_region_size")
 
-    sizes_doc = load_trace_region_sizes()
-    sizes = sizes_doc.get("sizes", {})
     sku_norm = normalize_sku(sku)
+    value = _find_configured_trace_region_size(model_name, sku_norm)
+    if value is not None:
+        return value
 
-    for model_key, model_block in sizes.items():
-        if not isinstance(model_block, dict) or not _model_matches(model_key, model_name, model_block):
+    logger.info(
+        f"No trace_region_size configured for model={model_name!r} and SKU={sku_norm!r}; "
+        f"defaulting to dynamic allocation (trace_region_size={TRACE_REGION_SIZE_DYNAMIC})."
+    )
+    return TRACE_REGION_SIZE_DYNAMIC
+
+
+def resolve_trace_region_size_for_candidates(model_name_candidates: list[str], sku: str | None) -> int:
+    """Resolve the first configured candidate's size, else dynamic allocation (0).
+
+    Used by the HF_MODEL env path, which derives several model-name candidates
+    from a single HF model string. A configured candidate always wins over the
+    dynamic-allocation default.
+    """
+    if not sku:
+        raise ValueError("sku is required to resolve trace_region_size")
+
+    sku_norm = normalize_sku(sku)
+    for model_name in model_name_candidates:
+        if not model_name:
             continue
+        value = _find_configured_trace_region_size(model_name, sku_norm)
+        if value is not None:
+            return value
 
-        skus = model_block.get("skus", {})
-        for sku_key, sku_block in skus.items():
-            if normalize_sku(sku_key) != sku_norm:
-                continue
-            if not isinstance(sku_block, dict):
-                continue
-            value = sku_block.get("trace_region_size")
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                return value
-
-    raise TraceRegionSizeNotConfiguredError(_missing_trace_region_size_message(model_name, sku_norm))
+    logger.info(
+        f"No trace_region_size configured for model candidates {list(model_name_candidates)!r} "
+        f"and SKU={sku_norm!r}; defaulting to dynamic allocation (trace_region_size={TRACE_REGION_SIZE_DYNAMIC})."
+    )
+    return TRACE_REGION_SIZE_DYNAMIC
 
 
 def resolve_demo_trace_region_size(model_key: str) -> int:

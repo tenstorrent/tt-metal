@@ -11,9 +11,8 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.model_targets import normalize_sku
 from models.demos.utils.trace_region_sizes import (
-    TraceRegionSizeNotConfiguredError,
     hf_model_name_candidates,
-    resolve_trace_region_size,
+    resolve_trace_region_size_for_candidates,
 )
 
 # NOTE: We need to override trace_region_size before the mesh device is opened
@@ -101,16 +100,5 @@ def get_supported_trace_region_size(request, mesh_device):
     if not candidates:
         return None
 
-    last_error: TraceRegionSizeNotConfiguredError | None = None
-    for model_name in candidates:
-        try:
-            return resolve_trace_region_size(model_name, sku)
-        except TraceRegionSizeNotConfiguredError as exc:
-            last_error = exc
-
-    if last_error is not None:
-        raise TraceRegionSizeNotConfiguredError(
-            f"trace_region_size is not configured for model candidates {candidates!r} and SKU={sku!r}. "
-            f"Add a (model, SKU) entry with trace_region_size to models/model_trace_region_sizes.yaml."
-        ) from last_error
-    return None
+    # Unconfigured (model, SKU) pairs fall back to dynamic allocation (0).
+    return resolve_trace_region_size_for_candidates(candidates, sku)
