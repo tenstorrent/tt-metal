@@ -98,9 +98,14 @@ void kernel_main() {
             CopyTile<cb_q, Dst::D0, CopyTilePolicy::WaitAndPop>{},
             MulUnary<Dst::D0>{scale_u32},
             PackTile<cb_q, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
-        DEVICE_PRINT("C:scaleQ done\n");
+        DEVICE_PRINT_UNPACK("C:scaleQ done UNPACK\n");
+        DEVICE_PRINT_MATH("C:scaleQ done MATH\n");
+        DEVICE_PRINT_PACK("C:scaleQ done PACK\n");
 
         for (uint32_t j = 0; j < num_kv_chunks; ++j) {
+            DEVICE_PRINT_UNPACK("C:preA UNPACK j={}\n", j);
+            DEVICE_PRINT_MATH("C:preA MATH j={}\n", j);
+            DEVICE_PRINT_PACK("C:preA PACK j={}\n", j);
             // A: cb_scores = (scaled Q)·Kⱼᵀ. transpose=true (within-tile) + reader
             // block-transpose => Q·Kᵀ. Q retained across KV blocks (popped in L).
             matmul_block<
@@ -116,7 +121,9 @@ void kernel_main() {
                 scores_buf,
                 scores_buf,
                 MatmulBlockShape::of(/*in0_sb=*/1, in1sb_qk, /*sbh=*/1, osw_qk, /*in0_block_k=*/Dt, /*num_k=*/1));
-            DEVICE_PRINT("C:A(QK) j={} done\n", j);
+            DEVICE_PRINT_UNPACK("C:A(QK) UNPACK j={} done\n", j);
+            DEVICE_PRINT_MATH("C:A(QK) MATH j={} done\n", j);
+            DEVICE_PRINT_PACK("C:A(QK) PACK j={} done\n", j);
 
             // B: cb_scores += maskⱼ (element-wise).
             if constexpr (use_mask) {
