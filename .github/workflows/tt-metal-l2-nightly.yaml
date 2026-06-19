@@ -45,11 +45,6 @@ on:
         required: false
         type: boolean
         default: false
-      run_models_unit_tests:
-        description: "Run models-unit-tests"
-        required: false
-        type: boolean
-        default: false
       run_tt_cnn_unit_tests:
         description: "Run tt-cnn-unit-tests"
         required: false
@@ -307,23 +302,6 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # =============================================================================
-  # Models team
-  # =============================================================================
-  models-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_models_unit_tests) &&
-      contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150')
-    secrets: inherit
-    uses: ./.github/workflows/models-post-commit.yaml
-    with:
-      arch: wormhole_b0
-      runner-label: N150
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  # =============================================================================
   # Triage team
   # =============================================================================
   triage-tests:
@@ -336,8 +314,9 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      run-hang-report-test: true
+      test-category: unit
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
   # =============================================================================
   # LLK team
   # =============================================================================
@@ -356,5 +335,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      l2-only: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

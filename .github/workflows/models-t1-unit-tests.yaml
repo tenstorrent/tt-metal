@@ -17,6 +17,9 @@ on:
           - qwen3-32b-galaxy
           - gpt-oss-120b
           - whisper
+          - gemma-4-12b
+          - gemma-4-26b-a4b
+          - gemma-4-31b
           - dit-common
           # llama3.3-70b-galaxy: disabled — see #42139
       sku:

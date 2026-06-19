@@ -95,12 +95,8 @@ inline uint32_t DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t el
 
     return value;
 }
+
 #else
-#ifdef DATA_FORMATS_DEFINED
-inline uint32_t DataflowBuffer::get_tile_size() const { return ::get_tile_size(logical_dfb_id_); }
-inline uint32_t DataflowBuffer::get_tile_hw() const { return ::get_tile_hw(logical_dfb_id_); }
-inline DataFormat DataflowBuffer::get_dataformat() const { return ::get_dataformat(logical_dfb_id_); }
-#endif
 
 inline bool DataflowBuffer::pages_reservable_at_back(int32_t num_pages) const { return cb_pages_reservable_at_back(logical_dfb_id_, num_pages); }
 

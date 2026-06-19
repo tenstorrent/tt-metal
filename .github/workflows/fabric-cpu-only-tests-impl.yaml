@@ -44,7 +44,6 @@ jobs:
         PYTHONPATH: /work
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        TT_METAL_CLEAR_L1: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
     defaults:

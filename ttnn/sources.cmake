@@ -173,6 +173,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/topk_large_indices/topk_large_indices_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
+    cpp/ttnn/operations/experimental/indexer_score/indexer_score_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
@@ -183,6 +184,18 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
     cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/quasar_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/pad/pad_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/tilize/tilize_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/move/move_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/slice/slice_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/transpose/transpose_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/reshard/reshard_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/pool_generic/generic_pools_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/conv2d/conv2d_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/matmul/matmul_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/binary/binary_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
     cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp

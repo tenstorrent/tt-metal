@@ -37,7 +37,7 @@ A breaking change is any change that:
      - Passes **all CI checks** using that branch:
          - [All post-commit checks](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml)
          - [Blackhole post-commit checks](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml)
-         - [L2 nightly tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml) (run fast-dispatch, slow-dispatch, cpp-unit-tests, models-unit-tests)
+         - [L2 nightly tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml) (run fast-dispatch, slow-dispatch, cpp-unit-tests)
          - [Device perf tests](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-device-models.yaml)
          - For the last 2, you can selectively run them only on BH or only on WH, or both, depending on your changes by passing string to architecture field (at the top).
          - If your change is affecting ttnn operations, additional checks might be required by the maintainers.

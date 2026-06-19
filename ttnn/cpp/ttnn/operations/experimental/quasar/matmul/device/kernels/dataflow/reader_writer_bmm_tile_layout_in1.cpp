@@ -1,0 +1,165 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+
+void kernel_main() {
+    // RUNTIME ARGS
+    // READER
+    uint32_t rt_args_idx = 0;
+    // in1 tensor args
+    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // batch args
+    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
+
+    // WRITER
+    // out tensor args
+    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+
+    // COMPILE TIME ARGS
+    // READER
+    // in1 tensor args
+    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(0);
+    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(1);
+    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(2);
+    // in1 block args
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(3);
+    constexpr uint32_t in1_block_h = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
+    // in0/in1 common args
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(6);
+    // batch args
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(7);
+    constexpr uint32_t KtNt = get_compile_time_arg_val(8);
+
+    // WRITER
+    // out tensor args
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(9);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(10);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(12);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
+    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(16);
+    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(17);
+    // batch args
+    constexpr uint32_t MtNt = get_compile_time_arg_val(18);
+
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    // WRITER
+    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
+
+    constexpr auto in1_args = TensorAccessorArgs<19>();
+    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+
+    Noc noc;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_out(cb_id_out0);
+
+#ifdef IN1_SHARDED
+    const uint32_t in1_num_tiles = batch * num_blocks * in1_block_h * in1_block_w;
+    cb_in1.reserve_back(in1_num_tiles);
+    cb_in1.push_back(in1_num_tiles);
+#else
+    const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the in1
+    // CB pages are sized to match (see the program factory), so tiles are laid out in L1 at the
+    // padded stride while the NOC reads the unpadded tile of data into each padded slot. No-op when
+    // the tile size is already aligned.
+    const uint32_t in1_aligned_tile_size_bytes =
+        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+#endif  // IN1_SHARDED
+
+#ifndef OUT_SHARDED
+    const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const auto s = TensorAccessor(out_args, out_tensor_addr);
+#endif  // OUT_SHARDED
+
+#if not defined IN1_SHARDED or not defined OUT_SHARDED
+    for (uint32_t b = 0; b < batch; ++b) {
+#ifndef IN1_SHARDED
+        uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            cb_in1.reserve_back(in1_block_num_tiles);
+
+            uint32_t in1_write_offset = 0;
+
+            uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
+            for (uint32_t h = 0; h < in1_block_h; ++h) {
+                uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
+                for (uint32_t w = 0; w < in1_block_w; ++w) {
+                    noc.async_read(
+                        s1,
+                        cb_in1,
+                        in1_single_tile_size_bytes,
+                        {.page_id = in1_tensor_tile_id},
+                        {.offset_bytes = in1_write_offset});
+                    in1_write_offset += in1_aligned_tile_size_bytes;
+                    in1_tensor_tile_id += in1_tensor_stride_w;
+                }
+                in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+            }
+            in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
+
+            noc.async_read_barrier();
+
+            cb_in1.push_back(in1_block_num_tiles);
+        }
+        if (bcast_B == 0) {
+            in1_tensor_start_tile_id += KtNt;
+        }
+#endif  // IN1_SHARDED
+
+#ifndef OUT_SHARDED
+        // WRITER
+        uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
+        for (uint32_t sbh = 0; sbh < out_num_subblocks_h; ++sbh) {
+            uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
+            for (uint32_t sbw = 0; sbw < out_num_subblocks_w; ++sbw) {
+                uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
+
+                cb_out.wait_front(out_subblock_tile_count);
+                uint32_t out_read_offset = 0;
+
+                for (uint32_t h = 0; h < out_subblock_h; ++h) {
+                    uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
+                    for (uint32_t w = 0; w < out_subblock_w; ++w) {
+                        noc.async_write(
+                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                            s,
+                            output_single_tile_size_bytes,
+                            {.offset_bytes = out_read_offset},
+                            {.page_id = out_tensor_tile_id});
+
+                        out_read_offset += output_single_tile_size_bytes;
+
+                        out_tensor_tile_id += out_tensor_stride_w;
+                    }
+                    out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
+                }
+
+                noc.async_write_barrier();
+                cb_out.pop_front(out_subblock_tile_count);
+                out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
+            }
+            out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
+        }
+        out_tensor_start_tile_id += MtNt;
+#endif  // OUT_SHARDED
+    }
+#endif  // not defined IN1_SHARDED or not defined OUT_SHARDED
+
+#ifdef OUT_SHARDED
+    cb_out.wait_front(batch * out_num_subblocks_h * out_num_subblocks_w * out_subblock_w * out_subblock_h);
+#endif  // OUT_SHARDED
+}
