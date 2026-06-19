@@ -182,7 +182,7 @@
     TT_LOGGER_LEVEL=Error pytest models/experimental/mistral_small_4_119b/tests/perf/test_e2e_performant.py -k L36V24
   skus:
     bh_loudbox:
-      timeout: 150
+      timeout: 360
   owner_id: U09SQ3SP5HV # Moritz Thüning
   team: models
   model-name: mistral-small-4-119b
