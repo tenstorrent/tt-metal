@@ -27,7 +27,7 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures im
     TextDecoderPccInputs,
     align_case_for_tt_prefill,
     decoder_seed_ids,
-    tokenize_source_text,
+    source_text_for_enc_len,
     _hf_speech_encoder_hidden_and_mask,
     _hf_text_encoder_hidden,
     _truncate_encoder_timeline,
@@ -65,7 +65,8 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
 
-E2E_PROMPT = "This is a test"
+# Fixed encoder timeline for E2E logit PCC (text + speech). Text uses ``source_text_for_enc_len``
+# (repeated unit phrase); speech uses synthetic mel stretched/truncated to this length (S2ST: preamble).
 MAX_ENC_SEQ = 256
 PCC_ENCODER_TEXT = 0.99
 PCC_ENCODER_SPEECH = 0.97  # speech encoder + adaptor @ enc_seq≈256: ~0.978 on BH 1×4 (see module test @ 4096 mel)
@@ -158,11 +159,7 @@ def _trim_pad_speech_enc(
 
 
 def _t2tt_source_ids(processor: AutoProcessor) -> Tuple[torch.Tensor, torch.Tensor]:
-    src_ids, src_mask = tokenize_source_text(processor, E2E_PROMPT, DEFAULT_SRC_LANG)
-    if int(src_ids.shape[1]) > MAX_ENC_SEQ:
-        src_ids = src_ids[:, :MAX_ENC_SEQ]
-        src_mask = src_mask[:, :MAX_ENC_SEQ]
-    return src_ids, src_mask
+    return source_text_for_enc_len(processor, MAX_ENC_SEQ, src_lang=DEFAULT_SRC_LANG)
 
 
 def make_t2tt_e2e_case(
@@ -621,8 +618,15 @@ def run_speech_e2e_logit_pcc(
     pcc_decode: float,
     log_label: str,
     pcc_prefill: float = PCC_PREFILL_SPEECH,
+    wav_path: Path | None = None,
 ) -> None:
-    speech = make_speech_e2e_inputs(hf_model, processor, tgt_lang=tgt_lang, enc_seq_len=MAX_ENC_SEQ)
+    speech = make_speech_e2e_inputs(
+        hf_model,
+        processor,
+        tgt_lang=tgt_lang,
+        enc_seq_len=MAX_ENC_SEQ,
+        wav_path=wav_path,
+    )
     enc_tt, enc_mask_tt = tt_encode_speech(
         mesh_device,
         hf_model.speech_encoder,

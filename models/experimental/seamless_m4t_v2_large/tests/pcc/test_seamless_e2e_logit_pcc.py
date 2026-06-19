@@ -10,7 +10,8 @@ decode. Per tt_transformers doc naming: "Logit PCC" compares activations **befor
 Scope:
   - All five tasks (T2TT, T2ST, S2TT, S2ST, ASR) via **text-decoder intermediates**
     (encoder hidden → decoder hidden before ``lm_head``). T2ST/S2ST stop before T2U/vocoder.
-  - Fixed short prompt / mel input (encoder timeline ≤ 256)
+  - Fixed encoder timeline **256** (text: repeated unit phrase; speech: mel/subsampled enc;
+    S2ST uses preamble WAV truncated to ≤256)
   - Eager KV decode (no trace / 2CQ)
   - Quick mode: 3 decode steps; full mode: 9 decode steps
 
@@ -35,6 +36,7 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_logit_pcc_helpers i
     PCC_DECODE_S2ST,
     PCC_PREFILL_S2ST,
     PCC_PREFILL_SPEECH,
+    resolve_preamble_wav_for_tests,
     run_speech_e2e_logit_pcc,
     run_t2tt_e2e_logit_pcc,
     weights_dir_or_skip,
@@ -96,6 +98,7 @@ def test_seamless_e2e_logit_pcc(mesh_device, device_params, reset_seeds, task, m
                 log_label=log_label,
             )
         else:
+            wav_path = resolve_preamble_wav_for_tests() if task == "s2st" else None
             run_speech_e2e_logit_pcc(
                 mesh_device,
                 hf_model,
@@ -105,4 +108,5 @@ def test_seamless_e2e_logit_pcc(mesh_device, device_params, reset_seeds, task, m
                 pcc_decode=pcc_decode,
                 pcc_prefill=_TASK_PREFILL_PCC[task],
                 log_label=log_label,
+                wav_path=wav_path,
             )

@@ -163,7 +163,7 @@ def _compute_top1_top5(
     return top1 / n, top5 / n
 
 
-def _run_token_accuracy_loop(
+def eval_token_matching_loop(
     tt_model,
     mesh_device: ttnn.Device,
     hf_model,
@@ -174,10 +174,8 @@ def _run_token_accuracy_loop(
     teacher_tokens: torch.Tensor,
     top5_tokens: torch.Tensor,
     decode_steps: int,
-    top1_threshold: float,
-    top5_threshold: float,
-    log_label: str,
-) -> None:
+) -> Tuple[float, float, int]:
+    """Teacher-forced decode; returns ``(top1_frac, top5_frac, n_eval_steps)``."""
     cfg = hf_model.config
     seed_len = int(seed_ids.shape[1])
     n_eval = min(decode_steps, int(teacher_tokens.numel()), int(top5_tokens.shape[0]))
@@ -236,6 +234,35 @@ def _run_token_accuracy_loop(
         ttnn.deallocate(layer[1])
 
     top1, top5 = _compute_top1_top5(predicted, teacher_tokens, top5_tokens, num_steps=n_eval)
+    return top1, top5, n_eval
+
+
+def _run_token_accuracy_loop(
+    tt_model,
+    mesh_device: ttnn.Device,
+    hf_model,
+    *,
+    enc_tt: ttnn.Tensor,
+    enc_mask_tt: ttnn.Tensor,
+    seed_ids: torch.Tensor,
+    teacher_tokens: torch.Tensor,
+    top5_tokens: torch.Tensor,
+    decode_steps: int,
+    top1_threshold: float,
+    top5_threshold: float,
+    log_label: str,
+) -> None:
+    top1, top5, n_eval = eval_token_matching_loop(
+        tt_model,
+        mesh_device,
+        hf_model,
+        enc_tt=enc_tt,
+        enc_mask_tt=enc_mask_tt,
+        seed_ids=seed_ids,
+        teacher_tokens=teacher_tokens,
+        top5_tokens=top5_tokens,
+        decode_steps=decode_steps,
+    )
     top1_pct = top1 * 100.0
     top5_pct = top5 * 100.0
     logger.info(

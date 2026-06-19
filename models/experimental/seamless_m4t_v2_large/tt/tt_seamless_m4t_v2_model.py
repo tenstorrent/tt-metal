@@ -5,11 +5,14 @@
 
 Inference parity with Hugging Face ``SeamlessM4Tv2Model``: ``forward`` and ``generate`` consume
 and return ``ttnn.Tensor`` on ``self.device``. Position IDs, additive 4D attention masks, the
-greedy ``argmax`` decode and all per-step tensor math run on device. Host-side work is limited to:
+greedy ``argmax`` decode and all per-step tensor math run on device. When on-device sampling
+is enabled (default on multi-device meshes), both greedy and ``do_sample=True`` token selection
+run via ``TTSampling`` on width-sharded ``lm_head`` logits — including post-trace sampling
+with ``use_decode_trace=True``. Host-side work is limited to:
 
 * ``generation_config`` dictionary lookups (subword/char tables, lang code IDs — string ops);
 * a single scalar readback of the subsampled-encoder length (needed for ``ttnn.slice`` end index);
-* a per-step scalar readback of the predicted greedy token (for the EOS early-stop check).
+* a per-step scalar readback of the predicted token (for the EOS early-stop check).
 
 Out of scope: attentions/hidden-state outputs, label loss. Text-decoder KV cache is used in ``generate`` when ``use_kv_cache=True``.
 """
@@ -59,6 +62,13 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
     make_t2u_trace_prealloc_tensors,
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
+from models.experimental.seamless_m4t_v2_large.tt.on_device_sampling import (
+    prepare_row_logits_for_sampling,
+    sample_first_token_from_prefill_logits,
+    sample_in_decode_trace,
+    try_create_on_device_sampler,
+)
+from models.tt_transformers.tt.ccl import TT_CCL
 
 # Bucket the speech-encoder mel-sequence length to this multiple so run-to-run length jitter reuses
 # the shape-specialized (JIT-compiled) kernels instead of recompiling cold (~7-20 s). 256 keeps the
@@ -658,6 +668,60 @@ class TTSeamlessM4Tv2Model:
         self._vocoder_prewarm_input: Optional[ttnn.Tensor] = None
         self._vocoder_prewarm_spk: Optional[ttnn.Tensor] = None
         self._vocoder_prewarm_lang: Optional[ttnn.Tensor] = None
+        self._tt_ccl = TT_CCL(device) if self._tp > 1 else None
+        self.sampling = None
+        self._on_device_sampler = try_create_on_device_sampler(
+            device,
+            vocab_size=int(vocab_size),
+            lm_head=getattr(parameters, "lm_head", None),
+            tt_ccl=self._tt_ccl,
+        )
+        self._supports_on_device_sampling = self._on_device_sampler is not None
+        if self._supports_on_device_sampling:
+            self.sampling = self._on_device_sampler.generator
+
+    def _use_on_device_sampling(self) -> bool:
+        """On-device TTSampling for greedy and stochastic when the mesh supports it."""
+        return self._on_device_sampler is not None and not getattr(self, "_decode_hf_exact_greedy", False)
+
+    @property
+    def _fold_sampling_in_trace(self) -> bool:
+        return self._use_on_device_sampling() and sample_in_decode_trace(self.device)
+
+    def _configure_on_device_sampling(
+        self,
+        *,
+        do_sample: bool,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+        repetition_penalty: float,
+        seed: Optional[int],
+    ) -> None:
+        if self._on_device_sampler is None:
+            return
+        self._on_device_sampler.configure(
+            do_sample=do_sample,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            seed=seed,
+        )
+
+    def _read_token_from_traced_logits(self, logits: ttnn.Tensor, *, dec_len: int = 1) -> int:
+        """Post-trace or in-trace token read via ``OnDeviceSampler``."""
+        sampler = self._on_device_sampler
+        if sampler is None:
+            raise RuntimeError("On-device sampler required for traced sampling path.")
+        if self._fold_sampling_in_trace:
+            return sampler.tt_read_token(0)
+        row_logits = prepare_row_logits_for_sampling(logits, dec_len=dec_len)
+        sampler.advance_seed()
+        sampler.sample_into_buffer(row_logits)
+        if row_logits is not logits:
+            ttnn.deallocate(row_logits)
+        return sampler.tt_read_token(0)
 
     def _reset_speech_hidden_cache(self) -> None:
         for t in self._speech_hidden_parts:
@@ -1816,11 +1880,13 @@ class TTSeamlessM4Tv2Model:
         batch_size: int = 1,
         cache_seq_len: Optional[int] = None,
     ) -> None:
-        """Capture Metal trace for one KV decode step (decoder + lm_head + chunk argmax)."""
+        """Capture Metal trace for one KV decode step (decoder + lm_head [+ optional sampling])."""
         rt = self._ensure_kv_decode_runtime(batch_size)
         config_cache_len = int(cache_seq_len) if cache_seq_len is not None else self._fixed_decode_trace_sdpa_len()
         if config_cache_len in rt.trace_ids_by_cache_seq_len:
             return
+        use_sampling = self._use_on_device_sampling()
+        fold_sampling = self._fold_sampling_in_trace
         self._release_all_active_decode_traces()
         ttnn.synchronize_device(self.device)
 
@@ -1839,12 +1905,18 @@ class TTSeamlessM4Tv2Model:
             cache_seq_len=config_cache_len,
             stash_speech_hidden=False,
         )
-        # Pre-compile the fused argmax too — else it JITs during capture → "Writes not supported".
-        compile_tok = self._decode_argmax_token(compile_logits)
-        ttnn.synchronize_device(self.device)
-        for _t in compile_tok:
-            ttnn.deallocate(_t)
+        if use_sampling:
+            row = prepare_row_logits_for_sampling(compile_logits, dec_len=1)
+            self._on_device_sampler.sample_into_buffer(row)
+            if row is not compile_logits:
+                ttnn.deallocate(row)
+        else:
+            compile_tok = self._decode_argmax_token(compile_logits)
+            ttnn.synchronize_device(self.device)
+            for _t in compile_tok:
+                ttnn.deallocate(_t)
         ttnn.deallocate(compile_logits)
+        ttnn.synchronize_device(self.device)
 
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
         self._reset_kv_decode_cur_pos(position, batch_size)
@@ -1866,19 +1938,30 @@ class TTSeamlessM4Tv2Model:
                 stash_speech_hidden=False,
                 retain_dec_out=True,
             )
-            capture_tok = self._decode_argmax_token(capture_logits)
+            if use_sampling:
+                if fold_sampling:
+                    row = prepare_row_logits_for_sampling(capture_logits, dec_len=1)
+                    self._on_device_sampler.sample_into_buffer(row)
+            else:
+                capture_tok = self._decode_argmax_token(capture_logits)
 
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         traced_step_capture()
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
-        if capture_logits is None or capture_tok is None:
+        if capture_logits is None:
+            raise RuntimeError("Decode trace capture produced no logits tensor.")
+        if not use_sampling and capture_tok is None:
             raise RuntimeError("Decode trace capture produced no logits/token tensor.")
         rt.logits_tt_by_cache_seq_len[config_cache_len] = capture_logits
         rt.logits_tt = capture_logits
-        rt.tok_tt_by_cache_seq_len[config_cache_len] = capture_tok
-        rt.tok_tt = capture_tok
-        self._free_kv_host_readback_buffers(rt)
-        self._ensure_tok_host_readback_buffers(rt, capture_tok)
+        if use_sampling:
+            rt.tok_tt_by_cache_seq_len.pop(config_cache_len, None)
+            rt.tok_tt = None
+        else:
+            rt.tok_tt_by_cache_seq_len[config_cache_len] = capture_tok
+            rt.tok_tt = capture_tok
+            self._free_kv_host_readback_buffers(rt)
+            self._ensure_tok_host_readback_buffers(rt, capture_tok)
         rt.trace_ids_by_cache_seq_len[config_cache_len] = trace_id
         rt.trace_id = trace_id
         rt.trace_cache_seq_len = config_cache_len
@@ -1986,13 +2069,16 @@ class TTSeamlessM4Tv2Model:
                 ttnn.wait_for_event(0, write_event)
             ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
 
-        next_id = self._greedy_token_after_traced_step(
-            rt.logits_tt,
-            1,
-            repetition_penalty=repetition_penalty,
-            prev_token_ids=prev_set,
-            read_cq_id=0,
-        )
+        if self._use_on_device_sampling():
+            next_id = self._read_token_from_traced_logits(rt.logits_tt, dec_len=1)
+        else:
+            next_id = self._greedy_token_after_traced_step(
+                rt.logits_tt,
+                1,
+                repetition_penalty=repetition_penalty,
+                prev_token_ids=prev_set,
+                read_cq_id=0,
+            )
         if phase_timer is not None:
             phase_timer.end_step(t_step)
         prev_set.add(next_id)
@@ -2033,7 +2119,8 @@ class TTSeamlessM4Tv2Model:
                     rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(cache_seq_len)
                 ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
                 cq0_idle = ttnn.record_event(dev, 0)
-                d2h_event = self._start_chunk_argmax_d2h(rt.tok_tt, cq_id=1, blocking=False)
+                if not self._use_on_device_sampling():
+                    d2h_event = self._start_chunk_argmax_d2h(rt.tok_tt, cq_id=1, blocking=False)
             else:
                 self._upload_pos_only(cur_pos, batch_size)
                 self._reset_kv_decode_cur_pos(cur_pos, batch_size)
@@ -2055,14 +2142,17 @@ class TTSeamlessM4Tv2Model:
                     rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(cache_seq_len)
                 ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
 
-            next_id = self._greedy_token_after_traced_step(
-                rt.logits_tt,
-                1,
-                repetition_penalty=repetition_penalty,
-                prev_token_ids=prev_set,
-                read_cq_id=0,
-                d2h_event=d2h_event,
-            )
+            if self._use_on_device_sampling():
+                next_id = self._read_token_from_traced_logits(rt.logits_tt, dec_len=1)
+            else:
+                next_id = self._greedy_token_after_traced_step(
+                    rt.logits_tt,
+                    1,
+                    repetition_penalty=repetition_penalty,
+                    prev_token_ids=prev_set,
+                    read_cq_id=0,
+                    d2h_event=d2h_event if use_2cq else None,
+                )
             if phase_timer is not None:
                 phase_timer.end_step(t_step)
             prev_set.add(next_id)
@@ -2146,8 +2236,9 @@ class TTSeamlessM4Tv2Model:
         cross_4d: Optional[ttnn.Tensor] = None,
         *,
         batch_size: int = 1,
+        sharded_logits: bool = False,
     ) -> ttnn.Tensor:
-        """Single decoder step with KV cache → ``[B, 1, V]`` logits."""
+        """Single decoder step with KV cache → ``[B, 1, V]`` or sharded ``[B, 1, V/tp]`` logits."""
         token_ids = self._single_token_tt(token_id, batch_size)
         pos_tt = tt_position_ids_decode_step(token_ids, self.pad_token_id, position)
         owns_cross_4d = cross_4d is None
@@ -2168,7 +2259,10 @@ class TTSeamlessM4Tv2Model:
             trace_no_profiler=True,
         )
         self._stash_speech_hidden_step(dec_out)
-        logits = self._lm_head(dec_out)
+        if sharded_logits:
+            logits = self._lm_head_sharded(dec_out)
+        else:
+            logits = self._lm_head(dec_out)
         ttnn.deallocate(dec_out)
         ttnn.deallocate(pos_tt)
         ttnn.deallocate(token_ids)
@@ -2624,8 +2718,9 @@ class TTSeamlessM4Tv2Model:
         Supports:
         - Greedy search (``do_sample=False``, default)
         - Beam search (``num_beams > 1``)
-        - Temperature / top-p / top-k sampling (``do_sample=True``)
-        - Single-capture Metal decode trace (``use_decode_trace=True``)
+        - Temperature / top-p / top-k sampling (``do_sample=True``; on device when enabled)
+        - On-device greedy via ``TTSampling`` when ``SEAMLESS_ONDEVICE_SAMPLING`` is enabled (default)
+        - Single-capture Metal decode trace (``use_decode_trace=True``; compatible with on-device sampling)
         - 2CQ decode pipeline (``use_2cq=True``; requires ``use_decode_trace=True``)
 
         Returns ``ttnn.Tensor`` outputs only. For text modality, the first-pass encoder output is
@@ -2651,6 +2746,9 @@ class TTSeamlessM4Tv2Model:
         temperature = float(kwargs_text.get("temperature", 1.0) or 1.0)
         top_p = float(kwargs_text.get("top_p", 1.0) or 1.0)
         top_k = int(kwargs_text.get("top_k", 0) or 0)
+        sampling_seed = kwargs_text.get("seed")
+        if sampling_seed is not None:
+            sampling_seed = int(sampling_seed)
         use_2cq = bool(kwargs_text.get("use_2cq", False))
         use_t2u_trace = bool(kwargs_text.pop("use_t2u_trace", False))
         if do_sample and num_beams > 1:
@@ -2663,6 +2761,20 @@ class TTSeamlessM4Tv2Model:
         if repetition_penalty < 1.0:
             raise ValueError(f"repetition_penalty must be >= 1.0 (got {repetition_penalty})")
         self._decode_hf_exact_greedy = bool(kwargs_text.get("hf_exact_greedy", False))
+        use_on_device_sampling = self._use_on_device_sampling()
+        if use_on_device_sampling:
+            self._configure_on_device_sampling(
+                do_sample=do_sample,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                seed=sampling_seed,
+            )
+        if use_2cq and use_on_device_sampling and self._fold_sampling_in_trace:
+            raise ValueError(
+                "use_2cq=True is incompatible with SEAMLESS_SAMPLE_IN_TRACE=1 (in-trace sampling uses single CQ)."
+            )
         eos_ids = _eos_id_set(kwargs_text.get("eos_token_id"))
         if self.generation_config is not None:
             eos_ids |= _eos_id_set(getattr(self.generation_config, "eos_token_id", None))
@@ -2804,7 +2916,8 @@ class TTSeamlessM4Tv2Model:
             cross_valid = False
             cur_pos = seed_len
             # Trace from the first decode-loop step (one SDPA bucket; no mid-loop re-capture).
-            decode_trace_ready = use_decode_trace and not do_sample
+            # Trace when greedy, or when on-device sampling handles token pick post-trace.
+            decode_trace_ready = use_decode_trace and (not do_sample or use_on_device_sampling)
             # A decode trace captured by a previous ``generate()`` call references that call's
             # ``kv_cache`` / encoder buffers, which were just reallocated above. Release it so this
             # call re-captures against its own buffers (guards back-to-back generate without a
@@ -2828,16 +2941,32 @@ class TTSeamlessM4Tv2Model:
                 ttnn.deallocate(warm_tt)
                 cross_valid = True
                 t_first = phase_timer.begin_step()
-                logits = self._lm_head(warm_out)
-                ttnn.deallocate(warm_out)
-                # Sampling is only applied during the decode loop; the first token after prefill
-                # uses greedy to be consistent with the reference implementation.
-                next_tt, next_id = self._greedy_next_token(
-                    logits, seed_len, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
-                )
+                if use_on_device_sampling:
+                    logits_sh = self._lm_head_sharded(warm_out)
+                    ttnn.deallocate(warm_out)
+                    next_id = sample_first_token_from_prefill_logits(
+                        self._on_device_sampler,
+                        logits_sh,
+                        dec_len=seed_len,
+                    )
+                    ttnn.deallocate(logits_sh)
+                elif do_sample:
+                    logits = self._lm_head(warm_out)
+                    ttnn.deallocate(warm_out)
+                    next_tt, next_id = self._sample_next_token(
+                        logits, seed_len, temperature=temperature, top_k=top_k, top_p=top_p
+                    )
+                    ttnn.deallocate(logits)
+                    ttnn.deallocate(next_tt)
+                else:
+                    logits = self._lm_head(warm_out)
+                    ttnn.deallocate(warm_out)
+                    next_tt, next_id = self._greedy_next_token(
+                        logits, seed_len, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
+                    )
+                    ttnn.deallocate(logits)
+                    ttnn.deallocate(next_tt)
                 phase_timer.end_step(t_first)
-                ttnn.deallocate(logits)
-                ttnn.deallocate(next_tt)
                 seq_host.append(next_id)
                 if eos_ids and next_id in eos_ids:
                     decode_steps_remaining = 0
@@ -2850,13 +2979,13 @@ class TTSeamlessM4Tv2Model:
             # After each execute_trace we record a fresh op_event so the next iteration
             # waits for the correct execution boundary.
             _2cq_op_event = None
-            if use_decode_trace and use_2cq and not do_sample:
+            if use_decode_trace and use_2cq and decode_trace_ready:
                 # CQ0 is idle after prefill; record the initial "done" event.
                 _2cq_op_event = ttnn.record_event(self.device, 0)
 
             seq_host_set = set(seq_host)
 
-            if decode_trace_ready and self._tp > 1 and not do_sample:
+            if decode_trace_ready and self._tp > 1:
                 seq_host = self._decode_loop_selffed(
                     enc_tt,
                     decode_cross_4d,
@@ -2877,9 +3006,8 @@ class TTSeamlessM4Tv2Model:
             for _decode_step in range(decode_steps_remaining):
                 cur_tok = int(seq_host[cur_pos])
                 t_step = phase_timer.begin_step()
-                # Sampling does not use the trace (random token breaks the traced path).
-                # Trace path: greedy only; eager path: greedy or sampling.
-                if use_decode_trace and decode_trace_ready and not do_sample:
+                traced_step = use_decode_trace and decode_trace_ready
+                if traced_step:
                     if use_2cq:
                         # 2CQ pipelined decode: CQ1 uploads H2D while CQ0 executes trace.
                         trace_id = self._select_decode_trace_for_position(cur_pos, batch_size)
@@ -2896,19 +3024,12 @@ class TTSeamlessM4Tv2Model:
                             _2cq_op_event = ttnn.record_event(self.device, 0)
                         else:
                             rt = self._kv_decode_rt
-                            # CQ1 waits until CQ0 has finished the previous trace
-                            # (decode input buffers are free to be overwritten).
                             ttnn.wait_for_event(1, _2cq_op_event)
-                            # Upload next-step token + position + cur_pos all on CQ1 while CQ0 is idle, so
-                            # the ``write_event`` covers every input and CQ0's only work is the trace
-                            # (cur_pos was previously uploaded on CQ0, on the critical path).
                             self._upload_kv_decode_step_inputs_cq1(cur_tok, cur_pos, batch_size)
                             self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=1)
                             write_event = ttnn.record_event(self.device, 1)
-                            # CQ0 waits for CQ1 uploads before executing the trace.
                             ttnn.wait_for_event(0, write_event)
                             ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
-                            # Update op_event: CQ0 has finished this trace step.
                             _2cq_op_event = ttnn.record_event(self.device, 0)
                             logits = rt.logits_tt
                     else:
@@ -2932,6 +3053,7 @@ class TTSeamlessM4Tv2Model:
                         cross_valid,
                         cross_4d=decode_cross_4d,
                         batch_size=batch_size,
+                        sharded_logits=use_on_device_sampling,
                     )
                 # Guard against occasional invalid traced logits buffer; fall back to eager decode.
                 if (
@@ -2950,10 +3072,16 @@ class TTSeamlessM4Tv2Model:
                         cross_valid,
                         cross_4d=decode_cross_4d,
                         batch_size=batch_size,
+                        sharded_logits=use_on_device_sampling,
                     )
                     use_decode_trace = False
                     decode_trace_ready = False
-                if do_sample:
+                if use_on_device_sampling:
+                    if traced_step:
+                        next_id = self._read_token_from_traced_logits(logits, dec_len=1)
+                    else:
+                        next_id = self._on_device_sampler.sample_and_read(logits, dec_len=1)
+                elif do_sample:
                     next_tt, next_id = self._sample_next_token(
                         logits, 1, temperature=temperature, top_k=top_k, top_p=top_p
                     )
@@ -2975,9 +3103,7 @@ class TTSeamlessM4Tv2Model:
                     )
                     ttnn.deallocate(next_tt)
                 phase_timer.end_step(t_step)
-                # Keep traced logits buffer alive across decode steps.
-                # In trace mode ``logits`` may alias runtime-owned DRAM buffers.
-                if not (use_decode_trace and decode_trace_ready and not do_sample):
+                if not (use_decode_trace and decode_trace_ready):
                     ttnn.deallocate(logits)
                 seq_host.append(next_id)
                 seq_host_set.add(next_id)
