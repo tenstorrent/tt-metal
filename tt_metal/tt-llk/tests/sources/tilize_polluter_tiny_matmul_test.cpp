@@ -239,7 +239,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.PARTIAL_FACE_PACK);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats_array[run].pack_dst, params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    // NOTE: do NOT re-run `_llk_pack_dest_init_` here. In a two-run SyncHalf kernel the
+    // dest-bank counter is initialised once (run-0); re-initialising it in run-1 resets
+    // the counter to bank-0 while the math side has already toggled to bank-1, so the
+    // packer would drain an unwritten bank (all-zeros result).
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {
