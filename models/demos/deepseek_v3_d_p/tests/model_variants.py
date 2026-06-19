@@ -51,6 +51,7 @@ class TestVariant:
         mla_pcc_threshold: float = 0.999,
         supports_pretrained: bool = True,
         prefill_trace_default: Optional[str] = None,
+        prefill_trace_layout: str = "single_file",
     ) -> None:
         self.name = name
         self.env_var = env_var
@@ -71,6 +72,10 @@ class TestVariant:
         # Golden chunked-prefill trace (metadata.json token_ids + kv_cache/ + hidden_states/) for the
         # chunked block/transformer PCC tests. The PREFILL_TRACE_DIR env overrides this default.
         self.prefill_trace_default = prefill_trace_default
+        # Trace on-disk layout: "single_file" (DeepSeek — one safetensors/layer, all tensors as keys)
+        # or "chunked_group_a_v1" (Kimi — each tensor a directory of row-sharded rows_<s>_<e>.safetensors,
+        # hidden_states/ -> decoder_io/). The chunked trace readers in the tests dispatch on this.
+        self.prefill_trace_layout = prefill_trace_layout
 
 
 DSV3 = TestVariant(
@@ -111,6 +116,7 @@ KIMI_V2_6 = TestVariant(
     # vllm-traced golden: metadata.json + kv_cache nest under a run-hash subdir (resolve_trace_dir
     # descends), and kv_post_transform is row-sharded (the transformer test's loader reassembles it).
     prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320",
+    prefill_trace_layout="chunked_group_a_v1",
 )
 
 TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI_V2_6]}

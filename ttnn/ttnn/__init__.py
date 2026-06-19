@@ -547,6 +547,8 @@ Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 
+IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
+
 import ttnn.graph
 
 if importlib.util.find_spec("torch") is not None:

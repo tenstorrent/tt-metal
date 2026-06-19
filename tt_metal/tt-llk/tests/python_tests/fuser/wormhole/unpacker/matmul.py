@@ -17,6 +17,7 @@ from helpers.llk_params import Transpose
 
 class MatmulUnpacker(Unpacker):
     loop: FusedLoop = LoopBlock()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [

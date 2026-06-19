@@ -119,6 +119,7 @@ class TtPrefillTransformer(LightweightModule):
         slot_num: int = 1,
         max_seq_len: Optional[int] = None,
         kv_only_last_layer: bool = False,
+        routing_use_l1_small_for_semaphores: bool = False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -179,6 +180,7 @@ class TtPrefillTransformer(LightweightModule):
                 layer_num=num_layers,
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
+                routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             )
             self.layers.append(layer)
 

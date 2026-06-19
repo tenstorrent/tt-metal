@@ -9,8 +9,10 @@ from typing import Annotated, List, Optional, Tuple
 
 import pytest
 import yaml
+from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
+from helpers.logger import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -102,19 +104,45 @@ class FuserConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_config(self) -> "FuserConfigSchema":
+        formats = {op_def.name: op_def.format for op_def in self.operands}
         seen_operands: set[str] = set()
 
         for op in self.operations:
+            src_a_name = None
             for node in op.math:
                 if hasattr(node, "src_a"):
+                    if src_a_name is None:
+                        src_a_name = node.src_a
                     seen_operands.add(node.src_a)
                 if hasattr(node, "src_b"):
                     seen_operands.add(node.src_b)
 
-            if op.output in seen_operands:
-                raise ValueError(f"cannot use '{op.output}' as output twice")
+            for pack_entry in op.pack:
+                if pack_entry.output in seen_operands:
+                    raise ValueError(
+                        f"cannot use '{pack_entry.output}' as output twice"
+                    )
+                seen_operands.add(pack_entry.output)
 
-            seen_operands.add(op.output)
+                if src_a_name is not None:
+                    input_fmt = formats[src_a_name]
+                    output_fmt = formats[pack_entry.output]
+                    if is_format_combination_outlier(
+                        input_fmt, output_fmt, self.dest_acc
+                    ):
+                        raise ValueError(
+                            f"Dest Accumulation must be enabled for {input_fmt.name} input and {output_fmt.name} output"
+                        )
+
+            if len(op.pack) > 1:
+                pack_formats = [formats[e.output] for e in op.pack]
+                first_exp_b = pack_formats[0].is_exponent_B()
+                if any(f.is_exponent_B() != first_exp_b for f in pack_formats[1:]):
+                    names = [e.output for e in op.pack]
+                    logger.warning(
+                        f"Pack outputs {names} have mixed exponent families, "
+                        f"unpack/math format inference will use {op.pack[0].output} as reference",
+                    )
 
         return self
 

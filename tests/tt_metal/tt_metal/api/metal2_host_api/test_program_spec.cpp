@@ -91,7 +91,8 @@ static_assert(hashable_v<ProgramSpec>, "ProgramSpec must be hashable via ttsl re
 static_assert(hashable_v<WorkUnitSpec>, "WorkUnitSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<KernelSpec>, "KernelSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashable via ttsl reflection");
-static_assert(hashable_v<RemoteDataflowBufferSpec>, "RemoteDataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<CrossNodeDataflowBufferSpec>, "CrossNodeDataflowBufferSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
 
@@ -940,8 +941,8 @@ TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-// Remote DFBs are part of the API surface but not yet supported by the runtime.
-TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
+// Cross-node DFBs are part of the API surface but not yet supported by the runtime.
+TEST_F(ProgramSpecTestQuasar, CrossNodeDFBNotYetSupportedAtRuntime) {
     NodeCoord producer_node{0, 0};
     NodeCoord consumer_node{1, 0};
 
@@ -955,7 +956,7 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
-    spec.remote_dataflow_buffers = {RemoteDataflowBufferSpec{
+    spec.cross_node_dataflow_buffers = {CrossNodeDataflowBufferSpec{
         .dfb_spec = MakeMinimalDFB("dfb"),
         .producer_consumer_map = {{producer_node, consumer_node}},
     }};
@@ -2487,8 +2488,8 @@ static_assert(
     std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
     "RuntimeArgSchema must remain an aggregate to support designated initializers");
 static_assert(
-    std::is_aggregate_v<RemoteDataflowBufferSpec>,
-    "RemoteDataflowBufferSpec must remain an aggregate to support designated initializers");
+    std::is_aggregate_v<CrossNodeDataflowBufferSpec>,
+    "CrossNodeDataflowBufferSpec must remain an aggregate to support designated initializers");
 
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.
@@ -2721,7 +2722,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     };
     EXPECT_EQ(gen1.processor, tt::tt_metal::DataMovementProcessor::RISCV_1);
 
-    RemoteDataflowBufferSpec remote_dfb{
+    CrossNodeDataflowBufferSpec remote_dfb{
         .dfb_spec =
             DataflowBufferSpec{
                 .unique_id = DFBSpecName{"remote_dfb"},
@@ -3127,7 +3128,7 @@ TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
 
 TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
     // DFB / Semaphore / TensorAccessor accessor names live in separate namespaces (each gets
-    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, ta::). Reusing
+    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, tensor::). Reusing
     // the same identifier across categories within one kernel must be allowed.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
@@ -3163,7 +3164,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 // SECTION 10: TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
-// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `ta::` namespace)
+// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
 // must be syntactically valid and compose correctly with the rest of the kernel build. Doesn't
 // validate runtime behavior — catches regressions in codegen string-formatting, token type alias
 // generation, and include-path resolution.
@@ -3176,7 +3177,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 
 TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     // DM kernel constructs a TensorAccessor from a binding token + invokes a NoC-using method.
-    // Exercises: ta:: namespace token, type alias <name>_t, the token ctor and its deduction
+    // Exercises: tensor:: namespace token, type alias <name>_t, the token ctor and its deduction
     // guide, get_common_arg_val for the implicit base address.
     NodeCoord node{0, 0};
 
@@ -3186,7 +3187,7 @@ TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    TensorAccessor accessor(ta::input_tensor);
+    TensorAccessor accessor(tensor::input_tensor);
     auto noc_addr = accessor.get_noc_addr(0);
     (void)noc_addr;
 }

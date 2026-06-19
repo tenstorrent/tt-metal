@@ -178,6 +178,16 @@ const MeshTensor& DeviceStorage::get_mesh_tensor() const {
         mesh_tensor_holder_->state_);
 }
 
+MeshTensor DeviceStorage::release_mesh_tensor() {
+    auto result = std::visit(
+        ttsl::overloaded{
+            [](MeshTensorHolder::Allocated& allocated) -> MeshTensor { return std::move(allocated.mesh_tensor_); },
+            [](const auto&) -> MeshTensor { TT_THROW("Tensor is not allocated"); }},
+        mesh_tensor_holder_->state_);
+    mesh_tensor_holder_->state_ = MeshTensorHolder::DeallocatedDefaultConstructed{};
+    return result;
+}
+
 MeshTensor& DeviceStorage::get_mesh_tensor() {
     return std::visit(
         ttsl::overloaded{

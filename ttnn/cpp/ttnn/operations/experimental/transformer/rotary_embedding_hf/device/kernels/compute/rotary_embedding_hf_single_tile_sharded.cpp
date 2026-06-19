@@ -8,6 +8,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -24,7 +25,8 @@ void kernel_main() {
     constexpr uint32_t batch_per_core = get_compile_time_arg_val(9);
 
     cb_wait_front(trans_mat_cb, onetile);
-    mm_init(in_cb, trans_mat_cb, rotated_in_interm_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, rotated_in_interm_cb);
+    matmul_init(in_cb, trans_mat_cb);
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);
 
     for (uint32_t batch_idx = 0; batch_idx < batch_per_core; ++batch_idx) {
@@ -45,7 +47,7 @@ void kernel_main() {
 
             reconfig_data_format(in_cb, trans_mat_cb);
             pack_reconfig_data_format(rotated_in_interm_cb);
-            mm_init_short(in_cb, trans_mat_cb);
+            matmul_init(in_cb, trans_mat_cb);
             tile_regs_acquire();
             matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
             tile_regs_commit();

@@ -39,7 +39,6 @@ on:
           - all
           - sdpa
           - bh-sdpa-nightly-integration
-          - bh-ring-sdpa-perf
       build-type:
         required: false
         type: choice

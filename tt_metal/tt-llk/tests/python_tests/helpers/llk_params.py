@@ -9,6 +9,7 @@ import torch
 from .format_config import DataFormat
 
 format_dict = {
+    DataFormat.Tf32: torch.float32,
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,
@@ -101,6 +102,10 @@ class MathOperation(Enum):
     # three offsets directly.
     SfpuSwiGLU = OpSpec("swiglu", MathOpType.SFPU_UNARY)
     Tanh = OpSpec("tanh", MathOpType.SFPU_UNARY)
+    # Typecast is dispatched by the (input, output) DataFormat pair rather than a
+    # single op, but it maps to SfpuType::typecast and runs through the shared
+    # unary-SFPU dispatch (see call_unary_sfpu_operation in sfpu_operations.h).
+    Typecast = OpSpec("typecast", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
     ReluMax = OpSpec(
         "relu_max", MathOpType.SFPU_UNARY

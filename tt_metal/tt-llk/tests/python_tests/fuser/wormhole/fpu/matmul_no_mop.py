@@ -15,6 +15,7 @@ from .matmul import MatmulFpu
 
 class MatmulNoMopFpu(MatmulFpu):
     loop: FusedLoop = LoopBlock()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
