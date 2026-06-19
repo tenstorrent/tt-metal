@@ -107,7 +107,7 @@ def test_conv2d_inference(
     W_out = W // kernel_size
     tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, out_channels, H_out, W_out)
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
