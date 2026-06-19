@@ -71,6 +71,42 @@ class TracedDecode:
         return self.out
 
 
+class TracedDecodeMLA:
+    """Compressed-latent (A6) analog of TracedDecode: captures TtMistral4TextModel.forward_decode_mla
+    over the 12.8x-smaller compressed-latent paged caches (one (cache, page_table) per layer from
+    init_compressed_caches). Same persistent-buffer + replay pattern. The compressed KV is ~25x smaller
+    per device than the expanded k/v, so this is the path that reaches long context past the ~8K
+    expanded-KV ceiling on the 1x8 mesh."""
+
+    def __init__(self, model, mesh, B, hidden, rope, caches):
+        self.model, self.mesh, self.B, self.caches = model, mesh, B, caches
+        self.tt_x = _repl(torch.zeros(B, 1, hidden), mesh)
+        self.tt_cos = _repl(torch.zeros(B, 1, 1, rope), mesh)
+        self.tt_sin = _repl(torch.zeros(B, 1, 1, rope), mesh)
+        self.tt_pos = ttnn.from_torch(
+            torch.zeros(B, dtype=torch.int32), device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
+        )
+        self.model.forward_decode_mla(self.tt_x, self.tt_pos, self.tt_cos, self.tt_sin, self.caches)  # warmup
+        self.tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        self.out = self.model.forward_decode_mla(self.tt_x, self.tt_pos, self.tt_cos, self.tt_sin, self.caches)
+        ttnn.end_trace_capture(mesh, self.tid, cq_id=0)
+
+    def step(self, x, cos, sin, positions):
+        ttnn.copy_host_to_device_tensor(_host(x, self.mesh, ttnn.TILE_LAYOUT), self.tt_x)
+        ttnn.copy_host_to_device_tensor(_host(cos, self.mesh, ttnn.TILE_LAYOUT), self.tt_cos)
+        ttnn.copy_host_to_device_tensor(_host(sin, self.mesh, ttnn.TILE_LAYOUT), self.tt_sin)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor(positions, dtype=torch.int32),
+                device=None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            ),
+            self.tt_pos,
+        )
+        ttnn.execute_trace(self.mesh, self.tid, cq_id=0, blocking=True)
+        return self.out
+
+
 class TracedPrefill:
     """Captures TtMistral4TextModel.forward_prefill at a FIXED input length S as a replayable trace
     over persistent device buffers (x, cos, sin). The KV-cache fill (fill_cache, fixed batch_idx 0 +

@@ -20,7 +20,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.mistral4.tests.m4_text_reference import load_m4_weights
-from models.demos.mistral4.tt.mistral4_generator import TracedDecode, _repl
+from models.demos.mistral4.tt.mistral4_generator import TracedDecode, TracedDecodeMLA, _repl
 from models.demos.mistral4.tt.mistral4_text import TtMistral4TextModel
 
 N_LAYERS = int(os.environ.get("M4_PERF_LAYERS", "2"))
@@ -102,6 +102,20 @@ def test_m4_perf(mesh_device, reset_seeds):
             ctx_rows.append((C, step, 1 / step))
             logger.info(f"DECODE-CTX ctx={C}: {step*1e3:.2f}ms/step, {1/step:.1f} tok/s/user ({N_LAYERS}L)")
 
+    # ---- COMPRESSED-latent (A6) decode tok/s/user vs CONTEXT (batch-1): the compressed KV (latent
+    # kvl+rope=320/pos/layer vs expanded n_heads*qk*2=8192/pos/layer, ~25x smaller per device) reaches
+    # far past the ~8K expanded-KV ceiling at full depth. M4_PERF_COMPRESSED_CTX=128,8192,32768,65536.
+    cctx_rows = []
+    comp_ctx = os.environ.get("M4_PERF_COMPRESSED_CTX")
+    if comp_ctx:
+        cctxs = [int(c) for c in comp_ctx.split(",")]
+        ccache = tt.init_compressed_caches(1, max_seq=max(cctxs) + DECODE_STEPS + 64)
+        tdcc = TracedDecodeMLA(tt, mesh_device, 1, hidden, rope, ccache)
+        for C in cctxs:
+            step = _time_decode(tdcc, 1, base=C)
+            cctx_rows.append((C, step, 1 / step))
+            logger.info(f"DECODE-COMPRESSED-CTX ctx={C}: {step*1e3:.2f}ms/step, {1/step:.1f} tok/s/user ({N_LAYERS}L)")
+
     # ---- prefill TTFT sweep (steady-state; warm up each shape once) ----
     for S in ISLS:
         x = _repl(torch.randn(1, S, hidden) * 0.1, mesh_device)
@@ -121,7 +135,9 @@ def test_m4_perf(mesh_device, reset_seeds):
     for B, step, tsu, agg in decode_rows:
         logger.info(f"  decode B={B:>3}: {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user  {agg:6.0f} tok/s aggregate")
     for C, step, tsu in ctx_rows:
-        logger.info(f"  decode ctx {C:>6}: {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user (B=1)")
+        logger.info(f"  decode ctx {C:>6} (expanded-kv): {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user (B=1)")
+    for C, step, tsu in cctx_rows:
+        logger.info(f"  decode ctx {C:>6} (compressed) : {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user (B=1)")
     for S, ttft, tps in table:
         logger.info(f"  ISL {S:>5}: TTFT {ttft*1e3:8.1f}ms  prefill {tps:7.0f} tok/s")
     assert table and dev_dec > 0

@@ -7,9 +7,10 @@
 
 > Status: **Correctness complete end-to-end** (every block PCC-verified on P150x8, generic ttnn ops,
 > no new kernels) and the **production decode path is captured as a bit-exact trace on the sharded
-> 8-device mesh** with on-device sampling. Perf is measured at full depth (below). Remaining serving
-> optimizations (MoE sparse dispatch, paged compressed-latent KV, 2CQ, sharded LM head) are listed
-> under **Current status**.
+> 8-device mesh** with on-device sampling. Perf is measured at full depth (below), including the
+> **compressed-latent KV decode path that reaches 64K context at 36 layers** (25.6× smaller KV; the
+> expanded-kv default OOMs beyond ~8K). Remaining serving optimizations (2CQ, compressed-cache prefill
+> fill to make the long-context path the default) are listed under **Current status**.
 
 ## Architecture / where the code lives
 - **Text core (MLA + MoE)** — model-local modules (`tt/mistral4_text.py`) from generic ttnn ops:
@@ -76,17 +77,29 @@ Largest full-depth ISL = **8192** (chunked prefill). 16384 runs at reduced layer
 | 32 — dense MoE | 1.34 | 43 | 741 |
 | 32 — **sparse MoE** | 1.88 | **60** (**+39.2%** vs dense) | 532 |
 
-**Decode — throughput vs context** (batch-1, decoding at `cur_pos = ctx`; SDPA-decode attends the
-expanded-kv cache up to `cur_pos`, so latency rises only gently as context grows):
+**Decode — throughput vs context** (batch-1, decoding at `cur_pos = ctx`; latency rises only gently as
+context grows because decode is dominated by MoE weight streaming, not attention). Two KV-cache paths:
 
-| ctx | 128 | 2048 | 4096 | 8192 |
-|---|---|---|---|---|
-| ms/step | 108.7 | 111.2 | 114.0 | 120.4 |
-| tok/s/user | 9.2 | 9.0 | 8.8 | 8.3 |
+| ctx | 128 | 2048 | 4096 | 8192 | 32768 | 65536 |
+|---|---|---|---|---|---|---|
+| **expanded-kv** tok/s/user (default) | 9.2 | 9.0 | 8.8 | 8.3 | OOM | OOM |
+| **compressed-latent** tok/s/user (A6) | 9.2 | 9.2 | 9.1 | 9.1 | 8.8 | **8.5** |
+| compressed-latent ms/step | 108 | 109 | 110 | 110 | 113 | 117 |
 
-Decode stays ~flat — only **~10% slower from 128 → 8192** (64× context), i.e. it is dominated by MoE
-weight streaming, not attention. The sweep stops at **8192**: at 36L the 119B fp8 weights leave ≈240 MB
-DRAM free, so the expanded-kv cache OOMs beyond ~8K — the same full-depth ceiling as chunked prefill.
+(All cells measured at the full 36 layers, B=1.)
+
+The **expanded-kv** path (HF-style — caches per-head k+v = 2·n_heads·qk = **16 KB/token/layer** = 576
+KB/token across 36 layers/device) is the wired default, but the 119B fp8 weights leave little DRAM so it
+OOMs beyond ~8K. The **compressed-latent** path (`forward_decode_mla` + `TracedDecodeMLA`: caches only the
+MLA latent kv_lora+rope = 320 = **640 B/token/layer**, **25.6× smaller**) reaches **65536 at the full 36
+layers** — ≈1.4 GB of KV/device vs ≈36 GB for expanded (which would OOM) — at the **same tok/s**: only
+**~9% slower from 128 → 65536**, a **512× context increase**. This is the A6 unlock: it lifts the decode
+context ceiling from ~8K to **≥64K** on the 1×8 mesh. Numerically verified — op 0.99974, live single-MLA
+0.99974, 2-layer model 0.9978 (`test_m4_mla_compressed_decode` / `test_m4_text_decode_compressed`). The
+earlier "compressed decode is op-nondeterministic" finding was wrong: it was an undersized cache (the
+paged-MLA decode op reads a full `k_chunk_size`=128 window per step, so the cache block must be ≥128;
+`init_compressed_cache` now floors it). Expanded-kv stays the default; the compressed path is opt-in
+pending a compressed-cache prefill fill + full-depth logit PCC.
 
 At high batch the dense MoE is compute-bound (all 16 local experts × B tokens), so per-user throughput
 drops while aggregate rises; **sparse dispatch** (top-4 routed experts) recovers it (+39.2% @B=32). The
