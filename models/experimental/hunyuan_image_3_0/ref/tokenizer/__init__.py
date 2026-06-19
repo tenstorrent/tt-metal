@@ -24,7 +24,7 @@
 #   tests/tokenizer/                   — CFG + host preprocess tests
 
 from .chat_template import ChatTemplateEncoder, TokenizerEncodeOutput
-from .gen_image_inputs import GenImageHostInputs, build_rope_image_info, prepare_gen_image_inputs
+from .gen_image_inputs import GenImageHostInputs, build_rope_image_info, prepare_gen_image_inputs, prepare_i2i_inputs
 from .hunyuan_tokenizer import (
     ASSETS_DIR,
     CONFIG_PATH,
@@ -34,7 +34,7 @@ from .hunyuan_tokenizer import (
     load_config,
     load_tokenizer,
 )
-from .image_info import ImageInfo, build_gen_image_info
+from .image_info import CondImage, ImageInfo, ImageTensor, JointImageInfo, build_gen_image_info
 from .resolution import Resolution, ResolutionGroup
 from .special_tokens import SpecialTokens, build_special_tokens, validate_special_tokens
 
@@ -46,7 +46,10 @@ __all__ = [
     "GenImageHostInputs",
     "HunyuanConfig",
     "HunyuanTokenizer",
+    "CondImage",
     "ImageInfo",
+    "ImageTensor",
+    "JointImageInfo",
     "Resolution",
     "ResolutionGroup",
     "SpecialTokens",
@@ -57,5 +60,6 @@ __all__ = [
     "load_config",
     "load_tokenizer",
     "prepare_gen_image_inputs",
+    "prepare_i2i_inputs",
     "validate_special_tokens",
 ]
