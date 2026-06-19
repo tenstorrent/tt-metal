@@ -35,7 +35,7 @@ void kernel_main() {
 
     DataflowBuffer dfb(dfb::out);
     Noc noc;
-    const auto tensor_accessor = TensorAccessor(ta::src_tensor);
+    const auto tensor_accessor = TensorAccessor(tensor::src_tensor);
 
     const uint32_t producer_idx = get_my_thread_id();
     const uint32_t num_producers = get_num_threads();
