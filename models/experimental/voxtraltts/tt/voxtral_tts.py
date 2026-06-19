@@ -870,9 +870,9 @@ class VoxtralTTSPipeline:
         )
         acoustic_noise_scale = _env_float("VOXTRAL_ACOUSTIC_NOISE_SCALE", 1.0)
 
-        # Staged trace replay: text-decode trace (+ acoustic FM trace on multi-device). On BH 1×1
-        # submesh, text trace diverges numerically; default trace is OFF there (see decode_trace_enabled).
-        # Debug (return_debug) keeps the legacy prefill_from_embeds + forward path for host traces.
+        # Staged trace replay: text-decode trace (+ acoustic FM trace on multi-device). Default ON
+        # on P150 and BH QB2 (see decode_trace_enabled). Debug (return_debug) keeps the legacy
+        # prefill_from_embeds + forward path for host traces.
         from models.experimental.voxtraltts.demo.decode_trace_2cq import (
             AcousticFMBuffers,
             TracedAcousticFM,
