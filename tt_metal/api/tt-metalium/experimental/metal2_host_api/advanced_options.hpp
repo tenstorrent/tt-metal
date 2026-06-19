@@ -219,10 +219,12 @@ struct TensorParameterAdvancedOptions {
     // CAUTION:
     // These options are UNSAFE if set to true; most kernels will not function
     // correctly if the tensor argument's spec deviates from the declared spec.
-    // Use with caution and ensure that your kernel logic is compatible.
+    // Use with caution. You must ensure that your kernel logic outside of the 
+    // TensorAccessor itself is compatible with the chosen relaxation option(s)!
 
     // Permit tensor arguments whose logical_shape differs from the declared shape.
     // The argument's padded_shape must still match exactly.
+    //
     // Effects:
     //  - Validation checks are relaxed
     //  - TensorAccessor configuration is completely unchanged
@@ -230,19 +232,20 @@ struct TensorParameterAdvancedOptions {
 
     // Permit tensor arguments with dynamic logical shape.
     // The argument's logical_shape AND padded_shape may differ from the declared shape.
+    //
     // Effects:
     //  - Validation checks are relaxed.
-    //  - For an interleaved ROW-MAJOR tensor: the byte page size = last_dim_width * element_size is
-    //    part of the varying shape, so it becomes an implicit runtime argument (re-derived from the
-    //    bound buffer each dispatch). Otherwise a compile-time page size would go stale on a
-    //    program-cache hit and the TensorAccessor would stride by the wrong number of bytes.
-    //    CAUTION: this makes the option UNSAFE for row-major. The TensorAccessor tracks the runtime
-    //    page size, but the REST of your kernel must too -- loop bounds, circular-buffer sizing, any
-    //    address math beyond the accessor. A kernel that assumes a fixed page size will mis-address.
-    //  - For an interleaved TILED tensor: TensorAccessor configuration is unchanged (the page size
-    //    is fixed by dtype/tile dims, so it cannot vary).
-    //  - For a sharded tensor: the TensorAccessor configuration dynamically reflects the argument's
-    //    actual shape. (Shape-in-pages becomes an implicit runtime argument.)
+    //  - For a sharded tensor: 
+    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's actual shape.
+    //    Shape, expressed in pages-per-dim, becomes implicit common runtime arguments.
+    //  - For an interleaved TILED tensor: 
+    //    TensorAccessor configuration is unchanged 
+    //    (The page size is fixed by dtype/tile dims, so it cannot vary with shape).
+    //  - For an interleaved ROW-MAJOR tensor: 
+    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's page size.
+    //    NOTE: page_size = last_dim_width * element_size is part of the varying shape!
+    //    The aligned_page_size becomes an implicit common runtime argument.
+    //    (Your kernel can access this value via TensorAccessor::get_aligned_page_size().)
     bool dynamic_tensor_shape = false;
 };
 
