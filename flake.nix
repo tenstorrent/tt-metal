@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 {
   description = "TT-Metal development environment and build system";
 
@@ -184,99 +188,3 @@
               llvmPkgs.openmp
               pkgs.openmpi
               pkgs.gdb
-              pkgs.valgrind
-              pkgs.perf-tools
-              pkgs.linuxPackages.perf
-              pkgs.doxygen
-              pkgs.graphviz
-              pkgs.texlive.combined.scheme-small
-            ];
-
-            TT_METAL_HOME = builtins.toString ./.;
-            TT_METAL_ENV = "dev";
-            PYTHONPATH = "${pythonEnv}/${pythonEnv.sitePackages}";
-            NIXPKGS_ALLOW_UNFREE = "1";
-
-            shellHook = ''
-              echo "╔══════════════════════════════════════════════╗"
-              echo "║   TT-Metal Development Environment (Nix)     ║"
-              echo "╚══════════════════════════════════════════════╝"
-              echo "TT_METAL_HOME=$TT_METAL_HOME"
-              echo "Python: $(python3 --version 2>/dev/null || true)"
-              echo "GCC: $(gcc --version 2>/dev/null | head -1 || true)"
-              echo "CMake: $(cmake --version 2>/dev/null | head -1 || true)"
-              echo ""
-
-              # Create python venv if not exists
-              if [ ! -d "$TT_METAL_HOME/.venv" ]; then
-                echo "Creating Python virtual environment..."
-                python3 -m venv "$TT_METAL_HOME/.venv"
-              fi
-              source "$TT_METAL_HOME/.venv/bin/activate" 2>/dev/null || true
-              export PATH="$TT_METAL_HOME/.venv/bin:$PATH"
-            '';
-          };
-
-          # Minimal SFPU-only development
-          sfpi = pkgs.mkShell {
-            name = "tt-metal-sfpi";
-            buildInputs = with pkgs; [
-              gcc14
-              gnumake
-              cmake
-              ninja
-              pythonEnv
-              llvmPkgs.llvm
-              llvmPkgs.clang
-              git
-            ];
-
-            TT_METAL_HOME = builtins.toString ./.;
-            TT_METAL_ENV = "sfpi";
-            SFPI_ONLY = "1";
-
-            shellHook = ''
-              echo "╔══════════════════════════════════════════════╗"
-              echo "║   TT-Metal SFPU-Only Environment (Nix)      ║"
-              echo "╚══════════════════════════════════════════════╝"
-              echo "SFPI_ONLY mode - minimal dependencies"
-              echo "TT_METAL_HOME=$TT_METAL_HOME"
-            '';
-          };
-        };
-
-        # FHS compatibility package for NixOS
-        packages.fhs = fhsEnv;
-
-        # Apps
-        apps.fhs = {
-          type = "app";
-          program = "${fhsEnv}/bin/tt-metal-fhs";
-        };
-
-        # Default app
-        apps.default = apps.fhs;
-
-        # Packages
-        packages.default = pkgs.stdenv.mkDerivation {
-          name = "tt-metal";
-          src = ./.;
-          buildInputs = commonBuildInputs ++ [ pythonEnv pkgs.openmpi ];
-          configurePhase = ''
-            cmake -B build -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=$out \
-              -DPYTHON_EXECUTABLE=${pythonEnv}/bin/python3
-          '';
-          buildPhase = ''
-            cmake --build build --target install
-          '';
-          installPhase = ''
-            cmake --install build
-          '';
-        };
-
-        # Formatter
-        formatter = pkgs.nixpkgs-fmt;
-      });
-}
