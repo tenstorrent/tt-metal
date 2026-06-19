@@ -41,11 +41,10 @@ void validate_mesh_shape(const tt::tt_metal::distributed::MeshDevice& mesh_devic
         if (mesh_shape[i] > mgd_shape[i]) {
             log_warning(
                 tt::LogOp,
-                "mesh_device shape {} is not a subset of the MGD (mesh graph descriptor) device_topology "
-                "shape {} (dim {} exceeds it), CCL op is not guaranteed to function correctly.",
+                "mesh_device {} dim{} is not a subset of MGD device_topology {} - CCL op may hang in some cases.",
                 mesh_shape,
-                mgd_shape,
-                i);
+                i,
+                mgd_shape);
         }
     }
 }
