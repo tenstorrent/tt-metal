@@ -7,15 +7,17 @@ Unix-domain socket:
 
 ```
  run_pdm_score.py (conda 3.9)                 ttnn_pdm_server.py (venv 3.10)
-   └─ DiffusionDriveTtnnAgent.forward ──socket──► TtnnDiffusionDriveModel(stage 3.5)
+   └─ DiffusionDriveTtnnAgent.forward ──socket──► TtnnDiffusionDriveModel (full on-device)
         (builds camera/lidar/status)   ◄──────────  returns trajectory (8,3)
 ```
 
 Status: the bridge is **validated end-to-end** (conda agent → venv server →
-trajectory) and the TTNN stack is validated at production resolution
-(256×1024 / 256×256, real checkpoint) at traj PCC 0.9999 / scores 0.996 vs the
-PyTorch reference.  A full PDM run has **not** been executed here (needs the
-3.1 GB metric cache + ~12 k scenarios); recipe below.
+trajectory).  The server now builds the **fully on-device** stack
+(`build_stage2 → 3 → 3_4 → 3_5 → 3_6 → 3_7` — every weight-bearing op on TTNN),
+validated at production resolution (256×1024 / 256×256, real 88.04 checkpoint)
+at **traj PCC 0.9998** / scores 0.9985 vs the PyTorch reference.  A full PDM run
+has **not** been executed here (needs the 3.1 GB metric cache + ~12 k
+scenarios); recipe below.
 
 ## 1. Start the TTNN server (tt-metal venv)
 

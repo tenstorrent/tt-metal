@@ -103,6 +103,33 @@ class TtnnDiffusionDriveModel:
         return self
 
     # ------------------------------------------------------------------
+    # Stage 3.6: install TTNN ResNet stems + GPT cross-modal fusion
+    # ------------------------------------------------------------------
+
+    def build_stage3_6(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Replace the ResNet-34 stems and the 4× GPT cross-modal fusion with TTNN.
+
+        After this call the TransFuser backbone runs **entirely** on-device:
+        stems (conv1+bn1+relu+maxpool), all BasicBlocks (Stage 2), the FPN
+        (Stage 3) and the cross-modal fusion (avg_pool2d + 1×1 channel projections
+        + GPT transformer + bilinear upsample + residual) all execute via TTNN ops.
+
+        Valid only at the production input resolution (camera 256×1024, LiDAR
+        256×256), where the adaptive-pool and bilinear-upsample ratios are integer
+        — the fusion asserts this and raises otherwise.  Requires ``build_stage2``.
+        Chainable.  Returns self.
+        """
+        if not hasattr(self._model._backbone, "_ttnn"):
+            raise RuntimeError("build_stage3_6 requires build_stage2 to be called first")
+
+        from models.demos.diffusion_drive.tt.ttnn_gpt_fusion import TtnnFuseFeatures
+
+        ttnn_bb = self._model._backbone._ttnn
+        ttnn_bb.install_stems(device)
+        ttnn_bb.install_fusion(TtnnFuseFeatures(ttnn_bb._ref, device))
+        return self
+
+    # ------------------------------------------------------------------
     # Stage 3.4: install TTNN perception head (drop-in submodule swaps)
     # ------------------------------------------------------------------
 
@@ -146,6 +173,26 @@ class TtnnDiffusionDriveModel:
         from models.demos.diffusion_drive.tt.ttnn_trajectory import install_ttnn_trajectory_head
 
         install_ttnn_trajectory_head(self._model._trajectory_head, device)
+        return self
+
+    # ------------------------------------------------------------------
+    # Stage 3.7: install TTNN agent head (last weight-bearing fallback)
+    # ------------------------------------------------------------------
+
+    def build_stage3_7(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Replace the AgentHead's two MLPs with TTNN drop-ins.
+
+        After this call every weight-bearing op in the model runs on TTNN.  The
+        agent head does not feed the trajectory/scores; the only host residue
+        left is non-weight scalar/control-flow glue (DDIM ``scheduler.step``,
+        ``gen_sineembed`` trig, norm/denorm, ``argmax``/``gather`` best-mode
+        select, per-index tanh scaling) — see ``tt/ttnn_trajectory.py`` and
+        ``01_plan.md`` §8 for the rationale on what cannot become a tensor op.
+        Chainable.  Returns self.
+        """
+        from models.demos.diffusion_drive.tt.ttnn_trajectory import install_ttnn_agent_head
+
+        install_ttnn_agent_head(self._model._agent_head, device)
         return self
 
     # ------------------------------------------------------------------

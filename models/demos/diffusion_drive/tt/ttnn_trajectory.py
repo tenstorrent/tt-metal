@@ -188,6 +188,19 @@ class TtnnCrossBevModule(nn.Module):
         return self._impl(queries, traj_points, bev_feature, spatial_shape)
 
 
+def install_ttnn_agent_head(agent_head, device) -> None:
+    """Monkeypatch an AgentHead's two MLPs with TTNN drop-ins.
+
+    ``_mlp_states`` (Linear+ReLU+Linear) and ``_mlp_label`` (Linear) run on
+    device.  The per-index tanh scaling in ``AgentHead.forward`` (POINT·32,
+    HEADING·π) is index-selection glue on a tiny tensor and stays on host.
+    The agent head does not affect trajectory/scores; this just removes the
+    last weight-bearing PyTorch fallback in the model.
+    """
+    agent_head._mlp_states = TtnnSequentialMLP(agent_head._mlp_states, device)
+    agent_head._mlp_label = TtnnSequentialMLP(agent_head._mlp_label, device)
+
+
 def install_ttnn_trajectory_head(trajectory_head, device) -> None:
     """Monkeypatch a TrajectoryHead's weight-bearing submodules with TTNN drop-ins."""
     th = trajectory_head
