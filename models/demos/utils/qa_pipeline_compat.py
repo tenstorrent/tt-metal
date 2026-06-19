@@ -231,7 +231,11 @@ class QuestionAnsweringPipeline:
         answers = []
         for example in examples:
             features = list(self.preprocess(example, **preprocess_params))
-            model_outputs = [self._forward(feature) for feature in features]
+            # Run the reference model under no_grad — otherwise its outputs require grad and
+            # postprocess's .numpy() raises "Can't call numpy() on Tensor that requires grad"
+            # (the real pipeline ran inference in no-grad context).
+            with torch.no_grad():
+                model_outputs = [self._forward(feature) for feature in features]
             answers.append(self.postprocess(model_outputs, **postprocess_params))
         return answers[0] if len(answers) == 1 else answers
 

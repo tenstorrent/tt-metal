@@ -125,8 +125,11 @@ def test_tile_position_emb_inference(
     )
     reference_model = MllamaPrecomputedAspectRatioEmbedding(Config())
     reference_model.load_state_dict(partial_state_dict)
-    # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector
-    aspect_ratios_id = torch.from_numpy(convert_aspect_ratios_to_ids(aspect_ratios.unsqueeze(0), max_num_tiles))
+    # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector.
+    # transformers 5.x convert_aspect_ratios_to_ids returns a torch.Tensor (4.x returned np.ndarray), so only
+    # wrap with torch.from_numpy when it's still an ndarray.
+    _aspect_ratios_id = convert_aspect_ratios_to_ids(aspect_ratios.unsqueeze(0), max_num_tiles)
+    aspect_ratios_id = _aspect_ratios_id if torch.is_tensor(_aspect_ratios_id) else torch.from_numpy(_aspect_ratios_id)
     reference_output = reference_model(input_tensor, aspect_ratios_id)
 
     ##### Perform the TT ops #####
