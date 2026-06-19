@@ -120,6 +120,7 @@ void kernel_main() {
     uint32_t next_nd_shift_c = nD_stride_c - d_stride_c * D;
 
     uint32_t num_tiles_read = 0;
+    // Supports both nobcast and outer_bcast cases for TTT variant
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
         for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
             for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {

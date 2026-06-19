@@ -126,6 +126,8 @@ def _model_key_candidates():
         is_moe = bool(getattr(tc, "enable_moe_block", False))
         if hidden == 5376 and not is_moe:
             candidates.append("gemma-4-31B-it")
+        elif hidden == 3840 and not is_moe:
+            candidates.append("gemma-4-12B-it")
         elif is_moe:
             candidates.append("gemma-4-26B-A4B-it")
     except Exception:
@@ -165,11 +167,13 @@ def get_pcc_threshold(request, default=0.99):
     table = _load_pcc_thresholds()
     node_name = request.node.name
     mesh_key = _mesh_key_from_node_name(node_name)
-    model_entry = _lookup_model_entry(table, _model_key())
-    mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
-    return mesh_entry.get(node_name, default)
+    # Try each candidate model key (HF_MODEL basename first, then the canonical
+    # names inferred from the loaded config) so a HF_MODEL that drops the "-it"
+    # suffix (e.g. google/gemma-4-26B-A4B) or points at a hashed cache snapshot
+    # still resolves to the right entry instead of falling back to 0.99.
+    # _lookup_model_entry matches case-insensitively.
     for model_key in _model_key_candidates():
-        model_entry = table.get(model_key, {})
+        model_entry = _lookup_model_entry(table, model_key)
         mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
         if node_name in mesh_entry:
             return mesh_entry[node_name]
