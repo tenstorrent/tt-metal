@@ -123,6 +123,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
     vector<uint32_t> inputs = generate_uniform_random_vector<uint32_t>(0, 100, 1 << 20);
 
     print_detected_devices();
+    ASSERT_TRUE(ensure_links(devices_));
 
     for (int i = 0; i < devices_.size(); i++) {
         const auto& sender_mesh_device = devices_[i];

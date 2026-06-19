@@ -124,6 +124,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidir) {
     vector<uint32_t> inputs = generate_uniform_random_vector<uint32_t>(0, 100, 1 << 20);
 
     print_detected_devices();
+    ASSERT_TRUE(ensure_links(devices_));
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];

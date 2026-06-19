@@ -249,6 +249,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet03DataIntegrityDram) {
     distributed::MeshDevice* prev_recv = 0;
 
     print_detected_devices();
+    ASSERT_TRUE(ensure_links(devices_));
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];

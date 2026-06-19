@@ -879,6 +879,35 @@ std::string get_locinfo(IDevice* sdev, CoreCoord score, IDevice* rdev, CoreCoord
         get_connector(sdev, score));
 }
 
+bool ensure_links(std::span<std::shared_ptr<distributed::MeshDevice>> devices) {
+    bool pass = true;
+
+    TEST_PARAM(uint32_t, expected_links, 0, "ETH_TEST_EXPECTED_LINKS");
+
+    if (!expected_links) {
+        return pass;
+    }
+
+    for (const auto& device : devices) {
+        auto* const dev = device->get_devices()[0];
+        int numlinks = dev->get_active_ethernet_cores().size();
+        if (numlinks != expected_links) {
+            pass = false;
+
+            log_critical(
+                tt::LogTest,
+                "missing links: chip[{} ({}), {}]: expected {} links, got {}",
+                dev->id(),
+                pci_bdf_for_device_id(dev->id()),
+                get_ubb(dev),
+                expected_links,
+                numlinks);
+        }
+    }
+
+    return pass;
+}
+
 }  // namespace tt::tt_metal
 
 #endif /* _ETH_COMMON_HPP */
