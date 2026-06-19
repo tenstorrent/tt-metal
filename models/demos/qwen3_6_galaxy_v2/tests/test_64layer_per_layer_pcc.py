@@ -257,11 +257,15 @@ def _build_tt_model(mesh, state_dict, pattern, n_layers):
     args = TtQwen36ModelArgs(mesh)
     args.n_layers = n_layers
     args.linear_attention_pattern = pattern
-    weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)
+    # QWEN36_PCC_DTYPE=bf16: load all weights at bfloat16 (fresh cache, tests
+    # whether bf8 weight quantization sets the 0.84 PCC ceiling).  Default bf8.
+    _dtype_str = os.environ.get("QWEN36_PCC_DTYPE", "bf8")
+    _dtype = ttnn.bfloat16 if _dtype_str == "bf16" else ttnn.bfloat8_b
+    weight_cache_path = args.weight_cache_path(_dtype)
     weight_cache_path.mkdir(parents=True, exist_ok=True)
     model = TtTransformer(
         args=args,
-        dtype=ttnn.bfloat8_b,
+        dtype=_dtype,
         mesh_device=mesh,
         state_dict=state_dict,
         weight_cache_path=weight_cache_path,

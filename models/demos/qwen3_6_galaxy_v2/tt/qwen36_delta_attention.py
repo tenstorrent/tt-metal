@@ -261,14 +261,12 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.model_config = args.get_model_config()
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
-        # Load weights at the passed dtype (bf8 by default, reuses existing cache).
-        # After loading, cast projection weights to bf16 to test whether bf8 weight
-        # quantization sets the 0.84 PCC ceiling. self.dtype=bf8 keeps the cache path
-        # valid; _proj_act_dtype=bf16 keeps matmul outputs bf16; weight casting happens
-        # in _build_weights after load (see _cast_weights_to_bf16 call below).
+        # self.dtype controls ALL weight loads via _to_device(dtype or self.dtype).
+        # Passing dtype=bfloat16 quantizes weights from fp32→bf16 directly (proper
+        # precision); bf8 is the default. _proj_act_dtype=bf16 keeps matmul outputs
+        # bf16 regardless of weight dtype so CCL reductions always run in bf16.
         self.dtype = dtype
         self._proj_act_dtype = ttnn.bfloat16
-        self._bf16_weights = True  # cast GDN projection weights to bf16 post-load
 
         # --- Mesh topology ---
         self.cluster_shape = list(mesh_device.shape)  # [8, 4]
@@ -524,9 +522,6 @@ class TtQwen36DeltaAttention(LightweightModule):
             QKVZ_rows.append(torch.cat([q_row, k_row, v_row, z_row], dim=-1))  # [5120, 2048]
         QKVZ_w_T_interleaved = torch.cat(QKVZ_rows, dim=-1)  # [5120, 16384]
         self.w_qkvz = self._to_device(QKVZ_w_T_interleaved, row_shard_out)
-        # Cast to bf16 post-load to test bf8-weight PCC ceiling hypothesis.
-        if getattr(self, "_bf16_weights", False) and self.w_qkvz.dtype != ttnn.bfloat16:
-            self.w_qkvz = ttnn.typecast(self.w_qkvz, dtype=ttnn.bfloat16)
 
         # B+A (per-row 6+6=12, NOT tile-multiple but matmul pads internally)
         BA_rows = []
@@ -536,8 +531,6 @@ class TtQwen36DeltaAttention(LightweightModule):
             BA_rows.append(torch.cat([b_row, a_row], dim=-1))  # [5120, 12]
         BA_w_T_interleaved = torch.cat(BA_rows, dim=-1)  # [5120, 96]
         self.w_ba = self._to_device(BA_w_T_interleaved, row_shard_out)
-        if getattr(self, "_bf16_weights", False) and self.w_ba.dtype != ttnn.bfloat16:
-            self.w_ba = ttnn.typecast(self.w_ba, dtype=ttnn.bfloat16)
 
         # -- Conv1d weight: pre-interleave by row (Bug1 fix from v1) --
         conv_w_src = self._resolve_weight(sd, "linear_attn.conv1d.weight", "conv1d.weight")
@@ -620,8 +613,6 @@ class TtQwen36DeltaAttention(LightweightModule):
         out_proj_w_T = out_proj_w.T.contiguous()
         row_shard_out0 = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=self.cluster_shape)
         self.w_out = self._to_device(out_proj_w_T, row_shard_out0)  # per-chip [768, 1280]
-        if getattr(self, "_bf16_weights", False) and self.w_out.dtype != ttnn.bfloat16:
-            self.w_out = ttnn.typecast(self.w_out, dtype=ttnn.bfloat16)
 
         # ------------------------------------------------------------------
         # Fused-prefill kernel: DEFAULT ON (disable with QWEN36_GDN_FUSED_PREFILL=0).
