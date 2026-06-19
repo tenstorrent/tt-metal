@@ -118,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     static constexpr bool TILIZE = true;
     const bool is_8bit_format    = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
     _llk_pack_init_with_src_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
         formats.pack_src,
@@ -130,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         false /* narrow_tile */,
         1 /* num_tiles */,
         is_8bit_format /* skip_bh_tilize_workaround */);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>();
 
     const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks     = params.NUM_BLOCKS;

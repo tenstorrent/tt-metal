@@ -116,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        const bool TILIZE              = true;
+        static constexpr bool TILIZE   = true;
         bool skip_bh_tilize_workaround = _llk_math_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
         // copy srca to dest
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
@@ -212,8 +212,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         const bool skip_bh_tilize_workaround = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
-        const bool TILIZE                    = true;
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, false>>(
+        static constexpr bool TILIZE         = true;
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
             formats.pack_src,
             formats.pack_dst,
             16 * 16 * 4 /* tile_size */,
@@ -233,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             false /* narrow_tile */,
             1 /* num_tiles */,
             skip_bh_tilize_workaround);
-        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
+        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>();
         PROFILER_SYNC();
     }
     {
