@@ -44,6 +44,12 @@ struct CompileRequest {
 
     # Generated files to write before compiling (shared by all targets).
     generatedFiles @4 :List(GeneratedFile);
+
+    # The client's build root (TT_METAL_HOME, trailing-slash). The server substitutes this prefix
+    # with its OWN root in gpp / lflags / linkerScript / extraLinkObjs / includes, so a client at a
+    # different filesystem layout (e.g. an eval clone) still resolves the sfpi toolchain, linker
+    # script, and hw link objects on the server. Empty => no re-root (legacy / matching-path).
+    clientRoot @5 :Text;
 }
 
 struct ElfBlob {

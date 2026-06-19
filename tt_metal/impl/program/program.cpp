@@ -218,6 +218,10 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.build_key = build_env.build_key();
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
+    // Ship our build root so the server can re-root the sfpi toolchain / linker script / hw link
+    // objects to its own tree — lets a client at a different path (e.g. an eval clone) compile
+    // remotely without the server needing the client's filesystem layout.
+    desc.request.client_root = build_env.build_env.get_root_path();
     static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
     desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
 
