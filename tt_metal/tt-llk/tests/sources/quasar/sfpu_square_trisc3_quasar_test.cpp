@@ -137,6 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_math_eltwise_sfpu_init_();
+    _init_square_();
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
