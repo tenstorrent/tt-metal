@@ -20,6 +20,7 @@ Requires an 8x4 Blackhole mesh and (env from the task):
     DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/goldened
 Override the trace dir with PREFILL_TRACE_DIR.
+# 2>&1 | tee out.log
 """
 
 import gc
@@ -32,6 +33,7 @@ import pytest
 import torch
 from loguru import logger
 from safetensors import safe_open
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
@@ -911,6 +913,36 @@ def run_chunked_transformer_no_pcc(
             f"isolated_claim={h2d_isolated_claim}"
         )
 
+    # Profiling warmup: run chunk 0 once through all layers so every kernel is JIT-compiled and the
+    # program cache is populated BEFORE the measured region. Gated by TT_PREFILL_PROFILE_WARMUP so
+    # normal runs are unaffected. Bracketed by PROFILE_WARMUP_START / PROFILE_MEASURE_START signposts;
+    # the per-layer post-processor keeps only ops AFTER PROFILE_MEASURE_START, so this compile pass is
+    # excluded from the device-time / op2op breakdown. The per-layer forward_layer_i_start/_end
+    # signposts (emitted inside TtPrefillTransformer.forward) delimit each layer within the measured run.
+    if os.environ.get("TT_PREFILL_PROFILE_WARMUP", "0") == "1":
+        signpost("PROFILE_WARMUP_START")
+        warm_tokens = ttnn.from_torch(
+            chunk_tok_host[0],
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+        )
+        transformer.forward(
+            warm_tokens,
+            tt_kvpe_cache,
+            number_of_non_padded_tokens=CHUNK,
+            actual_start=0,
+            actual_end=CHUNK,
+            cache_user_id=0,
+            return_intermediates=False,
+        )
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(warm_tokens)
+        logger.info("[profile] warmup chunk 0 complete (kernels JITted); measured region begins")
+        signpost("PROFILE_MEASURE_START")
+
     profiler.start("tt_forward")
     for it in range(num_iters):
         iter_start = time.time()
@@ -970,8 +1002,8 @@ def run_chunked_transformer_no_pcc(
     [(False, False), (True, False), (True, True)],
     ids=["nosvc", "h2dsvc_regular", "h2dsvc_isolated"],
 )
-@pytest.mark.parametrize("num_iters", [1, 2, 10, 20], ids=["iters1", "two_iters", "iters10", "iters20"])
-@pytest.mark.parametrize("n_chunks", [1, 11], ids=["chunks1", "chunks11"])
+@pytest.mark.parametrize("num_iters", [1, 2, 10, 20], ids=["iters1", "two_iters", "ten_iters", "iters20"])
+@pytest.mark.parametrize("n_chunks", [1, 2, 11], ids=["chunks1", "chunks2", "chunks_eleven"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",

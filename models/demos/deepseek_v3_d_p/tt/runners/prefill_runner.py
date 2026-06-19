@@ -231,6 +231,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
             actual_start=actual_start,
             actual_end=actual_end,
         )
+        ttnn.synchronize_device(pipeline.mesh_device)
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
         logger.info(f"[request] iter={i} chunk slot={slot_id} [{actual_start},{actual_end}) prefill = {_dt_ms:.2f} ms")
         i += 1
