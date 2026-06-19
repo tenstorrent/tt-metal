@@ -192,8 +192,8 @@ validate_env_dir() {
 # Apply Configuration
 # ============================================================================
 
-# Determine script directory (used for locating sibling scripts and OS detection)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Determine repository root from this script's location.
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Apply configuration with precedence: arguments > OS detection > default
 # Python version
@@ -205,7 +205,7 @@ fi
 if [ -n "$ARG_ENV_DIR" ]; then
     PYTHON_ENV_DIR="$ARG_ENV_DIR"
 elif [ -z "${PYTHON_ENV_DIR:-}" ]; then
-    PYTHON_ENV_DIR="$(pwd)/python_env"
+    PYTHON_ENV_DIR="$ROOT_DIR/python_env"
 fi
 
 # ============================================================================
@@ -213,9 +213,6 @@ fi
 # ============================================================================
 
 validate_env_dir "$PYTHON_ENV_DIR"
-
-# Determine script directory (used for locating sibling scripts)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Create virtual environment
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
@@ -230,7 +227,7 @@ uv venv "${UV_VENV_ARGS[@]}" "$PYTHON_ENV_DIR"
 
 # Patch activate for POSIX sh (Docker/CI use /bin/sh; relocatable activate uses $BASH_SOURCE)
 # Use 'if' to prevent set -e from exiting on patch failure
-if PATCH_OUTPUT=$("${SCRIPT_DIR}/scripts/patch_activate_posix.sh" "$PYTHON_ENV_DIR" 2>&1); then
+if PATCH_OUTPUT=$("${ROOT_DIR}/scripts/patch_activate_posix.sh" "$PYTHON_ENV_DIR" 2>&1); then
   if echo "$PATCH_OUTPUT" | grep -q "Skip"; then
     echo "INFO: patch_activate_posix.sh skipped (venv activate not relocatable or already patched)"
   else
@@ -256,13 +253,13 @@ echo "Installing dev dependencies"
 uv pip install --extra-index-url "$PYTORCH_INDEX" \
     --index-strategy unsafe-best-match \
     --no-build-isolation \
-    -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
+    -r "$ROOT_DIR/tt_metal/python_env/requirements-dev.txt"
 
 echo "Installing tt-triage dependencies"
-uv pip install --index-strategy unsafe-best-match -r "$(pwd)/tools/triage/requirements.txt"
+uv pip install --index-strategy unsafe-best-match -r "$ROOT_DIR/tools/triage/requirements.txt"
 
 echo "Installing tt-metal"
-uv pip install -e .
+uv pip install -e "$ROOT_DIR"
 
 if [[ "$SKIP_COMPAT_CHECK" == "true" ]]; then
     echo "Skipping package compatibility check (--skip-compat-check)"
@@ -278,8 +275,8 @@ fi
 # This allows using pre-built ttml from build_metal.sh --build-tt-train
 SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
 
-TTML_SRC_DIR="$SCRIPT_DIR/tt-train/sources/ttml"
-TTML_BUILD_DIR="$SCRIPT_DIR/build/tt-train/sources/ttml"
+TTML_SRC_DIR="$ROOT_DIR/tt-train/sources/ttml"
+TTML_BUILD_DIR="$ROOT_DIR/build/tt-train/sources/ttml"
 
 # Add ttml Python source code, if available
 if [ -d "$TTML_SRC_DIR" ]; then
@@ -298,9 +295,12 @@ else
     echo "  Skipping _ttml.pth creation (directory not found: $TTML_BUILD_DIR)"
 fi
 # Do not install hooks when this is a worktree
-if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
+if [ "$(git -C "$ROOT_DIR" rev-parse --git-dir)" = "$(git -C "$ROOT_DIR" rev-parse --git-common-dir)" ]; then
     echo "Generating git hooks"
-    pre-commit install
+    (
+        cd "$ROOT_DIR"
+        pre-commit install
+    )
     # Note: do NOT add `pre-commit install --hook-type commit-msg` here unless
     # .pre-commit-config.yaml contains hooks with `stages: [commit-msg]`.
     # Without matching hooks, the commit-msg invocation runs the default-stage
@@ -311,8 +311,7 @@ fi
 
 # Bundle Python interpreter into the venv if requested
 if [[ "$BUNDLE_PYTHON" == "true" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    "${SCRIPT_DIR}/scripts/bundle_python_into_venv.sh" "$PYTHON_ENV_DIR" --force
+    "${ROOT_DIR}/scripts/bundle_python_into_venv.sh" "$PYTHON_ENV_DIR" --force
 fi
 
 # Compile bytecode at the end to take advantage of parallelism
