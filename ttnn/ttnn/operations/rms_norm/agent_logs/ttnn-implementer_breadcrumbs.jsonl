@@ -48,3 +48,5 @@
 {"event":"test_run","status":"pass","test":"golden test_golden.py","detail":"1683 passed, 2940 skipped, 420 xfailed — no regression vs R4 baseline","ts":"2026-06-19T20:44:20+00:00"}
 {"event":"test_run","status":"pass","test":"golden regression + translated","detail":"passed","ts":"2026-06-19T20:45:04+00:00"}
 {"event":"refinement_complete","phase":"Refinement 5","outcome":"full [x]","detail":"PASS-1 single square+reduce; cb_squared=shard width; golden 1683/1683, all aux suites green","ts":"2026-06-19T20:45:51+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find device timing measurement infra","ts":"2026-06-19T21:00:10+00:00"}
+{"event":"test_run","status":"pass","test":"probes/probe_020.py","params":"profiler smoke test","detail":"RegimeA(1,1,2048,256)=18486ns, RegimeB(1,1,32,8192)=110031ns; profiler API works via ReadDeviceProfiler+get_latest_programs_perf_data","ts":"2026-06-19T21:01:54+00:00"}
