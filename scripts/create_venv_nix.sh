@@ -243,7 +243,7 @@ source "$PYTHON_ENV_DIR/bin/activate"
 PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
 
 
-echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
+echo "Updating wheel and setuptools"
 uv pip install --upgrade wheel setuptools==80
 
 
