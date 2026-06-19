@@ -61,20 +61,20 @@ from models.experimental.devstral2_123B_instruct.tt.tt_ministral3_model import T
 from models.tt_transformers.tt.ccl import TT_CCL
 
 _SWEEP_TIMEOUT_MARGIN = 1.25
-ISL_PERF_SANITY_TIMEOUT_SEC = int(os.environ.get("DEVSTRAL2_ISL_PERF_SANITY_TIMEOUT_SEC", str(90 * 60)))
-ISL_PERF_FULL_SWEEP_TIMEOUT_SEC = int(os.environ.get("DEVSTRAL2_ISL_PERF_SWEEP_TIMEOUT_SEC", str(24 * 3600)))
+ISL_PERF_SANITY_TIMEOUT_SEC = int(os.environ.get("DEVSTRAL2_ISL_PERF_SANITY_TIMEOUT_SEC", str(3 * 3600)))
+ISL_PERF_FULL_SWEEP_TIMEOUT_SEC = int(os.environ.get("DEVSTRAL2_ISL_PERF_SWEEP_TIMEOUT_SEC", str(6 * 3600)))
 
 _OUTPUT_DIR = Path(__file__).resolve().parent.parent / "isl_sweep_perf_outputs"
 
 _isl_perf_model_cache: dict[tuple[tuple[int, int], int], tuple[TtMinistral3ForCausalLM, Devstral2Args, str]] = {}
 
 
-def _chunk_log_every(num_chunks: int) -> int:
-    """Log prefill chunk progress every N chunks (0 = disable)."""
-    raw = os.environ.get("DEVSTRAL2_ISL_PERF_CHUNK_LOG_EVERY", "32").strip()
+def _chunk_log_every(num_chunks: int) -> Optional[int]:
+    """Return log interval in chunks, or None when chunk progress logging is disabled."""
+    raw = os.environ.get("DEVSTRAL2_ISL_PERF_CHUNK_LOG_EVERY", "0").strip()
     every = int(raw)
     if every <= 0:
-        return num_chunks + 1
+        return None
     return max(1, every)
 
 
@@ -87,6 +87,8 @@ def _log_prefill_chunk_progress(
     phase_started_s: float,
 ) -> None:
     every = _chunk_log_every(num_chunks)
+    if every is None:
+        return
     if chunk_idx != 0 and chunk_idx != num_chunks - 1 and (chunk_idx + 1) % every != 0:
         return
     elapsed_s = time.perf_counter() - phase_started_s

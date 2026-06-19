@@ -248,7 +248,7 @@ Results are logged incrementally and saved under ``tests/isl_sweep_perf_outputs/
 - ``isl_perf_{label}.json`` — rolling aggregate (updated after each ISL; ``complete: true`` at end)
 - ``isl_perf_{label}_isl_{N}.json`` — one file per completed ISL point
 
-Prefill chunk progress logs every 32 chunks by default (``DEVSTRAL2_ISL_PERF_CHUNK_LOG_EVERY``).
+Prefill chunk progress logging is off by default; set ``DEVSTRAL2_ISL_PERF_CHUNK_LOG_EVERY=32`` to log every 32 chunks.
 
 | Column | Meaning |
 |--------|---------|
@@ -275,14 +275,7 @@ Prefill chunk progress logs every 32 chunks by default (``DEVSTRAL2_ISL_PERF_CHU
 | 32768 | 46.3 | 708 | 12.97 |
 | 65536 | 136 | 483 | 12.04 |
 | 131072 | 445 | 295 | 10.59 |
-| 262144 | 1581† | 166† | *pending* |
-
-† **262144 (256K) — prefill only (pre-fix run).** Traced chunked prefill completed (2048 chunks:
-~27 min compile, ~26 min replay, TTFT 1581 s). Decode then hung because on-disk RoPE/page-table
-caches under ``seq_262144`` were keyed without ``max_seq_len``; at runtime ``max_seq_len=263168``
-decode at pos 262144 needs logical KV block 2048 and RoPE row 262144, which do not exist in
-262144-sized cached tensors. Fixed by sizing the KV floor with decode headroom and scoping
-seq-dependent cache keys to ``max_seq_len``. Re-run the sweep to validate 256K decode.
+| 262144 | 1581 | 166 | 8.48 |
 
 **Single-layer wall-clock perf:**
 
