@@ -295,6 +295,23 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = can_alias_partials_onto_out,
         .data_format = partial_df});
 
+    // UNTILIZE_STAGING CB: a DISTINCT one-block staging buffer for the fuse_bias + untilize_out path.
+    // Previously the kernel aliased the bias-add output onto matmul_partials_cb (untilize_mode_out_cb_id
+    // == matmul_partials_cb when untilize_out), so the TileRowMajor bias-add's reserve_back landed on the
+    // same one-block CB it was reading from BEFORE pop_front → reserve-before-pop circular wait. bf16's
+    // byte-slack absorbed it, but fp32's 2x-wider tiles removed the slack (the former fp32+bias+untilize
+    // exclusion). Un-aliasing onto this distinct buffer makes reserve_back land on a fresh CB → no
+    // circular wait for ANY dtype, so the fp32+bias+untilize exclusion is removed and that cell uses
+    // caller_owns like every other bias+untilize conv. Sized to ONE output block (the bias-add fills it
+    // one M-row-group at a time; the untilize phase drains it). Allocated ONLY for untilize_out + bias —
+    // every other path leaves it at 0 pages (no L1 cost). Same data format as partials (the bias-add
+    // packs the post-bias values here; the untilize phase reconfigs to the OUT format when it reads).
+    cb_info.emplace_back(CBInfo{
+        .name = Conv2dCb::UNTILIZE_STAGING,
+        .num_pages = (untilize_out && enable_bias) ? out_block_num_tiles : 0,
+        .page_size = partial_tile_size,
+        .data_format = partial_df});
+
     const bool overlap_im2col_cb =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
     {

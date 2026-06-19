@@ -925,23 +925,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // row-major read agree), proven correct by the step-(a) bias convs (SD per_core_N=10, in1=2) and the
     // d7b9fb1ad1c absolute-offset fix for in0_num_subblocks > 1. So NO in1-subblock guard.
     //
-    // EXCEPTION (fp32-specific): fuse_bias + untilize_out + fp32_dest_acc_en must NOT route to
-    // caller_owns. With caller_owns the matmul pushes the full out_block to matmul_partials_cb, then the
-    // TileRowMajor bias-add reads from that CB and writes back to the SAME CB (untilize_mode_out_cb_id ==
-    // matmul_partials_cb when untilize_out). The TileRowMajor bias path issues reserve_back BEFORE
-    // pop_front, so the bias-add can only proceed if there is free CB space at the moment it reserves.
-    // With fp32_dest_acc_en the partials CB is sized in fp32 (4B/elem, 2x bf16) and has NO slack: the
-    // full out_block exactly fills it, so reserve_back blocks forever waiting for a pop that the same
-    // TRISC chain owes — a true reserve-before-pop deadlock. bf16 sizes the same CB at 2B/elem and the
-    // extra slack lets the reserve succeed, so bf16 fuse_bias+untilize is known-good on caller_owns
-    // (test_sd_conv_wh — the deep-K SD production convs run this combo and benefit from caller_owns).
-    // Therefore route ONLY the fp32+bias+untilize combination to the non-caller_owns SubblockMajor path:
-    // SBM bias-add pops before reserving (no reserve-before-pop on the aliased CB), the ptr rewind and
-    // untilize phase both work correctly, and there is no production fp32 trace for this combination so
-    // the caller_owns drain-skip win is zero. All other pin-class convs (incl. bf16 bias+untilize) keep
-    // caller_owns unchanged from the clean mm_help2 base.
-    const bool fp32_bias_untilize = has_bias && untilize_out && fp32_dest_acc_en;
-    const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out) && !fp32_bias_untilize;
+    // fp32+bias+untilize is NO LONGER excluded (the LAST matrix exclusion — removed). The former
+    // exclusion existed because the kernel aliased the bias-add output onto matmul_partials_cb when
+    // untilize_out (untilize_mode_out_cb_id == matmul_partials_cb). The TileRowMajor bias-add issues
+    // reserve_back BEFORE pop_front, so with fp32_dest_acc_en the fp32-sized partials CB (4B/elem) had no
+    // slack — the full out_block filled it and reserve_back deadlocked. The kernel now un-aliases: the
+    // bias-add writes a DISTINCT UNTILIZE_STAGING CB (see conv2d_op_program_factory_common.cpp) and the
+    // untilize phase reads it, so the reserve-before-pop lands on a fresh CB with free slack for EVERY
+    // dtype. fp32+bias+untilize therefore takes caller_owns + TileRowMajor like every other bias+untilize
+    // conv (bf16 included — test_sd_conv_wh). The staging CB costs one extra output block of L1 for all
+    // bias+untilize convs (untilize_out && enable_bias only; 0 pages elsewhere).
+    const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out);
     if (!conv_tile_pack_row_major && pin_class_caller_owns) {
         conv_tile_pack_row_major = true;
         conv_caller_owns = true;
@@ -1292,7 +1286,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).index,
             get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
             get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
-            partials_cb_uses_output,
+            // Slot 25 (was the now-dead partials_cb_uses_output) now carries the UNTILIZE_STAGING CB
+            // index: the distinct one-block buffer the fuse_bias + untilize_out bias-add writes to (and
+            // the untilize phase reads from) instead of aliasing onto matmul_partials_cb. Only allocated
+            // (valid index) when untilize_out && has_bias; otherwise kInvalidCBIndex (kernel never uses it).
+            get_cb_info_by_name(cb_info, Conv2dCb::UNTILIZE_STAGING).index,
             conv_act_c_blocks,
             check_skip_compute,
             pack_relu,

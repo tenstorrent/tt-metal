@@ -33,6 +33,11 @@ enum class Conv2dCb {
     READER_INDICES,
     L1_ARRAY,
     MATMUL_PARTIALS,
+    // Distinct one-block staging buffer for the fuse_bias + untilize_out path. The bias-add reads
+    // matmul_partials_cb and writes here; the untilize phase reads here and writes OUT. Un-aliasing
+    // the bias-add output off matmul_partials_cb removes the TileRowMajor reserve-before-pop circular
+    // wait (the former fp32+bias+untilize deadlock). Sized to zero pages on every other path (no L1).
+    UNTILIZE_STAGING,
     OUT,
     COUNT
 };
