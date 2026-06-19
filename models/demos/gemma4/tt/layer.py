@@ -277,7 +277,7 @@ class Gemma4DecoderLayer:
         # 2. MLP + MoE block
         residual = hidden_states
         normed = self.pre_feedforward_layernorm.forward(hidden_states)
-        mlp_output = self.shared_mlp(normed)
+        mlp_output = self.shared_mlp(normed, is_decode=is_decode)
         normed.deallocate(True)
 
         if self.enable_moe_block:
