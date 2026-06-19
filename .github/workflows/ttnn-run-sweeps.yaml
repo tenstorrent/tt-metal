@@ -1147,6 +1147,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ contains(needs.resolve-inputs.outputs.sweep-name, 'Lead Models') || contains(needs.resolve-inputs.outputs.sweep-name, 'Model Traced') }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-n300:
@@ -1170,6 +1171,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ contains(needs.resolve-inputs.outputs.sweep-name, 'Lead Models') || contains(needs.resolve-inputs.outputs.sweep-name, 'Model Traced') }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-p150b:
@@ -1193,6 +1195,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ contains(needs.resolve-inputs.outputs.sweep-name, 'Lead Models') || contains(needs.resolve-inputs.outputs.sweep-name, 'Model Traced') }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-t3k:
@@ -1216,6 +1219,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ contains(needs.resolve-inputs.outputs.sweep-name, 'Lead Models') || contains(needs.resolve-inputs.outputs.sweep-name, 'Model Traced') }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-galaxy:
@@ -1237,6 +1241,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      fail-on-test-failure: ${{ contains(needs.resolve-inputs.outputs.sweep-name, 'Lead Models') || contains(needs.resolve-inputs.outputs.sweep-name, 'Model Traced') }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}

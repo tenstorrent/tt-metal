@@ -60,6 +60,7 @@ class SweepsConfig:
     arch_name: str | None = None
     main_proc_verbose: bool = False
     trace_params: bool = False
+    fail_on_test_failure: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -85,6 +86,7 @@ def create_config_from_args(args) -> SweepsConfig:
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
         trace_params=args.trace_params,
+        fail_on_test_failure=args.fail_on_test_failure,
     )
 
     # Validate and set ARCH_NAME
@@ -1000,6 +1002,8 @@ def run_sweeps(
                     f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})"
                 )
 
+    return final_status
+
 
 def get_module_names(config: SweepsConfig):
     """Extract module names based on configuration"""
@@ -1200,6 +1204,13 @@ if __name__ == "__main__":
         help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). Outputs to generated/ttnn/reports/operation_parameters/",
     )
 
+    parser.add_argument(
+        "--fail-on-test-failure",
+        action="store_true",
+        required=False,
+        help="Exit with non-zero status if any test case fails, crashes, or hangs. Use in CI to mark the job as failed.",
+    )
+
     args = parser.parse_args(sys.argv[1:])
 
     # Argument validation
@@ -1245,7 +1256,7 @@ if __name__ == "__main__":
     # Parse modules for running specific tests
     module_names = get_module_names(config)
 
-    run_sweeps(
+    final_status = run_sweeps(
         module_names,
         config=config,
     )
@@ -1255,3 +1266,7 @@ if __name__ == "__main__":
 
     if config.measure_device_perf:
         disable_profiler()
+
+    if config.fail_on_test_failure and final_status == "failure":
+        logger.error("Exiting with failure: one or more test cases did not pass (--fail-on-test-failure)")
+        sys.exit(1)
