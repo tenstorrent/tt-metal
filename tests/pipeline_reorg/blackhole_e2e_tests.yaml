@@ -26,6 +26,26 @@
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
+# --- seamless-m4t-v2-large (BH QuietBox 2 / 1×4 mesh) ---
+- id: bh-qb2-seamless-m4t-v2-token-matching-sanity
+  name: seamless-m4t-v2 token-matching sanity
+  model-name: seamless-m4t-v2-large
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    if [[ -d /localdev/blackhole_demos/huggingface_data/hub ]]; then
+      export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
+    fi
+    export SEAMLESS_SWEEP_AUTO_REF=1
+    pytest --timeout 5400 \
+      models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py \
+      -m sanity -v
+  skus:
+    bh_quietbox_2:
+      timeout: 90
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (models)
+  team: models
+
 # --- integration ---
 - id: bh-fabric-infra-integration
   name: fabric infra unit tests

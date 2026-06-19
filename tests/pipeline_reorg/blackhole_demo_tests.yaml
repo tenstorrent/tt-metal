@@ -23,6 +23,24 @@
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
 
+# ─── seamless-m4t-v2-large ──────────────────────────────────────────────────
+
+- name: seamless-m4t-v2 demo
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    if [[ -d /localdev/blackhole_demos/huggingface_data/hub ]]; then
+      export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
+    fi
+    export SEAMLESS_DEMO_MAX_SENTENCES=1
+    pytest models/experimental/seamless_m4t_v2_large/demo/demo.py -v
+  skus:
+    bh_quietbox_2:
+      timeout: 90
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (models)
+  team: models
+  model-name: seamless-m4t-v2-large
+
 # ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
 
 - name: mistral-small-3.1-24b e2e tests

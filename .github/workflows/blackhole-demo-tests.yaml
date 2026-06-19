@@ -21,6 +21,7 @@ on:
           - flux.1-dev
           - wan2.2-t2v-a14b
           - z-image-turbo
+          - seamless-m4t-v2-large
       system-type:
         description: "Select system type to test"
         required: false

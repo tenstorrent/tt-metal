@@ -32,6 +32,7 @@ on:
         options:
           - all
           - deepseek_prefill
+          - seamless-m4t-v2-large
       test-selection:
         description: 'Select e2e tests to run: all tests, all SDPA tests, or one test id'
         required: false
@@ -42,6 +43,7 @@ on:
           - sdpa
           - bh-sdpa-nightly-integration
           - bh-ring-sdpa-perf
+          - bh-qb2-seamless-m4t-v2-token-matching-sanity
       build-type:
         required: false
         type: choice

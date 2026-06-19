@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import numpy as np
+import pytest
 import torch
 import ttnn
 from transformers import AutoProcessor, AutoTokenizer
@@ -67,6 +68,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     hf_aligned_generation_kwargs,
     to_torch_replicated_first_shard,
 )
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import _requires_bh_qb
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
     SeamlessGenerateTimings,
     TTSeamlessM4Tv2GenerationOutput,
@@ -845,6 +847,16 @@ def main() -> None:
     print("=" * 78)
     print(f"  Audio outputs saved under: {OUTPUT_DIR}")
     _print_tt_perf_summary(perf_tt_log)
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.skipif(
+    _requires_bh_qb(),
+    reason="requires exactly 4 devices (MeshShape(1, 4))",
+)
+def test_seamless_m4t_v2_demo():
+    """CI smoke: all five tasks via ``main()`` (Blackhole demo pipeline entry point)."""
+    main()
 
 
 if __name__ == "__main__":
