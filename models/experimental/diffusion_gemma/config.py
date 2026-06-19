@@ -42,24 +42,59 @@ class TextConfig:
 
     # --- attention -------------------------------------------------------
     sliding_window: int = 1024  # verified (sliding layers; full-attn interleaved)
-    # Interleave pattern of sliding vs full-attention layers. Gemma-3 lineage
-    # uses a fixed period (e.g. 5 sliding : 1 full). Reconcile against config.json.
-    sliding_window_pattern: int = 6  # TODO(confirm)
+    # Every 6th layer is full_attention: layer_types has full at [5,11,17,23,29]
+    # for the 30-layer 26B-A4B (configs/gemma-4-26B-A4B-it/config.json).
+    sliding_window_pattern: int = 6  # verified (derived from layer_types)
     # K=V tying applies to full-attn (global) layers ONLY; sliding/local layers
     # keep a real separate V (matters for the bidirectional local-window path,
     # #47462). See gemma4 tt/attention/__init__.py:34.
-    attention_k_eq_v: bool = True  # TODO(confirm) inherited from gemma4 lineage
+    attention_k_eq_v: bool = True  # verified (26B-A4B config.json: attention_k_eq_v=True)
 
     # --- RoPE (dual theta, per layer type) -------------------------------
     rope_theta_full: float = 1.0e6  # verified (full-attention layers)
     rope_theta_sliding: float = 1.0e4  # verified (sliding layers)
 
-    # --- norms / softcap -------------------------------------------------
+    # --- norms / softcap / activation ------------------------------------
     final_logit_softcapping: float = 30.0  # verified
-    rms_norm_eps: float = 1.0e-6  # TODO(confirm) Gemma default
+    rms_norm_eps: float = 1.0e-6  # verified (26B-A4B config.json: 1e-06)
+    hidden_activation: str = "gelu_pytorch_tanh"  # verified (config.json hidden_activation)
 
     # --- canvas ----------------------------------------------------------
     canvas_length: int = 256  # verified (block size)
+
+    @classmethod
+    def from_hf_config(cls, hf: dict) -> "TextConfig":
+        """Build a TextConfig from an HF ``config.json`` dict (gemma4 family).
+
+        Reads ``text_config`` if nested, maps known field names, and derives
+        ``sliding_window_pattern`` from ``layer_types``. Absent keys fall back to
+        the verified defaults above (e.g. 12B has no MoE fields). Used by the
+        #47461 weight-mapping pass to keep this config in sync with the real
+        checkpoint and to catch renamed/missing keys.
+        """
+        text = hf.get("text_config", hf)
+        field_map = [
+            "num_hidden_layers",
+            "hidden_size",
+            "num_attention_heads",
+            "num_key_value_heads",
+            "head_dim",
+            "vocab_size",
+            "sliding_window",
+            "rms_norm_eps",
+            "final_logit_softcapping",
+            "num_experts",
+            "moe_intermediate_size",
+            "attention_k_eq_v",
+            "hidden_activation",
+        ]
+        kwargs = {k: text[k] for k in field_map if text.get(k) is not None}
+        layer_types = text.get("layer_types")
+        if layer_types:
+            full = [i for i, t in enumerate(layer_types) if t == "full_attention"]
+            if len(full) >= 2:
+                kwargs["sliding_window_pattern"] = full[1] - full[0]
+        return cls(**kwargs)
 
 
 @dataclass(frozen=True)

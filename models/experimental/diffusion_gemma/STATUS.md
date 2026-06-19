@@ -22,6 +22,7 @@ and marked `TODO(env)`. **HW + env are no longer blockers — QB2 is local and t
 |---|---|---|
 | Module scaffolding | — | ✅ package + config |
 | `config.py` (verified hyperparams) | §2 | ✅ done |
+| Config reconciliation vs real 26B-A4B config.json (`from_hf_config`) | #47461 | ✅ done — `tests/test_config.py`, all fields confirmed in sync |
 | **Diffusion sampling primitives (reference, pure torch)** | #47463 spike / #47468 oracle | ✅ done — `reference/sampling.py`, 11 tests pass |
 | PCC trajectory harness (validates decisions) | #47468 | ✅ done — `tests/trajectory_pcc.py`, 5 tests pass |
 | HF reference adapter seam (mock-tested) | #47468 | ✅ done — `reference/hf_reference.py`, 3 tests (guard + mock end-to-end) |

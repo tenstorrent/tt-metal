@@ -33,16 +33,22 @@ class SelfConditioning(nn.Module):
     than duplicated here.
     """
 
-    def __init__(self, hidden_size: int, intermediate_size: Optional[int] = None, activation: str = "gelu"):
+    def __init__(
+        self, hidden_size: int, intermediate_size: Optional[int] = None, activation: str = "gelu_pytorch_tanh"
+    ):
         super().__init__()
         inter = intermediate_size or hidden_size
         self.gate_proj = nn.Linear(hidden_size, inter, bias=False)
         self.up_proj = nn.Linear(hidden_size, inter, bias=False)
         self.down_proj = nn.Linear(inter, hidden_size, bias=False)
-        # TODO(confirm): exact activation (gelu vs silu/SwiGLU) vs HF reference.
+        # Default matches the gemma4 backbone (config.json hidden_activation =
+        # gelu_pytorch_tanh); the exact self-cond gate is reconciled vs the
+        # diffusion_gemma modeling file once importable (#47468).
         self.activation = activation
 
     def _act(self, x: torch.Tensor) -> torch.Tensor:
+        if self.activation == "gelu_pytorch_tanh":
+            return F.gelu(x, approximate="tanh")
         if self.activation == "gelu":
             return F.gelu(x)
         if self.activation == "silu":
