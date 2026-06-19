@@ -117,7 +117,7 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
         // Add binary reuse (FPU)
         UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb1, 0)));
         MATH((llk_math_generalized_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
-            icb1, icb1, 0, true)));
+            icb1, icb1, 0)));
         // Init transpose dest addrmods (does not conflict with add binary reuse)
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
@@ -126,7 +126,7 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
         // Copy add (FPU)
         UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
         MATH((llk_math_generalized_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
-            icb0, icb1, 0, true)));
+            icb0, icb1, 0)));
     }
     // Set srcb dummy valid for transpose wh (FPU)
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
