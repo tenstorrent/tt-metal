@@ -26,7 +26,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import torch
+
 from .resolution import Resolution, ResolutionGroup
+
+# Tensor with ``.i`` (ImageInfo) and optional ``.section_type`` / ``.vision_encoder_kwargs``.
+ImageTensor = torch.Tensor
 
 
 def default(value, default_value):
@@ -45,6 +50,8 @@ class ImageInfo:
     image_token_length: int | None = None
     base_size: int | None = None
     ratio_index: int | None = None
+    ori_image_width: int | None = None
+    ori_image_height: int | None = None
     add_timestep_token: bool = True
     add_guidance_token: bool = False
     add_timestep_r_token: bool = False
@@ -57,22 +64,91 @@ class ImageInfo:
 
     @property
     def meta_info(self) -> dict[str, Any]:
-        if self.image_type not in ("vae", "gen_image"):
-            raise ValueError(f"Unsupported image_type for meta_info: {self.image_type!r}")
+        if self.image_type in ("vae", "gen_image"):
+            return dict(
+                token_length=self.image_token_length,
+                add_timestep_token=self.add_timestep_token,
+                add_guidance_token=self.add_guidance_token,
+                add_timestep_r_token=self.add_timestep_r_token,
+                use_front_boi_token=self.use_front_boi_token,
+                add_image_shape_token=self.add_image_shape_token,
+                base_size=self.base_size,
+                ratio_idx=self.ratio_index,
+                token_height=self.token_height,
+                token_width=self.token_width,
+                image_height=self.image_height,
+                image_width=self.image_width,
+                ori_image_width=self.ori_image_width,
+                ori_image_height=self.ori_image_height,
+            )
+        if self.image_type in ("vit", "siglip2"):
+            return dict(
+                token_length=self.image_token_length,
+                use_front_boi_token=self.use_front_boi_token,
+                add_image_shape_token=self.add_image_shape_token,
+                token_height=self.token_height,
+                token_width=self.token_width,
+                image_height=self.image_height,
+                image_width=self.image_width,
+                ori_image_width=self.ori_image_width,
+                ori_image_height=self.ori_image_height,
+            )
+        raise ValueError(f"Unsupported image_type for meta_info: {self.image_type!r}")
+
+
+class JointImageInfo:
+    """Paired VAE + ViT metadata for ``cond_image_type='vae_vit'``."""
+
+    def __init__(
+        self,
+        vae_image_info: ImageInfo,
+        vision_image_info: ImageInfo,
+        vision_encoder_kwargs: dict | None = None,
+    ) -> None:
+        self.vae_image_info = vae_image_info
+        self.vision_image_info = vision_image_info
+        self.vision_encoder_kwargs = vision_encoder_kwargs
+        self.image_type = "joint_image"
+        self.image_token_length = vae_image_info.image_token_length + vision_image_info.image_token_length
+        self.add_timestep_token = vae_image_info.add_timestep_token
+        self.use_front_boi_token = vae_image_info.use_front_boi_token
+        self.add_image_shape_token = vae_image_info.add_image_shape_token
+
+    @property
+    def meta_info(self) -> dict[str, Any]:
         return dict(
-            token_length=self.image_token_length,
+            token_length=[self.vae_image_info.image_token_length, self.vision_image_info.image_token_length],
             add_timestep_token=self.add_timestep_token,
-            add_guidance_token=self.add_guidance_token,
-            add_timestep_r_token=self.add_timestep_r_token,
             use_front_boi_token=self.use_front_boi_token,
             add_image_shape_token=self.add_image_shape_token,
-            base_size=self.base_size,
-            ratio_idx=self.ratio_index,
-            token_height=self.token_height,
-            token_width=self.token_width,
-            image_height=self.image_height,
-            image_width=self.image_width,
+            base_size=self.vae_image_info.base_size,
+            ratio_idx=self.vae_image_info.ratio_index,
+            token_height=[self.vae_image_info.token_height, self.vision_image_info.token_height],
+            token_width=[self.vae_image_info.token_width, self.vision_image_info.token_width],
+            image_height=[self.vae_image_info.image_height, self.vision_image_info.image_height],
+            image_width=[self.vae_image_info.image_width, self.vision_image_info.image_width],
         )
+
+
+class CondImage:
+    """Dual VAE + ViT conditional image bundle."""
+
+    def __init__(self, image_type: str, vae_image: ImageTensor, vit_image: ImageTensor) -> None:
+        self.image_type = image_type
+        self.vae_image = vae_image
+        self.vit_image = vit_image
+
+        if image_type == "vae":
+            self.i = vae_image.i
+            self.section_type = "cond_vae_image"
+        elif image_type == "vit":
+            self.i = vit_image.i
+            self.section_type = "cond_vit_image"
+        elif image_type == "vae_vit":
+            self.i = JointImageInfo(vae_image.i, vit_image.i)
+            self.section_type = "cond_joint_image"
+        else:
+            raise ValueError(f"Unknown image_type: {image_type!r}")
 
 
 def _parse_image_size(image_size: str | int | tuple[int, int] | list[int], vae_reso_group: ResolutionGroup):
