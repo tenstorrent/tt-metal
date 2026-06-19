@@ -15,7 +15,7 @@ Read only what helps the current task:
 
 - `tests/ttnn/tracy/test_trace_runs.py`: minimal trace capture/replay examples.
 - `models/tt_transformers/tt/generator.py`: canonical decode trace patterns, including host input preparation, persistent device inputs, replay refresh, and split sampling.
-- `models/common/sampling/generator.py`: standalone traced sampling patterns.
+- `models/common/sampling/generator.py` and `models/common/modules/sampling/sampling_1d.py`: common on-device sampling implementations to compare before choosing a token-out sampling path.
 - `models/tt_transformers/tt/model.py`: model-side `prepare_decode_inputs_host` and device-only `ttnn_decode_forward` split.
 - `advanced_perf_optimizations.md`: deeper examples for TTNN trace capture/replay, multiple command queues, trace plus multi-CQ, and production benchmarking patterns. Search this file for the API or failure mode you are working on before loading it wholesale.
 
@@ -103,13 +103,13 @@ Build the hot loop so the steady-state step is trace replay plus the minimum cal
 Implement token-out traced decode with two cooperating traces:
 
 1. Capture the model decode trace up to sampler-ready logits.
-2. Capture the `models.common.sampling.SamplingGenerator` internal trace for the active sampling mode.
-3. Pass `tt_out_tok=<persistent decode token input tensor>` when calling `sampling.sample(...)`, so the sampled token is written directly into the tensor consumed by the next decode replay.
+2. Capture the chosen common sampling implementation, or a correct generator-owned trace wrapper around it, for the active sampling mode. Before choosing, compare `models/common/sampling/` and `models/common/modules/sampling/sampling_1d.py` against the model's state, seed, topology, trace, and logprob requirements.
+3. Pass `tt_out_tok=<persistent decode token input tensor>` when calling the sampler, so the sampled token is written directly into the tensor consumed by the next decode replay.
 4. Keep current-position/RoPE position state coherent with that token feedback by advancing it on device inside the trace when the model has a fixed-step decode loop. A completed trace does not use host-originated position refresh in the per-token loop.
 5. Refresh page-table trace inputs only when the page table changes, and test both unchanged and changed page-table cases. The unchanged-page-table case should perform no per-token page-table copies after setup.
 6. For greedy decode, keep the sampled token on device and benchmark the available on-device greedy strategies on the target mesh. Force-argmax is only a candidate. Do not select it by default.
 
-The canonical pattern is in `models/tt_transformers/tt/generator.py`: capture decode once, bind the model to the same persistent trace inputs that replay refreshes, enable the sampler's internal trace, and call sampling with `tt_out_tok` pointing at the decode token input. `SamplingGenerator.sample(..., enable_trace=False)` inside a full-model trace is not the canonical token-feedback path.
+The canonical pattern is in `models/tt_transformers/tt/generator.py`: capture decode once, bind the model to the same persistent trace inputs that replay refreshes, trace the chosen sampler path, and call sampling with `tt_out_tok` pointing at the decode token input. Untraced sampling hidden inside the model trace is not the canonical token-feedback path.
 
 The normal split-sampling path for greedy decode must be a semantically greedy path. Do not treat a slower generic sampled `top_k=32` or top-p-capable path as proof that split greedy is slow. If `top_k=1` split sampling fails because a gathered top-k tensor has a non-tile inner dimension, fix the sampler-ready shape by preserving or padding the top-k representation, or keep a minimal repro and leave the stage incomplete.
 
@@ -117,7 +117,7 @@ For vocab-sharded logits, split greedy usually should not mean a physical `top_k
 
 If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampling op dominates greedy token-out decode, the LM-head/sampling boundary is still wrong. Fix that before chasing lower-level decoder optimizations or marking tracing complete.
 
-For vLLM decode serving, mirror the production split: bind persistent token/current-position/RoPE/page-table/KV-cache tensors before capture, warm the same mode, capture a device-only decode, and replay with `ttnn.execute_trace(..., blocking=False)` only when the caller implements the async read/host-processing split. If the sampler consumes transformed logits, capture the model trace output in that sampler-ready form so replay returns the same device tensor identity. Prefer `models.common.sampling` internal trace for on-device sampling, and do not use host argmax or full-logits readback in a `sample_on_device_mode=all` path.
+For vLLM decode serving, mirror the production split: bind persistent token/current-position/RoPE/page-table/KV-cache tensors before capture, warm the same mode, capture a device-only decode, and replay with `ttnn.execute_trace(..., blocking=False)` only when the caller implements the async read/host-processing split. If the sampler consumes transformed logits, capture the model trace output in that sampler-ready form so replay returns the same device tensor identity. Reuse the chosen common sampling path from the full-model stage for on-device sampling, and do not use host argmax or full-logits readback in a `sample_on_device_mode=all` path.
 
 Do not collect Tracy, `tt-perf-report`, or `TT_METAL_DEVICE_PROFILER` metrics from a live vLLM server or serving adapter to prove this tracing work. vLLM-stage tracing evidence is functional and serving-level: trace capture/replay succeeds, stale-input tests pass, on-device sampling is wired, async split behavior is correct, qualitative/sampling checks pass, and `run_vllm_server` benchmark JSON records TTFT/ITL/throughput. Use non-serving full-model or reduced profiles from earlier stages for low-level device context if needed.
 
