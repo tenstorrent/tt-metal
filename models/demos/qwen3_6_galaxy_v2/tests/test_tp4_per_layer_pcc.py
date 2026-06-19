@@ -27,6 +27,15 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import sys
+
+# The qwen9b-wt tree must be first in sys.path for its models/experimental/
+# gated_attention_gated_deltanet to resolve correctly — the editable-install
+# .pth in python_env adds new/tt-metal's models/ to sys.path unconditionally
+# (bypassing PYTHONPATH order), so we explicitly prepend qwen9b-wt here.
+_QWEN9B_WT = pathlib.Path("/home/tt-admin/ssinghal/qwen36/qwen9b-wt")
+if str(_QWEN9B_WT) not in sys.path:
+    sys.path.insert(0, str(_QWEN9B_WT))
 
 import pytest
 import torch
