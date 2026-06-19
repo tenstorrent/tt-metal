@@ -37,7 +37,7 @@ from .tp import _rep_keyed
 # Column-parallel TP sharding: intermediate dim split 4 ways across devices.
 # up   [1,128,2688,1856] bf16 → [1,128,2688,464]/device at shard_dim=3 (≈1.19 GiB)
 # down [1,128,1856,2688] bf16 → [1,128,464,2688]/device at shard_dim=2 (≈1.19 GiB)
-# 23 E-layers × 2 matrices × 0.60 GiB ≈ 27.5 GiB total, 6.87 GiB per device (bfloat8_b).
+# 23 E-layers × 2 matrices × 1.19 GiB ≈ 54.7 GiB total, 13.7 GiB per device (bfloat16).
 _EXPERT_DEVICE_CACHE: dict = {}  # layer_idx -> (up_tt, down_tt)
 
 # Disk cache for pre-stacked, pre-tilized expert weight tensors.
@@ -48,7 +48,7 @@ _EXPERT_DEVICE_CACHE: dict = {}  # layer_idx -> (up_tt, down_tt)
 _EXPERT_DISK_CACHE_DIR = os.path.expanduser(
     os.environ.get(
         "TT_NEMOTRON_EXPERT_CACHE",
-        "~/.cache/ttnn/nemotron30b_experts_bfp8_tp4",
+        "~/.cache/ttnn/nemotron30b_experts_bf16_tp4",
     )
 )
 
@@ -94,15 +94,14 @@ def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
     """Return (up_tt, down_tt) stacked expert-weight tensors for layer_idx.
 
     Column-parallel TP sharding (shard intermediate dim, not expert count):
-      up_tt:   [1, 128, 2688, 464] bfloat8_b, 1 shard per TP device (dim=3)
-      down_tt: [1, 128, 464, 2688] bfloat8_b, 1 shard per TP device (dim=2)
+      up_tt:   [1, 128, 2688, 464] bfloat16, 1 shard per TP device (dim=3)
+      down_tt: [1, 128, 464, 2688] bfloat16, 1 shard per TP device (dim=2)
 
     All 128 experts are present on every device so sparse_matmul always has
     active experts — avoids the noc_semaphore_wait hang from the prior
-    expert-count sharding (tt-metal#45943).  Each device holds 6.87 GiB of
-    expert weights (27.5 GiB total ÷ 4).  bfloat8_b halves DRAM vs bf16 with
-    negligible quality loss for MoE.  moe_experts_forward adds an all_reduce to
-    sum the 4 partial intermediate-column outputs.
+    expert-count sharding (tt-metal#45943).  Each device holds 13.7 GiB of
+    expert weights (54.7 GiB total ÷ 4).  moe_experts_forward adds an
+    all_reduce to sum the 4 partial intermediate-column outputs.
 
     Disk cache (ttnn.as_tensor): first run stacks from safetensors and saves
     pre-tilized shards; subsequent runs load directly — skips torch.stack and
@@ -147,11 +146,9 @@ def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
 
     # ttnn.as_tensor: saves tilized+sharded tensor on first run, loads on subsequent.
     # Column-parallel: shard intermediate dim → [1,128,2688,464] and [1,128,464,2688].
-    # bfloat8_b halves expert DRAM vs bf16 (6.87 GiB/device vs 13.7 GiB) with negligible
-    # quality loss for MoE routing — expert activations are bf16 activations × bfp8 weights.
     up_tt = ttnn.as_tensor(
         up_cpu,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
@@ -160,7 +157,7 @@ def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
     )
     down_tt = ttnn.as_tensor(
         down_cpu,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
