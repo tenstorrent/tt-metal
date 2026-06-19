@@ -65,8 +65,8 @@ FORCE_INLINE void enhanced_noc_async_write(
          .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(dst_noc_addr)});
 }
 
-[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
 template <uint32_t max_transfer_size, bool only_writes>
+[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
 FORCE_INLINE void enhanced_noc_async_write(
     const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
     Noc noc;
