@@ -261,13 +261,16 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.model_config = args.get_model_config()
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
-        # Keep DeltaNet weights at the requested model dtype (bf8 by default).
-        # V2-7b: forcing self.dtype=bfloat16 unexpectedly dropped layer-0 PCC
-        # from 0.999 → 0.84 — DeltaNet relies on bf8-quantised recurrent inputs
-        # to keep its `exp(-A_log * softplus(...))` term within range.  The
-        # full-attention path (TtLlamaAttention) gets a separate bf16 weight
-        # override because its quantisation noise compounds differently.
+        # Keep DeltaNet weight/recurrent dtype at passed value (bf8 default).
+        # Tested: bf16 full (v7, 0.814) and bf16 col-axis only (v8, 0.821) both
+        # worse at tail than bf8 (0.837) — recurrent state error compounds more in
+        # bf16. GDN bf8 is the correct choice.
         self.dtype = dtype
+        # bf16 for the two col-axis partial-K projection matmuls (QKVZ, BA).
+        # These feed all_reduce(cluster_axis=1) — summing reductions that
+        # TP=4 doesn't have. Keeping bf16 activations here matches TP=4's
+        # precision policy (bf8 weights, bf16 activations through all CCL sums).
+        self._proj_act_dtype = ttnn.bfloat16
 
         # --- Mesh topology ---
         self.cluster_shape = list(mesh_device.shape)  # [8, 4]
@@ -937,7 +940,7 @@ class TtQwen36DeltaAttention(LightweightModule):
             qkvz_partial = ttnn.linear(
                 x_mm,
                 self.w_qkvz,
-                dtype=self.dtype,
+                dtype=self._proj_act_dtype,
                 memory_config=mem,
                 compute_kernel_config=ck,
                 program_config=self.model_config["QWEN36_DN_QKVZ_PREFILL_PROGCFG"](_T_qkvz),
@@ -947,7 +950,9 @@ class TtQwen36DeltaAttention(LightweightModule):
             if len(qkvz_partial.shape) == 4:
                 qkvz_partial = ttnn.reshape(qkvz_partial, [1, _T_qkvz, qkvz_partial.shape[-1]])
         else:
-            qkvz_partial = ttnn.linear(x, self.w_qkvz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+            qkvz_partial = ttnn.linear(
+                x, self.w_qkvz, dtype=self._proj_act_dtype, memory_config=mem, compute_kernel_config=ck
+            )
         # QWEN36_ABLATE_CCL: skip col-reduce (timing ablation; garbage values).
         if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
             qkvz = qkvz_partial
@@ -1009,7 +1014,7 @@ class TtQwen36DeltaAttention(LightweightModule):
 
         # B+A fused (note: matches in_proj_ba layout which is b|a, not a|b)
         # V2-DN-TP: col-axis all_reduce to complete the inner-product sum.
-        ba_partial = ttnn.linear(x, self.w_ba, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        ba_partial = ttnn.linear(x, self.w_ba, dtype=self._proj_act_dtype, memory_config=mem, compute_kernel_config=ck)
         if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
             ba = ba_partial  # skip col-reduce (timing ablation)
         else:
