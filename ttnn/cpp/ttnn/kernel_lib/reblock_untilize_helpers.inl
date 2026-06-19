@@ -56,10 +56,9 @@ inline void reblock_and_untilize(
 
     const uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_subblocks_w);
 
-    // Internalized in0_subblock loop: one call untilizes the whole output block,
-    // mirroring untilize(num_blocks). The caller no longer loops, and the standalone
-    // init/uninit wrappers are gone — a single InitAndUninit call covers reconfig +
-    // init + every in0_subblock row-group + uninit.
+    // Internalized in0_subblock loop: one call untilizes the whole output block
+    // (mirroring untilize(num_blocks)) — a single InitAndUninit call covers reconfig +
+    // init + every row-group + uninit.
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
         interm_buf.wait_front(num_tiles_in_row_of_subblocks);
 

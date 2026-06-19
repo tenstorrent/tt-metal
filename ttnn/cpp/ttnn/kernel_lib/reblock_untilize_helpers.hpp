@@ -32,29 +32,16 @@ namespace reblock_untilize_config {
 enum class InitUninitMode : uint8_t { InitAndUninit, InitOnly, UninitOnly, Neither };
 
 /**
- * Data-format reconfiguration for reblock_and_untilize. Mirrors
- * untilize_config::ReconfigureRegisterDatatypeMode (and the reduce / matmul_block
- * helpers' reconfig switch) so reblock obeys the SAME init paradigm as every other
- * matmul-adjacent helper: the helper guarantees its own init AND its own data-format
- * reconfig; the caller is responsible only for uninit / cleanup of any special
- * unpacker/packer mode a prior op left engaged before calling in.
+ * Data-format reconfig for reblock_and_untilize. Independent compile-time gate from
+ * InitUninitMode (mirrors untilize / reduce / matmul_block). reblock reads interm via
+ * copy_tile (srcA) and packs to out, so the targets are srcA=interm and pack=out.
  *
- * INDEPENDENT of InitUninitMode — fires on its own compile-time gate, exactly like
- * untilize. reblock reads interm via copy_tile (srcA only) and packs untilized output
- * to out, so the two reconfig targets are srcA=interm and pack=out.
- *
- * NoReconfigure              Skip both. Use when the caller reconfigured externally, or
- *                            when the reconfig is amortized via reblock_and_untilize_init
- *                            in the manual-lifecycle (InitOnly/Neither/UninitOnly) pattern
- *                            — the Neither loop calls then pass NoReconfigure.
+ * NoReconfigure              skip both (caller reconfigured externally, or amortized in the
+ *                            manual-lifecycle chain).
  * UnpackReconfigure          reconfig_data_format_srca(interm) only.
  * PackReconfigure            pack_reconfig_data_format(out) only.
- * UnpackAndPackReconfigure   (default) Both. The always-correct default: without it
- *                            reblock would untilize using whatever srcA / pack formats the
- *                            previous op (matmul, bias-add) left configured, which is
- *                            correct only when those formats happen to coincide with
- *                            interm / out. Making the reconfig the helper's own
- *                            responsibility removes that latent dependency.
+ * UnpackAndPackReconfigure   (default) both — without it reblock would untilize using
+ *                            whatever formats the previous op left.
  */
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
     NoReconfigure,
@@ -80,61 +67,33 @@ enum class ReconfigureRegisterDatatypeMode : uint8_t {
  * (one call untilizes the whole block, like untilize(num_blocks)); there are no
  * standalone init/uninit wrappers — a single InitAndUninit call covers the lifecycle.
  *
- * INPUT LAYOUT CONSTRAINT: this helper is SubblockMajor-only. The interm CB
- * tile addressing (n * out_subblock_num_tiles + h * out_subblock_w + w) assumes
- * tiles are grouped per-subblock — subblock(0,0)'s tiles, then subblock(0,1)'s
- * tiles, etc. For TileRowMajor input the row strip is already in tile-row order,
- * so callers should invoke the standard untilize helper directly — no reblock
- * needed. Enforced via static_assert on the `layout` template parameter; the
- * default (SubblockMajor) matches every supported caller and the assert exists
- * to fail compilation cleanly if a future caller pairs TileRowMajor matmul
- * output with this helper by mistake.
+ * INPUT LAYOUT CONSTRAINT: SubblockMajor-only. The interm tile addressing
+ * (n * out_subblock_num_tiles + h * out_subblock_w + w) assumes per-subblock grouping.
+ * For TileRowMajor input the strip is already tile-row ordered — use the standard untilize
+ * helper directly. Enforced via static_assert on the `layout` template parameter.
  *
- * ── WHY THIS IS A SEPARATE HELPER (not just untilize) ──────────────────────
- * This helper is NOT redundant with the standard `untilize` helper, and it is not
- * a candidate to be folded into it:
- *   • `untilize` reads CONTIGUOUS tile-rows (block_width_tiles wide) and untilizes
- *     them. It has no concept of subblock grouping. So `untilize` already handles
- *     the TileRowMajor matmul-output case directly (see the INPUT LAYOUT CONSTRAINT
- *     above) — for that layout, do NOT use reblock.
- *   • reblock exists for the SubblockMajor case: it GATHERS subblock-grouped interm
- *     tiles (striding block_offset by out_subblock_num_tiles across N-subblocks)
- *     into row order while untilizing. `untilize` cannot express that gather without
- *     a strided-input parameter that would burden its hot, common contiguous path —
- *     so the gather lives here instead.
- *   • It also does NOT overlap with matmul_block's LastBlockTarget::OutWithUntilize,
- *     which untilizes during the matmul pack but is capped to SINGLE-subblock-wide
- *     output (out_block_num_subblocks == 1). reblock's niche is exactly the case
- *     OutWithUntilize cannot cover: MULTI-subblock-wide SubblockMajor output that
- *     must be materialized to interm first (e.g. a fused bias phase sits between the
- *     matmul and the untilize).
+ * Distinct from the standard untilize helper: untilize reads contiguous tile-rows and so
+ * already handles TileRowMajor output directly (do NOT use reblock there). reblock exists
+ * for the SubblockMajor case — it gathers subblock-grouped interm tiles into row order
+ * while untilizing, which untilize can't express without a strided-input path. It also
+ * covers what matmul_block's OutWithUntilize cannot: multi-subblock-wide SubblockMajor
+ * output that must be materialized to interm first (e.g. when a phase sits between the
+ * matmul and the untilize).
  *
- * Init handling: by default the helper reconfigs data formats (srcA=interm,
- * pack=out — see reblock_untilize_config::ReconfigureRegisterDatatypeMode) AND calls
- * pack_untilize_dest_init + copy_tile_to_dst_init_short at start and
- * pack_untilize_uninit at end (init_uninit_mode=InitAndUninit). The reconfig and the
- * init/uninit lifecycle are INDEPENDENT compile-time switches, matching untilize /
- * reduce / matmul_block: the helper owns short init + data-format reconfig; the
- * caller owns uninit of any prior special mode before calling in. Caller's only boot
- * responsibility is one compute_kernel_hw_startup(). The helper loops over all
- * in0_num_subblocks internally and reconfigs + inits + uninits once around that loop,
- * so the default (InitAndUninit) is the only mode a single-call caller needs; the
- * partial modes (InitOnly/UninitOnly/Neither) remain only for chaining multiple
- * whole-block reblock calls back-to-back.
+ * Init: by default (InitAndUninit) the helper reconfigs data formats and brackets the
+ * whole-block loop with pack_untilize_dest_init + copy_tile_to_dst_init_short / uninit.
+ * Reconfig and init/uninit are independent gates (see the two config enums); the caller's
+ * only boot responsibility is one compute_kernel_hw_startup(). The partial modes
+ * (InitOnly/UninitOnly/Neither) exist only for chaining back-to-back reblock calls.
  *
- * ── Template Parameters ────────────────────────────────────────────────────
+ * ── Template parameters ──────────────────────────────────────────────────────
  *
  *   out_subblock_w     Subblock width in tiles.
  *   out_block_w        Full output block width in tiles (= out_subblock_w * num_subblocks_w).
- *   init_uninit_mode   reblock_untilize_config::InitUninitMode: InitAndUninit (default),
- *                      InitOnly, UninitOnly, Neither.
- *   reconfig_mode      reblock_untilize_config::ReconfigureRegisterDatatypeMode:
- *                      UnpackAndPackReconfigure (default), UnpackReconfigure,
- *                      PackReconfigure, NoReconfigure. Independent of init_uninit_mode.
- *   layout             OutputCBLayout of the matmul that fed `interm_buf`. Must be
- *                      SubblockMajor (the only layout this helper supports); passing
- *                      TileRowMajor fails the static_assert. Threaded through as a
- *                      template arg so the constraint is explicit at the call site.
+ *   init_uninit_mode   InitAndUninit (default), InitOnly, UninitOnly, Neither — see InitUninitMode.
+ *   reconfig_mode      UnpackAndPackReconfigure (default) etc. — see ReconfigureRegisterDatatypeMode.
+ *   layout             OutputCBLayout of the feeding matmul. Must be SubblockMajor (the only
+ *                      supported layout); TileRowMajor fails the static_assert.
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
