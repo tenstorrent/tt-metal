@@ -203,13 +203,14 @@ IndexerScoreDeviceOperation::invoke(
     const Tensor& weights,
     uint32_t chunk_start_idx,
     const IndexerScoreProgramConfig& program_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<Tensor>& chunk_offset) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
             .program_config = program_config,
             .compute_kernel_config = compute_kernel_config},
-        tensor_args_t{.q = q, .k = k, .weights = weights}};
+        tensor_args_t{.q = q, .k = k, .weights = weights, .chunk_offset = chunk_offset}};
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -222,7 +223,8 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& weights,
     uint32_t chunk_start_idx,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& chunk_offset) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
     // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi for the 2x peak, else
     // HiFi2 to keep the bf16 mantissa); a caller-supplied config overrides per field. fp32-dest acc and
@@ -238,7 +240,7 @@ ttnn::Tensor indexer_score(
         /*default_dst_full_sync_en=*/false);
     // Reuse invoke() so attribute/tensor packing lives in one place.
     auto [operation_attributes, tensor_args] =
-        OperationType::invoke(q, k, weights, chunk_start_idx, program_config, resolved);
+        OperationType::invoke(q, k, weights, chunk_start_idx, program_config, resolved, chunk_offset);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

@@ -157,15 +157,20 @@ class ttMLA(_ttMLAv3):
         self._idx_knorm_w = repl(w["indexer.k_norm"])  # [D_idx]
         self._idx_knorm_b = repl(w["indexer.k_norm_bias"])  # [D_idx]
 
-    def _device_rope_pe(self, x: ttnn.Tensor, glob: int, start_pos: int) -> ttnn.Tensor:
-        """On-device non-interleaved RoPE on the rope half (first 64) of the last dim
-        (backlog 19 / issue #4). x [1, n_heads, glob, D_idx]; cos/sin sliced to this
-        chunk's global positions. Returns [1, n_heads, glob, D_idx]."""
-        h = x.shape[1]
-        pe = ttnn.slice(x, [0, 0, 0, 0], [1, h, glob, 64])
-        nope = ttnn.slice(x, [0, 0, 0, 64], [1, h, glob, self.index_args.index_head_dim])
+    def _device_rope_pe(self, x: ttnn.Tensor, glob: int, start_pos: int, sp_shard: bool = False) -> ttnn.Tensor:
+        """On-device RoPE on the rope half (first 64) of the last dim (backlog 19 / issue #4).
+        x [1, n_heads, S, D_idx]; cos/sin sliced to this chunk's global positions [start_pos,
+        start_pos+glob). With sp_shard the cos/sin are mesh-partitioned across SP so each chip
+        ropes its own contiguous query block (positions start_pos + sp_rank*S_local) — used for the
+        SP-sharded indexer queries (the K cache stays full/gathered, so it ropes unsharded)."""
+        h, n = x.shape[1], x.shape[2]
+        pe = ttnn.slice(x, [0, 0, 0, 0], [1, h, n, 64])
+        nope = ttnn.slice(x, [0, 0, 0, 64], [1, h, n, self.index_args.index_head_dim])
         cos = ttnn.slice(self._idx_cos, [0, 0, start_pos, 0], [1, 1, start_pos + glob, 64])
         sin = ttnn.slice(self._idx_sin, [0, 0, start_pos, 0], [1, 1, start_pos + glob, 64])
+        if sp_shard and self.sp_factor > 1:  # each SP chip keeps its block's cos/sin (natural-order shard)
+            cos = ttnn.mesh_partition(cos, dim=2, cluster_axis=self.sp_axis)
+            sin = ttnn.mesh_partition(sin, dim=2, cluster_axis=self.sp_axis)
         if self._idx_trans is not None:  # GLM: interleaved RoPE (Meta-style + trans_mat)
             pe = ttnn.experimental.rotary_embedding_llama(pe, cos, sin, self._idx_trans, is_decode_mode=False)
         else:  # DS: non-interleaved (rotate_half)
@@ -173,6 +178,24 @@ class ttMLA(_ttMLAv3):
                 pe, cos, sin, is_decode_mode=False, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
             )
         return ttnn.concat([pe, nope], dim=-1)
+
+    def _chunk_offset(self, start_pos: int, seq_len: int) -> ttnn.Tensor:
+        """SP-sharded per-device causal chunk-start (in TILES) for indexer_score. Each SP chip owns the
+        contiguous query block [sp_rank*seq_len, ...), so its absolute start is start_pos + sp_rank*seq_len
+        (seq_len = S_local). One uint32 tile per device, value at [0,0]; replicated across TP."""
+        sp = self.sp_factor
+        vals = torch.zeros(sp, 1, 32, 32, dtype=torch.int32)
+        for i in range(sp):
+            vals[i, 0, 0, 0] = (start_pos + i * seq_len) // 32
+        dims = [None, None]
+        dims[self.sp_axis] = 0  # shard the sp blocks across the SP axis, replicate across TP
+        return ttnn.from_torch(
+            vals,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims),
+        )
 
     def _indexer_write_k(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int):
         """Device K stem (wk + TP all-reduce + k_norm + SP all-gather + device rope),
@@ -202,8 +225,9 @@ class ttMLA(_ttMLAv3):
         )
 
     def _indexer_topk(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
-        """Top-k indices [1, 1, glob, k] over the device index-key cache. Fully on
-        device (backlog 6 + 19): stems, RoPE, cache, logits, topk — no host."""
+        """Top-k indices [1, 1, S/sp, k] over the device index-key cache — SP-sharded on the query axis
+        (each chip scores its own S/sp rows; no Q/W all-gather). Fully on device (backlog 6 + 19): stems,
+        RoPE, cache, logits, topk — no host. K stays full/replicated (every query scores all keys)."""
         a = self.index_args
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
@@ -229,13 +253,12 @@ class ttMLA(_ttMLAv3):
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, 1, S/sp, H_idx*D_idx]
-        q = self._sp_all_gather(q, dim=2)  # [1, 1, glob, (H_idx/tp)*D_idx] full-seq, head-sharded on tp
+        )  # [1, 1, S/sp, (H_idx/tp)*D_idx] — queries stay SP-sharded (no all-gather; each chip scores its own rows)
         heads_local = a.index_n_heads // self.tp_factor  # this chip's indexer heads (col-parallel wq_b)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=heads_local, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )  # [1, H_idx/tp, glob, D_idx]
-        q_dev = self._device_rope_pe(q, glob, start_pos)
+        )  # [1, H_idx/tp, S/sp, D_idx]
+        q_dev = self._device_rope_pe(q, glob, start_pos, sp_shard=True)  # per-chip query positions
 
         # weights_proj: device stem -> reduce-scatter the H_idx heads across tp (each chip keeps the
         # reduced H_idx/tp slice matching its wq_b heads) -> SP gather -> scale -> [1, 1, glob, H_idx/tp].
@@ -246,8 +269,7 @@ class ttMLA(_ttMLAv3):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         wts = self._tp_rs_ag(wts, rs_only=True)  # reduce-scatter on the head dim -> this chip's heads
-        wts = self._sp_all_gather(wts, dim=2)
-        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * self.scale)
+        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * self.scale)  # stays SP-sharded [1, 1, S/sp, H_idx/tp]
 
         # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx),
         # so no triu mask add here. Each chip scores only its H_idx/tp heads -> a PARTIAL logit
@@ -256,7 +278,13 @@ class ttMLA(_ttMLAv3):
         # all 64 heads on one chip and must head-stream (HB=16). See INDEXER_OP.md "head residency".
         hb = 0 if self.tp_factor > 1 else 16
         cfg = ops.indexer_program_config(end_pos, head_group=hb)
-        logits = ops.indexer_logits(q_dev, self._index_kbuf, wts, chunk_start_idx=start_pos, program_config=cfg)
+        # SP-sharded queries: each chip scores only its S/sp rows vs the full key cache, with a per-device
+        # causal offset (start_pos + sp_rank*S_local) so the mask is correct without computing the full glob
+        # logits on every chip. topk below then stays SP-sharded ([1,1,S/sp,k]) — fed straight to sparse_mla.
+        offset = self._chunk_offset(start_pos, seq_len)
+        logits = ops.indexer_logits(
+            q_dev, self._index_kbuf, wts, chunk_start_idx=start_pos, program_config=cfg, chunk_offset=offset
+        )
         # All-reduce(SUM) the partial logits over tp -> full head-summed logit before top-k. The op emits
         # ROW_MAJOR; _tp_rs_ag (reduce_scatter+all_gather) runs in TILE, so round-trip the layout.
         if self.tp_factor > 1:

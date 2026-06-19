@@ -409,8 +409,12 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
     # _indexer_topk takes the per-chip (SP-local) sequence; it all-gathers back to the global glob.
     idx = mla._indexer_topk(_shard_idx_input(x, mesh_device), SEQ_LEN // mesh_device.shape[0])
 
-    logits = ops._to_host(captured["logits"]).float()[0, 0]  # [S, S]; future cols -inf
-    got_topk = ops._to_host(idx).long()[0, 0]  # [S, k]
+    # The indexer is now query-SP-sharded: top-k input is [1,1,S/sp,end_pos] (TP-replicated) and idx is
+    # [1,1,S/sp,k]. Reassemble the full S by concatenating the SP shards (tp=0 column) along the query dim.
+    sp_, tp_ = list(mesh_device.shape)
+    _sp_gather = lambda t: torch.cat([ttnn.to_torch(ttnn.get_device_tensors(t)[r * tp_]) for r in range(sp_)], dim=2)
+    logits = _sp_gather(captured["logits"]).float()[0, 0]  # [S, S]; future cols -inf
+    got_topk = _sp_gather(idx).long()[0, 0]  # [S, k]
     # PCC only over the causal region (device masks future to -inf; ref is pre-mask).
     tril = torch.tril(torch.ones(SEQ_LEN, SEQ_LEN, dtype=torch.bool))
     _, pcc = comp_pcc(ref["logits"][tril].float(), logits[tril], 0)

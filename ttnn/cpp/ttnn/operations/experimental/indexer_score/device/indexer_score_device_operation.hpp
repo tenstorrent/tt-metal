@@ -42,7 +42,8 @@ struct IndexerScoreDeviceOperation {
         const Tensor& weights,
         uint32_t chunk_start_idx,
         const IndexerScoreProgramConfig& program_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
+        const DeviceComputeKernelConfig& compute_kernel_config,
+        const std::optional<Tensor>& chunk_offset = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -59,6 +60,7 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& weights,
     uint32_t chunk_start_idx = 0,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& chunk_offset = std::nullopt);
 
 }  // namespace ttnn::experimental

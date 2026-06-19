@@ -44,12 +44,23 @@ def _to_host(t: ttnn.Tensor) -> torch.Tensor:
     return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
 
 
+def _chunk_offset_tensor(device, chunk_start_tiles: int) -> ttnn.Tensor:
+    """Build a replicated 1-tile uint32 chunk_offset for indexer_score: every device holds
+    chunk_start_tiles at element [0,0]. mla.py builds an SP-sharded variant for sharded queries."""
+    t = torch.zeros(1, 1, 32, 32, dtype=torch.int32)
+    t[0, 0, 0, 0] = int(chunk_start_tiles)
+    return ttnn.from_torch(
+        t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32, mesh_mapper=ttnn.ReplicateTensorToMesh(device)
+    )
+
+
 def indexer_logits(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
     w: ttnn.Tensor,
     chunk_start_idx: int = 0,
     program_config: "ttnn.IndexerScoreProgramConfig | None" = None,
+    chunk_offset: "ttnn.Tensor | None" = None,
 ) -> ttnn.Tensor:
     """
     Index scores per (query, key), causality fused:
@@ -76,8 +87,14 @@ def indexer_logits(
     weights = ttnn.permute(w, (0, 3, 2, 1))  # [1, H_idx, Sq, 1]
     if program_config is None:
         program_config = INDEXER_FULL_MODEL_CONFIG
+    # Per-device causal chunk-start (tiles), streamed into the op at runtime so each chip masks against
+    # its own query positions. Default: replicated chunk_start_idx (single-shot / unsharded queries);
+    # mla.py passes an SP-sharded tensor (start_pos + sp_rank*S_local) when the indexer queries are
+    # SP-sharded. Runtime delivery means start_pos no longer recompiles the kernel per chunk.
+    if chunk_offset is None:
+        chunk_offset = _chunk_offset_tensor(q.device(), chunk_start_idx // 32)
     return ttnn.experimental.indexer_score(
-        q, k, weights, chunk_start_idx=chunk_start_idx, program_config=program_config
+        q, k, weights, chunk_start_idx=chunk_start_idx, program_config=program_config, chunk_offset=chunk_offset
     )
 
 
@@ -149,9 +166,10 @@ def sparse_mla(
     # (sp == 1) already matches q's full S; for sp > 1 redistribute the replicated rows
     # onto the SP axis on device.
     idx = indices
-    if sp > 1:
-        # Re-shard the replicated rows onto the SP axis on device — the inverse of all_gather
-        # (mesh_partition): chip sp_i keeps queries [i·S/sp, (i+1)·S/sp), matching its q seq shard.
+    if sp > 1 and indices.shape[2] == q.shape[2] * sp:
+        # Replicated full-glob indices ([1,1,glob,k]) — reshard the rows onto the SP axis on device (inverse
+        # of all_gather): chip sp_i keeps queries [i·S/sp, (i+1)·S/sp). When the indexer already produced
+        # SP-sharded indices ([1,1,S/sp,k] == q's seq), they match q's shard and pass through unchanged.
         idx = ttnn.mesh_partition(indices, dim=2, cluster_axis=sp_axis)
 
     # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).

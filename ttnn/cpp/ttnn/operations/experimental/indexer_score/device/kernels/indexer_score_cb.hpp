@@ -24,6 +24,7 @@ enum CbArg : uint32_t {
     cb_acc_strip_arg,  // unit accumulator: QC x KC strip (untilize input)
     cb_out_strip_arg,  // untilized row-major strip output
     cb_scratch_arg,    // writer-only -inf scratch tile
+    cb_offset_arg,     // 1 tile: per-device causal chunk-start (tiles), filled by the reader (DRAM or const)
     num_cb_args
 };
 

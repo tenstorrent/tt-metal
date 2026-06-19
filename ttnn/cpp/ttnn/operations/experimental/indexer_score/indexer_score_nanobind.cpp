@@ -51,7 +51,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("chunk_start_idx") = 0,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
-        nb::arg("compute_kernel_config") = std::nullopt);
+        nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("chunk_offset") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

@@ -41,6 +41,11 @@ constexpr uint32_t q_send_sem = get_compile_time_arg_val(mc_ct_base + 5);
 constexpr uint32_t q_recv_sem = get_compile_time_arg_val(mc_ct_base + 6);
 constexpr uint32_t q_valid_sem = get_compile_time_arg_val(mc_ct_base + 7);
 
+// Optional per-device chunk_offset: flag at mc_ct_base+8; the chunk_offset TensorAccessor (when bound)
+// follows at mc_ct_base+9. The offset tensor's DRAM address is reader runtime arg 21.
+constexpr uint32_t has_offset = get_compile_time_arg_val(mc_ct_base + 8);
+constexpr uint32_t u32_tile_bytes = 32 * 32 * 4;  // one uint32 32x32 tile
+
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
     uint32_t role;            // 0 none (DRAM read), 1 sender (read + mcast), 2 receiver (wait for mcast)
@@ -123,6 +128,23 @@ inline void build_mask_tiles(Noc noc) {
     fill_causal_diagonal_tile_bf16<bf16_tile_bytes>(noc, cb_mask, /*tile_id=*/0);  // diagonal strict-upper -inf
     fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/1);                     // full -inf
     cb.push_back(num_mask_tiles);
+}
+
+// Publish the per-device causal chunk start (in tiles) into cb_offset for the compute kernel. Stage 1:
+// the compile-time chunk_start_tiles constant; Stage 1b will DRAM-read the optional chunk_offset tensor.
+inline void fill_cb_offset(Noc noc) {
+    CircularBuffer cb(cb_offset);
+    cb.reserve_back(1);
+    const uint32_t l1 = cb.get_write_ptr();
+    if constexpr (has_offset) {  // DRAM-read this device's chunk-start tile (per-SP-chip value)
+        constexpr auto off_args = TensorAccessorArgs<mc_ct_base + 9>();
+        const auto off_acc = TensorAccessor(off_args, get_arg_val<uint32_t>(21), u32_tile_bytes);
+        noc.async_read(off_acc, CoreLocalMem<uint32_t>(l1), u32_tile_bytes, {.page_id = 0}, {});
+        noc.async_read_barrier();
+    } else {  // single-shot: the compile-time constant
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1)[0] = chunk_start_tiles;
+    }
+    cb.push_back(1);
 }
 
 /** Read ONE q-row (heads_per_group heads x head_dim_tiles tiles, heads starting at first_head) from
@@ -244,6 +266,7 @@ void kernel_main() {
     Noc noc;
 
     build_mask_tiles(noc);
+    fill_cb_offset(noc);
 
     WorkUnitSpan span;
     span.start(flat_start);
