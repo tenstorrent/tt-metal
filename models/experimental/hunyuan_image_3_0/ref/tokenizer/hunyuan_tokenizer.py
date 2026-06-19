@@ -39,7 +39,7 @@ from torch import Tensor
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from .chat_template import ChatTemplateEncoder, TokenizerEncodeOutput
-from .image_info import ImageInfo, build_gen_image_info
+from .image_info import CondImage, ImageInfo, build_gen_image_info
 from .special_tokens import SpecialTokens, build_special_tokens, validate_special_tokens
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -167,23 +167,42 @@ class HunyuanTokenizer:
         prompt: str | list[str],
         *,
         image_size: str | tuple[int, int] | list[int] = 1024,
+        cond_images: CondImage | list[CondImage] | list[list[CondImage]] | None = None,
         mode: str = "gen_image",
         max_length: int | None = None,
         cfg_factor: int | None = None,
         sequence_template: str = "pretrain",
     ) -> dict[str, Any]:
-        """Build full T2I token sequence(s) for ``mode='gen_image'``.
+        """Build T2I or I2I token sequence(s) for ``mode='gen_image'``.
 
+        Pass ``cond_images`` for image-to-image (user cond block before prompt).
         Returns ``dict(output=TokenizerEncodeOutput, sections=...)`` matching HF layout.
         ``output.tokens`` shape is ``[B, S]`` or ``[2, S]`` when ``cfg_factor=2``.
         """
         batch_prompt = [prompt] if isinstance(prompt, str) else list(prompt)
+        batch_size = len(batch_prompt)
         gen_infos = [self.build_gen_image_info(image_size) for _ in batch_prompt]
         if cfg_factor is None:
             cfg_factor = 1 if self.config.cfg_distilled else 2
+
+        batch_cond_images = None
+        if cond_images is not None:
+            if isinstance(cond_images, CondImage):
+                batch_cond_images = [[cond_images] for _ in range(batch_size)]
+            elif cond_images and isinstance(cond_images[0], CondImage):
+                if len(cond_images) == batch_size:
+                    batch_cond_images = [[c] for c in cond_images]
+                elif len(cond_images) == 1:
+                    batch_cond_images = [list(cond_images) for _ in range(batch_size)]
+                else:
+                    batch_cond_images = [list(cond_images) for _ in range(batch_size)]
+            else:
+                batch_cond_images = list(cond_images)
+
         return self._chat.apply_chat_template(
             batch_prompt=batch_prompt,
             batch_gen_image_info=gen_infos,
+            batch_cond_images=batch_cond_images,
             mode=mode,
             max_length=max_length,
             cfg_factor=cfg_factor,
