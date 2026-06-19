@@ -46,15 +46,17 @@ FORCE_INLINE void zero_l1(uint32_t addr, uint32_t nbytes) {
 void kernel_main() {
     constexpr uint32_t cb_rm_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_gamma_rm = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
-    constexpr uint32_t has_gamma = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);            // real tiles along W (ceil(W/32))
-    constexpr uint32_t reduce_block = get_compile_time_arg_val(5);  // chunk width in tiles
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(6);    // ceil(Wt / reduce_block)
-    constexpr uint32_t W = get_compile_time_arg_val(7);             // true element count along W
-    constexpr uint32_t in_elem = get_compile_time_arg_val(8);       // input element bytes
-    constexpr uint32_t gamma_elem = get_compile_time_arg_val(9);    // gamma element bytes
-    constexpr auto input_args = TensorAccessorArgs<10>();
+    constexpr uint32_t cb_gamma_tiled = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_scaler = get_compile_time_arg_val(3);
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(4);
+    constexpr uint32_t gamma_is_tile = get_compile_time_arg_val(5);  // gamma.layout == TILE
+    constexpr uint32_t Wt = get_compile_time_arg_val(6);             // real tiles along W (ceil(W/32))
+    constexpr uint32_t reduce_block = get_compile_time_arg_val(7);   // chunk width in tiles
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(8);     // ceil(Wt / reduce_block)
+    constexpr uint32_t W = get_compile_time_arg_val(9);              // true element count along W
+    constexpr uint32_t in_elem = get_compile_time_arg_val(10);       // input element bytes
+    constexpr uint32_t gamma_elem = get_compile_time_arg_val(11);    // gamma element bytes
+    constexpr auto input_args = TensorAccessorArgs<12>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -121,34 +123,60 @@ void kernel_main() {
             cb_push_back(cb_rm_in, reduce_block);
         }
 
-        // ---- PASS-2 gamma feed (streamed): only stick 0 carries gamma data ----
+        // ---- PASS-2 gamma feed (streamed, per chunk) ----
         if constexpr (has_gamma) {
-            const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
-            for (uint32_t c = 0; c < num_chunks; ++c) {
-                const uint32_t col0 = c * chunk_cols;
-                uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
-                if (valid_cols > chunk_cols) {
-                    valid_cols = chunk_cols;
-                }
-                const uint32_t chunk_row_bytes = valid_cols * gamma_elem;
-                const uint32_t byte_off = col0 * gamma_elem;
-
-                cb_reserve_back(cb_gamma_rm, reduce_block);
-                uint32_t l1 = get_write_ptr(cb_gamma_rm);
-                // Row 0 only (row-broadcast). Zero its padding tail so the tile is
-                // well-formed; rows 1..31 are don't-care (never read by row-bcast).
-                if (chunk_row_bytes > 0) {
-                    const uint32_t zstart = chunk_row_bytes & ~3u;
-                    if (zstart < gamma_padded_chunk_bytes) {
-                        zero_l1(l1 + zstart, gamma_padded_chunk_bytes - zstart);
+            if constexpr (gamma_is_tile) {
+                // gamma is already TILE-laid-out (1,1,1,W) -> Wt column tiles, data
+                // in row 0 of each tile. Read tiles directly into cb_gamma_tiled
+                // (compute skips the tilize step). Synthetic padding tiles (beyond
+                // Wt, when reduce_block doesn't divide Wt) are zeroed.
+                const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiled);
+                const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+                for (uint32_t c = 0; c < num_chunks; ++c) {
+                    cb_reserve_back(cb_gamma_tiled, reduce_block);
+                    uint32_t l1 = get_write_ptr(cb_gamma_tiled);
+                    for (uint32_t t = 0; t < reduce_block; ++t) {
+                        const uint32_t gt = c * reduce_block + t;
+                        if (gt < Wt) {
+                            noc_async_read_tile(gt, gamma_accessor, l1);
+                        } else {
+                            zero_l1(l1, gamma_tile_bytes);
+                        }
+                        l1 += gamma_tile_bytes;
                     }
-                    const uint64_t noc_addr = gamma_accessor.get_noc_addr(0, byte_off);
-                    noc_async_read(noc_addr, l1, chunk_row_bytes);
-                } else {
-                    zero_l1(l1, gamma_padded_chunk_bytes);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_gamma_tiled, reduce_block);
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_gamma_rm, reduce_block);
+            } else {
+                // gamma is ROW_MAJOR (1,1,1,W): one stick. Only row 0 carries data;
+                // the row-broadcast multiply reads only row 0, and gamma padding
+                // columns multiply into padding output columns (discarded), so the
+                // padding tail is zeroed just to keep the tile well-formed.
+                const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
+                for (uint32_t c = 0; c < num_chunks; ++c) {
+                    const uint32_t col0 = c * chunk_cols;
+                    uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
+                    if (valid_cols > chunk_cols) {
+                        valid_cols = chunk_cols;
+                    }
+                    const uint32_t chunk_row_bytes = valid_cols * gamma_elem;
+                    const uint32_t byte_off = col0 * gamma_elem;
+
+                    cb_reserve_back(cb_gamma_rm, reduce_block);
+                    uint32_t l1 = get_write_ptr(cb_gamma_rm);
+                    if (chunk_row_bytes > 0) {
+                        const uint32_t zstart = chunk_row_bytes & ~3u;
+                        if (zstart < gamma_padded_chunk_bytes) {
+                            zero_l1(l1 + zstart, gamma_padded_chunk_bytes - zstart);
+                        }
+                        const uint64_t noc_addr = gamma_accessor.get_noc_addr(0, byte_off);
+                        noc_async_read(noc_addr, l1, chunk_row_bytes);
+                    } else {
+                        zero_l1(l1, gamma_padded_chunk_bytes);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_gamma_rm, reduce_block);
+                }
             }
         }
     }

@@ -73,3 +73,5 @@
 {"event": "phase", "phase": "refinement_2_golden", "state": "end", "at_ms": 1781890425123}
 {"event": "phase", "phase": "refinement_3", "state": "start", "at_ms": 1781890429082}
 {"source":"tt-probe","pid":2982463,"started_at_ms":1781891490932,"wait_ms":285,"run_ms":20230,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2984615,"started_at_ms":1781891549019,"wait_ms":247,"run_ms":36534,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2986759,"started_at_ms":1781891707039,"wait_ms":284,"run_ms":29650,"test_path":"rms_norm","exit_code":0}

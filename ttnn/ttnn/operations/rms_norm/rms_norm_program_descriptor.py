@@ -532,6 +532,7 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
     in_elem = input_tensor.element_size()
     gamma_elem = gamma.element_size() if has_gamma else in_elem
     out_elem = output_tensor.element_size()
+    gamma_is_tile = 1 if (has_gamma and gamma.layout == ttnn.TILE_LAYOUT) else 0
 
     num_cores = min(num_blocks_total, total_cores)
     core_ranges = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
@@ -567,8 +568,10 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
     reader_ct = [
         CB_RM_IN,
         CB_RM_GAMMA,
+        CB_RM_GAMMA_TILED,
         CB_SCALER,
         int(has_gamma),
+        gamma_is_tile,
         Wt,
         reduce_block,
         num_chunks,
@@ -628,6 +631,7 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         reduce_block,
         num_chunks,
         int(has_gamma),
+        gamma_is_tile,
         inv_W_bits,
         eps_bits,
     ]

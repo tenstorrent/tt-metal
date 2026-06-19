@@ -48,8 +48,9 @@ void kernel_main() {
     constexpr uint32_t reduce_block = get_compile_time_arg_val(11);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(12);
     constexpr uint32_t has_gamma = get_compile_time_arg_val(13);
-    constexpr uint32_t inv_W_bits = get_compile_time_arg_val(14);
-    constexpr uint32_t eps_bits = get_compile_time_arg_val(15);
+    constexpr uint32_t gamma_is_tile = get_compile_time_arg_val(14);  // gamma.layout == TILE
+    constexpr uint32_t inv_W_bits = get_compile_time_arg_val(15);
+    constexpr uint32_t eps_bits = get_compile_time_arg_val(16);
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
@@ -122,8 +123,12 @@ void kernel_main() {
         // ---------- PASS 2: normalize, per chunk, untilize -> cb_rm_out ----------
         for (uint32_t c = 0; c < num_chunks; ++c) {
             if constexpr (has_gamma) {
-                // tilize this chunk's gamma sticks (row 0 valid) -> cb_gamma_tiled
-                ckl::tilize<reduce_block, cb_gamma_rm, cb_gamma_tiled>(1);
+                // ROW_MAJOR gamma: tilize this chunk's sticks (row 0 valid) ->
+                // cb_gamma_tiled. TILE gamma: the reader already filled
+                // cb_gamma_tiled with column tiles directly (no tilize needed).
+                if constexpr (!gamma_is_tile) {
+                    ckl::tilize<reduce_block, cb_gamma_rm, cb_gamma_tiled>(1);
+                }
 
                 // x * recip (Col bcast) -> cb_normalized
                 ckl::eltwise_chain(
