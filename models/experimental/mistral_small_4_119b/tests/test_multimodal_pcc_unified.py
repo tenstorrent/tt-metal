@@ -256,7 +256,6 @@ def _chunked_hf_forward(hf_model, pixel_values, input_ids, image_sizes, chunk_si
     os.environ.get("MISTRAL4_MM_PCC") != "1",
     reason="Set MISTRAL4_MM_PCC=1 to run.",
 )
-@pytest.mark.slow
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
 @pytest.mark.parametrize(
@@ -265,10 +264,10 @@ def _chunked_hf_forward(hf_model, pixel_values, input_ids, image_sizes, chunk_si
         (1, 1, 128),
         (36, 24, 128),
         (36, 24, 4096),
-        (36, 24, 16384),
-        (36, 24, 65536),
-        (36, 24, 131072),
-        (36, 24, 262144),
+        pytest.param(36, 24, 16384, marks=pytest.mark.slow),
+        pytest.param(36, 24, 65536, marks=pytest.mark.slow),
+        pytest.param(36, 24, 131072, marks=pytest.mark.slow),
+        pytest.param(36, 24, 262144, marks=pytest.mark.slow),
     ],
     ids=[
         "L1V1",
