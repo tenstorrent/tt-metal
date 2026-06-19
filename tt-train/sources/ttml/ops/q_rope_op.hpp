@@ -9,7 +9,7 @@
 
 namespace ttml::ops {
 
-// Fused MLA Q RoPE forward: copy q_nope, apply RoPE to q_pe, return full head.
+// Fused MLA Q RoPE forward and backward (q_rope_fw; backward uses neg cos/sin on the rope slice).
 autograd::TensorPtr q_rope(
     const autograd::TensorPtr& q_full,
     const RotaryEmbeddingParams& rope_params,
