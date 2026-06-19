@@ -107,7 +107,7 @@ class Split(ttml.autograd.Function):
     This is the cheap inverse of :class:`Concat` and the efficient replacement
     for calling :func:`autograd_slice` several times on the same tensor.
 
-    Forward: ``len(sizes)`` contiguous ``ttnn.slice`` views.
+    Forward: ``len(sizes)`` contiguous chunks via ``ttnn.split``.
     Backward: a single ``ttnn.concat`` of the upstream gradients.
 
     Why a dedicated op: two adjacent ``autograd_slice`` calls each rebuild a
@@ -127,24 +127,13 @@ class Split(ttml.autograd.Function):
             raise ValueError(f"autograd_split dim {dim} out of range for rank-{rank} tensor")
         ctx.dim = dim
 
-        # Chunks must be positive and tile the split dim exactly: otherwise the forward
-        # would drop/overrun data and the backward concat would not reconstruct the input.
+        # Chunks must tile the split dim exactly: otherwise the forward could drop
+        # data and the backward concat would not reconstruct the input gradient.
         axis_size = val.shape[dim]
-        if any(s <= 0 for s in sizes):
-            raise ValueError(f"autograd_split sizes must be positive, got {list(sizes)}")
         if sum(sizes) != axis_size:
             raise ValueError(f"autograd_split sizes {list(sizes)} must tile dim {dim} (size {axis_size})")
 
-        outputs = []
-        offset = 0
-        for size in sizes:
-            start = [0] * rank
-            end = list(val.shape)
-            start[dim] = offset
-            end[dim] = offset + size
-            outputs.append(ttnn.slice(val, start, end))
-            offset += size
-        return tuple(outputs)
+        return tuple(ttnn.split(val, list(sizes), dim))
 
     @staticmethod
     def backward(ctx, *grad_outputs):
