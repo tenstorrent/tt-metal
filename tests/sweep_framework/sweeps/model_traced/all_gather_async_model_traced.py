@@ -1047,3 +1047,16 @@ def run(
             os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = _prev_op_timeout
         else:
             os.environ.pop("TT_METAL_OPERATION_TIMEOUT_SECONDS", None)
+        # Clear any custom worker sub-device manager so it does not leak into the
+        # next vector. In main-proc mode the device stays open across vectors, so a
+        # carved worker grid created here (for a traced multi-sub-device layout)
+        # would shrink the cores available to a later num_links>=2 gather and make
+        # it fail "Not enough cores ... for the requested number of links N".
+        # Validated on a 32-chip galaxy: all_gather module 136 pass/11 fail without
+        # this -> 147 pass/0 fail with it.
+        try:
+            if locals().get("_ccl_sub_device_manager") is not None:
+                device.clear_loaded_sub_device_manager()
+                device.remove_sub_device_manager(_ccl_sub_device_manager)
+        except Exception:
+            pass
