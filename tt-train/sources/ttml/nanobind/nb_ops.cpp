@@ -26,6 +26,7 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
+#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
@@ -59,6 +60,7 @@ void py_module_types(nb::module_& m) {
     }
 
     m.def_submodule("matmul");
+    m.def_submodule("mla");
     m.def_submodule("multi_head_utils");
     m.def_submodule("attention");
     m.def_submodule("reshape");
@@ -257,6 +259,20 @@ void py_module(nb::module_& m) {
             nb::arg("kvs"),
             nb::arg("num_heads"),
             nb::arg("num_groups"));
+    }
+
+    {
+        auto py_mla = static_cast<nb::module_>(m.attr("mla"));
+        py_mla.def(
+            "qkv_assemble_fw",
+            &ttml::ops::mla_qkv_assemble_fw,
+            nb::arg("q_pre"),
+            nb::arg("kv_up"),
+            nb::arg("k_pe"),
+            nb::arg("n_heads"),
+            nb::arg("qk_nope_dim"),
+            nb::arg("qk_rope_dim"),
+            nb::arg("v_dim"));
     }
 
     {

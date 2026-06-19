@@ -248,7 +248,7 @@ void run_single_dfb_program(
             .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
             .tensor_bindings = {{
                 .tensor_parameter_name = IN_TENSOR,
-                .accessor_name = "src_tensor",  // kernel: ta::src_tensor
+                .accessor_name = "src_tensor",  // kernel: tensor::src_tensor
             }},
             .compile_time_args =
                 {
@@ -288,7 +288,7 @@ void run_single_dfb_program(
             }},
             .tensor_bindings = {{
                 .tensor_parameter_name = OUT_TENSOR,
-                .accessor_name = "dst_tensor",  // kernel: ta::dst_tensor
+                .accessor_name = "dst_tensor",  // kernel: tensor::dst_tensor
             }},
             .compile_time_args =
                 {
@@ -961,7 +961,7 @@ void run_sequential_dfbs_program(
         num_producers + num_consumers <= 6,
         "num_producers + num_consumers must fit in 6 available Quasar DM threads (DM0 reserved for dispatch)");
     // dfb_seq_producer / dfb_seq_consumer kernels unroll up to TEST_NUM_DFBS bindings
-    // referencing dfb::dfb_<i> / ta::src_<i> / ta::dst_<i> for i in [0, TEST_NUM_DFBS).
+    // referencing dfb::dfb_<i> / tensor::src_<i> / tensor::dst_<i> for i in [0, TEST_NUM_DFBS).
     TT_FATAL(num_dfbs <= 6, "num_dfbs must be <= 6 (kernel binding-name limit dfb::dfb_0..5)");
 
     const CoreCoord core(0, 0);
@@ -1002,7 +1002,7 @@ void run_sequential_dfbs_program(
     const experimental::KernelSpecName PRODUCER{"producer"};
     const experimental::KernelSpecName CONSUMER{"consumer"};
 
-    // Producer kernel: N DFB bindings (dfb::dfb_0..N-1) + N tensor bindings (ta::src_0..N-1).
+    // Producer kernel: N DFB bindings (dfb::dfb_0..N-1) + N tensor bindings (tensor::src_0..N-1).
     // TEST_NUM_DFBS compiler define gates the per-DFB unrolled blocks; it must equal the
     // number of dfb_bindings / tensor_bindings registered here. Name is prefixed to avoid
     // colliding with dfb::NUM_DFBS in dataflow_buffer_config.h.

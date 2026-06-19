@@ -12,6 +12,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/transpose_wh.h"
@@ -79,14 +80,8 @@ void kernel_main() {
     // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
     // consistently throughout the kernel for correctness. acquire_dst/release_dst
     // must NOT be mixed with tile_regs_* in half-sync mode.
-    mm_block_init(
-        cb_input,
-        cb_weight,
-        cb_local_out,
-        /*transpose=*/0,
-        /*ct_dim=*/1,
-        /*rt_dim=*/1,
-        /*kt_dim=*/1);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_input, cb_weight, cb_local_out);
+    matmul_block_init(cb_input, cb_weight, /*transpose=*/0, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/1);
     tile_regs_acquire();
 
     uint32_t tiles_done = 0;
