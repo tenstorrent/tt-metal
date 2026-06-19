@@ -26,24 +26,24 @@ with **tensor parallelism (TP=8)** along the mesh cluster axis.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                    TtMinistral3ForCausalLM  (88 layers)                     │
+│                    TtMinistral3ForCausalLM  (88 layers)                      │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  input_ids ──► TtEmbedTokens ──► ┌──────────────────────────────────────┐  │
-│                                  │  TtDecoderLayer  × 88                │  │
-│                                  │  (residual transformer block)        │  │
-│                                  └──────────────────┬───────────────────┘  │
-│                                                     ▼                      │
+│  input_ids ──► TtEmbedTokens ──► ┌──────────────────────────────────────┐    │
+│                                  │  TtDecoderLayer  × 88                │    │
+│                                  │  (residual transformer block)        │    │
+│                                  └──────────────────┬───────────────────┘    │
+│                                                     ▼                        │
 │                                            TtRMSNorm (final)                 │
-│                                                     ▼                      │
+│                                                     ▼                        │
 │                                            lm_head (column-parallel)         │
-│                                                     ▼                      │
-│                                              logits [B, S, vocab]          │
-│                                                     │                      │
-│                                                     ▼                      │
-│                              OnDeviceSampler (ttnn.argmax, optional)       │
-│                                                     ▼                      │
-│                                              next token id                 │
+│                                                     ▼                        │
+│                                              logits [B, S, vocab]            │
+│                                                     │                        │
+│                                                     ▼                        │
+│                              OnDeviceSampler (ttnn.argmax, optional)         │
+│                                                     ▼                        │
+│                                              next token id                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
