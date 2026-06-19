@@ -1,0 +1,10 @@
+{
+  "pr_template": "- #{{TITLE}} [PR #{{NUMBER}}](#{{URL}})",
+  "transformers": [
+    {
+      "pattern": "^(- )(?:\\[[^\\]]*\\]\\s*)+[:\\-–—]?\\s*",
+      "target": "$1",
+      "flags": "gi"
+    }
+  ]
+}
