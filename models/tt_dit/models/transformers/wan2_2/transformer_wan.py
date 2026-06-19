@@ -113,7 +113,7 @@ class WanTransformerBlock(Module):
         self.ffn = ParallelFeedForward(
             dim,
             inner_dim=ffn_dim,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
