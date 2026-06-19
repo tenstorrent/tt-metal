@@ -2,15 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Model configuration for Janus Pro (deepseek-community/Janus-Pro-7B).
-
-Follows the Gemma3 ModelArgs conventions (same TTModelArgs base, same method
-layout) but loads Janus Pro weights and uses the Janus vision-tower dimensions
-and state-dict prefixes (``model.vision_model.*``).
-"""
-
-import gc
 import os
 
 from loguru import logger
@@ -18,7 +9,6 @@ from loguru import logger
 import ttnn
 from models.experimental.janus_pro.tt.load_checkpoints import convert_vision_hf_to_meta
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
-
 
 class ModelArgs(TTModelArgs):
     def __init__(
@@ -72,7 +62,7 @@ class ModelArgs(TTModelArgs):
         return max(snaps, key=os.path.getmtime) if snaps else None
 
     def _set_model_specific_params(self):
-        # Janus Pro uses a LLaMA-style text decoder: no Gemma-style RMSNorm unit offset.
+        # LLaMA-style text decoder: RMSNorm without a unit offset.
         self.rms_norm_add_unit_offset = False
 
     def create_tokenizer(self):
@@ -88,81 +78,63 @@ class ModelArgs(TTModelArgs):
             trust_remote_code=self.trust_remote_code_hf,
         )
 
-    def _set_vision_params(self, vision_config):
-        # SigLIP vision-tower dimensions used by the Janus vision encoder.
+    def _set_vision_params(self, config):
+        vision_config = config.get("vision_config", config)
+
+        # JanusVisionEmbeddings (patch_embedding, position_embedding)
         self.vision_chunk_size = vision_config.get("image_size", 384)
         self.vision_dim = vision_config.get("hidden_size", 1024)
         self.vision_patch_size = vision_config.get("patch_size", 16)
         self.vision_in_channels = vision_config.get("num_channels", 3)
+        self.mm_tokens_per_image = vision_config.get("num_image_tokens", 576)
 
+        # JanusVisionEncoder (ModuleList of encoder layers)
         self.vision_n_layers = vision_config.get("num_hidden_layers", 24)
+
+        # JanusVisionEncoderLayer (layer_norm1/2) and JanusVisionModel (post_layernorm)
+        self.vision_layer_norm_eps = vision_config.get("layer_norm_eps", 1e-6)
+
+        # JanusVisionAttention (q/k/v_proj, q/k_norm, projection_layer)
         self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+        self.vision_attention_bias = vision_config.get("attention_bias", True)
+        self.vision_use_qk_norm = vision_config.get("use_qk_norm", False)
+        self.vision_dropout = vision_config.get("attention_dropout", 0.0)
+        self.vision_projection_dropout = vision_config.get("projection_dropout", 0.0)
 
+        # JanusVisionMLP (fc1, activation_fn, fc2; activation_fn also used by JanusVisionAlignerMLP)
         mlp_ratio = vision_config.get("mlp_ratio", 4.0)
         self.vision_mlp_ratio = mlp_ratio
         self.vision_hidden_dim = int(self.vision_dim * mlp_ratio)
-
-        self.mm_tokens_per_image = vision_config.get("num_image_tokens", 576)
-
         act_layer = str(vision_config.get("hidden_act", "gelu")).lower()
         self.vision_act_layer = {
             "gelu": ttnn.UnaryOpType.GELU,
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
         }.get(act_layer, ttnn.UnaryOpType.GELU)
+        self.vision_hidden_dropout = vision_config.get("hidden_dropout_rate", 0.0)
 
-        # Janus has no image tiling or cross-attention; these exist only because
-        # the base ModelArgs.__repr__ reads them.
+        # JanusVisionAlignerMLP (fc1, hidden_layers; vision-to-text projection)
+        self.vision_projection_dim = vision_config.get("projection_dim", 2048)
+        self.vision_aligner_depth = vision_config.get("depth", 2)
+
+        # Not in Janus HF config; placeholders for base ModelArgs.__repr__
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 0)
 
-    def _set_hf_params(self, checkpoint_dir):
-        def merge_vision_config(base_config):
-            vision_config = base_config.get("vision_config", {})
-            # Merge non-nested keys into vision_config
-            vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
-            return vision_config
+    def get_hf_model_cls(self):
+        from transformers import JanusForConditionalGeneration
 
-        from transformers import AutoConfig
-
-        self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
-
-        if "text_config" in self.hf_config or "vision_config" in self.hf_config:
-            self._set_params_from_dict(self.hf_config)
-            if "vision_config" in self.hf_config:
-                merged_vision_config = merge_vision_config(self.hf_config)
-                self._set_vision_params(merged_vision_config)
-        else:
-            self._set_params_from_dict(self.hf_config)
+        return JanusForConditionalGeneration
 
     def load_state_dict(self):
-        from transformers import JanusForConditionalGeneration
-
-        model = JanusForConditionalGeneration.from_pretrained(
-            self.CKPT_DIR,
-            torch_dtype="auto",
-        )
-        if self.cache_hf_flag:
-            self.cached_hf_model = model
-        state_dict = model.state_dict()
-        state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
-
-        if not self.cache_hf_flag:
-            del model
-            gc.collect()
-
-        return state_dict
-
-    def reference_vision_transformer(self):
-        from transformers import JanusForConditionalGeneration
-
-        return JanusForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+        model = self.reference_vision_transformer(wrap=False)
+        return convert_vision_hf_to_meta(model.state_dict(), self.head_dim)
 
     def reference_siglip_patch_embed(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.embeddings.patch_embedding
 
     def reference_vision_embedding(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.embeddings

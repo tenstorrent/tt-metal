@@ -14,6 +14,7 @@ from models.experimental.janus_pro.tt.janus_conv2d_patch import TtJanusConv2dPat
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
 
+
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -49,7 +50,7 @@ def test_conv2d_inference(
 
     B, NCH, H, W = (1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size)
     in_channels, out_channels, kernel_size, stride, bias = (
-        3,
+        model_args.vision_in_channels,
         model_args.vision_dim,
         model_args.vision_patch_size,
         model_args.vision_patch_size,
