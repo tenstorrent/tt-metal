@@ -31,13 +31,19 @@ _TtnnBackboneAdapter can be assigned as a drop-in for the nn.Module.
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 
 import ttnn
-from models.demos.diffusion_drive.tt.ttnn_resnet34 import TtnnBasicBlock, prepare_resnet34_stage_params
+from models.demos.diffusion_drive.tt.common import fold_bn
+from models.demos.diffusion_drive.tt.ttnn_resnet34 import (
+    TtnnBasicBlock,
+    _ttnn_conv2d,
+    prep_conv_weights,
+    prepare_resnet34_stage_params,
+)
 
 # ---------------------------------------------------------------------------
 # Tensor-format helpers
@@ -58,6 +64,63 @@ def _from_ttnn_tile(x_ttnn: ttnn.Tensor, B: int, H: int, W: int, C: int) -> torc
     out = ttnn.to_torch(x_ttnn)  # (1, 1, B*H*W, C)
     out = out.reshape(B, H, W, C)
     return out.permute(0, 3, 1, 2).float()  # (B, C, H, W)
+
+
+def _pool_out_dim(size: int, kernel: int, stride: int, padding: int) -> int:
+    """Output dim of a (max/avg) pool with dilation=1 (floor mode)."""
+    return (size + 2 * padding - kernel) // stride + 1
+
+
+# ---------------------------------------------------------------------------
+# TTNN ResNet-34 stem (conv1 + bn1 + act1 + maxpool)
+# ---------------------------------------------------------------------------
+
+
+class TtnnStem:
+    """TTNN drop-in for a timm ResNet-34 stem: 7×7 s2 conv (BN-folded) + ReLU + 3×3 s2 maxpool.
+
+    torch (B, Cin, H, W) → torch (B, 64, H//4, W//4).  The conv, ReLU and maxpool
+    all run on-device; only the input/output torch<->ttnn boundary conversion is
+    on host (consistent with the per-stage round-trips in this staged backbone).
+    """
+
+    def __init__(self, conv1: nn.Conv2d, bn1: nn.BatchNorm2d, maxpool: nn.MaxPool2d, device: ttnn.Device) -> None:
+        self._device = device
+        w, b = fold_bn(conv1, bn1)  # fp32 fold → bfloat16
+        self._w, self._b = prep_conv_weights(w.to(torch.bfloat16), b.to(torch.bfloat16))
+        self._cin = conv1.in_channels
+        self._cout = conv1.out_channels
+        self._k = int(conv1.kernel_size[0])
+        self._s = int(conv1.stride[0])
+        self._p = int(conv1.padding[0])
+        self._mp_k = int(maxpool.kernel_size if isinstance(maxpool.kernel_size, int) else maxpool.kernel_size[0])
+        self._mp_s = int(maxpool.stride if isinstance(maxpool.stride, int) else maxpool.stride[0])
+        self._mp_p = int(maxpool.padding if isinstance(maxpool.padding, int) else maxpool.padding[0])
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, H, W = x.shape
+        xt = _to_ttnn_tile(x, B, H, W, C, self._device)
+        out, Ho, Wo = _ttnn_conv2d(
+            self._device, xt, self._w, self._b, B, H, W, C, self._cout, self._k, self._s, self._p
+        )
+        if out.is_sharded():
+            out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.relu(out)
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.max_pool2d(
+            out,
+            batch_size=B,
+            input_h=Ho,
+            input_w=Wo,
+            channels=self._cout,
+            kernel_size=[self._mp_k, self._mp_k],
+            stride=[self._mp_s, self._mp_s],
+            padding=[self._mp_p, self._mp_p],
+            dilation=[1, 1],
+        )
+        Hp = _pool_out_dim(Ho, self._mp_k, self._mp_s, self._mp_p)
+        Wp = _pool_out_dim(Wo, self._mp_k, self._mp_s, self._mp_p)
+        return _from_ttnn_tile(out, B, Hp, Wp, self._cout)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +161,24 @@ class TtnnTransfuserBackbone:
 
         # Stage 3: optional TTNN FPN (set by build_stage3)
         self._ttnn_fpn = None
+        # Stage 3.6: optional TTNN stems + GPT cross-modal fusion (set by build_stage3_6)
+        self._img_stem: Optional[TtnnStem] = None
+        self._lidar_stem: Optional[TtnnStem] = None
+        self._ttnn_fusion = None  # callable(image_features, lidar_features, layer_idx)
+
+    # ------------------------------------------------------------------
+    # Stage 3.6 installers
+    # ------------------------------------------------------------------
+
+    def install_stems(self, device: ttnn.Device) -> None:
+        """Build TTNN stems (conv1+bn1+relu+maxpool) for both encoders."""
+        ref = self._ref
+        self._img_stem = TtnnStem(ref.image_encoder.conv1, ref.image_encoder.bn1, ref.image_encoder.maxpool, device)
+        self._lidar_stem = TtnnStem(ref.lidar_encoder.conv1, ref.lidar_encoder.bn1, ref.lidar_encoder.maxpool, device)
+
+    def install_fusion(self, fusion) -> None:
+        """Install a TTNN GPT cross-modal fusion callable (see ttnn_gpt_fusion.TtnnFuseFeatures)."""
+        self._ttnn_fusion = fusion
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -163,17 +244,23 @@ class TtnnTransfuserBackbone:
         #   {'act1': '0', 'layer1': '1', …, 'layer4': '4'}
         # ------------------------------------------------------------------
         si = ref._start_index  # 1 for standard timm resnet34
-        if si > 0:
+        stems_on_device = self._img_stem is not None
+        if si > 0 and not stems_on_device:
             img_feats = ref.image_encoder.act1(ref.image_encoder.bn1(ref.image_encoder.conv1(img_feats)))
             lidar_feats = ref.lidar_encoder.act1(ref.lidar_encoder.bn1(ref.lidar_encoder.conv1(lidar_feats)))
+        elif si > 0:
+            # TTNN stem already folds conv1+bn1+act1+maxpool — produces post-maxpool feature.
+            img_feats = self._img_stem(img_feats)
+            lidar_feats = self._lidar_stem(lidar_feats)
 
         # ------------------------------------------------------------------
         # Steps 2-5: Four backbone stages, each followed by GPT fusion.
-        # For stage 0 (i=0) the timm iterator first runs maxpool (PyTorch).
+        # For stage 0 (i=0) the timm iterator first runs maxpool (PyTorch),
+        # unless the TTNN stem already did it on-device.
         # ------------------------------------------------------------------
         for i in range(4):
             # MaxPool is part of the stage-0 iteration in the reference model.
-            if i == 0 and si > 0:
+            if i == 0 and si > 0 and not stems_on_device:
                 img_feats = ref.image_encoder.maxpool(img_feats)
                 lidar_feats = ref.lidar_encoder.maxpool(lidar_feats)
 
@@ -181,9 +268,12 @@ class TtnnTransfuserBackbone:
             img_feats = self._run_ttnn_stage(img_feats, self._img_stages[i])
             lidar_feats = self._run_ttnn_stage(lidar_feats, self._lidar_stages[i])
 
-            # PyTorch: GPT cross-modal fusion (avgpool + 1×1 proj + attention +
-            # F.interpolate + residual add).
-            img_feats, lidar_feats = ref._fuse_features(img_feats, lidar_feats, i)
+            # GPT cross-modal fusion (avgpool + 1×1 proj + attention + upsample +
+            # residual add) — on TTNN if installed (Stage 3.6), else PyTorch.
+            if self._ttnn_fusion is not None:
+                img_feats, lidar_feats = self._ttnn_fusion(img_feats, lidar_feats, i)
+            else:
+                img_feats, lidar_feats = ref._fuse_features(img_feats, lidar_feats, i)
 
         # ------------------------------------------------------------------
         # Step 6: 3-level top-down FPN.

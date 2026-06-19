@@ -13,8 +13,9 @@ socket.
 
 This process:
   1. opens the Wormhole device (l1_small_size=32768),
-  2. loads DiffusionDriveModel from the checkpoint and installs the TTNN stack
-     (build_stage2 → 3 → 3_4 → 3_5),
+  2. loads DiffusionDriveModel from the checkpoint and installs the full TTNN
+     stack (build_stage2 → 3 → 3_4 → 3_5 → 3_6 → 3_7) — every weight-bearing op
+     on-device,
   3. serves one request at a time: recv {camera,lidar,status} numpy arrays →
      run forward → send back {trajectory} numpy array.
 
@@ -74,7 +75,18 @@ def _build_model(checkpoint: str, anchors: str, device):
     cfg.plan_anchor_path = anchors
     # latent=False → use the real LiDAR BEV that the agent sends.
     model = TtnnDiffusionDriveModel.from_checkpoint(checkpoint, cfg, device, latent=False)
-    model.build_stage2(device).build_stage3(device).build_stage3_4(device).build_stage3_5(device)
+    # Full on-device stack: backbone (stems + BasicBlocks + FPN + GPT fusion),
+    # perception head, DDIM denoiser, and agent head all run via TTNN ops.
+    # Stage 3.6 (fusion) requires the production resolution the agent sends
+    # (camera 256×1024, LiDAR 256×256), where the pool/upsample ratios are integer.
+    (
+        model.build_stage2(device)
+        .build_stage3(device)
+        .build_stage3_4(device)
+        .build_stage3_5(device)
+        .build_stage3_6(device)
+        .build_stage3_7(device)
+    )
     return model
 
 
@@ -97,7 +109,7 @@ def serve(checkpoint: str, anchors: str, sock_path: str) -> None:
     device = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
         model = _build_model(checkpoint, anchors, device)
-        _log("model ready (stage 3.5)")
+        _log("model ready (full on-device stack: stage 3.7)")
 
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         srv.bind(sock_path)
