@@ -29,6 +29,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -70,10 +71,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device
     tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-    ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape));
+    ASSERT_EQ(
+        input_buf_size_datums * datum_size_bytes, tensor_layout.impl().compute_packed_buffer_size_bytes(input_shape));
     ASSERT_EQ(
         output_buf_size_datums * datum_size_bytes,
-        tensor_layout.compute_packed_buffer_size_bytes(np_out.padded_shape()));
+        tensor_layout.impl().compute_packed_buffer_size_bytes(np_out.padded_shape()));
     auto input_tensor = create_device_tensor(TensorSpec(input_shape, tensor_layout), device);
     auto output_tensor = create_device_tensor(TensorSpec(np_out.logical_shape(), tensor_layout), device);
     // Populate input_tensor with data
@@ -122,7 +124,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             }
 
             TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-            ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
+            ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.impl().compute_packed_buffer_size_bytes(shape));
             auto input_tensor = create_device_tensor(TensorSpec(shape, tensor_layout), device_);
             ttnn::write_buffer(io_cq, input_tensor, {host_data});            // Write using cq 1
             auto write_event = ttnn::record_event(device_->mesh_command_queue(*io_cq));  // Record write on cq 1
