@@ -24,7 +24,8 @@ and marked `TODO(env)`.
 | `config.py` (verified hyperparams) | §2 | ✅ done |
 | **Diffusion sampling primitives (reference, pure torch)** | #47463 spike / #47468 oracle | ✅ done — `reference/sampling.py`, 11 tests pass |
 | PCC trajectory harness (validates decisions) | #47468 | ✅ done — `tests/trajectory_pcc.py`, 5 tests pass |
-| Torch reference model (vendored HF) | #47468 | ⛔ blocked: transformers `diffusion_gemma` unavailable (harness ready to plug it in) |
+| HF reference adapter seam (mock-tested) | #47468 | ✅ done — `reference/hf_reference.py`, 3 tests (guard + mock end-to-end) |
+| Torch reference model (real HF load) | #47468 | ⛔ blocked: transformers `diffusion_gemma` unavailable — drops into the adapter seam once installed |
 | Causal backbone bring-up (gemma4 reuse) | #47461 | ⛔ blocked: ckpt + transformers 5.x + HW |
 | KV-cache phase state machine | #47474 | ⬜ not started |
 | Canvas mask geometry (reference, pure torch) | #47462 | ✅ done — `reference/attention_mask.py`, 8 tests pass |
