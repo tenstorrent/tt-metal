@@ -157,7 +157,31 @@ algorithm.)
 
 ---
 
-### [ ] Refinement 3 — Non-tile-aligned shapes (alignment w / h)
+### [x] Refinement 3 — Non-tile-aligned shapes (alignment w / h)
+
+> **R3 outcome (full)**: both `w_non_aligned` and `h_non_aligned` landed in
+> `SUPPORTED["alignment"]` via **in-kernel** edge handling (no `ttnn.to_layout`/
+> `tilize` wrapper). All **120** non-aligned golden cells pass across every
+> supported dtype (incl. **bf8b** — the block-float −inf survives, no EXCLUSIONS
+> needed), mask, scale, and kv_heads_mode. Golden: **737 / 744** (was 624/744 at
+> R2: +120 non-aligned now pass; the remaining 7 are ALL `alignment=tile_aligned`
+> fp32 pre-existing corners — `Q1x1x128x1024` OOM ×4 = R4, `Q1x1x8192x64` fp32
+> no-mask rms 0.0206 ×2 = R1/#13364, `Q1x8x4096x128` GQA fp32 rms 0.0222 ×1 =
+> R2/#13364 — none introduced by R3). The three edges and where each was handled:
+> (1) **w_non_aligned (D)** and (2) **h_non_aligned (S_q)** needed only ceil-up
+> tile counts in the program descriptor — `from_torch` zero-pads the padded region,
+> so padded D-cols contribute 0 to Q·Kᵀ/PV (dropped on read-back) and padded query
+> rows are per-row-independent garbage dropped on read-back (confirmed in an
+> isolation probe: D-non-aligned + S_kv-aligned passes with zero masking).
+> (3) **S_kv not %32** was the structural edge bundled into BOTH alignment values
+> (every non-aligned INPUT carries a non-aligned S_kv): the padded key columns
+> scored 0 and over-counted the softmax denominator (no-mask rms ~0.19 pcc ~0.999;
+> causal pcc ~0.86 severity=bug). Fixed by an in-kernel additive −inf key-padding
+> mask (reader generates a bf16 vertical −inf column tile for cols ≥ S_kv%32,
+> mirroring production `fill_vertical_tile_bf16`; compute adds it to the last KV
+> block's scores before the row-max/row-sum — same `binary_add`/broadcast as the
+> user-mask path). 24/120 → 120/120. EXCLUSIONS stays `[]`.
+
 
 **Goal**: add `"w_non_aligned"` and `"h_non_aligned"` to `SUPPORTED["alignment"]` via
 **in-kernel** edge handling (zero-pad / mask the partial last tile in the reader or

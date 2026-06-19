@@ -153,3 +153,68 @@
   long-context precision corner (Issue #13364, lever-less) left red rather than
   excluded, so the literal "every gqa/mqa cell at supported dtype passes"
   Done-when is not 100% met.
+
+## Refinement 3 — Non-tile-aligned shapes (alignment w / h)
+- **Date**: 2026-06-19
+- **What was done**: added `w_non_aligned` and `h_non_aligned` to
+  `SUPPORTED["alignment"]` via **in-kernel** edge handling (no `ttnn.to_layout`/
+  `tilize` wrapper — SDPA stays TILE-layout). Three distinct edges:
+  - **Program descriptor**: tile counts (`Sq_t`/`Skv_t`/`Dt`) now round UP
+    (were floor + a `tile-aligned` assert). `ttnn.from_torch(TILE_LAYOUT)`
+    zero-pads the padded tile region, which makes the two "easy" edges fall out:
+    - *w_non_aligned (D not %32)*: padded D-columns of Q/K are zero → contribute
+      0 to the Q·Kᵀ contraction; padded D-columns of the PV output are zero (V
+      padding is zero) and dropped on read-back (logical-shape slice).
+    - *h_non_aligned (S_q not %32)*: padded query rows are zero → per-row softmax
+      is independent and the writer's padded rows are dropped on read-back.
+    Both were confirmed in an isolation probe (D=47 non-aligned + S_kv=64 aligned
+    passes at PCC 0.99 with **zero** masking).
+  - **The structural edge — S_kv not %32** (bundled into BOTH alignment values
+    because every non-aligned INPUT also carries a non-aligned S_kv): the padded
+    KEY columns of the last KV tile scored 0 and over-counted the softmax
+    denominator. Diagnosed precisely on the golden subset before the fix: no-mask
+    rms ~0.19 pcc ~0.999 (severity=precision, output scaled down by
+    Z_correct/Z_inflated); causal pcc ~0.86 rms ~0.6 (severity=bug). 24/120 of the
+    subset passed pre-fix — exactly the S_kv-aligned cases (`Q…32x50` S_kv=32,
+    `Q…64x47` S_kv=64), proving the D/S_q edges were already correct.
+  - **Fix** (mirrors production SDPA `fill_vertical_tile_bf16`): the reader
+    generates a bf16 −inf vertical column tile (cols ≥ S_kv%32 = 0xFF80) on-device
+    (no NoC read) once per work unit into `cb_pad_mask` (kv_chunk_t tiles, zeros
+    except the last). Compute adds it to `cb_scores` on the **last KV block only**,
+    before the row-max/row-sum — same `binary_add<…, BroadcastDim::None>` helper
+    and broadcast as the user-mask add (streaming WaitAndPop walks all
+    kv_chunk_t tiles). Robust for kv_chunk_t ∈ {1,3,4} (verified S_kv 47/33/50/65/100).
+    No new sync primitives; reuses the existing helper. EXCLUSIONS stays `[]`.
+- **Accuracy achieved** (golden tolerances: bf16 pcc 0.995/rms 0.05, fp32
+  0.999/0.02, bf8b 0.99/0.12): all non-aligned cells within target. The
+  dedicated `test_skv_keypad_denominator` (no-mask, S_q/D aligned, S_kv varied)
+  confirms the denominator is now correct: post-fix rms well under target vs the
+  ~0.19 pre-fix over-count.
+- **Golden test progress**: **737 / 744** passing (was 624/744 at R2: +120
+  non-aligned now pass — all 10 non-aligned INPUT shapes × 3 dtypes × 2 mask × 2
+  scale, incl. bf8b+non_aligned which the R3 plan flagged as an EXCLUSIONS
+  candidate but which passes cleanly). The 7 remaining failures are ALL
+  `alignment=tile_aligned` fp32 pre-existing corners untouched by R3:
+  `Q1x1x128x1024` L1 OOM ×4 (R4, `program.cpp:1487`), `Q1x1x8192x64` fp32 no-mask
+  rms 0.0206 ×2 (R1, Issue #13364), `Q1x8x4096x128` GQA fp32 no-mask explicit
+  rms 0.0222 ×1 (R2, Issue #13364). Left red per the OOM / precision-near-miss
+  protocol (not silenced in EXCLUSIONS).
+- **Issues encountered**: None new. The bf8b+non_aligned EXCLUSIONS candidate
+  the R3 plan anticipated did not materialize — bf8b non-aligned passes. The
+  per-unit pad-mask refill (advisory efficiency tradeoff vs a persistent no-pop
+  CB) is negligible for the non-aligned shapes (num_units ≤ 32) and was chosen
+  for correctness-first simplicity (reuses the exact user-mask `binary_add`).
+- **Non-regression**: 74/74 acceptance + gqa/mqa, 156/156 numerical precision
+  matrix, 130/130 new alignment tests; no hang under `--dev`, no race in non-dev.
+- **Tests added**:
+  - tests/.../test_scaled_dot_product_attention_alignment.py (130 cases):
+    test_alignment_matrix (120: 10 edge shapes × {bf16,fp32,bf8b} × {none,causal}
+    × {auto,explicit}, covering w/h/both non-aligned, cross-attn, GQA/MQA),
+    test_skv_keypad_denominator (10: S_kv ∈ {47,33,50,65,100} × {bf16,fp32},
+    directly targeting the key-padding denominator edge).
+  - tests/.../test_sdpa_nonaligned_probe.py (3 isolation probes, kept as debug
+    artifacts): from_torch zero-pad inspection, w_non_aligned+S_kv-aligned
+    isolation, h+S_kv-non-aligned.
+- **Checkbox**: `[x]` full — every `alignment ∈ {w_non_aligned, h_non_aligned}`
+  cell at supported dtype/kv_heads passes; prior phases still green (the 7 red
+  cells are inherited R1/R2/R4 tile-aligned fp32 corners, not regressions).
