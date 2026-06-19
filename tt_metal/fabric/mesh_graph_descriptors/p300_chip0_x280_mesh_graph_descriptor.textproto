@@ -1,0 +1,46 @@
+# Single-chip (1x1) mesh PINNED to the X280's physical chip (umd chip 0).
+#
+# On bh-14 (2-chip P300A) the X280 runs Linux on chip 0's L2CPU, which brings
+# down the chip0<->chip1 inter-chip ethernet. Auto-discovery therefore downgrades
+# to a 1x1 mesh ("insufficient fabric links between chips") and arbitrarily binds
+# the single node to chip 1, leaving chip 0 (the X280's chip) unmapped -> opening
+# logical device 0 TT_FATALs "Physical chip id 0 not found in control plane".
+#
+# The D2H host socket MUST live on the X280's own chip (host-memory IOMMU mappings
+# are per-PCIe-device), so we force the 1x1 node onto chip 0 with an explicit
+# pinning. Physical position from discovery (asic_to_fabric_node_mapping):
+#   umd chip 1 -> tray_id 3, asic_location 0   (bus_id 0x3, mobo-unknown fallback)
+#   umd chip 0 -> tray_id 1, asic_location 1   (bus_id 0x1)   <-- the X280's chip
+# (tray_id is the bus_id fallback; asic_location comes from the cluster descriptor:
+#  chip 1 = 0, chip 0 = 1. Verified: this pins metal physical chip id 0, selftest PASS.)
+#
+# Launch:
+#   TT_MESH_GRAPH_DESC_PATH=.../p300_chip0_x280_mesh_graph_descriptor.textproto \
+#   TT_METAL_SKIP_DRAM_TLBS=1 ... metal_example_x280_d2h 0 <mode>
+
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 1 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Pinnings -------------------------------------------------------------
+# Bind the single logical node (mesh 0, chip 0) to the X280's physical chip.
+
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 1
+    asic_location: 1
+  }
+}
+
+# --- Instantiation --------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
