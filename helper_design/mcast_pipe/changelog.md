@@ -286,3 +286,25 @@ intentionally kept raw + documented.** All on BH p150a, single parametrization e
   compile-time. P3/P6 in the helper docstring + tune/apply skills carry these caveats.
 - **Status: Round 4 migration COMPLETE.** 13 production + 2 toy_matmul + 3 unit kernels on the new
   `SenderPipe`/`ReceiverPipe` API; no old `Pipe<>` / `McastRect::single_core` usage remains.
+
+---
+
+## Reentrancy infrastructure — version stamp + migration ledger (2026-06-19)
+
+- **Trigger:** make `apply-dm-helper` re-entrant so that when `tune-dm-helper` bumps the API in a future
+  round, already-migrated kernels can be **remigrated** automatically, then the not-yet-migrated backlog
+  resumed — with durable in-repo state of what's done vs owed.
+- **Version stamp:** added `#define MCAST_PIPE_API_VERSION 4` to `mcast_pipe.hpp` (= the Round-4
+  `SenderPipe`/`ReceiverPipe` API). `tune-dm-helper` Step G.4 now owns bumping it on every *caller-facing*
+  change (and leaving it for internal-only changes).
+- **Ledger bootstrapped:** `migration/ledger.json` (+ `ledger.md` mirror) — 66 census sites: **13
+  migrated@v4** (set derived by grep of `SenderPipe`/`ReceiverPipe` usage, ground truth — not prose),
+  **46 pending** (clean/refactor not yet migrated, incl. the conv 1D-weights sender, gn/ln senders,
+  sdpa, CCL family), **7 deferred** (`defer`/`oos`/`ref`). Staleness is *derived*
+  (`migrated_api_version < CURRENT`), never stored.
+- **Skills updated:** `apply-dm-helper` (Gate-0 fresh-vs-re-entry branch, incremental Phase-1 map,
+  Tier-0 = remigrate-stale, per-kernel ledger write-back, report regenerated from the ledger);
+  `tune-dm-helper` (Step G.4 version stamp + materialization invariant #7 + exit-checkpoint report).
+- **Next API bump → next run:** `tune-dm-helper` bumps `MCAST_PIPE_API_VERSION` to 5; re-invoke
+  `apply-dm-helper helper_design/mcast_pipe/ --mode=…` → it remigrates the 13 stale kernels first, then
+  continues the 46 pending. No manual re-run of the whole fleet.

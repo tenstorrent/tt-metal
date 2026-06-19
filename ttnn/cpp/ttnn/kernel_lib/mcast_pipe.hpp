@@ -124,6 +124,13 @@
 
 #pragma once
 
+// Caller-facing API version — the staleness key for the apply-dm-helper rollout ledger
+// (helper_design/mcast_pipe/migration/ledger.json). BUMP THIS (and only this) whenever a
+// re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
+// count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
+// changes. v4 = the `SenderPipe`/`ReceiverPipe` split (Round 4). See tune-dm-helper Step G.4.
+#define MCAST_PIPE_API_VERSION 4
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"

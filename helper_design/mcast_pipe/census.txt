@@ -81,3 +81,6 @@ ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/ke
 ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp — role: sender | tag: refactor | flag-only sync
 ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/llama_all_gather_concat_writer.cpp — role: sender | tag: refactor | flag-only
 ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/all_to_all_sender_writer.cpp — role: sender | tag: refactor | INCLUDE_SRC loopback (intra-chip leg); fabric leg oos
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp — role: hybrid | tag: refactor | multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait
+models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_h2d_receiver.cpp — role: sender | tag: refactor | data write_multicast + counter inc_multicast (mixed-counter); name says receiver but multicasts
+ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/reader_bmm_tile_layout_in1_ring_all_gather.cpp — role: sender | tag: defer | flag-only collective barrier; ring/CCL twin of matmul reader_bmm_tile_layout_in1_ring_all_gather (P4 defer)
