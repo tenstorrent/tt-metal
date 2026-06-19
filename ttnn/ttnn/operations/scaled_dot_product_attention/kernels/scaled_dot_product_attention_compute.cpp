@@ -82,7 +82,10 @@ void kernel_main() {
     const uint32_t scale_u32 = get_arg_val<uint32_t>(1);
 
     // ---- Boot ----
-    compute_kernel_hw_startup(cb_q, cb_k, cb_scores);
+    // mm_init alone does the full hw_configure + pack_dest_init + pack_sync_init (a
+    // superset of compute_kernel_hw_startup); calling BOTH double-inits pack-sync/DEST
+    // and desyncs the DEST-bank parity counter (chain->matmul hang). Production SDPA
+    // boots with mm_init only for this exact matmul+reduce+eltwise mix.
     mm_init(cb_q, cb_k, cb_scores);
 
     CircularBuffer q_buf(cb_q), k_buf(cb_k), v_buf(cb_v);

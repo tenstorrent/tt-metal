@@ -1,2 +1,3 @@
 {"event":"test_run","status":"hang","test":"test_self_attention_no_mask_auto_scale[1x1x32x32]","detail":"compiles; device timeout on simplest single-tile case after restoring eltwise headers + patching bcast init + _op_contract infra","ts":"2026-06-19T18:59:56+00:00"}
 {"event":"tool_use","tool":"Agent","subagent":"ttnn-static-analyzer","description":"Structural review of SDPA kernels","ts":"2026-06-19T19:40:08+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"ttnn-expert-debugger","description":"Debug SDPA phase-E hang","ts":"2026-06-19T20:06:32+00:00"}
