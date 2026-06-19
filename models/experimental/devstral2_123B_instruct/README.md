@@ -254,9 +254,35 @@ Prefill chunk progress logs every 32 chunks by default (``DEVSTRAL2_ISL_PERF_CHU
 |--------|---------|
 | ISL | Input sequence length (tokens) |
 | TTFT (s) | Prefill trace replay after capture (device time) |
-| Prefill tok/s | ``ISL / prefill_replay_time`` |
+| Prefill tok/s | ``padded_ISL / prefill_replay_time`` |
 | Decode tok/s/u | Steady-state decode trace replay throughput |
 
+``test_isl_sweep_perf.py -k sweep``, BH Loudbox 1×8, ``model_max_seq_len=263168``,
+``max_new_tokens=100``, decode replay cap 32 (Jun 2026):
+
+| ISL | TTFT (s) | Prefill tok/s | Decode tok/s/u |
+|----:|---------:|--------------:|---------------:|
+| 32 | 0.095 | 1351 | 14.26 |
+| 64 | 0.095 | 1351 | 14.28 |
+| 128 | 0.096 | 1337 | 14.24 |
+| 256 | 0.192 | 1333 | 14.28 |
+| 512 | 0.388 | 1321 | 14.13 |
+| 1024 | 0.789 | 1298 | 14.12 |
+| 2048 | 1.62 | 1264 | 13.95 |
+| 4096 | 3.41 | 1201 | 13.95 |
+| 8192 | 7.50 | 1092 | 13.79 |
+| 16384 | 17.7 | 924 | 13.47 |
+| 32768 | 46.3 | 708 | 12.97 |
+| 65536 | 136 | 483 | 12.04 |
+| 131072 | 445 | 295 | 10.59 |
+| 262144 | 1581† | 166† | *pending* |
+
+† **262144 (256K) — prefill only.** Traced chunked prefill completed (2048 chunks:
+~27 min compile, ~26 min replay, TTFT 1581 s). The sweep then entered decode
+warm/compile at ``current_pos=262144`` and had not finished after several hours
+(no completion log or per-ISL JSON); 131072 decode finishes in ~5 s on the same
+run. Likely a 256K-specific decode-path issue (KV at max context, trace capture,
+or compile hang) — needs follow-up before marking the sweep complete.
 
 **Single-layer wall-clock perf:**
 
