@@ -1911,13 +1911,17 @@ def tt_distributed_rmsnorm(
 ):
     use_2d_grid = False
 
-    # Run distributed rmsnorm part 1
+    # Run distributed rmsnorm part 1 — fp32 stats for precision.
+    # bf16 stats caused post_mlp_norm PCC to drop from 0.9996 to 0.9811 per layer,
+    # introducing ~0.002 accumulated error per layer across 64 layers (→ 0.837 final).
     tt_stats = ttnn.rms_norm_pre_all_gather(
-        inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
+        inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.float32, use_2d_core_grid=use_2d_grid
     )
 
+    # buffer_key=None: "LAYERNORM" persistent buffer is bf16 which would cast fp32
+    # stats back to bf16, defeating the precision gain. Fresh fp32 output instead.
     tt_stats_gathered = tt_ccl.line_all_gather(
-        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
+        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key=None
     )
     tt_stats.deallocate(True)
 
