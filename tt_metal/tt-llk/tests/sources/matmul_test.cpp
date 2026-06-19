@@ -38,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces_B,
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
-    _llk_unpack_AB_matmul_init_<>(0, params.CT_DIM, params.RT_DIM, params.KT_DIM, FACE_R_DIM, FACE_R_DIM, 4, 4, false, false);
+    _llk_unpack_AB_matmul_init_<>(0, params.CT_DIM, params.RT_DIM, params.KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE, false, false);
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(

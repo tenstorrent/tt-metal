@@ -40,7 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<false>(unpack_a_src_format0, unpack_b_src_format0, unpack_a_dst_format0, unpack_b_dst_format0, 16, 16, 4, 4, 128, 128);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
-        _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1, 16, 16);
+        _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1);
         {
             const std::uint32_t mt = batch;
             for (std::uint32_t kt = 0; kt < 1; ++kt)
@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_get<>(semaphore::PACK_DONE);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
-        _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1, 16, 16);
+        _llk_unpack_AB_matmul_init_<>(false, 1, 1, 1);
         {
             const std::uint32_t mt = batch;
             for (std::uint32_t kt = 0; kt < 1; ++kt)

@@ -42,10 +42,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.CT_DIM,
         params.RT_DIM,
         params.KT_DIM,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* unpA_num_faces */,
-        4 /* unpB_num_faces */,
+        ckernel::DEFAULT_TENSOR_SHAPE,
+        ckernel::DEFAULT_TENSOR_SHAPE,
         false /* unpA_partial_face */,
         false /* unpB_partial_face */);
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)

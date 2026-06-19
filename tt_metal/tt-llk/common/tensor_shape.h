@@ -78,13 +78,78 @@ static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /**
- * @brief Validates tensor shape for operations that depend on face positioning within a tile.
- * Will start relaxing this constraint once we test larger tensor shapes.
+ * @brief Enumeration of all currently-supported TensorShape values.
  *
- * @param tensor_shape: Tensor shape to validate
- * @return true if tensor shape is valid, false otherwise
+ * Matches validate_tensor_shape_tile_dependent_ops_ plus the per-axis HW limits,
+ * yielding 20 unique shapes. Naming convention:
+ *   TENSOR_SHAPE_FR{face_r_dim}_NF{num_faces_r_dim}x{num_faces_c_dim}
+ *
+ * Kept out of production kernel builds unless asserts or tensor-shape DPRINT
+ * coverage need the table.
+ */
+#if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
+
+// face_r_dim = 1
+constexpr TensorShape TENSOR_SHAPE_FR1_NF1x1 = {1, MAX_FACE_C_DIM, 1, 1}; ///<  1 ×16
+constexpr TensorShape TENSOR_SHAPE_FR1_NF1x2 = {1, MAX_FACE_C_DIM, 1, 2}; ///<  1 ×32
+constexpr TensorShape TENSOR_SHAPE_FR1_NF2x1 = {1, MAX_FACE_C_DIM, 2, 1}; ///<  2 ×16
+constexpr TensorShape TENSOR_SHAPE_FR1_NF2x2 = {1, MAX_FACE_C_DIM, 2, 2}; ///<  2 ×32
+
+// face_r_dim = 2
+constexpr TensorShape TENSOR_SHAPE_FR2_NF1x1 = {2, MAX_FACE_C_DIM, 1, 1}; ///<  2 ×16
+constexpr TensorShape TENSOR_SHAPE_FR2_NF1x2 = {2, MAX_FACE_C_DIM, 1, 2}; ///<  2 ×32
+constexpr TensorShape TENSOR_SHAPE_FR2_NF2x1 = {2, MAX_FACE_C_DIM, 2, 1}; ///<  4 ×16
+constexpr TensorShape TENSOR_SHAPE_FR2_NF2x2 = {2, MAX_FACE_C_DIM, 2, 2}; ///<  4 ×32
+
+// face_r_dim = 4
+constexpr TensorShape TENSOR_SHAPE_FR4_NF1x1 = {4, MAX_FACE_C_DIM, 1, 1}; ///<  4 ×16
+constexpr TensorShape TENSOR_SHAPE_FR4_NF1x2 = {4, MAX_FACE_C_DIM, 1, 2}; ///<  4 ×32
+constexpr TensorShape TENSOR_SHAPE_FR4_NF2x1 = {4, MAX_FACE_C_DIM, 2, 1}; ///<  8 ×16
+constexpr TensorShape TENSOR_SHAPE_FR4_NF2x2 = {4, MAX_FACE_C_DIM, 2, 2}; ///<  8 ×32
+
+// face_r_dim = 8
+constexpr TensorShape TENSOR_SHAPE_FR8_NF1x1 = {8, MAX_FACE_C_DIM, 1, 1}; ///<  8 ×16
+constexpr TensorShape TENSOR_SHAPE_FR8_NF1x2 = {8, MAX_FACE_C_DIM, 1, 2}; ///<  8 ×32
+constexpr TensorShape TENSOR_SHAPE_FR8_NF2x1 = {8, MAX_FACE_C_DIM, 2, 1}; ///< 16 ×16
+constexpr TensorShape TENSOR_SHAPE_FR8_NF2x2 = {8, MAX_FACE_C_DIM, 2, 2}; ///< 16 ×32
+
+// face_r_dim = 16
+constexpr TensorShape TENSOR_SHAPE_FR16_NF1x1 = {16, MAX_FACE_C_DIM, 1, 1}; ///< 16 ×16
+constexpr TensorShape TENSOR_SHAPE_FR16_NF1x2 = {16, MAX_FACE_C_DIM, 1, 2}; ///< 16 ×32
+constexpr TensorShape TENSOR_SHAPE_FR16_NF2x1 = {16, MAX_FACE_C_DIM, 2, 1}; ///< 32 ×16
+constexpr TensorShape TENSOR_SHAPE_FR16_NF2x2 = {16, MAX_FACE_C_DIM, 2, 2}; ///< 32 ×32 (== DEFAULT_TENSOR_SHAPE)
+
+#endif // defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
+
+/// Build a TensorShape from explicit face dimensions and face-grid counts.
+constexpr TensorShape make_tensor_shape(
+    const std::uint8_t face_r_dim, const std::uint8_t face_c_dim, const std::uint8_t num_faces_r_dim, const std::uint8_t num_faces_c_dim)
+{
+    return TensorShape {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
+}
+
+/**
+ * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
+ *
+ * Maps the historical scalar parameters used across LLK call sites:
+ * - num_faces == 1: 1x1 face grid (face_r_dim × 16)
+ * - num_faces == 2: 1x2 face grid (face_r_dim × 32)
+ * - num_faces == 4: 2x2 face grid (face_r_dim*2 × 32; 32x32 when face_r_dim == 16)
+ *
+ * @note Caller must pass num_faces in {1, 2, 4}.
+ */
+inline TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be one of the valid values: 1, 2, or 4");
+    return TensorShape {face_r_dim, MAX_FACE_C_DIM, static_cast<std::uint8_t>(num_faces == 4 ? 2 : 1), static_cast<std::uint8_t>(num_faces == 1 ? 1 : 2)};
+}
+
+/**
+ * @brief Validates shapes for ops that depend on face positioning within a tile.
+ *
+ * Keep this conservative until larger TensorShape variants have coverage.
  **/
-__attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const TensorShape &tensor_shape)
+__attribute__((noinline)) inline bool validate_tensor_shape_tile_dependent_ops_(const TensorShape& tensor_shape)
 {
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
@@ -93,4 +158,89 @@ __attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const T
            (face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16) && (face_c_dim == 16);
 }
 
+/**
+ * @brief Fires the LLK_ASSERT for an unobserved TensorShape coverage hole.
+ *
+ * Keeping the assert in a noinline helper gives triage scripts a real frame
+ * containing an `ASSERT(` token instead of pointing at the macro call site.
+ */
+__attribute__((noinline, cold)) inline void assert_tensor_shape_unobserved_()
+{
+    LLK_ASSERT(false, "TensorShape not observed before, please add it to the coverage table.");
+}
+
+constexpr const char* tensor_shape_dim_name(const std::uint8_t dim)
+{
+    switch (dim)
+    {
+        case 1:
+            return "1";
+        case 2:
+            return "2";
+        case 4:
+            return "4";
+        case 8:
+            return "8";
+        case 16:
+            return "16";
+        default:
+            return "unknown";
+    }
+}
+
 } // namespace ckernel
+
+/**
+ * @brief Emit a TensorShape via DEVICE_PRINT (see tests/DPRINT.md).
+ *
+ * Place in front of validation asserts so the failing assert is preceded by the
+ * offending shape. Outside debug/assert builds this compiles to a no-op.
+ */
+#if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
+
+// Pull the correct DEVICE_PRINT wrapper only for DPRINT builds; assert-only builds
+// still use the dedupe path but skip the print emission.
+#ifdef DEBUG_PRINT_ENABLED
+#ifdef ENV_LLK_INFRA
+#include "dprint.h"
+#else
+#include "api/debug/dprint.h"
+#endif
+
+// Concatenate fn_name into the literal instead of using CTSTR(fn_name); CTSTR's
+// COMDAT string object conflicts with DEVICE_PRINT's own string-section metadata
+// at inline template call sites.
+#define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn, ts)                                                   \
+    DEVICE_PRINT(                                                                                 \
+        "[{}] tensor_shape: face_r_dim={} face_c_dim={} num_faces_r_dim={} num_faces_c_dim={}\n", \
+        ::ckernel::coverage::tensor_shape_function_name(fn),                                      \
+        ::ckernel::tensor_shape_dim_name((ts).face_r_dim),                                        \
+        ::ckernel::tensor_shape_dim_name((ts).face_c_dim),                                        \
+        ::ckernel::tensor_shape_dim_name((ts).num_faces_r_dim),                                   \
+        ::ckernel::tensor_shape_dim_name((ts).num_faces_c_dim))
+#else
+#define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn_name, ts) ((void)0)
+#endif
+
+#define LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(checker, fn, ts) \
+    do                                                          \
+    {                                                           \
+        if (!checker(fn, ts))                                   \
+        {                                                       \
+            LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn, ts);            \
+            ::ckernel::assert_tensor_shape_unobserved_();       \
+        }                                                       \
+    } while (0)
+
+#define LLK_VALIDATE_TENSOR_SHAPE_UNPACK(fn, ts) LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_unpack_tensor_shape_covered, fn, ts)
+#define LLK_VALIDATE_TENSOR_SHAPE_MATH(fn, ts)   LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_math_tensor_shape_covered, fn, ts)
+#define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn, ts)   LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_pack_tensor_shape_covered, fn, ts)
+
+#else
+
+#define LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(checker, fn_name, ts) ((void)0)
+#define LLK_VALIDATE_TENSOR_SHAPE_UNPACK(fn_name, ts)                ((void)0)
+#define LLK_VALIDATE_TENSOR_SHAPE_MATH(fn_name, ts)                  ((void)0)
+#define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn_name, ts)                  ((void)0)
+
+#endif // defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)

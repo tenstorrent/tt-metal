@@ -88,14 +88,17 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        from helpers.tile_shape import cpp_tensor_shape
+
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
+        src_a_tensor_shape = cpp_tensor_shape(compute_unit.src_b.tile_shape)
+        src_b_tensor_shape = cpp_tensor_shape(compute_unit.src_a.tile_shape)
 
-        return f"_llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
+        return f"_llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {src_a_tensor_shape}, {src_b_tensor_shape});\n"
 
     def unpack(
         self,
