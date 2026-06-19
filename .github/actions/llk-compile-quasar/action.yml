@@ -31,6 +31,7 @@ runs:
       shell: bash
       working-directory: tt_metal/tt-llk/tests/python_tests
       env:
+        LLK_BUILD_PARALLELISM: "0" # one g++ per worker
         CHIP_ARCH: quasar
       run: |
         echo "Compiling Quasar (group ${{ inputs.test-group }}/${{ inputs.test-splits }})..."
