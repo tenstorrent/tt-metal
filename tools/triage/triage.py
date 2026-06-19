@@ -851,7 +851,7 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
     if args["--remote-exalens"]:
         context = init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
     else:
-        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"], use_4B_mode=False)
+        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
 
     _patch_risc_debug()
     return context
