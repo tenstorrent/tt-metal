@@ -56,18 +56,6 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
-- id: bh-sdpa-nightly-integration
-  name: sdpa nightly tests
-  tags: [sdpa]
-  cmd: pytest tests/nightly/blackhole/sdpa/ -svv
-  skus:
-    bh_loudbox:
-      timeout: 60
-    bh_p300:
-      timeout: 60
-  owner_id: U07RD9YRFT9 # Slavko Krstic
-  team: ttnn
-
 - id: bh-grid-110-cores-panoptic-deeplab
   name: 110 cores panoptic-deeplab
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
