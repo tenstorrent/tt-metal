@@ -123,6 +123,12 @@ _FORCE_REGIME = None
 # An int -> force that K (if it qualifies) to sweep the W-split factor. Never set in
 # production.
 _FORCE_K = None
+# Measurement-only hook (perf tests, Refinement 7). None -> _regime_a_block_height
+# picks bh from the heuristic. An int -> force that BLOCK_HEIGHT (caller's
+# responsibility to pick a value that divides the per-core row count). Used to
+# measure the bh=1 baseline vs the row-blocked path on the same shape. Never set in
+# production.
+_FORCE_BH = None
 
 # ---- ROW_MAJOR (tilize-wrapped) regime CB indices ----
 # Refinement 3: ROW_MAJOR input/output handled natively via a tilize-wrapped,
@@ -244,6 +250,19 @@ def _row_fits_l1(Wt_resident, input_dtype, fp32_acc, gamma, has_gamma) -> bool:
 # Blast-radius bound (Refinement 7 scope): TILE Regime A no-gamma only. Every other
 # path (gamma, ROW_MAJOR, Regime B) keeps bh==1 and is byte-identical to pre-R7.
 #
+# DISABLED BY DEFAULT (_ENABLE_ROW_BLOCKING = False). The knob is fully implemented and
+# correct (golden 1683/1683 with it forced on), but measurement (R6 + R7) shows it is
+# net-NEGATIVE on this kernel: rms_norm is memory-bound (~10us per tile-row of DRAM
+# read+write at W=256), and row-blocking only amortizes per-row COMPUTE init — which is
+# not the bottleneck. Measured device time with bh>1 is 0.82-0.98x of bh=1 (i.e. SLOWER)
+# across (1,1,4096..16384,256) and (1,1,8192,512); double-buffering cb_input_resident did
+# not recover it. Enabling it would regress production, so it stays off until a kernel
+# change shifts the balance (see the follow-up refinement). Tests force it on via
+# `_ENABLE_ROW_BLOCKING = True` (or `_FORCE_BH`) to exercise the path.
+_ENABLE_ROW_BLOCKING = False
+
+
+#
 # `bh` must divide each core's row count with no remainder (the kernel has no
 # remainder loop), so we enable bh>1 only when Ht_total % total_cores == 0 (every
 # core gets exactly Ht_total//total_cores rows) and pick bh as a divisor of that
@@ -255,6 +274,10 @@ def _regime_a_block_height(Ht_total, num_cores, has_gamma, gamma_is_rm, Wt, inpu
     """Row-blocking factor for TILE Regime A no-gamma. Returns 1 (no blocking) for
     every other case or when the grid is not yet saturated."""
     if has_gamma or gamma_is_rm:
+        return 1
+    if _FORCE_BH is not None:  # measurement-only override (perf tests)
+        return _FORCE_BH
+    if not _ENABLE_ROW_BLOCKING:  # net-negative on this memory-bound kernel; off by default
         return 1
     if Ht_total <= num_cores:  # not many-row: each core owns <= 1 row group
         return 1
@@ -270,6 +293,7 @@ def _regime_a_block_height(Ht_total, num_cores, has_gamma, gamma_is_rm, Wt, inpu
     for cand in range(2, min(rows_per_core, dest) + 1):
         if rows_per_core % cand != 0:
             continue
+        # Resident footprint when row-blocked: cb_input_resident (bh*Wt) + cb_squared (bh*Wt).
         resident = cand * Wt * in_b + cand * Wt * inter_b
         if resident <= L1_RESIDENT_BUDGET_BYTES:
             bh = cand

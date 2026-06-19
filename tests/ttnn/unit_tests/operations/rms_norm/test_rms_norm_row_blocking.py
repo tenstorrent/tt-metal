@@ -28,12 +28,35 @@ def _ht_wt(shape):
     return Ht, Wt
 
 
-def _bh_for(shape, has_gamma=False, gamma_is_rm=0, dtype=ttnn.bfloat16, fp32_acc=True, total_cores=64):
+def _bh_for(shape, has_gamma=False, gamma_is_rm=0, dtype=ttnn.bfloat16, fp32_acc=True, total_cores=64, enabled=True):
     Ht, Wt = _ht_wt(shape)
     cfg = pd._resolve_compute_config(None)
     cfg.fp32_dest_acc_en = fp32_acc
     num_cores = min(Ht, total_cores)
-    return pd._regime_a_block_height(Ht, num_cores, has_gamma, gamma_is_rm, Wt, dtype, fp32_acc, cfg)
+    old = pd._ENABLE_ROW_BLOCKING
+    pd._ENABLE_ROW_BLOCKING = enabled
+    try:
+        return pd._regime_a_block_height(Ht, num_cores, has_gamma, gamma_is_rm, Wt, dtype, fp32_acc, cfg)
+    finally:
+        pd._ENABLE_ROW_BLOCKING = old
+
+
+@pytest.fixture
+def row_blocking_enabled():
+    """Row-blocking is OFF by default in production (net-negative on this memory-bound
+    kernel). Tests that exercise the bh>1 code path force it on, then restore."""
+    old = pd._ENABLE_ROW_BLOCKING
+    pd._ENABLE_ROW_BLOCKING = True
+    try:
+        yield
+    finally:
+        pd._ENABLE_ROW_BLOCKING = old
+
+
+def test_row_blocking_disabled_by_default():
+    # Production default: the knob is off, so a shape that WOULD row-block still gets bh=1.
+    assert _bh_for((1, 1, 8192, 256), enabled=False) == 1
+    assert _bh_for((1, 1, 16384, 256), enabled=False) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +112,7 @@ def _ref(x, gamma=None, eps=1e-6):
         (2, 1, 4096, 256),  # bh selection on a 4D many-row shape
     ],
 )
-def test_row_blocked_random_vs_torch(device, shape):
+def test_row_blocked_random_vs_torch(device, row_blocking_enabled, shape):
     assert _bh_for(shape) > 1, f"shape {shape} must route to a row-blocked program for this test"
     torch.manual_seed(0)
     x = torch.randn(*shape)
@@ -102,7 +125,7 @@ def test_row_blocked_random_vs_torch(device, shape):
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 4096, 256), (1, 1, 8192, 256)])
-def test_row_blocked_all_ones_exact(device, shape):
+def test_row_blocked_all_ones_exact(device, row_blocking_enabled, shape):
     # All-ones input -> every row's RMS = 1 -> output == 1 everywhere.
     assert _bh_for(shape) > 1
     x = torch.ones(*shape)
@@ -111,7 +134,7 @@ def test_row_blocked_all_ones_exact(device, shape):
     assert (out - 1.0).abs().max().item() < 0.05, f"all-ones row-blocked not ~1.0 for {shape}"
 
 
-def test_row_blocked_distinguishable_rows(device):
+def test_row_blocked_distinguishable_rows(device, row_blocking_enabled):
     # Each tile-row gets a distinct magnitude so a per-row recip mix-up (wrong
     # TileOffset indexing) would show. Row r scaled by (r+1).
     shape = (1, 1, 8192, 256)  # bh=4
