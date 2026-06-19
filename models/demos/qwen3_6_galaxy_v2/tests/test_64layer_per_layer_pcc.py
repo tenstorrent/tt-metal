@@ -423,8 +423,6 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
                 # ---- replicate the is_qwen36_path == True / prefill branch ----
                 # (mirrors llama_decoder.TtTransformerBlock.forward exactly for
                 # the prefill path; any mismatch would show up as a PCC anomaly)
-                pass
-
                 is_qwen36_path = orig_layer.is_qwen36 and mode in ("prefill", "decode")
                 if not is_qwen36_path or mode != "prefill":
                     # Non-qwen36 or decode: fall through to original forward, no capture.
