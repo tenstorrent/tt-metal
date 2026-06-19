@@ -16,9 +16,12 @@
 // This overlaps ~(h_in/h_out) of the W exchange with the H exchange.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 
@@ -33,7 +36,7 @@ constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
 constexpr auto src_args = TensorAccessorArgs<ct_after_dst>();
 
 template <uint32_t stick_size_bytes>
-inline void zeroPad(const Noc& noc, const CircularBuffer& cb) {
+inline void zeroPad(Noc& noc, CircularBuffer& cb) {
     noc.async_write_zeros(cb, stick_size_bytes);
     noc.write_zeros_l1_barrier();
 }
@@ -70,8 +73,8 @@ void kernel_main() {
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
-    Noc noc;
-    CircularBuffer cb(cb_output_id);
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
 
     // =========================================================================
     // Phase 1: interior rows from INPUT DRAM (no barrier wait)
@@ -93,18 +96,18 @@ void kernel_main() {
             uint32_t input_row_base = (t_input * h_in + h) * num_interior_sticks;
 
             if (is_first_chip) {
-                cb_reserve_back(cb_output_id, 1);
+                cb_output.reserve_back(1);
                 if (is_t_front || h_masked || is_padding_zeros) {
-                    zeroPad<stick_size>(noc, cb);
+                    zeroPad<stick_size>(noc_obj, cb_output);
+                    noc_obj.async_read_barrier();
                 } else {
                     // direction=0: replicate leftmost input col; direction=1: rightmost
                     uint32_t input_col = direction ? (num_interior_sticks - 1) : 0;
                     uint32_t src_stick = input_row_base + input_col;
-                    uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                    noc_async_read(src_accessor.get_noc_addr(src_stick), dst_l1_addr, stick_size);
-                    noc_async_read_barrier();
+                    noc_obj.async_read(src_accessor, cb_output, stick_size, {.page_id = src_stick}, {});
+                    noc_obj.async_read_barrier();
                 }
-                cb_push_back(cb_output_id, 1);
+                cb_output.push_back(1);
             }
 
             if (!is_last_chip) {
@@ -112,19 +115,19 @@ void kernel_main() {
                 // is_padding_zeros. is_padding_zeros only gates the tensor-global edge pad
                 // (is_first_chip branch above), never inter-device boundaries.
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
-                    cb_reserve_back(cb_output_id, 1);
+                    cb_output.reserve_back(1);
                     if (is_t_front || h_masked) {
-                        zeroPad<stick_size>(noc, cb);
+                        zeroPad<stick_size>(noc_obj, cb_output);
+                        noc_obj.async_read_barrier();
                     } else {
                         // direction=0: send rightmost boundary cols (W_in - pad_id)
                         // direction=1: send leftmost boundary cols (padding - pad_id)
                         uint32_t input_col = direction ? (padding - pad_id) : (num_interior_sticks - pad_id);
                         uint32_t src_stick = input_row_base + input_col;
-                        uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                        noc_async_read(src_accessor.get_noc_addr(src_stick), dst_l1_addr, stick_size);
-                        noc_async_read_barrier();
+                        noc_obj.async_read(src_accessor, cb_output, stick_size, {.page_id = src_stick}, {});
+                        noc_obj.async_read_barrier();
                     }
-                    cb_push_back(cb_output_id, 1);
+                    cb_output.push_back(1);
                 }
             }
         }
@@ -134,7 +137,11 @@ void kernel_main() {
     // Phase 2: H-pad rows (corners) from OUTPUT DRAM (after H halo received)
     // =========================================================================
     if (barrier_count > 0) {
+        // Device 2.0 migration: legacy primitive retained: barrier_sem_addr is a GlobalSemaphore address. Semaphore<>
+        // binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
+        // Device 2.0 migration: legacy primitive retained: barrier_sem_addr is a GlobalSemaphore address. Semaphore<>
+        // binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
     }
 
@@ -151,33 +158,33 @@ void kernel_main() {
             uint32_t row_base = output_row * output_row_width;
 
             if (is_first_chip) {
-                cb_reserve_back(cb_output_id, 1);
+                cb_output.reserve_back(1);
                 if (is_t_front || is_padding_zeros) {
-                    zeroPad<stick_size>(noc, cb);
+                    zeroPad<stick_size>(noc_obj, cb_output);
+                    noc_obj.async_read_barrier();
                 } else {
                     // direction=0: leftmost interior col; direction=1: rightmost
                     uint32_t col = direction ? (pad2_left + num_interior_sticks - 1) : pad2_left;
-                    uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                    noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
-                    noc_async_read_barrier();
+                    noc_obj.async_read(dst_accessor, cb_output, stick_size, {.page_id = row_base + col}, {});
+                    noc_obj.async_read_barrier();
                 }
-                cb_push_back(cb_output_id, 1);
+                cb_output.push_back(1);
             }
 
             if (!is_last_chip) {
                 // Inter-device W exchange: ship real boundary data regardless of is_padding_zeros.
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
-                    cb_reserve_back(cb_output_id, 1);
+                    cb_output.reserve_back(1);
                     if (is_t_front) {
-                        zeroPad<stick_size>(noc, cb);
+                        zeroPad<stick_size>(noc_obj, cb_output);
+                        noc_obj.async_read_barrier();
                     } else {
                         uint32_t col = direction ? (pad2_left + (padding - pad_id))
                                                  : (pad2_left + num_interior_sticks - pad_id);
-                        uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                        noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
-                        noc_async_read_barrier();
+                        noc_obj.async_read(dst_accessor, cb_output, stick_size, {.page_id = row_base + col}, {});
+                        noc_obj.async_read_barrier();
                     }
-                    cb_push_back(cb_output_id, 1);
+                    cb_output.push_back(1);
                 }
             }
         }
@@ -188,32 +195,32 @@ void kernel_main() {
             uint32_t row_base = output_row * output_row_width;
 
             if (is_first_chip) {
-                cb_reserve_back(cb_output_id, 1);
+                cb_output.reserve_back(1);
                 if (is_t_front || is_padding_zeros) {
-                    zeroPad<stick_size>(noc, cb);
+                    zeroPad<stick_size>(noc_obj, cb_output);
+                    noc_obj.async_read_barrier();
                 } else {
                     uint32_t col = direction ? (pad2_left + num_interior_sticks - 1) : pad2_left;
-                    uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                    noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
-                    noc_async_read_barrier();
+                    noc_obj.async_read(dst_accessor, cb_output, stick_size, {.page_id = row_base + col}, {});
+                    noc_obj.async_read_barrier();
                 }
-                cb_push_back(cb_output_id, 1);
+                cb_output.push_back(1);
             }
 
             if (!is_last_chip) {
                 // Inter-device W exchange: ship real boundary data regardless of is_padding_zeros.
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
-                    cb_reserve_back(cb_output_id, 1);
+                    cb_output.reserve_back(1);
                     if (is_t_front) {
-                        zeroPad<stick_size>(noc, cb);
+                        zeroPad<stick_size>(noc_obj, cb_output);
+                        noc_obj.async_read_barrier();
                     } else {
                         uint32_t col = direction ? (pad2_left + (padding - pad_id))
                                                  : (pad2_left + num_interior_sticks - pad_id);
-                        uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                        noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
-                        noc_async_read_barrier();
+                        noc_obj.async_read(dst_accessor, cb_output, stick_size, {.page_id = row_base + col}, {});
+                        noc_obj.async_read_barrier();
                     }
-                    cb_push_back(cb_output_id, 1);
+                    cb_output.push_back(1);
                 }
             }
         }
@@ -226,7 +233,9 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
         // Wait for t_count * h_out increments (one per row sent by our W neighbor)
+        // Device 2.0 migration: legacy primitive retained: w_neighbor_sem_addr is a GlobalSemaphore address.
         noc_semaphore_wait_min(w_neighbor_sem_ptr, t_count * h_out);
+        // Device 2.0 migration: legacy primitive retained: w_neighbor_sem_addr is a GlobalSemaphore address.
         noc_semaphore_set(w_neighbor_sem_ptr, 0);
     }
 }
