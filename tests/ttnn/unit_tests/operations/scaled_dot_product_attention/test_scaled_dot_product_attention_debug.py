@@ -34,13 +34,38 @@ Two distinct bugs were isolated (see the ttnn-expert-debugger RESULT commit):
   hung in phase 0. The fix emits emit_pre_element_transitions() in
   elem_apply_pack for PackTile elements.
 
-  Bug #2 (OPEN): a matmul_block immediately FOLLOWING an eltwise_chain still
-  hangs (phase 0 chain -> phase A QK matmul; and with phase 0 removed, phase E
-  exp chain -> phase F matmul-reduce -> phase H PV matmul hangs at H). The
-  `reduce`-with-matmul path survives a preceding chain, but `matmul_block` does
-  not. A full mm_block_init (pack-sync re-init) before the matmul did NOT fix it,
-  so the residual is a deeper chain-exit state (DEST bank parity / datacopy
-  unpacker MOP) that matmul_block's init does not reconcile.
+  Bug #2 (ROOT-CAUSED + chain->matmul FIXED): a matmul_block FOLLOWING an
+  eltwise_chain hung. DEVICE_PRINT inside matmul_block_helpers.inl pinned the
+  hang to the OUTPUT pack_reconfig_data_format (gated on fp32_dest_acc_en /
+  packer_l1_acc): PACK reached 'mm:before pack_reconfig' and never 'mm:after'.
+  That reconfig ends in TTI_STALLWAIT(STALL_CFG, PACK|THCON)
+  (cpack_common.h::reconfig_packer_data_format). Issued AFTER the matmul's
+  tile_regs_wait (which sets up an fp32 DEST read), the STALLWAIT never drains
+  when the matmul follows a foreign-op pack -> packer deadlock.
+
+  Bisection (minimal boot + ONE eltwise_chain + ONE matmul_block harness, all
+  on [1x1x32x32]) — NONE of the prescribed in-kernel resets cleared it:
+    reduce_uninit<true>, copy_tile_init, reconfig+mm_block_init_short(None),
+    no-op tile_regs cycle, full mm_init mid-kernel, pack_reconfig-after-chain,
+    llk_pack_dest_init, dst_full_sync_en=True  -> ALL HANG.
+  What DID clear it:
+    fp32_dest_acc_en=False (reconfig skipped)            -> WORKS
+    skip matmul's pack_reconfig (fp32 on)                -> WORKS
+    issue matmul pack_reconfig BEFORE tile_regs_acquire  -> WORKS (the FIX)
+
+  FIX (ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.inl): move the output
+  pack_reconfig_data_format to BEFORE tile_regs_acquire (packer idle) instead of
+  after tile_regs_wait. Clears the eltwise_chain -> matmul_block hang (phase
+  0 -> A; verified P:phA + M:phA print on the real kernel).
+
+  Bug #3 (RESIDUAL, separate boundary): with Bug #2 fixed the kernel now hangs at
+  matmul -> reduce (phase A -> C). The reduce helper issues
+  pack_reconfig_data_format(output) (reduce_helpers_compute.inl, default
+  reconfig_mode INPUT_AND_OUTPUT) after the matmul's pack; in fp32 DEST mode the
+  same STALLWAIT deadlocks. This is a matmul-exit / reduce-entry issue, NOT
+  eltwise_chain -> matmul_block. Production SDPA sidesteps the whole class by
+  using bf16 (Float16_b) intermediate CBs with fp32 DEST accumulation
+  (sdpa_program_factory.cpp: "need to disable fp32 cbs", Issue #13364).
 """
 
 from __future__ import annotations
