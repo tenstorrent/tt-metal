@@ -406,10 +406,37 @@ def run(
     # Derive proper ranges from the K-cache shape: dim 0 = num_pages, dim 2 = page_size.
     _num_pages = int(shape_b[0]) if len(shape_b) >= 4 else 1
     _page_size = int(shape_b[2]) if len(shape_b) >= 4 else 1
-    _max_pages_per_user = int(shape_d[-1]) if len(shape_d) >= 2 else _num_pages
+    _max_pages_per_user = int(shape_d[-1]) if len(shape_d) >= 1 else _num_pages
     _seq_len_max = max(2, min(_num_pages, _max_pages_per_user) * _page_size)
-    torch_input_d = torch.randint(0, max(_num_pages, 1), tuple(shape_d), dtype=torch.int32)
-    torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
+    # page_table is a paged-KV virtual->physical block map and MUST be a valid
+    # (1-to-1) mapping into [0, num_pages). Filling it with arbitrary randint
+    # values makes the decode kernel dereference garbage physical blocks -> a NoC
+    # transaction that never completes -> device HANG (this is exactly why the
+    # BS=32 sharded-page-table configs 83ebb7ca / c8c59223 hung). Build
+    # b sequences x max_pages_per_user UNIQUE physical blocks, then stack one
+    # identical copy per core (sharded page tables replicate the (b,mbps) map
+    # across the leading dim; ordinary page tables are just (b,mbps)). cur_pos is
+    # one bounded position per user, replicated the same way.
+    _b = int(shape_a[1]) if len(shape_a) >= 2 else 1
+    _mbps = int(_max_pages_per_user)
+    try:
+        _n_virt = _b * _mbps
+        if 0 < _n_virt <= _num_pages:
+            _valid_map = torch.randperm(_num_pages)[:_n_virt].reshape(_b, _mbps).to(torch.int32)
+        else:
+            _valid_map = torch.randint(0, max(_num_pages, 1), (_b, _mbps), dtype=torch.int32)
+        _pt_rows = int(shape_d[0]) if len(shape_d) >= 1 else _b
+        _rep_pt = max(1, _pt_rows // max(_b, 1))
+        torch_input_d = _valid_map.repeat(_rep_pt, 1)[:_pt_rows].reshape(tuple(shape_d))
+        _cp_b = torch.randint(1, _seq_len_max, (_b,), dtype=torch.int32)
+        if int(shape_e[-1]) == _b:
+            torch_input_e = _cp_b.reshape((1,) * (len(shape_e) - 1) + (_b,)).expand(tuple(shape_e)).contiguous()
+        else:
+            torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
+    except Exception:
+        # Best-effort fallback: at least keep values within the valid range.
+        torch_input_d = torch.randint(0, max(_num_pages, 1), tuple(shape_d), dtype=torch.int32)
+        torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
 
     if len(shape_a) == 4:
         try:
@@ -479,9 +506,10 @@ def run(
     # --- paged_sdpa decode Q padding fix --------------------------------------
     # The decode kernel reads padded_num_heads (= nearest_pow_2(nearest_n(H_q,32)))
     # rows per core. The master trace records Q as ROW_MAJOR with shard height =
-    # H_q (e.g. 8), so only user 0 aligns and the rest read padding (PCC ~0.06).
-    # Rebuild Q as TILE with shard height = padded_num_heads so all users align,
-    # then take the direct from_torch path (which pads heads up to the shard height).
+    # H_q (e.g. 8), so only user 0 aligns and the rest read padding (PCC ~0.06),
+    # and the resulting placement also trips \"not on_dispatch_core\". Rebuild Q
+    # as TILE with shard height = padded_num_heads so all users align, then take
+    # the direct from_torch path (which pads heads up to the shard height).
     _q_pad_override = False
     try:
         if len(shape_a) == 4 and _is_sharded_memory_config(mem_config_a):
@@ -723,7 +751,11 @@ def run(
     #    whenever NH < 32 and B > 1 (it processed B*NH//32 rows at stride 32//NH,
     #    comparing batch k's golden against output row (32//NH)*k -> ~0 PCC).
     #  - head-packed: NH padded to 32 with 32//NH batches per 32-row block.
-    _nbatch = int(ttnn.to_torch(cp_dts[0]).reshape(-1).numel())
+    # The per-chip batch is the LAST dim of cur_pos, not its element count:
+    # sharded cur_pos is (num_cores, batch) so .numel() (=cores*batch) inflated
+    # _nbatch and forced the head-packed branch (b_eff=2, stride=4) -> ~0.43 PCC.
+    _cp0 = ttnn.to_torch(cp_dts[0])
+    _nbatch = int(_cp0.shape[-1]) if _cp0.ndim >= 1 else int(_cp0.numel())
     if X == _nbatch:
         b_eff = X
         stride = 1
