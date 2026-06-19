@@ -74,6 +74,9 @@ class ModelArgs:
     index_n_heads: int = 64
     index_head_dim: int = 128
     index_topk: int = 2048
+    # Indexer RoPE convention: DeepSeek-V3.2 = non-interleaved (rotate_half);
+    # GLM-5.1 = interleaved. (MLA RoPE is always interleaved.)
+    index_rope_interleave: bool = False
 
     @property
     def qk_head_dim(self) -> int:
@@ -169,6 +172,7 @@ class IndexerCPU(nn.Module):
         self.head_dim = args.index_head_dim
         self.rope_head_dim = args.qk_rope_head_dim
         self.index_topk = args.index_topk
+        self.rope_interleave = args.index_rope_interleave  # GLM: True; DS: False
         self.q_lora_rank = args.q_lora_rank
         self.scale_fmt = args.scale_fmt
         # When False, skip the orthogonal Hadamard transform and the fp8
@@ -231,8 +235,8 @@ class IndexerCPU(nn.Module):
         # Split RoPE and non-RoPE parts
         q_pe, q_nope = torch.split(q, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
 
-        # Apply RoPE (non-interleaved)
-        q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=False)
+        # Apply RoPE (DS: non-interleaved / GLM: interleaved — ModelArgs.index_rope_interleave)
+        q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=self.rope_interleave)
 
         # Concatenate back
         q = torch.cat([q_pe, q_nope], dim=-1)  # [B, L, H, D]
@@ -243,7 +247,7 @@ class IndexerCPU(nn.Module):
 
         # Split and apply RoPE to key
         k_pe, k_nope = torch.split(k, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
-        k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis, interleaved=False).squeeze(2)
+        k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis, interleaved=self.rope_interleave).squeeze(2)
         k = torch.cat([k_pe, k_nope], dim=-1)  # [B, L, D]
 
         if self.use_fp8_path:
