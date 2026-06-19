@@ -16,12 +16,13 @@ MATH_FIDELITY = {
 }
 
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
-# mapped to the (UnaryOpType, param0_float) tuples the matmul fused-activation path expects.
+# mapped to the values the matmul fused-activation path expects. Each value is
+# either a bare ttnn.UnaryOpType (no parameter) or a (UnaryOpType, param0)
+# tuple; nanobind's implicit caster handles both forms.
 #
 # "gelu":      exact GELU (piecewise CDF / FP32 erf), matches F.gelu().
 # "gelu_fast": 6-segment piecewise-linear LUT, ~1% absolute error vs exact GELU.
-# "gelu_tanh": FP32 tanh approximation, matches F.gelu(approximate="tanh"). NaN-safe
-#              (kernel uses x*x*x for the cube, no exp/log path).
+# "gelu_tanh": FP32 tanh approximation, matches F.gelu(approximate="tanh").
 _FUSED_GELU_VARIANTS = {
     "gelu": (ttnn.UnaryOpType.GELU, False),
     "gelu_fast": (ttnn.UnaryOpType.GELU, True),
