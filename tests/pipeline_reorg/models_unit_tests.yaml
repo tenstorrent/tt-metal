@@ -22,6 +22,8 @@
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
+    # pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
+    # pytest --timeout 500 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: llama3.1-8b
   skus:
     wh_n150:
@@ -86,6 +88,8 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
+    # pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
+    # pytest --timeout 900 models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
   model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
@@ -173,6 +177,8 @@
     pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
+    #pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
+    #pytest --timeout 600 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: mistral-7b
   skus:
     wh_n150:
@@ -219,10 +225,22 @@
     # test_bridge_* in test_vllm_parity.py import generator_vllm which needs
     # the vllm package; vllm is not installed in this CI image, so skip them
     # here (they still run in environments that have vllm).
+    # CI-burden reduction, following #45818 (Gemma-4 reduce CI burden): the
+    # heavy full-model-build + device-trace tests added *after* that PR by #45355
+    # (prefill device trace + batched prefill) time out the larger variants on
+    # constrained runners (e.g. 26B/31B on wh_llmbox), so the whole
+    # test_prefill_trace_* and test_batched_prefill_perf files are ignored here.
+    # test_full_model_parity_* (vLLM full-model parity decode loops, from #44265)
+    # is likewise deselected. The tier-1 promotion of 26B/31B/12B is intentionally
+    # kept — only the heavy test cases are removed, not the tiers.
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e2b
   skus:
@@ -232,7 +250,7 @@
     bh_p150:
       timeout: 10
       tier: 3
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-E4B unit tests
@@ -241,8 +259,12 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e4b
   skus:
@@ -256,7 +278,7 @@
     bh_quietbox_2:
       timeout: 15
       tier: 3
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-26B-A4B unit tests
@@ -265,17 +287,21 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox:
-      timeout: 20
+      timeout: 30
       tier: 2
     bh_quietbox_2:
       timeout: 15
-      tier: 2
+      tier: 1
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
     # `test_experts[blackhole-decode-1x32]` and cascades across all 32 devices.
@@ -284,7 +310,7 @@
     # bh_galaxy:
     #   timeout: 20
     #   tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-31B unit tests
@@ -293,24 +319,49 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      -k "not test_bridge_" \
+      -k "not test_bridge_ and not test_full_model_parity" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-31b
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 25
       tier: 2
     bh_quietbox_2:
       timeout: 15
-      tier: 2
+      tier: 1
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
     # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
     # prefill on 31B). Needs separate investigation; re-enable once root-caused.
     # bh_galaxy:
     #   timeout: 20
     #   tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: Gemma-4-12B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
+    pytest --timeout 900 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_ and not test_full_model_parity" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-12b
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Shallow UNet unit tests

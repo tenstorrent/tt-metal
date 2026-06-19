@@ -120,6 +120,7 @@ class TtMoERoutingSetup(LightweightModule):
         expert_dispatch_table: torch.Tensor,
         num_links: int = 1,
         experts_per_chip: int = 32,
+        use_l1_small_for_semaphores: bool = False,
     ):
         """
         Initialize routing setup with the expert-to-chip mapping.
@@ -140,6 +141,7 @@ class TtMoERoutingSetup(LightweightModule):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.experts_per_chip = experts_per_chip
+        self.use_l1_small_for_semaphores = use_l1_small_for_semaphores
 
         self.experts_in_dispatch_group = ttnn.from_torch(
             expert_dispatch_table,
@@ -273,6 +275,10 @@ class TtMoERoutingSetup(LightweightModule):
             num_links=self.num_links,
             experts_per_chip=self.experts_per_chip,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Route the internal all-gather's global semaphores to L1_SMALL so they don't pin the main-L1
+            # floor and clash with the next layer's MLA static CBs. Off by default; enabled only where the
+            # device is opened with l1_small_size > 0 (e.g. the Kimi chunked test).
+            use_l1_small_for_semaphores=self.use_l1_small_for_semaphores,
         )
         signpost(header="moe_gate_calculate_global_dispatch_offsets")
 
