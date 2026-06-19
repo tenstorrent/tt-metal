@@ -13,6 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-logger/tt-logger.hpp>         // log_info: per-program schedule/mcast summary
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -36,72 +37,11 @@ inline void patch_arg(tt::tt_metal::RuntimeArgsData& args, uint32_t index, uint3
     args[index] = value;
 }
 
-// Dense deal landed exactly on the grid (q/w mcast along rows, k down columns) and each direction's
-// lines form contiguous NoC rects. 0 = direction off (per-core DRAM read); see call-site block.
-struct McastPlan {
-    bool grid_aligned = false;
-    uint32_t k_mcast_on = 0;  // K columns are vertical NoC rects
-    uint32_t q_mcast_on = 0;  // Q/W rows are single horizontal NoC rects (covers q and w)
-};
-
-// Pure analysis of the physical core coords: grid alignment + per-line NoC-rect contiguity for the
-// two mcast directions. phys is indexed row-major (y * grid.x + x).
-inline McastPlan compute_mcast_plan(
-    CoreCoord grid,
-    const std::vector<CoreCoord>& phys,
-    uint32_t groups,
-    uint32_t num_cores,
-    uint32_t base,
-    uint32_t rem,
-    uint64_t total_units,
-    uint32_t HB,
-    uint32_t Hi) {
-    const auto cidx = [&](uint32_t x, uint32_t y) { return y * grid.x + x; };
-    // grid-aligned iff group g == grid row y and the row's grid_x cores evenly split its k-chunks
-    // (units_per_group == grid.x * base, no remainder, full grid).
-    const uint32_t units_per_group = groups > 0 ? (uint32_t)(total_units / groups) : 0;
-    const bool grid_aligned =
-        groups == grid.y && num_cores == (uint32_t)(grid.x * grid.y) && rem == 0 && units_per_group == grid.x * base;
-
-    // K columns must be vertical NoC rects: shared x down the column, contiguous y spanning the grid.
-    bool k_cols_ok = grid_aligned;
-    for (uint32_t x = 0; x < grid.x && k_cols_ok; ++x) {
-        const uint32_t px = phys[cidx(x, 0)].x;
-        uint32_t ymin = phys[cidx(x, 0)].y, ymax = ymin;
-        for (uint32_t y = 0; y < grid.y; ++y) {
-            const auto& p = phys[cidx(x, y)];
-            if (p.x != px) {
-                k_cols_ok = false;
-            }
-            ymin = std::min<uint32_t>(ymin, p.y);
-            ymax = std::max<uint32_t>(ymax, p.y);
-        }
-        if (ymax - ymin + 1 != grid.y) {
-            k_cols_ok = false;
-        }
-    }
-    // Q/W row-mcast needs every core in a logical row on ONE physical NoC row (mcast = the row's
-    // horizontal bounding-box rect) and all heads resident (one q block). x-contiguity not required
-    // (the NoC routes the bbox rect); only a row spanning multiple physical NoC rows disables it.
-    // grid.x >= grid.y guards the diagonal sender lookup phys[cidx(y, y)] at the call site: cidx(y, y)
-    // is in-bounds only while y < grid.x, which holds for every row iff the grid is at least as wide as
-    // tall (always true on Blackhole's 14x10 grid; the guard keeps a narrower grid safe).
-    bool q_rows_ok = grid_aligned && HB == Hi && grid.x >= grid.y;
-    for (uint32_t y = 0; y < grid.y && q_rows_ok; ++y) {
-        const uint32_t py = phys[cidx(0, y)].y;
-        for (uint32_t x = 0; x < grid.x; ++x) {
-            if (phys[cidx(x, y)].y != py) {
-                q_rows_ok = false;
-            }
-        }
-    }
-    return {grid_aligned, k_cols_ok ? 1u : 0u, q_rows_ok ? 1u : 0u};
-}
-
-// Output-stationary flat deal of causal-valid work units. One unit = QC q-tile-rows x up-to-KC
-// k-tiles, dealt evenly across cores row-major (kernels invert the flat index). Heads stream in
-// HB-head groups; fully-future tiles get the full -inf mask, row tails -inf-filled by the writer
-// (zeros unsafe: gates can be negative).
+// Banded-product schedule: the work space (group_count q-row-groups x band_count k-bands) tiles onto
+// a rows_used x cols_used core rectangle -- groups -> rows (q/w multicast along a row), bands ->
+// columns (k multicast down a column). One (group, band) cell = one work unit of QC q-tile-rows x
+// up-to-KC k-tiles. Heads stream in HB-head groups; the causal masked suffix is stamped to -inf by
+// compute (zeros unsafe: gates can be negative). See indexer_score_work_split.hpp for the grid map.
 IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensors, tensor_return_value_t& out) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -144,52 +84,53 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // QC/KC/HB are verbatim from the config -- no auto-tune; the caller owns the perf trade-off (see
     // glx_config() in the test). An oversized config is not clamped; it fails at CB allocation.
 
-    // total work units V = groups x the per-group unit count (uniform under the dense schedule; groups
-    // exact since validate guarantees QC divides Sqt). units_in_group is the shared formula the kernels'
-    // WorkUnitSpan inverts.
-    const uint32_t groups = Sqt / QC;
-    const uint64_t total_units = (uint64_t)groups * units_in_group(KC, Tt);
-
+    // ---- banded-product schedule -------------------------------------------------------------
+    // Work space = group_count q-row-groups x band_count k-bands, tiled onto a rows_used x cols_used
+    // rectangle: groups -> rows (q/w mcast along a row), bands -> columns (k mcast down a column). Rows
+    // phase-stack groups when group_count > grid_y; each column owns a contiguous chunk of bands.
+    const uint32_t group_count = Sqt / QC;
+    const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC)
     const auto grid = q.device()->compute_with_storage_grid_size();
-    const uint32_t num_cores = std::min<uint64_t>(total_units, (uint64_t)grid.x * grid.y);
-    const auto core_ranges = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid, true);
-    const auto cores = tt::tt_metal::corerange_to_cores(core_ranges, num_cores, true);
+    const uint32_t grid_x = grid.x, grid_y = grid.y;
 
-    const uint32_t base = total_units / num_cores;
-    const uint32_t rem = total_units % num_cores;
+    const uint32_t rows_used = rows_for_groups(group_count, grid_y);
+    const uint32_t cols_used = cols_for_bands(band_count, grid_x);
+    const uint32_t num_cores = rows_used * cols_used;
 
-    // ---- grid-aligned multicast (decoupled Q/W along rows, K down columns) -------------------
-    // When the dense deal lands exactly on the grid, a grid ROW shares identical q/w and a grid COLUMN
-    // shares the identical k-band: one core per row mcasts q/w along it, one per column mcasts k down
-    // it, killing ~grid_x q/w re-reads + ~grid_y k re-reads. Each direction is independent, enabled only
-    // if its lines are contiguous NoC rects; else that input falls back to per-core DRAM reads.
-    std::vector<CoreCoord> phys(num_cores);
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        phys[i] = q.device()->worker_core_from_logical_core(cores[i]);
+    // Even band split across the used columns: the first (band_count % cols_used) columns get one extra.
+    std::vector<uint32_t> col_band_start(cols_used), col_band_size(cols_used);
+    {
+        const uint32_t bands_per_col = band_count / cols_used, extra = band_count % cols_used;
+        uint32_t off = 0;
+        for (uint32_t col = 0; col < cols_used; ++col) {
+            col_band_size[col] = bands_per_col + (col < extra ? 1u : 0u);
+            col_band_start[col] = off;
+            off += col_band_size[col];
+        }
     }
-    const McastPlan plan = compute_mcast_plan(grid, phys, groups, num_cores, base, rem, total_units, HB, Hi);
-    const bool grid_aligned = plan.grid_aligned;
-    const uint32_t k_mcast_on = plan.k_mcast_on;
-    const uint32_t q_mcast_on = plan.q_mcast_on;
+    // rows_used divides group_count, so every row runs the same num_groups (group = y + p*rows_used).
+    // Uniformity keeps every column's k-mcast in lockstep.
+    const uint32_t num_groups = group_count / rows_used;
+    // Widest column's band count: the streaming q-mcast pad target. Streaming re-reads q per output tile,
+    // so the uneven per-column band counts would desync the row's q-mcast; the kernels pad each row to
+    // max_bands with dummy q-only "phantom" bands (band-independent data) to keep the rendezvous uniform.
+    const uint32_t max_bands = (band_count + cols_used - 1) / cols_used;
 
-    auto cidx = [&](uint32_t x, uint32_t y) { return y * grid.x + x; };
-    // Physical NoC bounding box of one grid column / row, used to build the multicast rects below.
-    auto phys_col_y_range = [&](uint32_t x) {  // [min y, max y] down grid column x
-        uint32_t lo = static_cast<uint32_t>(phys[cidx(x, 0)].y), hi = lo;
-        for (uint32_t y = 0; y < grid.y; ++y) {
-            lo = std::min<uint32_t>(lo, static_cast<uint32_t>(phys[cidx(x, y)].y));
-            hi = std::max<uint32_t>(hi, static_cast<uint32_t>(phys[cidx(x, y)].y));
+    const CoreRange core_rect(CoreCoord{0, 0}, CoreCoord{cols_used - 1, rows_used - 1});
+    const CoreRangeSet core_ranges(core_rect);
+
+    // Physical coords of the used rectangle, indexed [row][col], for the mcast bounding boxes below.
+    std::vector<std::vector<CoreCoord>> phys(rows_used, std::vector<CoreCoord>(cols_used));
+    for (uint32_t row = 0; row < rows_used; ++row) {
+        for (uint32_t col = 0; col < cols_used; ++col) {
+            phys[row][col] = q.device()->worker_core_from_logical_core(CoreCoord{col, row});
         }
-        return std::pair<uint32_t, uint32_t>{lo, hi};
-    };
-    auto phys_row_x_range = [&](uint32_t y) {  // [min x, max x] across grid row y
-        uint32_t lo = static_cast<uint32_t>(phys[cidx(0, y)].x), hi = lo;
-        for (uint32_t x = 0; x < grid.x; ++x) {
-            lo = std::min<uint32_t>(lo, static_cast<uint32_t>(phys[cidx(x, y)].x));
-            hi = std::max<uint32_t>(hi, static_cast<uint32_t>(phys[cidx(x, y)].x));
-        }
-        return std::pair<uint32_t, uint32_t>{lo, hi};
-    };
+    }
+
+    // k-mcast needs >1 row down a column; q/w-mcast needs >1 column along a row. Both are HB-independent:
+    // streaming keeps q-mcast via the phantom-band pad (see max_bands above), so neither gates on HB.
+    const uint32_t k_mcast_on = (rows_used > 1) ? 1u : 0u;
+    const uint32_t q_mcast_on = (cols_used > 1) ? 1u : 0u;
 
     // 3 semaphores per active direction: send (receivers ready), recv (sender relays valid in), valid
     // (constant 1, relay source). Mirrors SDPA chain_link's handshake.
@@ -228,6 +169,24 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     };
 
     const bool stream_heads = HB < Hi;
+
+    // One-line schedule/mcast summary (per program-cache miss) so tests and profiling can read the
+    // active multicast directions without decoding compile-time args.
+    log_info(
+        tt::LogOp,
+        "indexer_score schedule: G={} U={} grid={}x{} rows_used={} cols_used={} num_groups={} "
+        "max_bands={} stream_heads={} k_mcast={} q_mcast={}",
+        group_count,
+        band_count,
+        grid_x,
+        grid_y,
+        rows_used,
+        cols_used,
+        num_groups,
+        max_bands,
+        stream_heads ? 1 : 0,
+        k_mcast_on,
+        q_mcast_on);
 
     // Allocate each CB by its CbArg slot; make_cb assigns the next continuous index.
     make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
@@ -313,21 +272,49 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_ct});
 
-    // Per-core multicast runtime args: K column then Q/W row, each an 8-tuple (push_mcast_dir below); the two
-    // together are what the non-grid-aligned fallback zero-fills.
-    constexpr uint32_t mcast_args_per_dir = 8;
-    constexpr uint32_t reader_mcast_args = 2 * mcast_args_per_dir;
+    // Per-core args: schedule {row_group0, group_stride, num_groups, band0, num_bands, max_bands} then
+    // (reader only) the K-column + Q/W-row mcast 8-tuples. role is a McastRole (none = per-core DRAM read); rect
+    // (xs,ys,xe,ye) + sender (sx,sy) are physical NoC; ndst = #receivers. mcast rects are fixed per core
+    // (one column for k, one row for q); only the data changes per group/band phase.
+    const auto u32 = [](auto v) { return static_cast<uint32_t>(v); };
+    std::vector<CoreCoord> cores;
+    cores.reserve(num_cores);
+    for (uint32_t row = 0; row < rows_used; ++row) {
+        // physical bbox of this row across the used columns (q/w mcast rect); py constant along the row.
+        uint32_t q_xs = u32(phys[row][0].x), q_xe = u32(phys[row][0].x);
+        for (uint32_t bbox_col = 0; bbox_col < cols_used; ++bbox_col) {
+            q_xs = std::min<uint32_t>(q_xs, u32(phys[row][bbox_col].x));
+            q_xe = std::max<uint32_t>(q_xe, u32(phys[row][bbox_col].x));
+        }
+        const uint32_t q_py = u32(phys[row][0].y);
+        const uint32_t q_diag = std::min<uint32_t>(row, cols_used - 1);  // diagonal sender column
+        const CoreCoord q_sender = phys[row][q_diag];
+        for (uint32_t col = 0; col < cols_used; ++col) {
+            // physical bbox of this column down the used rows (k mcast rect); px constant down the column.
+            uint32_t k_ys = u32(phys[0][col].y), k_ye = u32(phys[0][col].y);
+            for (uint32_t bbox_row = 0; bbox_row < rows_used; ++bbox_row) {
+                k_ys = std::min<uint32_t>(k_ys, u32(phys[bbox_row][col].y));
+                k_ye = std::max<uint32_t>(k_ye, u32(phys[bbox_row][col].y));
+            }
+            const uint32_t k_px = u32(phys[0][col].x);
+            const CoreCoord k_sender = phys[0][col];
 
-    uint32_t flat = 0;
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const uint32_t count = base + (i < rem ? 1 : 0);
-        std::vector<uint32_t> reader_rt = {
-            q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), flat, count};
-        // Per-core mcast args: K column (8) then Q/W row (8). role is a McastRole (none = per-core DRAM
-        // read); rect (xs,ys,xe,ye) + sender (sx,sy) are physical NoC; ndst = #receivers.
-        const auto u32 = [](auto v) { return static_cast<uint32_t>(v); };
-        const auto push_mcast_dir =
-            [&](uint32_t role, uint32_t xs, uint32_t ys, uint32_t xe, uint32_t ye, const CoreCoord& s, uint32_t ndst) {
+            const CoreCoord core{col, row};
+            cores.push_back(core);
+            // {row_group0, group_stride, num_groups, band0, num_bands, max_bands}. max_bands is uniform
+            // (the row's widest column); the streaming reader/compute pad their band loop to it.
+            const std::array<uint32_t, 6> sched = {
+                row, rows_used, num_groups, col_band_start[col], col_band_size[col], max_bands};
+
+            std::vector<uint32_t> reader_rt = {q.buffer()->address(), k.buffer()->address(), w.buffer()->address()};
+            reader_rt.insert(reader_rt.end(), sched.begin(), sched.end());
+            const auto push_mcast_dir = [&](uint32_t role,
+                                            uint32_t xs,
+                                            uint32_t ys,
+                                            uint32_t xe,
+                                            uint32_t ye,
+                                            const CoreCoord& s,
+                                            uint32_t ndst) {
                 reader_rt.push_back(role);
                 reader_rt.push_back(xs);
                 reader_rt.push_back(ys);
@@ -337,44 +324,30 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
                 reader_rt.push_back(u32(s.y));
                 reader_rt.push_back(ndst);
             };
-        if (grid_aligned) {
-            const uint32_t x = i % grid.x, y = i / grid.x;
-            // K column x: sender on row 0, receivers down the column; vertical rect spanning the column.
-            const auto [kys, kye] = phys_col_y_range(x);
+            // K column: sender row 0, receivers rows [1, rows_used); vertical rect spanning the column.
             push_mcast_dir(
-                k_mcast_on ? (y == 0 ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
-                u32(phys[cidx(x, 0)].x),
-                kys,
-                u32(phys[cidx(x, 0)].x),
-                kye,
-                phys[cidx(x, 0)],
-                u32(grid.y) - 1);
-            // Q/W row y: same shape as the K column; the ONLY difference is the sender sits on the grid
-            // DIAGONAL (logical x == y) instead of row 0 -- any core in the row can send (all share q/w),
-            // and the diagonal fans senders across distinct columns rather than stacking in one. The
-            // diagonal lookup phys[cidx(y, y)] is in-bounds only when q_mcast_on held (q_rows_ok requires
-            // grid.x >= grid.y); with q-mcast off the role is none and the rect/sender are unused, so fall
-            // back to this core's own coord to keep the index valid.
-            const auto [qxs, qxe] = phys_row_x_range(y);
-            const CoreCoord q_sender = q_mcast_on ? phys[cidx(y, y)] : phys[i];
-            const uint32_t qpy = u32(q_sender.y);  // sender's row == every core's py in this grid row
+                k_mcast_on ? (row == 0 ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
+                k_px,
+                k_ys,
+                k_px,
+                k_ye,
+                k_sender,
+                rows_used - 1);
+            // Q/W row: sender on the diagonal column, receivers the rest of the row; horizontal rect.
             push_mcast_dir(
-                q_mcast_on ? (x == y ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
-                qxs,
-                qpy,
-                qxe,
-                qpy,
+                q_mcast_on ? (col == q_diag ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
+                q_xs,
+                q_py,
+                q_xe,
+                q_py,
                 q_sender,
-                u32(grid.x) - 1);
-        } else {
-            for (uint32_t z = 0; z < reader_mcast_args; ++z) {
-                reader_rt.push_back(0);
-            }
+                cols_used - 1);
+            tt::tt_metal::SetRuntimeArgs(program, reader_id, core, reader_rt);
+            tt::tt_metal::SetRuntimeArgs(program, compute_id, core, std::vector<uint32_t>(sched.begin(), sched.end()));
+            std::vector<uint32_t> writer_rt = {out.buffer()->address()};
+            writer_rt.insert(writer_rt.end(), sched.begin(), sched.end());
+            tt::tt_metal::SetRuntimeArgs(program, writer_id, core, writer_rt);
         }
-        tt::tt_metal::SetRuntimeArgs(program, reader_id, cores[i], reader_rt);
-        tt::tt_metal::SetRuntimeArgs(program, compute_id, cores[i], {flat, count});
-        tt::tt_metal::SetRuntimeArgs(program, writer_id, cores[i], {out.buffer()->address(), flat, count});
-        flat += count;
     }
 
     return {
