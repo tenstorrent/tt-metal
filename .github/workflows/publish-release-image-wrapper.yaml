@@ -50,6 +50,7 @@ jobs:
       packages: write
       contents: read
     needs:
+      - check-harbor
       - build-artifact
       - create-image-tag-name
     secrets: inherit
@@ -59,3 +60,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       platform: ${{ inputs.platform }}
       image: ${{ matrix.image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
