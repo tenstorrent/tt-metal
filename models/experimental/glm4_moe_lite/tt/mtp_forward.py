@@ -161,7 +161,7 @@ def mtp_forward_eager(
             local_max_tt, local_argmax_tt = max_out
         else:
             local_max_tt = max_out
-            local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+            local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False)
 
         mesh_rows, mesh_cols = int(device.shape[0]), int(device.shape[1])
         tp_axis = lm_head_tp_axis
@@ -208,7 +208,7 @@ def mtp_forward_eager(
         if isinstance(max_out, tuple):
             _, next_ids_tt = max_out
         else:
-            next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
+            next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False)
         draft_token_ids = (
             _tt_to_torch_single(
                 tensor=next_ids_tt,
