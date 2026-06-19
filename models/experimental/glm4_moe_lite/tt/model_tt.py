@@ -160,6 +160,34 @@ def _is_mesh_device(device: Any) -> bool:
     return device.__class__.__name__ == "MeshDevice"
 
 
+def _alloc_sharded_rope_buffer(
+    *,
+    device: Any,
+    shape: tuple[int, ...],
+    sharded_cfg: ttnn.MemoryConfig,
+    mapper: Any,
+) -> ttnn.Tensor:
+    """Allocate a HEIGHT_SHARDED RoPE cos/sin buffer used as a ``ttnn.copy`` destination.
+
+    Build it via ``interleaved_to_sharded`` (the same op that produces the copy
+    *source* at runtime) so its logical shape matches the source. Allocating
+    directly with ``from_torch(memory_config=HEIGHT_SHARDED)`` reports the
+    tile-padded shard height as the logical shape on mesh devices (e.g. logical
+    [1,1,32,64] for a [1,1,1,64] tensor with a 32-row shard), which then trips
+    ``ttnn.copy``'s strict ``logical_shape`` equality check against the
+    ``interleaved_to_sharded`` source (logical [1,1,1,64]).
+    """
+    dram = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+    return ttnn.interleaved_to_sharded(dram, sharded_cfg)
+
+
 def _tt_to_torch_for_vllm_output(*, tensor: ttnn.Tensor, device: Any) -> torch.Tensor:
     """
     Convert a TT tensor to torch for vLLM outputs.
@@ -1617,7 +1645,7 @@ class Glm4MoeLiteDenseOnlyTT:
                     local_max_tt, next_ids_tt = max_out
                     ttnn.deallocate(local_max_tt, force=False)
                 else:
-                    next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
+                    next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False)
                 ttnn.deallocate(logits_rm_tight, force=False)
 
                 next_ids_torch = _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
@@ -1661,7 +1689,7 @@ class Glm4MoeLiteDenseOnlyTT:
                     local_max_tt, local_argmax_tt = max_out
                 else:
                     local_max_tt = max_out
-                    local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+                    local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False)
 
                 local_argmax_torch = _mesh_to_torch_selected(tensor=local_argmax_tt, device_ids=selected_device_ids)
                 local_max_torch = _mesh_to_torch_selected(tensor=local_max_tt, device_ids=selected_device_ids)
@@ -1905,7 +1933,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 local_max_tt, local_argmax_tt = max_out
             else:
                 local_max_tt = max_out
-                local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+                local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False)
 
             mesh_rows, mesh_cols = int(self.device.shape[0]), int(self.device.shape[1])
             tp_axis = self.lm_head_tp_axis
@@ -1952,7 +1980,7 @@ class Glm4MoeLiteDenseOnlyTT:
             if isinstance(max_out, tuple):
                 _, next_ids_tt = max_out
             else:
-                next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
+                next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False)
             draft_token_ids = (
                 _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
                 .reshape(-1)
@@ -2094,21 +2122,17 @@ class Glm4MoeLiteDenseOnlyTT:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            state.cos_decode_tt = ttnn.from_torch(
-                torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+            state.cos_decode_tt = _alloc_sharded_rope_buffer(
                 device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=state.rope_sharded_mem_config,
-                mesh_mapper=mapper,
+                shape=(1, batch, 1, rope_dim),
+                sharded_cfg=state.rope_sharded_mem_config,
+                mapper=mapper,
             )
-            state.sin_decode_tt = ttnn.from_torch(
-                torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+            state.sin_decode_tt = _alloc_sharded_rope_buffer(
                 device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=state.rope_sharded_mem_config,
-                mesh_mapper=mapper,
+                shape=(1, batch, 1, rope_dim),
+                sharded_cfg=state.rope_sharded_mem_config,
+                mapper=mapper,
             )
             trans_mat_mem_config = ttnn.create_sharded_memory_config(
                 shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
@@ -2443,21 +2467,17 @@ class Glm4MoeLiteDenseOnlyTT:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        state.cos_batch_tt = ttnn.from_torch(
-            torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+        state.cos_batch_tt = _alloc_sharded_rope_buffer(
             device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=state.rope_sharded_mem_config,
-            mesh_mapper=mapper,
+            shape=(1, batch, 1, rope_dim),
+            sharded_cfg=state.rope_sharded_mem_config,
+            mapper=mapper,
         )
-        state.sin_batch_tt = ttnn.from_torch(
-            torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+        state.sin_batch_tt = _alloc_sharded_rope_buffer(
             device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=state.rope_sharded_mem_config,
-            mesh_mapper=mapper,
+            shape=(1, batch, 1, rope_dim),
+            sharded_cfg=state.rope_sharded_mem_config,
+            mapper=mapper,
         )
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
@@ -2535,21 +2555,17 @@ class Glm4MoeLiteDenseOnlyTT:
             )
             state.mtp_rot_idxs_padded_batch = int(padded_batch)
             state.mtp_rope_sharded_mem_config = state.rope_sharded_mem_config
-            state.mtp_cos_batch_tt = ttnn.from_torch(
-                torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+            state.mtp_cos_batch_tt = _alloc_sharded_rope_buffer(
                 device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=state.rope_sharded_mem_config,
-                mesh_mapper=mapper,
+                shape=(1, batch, 1, rope_dim),
+                sharded_cfg=state.rope_sharded_mem_config,
+                mapper=mapper,
             )
-            state.mtp_sin_batch_tt = ttnn.from_torch(
-                torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+            state.mtp_sin_batch_tt = _alloc_sharded_rope_buffer(
                 device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=state.rope_sharded_mem_config,
-                mesh_mapper=mapper,
+                shape=(1, batch, 1, rope_dim),
+                sharded_cfg=state.rope_sharded_mem_config,
+                mapper=mapper,
             )
             state.mtp_trans_matrix_tt = state.trans_matrix_tt  # Reuse same transformation matrix
 
@@ -2824,7 +2840,7 @@ class Glm4MoeLiteDenseOnlyTT:
         vocab = int(self.hparams.vocab_size)
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
             view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
-            return None, ttnn.argmax(view, dim=3, keepdim=False, use_multicore=True)
+            return None, ttnn.argmax(view, dim=3, keepdim=False)
         vps = int(self.lm_head_vocab_per_shard)
         if self._sampling_allgather_enabled():
             mesh_cols = int(self.device.shape[1])
@@ -2833,7 +2849,7 @@ class Glm4MoeLiteDenseOnlyTT:
             view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vps])
             gathered = ttnn.all_gather(view, dim=3, cluster_axis=cluster_axis, num_links=1)
             full = ttnn.slice(gathered, [0, 0, 0, 0], [1, 1, batch, vocab])
-            idx = ttnn.argmax(full, dim=3, keepdim=False, use_multicore=True)
+            idx = ttnn.argmax(full, dim=3, keepdim=False)
             ttnn.deallocate(gathered, force=False)
             ttnn.deallocate(full, force=False)
             return None, idx
@@ -2841,7 +2857,7 @@ class Glm4MoeLiteDenseOnlyTT:
         max_out = ttnn.max(view, dim=3, keepdim=True)
         if isinstance(max_out, tuple):
             return max_out
-        return max_out, ttnn.argmax(view, dim=3, keepdim=False, use_multicore=True)
+        return max_out, ttnn.argmax(view, dim=3, keepdim=False)
 
     def _resolve_token_ids_from_trace_output(self, *, top1_values_tt, top1_indices_tt, batch: int) -> torch.Tensor:
         """Resolve global token IDs from trace output tensors (reusable for MTP)."""
@@ -3173,12 +3189,12 @@ class Glm4MoeLiteDenseOnlyTT:
                         ttnn.deallocate(mtp_max_out_warm[0], force=False)
                         ttnn.deallocate(mtp_max_out_warm[1], force=False)
                     else:
-                        mtp_argmax_warm = ttnn.argmax(mtp_logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
+                        mtp_argmax_warm = ttnn.argmax(mtp_logits_rm_warm_view, dim=3, keepdim=False)
                         ttnn.deallocate(mtp_max_out_warm, force=False)
                         ttnn.deallocate(mtp_argmax_warm, force=False)
                 else:
                     mtp_logits_rm_warm_view = ttnn.slice(mtp_logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab])
-                    mtp_argmax_warm = ttnn.argmax(mtp_logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
+                    mtp_argmax_warm = ttnn.argmax(mtp_logits_rm_warm_view, dim=3, keepdim=False)
                     ttnn.deallocate(mtp_argmax_warm, force=False)
                 ttnn.deallocate(mtp_logits_rm_warm, force=False)
                 ttnn.synchronize_device(self.device)
@@ -3202,15 +3218,11 @@ class Glm4MoeLiteDenseOnlyTT:
                         state.mtp_top1_values_tt, state.mtp_top1_indices_tt = mtp_max_out
                     else:
                         state.mtp_top1_values_tt = mtp_max_out
-                        state.mtp_top1_indices_tt = ttnn.argmax(
-                            mtp_logits_rm_view, dim=3, keepdim=False, use_multicore=True
-                        )
+                        state.mtp_top1_indices_tt = ttnn.argmax(mtp_logits_rm_view, dim=3, keepdim=False)
                 else:
                     mtp_logits_rm_view = ttnn.slice(mtp_logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
                     state.mtp_top1_values_tt = None
-                    state.mtp_top1_indices_tt = ttnn.argmax(
-                        mtp_logits_rm_view, dim=3, keepdim=False, use_multicore=True
-                    )
+                    state.mtp_top1_indices_tt = ttnn.argmax(mtp_logits_rm_view, dim=3, keepdim=False)
                 ttnn.end_trace_capture(self.device, mtp_trace_id, cq_id=0)
                 ttnn.synchronize_device(self.device)
                 state.mtp_trace_id = mtp_trace_id
