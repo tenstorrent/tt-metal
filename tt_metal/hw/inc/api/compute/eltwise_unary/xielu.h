@@ -29,10 +29,17 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
-    MATH(SFPU_UNARY_TWO_PARAM_KERNEL_WITH_DST_ACCUM(
-        calculate_xielu, RC, APPROX, DST_ACCUM_MODE, idst, alpha_p, alpha_n));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_xielu,
+        (APPROX, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC,
+        alpha_p,
+        alpha_n));
 }
 
-ALWI void xielu_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(xielu, sfpu::xielu_init, APPROX)); }
+ALWI void xielu_tile_init() { MATH(SFPU_UNARY_INIT_FN(xielu, sfpu::xielu_init, (APPROX))); }
 
 }  // namespace ckernel

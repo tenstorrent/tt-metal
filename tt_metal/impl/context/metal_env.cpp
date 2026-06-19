@@ -283,6 +283,11 @@ bool MetalEnvImpl::set_fabric_config(
         this->initialize_control_plane_impl();
     }
 
+    // Active tt-fabric: refresh routing tables (control plane rebuild is not enough).
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        this->initialize_fabric_config();
+    }
+
     return true;
 }
 

@@ -13,7 +13,12 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_link_libraries(unit_tests_context_smoke PRIVATE test_metal_common_libs)
+target_link_libraries(
+    unit_tests_context_smoke
+    PRIVATE
+        test_metal_common_libs
+        TTNN::CPP
+)
 
 # Non-smoke tests
 add_executable(unit_tests_context)
@@ -35,4 +40,5 @@ target_link_libraries(
     PRIVATE
         TT::Metalium::Test::Context::Smoke
         test_metal_common_libs
+        TTNN::CPP
 )

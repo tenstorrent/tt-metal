@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.8.1"
+        default: "v1.9.0"
       job-timeout:
         required: false
         type: number
@@ -151,7 +151,9 @@ jobs:
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
     env:
-      TTNN_TESTS_YAML: tests/pipeline_reorg/ttnn-tests.yaml
+      TTNN_TESTS_YAML: |
+        tests/pipeline_reorg/ttnn-tests.yaml
+        tests/pipeline_reorg/ttnn_smoke_merge_gate_tests.yaml
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
@@ -170,11 +172,14 @@ jobs:
         run: |
           set -euo pipefail
           pip3 install -q PyYAML
-          python3 - "${{ env.TTNN_TESTS_YAML }}" "$GITHUB_OUTPUT" << 'PY'
-          import json, re, sys, yaml
-          path, out_path = sys.argv[1], sys.argv[2]
-          with open(path) as f:
-              tests = yaml.safe_load(f)
+          python3 - "$GITHUB_OUTPUT" << 'PY'
+          import json, os, re, sys, yaml
+          out_path = sys.argv[1]
+          paths = [line.strip() for line in os.environ["TTNN_TESTS_YAML"].splitlines() if line.strip()]
+          tests = []
+          for path in paths:
+              with open(path) as f:
+                  tests.extend(yaml.safe_load(f) or [])
           # TTSim runs all tests on ubuntu-latest; ignore skus and timeouts from YAML, use fixed timeout.
           TTSIM_TIMEOUT_MINUTES = 40
           entries = []
@@ -376,7 +381,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
             # ToDo: Re-enable this test once tt-sim supports NOC
@@ -384,8 +389,11 @@ jobs:
             # ./build/test/tt_metal/test_single_dm_l1_write
             :
           else
-            ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
-            ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
+            # Exclude *TestQuasar fixtures (configure_mock_mode(QUASAR) triggers dispatch-core
+            # assertion in TTSim) and ProgramSpecHWTest.* (real HW tests that time out in TTSim)
+            # until they gain TTSim-aware GTEST_SKIP() guards in SetUp().
+            ./build/test/tt_metal/unit_tests_api --gtest_filter="-ProgramRunArgsTestQuasar.*:ProgramSpecTestQuasar.*:ProgramSpecHWTest.*"
+            ./build/test/tt_metal/unit_tests_data_movement
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DevicePrintFixture.IdleEthTestPrint"
             # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
             # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
@@ -394,9 +402,8 @@ jobs:
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
-            ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"
-            ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc1"
-            ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
+            ./build/test/tt_metal/unit_tests_eth
+            ./build/test/tt_metal/unit_tests_legacy
           fi
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}

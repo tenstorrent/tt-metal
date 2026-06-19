@@ -780,6 +780,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         use_batched_prefill=False,
                         user_id=user_id,
                         padded_batch_size=None,
+                        use_full_prompt_len=True,
                     )
             else:
                 page_table_user = None
@@ -2658,6 +2659,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         use_batched_prefill=False,
         user_id=None,
         padded_batch_size=None,
+        use_full_prompt_len=False,
     ):
         block_size = get_block_size(kv_cache)
 
@@ -2679,7 +2681,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # prefill length (for example 32-token prompts become 128-token
             # kernels), so the page table must expose blocks for that padded
             # length even on the non-traced compile path.
-            target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
+            if use_full_prompt_len:
+                target_prefill_len = prefill_len
+            else:
+                target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
             num_blocks = num_blocks_in_seq(target_prefill_len, block_size)
             if page_table.shape[1] < num_blocks:
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1

@@ -141,7 +141,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces);
 
     _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
-        formats.pack_src, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, 1 /* num_tiles */);
+        formats.pack_src, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 
     // Replace MOP with the block-contiguous version (REPLAY + W-per-tile).
     _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);

@@ -266,7 +266,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::Copy
-        TTNN::Ops::Experimental::DramCorePrefetcher
+        TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::Matmul
@@ -276,8 +276,10 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
+        TTNN::Ops::Experimental::TopkLargeIndices
         TTNN::Ops::Experimental::TopkRouterGpt
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
+        TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
@@ -287,11 +289,13 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
+        TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache
         TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
+        TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SliceWrite
@@ -522,6 +526,7 @@ add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
+add_subdirectory(cpp/ttnn/operations/experimental/quasar)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
@@ -530,15 +535,17 @@ add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce)
-add_subdirectory(cpp/ttnn/operations/experimental/dram_core_prefetcher)
+add_subdirectory(cpp/ttnn/operations/experimental/tensor_prefetcher)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate)
+add_subdirectory(cpp/ttnn/operations/experimental/topk_large_indices)
 add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
+add_subdirectory(cpp/ttnn/operations/experimental/indexer_score)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
@@ -548,6 +555,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/extract)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/insert)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back)

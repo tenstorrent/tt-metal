@@ -5,6 +5,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -351,11 +352,14 @@ void kernel_main() {
     constexpr uint32_t ternary_a_cb = tt::CBIndex::c_5;
     constexpr uint32_t ternary_b_cb = tt::CBIndex::c_6;
 
+    // compute_kernel_hw_startup must be the first compute API call (before SFPU/op inits).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, intermediate_cb);
+
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    mm_init(in0_cb, in1_cb, intermediate_cb);
+    matmul_init(in0_cb, in1_cb);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -383,7 +387,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            mm_block_init_short(
+            matmul_block_init(
                 in0_cb,
                 in1_cb,
                 false /*transpose*/,

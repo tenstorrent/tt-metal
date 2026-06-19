@@ -93,6 +93,21 @@ def _model_key():
     return os.path.basename(_get_model_path().rstrip("/"))
 
 
+def _lookup_model_entry(table, model_key):
+    """Resolve a model entry from pcc_thresholds.json, case-insensitively.
+
+    HF_MODEL may use ``google/gemma-4-31b-it`` while the table keys use
+    ``gemma-4-31B-it``; basename casing must not force the 0.99 default.
+    """
+    if model_key in table:
+        return table[model_key]
+    key_lower = model_key.lower()
+    for entry_key, entry in table.items():
+        if entry_key.lower() == key_lower:
+            return entry
+    return {}
+
+
 @lru_cache(maxsize=1)
 def _model_key_candidates():
     """Return possible threshold-table keys for the active HF_MODEL.
@@ -111,6 +126,8 @@ def _model_key_candidates():
         is_moe = bool(getattr(tc, "enable_moe_block", False))
         if hidden == 5376 and not is_moe:
             candidates.append("gemma-4-31B-it")
+        elif hidden == 3840 and not is_moe:
+            candidates.append("gemma-4-12B-it")
         elif is_moe:
             candidates.append("gemma-4-26B-A4B-it")
     except Exception:
@@ -150,8 +167,13 @@ def get_pcc_threshold(request, default=0.99):
     table = _load_pcc_thresholds()
     node_name = request.node.name
     mesh_key = _mesh_key_from_node_name(node_name)
+    # Try each candidate model key (HF_MODEL basename first, then the canonical
+    # names inferred from the loaded config) so a HF_MODEL that drops the "-it"
+    # suffix (e.g. google/gemma-4-26B-A4B) or points at a hashed cache snapshot
+    # still resolves to the right entry instead of falling back to 0.99.
+    # _lookup_model_entry matches case-insensitively.
     for model_key in _model_key_candidates():
-        model_entry = table.get(model_key, {})
+        model_entry = _lookup_model_entry(table, model_key)
         mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
         if node_name in mesh_entry:
             return mesh_entry[node_name]
@@ -168,6 +190,35 @@ def is_moe_model():
 
 
 skip_if_not_moe = pytest.mark.skipif(not is_moe_model(), reason="Model does not use MoE")
+
+_GEMMA4_CONFIGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configs"))
+_CONFIG_ONLY_SKIP_REASON = (
+    "Real HF checkpoint required (weights + tokenizer); "
+    "CI unit job uses config-only HF_MODEL under models/demos/gemma4/configs/"
+)
+
+
+def uses_ci_config_only_checkpoint():
+    """True when HF_MODEL points at a checked-in config stub without weight files."""
+    model_path = _get_model_path()
+    if not os.path.isdir(model_path):
+        return False
+    resolved = os.path.abspath(model_path)
+    if not resolved.startswith(_GEMMA4_CONFIGS_DIR + os.sep):
+        return False
+    if os.path.isfile(os.path.join(resolved, "model.safetensors")):
+        return False
+    if os.path.isfile(os.path.join(resolved, "pytorch_model.bin")):
+        return False
+    if any(name.startswith("model") and name.endswith(".safetensors") for name in os.listdir(resolved)):
+        return False
+    return True
+
+
+def skip_if_config_only_checkpoint():
+    """Skip tests that load HF weights or tokenizers when only config.json is available."""
+    if uses_ci_config_only_checkpoint():
+        pytest.skip(_CONFIG_ONLY_SKIP_REASON)
 
 
 class TestFactory:

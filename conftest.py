@@ -554,12 +554,27 @@ def mesh_device(request, silicon_arch_name, device_params):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
+        # This is a workaround to support skipping tests where configuring mesh devices whose size does not match the physical
+        # number of devices causes the runtime to crash. Theoretically the runtime should support mesh devices smaller than the
+        # number of physical devices, but that hasn't been the case when testing. TODO remove when such behavior is more widely supported.
+        if (
+            device_params.get("require_exact_physical_num_devices", False)
+            and num_devices_requested != ttnn.get_num_devices()
+        ):
+            pytest.skip(
+                f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({ttnn.get_num_devices()})."
+            )
+
         if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
-            pytest.skip("Requested more devices than available. Test not applicable for machine")
+            pytest.skip(
+                f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+            )
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
         if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
-            pytest.skip("Requested more devices than available. Test not applicable for machine")
+            pytest.skip(
+                f"Requested more devices ({param}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+            )
         mesh_shape = ttnn.MeshShape(1, param)
 
     override_trace_region_size = get_supported_trace_region_size(request, param)
@@ -568,6 +583,7 @@ def mesh_device(request, silicon_arch_name, device_params):
         logger.info(f"Overriding trace region size to {override_trace_region_size}")
 
     updated_device_params = get_updated_device_params(device_params)
+    updated_device_params.pop("require_exact_physical_num_devices", False)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
