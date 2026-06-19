@@ -64,6 +64,14 @@ circular buffer to a FIXED size independent of F; this was verified to fit the f
 resident L1 up to the 510-phoneme max (F~138k).  Folding the reflect-pad trim into ``padding`` and
 collapsing the post-conv reshapes cut the standalone iSTFT device time 1957->~266µs.
 
+L1 vs DRAM placement (266->~231µs): the transient polar->rect / layout / COLA tensors run in L1
+interleaved (L1 bandwidth >> DRAM) — EXCEPT any tensor still alive while the conv_transpose runs,
+which must be DRAM.  At the 510-phoneme max a live L1 tensor (the ~6 MiB conv input, or the ~3 MiB
+X_real/X_imag the caller frees after the conv) clashes with the conv's static circular buffers
+("circular buffers clash with L1 buffers").  So ``cos``/``sin``, the channel-stack/permute layout
+scratch, and the COLA multiply are L1 (all freed before, or created after, the conv); the conv
+input and X_real/X_imag are DRAM.
+
 Long sequences (single-pass, device-only)
 ------------------------------------------
 Both directions run in a single device pass at any length — no chunking, no CPU fallback.  The
@@ -715,20 +723,6 @@ class TTTorchSTFT:
             y = ttnn.squeeze(y, 0)
         return ttnn.reshape(y, [B, 1, p.output_length], memory_config=mc)
 
-    def _to_nhwc_rm(self, x_bkf: ttnn.Tensor) -> ttnn.Tensor:
-        """``[B, K, F]`` (TILE) → ``[B, 1, F, K]`` ROW_MAJOR for conv_transpose2d NHWC input.
-
-        ROW_MAJOR so the frame axis (dim=2) can be sliced at arbitrary (non-tile-aligned)
-        boundaries by the chunked iSTFT path.
-        """
-        p = self.params
-        mc = ttnn.DRAM_MEMORY_CONFIG
-        B = int(x_bkf.shape[0])
-        x_bfk = ttnn.permute(x_bkf, (0, 2, 1), memory_config=mc)
-        x_rm = ttnn.to_layout(x_bfk, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
-        ttnn.deallocate(x_bfk)
-        return ttnn.reshape(x_rm, [B, 1, p.F, p.K], memory_config=mc)
-
     def _ct_ola_run(self, x_nhwc: ttnn.Tensor, n_frames: int, pad: int) -> ttnn.Tensor:
         """Fused conv_transpose2d OLA on ``n_frames`` frames → trimmed windowed-sum ``[B, L_out, 1]`` TILE.
 
@@ -822,21 +816,27 @@ class TTTorchSTFT:
         """
         p = self.params
         mc = ttnn.DRAM_MEMORY_CONFIG
+        mcl1 = ttnn.L1_MEMORY_CONFIG
         B = int(X_real.shape[0])
         pad = p.filter_length // 2
 
-        # Channel-stack [X_real | X_imag] -> [B, 1, F, 2K] so a single fused conv_transpose computes
-        # y_real + y_imag.  The concat is along the last (channel) axis in ROW_MAJOR — no tilize/
-        # untilize round-trip (unlike a TILE concat along the non-aligned K axis).
-        xr_nhwc = self._to_nhwc_rm(X_real)  # [B, 1, F, K] ROW_MAJOR
-        xi_nhwc = self._to_nhwc_rm(X_imag)  # [B, 1, F, K] ROW_MAJOR
-        x_comb = ttnn.concat([xr_nhwc, xi_nhwc], dim=3, memory_config=mc)  # [B, 1, F, 2K]
-        ttnn.deallocate(xr_nhwc)
-        ttnn.deallocate(xi_nhwc)
+        # Channel-stack [X_real | X_imag] on the K axis WHILE STILL TILE, then a single permute +
+        # untilize gives the NHWC ROW_MAJOR conv input -- one untilize instead of the per-branch
+        # two (each ~19µs).  The transient TILE intermediates stay in L1 (tiny, freed before the
+        # conv), but the conv INPUT ``x_comb`` is materialised in DRAM: at the 510-phoneme max
+        # (F~138k) it is ~6 MiB and, if left in L1, its interleaved pages clash with the conv's
+        # static circular buffers ("circular buffers clash with L1 buffers").  DRAM keeps the
+        # conv's L1 free for its CBs at every length.
+        x_stack = ttnn.concat([X_real, X_imag], dim=1, memory_config=mcl1)  # [B, 2K, F] TILE (L1)
+        x_bfc = ttnn.permute(x_stack, (0, 2, 1), memory_config=mcl1)  # [B, F, 2K] TILE (L1)
+        ttnn.deallocate(x_stack)
+        x_rm = ttnn.to_layout(x_bfc, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)  # untilize once -> DRAM
+        ttnn.deallocate(x_bfc)
+        x_comb = ttnn.reshape(x_rm, [B, 1, p.F, 2 * p.K], memory_config=mc)  # [B, 1, F, 2K] RM (DRAM)
         # conv_transpose trims the reflect-pad margins via padding=(pad,0) and emits TILE directly:
         # y_flat is already [B, output_length] TILE (no separate slice / untilize / tilize / reshape).
         y_flat = self._ct_ola_run(x_comb, p.F, pad)
-        y_norm = ttnn.multiply(y_flat, p.inv_denom_tt, memory_config=mc)
+        y_norm = ttnn.multiply(y_flat, p.inv_denom_tt, memory_config=mcl1)
         ttnn.deallocate(y_flat)
         return ttnn.reshape(y_norm, [B, 1, p.output_length], memory_config=mc)
 
@@ -859,10 +859,16 @@ class TTTorchSTFT:
         # matrix) run directly on the incoming dtype.  The polar->rect conversion and the
         # well-conditioned dense matmul tolerate bf16 here (unlike the forward atan2 path), so the
         # two BF16=>FP32 typecast dispatches are pure overhead on this op-gap-bound path.
-        cos_phase = ttnn.cos(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        sin_phase = ttnn.sin(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        X_real = ttnn.multiply(magnitude, cos_phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        X_imag = ttnn.multiply(magnitude, sin_phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # cos/sin live in L1 (tiny, transient, freed right here) — L1 bandwidth >> DRAM.  X_real /
+        # X_imag, however, stay ALIVE through the conv_transpose (the caller frees them after), so
+        # they must be DRAM: at the 510-phoneme max (F~138k) an L1 X_real/X_imag (~3 MiB each)
+        # clashes with the conv's static circular buffers ("circular buffers clash with L1 buffers").
+        mcl1 = ttnn.L1_MEMORY_CONFIG
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        cos_phase = ttnn.cos(phase, memory_config=mcl1)
+        sin_phase = ttnn.sin(phase, memory_config=mcl1)
+        X_real = ttnn.multiply(magnitude, cos_phase, memory_config=mc)
+        X_imag = ttnn.multiply(magnitude, sin_phase, memory_config=mc)
         ttnn.deallocate(cos_phase)
         ttnn.deallocate(sin_phase)
 
