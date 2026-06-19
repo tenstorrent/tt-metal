@@ -30,6 +30,7 @@ and marked `TODO(env)`.
 | KV-cache phase state machine | #47474 | ⬜ not started |
 | Canvas mask geometry (reference, pure torch) | #47462 | ✅ done — `reference/attention_mask.py`, 8 tests pass |
 | Self-conditioning gated MLP (reference, pure torch) | #47461/#47463 | ✅ done — `reference/self_conditioning.py`, 6 tests pass |
+| Multi-canvas generation loop (reference, pure torch) | #47464 | ✅ done — `reference/generate.py`, 3 tests (commit-append, prefix-grows) |
 | Bidirectional canvas attention (device SDPA) | #47462 | ⬜ not started (mask reference done; non-causal SDPA path blocked on HW) |
 | Reference denoise trajectory (pure torch) | #47463/#47468 | ✅ done — `reference/denoise_loop.py`, 4 tests pass |
 | Discrete-diffusion decode loop (device) | #47463 | ⬜ not started (reference logic done) |
@@ -50,11 +51,13 @@ Legend: ✅ done · 🚧 in progress · ⛔ blocked on environment · ⬜ not st
    harness (`tests/trajectory_pcc.py`) + self-conditioning gated MLP
    (`reference/self_conditioning.py`).
 
-**The env-independent reference layer is complete (34 CPU tests pass).** It
+**The env-independent reference layer is complete (40 CPU tests pass).** It
 pins every net-new *algorithm* — sampling/acceptance (#47463), denoise
-trajectory (#47463), mask geometry (#47462), self-conditioning (#47461/#47463),
-and the decision-level PCC harness (#47468) — so the device port has an oracle
-to validate against. Remaining work is environment-gated:
+trajectory (#47463), multi-canvas generation (#47464), mask geometry (#47462),
+self-conditioning (#47461/#47463), the decision-level PCC harness (#47468), and
+the HF-reference adapter seam (#47468) — so the device port and the real HF
+reference both have an oracle to validate against. Remaining work is
+environment-gated:
 
 5. ⛔ Vendored HF reference wrapper — unblocks once `transformers` ships
    `diffusion_gemma` (then plug it into the trajectory harness).
