@@ -490,7 +490,7 @@ class TtMistral4TextModel:
         full = ttnn.to_layout(full, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Write directly into the pre-allocated buffer so trace replay can overwrite
         # the same slot every step — saves one Copy/assign op and the L1 temp.
-        ttnn.argmax(full, dim=-1, use_multicore=True, output_tensor=self._decode_token_out)
+        ttnn.argmax(full, dim=-1, output_tensor=self._decode_token_out)
         ttnn.deallocate(full)
         return self._decode_token_out
 
