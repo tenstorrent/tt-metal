@@ -2,32 +2,40 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Full-model decode PCC test for Mistral-Small-4.
+Full-model decode PCC test for Mistral-Small-4 (teacher-forced, multi-step).
 
-Runs the full 36-layer model and validates the KV-cache decode step at position
-P with two independent PCC checks:
+Runs the full 36-layer model and validates the KV-cache decode path over
+MISTRAL4_DECODE_STEPS consecutive positions, teacher-forced against an HF Torch
+reference: each step feeds the reference's greedy token, so the TT and HF
+trajectories stay aligned and every step is compared at the same context. This
+exercises the cache read/write across positions (not just one step), catching
+drift, wrong cache-slot indexing, and RoPE-at-higher-position bugs that a
+single-step check misses.
 
-  1. Decode-vs-prefill (self-consistency): the decode logits at position P must
-     match the TTNN prefill logits at position P.  Floor 0.70, typically ~0.99.
-  2. Decode-vs-HF (ground truth): the decode logits must match the HF Torch
-     reference's last-position logits.  Floor 0.90 (measured 0.967).
+Two PCC families:
+  1. Decode-vs-HF (ground truth): at EVERY decode step the decode logits must
+     match the HF reference's logits at that position. Floor 0.90 (step 0 ~0.961).
+  2. Decode-vs-prefill (self-consistency): at step 0 (the last prompt position)
+     the decode logits must match the TTNN prefill logits at that position.
+     Floor 0.70, typically ~0.99. Only definable at a prefilled position, and it
+     isolates the decode path from the bfloat16 kernel-shape effect.
+
+Why the two HF/self-consistency floors differ:
+  In bfloat16, TTNN matmul kernels are shape-specific: a seq_len-token prefill
+  kernel produces slightly different K/V at a position than a 1-token decode
+  kernel. HF always uses a full-context kernel. So decode-vs-HF carries PCC loss
+  from this kernel-shape effect on top of quantization loss; the self-consistency
+  check (decode-vs-prefill) is free of it and anchors the cache-read correctness.
 
 Test design:
-  1. Build HF reference, run a forward pass, capture last-position logits, free it.
-  2. Prefill the same prompt through the TTNN model → fills all 36 KV caches and
-     returns reference logits at the last position.
-  3. Decode at that same last position using the cached K/V → returns logits.
-  4. Compare decode logits against both references via PCC.
+  1. Build HF reference; greedily generate MISTRAL4_DECODE_STEPS tokens with a
+     DynamicCache, capturing per-step logits + the teacher tokens; free it.
+  2. Prefill the prompt through the TTNN model → fills all 36 KV caches.
+  3. Decode step-by-step from the last prompt position, feeding the teacher token
+     each step (teacher forcing), reading/writing the KV cache.
+  4. Compare each step's decode logits against HF (all steps) and prefill (step 0).
 
-Why two checks instead of just decode-vs-HF:
-  In bfloat16, TTNN matmul kernels are shape-specific: a seq_len-token prefill
-  kernel produces slightly different K/V at position P than a 1-token decode
-  kernel.  HF always uses a full-context kernel.  So decode-vs-HF carries PCC
-  loss from this kernel-shape effect on top of the quantization loss already
-  present in prefill-vs-HF.  At position 4 of the 5-token prompt this measures
-  0.967; the floor is 0.90.  The self-consistency check isolates the decode path
-  itself (does it correctly read/use the cache prefill wrote?), free of the
-  kernel-shape effect; the HF check anchors the absolute correctness.
+Set MISTRAL4_DECODE_STEPS=1 to recover the original single-step check.
 
 Run manually::
 
@@ -42,7 +50,6 @@ import os
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -60,6 +67,7 @@ pytest.importorskip("transformers")
 pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mistral4 required")
 
 _N_LAYERS = int(os.environ.get("MISTRAL4_DECODE_N_LAYERS", "36"))
+_DECODE_STEPS = int(os.environ.get("MISTRAL4_DECODE_STEPS", "8"))  # teacher-forced decode steps to validate
 _PCC_FLOOR = 0.70  # decode-vs-prefill self-consistency floor
 _HF_PCC_FLOOR = 0.90  # decode-vs-HF floor (lower than prefill: includes the bfloat16 kernel-shape effect)
 
@@ -117,15 +125,30 @@ def test_mistral_small_4_decode_pcc(reset_seeds, mesh_device):
 
     # ── HF reference (CPU, bfloat16, streamed weights) ───────────────────────
     # Built and freed BEFORE the TTNN model so peak host RAM holds one full model
-    # at a time. HF's last-position logits are the ground-truth next-token
-    # distribution for position seq_len-1 — the same prediction the decode step makes.
+    # at a time. Greedily generate _DECODE_STEPS tokens with a DynamicCache,
+    # capturing the per-step ground-truth logits and the teacher tokens the TTNN
+    # decode loop is forced with (so both trajectories stay aligned position-by-position).
+    from transformers.cache_utils import DynamicCache
+
     logger.info(f"Building HF reference ({_N_LAYERS} layers, CPU, bfloat16)...")
     hf_model = _build_hf_ref(text, state_dict, _N_LAYERS)
-    logger.info("Running HF reference forward pass...")
-    hf_logits = hf_model(input_ids).logits[0, seq_len - 1, :].float()  # [vocab]
-    del hf_model
+    logger.info(f"Running HF reference + greedy teacher generation ({_DECODE_STEPS} steps)...")
+    hf_step_logits: list[torch.Tensor] = []  # hf_step_logits[j] = logits at position (seq_len-1+j)
+    teacher_tokens: list[int] = []  # teacher_tokens[j] = greedy token at position (seq_len+j)
+    hf_cache = DynamicCache()
+    out = hf_model(input_ids, past_key_values=hf_cache, use_cache=True)
+    step_logit = out.logits[0, -1, :].float().clone()
+    hf_step_logits.append(step_logit)
+    teacher_tokens.append(int(step_logit.argmax()))
+    for _ in range(_DECODE_STEPS - 1):
+        nxt = torch.tensor([[teacher_tokens[-1]]], dtype=torch.long)
+        out = hf_model(nxt, past_key_values=hf_cache, use_cache=True)
+        step_logit = out.logits[0, -1, :].float().clone()
+        hf_step_logits.append(step_logit)
+        teacher_tokens.append(int(step_logit.argmax()))
+    del hf_model, hf_cache, out
     gc.collect()
-    logger.info(f"HF reference logits shape: {tuple(hf_logits.shape)}")
+    logger.info(f"HF teacher tokens (positions {seq_len}..{seq_len + _DECODE_STEPS - 1}): {teacher_tokens}")
 
     logger.info(f"Building TtMistral4TextModel ({_N_LAYERS} layers)...")
     model = TtMistral4TextModel(
@@ -136,46 +159,67 @@ def test_mistral_small_4_decode_pcc(reset_seeds, mesh_device):
         max_seq_len=seq_len + 64,
     )
 
-    embed_w = state_dict["language_model.model.embed_tokens.weight"].to(torch.bfloat16)
     rotary = Mistral4RotaryEmbedding(text).eval().to(torch.bfloat16)
-    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
-    hidden0 = F.embedding(input_ids, embed_w)
-    cos_full, sin_full = rotary(hidden0, position_ids)
+    # RoPE table must cover every position the decode loop touches: [0, seq_len + _DECODE_STEPS).
+    total_positions = seq_len + _DECODE_STEPS
+    position_ids = torch.arange(total_positions, dtype=torch.long).unsqueeze(0)
+    dummy = torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16)  # rotary uses position_ids; x is only a dtype carrier
+    cos_full, sin_full = rotary(dummy, position_ids)
     model.cache_rope_tables(cos_full, sin_full)
 
     # Prefill: fills all KV caches + returns logits at every position.
     logger.info(f"Running prefill (seq_len={seq_len})...")
     prefill_logits = model.prefill(input_ids)  # [1, seq_len, vocab]
-    ref_logits = prefill_logits[0, seq_len - 1, :].float()  # [vocab]
-    logger.info(f"Reference logits shape: {tuple(ref_logits.shape)}")
+    prefill_last = prefill_logits[0, seq_len - 1, :].float()  # [vocab] at position seq_len-1
 
-    # Decode: re-run the last token through the full decode path using the KV
-    # cache just filled by prefill, and collect the logit distribution.
-    last_input_id = input_ids[:, seq_len - 1 : seq_len]  # [1, 1]
-    logger.info(f"Running decode step at position {seq_len - 1}...")
-    dec_logits = model.decode_logits(last_input_id, seq_len - 1)  # [vocab]
+    # Teacher-forced decode. Step j processes the token at position (seq_len-1+j) and
+    # predicts position (seq_len+j). Step 0's input is the last prompt token; later
+    # steps feed the HF teacher token for the position being decoded, so TT and HF
+    # stay aligned and every step is compared at the same context.
+    hf_pccs: list[float] = []
+    token_matches = 0
+    sc_passing, sc_msg = None, None
+    for j in range(_DECODE_STEPS):
+        pos = seq_len - 1 + j
+        if j == 0:
+            tok = input_ids[:, seq_len - 1 : seq_len]  # [1,1] last prompt token
+        else:
+            tok = torch.tensor([[teacher_tokens[j - 1]]], dtype=torch.long)  # token sitting at position `pos`
+        dec_logits = model.decode_logits(tok, pos).float()  # [vocab], predicts position pos+1
 
-    ref_tok = int(ref_logits.argmax())
-    dec_tok = int(dec_logits.argmax())
-    hf_tok = int(hf_logits.argmax())
-    logger.info(f"Greedy token: HF={hf_tok}, prefill={ref_tok}, decode={dec_tok}")
+        hf_passing, hf_pcc = comp_pcc(hf_step_logits[j], dec_logits, _HF_PCC_FLOOR)
+        hf_pccs.append(float(hf_pcc))
+        dec_tok = int(dec_logits.argmax())
+        if dec_tok == teacher_tokens[j]:
+            token_matches += 1
+        logger.info(
+            f"step {j} (pos={pos}): decode-vs-HF PCC={float(hf_pcc):.4f} (floor {_HF_PCC_FLOOR}); "
+            f"decode_tok={dec_tok}, HF_tok={teacher_tokens[j]}"
+        )
+        assert hf_passing, (
+            f"Decode-vs-HF PCC below floor {_HF_PCC_FLOOR} at step {j} (pos={pos}).\n"
+            f"The full 36-layer decode path diverges from the HF reference beyond the "
+            f"expected bfloat16 quantization + kernel-shape loss.\nPCC={float(hf_pcc)}"
+        )
 
-    # ── Check 1: decode-vs-prefill self-consistency (isolates the decode path) ──
-    sc_passing, sc_msg = comp_pcc(ref_logits, dec_logits, _PCC_FLOOR)
-    logger.info(f"Decode-vs-prefill (self-consistency) PCC (pos={seq_len - 1}): {sc_msg}")
+        # Step 0 sits at a prefilled position, so it also gets the self-consistency check.
+        if j == 0:
+            sc_passing, sc_pcc = comp_pcc(prefill_last, dec_logits, _PCC_FLOOR)
+            sc_msg = f"{float(sc_pcc)}"
+            logger.info(f"step 0 decode-vs-prefill (self-consistency) PCC: {sc_msg}")
 
-    # ── Check 2: decode-vs-HF ground truth ─────────────────────────────────────
-    hf_passing, hf_msg = comp_pcc(hf_logits, dec_logits, _HF_PCC_FLOOR)
-    logger.info(f"Decode-vs-HF PCC (pos={seq_len - 1}): {hf_msg}")
+    mean_hf = sum(hf_pccs) / len(hf_pccs)
+    logger.info(
+        f"Decode-vs-HF over {_DECODE_STEPS} steps: mean={mean_hf:.4f}, min={min(hf_pccs):.4f}; "
+        f"greedy token match (decode == HF teacher): {token_matches}/{_DECODE_STEPS}"
+    )
 
     assert sc_passing, (
-        f"Decode-vs-prefill PCC below floor {_PCC_FLOOR}.\n"
+        f"Decode-vs-prefill PCC below floor {_PCC_FLOOR} at step 0.\n"
         f"The full 36-layer decode path is not self-consistent with prefill "
-        f"(wrong cache slot, masked attention, NaN, etc.).\n{sc_msg}"
+        f"(wrong cache slot, masked attention, NaN, etc.).\nPCC={sc_msg}"
     )
-    assert hf_passing, (
-        f"Decode-vs-HF PCC below floor {_HF_PCC_FLOOR}.\n"
-        f"The full 36-layer decode path does not match the HF reference beyond the "
-        f"expected bfloat16 quantization + kernel-shape loss.\n{hf_msg}"
+    logger.info(
+        f"PASSED — all {_DECODE_STEPS} decode steps ≥ HF floor {_HF_PCC_FLOOR}; "
+        f"step-0 self-consistency ≥ {_PCC_FLOOR}"
     )
-    logger.info(f"PASSED — self-consistency PCC >= {_PCC_FLOOR}, HF PCC >= {_HF_PCC_FLOOR}")

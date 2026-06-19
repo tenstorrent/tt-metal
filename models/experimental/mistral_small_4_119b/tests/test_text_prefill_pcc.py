@@ -18,10 +18,22 @@ PCC note:
   values below 0.80 suggest a real bug (wrong weights, wrong norm,
   wrong attention, etc.).
 
+ISL sweep:
+  Parametrized over input sequence length (``isl``) with ids ``base`` (the real
+  5-token prompt — the documented PCC point), ``128``, ``512``, ``2k``, ``4k``.
+  The non-base cases pad the prompt with coherent English filler tokenized to
+  exactly ``isl`` tokens (real English, not random ids, so MoE routing matches
+  between the HF float32 reference and the TTNN bf16 path). Select one with
+  ``-k``, e.g. ``-k 2k``. The sweep is capped at 4K because the 119B HF CPU
+  reference forward (O(seq²) attention) is the practical ceiling — longer ISL is
+  PCC-verified via the multimodal test (chunked HF reference) instead.
+
 Run manually::
 
     export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -v -s --timeout=0
+    # one ISL point:
+    pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -v -s --timeout=0 -k 2k
 
 Override layer count for faster local iteration::
 
@@ -63,6 +75,27 @@ pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mi
 
 _N_LAYERS = int(os.environ.get("MISTRAL4_PREFILL_N_LAYERS", "36"))
 _PCC_FLOOR = 0.90
+
+_REAL_PROMPT = "The capital of France is"
+# Coherent English filler for the ISL sweep. Real text (not random ids) keeps the MoE
+# router selecting the same experts in the HF fp32 reference and the TTNN bf16 path —
+# random ids make routing scores near-tied and collapse PCC without a real regression.
+_FILLER = (
+    "The history of science is a long and winding road full of unexpected turns. "
+    "Researchers across many fields have built upon each other's work for centuries, "
+    "and every careful measurement adds another small piece to the larger picture. "
+)
+
+
+def _build_prompt_ids(tokenizer, target_len: int) -> torch.Tensor:
+    """Return [1, target_len] input_ids: the real prompt for target_len==0, else
+    coherent English filler tokenized and sliced to exactly target_len tokens."""
+    if target_len == 0:
+        return tokenizer(_REAL_PROMPT, return_tensors="pt").input_ids
+    per = max(1, len(tokenizer(_FILLER, add_special_tokens=False).input_ids))
+    reps = target_len // per + 1
+    ids = tokenizer(_FILLER * reps, return_tensors="pt").input_ids
+    return ids[:, :target_len]
 
 
 def _state_dict_prefixes(n_layers: int) -> tuple:
@@ -155,8 +188,13 @@ def _build_hf_ref(text_config, state_dict, n_layers: int) -> torch.nn.Module:
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.slow
 @pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
-def test_mistral_small_4_prefill_pcc(reset_seeds, mesh_device):
-    """Compare TTNN prefill logits to HF float32 reference for the same prompt."""
+@pytest.mark.parametrize(
+    "isl",
+    [0, 128, 512, 2048, 4096],
+    ids=["base", "128", "512", "2k", "4k"],
+)
+def test_mistral_small_4_prefill_pcc(reset_seeds, mesh_device, isl):
+    """Compare TTNN prefill logits to HF float32 reference across an ISL sweep."""
     from transformers import AutoConfig, AutoTokenizer
     from transformers.models.mistral4.modeling_mistral4 import Mistral4RotaryEmbedding
 
@@ -183,10 +221,12 @@ def test_mistral_small_4_prefill_pcc(reset_seeds, mesh_device):
     except Exception as exc:
         pytest.skip(f"Tokenizer load failed: {exc}")
 
-    prompt = "The capital of France is"
-    input_ids = tokenizer(prompt, return_tensors="pt").input_ids  # [1, seq_len]
+    input_ids = _build_prompt_ids(tokenizer, isl)  # [1, seq_len]
     seq_len = input_ids.shape[1]
-    logger.info(f"Prompt: {prompt!r}  →  {seq_len} tokens: {input_ids.tolist()}")
+    if isl == 0:
+        logger.info(f"ISL=base — prompt {_REAL_PROMPT!r} → {seq_len} tokens: {input_ids.tolist()}")
+    else:
+        logger.info(f"ISL={isl} — filler prompt → {seq_len} tokens")
 
     # ── HF reference (CPU, bfloat16, streamed weights) ───────────────────
     logger.info(f"Building HF reference ({_N_LAYERS} layers, CPU, bfloat16)...")
