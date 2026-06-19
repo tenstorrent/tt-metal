@@ -8,8 +8,8 @@
 #include "ckernel_defs.h"
 
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -57,11 +57,11 @@ inline void calculate_mish() {
 
             sfpi::vFloat inv_denom;
             if constexpr (APPROXIMATION_MODE) {
-                inv_denom = _sfpu_reciprocal_<0>(denom);
+                inv_denom = sfpu_reciprocal_iter<0>(denom);
             } else if constexpr (is_fp32_dest_acc_en) {
-                inv_denom = _sfpu_reciprocal_<2>(denom);
+                inv_denom = sfpu_reciprocal_iter<2>(denom);
             } else {
-                inv_denom = _sfpu_reciprocal_<1>(denom);
+                inv_denom = sfpu_reciprocal_iter<1>(denom);
             }
 
             result = x * (numer * inv_denom);
@@ -69,7 +69,7 @@ inline void calculate_mish() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -79,7 +79,7 @@ inline void calculate_mish() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void mish_init() {
     // exp does not need an init
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
 }  // namespace ckernel::sfpu

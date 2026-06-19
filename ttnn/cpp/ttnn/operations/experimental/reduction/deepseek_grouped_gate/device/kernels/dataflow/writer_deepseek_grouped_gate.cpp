@@ -103,17 +103,6 @@ FORCE_INLINE void generate_group_indices_tiles(
     cb_push_back(cb_group_index_template, 1);
 }
 
-void zero_buffer(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-    noc_async_read_barrier();
-}
-
 FORCE_INLINE void generate_summed_experts_tiles(
     const uint32_t cb_top_experts_per_group,
     const uint32_t cb_sorted_group_scores,

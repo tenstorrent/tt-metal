@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_binary.h"
+#include "api/dataflow/circular_buffer.h"
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
@@ -77,6 +78,9 @@ void kernel_main() {
 
         uint32_t input_slice_cb_id = input_slice_cb_ids[actual_slice_idx];
         uint32_t intermediate_slice_cb_id = intermediate_slice_cb_ids[actual_slice_idx];
+        CircularBuffer cb_input_slice(input_slice_cb_id);
+        CircularBuffer cb_intermediate_slice(intermediate_slice_cb_id);
+        CircularBuffer cb_compute(compute_cb_id);
 
         binary_op_init_common(input_slice_cb_id, intermediate_slice_cb_id, compute_cb_id);
         add_tiles_init(input_slice_cb_id, intermediate_slice_cb_id, false);
@@ -84,18 +88,27 @@ void kernel_main() {
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;
         while (tiles_read < tiles_to_read) {
-            cb_wait_front(input_slice_cb_id, tile_granularity);
-            cb_wait_front(intermediate_slice_cb_id, tile_granularity);
-            cb_reserve_back(compute_cb_id, tile_granularity);
-            acquire_dst();
+            cb_input_slice.wait_front(tile_granularity);
+            cb_intermediate_slice.wait_front(tile_granularity);
+
+            tile_regs_acquire();
             for (uint32_t tile_id = 0; tile_id < tile_granularity; ++tile_id) {
                 add_tiles(input_slice_cb_id, intermediate_slice_cb_id, tile_id, tile_id, tile_id);
+            }
+            tile_regs_commit();
+
+            cb_input_slice.pop_front(tile_granularity);
+            cb_intermediate_slice.pop_front(tile_granularity);
+
+            cb_compute.reserve_back(tile_granularity);
+
+            tile_regs_wait();
+            for (uint32_t tile_id = 0; tile_id < tile_granularity; ++tile_id) {
                 pack_tile(tile_id, compute_cb_id);
             }
-            release_dst();
-            cb_pop_front(input_slice_cb_id, tile_granularity);
-            cb_pop_front(intermediate_slice_cb_id, tile_granularity);
-            cb_push_back(compute_cb_id, tile_granularity);
+            tile_regs_release();
+
+            cb_compute.push_back(tile_granularity);
             tiles_read += tile_granularity;
         }
 

@@ -7,12 +7,33 @@ import shutil
 import tempfile
 
 import pandas as pd
+import pytest
 from loguru import logger
 from tracy.common import PROFILER_ARTIFACTS_DIR
 from tracy.process_model_log import get_latest_ops_log_filename
 
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_transformers.tests.test_utils import merge_device_rows
+
+
+def adjust_margin_for_ddr_speed(margin: float, expected_speed: int = 16000) -> float:
+    """Return *margin* adjusted for the actual DDR speed reported by tt-smi.
+
+    - DDR speed < *expected_speed*  → double the margin (slower memory, looser threshold).
+    - DDR speed > *expected_speed*  → warn that baselines may need updating, keep margin.
+    - DDR speed == *expected_speed* or unavailable → keep margin unchanged.
+    """
+    ddr_speed = get_ddr_speed()
+    if ddr_speed is not None and ddr_speed < expected_speed:
+        logger.warning(
+            f"DDR speed is {ddr_speed} (expected {expected_speed}), increasing margin from {margin} to {margin * 2}"
+        )
+        return margin * 2
+    if ddr_speed is not None and ddr_speed > expected_speed:
+        logger.warning(f"DDR speed is {ddr_speed} (above expected {expected_speed}), baselines may need updating")
+    return margin
+
 
 # TP-collective ops: depend on TP=4 topology/bandwidth → take from 2x4
 # Everything else: depends on SP=8 tokens-per-chip and 8 experts/device → take from 8x1
@@ -179,6 +200,9 @@ def run_model_device_perf_test_with_merge(
     batch_size: int = 1,
     margin: float = 0.015,
     comments: str = "",
+    op_filter: str = "",
+    between_signposts: tuple[str, str] | None = None,
+    extra_env: dict | None = None,
 ):
     """
     Run device performance test with multi-device row merging.
@@ -197,13 +221,36 @@ def run_model_device_perf_test_with_merge(
         batch_size: Batch size for the model (default: 1)
         margin: Acceptable performance margin as percentage (default: 0.015 = 1.5%)
         comments: Additional settings description for the report
+        op_filter: If set, restricts the measurement to rows whose OP CODE
+            contains the given substring — useful when the worker emits multiple
+            ops and only one is under test.
+        between_signposts: If set to (start_header, stop_header), restricts the
+            measurement to device ops emitted between those two tracy signposts
+            (e.g. ("MLA_START", "MLA_END")), excluding everything dispatched before
+            the first start / after the last stop — such as one-time weight-load
+            tilize/typecast at construction. Handles repeated/nested pairs (only ops
+            inside an open region are kept).
+        extra_env: If set, applied to os.environ for the duration of the subprocess
+            invocation. Use for vars the worker reads directly (e.g. TT_DS_CAPTURED_LAYER)
+            — prefixing them into the command doesn't work because tracy's -m flag
+            mis-parses leading KEY=VAL tokens as module names.
     """
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
 
-    post_processed_results = run_device_perf(
-        command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
-    )
+    saved_env = {k: os.environ.get(k) for k in (extra_env or {})}
+    try:
+        if extra_env:
+            os.environ.update(extra_env)
+        post_processed_results = run_device_perf(
+            command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
+        )
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     # Apply multi-device row merging
     filename = get_latest_ops_log_filename(subdir)
@@ -215,7 +262,32 @@ def run_model_device_perf_test_with_merge(
 
     logger.debug(f"CSV total rows: {total_rows}, signposts: {signpost_rows}, device ops: {device_rows}")
 
+    if between_signposts is not None:
+        start_header, stop_header = between_signposts
+        sp = df["OP TYPE"] == "signpost"
+        is_start = sp & (df["OP CODE"] == start_header)
+        is_stop = sp & (df["OP CODE"] == stop_header)
+        if not is_start.any() or not is_stop.any():
+            pytest.fail(
+                f"between_signposts={between_signposts!r}: signpost(s) not found in {filename} "
+                f"(found starts={int(is_start.sum())}, stops={int(is_stop.sum())})"
+            )
+        # CSV rows are in host-dispatch order; +1 at each start, -1 at each stop. A row is "inside"
+        # an open region when the running depth is > 0. The start row itself raises depth to 1, so it
+        # is excluded only by ~sp (signpost rows are never device ops); the stop row drops depth to 0.
+        depth = (is_start.astype(int) - is_stop.astype(int)).cumsum()
+        df = df[(depth > 0) & ~sp]
+        if df.empty:
+            pytest.fail(f"between_signposts={between_signposts!r} matched no device rows in {filename}")
+        logger.debug(f"Rows between signposts {between_signposts}: {len(df)}")
+
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
+
+    if op_filter:
+        df = df[df["OP CODE"].str.contains(op_filter, na=False, regex=False)]
+        if df.empty:
+            pytest.fail(f"op_filter={op_filter!r} matched no rows in {filename}")
+        logger.debug(f"Rows after op_filter={op_filter!r}: {len(df)}")
 
     logger.debug(f"Device rows before merge: {len(df)}")
     df_merged = merge_device_rows(df)
@@ -271,6 +343,105 @@ def run_model_device_perf_test_with_merge(
         expected_results=expected_results,
         comments=comments,
     )
+
+
+def run_model_device_perf_test_per_op(
+    command: str,
+    expected_per_op: dict,
+    subdir: str,
+    model_name: str,
+    margin: float = 0.03,
+    comments: str = "",
+    extra_env: dict | None = None,
+):
+    """Run one worker subprocess and assert performance for multiple ops independently.
+
+    Use when a single worker invocation produces multiple device ops in the Tracy CSV
+    (e.g. dispatch + combine in one forward pass) and each needs its own baseline so
+    a regression points to the responsible kernel rather than the combined total.
+
+    Args:
+        command: pytest command to spawn the worker.
+        expected_per_op: dict mapping OP CODE substring → expected duration in ns.
+            For each entry, the merged-device-rows DataFrame is filtered by substring,
+            durations summed, and asserted against expected ± margin. Every entry must
+            match at least one row in the CSV; missing matches `pytest.fail`.
+        subdir: profiler artifacts subdir.
+        model_name: name passed to `prep_device_perf_report`.
+        margin: tolerance applied uniformly to all entries in `expected_per_op`.
+        comments: report comments string.
+        extra_env: optional env vars applied to `os.environ` for the duration of the
+            subprocess invocation. Use this for vars the worker reads directly
+            (e.g. TT_DS_CAPTURED_LAYER) — prefixing them into `command` doesn't work
+            because tracy's `-m` flag mis-parses leading KEY=VAL tokens as module names.
+    """
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
+
+    saved_env = {k: os.environ.get(k) for k in (extra_env or {})}
+    try:
+        if extra_env:
+            os.environ.update(extra_env)
+        run_device_perf(command, subdir=subdir, num_iterations=1, cols=cols, batch_size=1)
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    filename = get_latest_ops_log_filename(subdir)
+    df = pd.read_csv(filename)
+    df = df[df["OP TYPE"] == "tt_dnn_device"]
+    df_merged = merge_device_rows(df)
+    logger.info(f"[per-op] CSV={filename}  device rows={len(df)}  merged ops={len(df_merged)}")
+
+    measured_per_op = {}
+    failures = []
+    for op_substring, expected_ns in expected_per_op.items():
+        rows = df_merged[df_merged["OP CODE"].str.contains(op_substring, na=False, regex=False)]
+        if rows.empty:
+            pytest.fail(
+                f"No merged rows match op_substring={op_substring!r} in {filename}; "
+                f"available op codes: {sorted(df_merged['OP CODE'].unique())}"
+            )
+        measured_ns = float(rows["DEVICE KERNEL DURATION [ns]"].sum())
+        measured_per_op[op_substring] = measured_ns
+        lo = (1 - margin) * expected_ns
+        hi = (1 + margin) * expected_ns
+        passing = lo <= measured_ns <= hi
+        logger.info(
+            f"[per-op] {op_substring}: measured={measured_ns:,.0f} ns  "
+            f"expected={expected_ns:,.0f} ns  bounds=[{lo:,.0f}, {hi:,.0f}]  "
+            f"{'PASS' if passing else 'FAIL'}"
+        )
+        if not passing:
+            failures.append((op_substring, measured_ns, expected_ns, lo, hi))
+
+    total_measured = sum(measured_per_op.values())
+    post_processed_results = {inference_time_key: total_measured}
+    expected_results = {}
+    for op_substring, measured_ns in measured_per_op.items():
+        key = f"{op_substring} DEVICE KERNEL DURATION [ns]"
+        post_processed_results[key] = measured_ns
+        expected_ns = expected_per_op[op_substring]
+        expected_results[f"Lower Threshold {key}"] = (1 - margin) * expected_ns
+        expected_results[f"Upper Threshold {key}"] = (1 + margin) * expected_ns
+
+    prep_device_perf_report(
+        model_name=model_name,
+        batch_size=1,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments=comments,
+    )
+
+    if failures:
+        msg = "Per-op perf checks failed:\n  " + "\n  ".join(
+            f"{op}: measured={m:,.0f} ns  expected={e:,.0f} ns (bounds [{lo:,.0f}, {hi:,.0f}], margin ±{margin*100:.0f}%)"
+            for op, m, e, lo, hi in failures
+        )
+        pytest.fail(msg)
 
 
 def run_moe_perf_with_approximation(

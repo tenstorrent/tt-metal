@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <optional>
 
 namespace ttnn::prim {
@@ -16,6 +17,13 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(args.num_layers > 0, "Prefetcher must run for at least 1 layer");
     TT_FATAL(args.global_cb.has_value(), "Global circular buffer must be provided");
+
+    TT_FATAL(
+        tt::tt_metal::experimental::sender_core_type(*args.global_cb) !=
+            tt::tt_metal::experimental::SenderCoreType::Dram,
+        "ttnn.dram_prefetcher does not support DRAM-sender GlobalCircularBuffers. Use "
+        "ttnn.experimental.start_tensor_prefetcher / ttnn.experimental.stop_tensor_prefetcher instead.");
+
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
     auto global_cb = *(args.global_cb);

@@ -41,6 +41,7 @@ on:
           - all
           - deepseek_prefill
           - deepseek_decode
+          - deepseek_unit_tests
           - wan22
           - single_galaxy_deepseek
           - sp1_deepseek
@@ -57,12 +58,17 @@ permissions:
   id-token: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -71,7 +77,7 @@ jobs:
 
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_prefill' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -79,14 +85,14 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
+      enabled-skus: bh_galaxy,bh_loudbox
       model: deepseek_prefill
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Prefill] "
 
   deepseek-decode-tests:
     name: "DeepSeek Decode Tests (B1 Decoder Block)"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_decode' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -99,9 +105,24 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Decode] "
 
+  deepseek-unit-tests:
+    name: "DeepSeek B1 Unit Tests"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_unit_tests' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-release-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: bh_galaxy
+      model: deepseek_unit_tests
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      job-prefix: "[DeepSeek Unit Tests] "
+
   wan22-tests:
     name: "Wan 2.2 Tests"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'wan22' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -116,7 +137,7 @@ jobs:
 
   deepseek-sp4-tests:
     name: "SP4 DeepSeek Tests"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml

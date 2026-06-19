@@ -14,6 +14,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -25,6 +26,7 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
+#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
@@ -58,6 +60,7 @@ void py_module_types(nb::module_& m) {
     }
 
     m.def_submodule("matmul");
+    m.def_submodule("mla");
     m.def_submodule("multi_head_utils");
     m.def_submodule("attention");
     m.def_submodule("reshape");
@@ -256,6 +259,20 @@ void py_module(nb::module_& m) {
             nb::arg("kvs"),
             nb::arg("num_heads"),
             nb::arg("num_groups"));
+    }
+
+    {
+        auto py_mla = static_cast<nb::module_>(m.attr("mla"));
+        py_mla.def(
+            "qkv_assemble_fw",
+            &ttml::ops::mla_qkv_assemble_fw,
+            nb::arg("q_pre"),
+            nb::arg("kv_up"),
+            nb::arg("k_pe"),
+            nb::arg("n_heads"),
+            nb::arg("qk_nope_dim"),
+            nb::arg("qk_rope_dim"),
+            nb::arg("v_dim"));
     }
 
     {
@@ -495,16 +512,7 @@ void py_module(nb::module_& m) {
         auto py_metal = m.def_submodule("metal");
         py_metal.def(
             "moe_group",
-            [](const ttnn::Tensor& dispatched,
-               const ttnn::Tensor& metadata,
-               const ttnn::Tensor& scores,
-               const ttnn::Tensor& local_expert_ids,
-               uint32_t e_local,
-               uint32_t k) {
-                auto [grouped, grouped_scores, k_slot, counts, offsets, plan] =
-                    ttml::metal::moe_group(dispatched, metadata, scores, local_expert_ids, e_local, k);
-                return nb::make_tuple(grouped, grouped_scores, k_slot, counts, offsets, plan);
-            },
+            &ttml::metal::moe_group,
             nb::arg("dispatched"),
             nb::arg("metadata"),
             nb::arg("scores"),
@@ -520,6 +528,22 @@ void py_module(nb::module_& m) {
             "         plan            [1,1,1,T_cap]   uint32).\n"
             "grouped_scores[i] = scores[plan[i], k_slot[i]]; both are 0/SENTINEL\n"
             "in pad slots.");
+        py_metal.def(
+            "moe_ungroup",
+            &ttml::metal::moe_ungroup,
+            nb::arg("expert_out"),
+            nb::arg("plan"),
+            nb::arg("offsets"),
+            nb::arg("grouped_scores"),
+            nb::arg("e_local"),
+            nb::arg("d"),
+            nb::arg("b"),
+            nb::arg("s"),
+            "Ungroup expert outputs back to dense [D,B,S,H] ROW_MAJOR bf16,\n"
+            "fused with per-token weight scaling. expert_out is the FFN\n"
+            "output in moe_group's grouped layout; plan/offsets/grouped_scores\n"
+            "are direct outputs of moe_group (grouped_scores already encodes\n"
+            "scores[plan[i], k_slot] per row). Returns ungrouped [D,B,S,H].");
     }
 }
 

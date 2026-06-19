@@ -42,13 +42,13 @@ bool Inspector::is_enabled() {
     return false;
 }
 
-std::unique_ptr<inspector::Data> Inspector::initialize(std::optional<int> rank) {
+std::unique_ptr<inspector::Data> Inspector::initialize(std::optional<int> rank, ContextId context_id) {
     if (!is_enabled()) {
         // Inspector is not enabled, skipping initialization.
         return nullptr;
     }
     try {
-        auto* data = new inspector::Data(rank);
+        auto* data = new inspector::Data(rank, context_id);
 
         return std::unique_ptr<inspector::Data>(data);
     } catch (const std::exception& e) {
@@ -156,9 +156,10 @@ void Inspector::program_compile_already_exists(
 
 void Inspector::program_kernel_compile_finished(
     const detail::ProgramImpl* program,
-    const IDevice* /*device*/,
+    const IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
-    const tt::tt_metal::JitBuildOptions& build_options) noexcept {
+    const tt::tt_metal::JitBuildOptions& build_options,
+    const std::string& binary_root) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -168,6 +169,10 @@ void Inspector::program_kernel_compile_finished(
         return;
     }
     try {
+        std::vector<std::string> processor_elf_paths;
+        if (device != nullptr) {
+            processor_elf_paths = kernel->elf_paths_by_processor_index(*device, binary_root);
+        }
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         auto& kernel_data = program_data.kernels[kernel->get_watcher_kernel_id()];
@@ -175,9 +180,12 @@ void Inspector::program_kernel_compile_finished(
         kernel_data.watcher_kernel_id = kernel->get_watcher_kernel_id();
         kernel_data.name = kernel->name();
         kernel_data.path = build_options.path;
-        if (data->kernel_path_collection_enabled) {
-            std::lock_guard<std::mutex> path_lock(data->kernel_path_mutex);
-            data->kernel_id_to_path[kernel->get_watcher_kernel_id()] = build_options.path;
+        if (!processor_elf_paths.empty()) {
+            if (data->kernel_path_collection_enabled) {
+                std::lock_guard<std::mutex> path_lock(data->kernel_path_mutex);
+                data->kernel_id_to_processor_elf_paths[kernel->get_watcher_kernel_id()] = processor_elf_paths;
+            }
+            kernel_data.processor_elf_paths = std::move(processor_elf_paths);
         }
         kernel_data.source = kernel->kernel_source().source_;
         data->kernel_id_to_program_id[kernel->get_watcher_kernel_id()] = program->get_id();
@@ -572,7 +580,7 @@ void Inspector::enable_kernel_path_collection() {
     }
 }
 
-std::string Inspector::get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id) {
+std::string Inspector::get_kernel_elf_path(int watcher_kernel_id, uint32_t processor_index) {
     std::string elf_path;
 
     if (!is_enabled()) {
@@ -584,29 +592,17 @@ std::string Inspector::get_kernel_path_from_watcher_kernel_id(int watcher_kernel
         return elf_path;
     }
     try {
-        if (data->kernel_path_collection_enabled) {
-            std::lock_guard<std::mutex> lock(data->kernel_path_mutex);
-            auto kernel_path_it = data->kernel_id_to_path.find(watcher_kernel_id);
-            if (kernel_path_it != data->kernel_id_to_path.end()) {
-                elf_path = kernel_path_it->second;
-            }
-        } else {
-            std::lock_guard<std::mutex> lock(data->programs_mutex);
-            auto program_id_it = data->kernel_id_to_program_id.find(watcher_kernel_id);
-            if (program_id_it != data->kernel_id_to_program_id.end()) {
-                auto program_id = data->kernel_id_to_program_id.at(watcher_kernel_id);
-                auto program_data_it = data->programs_data.find(program_id);
-                if (program_data_it != data->programs_data.end()) {
-                    auto& program_data = program_data_it->second;
-                    auto kernel_data_it = program_data.kernels.find(watcher_kernel_id);
-                    if (kernel_data_it != program_data.kernels.end()) {
-                        elf_path = kernel_data_it->second.path;
-                    }
-                }
-            }
+        std::lock_guard<std::mutex> lock(data->kernel_path_mutex);
+        auto kernel_it = data->kernel_id_to_processor_elf_paths.find(watcher_kernel_id);
+        if (kernel_it != data->kernel_id_to_processor_elf_paths.end() && processor_index < kernel_it->second.size()) {
+            elf_path = kernel_it->second[processor_index];
         }
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to get ELF path from watcher kernel ID {}: {}", watcher_kernel_id, e.what());
+        TT_INSPECTOR_LOG(
+            "Failed to get ELF path for watcher kernel ID {} processor index {}: {}",
+            watcher_kernel_id,
+            processor_index,
+            e.what());
     }
     return elf_path;
 }

@@ -41,16 +41,20 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
+    - cron: "0 */6 * * *" # This cron schedule runs the workflow every 6 hours
 
 permissions:
   packages: write
   contents: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -59,7 +63,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   t3000-unit-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:

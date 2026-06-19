@@ -18,8 +18,8 @@ namespace ckernel {
  *
  * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init.
  * reconfig_data_format only reprograms THCON data formats (gasket), not the MOP. When operands or
- * DFB/buffer descriptors change, call the op init again for the new operand pair before the next
- * unpack operation.
+ * DFB/buffer descriptors change, call the op init again for the new
+ * operand pair before the next unpack operation.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
@@ -109,6 +109,10 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  * call will always perform the reconfiguration, regardless of the data format of the old operand.
  * If the new CB ID is the same as the current one, reconfiguration will still occur.
  *
+ * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed at op init. pack_reconfig_data_format
+ * only reprograms THCON IN_DATA_FORMAT (gasket), not the MOP or buffer descriptors. When the pack output
+ * operand changes, call pack_init(new_cb_id) before pack_tile.
+ *
  * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
  * that they are called before the call to the packer function that uses the new configuration. It is
  * recommended to call this function right after other op-specific initialization functions.
@@ -123,7 +127,12 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
-#ifndef ARCH_QUASAR
+#ifdef ARCH_QUASAR
+    static_assert(
+        !is_tile_dim_reconfig_en,
+        "Quasar pack reconfig does not support tile-dimension changes; call pack_init instead");
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
+#else
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
         PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
@@ -138,6 +147,9 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
  * it checks if the old and new data formats are different. If they are the same, it does not perform
  * the reconfiguration. This function is useful when you want to ensure that the packer only reconfigures
  * when different data format is wanted, avoiding unnecessary reconfiguration overhead.
+ *
+ * NOTE(ARCH_QUASAR): See pack_reconfig_data_format(new_cb_id). Call pack_init(new_cb_id) before pack_tile
+ * when switching pack output operand.
  *
  * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
  * that they are called before the call to the packer function that uses the new configuration. It is
@@ -154,7 +166,12 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
-#ifndef ARCH_QUASAR
+#ifdef ARCH_QUASAR
+    static_assert(
+        !is_tile_dim_reconfig_en,
+        "Quasar pack reconfig does not support tile-dimension changes; call pack_init instead");
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
+#else
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
         PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));

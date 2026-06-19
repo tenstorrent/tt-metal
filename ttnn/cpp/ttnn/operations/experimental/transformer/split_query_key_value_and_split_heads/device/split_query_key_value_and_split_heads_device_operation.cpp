@@ -97,8 +97,14 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_specs(
         uint32_t per_core_N_k = M;                              // 384
         auto shard_spec_k = tt::tt_metal::ShardSpec{all_cores, {per_core_M_k, per_core_N_k}, shard_orientation};
         // create sharded tensors
-        auto mem_config_qv = operation_attributes.output_mem_config.with_shard_spec(shard_spec_qv);
-        auto mem_config_k = operation_attributes.output_mem_config.with_shard_spec(shard_spec_k);
+        auto mem_config_qv = tt::tt_metal::MemoryConfig(
+            operation_attributes.output_mem_config.memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec_qv);
+        auto mem_config_k = tt::tt_metal::MemoryConfig(
+            operation_attributes.output_mem_config.memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec_k);
         auto out_tensor_q = TensorSpec(
             Shape({batch_size, num_heads, M, K}),
             TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), mem_config_qv));

@@ -9,18 +9,24 @@ on:
       note:
         description: 'This workflow can be run between 12 PM and 4 PM UTC'
         required: false
-        default: ''
+        default: ""
 
 run-name: Fabric Test on a BH Quad
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-wheel: true
-      platform: 'Ubuntu 22.04'
+      platform: "Ubuntu 22.04"
       skip-tt-train: false
       ref: ${{ github.sha }}
 
@@ -37,6 +43,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: MGD
         id: mgd
@@ -96,6 +103,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Parse docker image
         id: parse-image
@@ -110,8 +118,8 @@ jobs:
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
-          environmentName:  ci-${{ github.run_id }}-reset
-          allocationName:  ci-${{ github.run_id }}-metal
+          environmentName: ci-${{ github.run_id }}-reset
+          allocationName: ci-${{ github.run_id }}-metal
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
@@ -144,7 +152,7 @@ jobs:
         if: always()
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-reset
+          environmentName: ci-${{ github.run_id }}-reset
           namespace: ttop-ci
 
   run:
@@ -171,6 +179,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Parse docker image
         id: parse-image
@@ -185,8 +194,8 @@ jobs:
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
         with:
-          environmentName:  ci-${{ github.run_id }}-metal
-          allocationName:  ci-${{ github.run_id }}-metal
+          environmentName: ci-${{ github.run_id }}-metal
+          allocationName: ci-${{ github.run_id }}-metal
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
@@ -255,18 +264,18 @@ jobs:
       - name: Run Physical discovery test
         timeout-minutes: 10
         run: |
-            mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+          mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
 
       - name: Run System Health Check
         timeout-minutes: 10
         run: |
-            mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
+          mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
 
       - name: Run Fabric Test
         timeout-minutes: 20
         run: |
           tt-run --skip-mgd-check --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
-            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
+            /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_superpod_short_running.yaml
 
   cleanup:
     name: Cleanup
@@ -278,22 +287,23 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Delete environment
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-metal
+          environmentName: ci-${{ github.run_id }}-metal
           namespace: ttop-ci
 
       # Redundantly try to drop reset env - reset job might have failed
       - name: Delete reset environment
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-reset
+          environmentName: ci-${{ github.run_id }}-reset
           namespace: ttop-ci
 
       - name: Delete allocation
         uses: ./.github/actions/ttop-delete-allocation
         with:
-          allocationName:  ci-${{ github.run_id }}-metal
+          allocationName: ci-${{ github.run_id }}-metal
           namespace: ttop-ci

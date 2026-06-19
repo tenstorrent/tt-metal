@@ -20,13 +20,13 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "reshape.hpp"
 #include "reshape_common.hpp"
@@ -34,6 +34,15 @@
 
 namespace ttnn::operations::data_movement {
 namespace detail {
+
+static uint32_t collapse_second_dim(const ttnn::Shape& shape) {
+    TT_FATAL((shape.rank() != 0), "Can't collapse rank 0 tensor shape");
+    uint32_t second_dim = 1;
+    for (int64_t i = 0; i < static_cast<int64_t>(shape.rank()) - 1; ++i) {
+        second_dim = second_dim * shape[i];
+    }
+    return second_dim;
+}
 
 // Largest n in [1, max_n] with dim % n == 0 and (dim / n) % align == 0, else 0.
 static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
@@ -72,18 +81,34 @@ static bool has_inner_2d_tile_padding(const ttnn::Shape& shape) {
 // Returns a sharded output MemoryConfig, or INTERLEAVED if no valid grid exists.
 // Callers must check is_sharded() before calling interleaved_to_sharded.
 //
-// `explicit_memory_config` indicates the caller explicitly passed `memory_config` to the
-// public reshape API (vs. defaulting to the input tensor's). When true, the supplied spec
-// is honored as-is provided it tile-aligns and its grid covers the output's physical
-// shape (over-cover allowed). This lets a model lock in the layout its downstream ops are
-// tuned for; if the supplied spec does not cover the output we fall through to the
-// derivation logic below.
+// `explicit_memory_config`: caller passed `memory_config` to the public API; honor
+// a supplied BLOCK spec when tile-aligned and its grid covers the output.
+//
+// `input_shard_spec`: when `memory_config` is sharded but has no shard_spec, seed
+// derivation from the input tensor's spec (layout should match the input).
 MemoryConfig recompute_shard_spec_for_output(
-    const MemoryConfig& memory_config, const TensorSpec& output_shape, bool explicit_memory_config = false) {
+    const MemoryConfig& memory_config,
+    const TensorSpec& output_shape,
+    bool explicit_memory_config = false,
+    const std::optional<tt::tt_metal::ShardSpec>& input_shard_spec = std::nullopt) {
+    // Auto-derive: caller asked for a sharded output but didn't pin a shard_spec. Seed
+    // from input_shard_spec (typically the input tensor's) and re-enter. The caller's
+    // layout and buffer_type are preserved; the full ShardSpec (grid, orientation, and
+    // per-core shape) comes from the input and will be re-derived for the output shape.
+    if (!memory_config.shard_spec().has_value() && input_shard_spec.has_value()) {
+        MemoryConfig seeded{memory_config.memory_layout(), memory_config.buffer_type(), input_shard_spec};
+        // Layout-only request: re-derive shard_spec for output_shape; skip BLOCK explicit override.
+        return recompute_shard_spec_for_output(seeded, output_shape, /*explicit_memory_config=*/false, std::nullopt);
+    }
     auto output_mem_config = memory_config;
-    TT_FATAL(memory_config.shard_spec().has_value(), "Shard spec has no value");
-    const auto& input_shard_spec = memory_config.shard_spec().value();
-    auto orientation = input_shard_spec.orientation;
+    TT_FATAL(
+        memory_config.shard_spec().has_value(),
+        "ttnn.reshape: sharded output memory_config (layout={}) was supplied without a shard_spec, "
+        "and no input_shard_spec is available (input is likely interleaved). Either provide a "
+        "shard_spec on memory_config or omit memory_config to inherit it from the input tensor.",
+        memory_config.memory_layout());
+    const auto& source_shard_spec = memory_config.shard_spec().value();
+    auto orientation = source_shard_spec.orientation;
 
     auto alignment = output_shape.page_config().get_recommended_shard_shape_alignment(output_shape.data_type());
     uint32_t align_h = alignment.size() >= 2 ? alignment[-2] : 1;
@@ -93,14 +118,14 @@ MemoryConfig recompute_shard_spec_for_output(
 
     // Reject non-rectangular grids; bounding_box() would silently include extra cores.
     // TODO: search for a rectangular sub-grid inside the input before falling back.
-    auto input_bbox = input_shard_spec.grid.bounding_box();
-    if (input_bbox.size() != input_shard_spec.grid.num_cores()) {
+    auto input_bbox = source_shard_spec.grid.bounding_box();
+    if (input_bbox.size() != source_shard_spec.grid.num_cores()) {
         log_warning(
             tt::LogOp,
-            "ttnn.reshape: input shard grid is non-rectangular "
+            "ttnn.reshape: shard grid is non-rectangular "
             "(bbox cores={}, grid cores={}); falling back to INTERLEAVED",
             input_bbox.size(),
-            input_shard_spec.grid.num_cores());
+            source_shard_spec.grid.num_cores());
         return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
     }
 
@@ -113,7 +138,7 @@ MemoryConfig recompute_shard_spec_for_output(
     // grid covers the output's physical extent. Lets callers preserve a layout their
     // downstream ops are tuned for, even when our derived sub-grid would be smaller.
     if (explicit_memory_config && layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        const auto& shard_shape = input_shard_spec.shape;
+        const auto& shard_shape = source_shard_spec.shape;
         uint32_t shard_h = shard_shape[0];
         uint32_t shard_w = shard_shape[1];
         bool is_rm = (orientation == ShardOrientation::ROW_MAJOR);
@@ -149,15 +174,41 @@ MemoryConfig recompute_shard_spec_for_output(
         CoreCoord new_end =
             is_rm ? CoreCoord{start.x + nx - 1, start.y + ny - 1} : CoreCoord{start.x + ny - 1, start.y + nx - 1};
         output_mem_config = output_shape.block_sharded(CoreRange{start, new_end}, orientation).memory_config();
-    } else if (layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        // Pass the full input grid through unchanged. Sub-grid search (picking a smaller
-        // rectangular subset for tile alignment) silently shrinks the shard grid and
-        // caused UFLD V2 PCC regression by changing the shard layout that downstream
-        // ops read from; let height_sharded() handle alignment internally instead.
-        output_mem_config = output_shape.height_sharded(input_shard_spec.grid, orientation).memory_config();
-    } else if (layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        // Pass the full input grid through unchanged (see HEIGHT_SHARDED comment above).
-        output_mem_config = output_shape.width_sharded(input_shard_spec.grid, orientation).memory_config();
+    } else if (layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        const bool is_height = (layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        const uint32_t num_cores = source_shard_spec.grid.num_cores();
+        const uint32_t phys_dim = is_height ? phys_h : phys_w;
+
+        // Preserve the input grid; height/width_sharded() rounds the per-core shape up
+        // to tile alignment without changing the grid itself.
+        output_mem_config = is_height ? output_shape.height_sharded(source_shard_spec.grid, orientation).memory_config()
+                                      : output_shape.width_sharded(source_shard_spec.grid, orientation).memory_config();
+
+        // Warn when each core's shard slot is much larger than the data slice it actually backs.
+        // 4x threshold skips the benign 2x case (e.g. 16-row data in a 32-row tile slot) and
+        // only flags genuinely over-padded shards (e.g. UFLD V2's ~6.4x case).
+        constexpr uint32_t kOverpadWarnThreshold = 4;
+        if (output_mem_config.shard_spec().has_value()) {
+            const auto& out_shape = output_mem_config.shard_spec().value().shape;
+            const uint32_t shard_dim = is_height ? out_shape[0] : out_shape[1];
+            const uint32_t data_per_core = (phys_dim + num_cores - 1) / num_cores;
+            if (data_per_core > 0 && shard_dim / data_per_core >= kOverpadWarnThreshold) {
+                log_warning(
+                    tt::LogOp,
+                    "ttnn.reshape: {} output per-core shard ({} {}) is {}x its per-core data "
+                    "slice ({} {}) for phys_{}={} on {} cores. Per-core L1 is dominated by "
+                    "padding; consider a smaller core grid or INTERLEAVED.",
+                    layout,
+                    shard_dim,
+                    is_height ? "rows" : "cols",
+                    shard_dim / data_per_core,
+                    data_per_core,
+                    is_height ? "rows" : "cols",
+                    is_height ? 'h' : 'w',
+                    phys_dim,
+                    num_cores);
+            }
+        }
     } else {
         TT_FATAL(
             false, "Unsupported memory layout {}: expected BLOCK_SHARDED, HEIGHT_SHARDED, or WIDTH_SHARDED", layout);
@@ -190,7 +241,11 @@ ttnn::Tensor perform_reshape_on_2D_RM(
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-        auto output_mem_config = recompute_shard_spec_for_output(memory_config, temp_tensor2.tensor_spec());
+        auto output_mem_config = recompute_shard_spec_for_output(
+            memory_config,
+            temp_tensor2.tensor_spec(),
+            /*explicit_memory_config=*/false,
+            tensor.memory_config().shard_spec());
         if (output_mem_config.is_sharded()) {
             return ttnn::interleaved_to_sharded(temp_tensor2, output_mem_config, std::nullopt);
         }
@@ -209,16 +264,13 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     // This function turns a RM 2D->MD into an equivalent 2D->2D conversion and then turns the 2D output back to MD
     // using a 0 cost view
     TT_FATAL((logical_shape.rank() != 0), "Can't do reshape to rank 0 tensor");
-    // Collapse into the second last dimension
-    uint32_t second_dim = 1;
-    for (int64_t i = 0; i < static_cast<int64_t>(logical_shape.rank()) - 1; ++i) {
-        second_dim = second_dim * logical_shape[i];
-    }
+    const uint32_t logical_second_dim = collapse_second_dim(logical_shape);
+    const uint32_t padded_second_dim = collapse_second_dim(padded_shape);
     return PerformView(
         perform_reshape_on_2D_RM(
             tensor,
-            ttnn::Shape({second_dim, logical_shape[-1]}),
-            ttnn::Shape({second_dim, logical_shape[-1]}),
+            ttnn::Shape({logical_second_dim, logical_shape[-1]}),
+            ttnn::Shape({padded_second_dim, padded_shape[-1]}),
             memory_config,
             sub_core_grid),
         logical_shape,
@@ -238,21 +290,20 @@ ttnn::Tensor reshape_rm(
     const PadValue& /*pad_value*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
-    const auto& tensor_shape = tensor.logical_shape();
-    TT_FATAL((tensor_shape.rank() != 0), "Can't do reshape from rank 0 tensor");
+    TT_FATAL((tensor.logical_shape().rank() != 0), "Can't do reshape from rank 0 tensor");
     TT_FATAL(tensor.layout() == ttnn::ROW_MAJOR_LAYOUT, "Wrong layout in `reshape_rm` `");
 
-    // Collapse into the second last dimension
-    uint32_t second_dim = 1;
-    for (int64_t i = 0; i < static_cast<int64_t>(tensor_shape.rank()) - 1; ++i) {
-        second_dim = second_dim * tensor_shape[i];
-    }
+    const auto& tensor_logical_shape = tensor.logical_shape();
+    const auto& tensor_padded_shape = tensor.padded_shape();
+    const uint32_t logical_second_dim = collapse_second_dim(tensor_logical_shape);
+    const uint32_t padded_second_dim = collapse_second_dim(tensor_padded_shape);
+
     // Call reshape with the equivalent data 2D Row Major input tensor
     return fix_shape_and_perform_reshape_on_2D_RM(
         PerformView(
             tensor,
-            Shape({second_dim, tensor_shape[-1]}),
-            Shape({second_dim, tensor_shape[-1]}),
+            Shape({logical_second_dim, tensor_logical_shape[-1]}),
+            Shape({padded_second_dim, tensor_padded_shape[-1]}),
             tile_first_dim,
             tile_second_dim),
         logical_shape,
@@ -376,7 +427,10 @@ ttnn::Tensor reshape_tiled(
             output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
             if (memory_config.is_sharded()) {
                 auto output_mem_config = detail::recompute_shard_spec_for_output(
-                    memory_config, output_tensor_3d.tensor_spec(), explicit_memory_config);
+                    memory_config,
+                    output_tensor_3d.tensor_spec(),
+                    explicit_memory_config,
+                    tensor.memory_config().shard_spec());
                 if (output_mem_config.is_sharded()) {
                     output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
                 }
@@ -397,12 +451,12 @@ ttnn::Tensor reshape_tiled(
                     interleaved_output_mem_config,
                     requested_shape_3d,
                     requested_padded_shape_3d));
-            target_output_mem_config =
-                detail::recompute_shard_spec_for_output(memory_config, interleaved_output_spec, explicit_memory_config);
+            target_output_mem_config = detail::recompute_shard_spec_for_output(
+                memory_config, interleaved_output_spec, explicit_memory_config, tensor.memory_config().shard_spec());
         }
 
-        // Defensive: if recompute fell back to INTERLEAVED while input is sharded,
-        // convert the input first so prim::reshape_view gets matching layouts.
+        // If recompute fell back to INTERLEAVED, un-shard the input so
+        // prim::reshape_view sees matching layouts.
         if (tensor3d.memory_config().is_sharded() && !target_output_mem_config.is_sharded()) {
             MemoryConfig interleaved_input{TensorMemoryLayout::INTERLEAVED, tensor3d.memory_config().buffer_type()};
             tensor3d = ttnn::sharded_to_interleaved(tensor3d, interleaved_input, std::nullopt);
@@ -466,8 +520,8 @@ ttnn::Tensor reshape_tiled(
         tt::tt_metal::TensorSpec synthetic_spec(requested_shape_3d, synthetic_layout);
 
         // Recompute the shard spec for the output tensor shape
-        updated_mem_config =
-            detail::recompute_shard_spec_for_output(updated_mem_config, synthetic_spec, explicit_memory_config);
+        updated_mem_config = detail::recompute_shard_spec_for_output(
+            updated_mem_config, synthetic_spec, explicit_memory_config, tensor.memory_config().shard_spec());
     }
 
     auto output_tensor_3d = ttnn::prim::reshape_view(

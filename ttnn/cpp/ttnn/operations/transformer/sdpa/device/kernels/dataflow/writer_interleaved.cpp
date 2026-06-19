@@ -3,11 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
@@ -80,19 +84,26 @@ void kernel_main() {
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
-    // Layout: [neginf(0)] [causal_diag?(1)] [k_partial?].
+    // Sliding layout: [neginf, trailing_primary, leading_prev, leading_current, trailing_next, k_partial?].
+    // Non-sliding layout: [neginf, causal_diag?, k_partial?].
     if constexpr (use_lightweight_mask) {
         // is_causal handles K-partial via causal stamp; skip emitting partial tile in causal mode.
         constexpr uint32_t writer_partial_col = is_causal ? 0u : k_partial_col;
-        generate_lightweight_mask_tiles<writer_partial_col, /*joint_l*/ 0u, cb_mask_in, is_causal>();
+        generate_lightweight_mask_tiles<
+            writer_partial_col,
+            /*joint_l*/ 0u,
+            cb_mask_in,
+            is_causal,
+            sliding_window_size>(noc);
     }
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
-            cb_wait_front(cb_chunk_start_idx, 1);
-            auto chunk_start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_chunk_start_idx));
+            CircularBuffer cb_chunk_start(cb_chunk_start_idx);
+            cb_chunk_start.wait_front(1);
+            auto chunk_start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_chunk_start.get_read_ptr());
             uint32_t chunk_start_idx = chunk_start_ptr[0];
-            cb_pop_front(cb_chunk_start_idx, 1);
+            cb_chunk_start.pop_front(1);
             const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
             chunk_start_t_in_q_chunks_phase_1 = chunk_start_idx / q_chunk_size;
             if (num_phases == 2) {
@@ -123,7 +134,16 @@ void kernel_main() {
                 !use_provided_mask && !use_lightweight_mask &&
                 (is_causal || sliding_window_size > 0 || use_padded_mask)) {
                 generate_mask<is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
-                    Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0, is_causal);
+                    noc,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    q_chunk,
+                    chunk_start_t_in_q_chunks,
+                    true,
+                    false,
+                    unpadded_Sk,
+                    0,
+                    is_causal);
             }
 
             // Determine how many rows of OUT will be written. Both start and end rows are
@@ -137,6 +157,7 @@ void kernel_main() {
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
                 // are padding and get popped without being written.
                 write_block_row_grouped(
+                    noc,
                     out_writer,
                     cb_out,
                     Sq_chunk_t,
@@ -148,6 +169,7 @@ void kernel_main() {
                     barrier_threshold);
             } else {
                 write_block(
+                    noc,
                     out_writer,
                     cb_out,
                     out_chunk_tiles,

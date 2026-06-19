@@ -78,7 +78,7 @@ void kernel_main() {
     // Try sending with NoC API
     Noc noc;
     UnicastEndpoint unicast_endpoint;
-    noc.async_write(
+    noc.async_write<NocOptions::CUSTOM_VC>(
         mem,
         unicast_endpoint,
         num_bytes,
@@ -88,7 +88,7 @@ void kernel_main() {
             .noc_y = neighbor_worker_core_y,
             .addr = src_addr,
         },
-        0);
+        NocOptVals{.vc = 0});
     noc.async_write_barrier();
 
     // Try clear data here before reading from neighbor core

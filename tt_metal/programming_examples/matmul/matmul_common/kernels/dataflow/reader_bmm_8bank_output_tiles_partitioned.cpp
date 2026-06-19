@@ -51,7 +51,7 @@ void kernel_main() {
             {  // Read A's tile at (mt, kt)
                 cb_reserve_back(cb_id_in0, onetile);
                 uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+                noc_async_read_page(itileA, s0, l1_write_addr_in0);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
             }
@@ -59,7 +59,7 @@ void kernel_main() {
             {  // Read B's tile at (kt, nt)
                 cb_reserve_back(cb_id_in1, onetile);
                 uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(itileB, s1, l1_write_addr_in1);
+                noc_async_read_page(itileB, s1, l1_write_addr_in1);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
             }

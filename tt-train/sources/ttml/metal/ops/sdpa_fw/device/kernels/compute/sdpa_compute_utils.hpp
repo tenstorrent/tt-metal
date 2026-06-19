@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/exp.h"
@@ -17,77 +18,64 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/mask.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
+#ifdef TRISC_MATH
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
+#endif
 
 constexpr uint32_t onetile = 1U;
+
+// Round `a` up to the nearest multiple of `b`. Uses the bitwise fast path when
+// `b` is a power of two and the standard divmul form otherwise.
+inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
+    if ((b & (b - 1U)) == 0U) {
+        return (a + (b - 1U)) & -b;
+    }
+    return ((a + b - 1U) / b) * b;
+}
 
 // SFPU intrinsics for first-column-only operations.
 // Column vectors (from row-reduce) only have meaningful data in column 0,
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
 // saving ~75% of SFPU cycles.
 #ifdef TRISC_MATH
-void calculate_recip_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat out;
-        if constexpr (DST_ACCUM_MODE) {
-            out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-        } else {
-            out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
-        }
-        sfpi::dst_reg[0] = out;
-        sfpi::dst_reg += 2;
-    }
-}
-
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, VectorMode::C);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
 }
+#endif  // TRISC_MATH
 
-// First-column exp with fused scale: exp(scale * x) on column 0 only.
-// Uses _ckernel_sfpu_exp_accurate_ — the same function behind exp_tile<false, true>,
-// so accuracy is identical to the full-tile version. Stride-2 access skips column 1.
-// Combined with VectorMode::C (2 faces instead of 4), this gives 4× fewer SFPU iterations
-// compared to exp_tile<false, true>(idx, VectorMode::RC).
-template <uint16_t scale_bf16>
-void calculate_exponential_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true, DST_ACCUM_MODE>(val, scale_bf16);
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg += 2;
-    }
-}
-
-template <uint16_t scale_bf16>
-void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, VectorMode::C);
-}
-#endif
-
-// now we have to multiply result by scaler factor and then apply mask
-// we need to transform the attention mask for use in softmax:
-// The input `attn_mask` contains 1.0 for valid (keep) positions and 0.0 for masked (drop) positions.
-// To convert this into a format compatible with softmax masking:
-//   - Subtract 1.0 from the mask, so values become 0.0 (keep) and -1.0 (mask).
-//   - Multiply by a large negative value (e.g., 1e9F), resulting in 0.0 for valid entries and -inf for
-//   masked ones.
-// This way, after applying softmax, masked positions will effectively become zero,
-// and only the unmasked positions will retain meaningful attention weights
+// Apply an attention mask to a Q@K^T score tile already sitting in DST register `register_idx`.
+//
+// The input `attn_mask` tile holds 1.0 at valid (keep) positions and 0.0 at masked (drop)
+// positions. The function transforms it to (0.0, -1e9) in-place and adds it to the score
+// tile so that masked positions become large negative values that vanish under softmax.
+//
+// Preconditions:
+//   - The DST register buffer must be in acquired state via *acquire_dst*.
+//   - `cb_attn_mask` must have at least `mask_tile_idx + 1` tiles fronted.
+//
+// `mask_tile_idx` selects which mask tile in `cb_attn_mask` to apply:
+//   - When the writer pre-stages two causal masks in this CB, callers pass 0 for the
+//     diagonal-tile pattern and 1 for the all-masked pattern used past the diagonal.
+//   - When the host provides an arbitrary mask, callers pass the per-chunk tile offset.
+//
+// Scaling by the SDPA scaler factor is NOT done here; it is deferred to after the
+// row-max subtraction for better numerical precision.
 void apply_mask_on_reg(
-    uint32_t register_idx, uint32_t cb_attn_mask, uint32_t minus_one_bits, uint32_t custom_inf_bits) {
-    /* The DST register buffer must be in acquired state via *acquire_dst* call.*/
-
+    uint32_t register_idx,
+    uint32_t cb_attn_mask,
+    uint32_t minus_one_bits,
+    uint32_t custom_inf_bits,
+    uint32_t mask_tile_idx = 0U) {
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
     cb_wait_front(cb_attn_mask, onetile);
     copy_tile_init(cb_attn_mask);
     copy_tile(
         cb_attn_mask,
-        /* tile_idx */ 0,
+        /* tile_idx */ mask_tile_idx,
         /* register idx */ mask_register);
 
     // Apply the attention mask to Q @ K^T scores:
@@ -112,22 +100,32 @@ void apply_mask_on_reg(
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
 // exp, sum, reciprocal) to stay in DST at FP32 without pack/unpack round-trips through the CB.
-template <PoolType pool_type, ReduceDim reduce_dim>
+//
+// Reduces over `Sk_chunk_t` consecutive attention-weight tiles in the same row, accumulating
+// the max into a single DST register. For `Sk_chunk_t == 1` this collapses to a single
+// reduce_tile call (the original single-tile behavior).
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t Sk_chunk_t = 1U>
 void update_cur_row_max_value(
     uint32_t cb_attention_weights,
     uint32_t cb_identity_scaler,
     uint32_t cb_cur_max,
     uint32_t cb_prev_max,
     bool do_eltwise_max = false) {
-    cb_wait_front(cb_attention_weights, onetile);
+    cb_wait_front(cb_attention_weights, Sk_chunk_t);
 
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1U;
     reconfig_data_format(cb_attention_weights, cb_identity_scaler);
     reduce_init<pool_type, reduce_dim>(cb_attention_weights, cb_identity_scaler, cb_cur_max);
     tile_regs_acquire();
-    reduce_tile<pool_type, reduce_dim>(
-        cb_attention_weights, cb_identity_scaler, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ reduce_dst_idx);
+    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+        reduce_tile<pool_type, reduce_dim>(
+            cb_attention_weights,
+            cb_identity_scaler,
+            /* in0 tile_idx */ n,
+            /* in1 tile_idx */ 0,
+            /* dst_reg_idx */ reduce_dst_idx);
+    }
     reduce_uninit();
 
     if (do_eltwise_max) {
@@ -149,66 +147,113 @@ void update_cur_row_max_value(
     cb_push_back(cb_cur_max, onetile);
 }
 
-/* We process data by one tile, because we read only one row of K
- * Maybe we can read two rows of K and V and then process data by subblocks*/
-template <uint32_t scaler_fp32>
+// Apply exp(scale * (score - max)) in place on Sk_chunk_t attention-weight tiles, and produce
+// the per-row partial chunk sum (sum over the Sk_chunk_t tiles) into cb_cur_exp_sum.
+//
+// For Sk_chunk_t > 1 the chunk sum is built directly in L1 via the packer's L1-accumulate path:
+// the first exp tile overwrites cb_cur_exp_sum[0], subsequent tiles add to it. This avoids an
+// extra DST cycle (and an extra row-reduce CB) just to fold the per-tile partial sums together.
+//
+// DST budget: Sk_chunk_t registers are held live across sub_tiles_bcast_cols + exp_tile +
+// (two) pack passes. With fp32_dest_acc_en=true the DST has 4 tiles, so Sk_chunk_t <= 4.
+template <uint32_t scaler_fp32, uint32_t Sk_chunk_t = 1U>
 void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
-    cb_wait_front(cb_attention_weights, onetile);
+    cb_wait_front(cb_attention_weights, Sk_chunk_t);
     cb_wait_front(cb_cur_max, onetile);
 
-    const uint32_t exp_dst_idx = 0;
     reconfig_data_format(cb_attention_weights, cb_cur_max);
     sub_bcast_cols_init_short(cb_attention_weights, cb_cur_max);
-    tile_regs_acquire();
-    sub_tiles_bcast_cols(
-        cb_attention_weights, cb_cur_max, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ exp_dst_idx);
 
     // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
-    exp_tile_init</* approx */ false, scaler_fp32>();
-    exp_tile</* approx */ false, /* scale_en */ true>(exp_dst_idx, VectorMode::RC, scaler_bf16);
+    // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
+    tile_regs_acquire();
+    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+        sub_tiles_bcast_cols(
+            cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
+        sdpa_exp_tile_scaled<scaler_fp32>(n);
+    }
     tile_regs_commit();
 
-    tile_regs_wait();
-    // update current qk matmul result with exp values
-    cb_pop_front(cb_attention_weights, onetile);
-    cb_reserve_back(cb_attention_weights, onetile);
-    pack_reconfig_data_format(cb_attention_weights);
-    pack_tile(exp_dst_idx, cb_attention_weights);
-
-    /* update current exp sum with exp values
-     * at the moment we pack one tile here
-     * but we can use L1 accumlator to pack more tiles
-     * in case we will be able to read more then one row of K and V
-     */
+    // In-place overwrite of cb_attention_weights. The CB is sized exactly Sk_chunk_t (no
+    // double-buffering), so pop+reserve aliases to the same physical L1 slots.
+    cb_pop_front(cb_attention_weights, Sk_chunk_t);
+    cb_reserve_back(cb_attention_weights, Sk_chunk_t);
     cb_reserve_back(cb_cur_exp_sum, onetile);
-    pack_reconfig_data_format(cb_cur_exp_sum);
-    pack_tile(exp_dst_idx, cb_cur_exp_sum);
-    tile_regs_release();
 
-    cb_push_back(cb_attention_weights, onetile);
+    tile_regs_wait();
+    // Write the Sk_chunk_t exp tiles back to cb_attention_weights at offsets 0..Sk_chunk_t-1.
+    pack_reconfig_data_format(cb_attention_weights);
+    pack_reconfig_l1_acc(false);
+    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+        pack_tile(n, cb_attention_weights);
+    }
+    cb_push_back(cb_attention_weights, Sk_chunk_t);
+
+    // Build the chunk's partial sum directly in cb_cur_exp_sum[0]:
+    //   - first exp tile: overwrite slot 0 (L1-acc off);
+    //   - subsequent tiles: L1-accumulate onto slot 0.
+    pack_reconfig_data_format(cb_cur_exp_sum);
+    pack_tile</* out_of_order */ true>(/* dst */ 0, cb_cur_exp_sum, /* offset */ 0);
+    if constexpr (Sk_chunk_t > 1U) {
+        pack_reconfig_l1_acc(true);
+        for (uint32_t n = 1U; n < Sk_chunk_t; ++n) {
+            pack_tile</* out_of_order */ true>(/* dst */ n, cb_cur_exp_sum, /* offset */ 0);
+        }
+        pack_reconfig_l1_acc(false);
+    }
     cb_push_back(cb_cur_exp_sum, onetile);
+    tile_regs_release();
 }
 
+// Computes (attention_weights @ V) where attention_weights is a row of Sk_chunk_t score tiles
+// and V is the corresponding Sk_chunk_t × Wt block. The K-dimension reduction (over Sk_chunk_t)
+// is accumulated inside the matmul DST register across an inner loop. For Sk_chunk_t == 1 the
+// inner loop runs once and indexing collapses to the original single-tile-row form.
+//
+// Each output block of `block_size` feat tiles is produced by one matmul_block call per K step
+// (ct_dim=block_size, rt_dim=1, kt_dim=Sk_chunk_t). V is row-major in cb_value (seq outer, feat
+// inner), so the `block_size` V tiles consumed per K step at a fixed seq are already contiguous
+// in the CB — no transpose read needed (contrast with QK^T where K must be col-major). The
+// matmul_block MOP walks them contiguously starting at in1_idx = k*Wt+tile_idx.
+//
+// `block_size` here is the caller's choice. `matmul_block` writes ct_dim output tiles into
+// DST and needs no scratch register, so callers can pass up to `dst_size` (4 for fp32_acc,
+// 8 for bf16_acc) — distinct from the SFPU block_size used elsewhere that needs `+1` for
+// `unary_bcast` scratch and is therefore capped at `dst_size - 1`.
+template <uint32_t Sk_chunk_t = 1U>
 void matmul_qk_by_v(
     uint32_t Wt, uint32_t block_size, uint32_t cb_attention_weights, uint32_t cb_value, uint32_t cb_cur_mm_out) {
-    cb_wait_front(cb_attention_weights, onetile);
-    cb_wait_front(cb_value, Wt);
+    cb_wait_front(cb_attention_weights, Sk_chunk_t);
+    cb_wait_front(cb_value, Sk_chunk_t * Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
-    mm_init_short(cb_attention_weights, cb_value, /* transpose */ 0);
     pack_reconfig_data_format(cb_cur_mm_out);
+    matmul_block_init(
+        cb_attention_weights,
+        cb_value,
+        /* transpose */ 0,
+        /* ct_dim */ block_size,
+        /* rt_dim */ 1,
+        /* kt_dim */ Sk_chunk_t);
+
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            matmul_tiles(
+        // K-reduction: at each k step, matmul_block writes ct_dim=block_size output tiles into
+        // DST[0..block_size-1], accumulating across k steps. For Sk_chunk_t==1 the loop runs
+        // once and behavior matches the legacy single-step matmul.
+        for (uint32_t k_in_chunk = 0; k_in_chunk < Sk_chunk_t; ++k_in_chunk) {
+            matmul_block(
                 cb_attention_weights,
                 cb_value,
-                /* tile_idx */ 0,
-                /* tile_idx */ tile_idx + block_idx,
-                block_idx);
+                /* in0 (A) tile_idx */ k_in_chunk,
+                /* in1 (B) tile_idx */ k_in_chunk * Wt + tile_idx,
+                /* dst_idx */ 0,
+                /* transpose */ 0,
+                /* ct_dim */ block_size,
+                /* rt_dim */ 1,
+                /* kt_dim */ Sk_chunk_t);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -238,11 +283,10 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
         /* tile_idx */ 0,
         /* dst_reg_idx */ exp_max_diff_dst_idx);
 
-    // First-column fused scale+exp: exp(scale * (prev_max - cur_max)).
+    // First-column scaled exp: exp(scale * (prev_max - cur_max)).
     // Both max values are column vectors, so the result is a column vector —
     // only column 0 has data. Process 4× fewer SFPU iterations than full-tile exp.
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
-    MATH((exp_tile_first_column<scaler_bf16>(exp_max_diff_dst_idx)));
+    sdpa_exp_tile_first_column_scaled<scaler_fp32>(exp_max_diff_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -353,8 +397,7 @@ void row_reduce_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
 
-    mm_init(cb_in_idx, cb_matmul_reduce, cb_in_idx, 0);
-    // mm_init_short(cb_in_idx, cb_matmul_reduce, 0);
+    matmul_init(cb_in_idx, cb_matmul_reduce, 0);
     matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
     tile_regs_commit();
 

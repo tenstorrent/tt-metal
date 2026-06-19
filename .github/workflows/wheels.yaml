@@ -22,7 +22,7 @@ on:
         required: false
         type: string
         default: ""
-        description: 'Commit SHA to test (default: HEAD)'
+        description: "Commit SHA to test (default: HEAD)"
       enable-lto:
         required: false
         type: boolean
@@ -33,11 +33,10 @@ on:
         description: "Name to give download-artifact to get the Wheel"
         value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.artifact_name }}
 
-
 jobs:
   build-wheel:
     name: 🐍 Build wheel (Python ${{ inputs.python-version }})
-    timeout-minutes: 30
+    timeout-minutes: 45
     runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
@@ -64,12 +63,15 @@ jobs:
             exit 1
           fi
           # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          # Omit |read-only unless actually true — ccache 4.13 treats the presence of the
+          # option (even =false) as read-only due to an std::optional<bool> check bug.
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}${{ vars.REDIS_IS_READONLY == 'true' && '|read-only=true' || '' }}"
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
@@ -78,7 +80,7 @@ jobs:
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
@@ -90,9 +92,9 @@ jobs:
 
       # Python for driving the build; not the version the wheel targets
       - name: Set up Python 3.12
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: 🐍 Build wheel
         id: build-wheel
@@ -112,7 +114,7 @@ jobs:
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_TEST_SKIP: ${{ inputs.build-type == 'ASan' && '*' || '' }}
-          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+          CIBW_MANYLINUX_X86_64_IMAGE: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
 
       - name: 📦 Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
@@ -121,7 +123,7 @@ jobs:
 
       - name: 📦 Save CPM source cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}

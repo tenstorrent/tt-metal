@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: true
         type: choice
         default: all
@@ -18,7 +18,6 @@ on:
           - flux1-dev
           - motif
           - qwenimage
-          - gemma-3-27b-it
       platform:
         required: false
         type: choice
@@ -47,19 +46,25 @@ on:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
       tracy: true
   t3000-perf-tests:
-    needs: [build-artifact]
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:

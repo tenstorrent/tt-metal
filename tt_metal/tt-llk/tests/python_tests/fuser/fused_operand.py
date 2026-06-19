@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
@@ -28,8 +28,10 @@ class Operand:
     name: str
     dimensions: Tuple[int, int]
     data_format: DataFormat
-    tile_shape: TileShape = construct_tile_shape(
-        (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+    tile_shape: TileShape = field(
+        default_factory=lambda: construct_tile_shape(
+            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        )
     )
     l1_address: Optional[int] = None
     is_output: bool = False
@@ -42,6 +44,9 @@ class Operand:
     tile_count_x: Optional[int] = None
     tile_count_y: Optional[int] = None
     tile_size: Optional[int] = None
+    acc_atol: float = 0.0
+    acc_rtol: float = 0.0
+    acc_pcc: float = 1.0
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()

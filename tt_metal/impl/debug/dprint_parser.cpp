@@ -6,7 +6,8 @@
 
 #include <cmath>
 #include <cstring>
-#include <fstream>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -21,10 +22,8 @@
 #include "hostdev/device_print_structures.h"
 #include "tt_backend_api_types.hpp"
 
-#include "llrt/tt_elffile.hpp"
-
-#include "dwarf.h"
-#include "libdwarf.h"
+#include "elf_file.hpp"
+#include "dwarf_die.hpp"
 
 using std::string;
 using namespace std::literals;
@@ -71,7 +70,7 @@ public:
         device_print_detail::structures::DevicePrintStringInfo32,
         device_print_detail::structures::DevicePrintStringInfo64>;
 
-    explicit DevicePrintParserImpl(const std::string& elf_path);
+    explicit DevicePrintParserImpl(const std::string& elf_path, ttexalens::native_elf::ElfFile elf);
 
     std::string_view format_message(
         uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) override;
@@ -128,34 +127,39 @@ private:
         ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
 
     const EnumInfo* get_enum_info(std::string_view type_name);
-    void load_enum_info_from_dwarf();
 
     std::string elf_path;
-    ll_api::ElfFile elf_file;
-    std::span<std::byte> format_strings_info_bytes;
+    ttexalens::native_elf::ElfFile elf_file;
+    std::span<const std::byte> format_strings_info_bytes;
     uint64_t format_strings_info_address{};
-    std::span<std::byte> format_strings_bytes;
+    std::span<const std::byte> format_strings_bytes;
     uint64_t format_strings_address{};
-    DevicePrintStringInfo* string_info_ptr{};
+    const DevicePrintStringInfo* string_info_ptr{};
     size_t string_info_size{};
     std::vector<ParsedStringInfo> parsed_string_info;
     std::map<std::string, EnumInfo, std::less<>> enum_info_cache_;
-    bool enum_info_loaded_{};
 };
 
 template <uint8_t PointerSize>
-DevicePrintParserImpl<PointerSize>::DevicePrintParserImpl(const std::string& elf_path) : elf_path(elf_path) {
+DevicePrintParserImpl<PointerSize>::DevicePrintParserImpl(
+    const std::string& elf_path, ttexalens::native_elf::ElfFile elf) :
+    elf_path(elf_path), elf_file(std::move(elf)) {
     try {
-        elf_file.ReadImage(elf_path);
-        format_strings_info_bytes =
-            elf_file.GetSectionContents(".device_print_strings_info", format_strings_info_address);
-        format_strings_bytes = elf_file.GetSectionContents(".device_print_strings", format_strings_address);
-        string_info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
+        const auto* info_section = elf_file.get_section_by_name(".device_print_strings_info");
+        const auto* strings_section = elf_file.get_section_by_name(".device_print_strings");
+        if (info_section == nullptr || strings_section == nullptr) {
+            throw std::runtime_error("ELF is missing the DEVICE_PRINT string sections");
+        }
+        format_strings_info_bytes = info_section->data();
+        format_strings_info_address = info_section->address();
+        format_strings_bytes = strings_section->data();
+        format_strings_address = strings_section->address();
+        string_info_ptr = reinterpret_cast<const DevicePrintStringInfo*>(format_strings_info_bytes.data());
         string_info_size = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
         parsed_string_info.resize(string_info_size);
     } catch (...) {
-        // Failed to load ELF file
-        log_warning(tt::LogMetal, "Failed to load ELF file {}", elf_path);
+        // ELF loaded but its DEVICE_PRINT sections are missing/unreadable — degrade to a no-op parser.
+        log_warning(tt::LogMetal, "Failed to parse DEVICE_PRINT info from ELF file {}", elf_path);
     }
 }
 
@@ -166,19 +170,6 @@ struct DevicePrintParserDeleter {
     }
 };
 
-static uint8_t read_elf_pointer_size(const std::string& path) {
-    std::ifstream elf_stream(path, std::ios::binary);
-    uint8_t ei_class = 0;
-    if (elf_stream.seekg(4) && elf_stream.read(reinterpret_cast<char*>(&ei_class), 1)) {
-        switch (ei_class) {
-            case 1: return 4;  // 32-bit ELF
-            case 2: return 8;  // 64-bit ELF
-            default: TT_THROW("Unknown ELF class {} in file {}", ei_class, path);
-        }
-    }
-    TT_THROW("Failed to read ELF class from file {}", path);
-}
-
 std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const std::string& elf_path) {
     auto cached_parser_it = parser_cache.find(elf_path);
     if (cached_parser_it != parser_cache.end()) {
@@ -186,14 +177,16 @@ std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const s
             return cached_parser;
         }
     }
-    uint8_t ptr_size = read_elf_pointer_size(elf_path);
+    // Parse the ELF once here; ttexalens_elf reports the pointer size, which selects the 32-/64-bit
+    // parser, and the parsed ElfFile is then handed off to it so the file isn't opened a second time.
+    ttexalens::native_elf::ElfFile elf_file(elf_path);
     std::shared_ptr<DevicePrintParser> new_parser;
-    if (ptr_size == 8) {
-        new_parser =
-            std::shared_ptr<DevicePrintParser>(new DevicePrintParserImpl<8>(elf_path), DevicePrintParserDeleter());
+    if (elf_file.get_pointer_size() == 8) {
+        new_parser = std::shared_ptr<DevicePrintParser>(
+            new DevicePrintParserImpl<8>(elf_path, std::move(elf_file)), DevicePrintParserDeleter());
     } else {
-        new_parser =
-            std::shared_ptr<DevicePrintParser>(new DevicePrintParserImpl<4>(elf_path), DevicePrintParserDeleter());
+        new_parser = std::shared_ptr<DevicePrintParser>(
+            new DevicePrintParserImpl<4>(elf_path, std::move(elf_file)), DevicePrintParserDeleter());
     }
     parser_cache[elf_path] = new_parser;
     return new_parser;
@@ -973,175 +966,55 @@ DevicePrintParser::ArgumentValue DevicePrintParserImpl<PointerSize>::read_argume
 template <uint8_t PointerSize>
 const typename DevicePrintParserImpl<PointerSize>::EnumInfo* DevicePrintParserImpl<PointerSize>::get_enum_info(
     std::string_view type_name) {
-    if (!enum_info_loaded_) {
-        load_enum_info_from_dwarf();
-        enum_info_loaded_ = true;
-    }
-    auto it = enum_info_cache_.find(type_name);
-    if (it != enum_info_cache_.end()) {
+    if (auto it = enum_info_cache_.find(type_name); it != enum_info_cache_.end()) {
         return &it->second;
     }
-    return nullptr;
-}
-
-template <uint8_t PointerSize>
-void DevicePrintParserImpl<PointerSize>::load_enum_info_from_dwarf() {
-    Dwarf_Debug dbg = nullptr;
-    Dwarf_Error err = nullptr;
-
-    // libdwarf can open ELF files directly by path
-    int res = dwarf_init_path(
-        elf_path.c_str(),
-        nullptr,  // true_pathbuf
-        0,        // true_pathlen
-        DW_GROUPNUMBER_ANY,
-        nullptr,  // errhand
-        nullptr,  // errarg
-        &dbg,
-        &err);
-
-    if (res != DW_DLV_OK) {
-        // No DWARF info available
-        return;
+    using ttexalens::native_elf::DwarfDieTag;
+    const auto* dwarf_info = elf_file.get_dwarf_info();
+    if (dwarf_info == nullptr) {
+        // No DWARF info available (stripped binary, etc.)
+        return nullptr;
     }
 
-    // Traverse all compilation units
-    Dwarf_Unsigned cu_header_length = 0;
-    Dwarf_Half version_stamp = 0;
-    Dwarf_Off abbrev_offset = 0;
-    Dwarf_Half address_size = 0;
-    Dwarf_Half offset_size = 0;
-    Dwarf_Half extension_size = 0;
-    Dwarf_Sig8 type_signature;
-    Dwarf_Unsigned typeoffset = 0;
-    Dwarf_Unsigned next_cu_header = 0;
-    Dwarf_Half header_cu_type = 0;
-    Dwarf_Bool is_info = true;
+    // Resolve the (possibly qualified, e.g. "ns::Class::Enum") enum type name to
+    // its DIE, then collect its DW_TAG_enumerator children as (value, name) pairs.
+    auto enum_die = dwarf_info->get_die_by_name(type_name);
+    if (!enum_die || enum_die->get_tag() != DwarfDieTag::enumeration_type) {
+        return nullptr;
+    }
 
-    while (dwarf_next_cu_header_d(
-               dbg,
-               is_info,
-               &cu_header_length,
-               &version_stamp,
-               &abbrev_offset,
-               &address_size,
-               &offset_size,
-               &extension_size,
-               &type_signature,
-               &typeoffset,
-               &next_cu_header,
-               &header_cu_type,
-               &err) == DW_DLV_OK) {
-        Dwarf_Die cu_die = nullptr;
-        if (dwarf_siblingof_b(dbg, nullptr, is_info, &cu_die, &err) != DW_DLV_OK) {
+    EnumInfo info;
+    info.type_name = std::string(type_name);
+    for (auto child = enum_die->get_first_child(); child; child = child->get_next_sibling()) {
+        if (child->get_tag() != DwarfDieTag::enumerator) {
             continue;
         }
-
-        // Recursive lambda to walk the DIE tree and collect enum types with qualified names
-        std::function<void(Dwarf_Die, const std::string&)> walk_die;
-        walk_die = [&](Dwarf_Die die, const std::string& parent_scope) {
-            Dwarf_Half tag = 0;
-            if (dwarf_tag(die, &tag, &err) != DW_DLV_OK) {
-                return;
-            }
-
-            // Build the current scope name
-            std::string current_scope = parent_scope;
-            char* die_name = nullptr;
-            bool has_name = (dwarf_diename(die, &die_name, &err) == DW_DLV_OK && die_name);
-
-            if (tag == DW_TAG_namespace || tag == DW_TAG_class_type || tag == DW_TAG_structure_type) {
-                if (has_name) {
-                    if (!current_scope.empty()) {
-                        current_scope += "::";
-                    }
-                    current_scope += die_name;
+        std::string_view enumerator_name = child->get_name();
+        if (enumerator_name.empty()) {
+            continue;
+        }
+        // ConstantValue is variant<monostate, bool, int64_t, uint64_t, float, double>;
+        // an enumerator carries an integral (or bool) value — anything else is skipped.
+        std::optional<int64_t> enum_val = std::visit(
+            [](auto&& v) -> std::optional<int64_t> {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t> || std::is_same_v<T, bool>) {
+                    return static_cast<int64_t>(v);
+                } else {
+                    return std::nullopt;
                 }
-            }
-
-            if (tag == DW_TAG_enumeration_type && has_name) {
-                std::string enum_qualified_name = current_scope;
-                if (!enum_qualified_name.empty()) {
-                    enum_qualified_name += "::";
-                }
-                enum_qualified_name += die_name;
-
-                // Extract enumerator children
-                EnumInfo info;
-                info.type_name = enum_qualified_name;
-
-                Dwarf_Die child = nullptr;
-                if (dwarf_child(die, &child, &err) == DW_DLV_OK) {
-                    while (child) {
-                        Dwarf_Half child_tag = 0;
-                        if (dwarf_tag(child, &child_tag, &err) == DW_DLV_OK && child_tag == DW_TAG_enumerator) {
-                            char* enumerator_name = nullptr;
-                            Dwarf_Signed sval = 0;
-                            Dwarf_Unsigned uval = 0;
-                            bool got_value = false;
-                            int64_t enum_val = 0;
-
-                            if (dwarf_diename(child, &enumerator_name, &err) == DW_DLV_OK && enumerator_name) {
-                                // Try to get const_value as signed first, then unsigned
-                                Dwarf_Attribute attr = nullptr;
-                                if (dwarf_attr(child, DW_AT_const_value, &attr, &err) == DW_DLV_OK) {
-                                    Dwarf_Half form = 0;
-                                    dwarf_whatform(attr, &form, &err);
-                                    if (dwarf_formsdata(attr, &sval, &err) == DW_DLV_OK) {
-                                        enum_val = sval;
-                                        got_value = true;
-                                    } else if (dwarf_formudata(attr, &uval, &err) == DW_DLV_OK) {
-                                        enum_val = static_cast<int64_t>(uval);
-                                        got_value = true;
-                                    }
-                                    dwarf_dealloc_attribute(attr);
-                                }
-
-                                if (got_value) {
-                                    info.enumerators.emplace_back(enum_val, std::string(enumerator_name));
-                                }
-
-                                dwarf_dealloc(dbg, enumerator_name, DW_DLA_STRING);
-                            }
-                        }
-
-                        Dwarf_Die sibling = nullptr;
-                        if (dwarf_siblingof_b(dbg, child, is_info, &sibling, &err) != DW_DLV_OK) {
-                            dwarf_dealloc_die(child);
-                            break;
-                        }
-                        dwarf_dealloc_die(child);
-                        child = sibling;
-                    }
-                }
-
-                if (!info.enumerators.empty()) {
-                    enum_info_cache_[enum_qualified_name] = std::move(info);
-                }
-            }
-            dwarf_dealloc(dbg, die_name, DW_DLA_STRING);
-
-            // Recurse into children
-            Dwarf_Die child = nullptr;
-            if (dwarf_child(die, &child, &err) == DW_DLV_OK) {
-                while (child) {
-                    walk_die(child, (tag == DW_TAG_enumeration_type) ? parent_scope : current_scope);
-                    Dwarf_Die sibling = nullptr;
-                    if (dwarf_siblingof_b(dbg, child, is_info, &sibling, &err) != DW_DLV_OK) {
-                        dwarf_dealloc_die(child);
-                        break;
-                    }
-                    dwarf_dealloc_die(child);
-                    child = sibling;
-                }
-            }
-        };
-
-        walk_die(cu_die, "");
-        dwarf_dealloc_die(cu_die);
+            },
+            child->get_constant_value());
+        if (enum_val) {
+            info.enumerators.emplace_back(*enum_val, std::string(enumerator_name));
+        }
     }
 
-    dwarf_finish(dbg);
+    if (info.enumerators.empty()) {
+        return nullptr;
+    }
+    auto inserted = enum_info_cache_.emplace(std::string(type_name), std::move(info));
+    return &inserted.first->second;
 }
 
 }  // namespace tt::tt_metal

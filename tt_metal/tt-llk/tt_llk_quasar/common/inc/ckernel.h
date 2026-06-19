@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "ckernel_addrmod.h"
+#include "ckernel_fence.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 // #include "fw_debug.h"

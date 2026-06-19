@@ -10,6 +10,10 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       wheel-artifact-name:
         required: true
         type: string
@@ -18,12 +22,12 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false
@@ -31,6 +35,11 @@ on:
         required: false
         type: boolean
         default: false
+      test-category:
+        required: false
+        type: string
+        default: sanity
+        description: "Time-budget workflow key passed to verify_time_budget.py (e.g. smoke for merge-gate, sanity for APC/post-commit)."
       ref:
         required: false
         type: string
@@ -53,10 +62,11 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn-tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.test-category == 'smoke' && './tests/pipeline_reorg/ttnn_smoke_merge_gate_tests.yaml' || './tests/pipeline_reorg/ttnn-tests.yaml' }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
@@ -75,7 +85,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "sanity"
+            "${{ inputs.test-category }}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -88,9 +98,13 @@ jobs:
       - name: Filter matrix by merge_gate
         id: filter-matrix
         run: |
-          merge_gate="${{ inputs.merge-gate-call }}"
           matrix='${{ steps.build-matrix.outputs.matrix }}'
-          filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
+          if [[ "${{ inputs.test-category }}" == "smoke" ]]; then
+            filtered="$matrix"
+          else
+            merge_gate="${{ inputs.merge-gate-call }}"
+            filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
+          fi
           len=$(echo "$filtered" | jq 'length')
           if [ "$len" -eq 0 ]; then
             echo "::error::No tests left after filtering for merge_gate=$merge_gate"
@@ -110,10 +124,11 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ matrix.test-group.sku != 'bh_p100' && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ matrix.test-group.sku != 'bh_p100' && format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        TT_LOGGER_LEVEL: warn
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -125,6 +140,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
@@ -141,7 +157,7 @@ jobs:
           enable-kernel-ccache: true
           # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
           # This allows different retention policies for runtime JIT vs. C++ build artifacts
-          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: Set ttnn fast runtime if exists in config
@@ -190,7 +206,7 @@ jobs:
         if: ${{ inputs.collect-coverage && always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: profdata-${{ matrix.test-group.name }}
+          name: profdata-ttnn-${{ matrix.test-group.name }}
           path: ${{ github.workspace }}/docker-job/coverage/job.profdata
           if-no-files-found: ignore
           retention-days: 1
@@ -198,9 +214,19 @@ jobs:
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}
         run: |
-          echo "::group::CCache Statistics"
-          ccache --show-stats || echo "ccache stats not available"
-          echo "::endgroup::"
+          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache.log ]; then
+            echo '## CCache Remote Storage (kernel)' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

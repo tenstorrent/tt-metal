@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_ccl ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_ccl TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_ccl TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 
 set_target_properties(
@@ -30,6 +30,8 @@ file(
     rms_allgather/device/kernels/*
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
+    send_recv_async/recv_async_h2d/device/kernels/*
+    send_recv_async/send_async_d2h/device/kernels/*
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
     strided_reduce_scatter_async/device/kernels/*

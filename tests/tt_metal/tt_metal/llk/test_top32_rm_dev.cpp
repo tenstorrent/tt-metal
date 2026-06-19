@@ -234,11 +234,13 @@ bool run_top32_rm_dev(
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     std::vector<uint32_t> compute_compile_args = {row_elements, num_in_tiles, kOutputTiles};
+    // The v2 kernel handles >= 1024 elements (whole 1024-chunk pre-sort path), while the original
+    // kernel handles < 1024 elements (64-elements-at-a-time path).
+    const char* compute_kernel = (row_elements >= 1024)
+                                     ? "tests/tt_metal/tt_metal/test_kernels/compute/top32_rm_dev_compute_v2.cpp"
+                                     : "tests/tt_metal/tt_metal/test_kernels/compute/top32_rm_dev_compute.cpp";
     CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/top32_rm_dev_compute_v2.cpp",
-        crs,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_compile_args});
+        program_, compute_kernel, crs, ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_compile_args});
 
     SetRuntimeArgs(program_, reader, core, {buf_in0->address(), 0u, buf_in1->address(), 0u, num_in_tiles});
     SetRuntimeArgs(program_, writer, core, {buf_out0->address(), 0u, buf_out1->address(), 0u, kOutputTiles});
@@ -261,6 +263,10 @@ bool run_top32_rm_dev(
 }  // namespace unit_tests::compute::top32_rm_dev
 
 TEST_F(MeshDeviceFixture, Top32RmDevPipelineCompletes) {
+    // The top32_rm_dev kernels rely on Blackhole-only DeepSeek LLK headers; no WH B0 port exists yet.
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "top32_rm_dev kernels are only supported on Blackhole";
+    }
     for (uint32_t row : {64u, 128u, 160u, 3232u}) {
         log_info(LogTest, "Top32 RM dev row_elements={}", row);
         EXPECT_TRUE(unit_tests::compute::top32_rm_dev::run_top32_rm_dev(this->devices_.at(0), row, 12345u));

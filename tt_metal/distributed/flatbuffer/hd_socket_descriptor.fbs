@@ -36,6 +36,15 @@ table HDSocketDescriptor {
     // Used by connectors to restore page_size / fifo_curr_size / bytes_sent /
     // bytes_acked / write_ptr / read_ptr from the previous driver process.
     connector_state_offset: uint32;
+
+    // Mesh coordinate of the owning device within the mesh. Variable-length
+    // to accommodate arbitrary-rank meshes; typically 2 entries (row, col).
+    // Used by the connector so its sockets report the right coord via
+    // `H2DSocket::get_active_cores()` — downstream container-level lookups
+    // (e.g. shard-by-coord in a DistributedHostBuffer) depend on it.
+    // Appended last so old readers that don't know about this field still
+    // parse the descriptor correctly.
+    mesh_coord: [uint32];
 }
 
 root_type HDSocketDescriptor;

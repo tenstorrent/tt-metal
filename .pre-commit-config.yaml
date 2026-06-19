@@ -57,11 +57,6 @@ repos:
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api --check-ttnn-forwards
       language: system
       pass_filenames: false
-    - id: validate-metalium-deprecation
-      name: validate-metalium-deprecation
-      entry: python3 scripts/validate_api/validate_deprecation.py tt_metal/api origin/main
-      language: system
-      pass_filenames: false
 - repo: local
   hooks:
     - id: check-torch-imports-in-ttnn
@@ -100,7 +95,7 @@ repos:
       entry: bash .github/scripts/utils/validate_golden_csv_columns.sh
       language: system
       pass_filenames: false
-      files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+      files: ^tests/tt_metal/tt_fabric/test_infra/golden/.*bandwidth.*\.csv$
 
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.

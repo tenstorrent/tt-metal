@@ -17,9 +17,7 @@ Updated to use refactored TestFactory and MeshConfig patterns:
 - Passes mesh_config to create_tt_model for proper sharding
 """
 
-import json
 import os
-from pathlib import Path
 
 import pytest
 import torch
@@ -33,7 +31,9 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
 from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, preprocess_inputs_prefill
@@ -934,27 +934,31 @@ def test_gpt_oss_demo(
         tt_device_name = "GLX" if tt_device_name == "TG" else tt_device_name  # TG is old nomenclature of 4U galaxy.
         model_name = model_args[0].model_name
         model_device_key = f"{tt_device_name}_{model_name}"
-
-        with open(Path(__file__).parent.parent.joinpath("perf_targets.json"), "r") as f:
-            perf_targets = json.load(f)
-        prefill_pad_length = 1 << max(prefill_lens).bit_length()  # round up to the next power of 2
+        sku = get_current_device_sku_name()
         targets = {}
-        if (
-            f"batch_{batch_size}" in perf_targets["targets"]
-            and f"prefill_{prefill_pad_length}" in perf_targets["targets"][f"batch_{batch_size}"]
-            and model_device_key in perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"]
-        ):
-            targets = {
-                "prefill_t/s": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["TTFT"],
-                "decode_t/s": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["decode_tok_s"],
-                "decode_t/s/u": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["decode_tok_s_u"],
-            }
+        resolved_perf_targets = resolve_perf_targets(
+            model_name=model_name,
+            sku=sku,
+            batch_size=global_batch_size,
+            seq_len=max(prefill_lens),
+        )
+        if resolved_perf_targets:
+            if resolved_perf_targets.get("prefill_t/s") is not None:
+                targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
+            if resolved_perf_targets.get("decode_t/s") is not None:
+                targets["decode_t/s"] = float(resolved_perf_targets["decode_t/s"])
+            if resolved_perf_targets.get("decode_t/s/u") is not None:
+                targets["decode_t/s/u"] = float(resolved_perf_targets["decode_t/s/u"])
+            if not targets:
+                logger.warning(
+                    f"No centralized perf targets found for {model_device_key} "
+                    f"(batch={global_batch_size}, seq_len={max(prefill_lens)})"
+                )
+        else:
+            logger.warning(
+                f"No centralized perf targets found for {model_device_key} "
+                f"(batch={global_batch_size}, seq_len={max(prefill_lens)})"
+            )
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
@@ -998,65 +1002,17 @@ def test_gpt_oss_demo(
             output_sequence_length=num_tokens_generated_decode[0],
         )
 
-        # check measurements against CI performance targets
-        logger.info(
-            f"Checking measurements against CI performance targets for {model_name} on {tt_device_name} for padded prefill length {prefill_pad_length}"
-        )
-        # Only call verify_perf if the model_device_key exists in the targets
-        if f"batch_{batch_size}" in perf_targets["ci"] and False:
-            if f"prefill_{prefill_pad_length}" in perf_targets["ci"][f"batch_{batch_size}"]:
-                if model_device_key in perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"]:
-                    perf_config = perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                        model_device_key
-                    ]
-
-                    # Parse TTFT target with tolerance
-                    current_ttft_target = perf_config["TTFT"]
-                    if isinstance(current_ttft_target, list):
-                        ttft_tolerance = current_ttft_target[1]
-                        current_ttft_target = current_ttft_target[0]
-                    else:
-                        ttft_tolerance = 1.15  # Default 15% tolerance
-
-                    # Parse decode_tok_s_u target with tolerance
-                    decode_tsu_target = perf_config["decode_tok_s_u"]
-                    if isinstance(decode_tsu_target, list):
-                        decode_tolerance = decode_tsu_target[1]
-                        decode_tsu_target = decode_tsu_target[0]
-                    else:
-                        decode_tolerance = 1.15  # Default 15% tolerance
-
-                    # Verify prefill performance with prefill-specific tolerance
-                    prefill_targets = {
-                        "prefill_time_to_token": current_ttft_target / 1000,  # convert to seconds
-                    }
-                    verify_perf(
-                        measurements,
-                        prefill_targets,
-                        high_tol_percentage=ttft_tolerance,
-                        expected_measurements={k: True for k in prefill_targets.keys()},
-                    )
-
-                    # Verify decode performance with decode-specific tolerance
-                    decode_targets = {
-                        "decode_t/s/u": decode_tsu_target,
-                        "decode_t/s": decode_tsu_target * global_batch_size,  # calculate from per-user rate
-                    }
-                    verify_perf(
-                        measurements,
-                        decode_targets,
-                        high_tol_percentage=decode_tolerance,
-                        expected_measurements={k: True for k in decode_targets.keys()},
-                    )
-                else:
-                    logger.warning(
-                        f"No CI performance targets found for model {model_name} on device {tt_device_name} for prefill length {prefill_pad_length}. Skipping performance verification."
-                    )
-            else:
-                logger.warning(
-                    f"No CI performance targets found for prefill length {prefill_pad_length}. Skipping performance verification."
-                )
+        if targets:
+            verify_perf(
+                measurements,
+                expected_measurements={k: True for k in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if k in targets},
+                model_name=model_name,
+                sku=sku,
+                batch_size=global_batch_size,
+                seq_len=max(prefill_lens),
+            )
         else:
-            logger.warning(
-                f"No CI performance targets found for batch size {batch_size}. Skipping performance verification."
+            logger.info(
+                "Skipping in-demo verify_perf checks for GPT-OSS due to missing centralized SKU/targets. "
+                "Performance validation remains enforced by centralized target validation in CI."
             )

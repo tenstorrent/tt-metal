@@ -69,10 +69,9 @@ uint32_t resolve_ring_id(
     return 0;  // unreachable; satisfies non-void return.
 }
 
-}  // namespace
-
-// Ring-distributed SDPA program factory
-ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgramFactory::create_descriptor(
+// Ring-distributed SDPA per-coord program build. Pulled into an anonymous-namespace helper
+// so create_workload_descriptor() can loop coords and reuse this body verbatim.
+ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     const RingDistributedSDPAParams& operation_attributes,
     const RingDistributedSDPAInputs& tensor_args,
     Tensor& tensor_return_value,
@@ -288,17 +287,19 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
         static_cast<uint32_t>(is_chunked),  //(uint32_t)is_chunked,
         block_size_t,
         page_table_stick_size,
-        0,                 // use_attention_sink
-        0,                 // use_mla
-        0,                 // mla_kv_overlap
-        qk_out_subblock_h  // qk_subblock_h
+        0,                  // use_attention_sink
+        0,                  // use_mla
+        0,                  // mla_kv_overlap
+        qk_out_subblock_h,  // qk_subblock_h
+        0,                  // sliding_window_size (ring uses no sliding window)
+        0                   // use_streaming_compute (ring uses legacy compute)
     };
-    // Semaphore placeholders (not used in ring, but kernel expects them at indices 27-30)
+    // Semaphore placeholders (not used in ring, but kernel expects them at indices 29-32)
     reader_compile_time_args.push_back(0);  // sender_semaphore_id
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id
     reader_compile_time_args.push_back(0);  // valid_semaphore_id
     reader_compile_time_args.push_back(0);  // mcast_enabled
-    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 31
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -556,6 +557,26 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+}  // namespace
+
+// Ring-distributed SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
+// ring_id is inferred from the coord, so each coord builds a distinct descriptor.
+WorkloadDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgramFactory::create_workload_descriptor(
+    const RingDistributedSDPAParams& operation_attributes,
+    const RingDistributedSDPAInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc = build_ring_distributed_sdpa_program_descriptor(
+            operation_attributes, tensor_args, tensor_return_value, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
 }
 
 }  // namespace ttnn::prim

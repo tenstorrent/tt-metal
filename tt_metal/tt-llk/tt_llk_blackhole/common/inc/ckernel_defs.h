@@ -15,6 +15,33 @@
 namespace ckernel
 {
 
+/**
+ * @brief Whether the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) must be
+ *        disabled (written 1) for the given SrcA/SrcB destination formats.
+ *
+ * While the flag is clear (its reset state), MOVA2D / MOVB2D flush any SrcA/SrcB datum whose low
+ * 8 bits are zero to 0 (FlushDenormals; see MOVA2D.md `if (FlushDenormals && !(SrcAVal & 0xff))`).
+ * For the floating-point Src layout the low 8 bits are the exponent, and a zero exponent denotes a
+ * subnormal, which the HW does not support and therefore rounds to zero.
+ *
+ * UInt16 is the HW "Integer 16" format and the only 16-bit integer unpacker destination format. It
+ * shares the Src bit layout, so its low byte is the integer's low magnitude bits, NOT an exponent.
+ * A legitimate value such as 256 (0x0100) has a zero low byte and would be silently flushed to 0,
+ * destroying the high magnitude bits. Disabling the flag suppresses the flush so 16-bit integer
+ * data survives the move into Dst.
+ *
+ * @param srca_dst_format Destination data format of SrcA.
+ * @param srcb_dst_format Destination data format of SrcB.
+ * @return true when either operand is UInt16, in which case the flag must be disabled.
+ *
+ * @note ISA (paths are in the tt-isa-documentation repo): Blackhole/TensixTile/TensixCoprocessor/MOVA2D.md (FlushDenormals branch) and
+ *       SrcASrcB.md (the "Integer 16" note).
+ */
+inline bool requires_disabled_src_zero_flag(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    return (srca_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (srcb_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+}
+
 enum Srcs
 {
     SrcA = 0,
@@ -271,7 +298,13 @@ enum class BinaryOp : std::uint8_t
     RSHFT         = 7,
     LSHFT         = 8,
     LOGICAL_RSHFT = 9,
-    ADD_TOP_ROW   = 10
+    ADD_TOP_ROW   = 10,
+    LT            = 11,
+    GT            = 12,
+    LE            = 13,
+    GE            = 14,
+    EQ            = 15,
+    NE            = 16,
 };
 
 enum class PackMode : std::uint8_t

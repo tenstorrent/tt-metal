@@ -7,8 +7,10 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <bit>
 #include <cmath>
 #include <limits>
@@ -24,15 +26,22 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     using namespace tt::tt_metal;
     const auto& a = tensor_args.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
+    const bool rm_path = operation_attributes.row_major_h_dense_path;
     const auto& shape = a.padded_shape();
+    const auto& logical_shape = a.logical_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
-    uint32_t Wt = W / tile_width;
-    uint32_t Ht = H / tile_height;
+    uint32_t Wt = tt::div_up(W, tile_width);
+    uint32_t Ht = tt::div_up(H, tile_height);
     uint32_t HtWt = Ht * Wt;
+
+    if (rm_path) {
+        validate_rm_preconditions(
+            a, output, operation_attributes.math_op, operation_attributes.negate, ReduceOpDim::H, "Reduce H");
+    }
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device().arch(), operation_attributes.compute_kernel_config);
@@ -50,12 +59,35 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                               output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
+    // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
+    // a single struct so the per-site formulas don't drift between this factory and the W one.
+    // tt::datum_size(...) inside make_rm_plan throws for block-float formats; guard the call
+    // behind rm_path since validate_rm_preconditions already gates the RM branch to BF16/FP32.
+    RmPlan plan{};
+    if (rm_path) {
+        plan = make_rm_plan(
+            shape,
+            logical_shape,
+            tile_height,
+            tile_width,
+            src0_cb_data_format,
+            dst_cb_data_format,
+            operation_attributes.math_op,
+            ReduceOpDim::H);
+    }
+
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
     // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
     // exponent, so the device reduces with scaler=1.0 and the user scalar is applied after the
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
+
+    // Int32 max/min use the SFPU reduce path (GMPOOL has no Int32 support).
+    // The host already lowers reduce_min to math_op=MAX + negate=true (see reduce_op.cpp::reduce_min),
+    // so this single check covers both MAX and MIN.
+    const bool use_sfpu_reduce_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+    const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_reduce_path;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
@@ -85,9 +117,62 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
     ProgramDescriptor desc;
 
+    if (rm_path) {
+        constexpr uint32_t cb_rm = CBIndex::c_24;
+        // CB pages are per-row (see make_rm_plan); hold 2 slabs worth of rows so the reader can
+        // produce one slab while compute drains the previous one (compute_kernel_lib::tilize waits
+        // for up to TILE_HEIGHT pages per block).
+        const uint32_t num_rm_pages = 2 * plan.rm_rows_per_tile;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_rm_pages * plan.rm_staging_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_rm),
+                .data_format = src0_cb_data_format,
+                .page_size = plan.rm_staging_page_size,
+            }}},
+        });
+
+        constexpr uint32_t cb_clear_value = CBIndex::c_4;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = src0_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_clear_value),
+                .data_format = src0_cb_data_format,
+                .page_size = src0_single_tile_size,
+            }}},
+        });
+
+        // reduce_rm.cpp accumulates partial reductions across H chunks into cb_acc (c_5).
+        constexpr uint32_t cb_acc = CBIndex::c_5;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = plan.wt_tiles_per_chunk * dst_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_acc),
+                .data_format = dst_cb_data_format,
+                .page_size = dst_single_tile_size,
+            }}},
+        });
+    }
+
     uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t src1_cb_index = CBIndex::c_1;
-    if (use_width_sharding) {
+    if (rm_path) {
+        // RM compute kernel expects up to wt_tiles_per_chunk * ht_tiles_per_chunk tiles in flight
+        // (NC fan-out is pinned to 1 in the RM compute contract).
+        const uint32_t num_input_tiles = std::max(2U, plan.wt_tiles_per_chunk * plan.ht_tiles_per_chunk);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_input_tiles * src0_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(src0_cb_index),
+                .data_format = src0_cb_data_format,
+                .page_size = src0_single_tile_size,
+            }}},
+        });
+    } else if (use_width_sharding) {
         uint32_t num_shard_tiles = a.shard_spec().value().numel() / tile_hw;
         uint32_t num_input_tiles = 2;
         desc.cbs.push_back(CBDescriptor{
@@ -111,7 +196,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .tensor = &a,
         });
     } else {
-        uint32_t num_input_tiles = operation_attributes.negate ? chunk_size : 2;
+        uint32_t num_input_tiles = use_fpu_negate ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_input_tiles * src0_single_tile_size,
             .core_ranges = all_cores,
@@ -135,7 +220,18 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     });
 
     uint32_t output_cb_index = CBIndex::c_3;
-    if (use_width_sharding) {
+    if (rm_path) {
+        const uint32_t num_output_tiles = std::max(2U, plan.wt_tiles_per_chunk);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_output_tiles * dst_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(output_cb_index),
+                .data_format = dst_cb_data_format,
+                .page_size = dst_single_tile_size,
+            }}},
+        });
+    } else if (use_width_sharding) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / tile_hw;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_tiles * dst_single_tile_size,
@@ -148,7 +244,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .tensor = &output,
         });
     } else {
-        uint32_t num_output_tiles = operation_attributes.negate ? chunk_size : 2;
+        uint32_t num_output_tiles = use_fpu_negate ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_tiles * dst_single_tile_size,
             .core_ranges = all_cores,
@@ -163,7 +259,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // Packed fp32 scalar passed to the compute kernel for mul_unary_tile post-reduction scaling.
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    if (operation_attributes.negate) {
+    if (use_fpu_negate) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
         // via push_back(ntiles).  The CB FIFO write pointer only wraps when
         // wr_ptr exactly reaches fifo_limit, so it is not enough for the CB
@@ -259,12 +355,23 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.config = ReaderConfigDescriptor{};
 
-    if (use_width_sharding) {
+    if (rm_path) {
+        std::vector<uint32_t> reader_compile_time_args =
+            build_rm_reader_ct_args(plan, scaler_bits, a, ReduceOpDim::H);
+
+        reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "reader_unary_reduce_rm.cpp";
+        reader_desc.compile_time_args = reader_compile_time_args;
+        reader_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
+    } else if (use_width_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
@@ -299,7 +406,15 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     writer_desc.core_ranges = all_cores;
     writer_desc.config = WriterConfigDescriptor{};
 
-    if (use_width_sharding) {
+    if (rm_path) {
+        std::vector<uint32_t> writer_compile_time_args = build_rm_writer_ct_args(plan, output, ReduceOpDim::H);
+
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "writer_reduce_rm_scalar.cpp";
+        writer_desc.compile_time_args = writer_compile_time_args;
+        writer_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
+    } else if (use_width_sharding) {
         std::vector<uint32_t> writer_ct_args = {
             output_cb_index,
         };
@@ -319,16 +434,25 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reader's per-batch tile layout.
     uint32_t compute_Wt = use_width_sharding ? (num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
     uint32_t compute_NC = use_width_sharding ? NC : 1;
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        Ht,                    // Ht
-        compute_Wt,            // Wt
-        compute_NC,            // NC
-        post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
-    };
+    // reduce_rm.cpp (H path) expects {Ht, Wt, nc_per_reduce, post_mul_bits, wt_chunk, ht_chunk};
+    // reduce.cpp / reduce_h_neg.cpp expect {Ht, Wt, NC, post_mul_bits}.
+    std::vector<uint32_t> compute_kernel_args_group_1;
+    if (rm_path) {
+        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, plan.Ht_rm, post_mul_scaler_bits);
+    } else {
+        compute_kernel_args_group_1 = {
+            Ht,                    // Ht
+            compute_Wt,            // Wt
+            compute_NC,            // NC
+            post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+        };
+    }
 
+    // MIN on Int32 uses -MAX(-x) in reduce_h_neg.
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
-        (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
+        rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
+                : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
+                      (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;
@@ -340,18 +464,26 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
     };
 
     std::optional<KernelDescriptor> compute_desc_g2;
     if (!core_group_2.ranges().empty()) {
-        uint32_t compute_Wt_group_2 = use_width_sharding ? (num_cols_per_core_group_2 / NC) : num_cols_per_core_group_2;
-        uint32_t compute_NC_group_2 = use_width_sharding ? NC : 1;
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            Ht,                    // Ht
-            compute_Wt_group_2,    // Wt
-            compute_NC_group_2,    // NC
-            post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
-        };
+        std::vector<uint32_t> compute_kernel_args_group_2;
+        if (rm_path) {
+            // RM kernel takes per-core counts via runtime args, so both groups share compile args.
+            compute_kernel_args_group_2 = compute_kernel_args_group_1;
+        } else {
+            uint32_t compute_Wt_group_2 =
+                use_width_sharding ? (num_cols_per_core_group_2 / NC) : num_cols_per_core_group_2;
+            uint32_t compute_NC_group_2 = use_width_sharding ? NC : 1;
+            compute_kernel_args_group_2 = {
+                Ht,                    // Ht
+                compute_Wt_group_2,    // Wt
+                compute_NC_group_2,    // NC
+                post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+            };
+        }
 
         KernelDescriptor d;
         d.kernel_source = compute_kernel;
@@ -363,12 +495,16 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
         };
         compute_desc_g2 = std::move(d);
     }
 
     std::vector<CoreCoord> cores;
-    if (operation_attributes.sub_core_grids.has_value()) {
+    if (rm_path) {
+        // RM compute kernel iterates cores in row-wise order; match it so per-core counts line up.
+        cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
+    } else if (operation_attributes.sub_core_grids.has_value()) {
         for (const auto& range : all_cores.ranges()) {
             for (int y = range.start_coord.y; y <= range.end_coord.y; ++y) {
                 for (int x = range.start_coord.x; x <= range.end_coord.x; ++x) {
@@ -381,7 +517,49 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     }
     TT_FATAL(
         cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
-    if (use_width_sharding) {
+    if (rm_path) {
+        for (uint32_t i = 0, output_tiles_seen = 0; i < num_cores; i++) {
+            const CoreCoord& core = cores[i];
+            uint32_t num_output_tiles_local = 0;
+            if (core_group_1.contains(core)) {
+                num_output_tiles_local = num_cols_per_core_group_1;
+            } else if (core_group_2.contains(core)) {
+                num_output_tiles_local = num_cols_per_core_group_2;
+            } else {
+                TT_THROW("Core not in specified core ranges");
+            }
+            reader_desc.emplace_runtime_args(
+                core,
+                {
+                    a,
+                    num_output_tiles_local,
+                    output_tiles_seen,
+                });
+            writer_desc.emplace_runtime_args(
+                core,
+                {
+                    output,
+                    num_output_tiles_local,
+                    output_tiles_seen,
+                });
+            if (core_group_1.contains(core)) {
+                compute_desc_g1.emplace_runtime_args(core, {num_output_tiles_local, output_tiles_seen});
+            } else if (compute_desc_g2.has_value()) {
+                compute_desc_g2->emplace_runtime_args(core, {num_output_tiles_local, output_tiles_seen});
+            } else {
+                TT_THROW("Reduce H (dense RM): core in core_group_2 but no second compute descriptor");
+            }
+
+            output_tiles_seen += num_output_tiles_local;
+            if (i == num_cores - 1) {
+                TT_FATAL(
+                    output_tiles_seen == num_cols,
+                    "Reduce H (dense RM) assigned {} output tile columns across cores, expected {}",
+                    output_tiles_seen,
+                    num_cols);
+            }
+        }
+    } else if (use_width_sharding) {
         TT_FATAL(NC != 0, "Batch size NC must be non-zero (shape[0]={}, shape[1]={})", shape[0], shape[1]);
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;

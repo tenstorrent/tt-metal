@@ -68,7 +68,7 @@ constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t
 }
 
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 
@@ -98,18 +98,18 @@ public:
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE * NUM_DM_CORES);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             } else {
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE * NUM_DM_CORES);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
@@ -174,49 +174,44 @@ public:
                     case 4:
                     case 8:
                     case 12:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC0_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC0_GLOBAL_BASE +
-                                MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));  // for legacy kernels
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                         break;
                     case 1:
                     case 5:
                     case 9:
                     case 13:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC1_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         break;
                     case 2:
                     case 6:
                     case 10:
                     case 14:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC2_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         break;
                     case 3:
                     case 7:
                     case 11:
                     case 15:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC3_KERNEL_BASE);
+                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
-                        flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE);
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
+                        flags +=
+                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                         break;
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
@@ -337,9 +332,7 @@ public:
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_trisc{}.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.is_fw ? "" : "_lgc");
+                            "runtime/hw/toolchain/quasar/{}_trisc.ld", params.is_fw ? "firmware" : "kernel");
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
@@ -495,6 +488,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;                      // TODO: add correct value
     this->noc_overlay_start_addr_ = 0;                                       // TODO: add correct value

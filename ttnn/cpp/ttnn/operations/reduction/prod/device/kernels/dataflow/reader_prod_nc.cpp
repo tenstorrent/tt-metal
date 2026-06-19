@@ -9,7 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/cb_fill_helpers.hpp"
 
 void kernel_main() {
     const auto input_addr = get_arg_val<uint32_t>(0);

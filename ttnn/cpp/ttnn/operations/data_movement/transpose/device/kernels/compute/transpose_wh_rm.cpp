@@ -6,7 +6,6 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
@@ -140,14 +139,17 @@ void kernel_main() {
     unary_op_init_common(cb_in, cb_out_idx);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
-        // Tilize input with activation pattern (Ht rows × Wt tiles)
+        // Tilize input (Ht rows × Wt tiles). Fp32Mode::Lossless keeps the full
+        // Float32 mantissa through tilization; the default Fast mode would
+        // collapse it to tf32 precision before the transpose ever runs.
         compute_kernel_lib::tilize<
             Wt,
             cb_in,
             cb_tilize,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(Ht);
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(Ht);
 
         // transpose
         cb_tilize_buf.wait_front(HtWt);

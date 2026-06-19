@@ -45,7 +45,7 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 // Uint8 requires special handling because when int8 is put into DEST, the sign bit actually gets put
 // to the MSB of the 32bit container, rather than to bit 8. So for int8 the packer will read the 7 LSBs + 1 MSB,
 // but for uint8 the packer will read the 8 LSBs.
-constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 4;
+constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
 
@@ -80,7 +80,11 @@ typedef union
 tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)TILE_COUNTERS_BASE;
 
 // Destination register offset, offset = 0 -> targets dest bank 0, offset = 512 for 16bit dest, 256 for 32bit dest -> targets dest bank 1
+#ifdef ENV_LLK_INFRA
 static std::uint32_t dest_register_offset = 0;
+#else
+extern thread_local std::uint32_t dest_register_offset;
+#endif
 
 /**
 * @brief Check divisibility by power of 2
@@ -167,6 +171,29 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
     else
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC3_Offset_ADDR32] = base_addr;
+    }
+}
+
+/**
+ * @brief Helper function to calculate log2 for FPU rows
+ * since FPU rows are <=16, and are power of 2, can use
+ * simplified higher perf method
+ * @param val: Input value to log2 operation
+ */
+inline std::uint32_t rows_log2(const std::uint32_t math_rows)
+{
+    switch (math_rows)
+    {
+        case 16:
+            return 4;
+        case 8:
+            return 3;
+        case 4:
+            return 2;
+        case 2:
+            return 1;
+        default:
+            return 0;
     }
 }
 
@@ -317,6 +344,17 @@ struct srcs_dims
 inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 {
     return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
+}
+
+/**
+ * @brief finds and returns the larger value between two inputs
+ * @note if both values are equal returns input1
+ *
+ * @param input1/input2: the values to be compared
+ */
+inline std::uint32_t find_max(std::uint32_t input1, std::uint32_t input2)
+{
+    return (input1 >= input2) ? input1 : input2;
 }
 
 } // namespace ckernel::trisc

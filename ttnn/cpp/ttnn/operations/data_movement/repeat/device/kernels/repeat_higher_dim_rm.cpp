@@ -88,7 +88,7 @@ void kernel_main() {
                 CoreLocalMem<uint32_t> dst_mem(data_location);
                 // Use TensorAccessor directly to avoid address truncation
                 // Template parameter preserves one-packet fast path for page-sized transfers
-                noc.async_read<Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
+                noc.async_read<NocOptions::DEFAULT, original_page_size_bytes>(
                     s,
                     dst_mem,
                     original_page_size_bytes,
@@ -106,6 +106,7 @@ void kernel_main() {
                             alignment_buffer +
                             (dst_noc_addr & w_offset_to_use);  // Guaranteed aligned to target page addr
                         tt_memmove<false, false, false, original_page_size_bytes>(
+                            noc,
                             target_align_buffer,
                             data_location,
                             original_page_size_bytes);  // Data is copied to align buffer
@@ -117,10 +118,7 @@ void kernel_main() {
                     CoreLocalMem<uint32_t> src_mem(data_location);
                     // Use TensorAccessor directly to avoid address truncation
                     // Template parameter preserves one-packet fast path for page-sized transfers
-                    noc.async_write<
-                        Noc::TxnIdMode::DISABLED,
-                        Noc::ResponseMode::NON_POSTED,
-                        original_page_size_bytes>(
+                    noc.async_write<NocOptions::DEFAULT, original_page_size_bytes>(
                         src_mem,
                         d,
                         original_page_size_bytes,
