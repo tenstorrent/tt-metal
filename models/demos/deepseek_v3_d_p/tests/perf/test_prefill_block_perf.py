@@ -243,7 +243,14 @@ def test_deepseek_v3_prefill_block_perf(
 ):
     # 4x4 sub-torus variants need 16 specific chips carved out + the Ring-4-on-Y descriptor.
     # These must reach the worker via os.environ (extra_env), not the command string.
-    extra_env = _SUBTORUS_Y4_ENV if "_4x4_" in model_name else None
+    extra_env = None
+    if "_4x4_" in model_name:
+        extra_env = dict(_SUBTORUS_Y4_ENV)
+        # The dedicated host-gate entries must ALWAYS run 128 experts + host gate, even if a stray
+        # DS_4X4_FULL_EXPERTS is exported in the shell (e.g. left over from a device-gate run).
+        # Clear it for the worker so the loop test halves to 128 and forces HOST_ALL.
+        if "128ec_hostgate" in model_name:
+            extra_env["DS_4X4_FULL_EXPERTS"] = ""
 
     # DS_PERF_ISL sweep: retarget this entry's ISL to measure perf at a different length. The
     # per-entry expected_ns is calibrated for the native ISL, so the threshold check will FAIL —
