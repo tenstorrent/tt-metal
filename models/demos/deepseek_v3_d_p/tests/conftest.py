@@ -67,6 +67,40 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-mesh-8x4",
     ),
+    # FABRIC_2D_TORUS_Y: single-galaxy 8x4 with the SP axis (mesh dim 0, 8-long) closed into a
+    # ring; the TP axis (dim 1, 4-wide) stays a line. Per-axis topology (SP, TP) = (Ring, Linear):
+    # Ring drives the SP-axis MoE dispatch/combine, Linear the TP-axis collectives (RMS-norm, MLA,
+    # shared-expert, gate). A scalar Ring here would deadlock the TP-axis all-gathers on a column
+    # wrap link that has no physical fabric edge. 2-link mirrors the fabric2d-mesh-8x4 sibling.
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Ring, ttnn.Topology.Linear),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="fabric2d-torus-y-8x4",
+    ),
+    # FABRIC_2D_TORUS_Y on a 4x4 sub-torus (16 of the galaxy's 32 chips). Same [RING, LINE]
+    # shape as the 8x4 torus but with a Ring-4 on the SP axis (dim 0). Requires carving the
+    # sub-torus at runtime via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH pointing
+    # at single_bh_galaxy_subtorus_y4_graph_descriptor.textproto (channels count: 2 → 2 links).
+    # Per-axis topology (SP, TP) = (Ring, Linear), as for the 8x4 torus.
+    pytest.param(
+        (4, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Ring, ttnn.Topology.Linear),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="fabric2d-torus-y-4x4",
+    ),
 ]
 
 

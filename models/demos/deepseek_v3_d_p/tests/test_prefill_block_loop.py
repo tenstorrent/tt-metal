@@ -70,7 +70,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
         "layer8",
     ],
 )
-@pytest.mark.parametrize("isl_total", [1024, 6400, 25 * 1024], ids=["isl_1k", "isl_6k4", "isl_25k"])
+@pytest.mark.parametrize("isl_total", [1024, 6400, 12800, 25 * 1024], ids=["isl_1k", "isl_6k4", "isl_12k8", "isl_25k"])
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -155,6 +155,10 @@ def test_prefill_block_loop(
     emb_dim = config.hidden_size
     first_k_dense = config.first_k_dense_replace  # 3
     n_routed = config.n_routed_experts  # 256
+    # NOTE: the routed-expert count is fixed at 256 by the device gate kernels — both
+    # deepseek_grouped_gate (bf16) and moe_grouped_topk (fp32) hard-assert experts==256,
+    # n_groups==8, topk_groups==4, n_activated==8. So the 4x4 sub-torus runs the full 256
+    # experts (16/chip); halving to 128 is only possible with a HOST gate (gate_host).
     # Synthetic expert modes:
     #   -1  = uniform experts (all 1/7168), donor layer 3
     #   -2  = column-varying experts (different val per dispatch group), donor layer 3
