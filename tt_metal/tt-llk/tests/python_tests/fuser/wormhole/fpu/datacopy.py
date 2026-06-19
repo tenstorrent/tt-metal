@@ -45,6 +45,10 @@ class DatacopyFpu(Fpu):
             num_faces=operation.tile_shape.total_num_faces(),
             input_dimensions=compute_unit.src_a.dimensions,
             face_r_dim=operation.tile_shape.face_r_dim,
+            tile_dimensions=[
+                operation.tile_shape.total_row_dim(),
+                operation.tile_shape.total_col_dim(),
+            ],
         )
 
         return (tensor_a, tensor_b, golden_tensor)
