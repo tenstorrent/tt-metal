@@ -17,6 +17,7 @@
  * LLK MATH COMMON
  *************************************************************************/
 
+// TODO SK: the two functions below must be removed ASAP (in the next PR), issue #46326
 constexpr bool llk_math_is_unpack_to_dest_32b(const std::uint32_t operand_id) {
     const DataFormat unpack_dst_fmt = static_cast<DataFormat>(unpack_dst_format[operand_id]);
     return unpack_dst_fmt == DataFormat::Float32 || unpack_dst_fmt == DataFormat::Int32;

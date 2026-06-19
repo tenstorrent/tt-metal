@@ -587,13 +587,10 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .node = experimental::NodeCoord(0, 0)};
     for (unsigned int id = 0; id < num_devices_; id++) {
-        if (devices_.at(id)->arch() !=
-            ARCH::QUASAR) {  // TODO (#38092): Remove when we can run back to back tests on Quasar
-            test_config.num_tiles = 1;
-            ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
-            test_config.num_tiles = 4;
-            ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
-        }
+        test_config.num_tiles = 1;
+        ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+        test_config.num_tiles = 4;
+        ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
         test_config.num_tiles = 8;
         ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
     }
