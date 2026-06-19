@@ -64,6 +64,31 @@ def _dest_limit(cfg) -> int:
     return 4 if fp32 else 8
 
 
+def _intermediate_dtype(input_dtype, fp32_acc):
+    """CB format for the accumulator/phase-boundary intermediates (Σx², the
+    reduce scaler, recip-rms, the pass-2 normalized block, and the Regime-B
+    gathered partials).
+
+    Numeric-formats rule (skill §4): when the running Σx² crosses the CB,
+    promote it to Float32 if fp32_dest_acc_en so the fp32 dest accumulation is
+    not truncated at the pack boundary. A block-float (bf8b) input must never
+    keep a bf8b accumulator — promote it. bf16 input keeps its bf16
+    intermediates (byte-identical to Phase 0 / Refinement 1, no regression):
+    bf16 ⊂ TF32 so the dest math is already exact and the baseline passes.
+    """
+    if input_dtype == ttnn.bfloat16:
+        return ttnn.bfloat16
+    # float32 or bfloat8_b input.
+    return ttnn.float32 if fp32_acc else ttnn.bfloat16
+
+
+def _tile_bytes(dtype) -> int:
+    """Bytes for a standard 32x32 tile of `dtype` (Float32=4096, bf16=2048,
+    bf8b=1088). Used for per-CB sizing now that input / intermediate / gamma /
+    output CBs can each carry a different format."""
+    return ttnn.tile_size(dtype)
+
+
 def _even_split(total, num_cores):
     """Return a list of (start, count) contiguous chunks summing to `total`."""
     base = total // num_cores
@@ -141,35 +166,41 @@ def _regime_a_descriptor(
     num_cores = min(Ht_total, total_cores)
     reduce_block = min(Wt, _dest_limit(cfg))
 
-    tile_bytes = input_tensor.buffer_page_size()
-
     core_ranges = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(8, 8), row_wise=True)
     cores = ttnn.corerange_to_cores(core_ranges, num_cores, row_wise=True)
     splits = _even_split(Ht_total, num_cores)
 
-    # ---------- circular buffers ----------
+    # ---------- circular buffers (per-CB format) ----------
+    # Input / output CBs follow the tensor dtype; accumulator intermediates
+    # (Σx², scaler, recip-rms, normalized block) follow _intermediate_dtype;
+    # gamma follows its own dtype (mixed precision). Each format gets its own
+    # tile byte size.
     def cb(index, dtype, num_pages):
+        pb = _tile_bytes(dtype)
         return ttnn.CBDescriptor(
-            total_size=num_pages * tile_bytes,
+            total_size=num_pages * pb,
             core_ranges=core_ranges,
-            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=tile_bytes)],
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=pb)],
         )
 
     dt = input_tensor.dtype
+    fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
+    inter = _intermediate_dtype(dt, fp32_acc)
+    gamma_dt = gamma.dtype if has_gamma else dt
     cbs = [
         cb(CB_INPUT_RESIDENT, dt, Wt),
-        cb(CB_SCALER, dt, 1),
+        cb(CB_SCALER, inter, 1),
         cb(CB_OUTPUT, dt, 2),
-        cb(CB_SQUARED, dt, reduce_block),
-        cb(CB_PARTIAL_SUMSQ, dt, 2),
-        cb(CB_RECIP_RMS, dt, 2),
+        cb(CB_SQUARED, inter, reduce_block),
+        cb(CB_PARTIAL_SUMSQ, inter, 2),
+        cb(CB_RECIP_RMS, inter, 2),
     ]
     if has_gamma:
-        cbs.append(cb(CB_GAMMA, dt, Wt))
+        cbs.append(cb(CB_GAMMA, gamma_dt, Wt))
         # cb_normalized is the pass-2 Col->Row streaming intermediate, sized to one
         # REDUCE_BLOCK (constant) — NOT Wt — so the resident L1 footprint does not scale
         # with the row width (compute streams pass-2 per block).
-        cbs.append(cb(CB_NORMALIZED, dt, reduce_block))
+        cbs.append(cb(CB_NORMALIZED, inter, reduce_block))
 
     # ---------- reader ----------
     reader_ct = [CB_INPUT_RESIDENT, CB_GAMMA, CB_SCALER, Wt, int(has_gamma)]
@@ -282,8 +313,10 @@ def _regime_b_descriptor(
     gh = K // gx  # band height (rows) per group
     Wt_s = Wt // K
     reduce_block = min(Wt_s, _dest_limit(cfg))
-    tile_bytes = input_tensor.buffer_page_size()
     dt = input_tensor.dtype
+    fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
+    inter = _intermediate_dtype(dt, fp32_acc)
+    gamma_dt = gamma.dtype if has_gamma else dt
     device = input_tensor.device()
 
     DATA_READY = 0
@@ -293,27 +326,32 @@ def _regime_b_descriptor(
     used_cores = num_row_groups * K
     core_ranges = ttnn.num_cores_to_corerangeset(used_cores, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
 
-    def cb(index, num_pages):
+    # Per-CB format: input/output follow the tensor dtype; the mcast-gathered
+    # partials (cb_local_sumsq → cb_partials_gathered) and the accumulator
+    # intermediates follow _intermediate_dtype, so the cross-core all-gather
+    # transfers a matched tile-byte count (both endpoints share the format).
+    def cb(index, dtype, num_pages):
+        pb = _tile_bytes(dtype)
         return ttnn.CBDescriptor(
-            total_size=num_pages * tile_bytes,
+            total_size=num_pages * pb,
             core_ranges=core_ranges,
-            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dt, page_size=tile_bytes)],
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=pb)],
         )
 
     cbs = [
-        cb(CB_INPUT_RESIDENT, Wt_s),
-        cb(CB_SCALER, 1),
-        cb(CB_OUTPUT, 2),
-        cb(CB_SQUARED, reduce_block),
-        cb(CB_PARTIAL_SUMSQ, 2),
-        cb(CB_RECIP_RMS, 2),
-        cb(CB_PARTIALS_GATHERED, K),
-        cb(CB_LOCAL_SUMSQ, 2),
+        cb(CB_INPUT_RESIDENT, dt, Wt_s),
+        cb(CB_SCALER, inter, 1),
+        cb(CB_OUTPUT, dt, 2),
+        cb(CB_SQUARED, inter, reduce_block),
+        cb(CB_PARTIAL_SUMSQ, inter, 2),
+        cb(CB_RECIP_RMS, inter, 2),
+        cb(CB_PARTIALS_GATHERED, inter, K),
+        cb(CB_LOCAL_SUMSQ, inter, 2),
     ]
     if has_gamma:
-        cbs.append(cb(CB_GAMMA, Wt_s))
+        cbs.append(cb(CB_GAMMA, gamma_dt, Wt_s))
         # Constant-sized pass-2 streaming intermediate (one REDUCE_BLOCK), not Wt_s.
-        cbs.append(cb(CB_NORMALIZED, reduce_block))
+        cbs.append(cb(CB_NORMALIZED, inter, reduce_block))
 
     # Semaphores on the full union of used cores (disjoint groups reuse the same IDs).
     semaphores = [

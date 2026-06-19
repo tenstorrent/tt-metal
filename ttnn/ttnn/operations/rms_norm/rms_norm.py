@@ -69,18 +69,24 @@ INPUT_TAGGERS = {
 # accepted at the True-only Phase-0 precision corner per prompt}, ranks 2-4,
 # optional bf16/TILE gamma.
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    # Refinement 2: full float precision surface. Input/output CB formats are
+    # derived from the tensor dtype in the program descriptor; accumulator
+    # intermediates are promoted to Float32 when fp32_dest_acc_en (see
+    # rms_norm_program_descriptor._intermediate_dtype).
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "rank": [2, 3, 4],
-    # Phase 0 maxed-out precision corner. bf16 + fp32_dest_acc_en=False is a
-    # later (numeric) refinement per the op prompt.
-    "fp32_dest_acc_en": [True],
+    # Refinement 2: both precision corners. fp32 input requires fp32
+    # accumulation (the {float32, fp32_dest_acc_en=False} cell is EXCLUDED
+    # below per the op prompt); bf16 / bf8b run at either.
+    "fp32_dest_acc_en": [True, False],
     "gamma_mode": ["gamma", "no_gamma"],
-    # float32 is listed only so the no_gamma canonical cell
-    # (gamma_dtype=float32, gamma_layout=TILE) is supported; gamma-present +
-    # float32 is refused by the EXCLUSIONS entry below.
-    "gamma_dtype": [ttnn.bfloat16, ttnn.float32],
+    # Refinement 2: gamma carries its own dtype, independent of the input
+    # (mixed-precision LLMs: bf16 activations + fp32 weights). The gamma CB
+    # format follows gamma.dtype in the descriptor. float32 also covers the
+    # no_gamma canonical cell (gamma_dtype=float32, gamma_layout=TILE).
+    "gamma_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "gamma_layout": [ttnn.TILE_LAYOUT],
 }
 
@@ -88,11 +94,10 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
-# gamma-present + float32 gamma is inside SUPPORTED (float32 is only there for
-# the no_gamma canonical cell) but the kernel reads gamma with the input's
-# (bf16) tile format, so a real fp32 gamma is refused for now.
+# float32 input mandates fp32 accumulation — there is no correct bf16-dest
+# datapath for fp32 data (the prompt's documented EXCLUSION, precision_convention).
 EXCLUSIONS = [
-    {"gamma_mode": "gamma", "gamma_dtype": ttnn.float32},
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
 ]
 
 
