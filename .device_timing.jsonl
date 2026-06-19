@@ -1,0 +1,5 @@
+{"event": "phase", "phase": "planner", "state": "start", "at_ms": 1781881832306}
+{"event": "phase", "phase": "planner", "state": "end", "at_ms": 1781882570611}
+{"event": "phase", "phase": "implementer", "state": "start", "at_ms": 1781882570952}
+{"source":"run_safe_pytest","pid":2875653,"started_at_ms":1781883690884,"wait_ms":3,"run_ms":26035,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2876677,"started_at_ms":1781883722433,"wait_ms":2,"run_ms":26773,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":1}
