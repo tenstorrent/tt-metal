@@ -80,6 +80,9 @@ SP4_GLX_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superc
 SP4_GLX_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC16_32x4_revAB_aisleD_single_pod_mapping.yaml"
 BH_110C_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_aisleC/SC16_32x4_revC_aisleC_mapping.yaml"
 BH_110C_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_aisleC/SC16_32x4_revC_aisleC_single_pod_mapping.yaml"
+# Full 20-host subtorus 110C galaxy (hosts bh-glx-110-c01..c10). Used for the 64-stage Blitz decode ring, which
+# needs the subtorus wrap-around to close (the non-subtorus 16-host SC16_revC_aisleC above cannot).
+BH_110C_SC20_SUBTORUS_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_mapping.yaml"
 SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC4_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml"
 POD_16X8_BH_GALAXY_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SP3_16x8_revAB_aisleC/SP3_16x8_revAB_aisleC_1pod_mapping.yaml"
 SUBTORUS_SC16_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_subtorus_aisleD/SC16_32x4_revC_subtorus_aisleD_mapping.yaml"
@@ -470,8 +473,14 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Dual 4x16 quad-galaxy intermesh (M0 1x8 + M1 2x16 hosts, 4 intermesh links)
 # NOTE: Not yet working for full cluster, this is working for if you specify a single pod, because of placemnet optimizations
 #TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/dual_4x16_blitz_test.textproto" --mock-cluster-rank-binding "${BH_110C_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyCornerPinnings"
-# Superpod Blitz decode (16 MPI ranks): 64-stage 4x2 RING+LINE pipeline
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${BH_110C_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
+# Superpod Blitz decode (64-stage 4x2 RING+LINE pipeline) on the full 20-host subtorus 110C galaxy. The ring
+# needs the subtorus wrap-around to close, so it runs on SC20_revC_subtorus_aisleC (not the non-subtorus 16-host
+# SC16_revC_aisleC, where the ring cannot close and multi-peer cabling collapses). Embedding a 64-mesh ring into
+# the 80-mesh (20-host) physical graph is a slack search whose tight host-minimization the SAT engine used to spin
+# on for minutes; the topology SAT conflict-cap (see the topology_solver_sat host-minimization change) abandons the
+# intractable tight budget and falls through to a fast unconstrained mapping, so this runs on plain SAT now. (The
+# 16-host bijection version of this ring runs in the bh-subtorus-sc16 group.)
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${BH_110C_SC20_SUBTORUS_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:MultiHost.Test2x4GroupingHorizontalTrayMapping"
 # Llama 8b pod MGDs on the FULL 16-host 110C system — COMMENTED OUT: the 40-host 2-mesh pod has no valid
 # mapping onto a 16-host mock. The single-pod (4-host) 110C versions run in the bh-pod-pipeline group
 # (via BH_110C_SINGLE_POD_CLUSTER_DESC_MAPPING).
