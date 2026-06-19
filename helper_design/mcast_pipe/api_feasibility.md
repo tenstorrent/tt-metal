@@ -7,6 +7,34 @@ against feasibility.)
 
 ---
 
+## Round-5 re-entry addendum (2026-06-19) — `McastRect` is templated on the NoC id
+
+> DERIVED FROM: feedback.txt item 1. Re-entry at **Step D** (contract change, leftmost). The rest
+> of this file (the old `Pipe` + `McastDestSet` draft below) is the historical Step-D record;
+> the authoritative API is `changelog.md`. This addendum revises ONE contract point.
+
+**Claim (item 1):** `McastRect::start_end_for_noc(noc_id)` runs a corner comparison + per-NoC swap
+on *every* `send()` (twice — once for the data mcast, once for the flag mcast). The NoC id is
+compile-time (`constexpr uint8_t noc_index = NOC_INDEX`, `dataflow_api_common.h`) and the factory
+chooses it, so the comparison can be hoisted out of the hot path entirely.
+
+**Revised contract — `McastRect<uint8_t NOC_ID = noc_index>`:**
+- Adds a compile-time template param `NOC_ID`, defaulted to the kernel's `noc_index` so the common
+  call site writes `McastRect<>{x0,y0,x1,y1}`; a factory that drives a specific NoC passes it
+  explicitly (`McastRect<1>{...}`). The four coords stay **runtime** (per-core — invariant 6 honoured).
+- The **constructor** computes and stores, ONCE, both the routing-correct `(start,end)` for `NOC_ID`
+  *and* the normalized box (`xlo..yhi` for the containment test). The per-call comparison/swap is gone.
+- The runtime method `start_end_for_noc(noc_id)` is **deleted**; callers/`SenderPipe` read stored
+  fields. `SenderPipe` gains the same `NOC_ID` template param (defaulted to `noc_index`) so even
+  `sender_in_rect_`'s `my_x[noc_.get_noc_id()]` collapses to a compile-time `my_x[NOC_ID]`.
+
+**Verdict: FEASIBLE WITH REVISION (contract-only).** No pattern coverage changes; no style fork is
+touched. This is a representation/type-honesty change — the same address math, computed once at
+construction instead of per call. Caller-facing (the `McastRect` ctor/type), so it forces a call-site
+rewrite → `MCAST_PIPE_API_VERSION` bump (Step G). Step E is a re-confirm no-op (below); no device work.
+
+---
+
 ## First concrete API draft (promoted from the Step-0 sketch)
 
 Grounded in the two prior-art shapes the census found (`deepseek_b1_ops::Mcast` — CT-templated

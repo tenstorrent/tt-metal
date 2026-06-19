@@ -4,7 +4,7 @@
 // mcast_pipe helper unit test: RECEIVER kernel driving dataflow_kernel_lib::ReceiverPipe.
 // Ported from bakeoff_mcast_receiver.cpp. The ReceiverPipe takes only the noc + (template) sem
 // ids; the sender's coords (the target of the consumed ack) are passed to receive().
-//   STAGING_COUNTER(0/1) -> Staging::Flag (wait+reset) | Staging::Counter (wait_min)
+//   STAGING_COUNTER(0/1) -> HandshakeKind::Flag (wait+reset) | HandshakeKind::Counter (wait_min)
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -21,7 +21,7 @@
 
 using namespace dataflow_kernel_lib;
 
-constexpr Staging STG = STAGING_COUNTER ? Staging::Counter : Staging::Flag;
+constexpr HandshakeKind STG = STAGING_COUNTER ? HandshakeKind::Counter : HandshakeKind::Flag;
 
 void kernel_main() {
     constexpr uint32_t cb_dst = get_compile_time_arg_val(0);

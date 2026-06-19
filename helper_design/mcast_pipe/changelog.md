@@ -308,3 +308,40 @@ intentionally kept raw + documented.** All on BH p150a, single parametrization e
 - **Next API bump → next run:** `tune-dm-helper` bumps `MCAST_PIPE_API_VERSION` to 5; re-invoke
   `apply-dm-helper helper_design/mcast_pipe/ --mode=…` → it remigrates the 13 stale kernels first, then
   continues the 46 pending. No manual re-run of the whole fleet.
+
+---
+
+## Round 5 — naming + `McastRect` NoC-id templating (2026-06-19)
+
+- **Trigger:** `tune-dm-helper feedback.txt` — three claims: (1) `McastRect::start_end_for_noc()` runs a
+  corner comparison + per-NoC swap on every `send()` (twice/send) though the NoC id is compile-time —
+  template the rect on the NoC id and precompute in the ctor; (2) `Staging` is not a clear name; (3)
+  `INITIAL_READY` is not a clear name — make the flag-only scope obvious.
+- **Re-entry routing (batched, upstream-first):** item 1 → **Step D** (contract: type signature + where a
+  value is computed); items 2,3 → **Step F** (wording). Leftmost = D → one forward pass D→E→F→G. **Step E
+  was a re-confirm no-op** (item 1 touches no style fork; coverage/perf maps stand) — **no device bake-off.**
+- **Decisions:**
+  - **D1 — `McastRect<uint8_t NOC_ID = noc_index>`.** Adds a compile-time `NOC_ID` template param
+    (default `noc_index`; factory may pass an explicit id). The four coords stay runtime (per-core). The
+    **ctor** computes & stores the routing-correct `(start_x,start_y,end_x,end_y)` for `NOC_ID` once; the
+    per-call `start_end_for_noc(noc_id)` method is **deleted** (now a stored-field accessor `bounds()`).
+    `SenderPipe` gains a matching `NOC_ID` param so `sender_in_rect_`'s `my_x[noc_.get_noc_id()]` folds to
+    a compile-time `my_x[NOC_ID]`.
+  - **F2 — `Staging` → `HandshakeKind`** (members `Flag`, `Counter` unchanged). *(user pick)*
+  - **F3 — `INITIAL_READY` → `INITIAL_FLAG_VALUE`** — the name now states it's a flag value, hence
+    `HandshakeKind::Flag`-only. *(user pick)*
+- **API before:** `SenderPipe<N, DR, C, Staging=Flag, PRE_HANDSHAKE=true, INITIAL_READY=VALID>(noc, McastRect{...})`,
+  `ReceiverPipe<DR, C, Staging=Flag, PRE_HANDSHAKE=true>(noc)`, `McastRect{x0,y0,x1,y1}`.
+- **API after (API version 5):** `SenderPipe<N, DR, C, HandshakeKind=Flag, PRE_HANDSHAKE=true,
+  INITIAL_FLAG_VALUE=VALID, NOC_ID=noc_index>(noc, McastRect<>{...})`,
+  `ReceiverPipe<DR, C, HandshakeKind=Flag, PRE_HANDSHAKE=true>(noc)`, `McastRect<NOC_ID=noc_index>{x0,y0,x1,y1}`.
+- **`MCAST_PIPE_API_VERSION` 4 → 5** (caller-facing: renamed enum + renamed param + `McastRect` type now
+  templated → every migrated call site is rewritten). All 13 Round-4 migrated kernels are now **stale@v4**.
+- **Artifacts touched:** `api_feasibility.md` (Round-5 addendum), `style_bakeoff.md` (E no-op note),
+  `proposed_helpers.md` (header), this changelog, `mcast_pipe.hpp` (materialized), the 3 unit-test kernels
+  + `test_mcast_pipe.py` (ported to the new API).
+- **Verification:** header-only + JIT kernel change (no `build_metal.sh` rebuild). `test_mcast_pipe.py`
+  unit gate is the green re-confirm of the materialization. Provisional dual-paths: none new (F4 linking
+  stayed baked-in; no fork re-decided).
+- **Hand-off:** re-invoke `apply-dm-helper helper_design/mcast_pipe/` → Tier-0 remigrates the 13
+  stale@v4 kernels to v5 first, then resumes the 46 pending. No manual fleet re-run.

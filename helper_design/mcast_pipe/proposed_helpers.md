@@ -6,7 +6,11 @@
 > moved loopback inference to `sender_in_rect && src!=dst`; **Round 4 (2026-06-13)** split the object
 > into `SenderPipe` / `ReceiverPipe`, made the count the FULL recipient set (`num_active_receiver_cores`,
 > incl. sender-if-receiver), moved semaphore construction+init into the ctors (pass IDs), and put the
-> data mcast + self-copy on the `Noc` object (noc 2.0). Authoritative running record: `changelog.md`.
+> data mcast + self-copy on the `Noc` object (noc 2.0); **Round 5 (2026-06-19)** is a naming/contract
+> pass — `Staging` → **`HandshakeKind`**, `INITIAL_READY` → **`INITIAL_FLAG_VALUE`** (flag-only scope
+> now self-documenting), and `McastRect` is templated on the NoC id (`McastRect<NOC_ID = noc_index>`)
+> with the routing-correct corners precomputed in its ctor instead of re-derived per `send()`.
+> Authoritative running record: `changelog.md`.
 
 The deliverable. One fat, two-sided helper — `Pipe` — that wraps the NoC-multicast +
 semaphore-handshake block, built on the object API (`Noc` / `Semaphore<>` / `MulticastEndpoint`),

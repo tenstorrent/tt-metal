@@ -73,7 +73,7 @@
 //
 // Internal dual-paths (predicates, NOT a config blob the caller navigates):
 //   * loopback       -> EXCLUDE_SRC | INCLUDE_SRC | self-only-local-copy (inferred, above)
-//   * Staging::Counter forces the fence to async_atomic_barrier (a write flush HANGS the
+//   * HandshakeKind::Counter forces the fence to async_atomic_barrier (a write flush HANGS the
 //     non-posted multicast atomic — bake-off F2).
 //
 // F4 linking is NOT a knob (Round 4): every migrated call site links, so the data mcast is
@@ -86,12 +86,15 @@
 //
 // TEMPLATE params (all compile-time + core-uniform; the caller-facing choices):
 //   SenderPipe<NUM_ACTIVE_RECEIVER_CORES, DATA_READY_SEM_ID, CONSUMED_SEM_ID,
-//              STAGING = Flag, PRE_HANDSHAKE = true, INITIAL_READY = VALID>(noc, dest)
-//   ReceiverPipe<DATA_READY_SEM_ID, CONSUMED_SEM_ID, STAGING = Flag, PRE_HANDSHAKE = true>(noc)
-//   * STAGING       (default Flag)   — Counter only for monotone / streaming protocols.
-//   * PRE_HANDSHAKE (default true)   — false when each receiver reserves a fresh CB slot.
-//   * INITIAL_READY (default VALID)  — sender's local "ready" value (Flag only); INVALID for a
-//                                       signal sender that starts cleared (sharded-LN phase-1).
+//              HANDSHAKE = Flag, PRE_HANDSHAKE = true, INITIAL_FLAG_VALUE = VALID,
+//              NOC_ID = noc_index>(noc, McastRect<NOC_ID>{...})
+//   ReceiverPipe<DATA_READY_SEM_ID, CONSUMED_SEM_ID, HANDSHAKE = Flag, PRE_HANDSHAKE = true>(noc)
+//   * HANDSHAKE          (default Flag)   — HandshakeKind; Counter only for monotone / streaming protocols.
+//   * PRE_HANDSHAKE      (default true)   — false when each receiver reserves a fresh CB slot.
+//   * INITIAL_FLAG_VALUE (default VALID)  — sender's local FLAG value (HandshakeKind::Flag ONLY); INVALID
+//                                           for a signal sender that starts cleared (sharded-LN phase-1).
+//   * NOC_ID             (default noc_index) — compile-time NoC id; must match the `noc` arg. Used to
+//                                           precompute the rect's routing corners; folds my_x/my_y index.
 //
 // -----------------------------------------------------------------------------
 // SEMAPHORE LIFECYCLE OWNED BY THE PIPE (Round 4)
@@ -100,12 +103,12 @@
 // `Semaphore<>` objects. Each Pipe instantiates its `Semaphore<>` internally. A Pipe kernel-inits
 // a cell ONLY when this core establishes a happens-before edge to every other writer of that cell
 // before they write it — otherwise the init races and must come from the HOST:
-//   * ReceiverPipe inits its `data_ready` = INVALID (Staging::Flag). SAFE: the receiver writes it
+//   * ReceiverPipe inits its `data_ready` = INVALID (HandshakeKind::Flag). SAFE: the receiver writes it
 //                  before its own ack, and the sender (the only other writer) is gated behind that
 //                  ack — strict happens-before.
-//   * SenderPipe   pre-sets ONLY its OWN local `data_ready` = `INITIAL_READY` (default VALID — the
-//                  value it broadcasts; Staging::Flag). SAFE: the sender is the sole writer of its
-//                  own cell before the first send. `INITIAL_READY = INVALID` for a signal sender.
+//   * SenderPipe   pre-sets ONLY its OWN local `data_ready` = `INITIAL_FLAG_VALUE` (default VALID — the
+//                  value it broadcasts; HandshakeKind::Flag). SAFE: the sender is the sole writer of its
+//                  own cell before the first send. `INITIAL_FLAG_VALUE = INVALID` for a signal sender.
 //   * SenderPipe DOES NOT init `consumed`. RACY if it did: receivers increment the sender's counter
 //                  remotely with NO happens-before relative to the sender's ctor (a receiver can ack
 //                  before the sender core even runs), so a ctor `set(0)` would clobber an early ack
@@ -128,8 +131,10 @@
 // (helper_design/mcast_pipe/migration/ledger.json). BUMP THIS (and only this) whenever a
 // re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
 // count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
-// changes. v4 = the `SenderPipe`/`ReceiverPipe` split (Round 4). See tune-dm-helper Step G.4.
-#define MCAST_PIPE_API_VERSION 4
+// changes. v4 = the `SenderPipe`/`ReceiverPipe` split (Round 4). v5 = Round 5: `Staging`→`HandshakeKind`,
+// `INITIAL_READY`→`INITIAL_FLAG_VALUE`, and `McastRect` templated on the NoC id (`McastRect<NOC_ID>`)
+// with routing corners precomputed in its ctor. See tune-dm-helper Step G.4.
+#define MCAST_PIPE_API_VERSION 5
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -140,47 +145,63 @@
 namespace dataflow_kernel_lib {
 
 // -----------------------------------------------------------------------------
-// Staging style (F2). Flag is the baked-in default (fastest). Counter is exposed
-// ONLY for protocols that genuinely need a monotone, reset-free counter (census C3:
-// layernorm phase-2 streaming, deepseek_prefill).
+// Handshake mechanism (F2). Flag is the baked-in default (fastest): a level flag set to
+// VALID/INVALID with an exact wait + reset. Counter is exposed ONLY for protocols that
+// genuinely need a monotone, reset-free counter (census C3: layernorm phase-2 streaming,
+// deepseek_prefill) — inc_multicast + wait_min, no reset.
+// (Renamed from `Staging` in Round 5: the name now says WHAT the choice is — the kind of
+//  sender↔receiver handshake — not an implementation-stage noun.)
 // -----------------------------------------------------------------------------
-enum class Staging { Flag, Counter };
+enum class HandshakeKind { Flag, Counter };
 
 // -----------------------------------------------------------------------------
 // A multicast destination rectangle, in NoC (virtual) coordinates. PURE GEOMETRY: the
 // broadcast bounding box. The transfer/ACK count is the separate `NUM_ACTIVE_RECEIVER_CORES`
 // template param — NOT the area. SENDER side only (the receiver does not multicast).
 //
-// CORNER ORDERING IS OWNED HERE (not the caller). The mcast hardware walks the rect from
-// `start` in the NoC's routing direction up to `end`, so `start` must be the corner the
-// routing reaches FIRST: the low corner on NoC0 (+x/+y), the high corner on NoC1 (-x/-y).
-// `McastRect` stores the four numbers in WHATEVER order it was constructed with — canonical
-// top-left→bottom-right, or already swapped (some hosts std::swap for NOC_1) — and
-// `start_end_for_noc()` always re-derives the routing-correct (start,end) for the live NoC.
-// So however the rect is initialized, the mcast APIs always receive the corners in good order.
+// TEMPLATED ON THE NoC ID (Round 5). The mcast hardware walks the rect from `start` in the NoC's
+// routing direction up to `end`, so `start` must be the corner the routing reaches FIRST: the low
+// corner on NoC0 (+x/+y), the high corner on NoC1 (-x/-y). The NoC id is compile-time
+// (`constexpr uint8_t noc_index = NOC_INDEX`) and the factory chooses it, so `NOC_ID` is a template
+// param (defaulted to the kernel's `noc_index`; a factory driving a specific NoC passes it
+// explicitly, e.g. `McastRect<1>{...}`). The four coords stay RUNTIME (per-core). The CONSTRUCTOR
+// computes — ONCE — both the routing-correct (start,end) for `NOC_ID` and the normalized box, so the
+// per-send corner comparison + per-NoC swap is hoisted out of the hot path entirely (it used to run
+// twice per `send()` via the old `start_end_for_noc(noc_id)` method, now deleted). Callers may pass
+// the four corners in WHATEVER order (canonical top-left→bottom-right, or already swapped) — the
+// normalization tolerates either, so the mcast APIs always get the corners in routing order.
+// PRECONDITION: `NOC_ID` must match the `Noc` the `SenderPipe` runs on (both default to `noc_index`,
+// so the common case is automatically consistent).
 // -----------------------------------------------------------------------------
+template <uint8_t NOC_ID = noc_index>
 struct McastRect {
-    uint32_t x0{};
-    uint32_t y0{};
-    uint32_t x1{};
-    uint32_t y1{};
-
-    // Order-agnostic normalized bounds (tolerate either input ordering).
-    constexpr uint32_t xlo() const { return x0 < x1 ? x0 : x1; }
-    constexpr uint32_t xhi() const { return x0 < x1 ? x1 : x0; }
-    constexpr uint32_t ylo() const { return y0 < y1 ? y0 : y1; }
-    constexpr uint32_t yhi() const { return y0 < y1 ? y1 : y0; }
-
-    // Routing-correct (start_x, start_y, end_x, end_y) for the mcast APIs on `noc_id`.
-    // NoC0 → start = low corner; NoC1 → start = high corner (the per-NoC swap the host used to
-    // do with std::swap on NOC_1 — now owned by the rect, applied as a full diagonal-corner swap
-    // to match the host's CoreCoord-pair swap).
+    // Routing-correct (start_x, start_y, end_x, end_y) for the mcast APIs on NOC_ID.
     struct Bounds {
         uint32_t sx, sy, ex, ey;
     };
-    constexpr Bounds start_end_for_noc(uint8_t noc_id) const {
-        return noc_id == 1 ? Bounds{xhi(), yhi(), xlo(), ylo()} : Bounds{xlo(), ylo(), xhi(), yhi()};
-    }
+
+    // Coords may arrive in either ordering; normalize + precompute the routing corners ONCE.
+    constexpr McastRect(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) :
+        xlo_(x0 < x1 ? x0 : x1),
+        xhi_(x0 < x1 ? x1 : x0),
+        ylo_(y0 < y1 ? y0 : y1),
+        yhi_(y0 < y1 ? y1 : y0),
+        // NoC0 → start = low corner; NoC1 → start = high corner (full diagonal-corner swap to match
+        // the host's per-NoC CoreCoord-pair swap). Decided at construction, not per send().
+        start_end_(NOC_ID == 1 ? Bounds{xhi_, yhi_, xlo_, ylo_} : Bounds{xlo_, ylo_, xhi_, yhi_}) {}
+
+    // Precomputed routing-correct (start,end) for NOC_ID — a field read, no comparison.
+    constexpr const Bounds& bounds() const { return start_end_; }
+
+    // Normalized box (for the sender-in-rect containment test).
+    constexpr uint32_t xlo() const { return xlo_; }
+    constexpr uint32_t xhi() const { return xhi_; }
+    constexpr uint32_t ylo() const { return ylo_; }
+    constexpr uint32_t yhi() const { return yhi_; }
+
+private:
+    uint32_t xlo_, xhi_, ylo_, yhi_;
+    Bounds start_end_;
 };
 
 // =============================================================================
@@ -192,12 +213,13 @@ struct McastRect {
 //                                 recipients. The Pipe derives ack_count and mcast_dests from it.
 //   * DATA_READY_SEM_ID         — S->R "data is ready" flag id.
 //   * CONSUMED_SEM_ID           — R->S "dest drained" counter id (used iff PRE_HANDSHAKE).
-//   * STAGING / PRE_HANDSHAKE   — the use-case knobs.
-//   * INITIAL_READY             — value the ctor pre-sets the sender's LOCAL data-ready cell to
-//                                 (Flag staging only). DEFAULT `VALID` (5/6 migrated data senders set
-//                                 VALID before the loop). A signal sender that must start INVALID
-//                                 passes `INITIAL_READY = INVALID` (sharded-LN phase-1). Folding it in
-//                                 lets call sites drop their manual `<flag_sem>.set(VALID)` line.
+//   * HANDSHAKE / PRE_HANDSHAKE — the use-case knobs (HANDSHAKE is a HandshakeKind).
+//   * INITIAL_FLAG_VALUE        — value the ctor pre-sets the sender's LOCAL data-ready FLAG cell to
+//                                 (HandshakeKind::Flag ONLY). DEFAULT `VALID` (5/6 migrated data senders
+//                                 set VALID before the loop). A signal sender that must start INVALID
+//                                 passes `INITIAL_FLAG_VALUE = INVALID` (sharded-LN phase-1). Folding it
+//                                 in lets call sites drop their manual `<flag_sem>.set(VALID)` line.
+//   * NOC_ID                    — compile-time NoC id (must match `noc`; defaults to `noc_index`).
 // The ONLY runtime ctor input is the `McastRect` — its (virtual) coords vary per sender core under
 // one compiled binary (e.g. each row-sender in a 2D matmul targets a different row), so it is set
 // per-core via runtime args and CANNOT be a template param. `send()`/`send_signal()` payload + the
@@ -206,22 +228,23 @@ template <
     uint32_t NUM_ACTIVE_RECEIVER_CORES,
     uint32_t DATA_READY_SEM_ID,
     uint32_t CONSUMED_SEM_ID,
-    Staging STAGING = Staging::Flag,  // F2 use-case knob
-    bool PRE_HANDSHAKE = true,        // H2 use-case knob
-    uint32_t INITIAL_READY = VALID>   // local "ready" value (Flag only); INVALID for a signal sender
+    HandshakeKind HANDSHAKE = HandshakeKind::Flag,  // F2 use-case knob
+    bool PRE_HANDSHAKE = true,                      // H2 use-case knob
+    uint32_t INITIAL_FLAG_VALUE = VALID,            // local flag value (Flag only); INVALID for a signal sender
+    uint8_t NOC_ID = noc_index>                     // compile-time NoC id (must match `noc`; defaults to noc_index)
 class SenderPipe {
 public:
     // `dest` — receiver rectangle (geometry only). The only runtime ctor arg (see above).
-    explicit SenderPipe(const Noc& noc, const McastRect& dest) :
+    explicit SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest) :
         noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumed_(CONSUMED_SEM_ID) {
         // NOTE: the `consumed` ACK counter is NOT kernel-initialized here. Receivers increment it
         // remotely (`up()`) with NO happens-before relative to this ctor — a receiver can ack before
         // the sender core even runs, so a ctor `set(0)` would clobber an early ack and hang. Its
         // initial value (0) MUST come from host `CreateSemaphore(..., 0)` (every call site does this).
         // The sender DOES own its own local data-ready cell (only it writes it before the first send),
-        // so pre-setting that to the broadcast "ready" value is race-free (Flag staging only).
-        if constexpr (STAGING == Staging::Flag) {
-            data_ready_.set(INITIAL_READY);
+        // so pre-setting that to the broadcast "ready" value is race-free (Flag handshake only).
+        if constexpr (HANDSHAKE == HandshakeKind::Flag) {
+            data_ready_.set(INITIAL_FLAG_VALUE);
         }
     }
 
@@ -269,16 +292,17 @@ public:
     }
 
 private:
-    // ---- is the sender's own core inside the receiver rect? (IR1: compare in noc_'s space) ----
+    // ---- is the sender's own core inside the receiver rect? (IR1: compare in NOC_ID's space) ----
+    // NOC_ID is compile-time, so the my_x/my_y index folds to a constant.
     bool sender_in_rect_() const {
-        const uint32_t mx = my_x[noc_.get_noc_id()];
-        const uint32_t my = my_y[noc_.get_noc_id()];
+        const uint32_t mx = my_x[NOC_ID];
+        const uint32_t my = my_y[NOC_ID];
         return mx >= dest_.xlo() && mx <= dest_.xhi() && my >= dest_.ylo() && my <= dest_.yhi();
     }
 
     // ---- data multicast via the Noc object (noc 2.0) ----
     void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
-        const auto r = dest_.start_end_for_noc(noc_.get_noc_id());  // routing-correct start/end
+        const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
         UnicastEndpoint src_ep;
         MulticastEndpoint dst_ep;
         const typename noc_traits_t<UnicastEndpoint>::src_args_type src_args{.addr = src_l1};
@@ -299,8 +323,8 @@ private:
     // `loopback` mirrors the data mcast of the same send() (INV4: same path); send_signal()
     // has no data, so its flag is always EXCLUDE_SRC.
     void raise_flag_(uint32_t value, bool loopback, uint32_t mcast_dests) {
-        const auto r = dest_.start_end_for_noc(noc_.get_noc_id());  // routing-correct start/end
-        if constexpr (STAGING == Staging::Counter) {
+        const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
+        if constexpr (HANDSHAKE == HandshakeKind::Counter) {
             data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, value, mcast_dests);
         } else {
             data_ready_.set(value);
@@ -316,7 +340,7 @@ private:
 
     // ---- post-send fence (F1) ----
     void fence_() {
-        if constexpr (STAGING == Staging::Counter) {
+        if constexpr (HANDSHAKE == HandshakeKind::Counter) {
             // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests ACKs that
             // must be drained, so a write flush is NOT sufficient — an atomic barrier is forced.
             noc_.async_writes_flushed();
@@ -332,8 +356,8 @@ private:
             return;  // src == dst: nothing to copy (source polymorphism, R4)
         }
         UnicastEndpoint src_ep, dst_ep;
-        const uint32_t mx = my_x[noc_.get_noc_id()];
-        const uint32_t my = my_y[noc_.get_noc_id()];
+        const uint32_t mx = my_x[NOC_ID];
+        const uint32_t my = my_y[NOC_ID];
         noc_.async_read(
             src_ep,
             dst_ep,
@@ -344,7 +368,7 @@ private:
     }
 
     Noc noc_;
-    McastRect dest_;
+    McastRect<NOC_ID> dest_;
     Semaphore<> data_ready_;
     Semaphore<> consumed_;
 };
@@ -361,13 +385,13 @@ private:
 template <
     uint32_t DATA_READY_SEM_ID,
     uint32_t CONSUMED_SEM_ID,
-    Staging STAGING = Staging::Flag,  // F2 use-case knob (must match the SenderPipe's)
-    bool PRE_HANDSHAKE = true>        // H2 use-case knob (must match the SenderPipe's)
+    HandshakeKind HANDSHAKE = HandshakeKind::Flag,  // F2 use-case knob (must match the SenderPipe's)
+    bool PRE_HANDSHAKE = true>                      // H2 use-case knob (must match the SenderPipe's)
 class ReceiverPipe {
 public:
     explicit ReceiverPipe(const Noc& noc) : noc_(noc), data_ready_(DATA_READY_SEM_ID), consumed_(CONSUMED_SEM_ID) {
-        // Init the flag THIS side waits on. Counter staging needs no reset/init (monotone).
-        if constexpr (STAGING == Staging::Flag) {
+        // Init the flag THIS side waits on. Counter handshake needs no reset/init (monotone).
+        if constexpr (HANDSHAKE == HandshakeKind::Flag) {
             data_ready_.set(INVALID);
         }
     }
@@ -381,7 +405,7 @@ public:
             // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
             consumed_.up(noc_, sender_x, sender_y, 1);
         }
-        if constexpr (STAGING == Staging::Counter) {
+        if constexpr (HANDSHAKE == HandshakeKind::Counter) {
             data_ready_.wait_min(++round_);
         } else {
             data_ready_.wait(VALID);
@@ -390,13 +414,13 @@ public:
     }
 
     // Wait the control flag and RETURN its value. Symmetric with SenderPipe::send_signal().
-    //   * Staging::Flag    — a plain doorbell: returns VALID once the flag arrives, then clears.
-    //   * Staging::Counter — returns the monotone round number reached.
+    //   * HandshakeKind::Flag    — a plain doorbell: returns VALID once the flag arrives, then clears.
+    //   * HandshakeKind::Counter — returns the monotone round number reached.
     // Value-carrying-flag payload extraction (moe_gpt: token counts packed in the sem word) is
     // a migration-time concern for that op — it reads its own sem cell directly, since it owns
     // the cell address. Kept out of the generic doorbell path to keep receive_signal() simple.
     uint32_t receive_signal() {
-        if constexpr (STAGING == Staging::Counter) {
+        if constexpr (HANDSHAKE == HandshakeKind::Counter) {
             data_ready_.wait_min(++round_);
             return round_;
         } else {
@@ -410,7 +434,7 @@ private:
     Noc noc_;
     Semaphore<> data_ready_;
     Semaphore<> consumed_;
-    uint32_t round_ = 0;  // monotone round counter for Staging::Counter
+    uint32_t round_ = 0;  // monotone round counter for HandshakeKind::Counter
 };
 
 }  // namespace dataflow_kernel_lib

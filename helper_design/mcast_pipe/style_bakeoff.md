@@ -6,6 +6,13 @@
 The bake-off resolves the four style forks the API draft (Step ★) left open, by measurement, not
 argument: **coverage screen first (cheap, correctness/hang), perf+L1 only on survivors.**
 
+> **Round-5 re-entry (2026-06-19) — E re-confirm NO-OP, no device.** feedback.txt item 1 (template
+> `McastRect` on the NoC id, precompute corners in the ctor) touches NONE of the four style forks
+> (F1 fence / F2 staging / F3 loopback / F4 linking). It changes where a constexpr-foldable corner
+> swap is computed (ctor vs per-call), not which mitigation a fork takes — no new variant, no new
+> topology/dtype cell. All coverage maps and ns/L1 numbers below stand verbatim. Items 2 & 3 are
+> pure renames (Step F). No re-measure, no re-decide.
+
 ---
 
 ## E.1 — Triage: which forks are style (→ bake-off) vs use-case (→ knob)

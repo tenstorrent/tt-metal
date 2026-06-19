@@ -67,9 +67,9 @@ void kernel_main() {
         num_active_cores,
         data_ready_sem_id,
         /*CONSUMED=*/data_ready_sem_id,
-        Staging::Flag,
+        HandshakeKind::Flag,
         /*PRE_HANDSHAKE=*/false>
-        pipe(noc, McastRect{x0, y0, x1, y1});
+        pipe(noc, McastRect<>{x0, y0, x1, y1});
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.send(src_addr, dst_addr, payload_bytes);

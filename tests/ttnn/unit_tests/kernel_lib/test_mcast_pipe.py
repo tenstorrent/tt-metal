@@ -47,7 +47,7 @@ def _defines(staging_counter):
 # variant is gone (it would be identical to flag_linked).
 VARIANTS = {
     "flag_linked": (0,),  # canonical clean-spine path: Flag + linked pair + flush
-    "counter": (1,),  # Staging::Counter knob (atomic-barrier fence)
+    "counter": (1,),  # HandshakeKind::Counter knob (atomic-barrier fence)
 }
 
 
@@ -55,8 +55,8 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
     """recv_rect = ((rx0,ry0),(rx1,ry1)) logical; sender_logical = (sx,sy) logical.
     sender_noc selects which NoC the sender mcasts on: 0 (reader) or 1 (writer). On NoC1 the
     hardware needs start=high-corner / end=low-corner; the test always passes the rect in
-    CANONICAL (low->high) order, so a green NoC1 run proves McastRect.start_end_for_noc() owns
-    the per-NoC corner swap (the old verbatim-passthrough would mis-encode the rect on NoC1)."""
+    CANONICAL (low->high) order, so a green NoC1 run proves McastRect<NOC_ID> owns the per-NoC corner
+    swap (precomputed in its ctor; the old verbatim-passthrough would mis-encode the rect on NoC1)."""
     (rx0, ry0), (rx1, ry1) = recv_rect
     sx, sy = sender_logical
     (stage_c,) = VARIANTS[variant]
@@ -223,9 +223,9 @@ def test_coverage(device, variant, rect_name, n_iters, payload_tiles):
 
 # ---------- NoC1 corner-ordering: McastRect must own the per-NoC start/end swap ----------
 # Sender mcasts on NoC1, where the hardware wants start=high-corner / end=low-corner. The rect is
-# passed in CANONICAL (low->high) order regardless of NoC, so a PASS proves the Pipe re-derives the
-# routing-correct ordering from noc_index via McastRect.start_end_for_noc(). With the old
-# verbatim-passthrough this would mis-encode the rect on NoC1 (degenerate box -> wrong/hang).
+# passed in CANONICAL (low->high) order regardless of NoC, so a PASS proves the Pipe derives the
+# routing-correct ordering from NOC_ID via McastRect<NOC_ID> (corners precomputed in its ctor). With
+# the old verbatim-passthrough this would mis-encode the rect on NoC1 (degenerate box -> wrong/hang).
 @pytest.mark.parametrize("variant", COVERAGE_VARIANTS)
 @pytest.mark.parametrize("rect_name", list(RECTS.keys()))
 def test_noc1_sender_corner_order(device, variant, rect_name):
