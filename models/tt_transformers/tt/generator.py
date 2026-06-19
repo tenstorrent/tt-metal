@@ -1248,13 +1248,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ):
             new_tokens = []
             new_start_pos = []
-            # Correctness fix (on by default; set TT_FIX_RESET_POS=0 to disable for
-            # A/B). When we take the device's async-ahead token for a continuing
-            # slot, the token sits at position dev_pos; staging the lagging host
-            # position (=dev_pos-1) re-processes that token at the wrong position
+            # When we take the device's async-ahead token for a continuing slot,
+            # the token sits at position dev_pos; staging the lagging host position
+            # (=dev_pos-1) would re-process that token at the wrong position
             # (overwriting KV / regenerating a position -> duplicate/flipped tokens
             # under concurrency). Pair the device token with the device position.
-            _fix_reset_pos = os.environ.get("TT_FIX_RESET_POS", "1") != "0"
             for i, tok_chunk in enumerate(tokens):
                 trace_in = self.trace_inputs_decode[on_device_sampling][i]
                 dev_toks = (
@@ -1295,11 +1293,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             use_dev[slot - i * bs] = False
                 merged = torch.where(use_dev, dev_toks.view(-1), tok_chunk.view(-1)).view(tok_chunk.shape)
                 new_tokens.append(merged.to(tok_chunk.dtype))
-                if _fix_reset_pos:
-                    merged_pos = torch.where(use_dev, dev_pos, host_pos)
-                    new_start_pos.append(merged_pos.view(start_pos[i].shape).to(start_pos[i].dtype))
-                else:
-                    new_start_pos.append(start_pos[i])
+                merged_pos = torch.where(use_dev, dev_pos, host_pos)
+                new_start_pos.append(merged_pos.view(start_pos[i].shape).to(start_pos[i].dtype))
             tokens = new_tokens
             start_pos = new_start_pos
         self._slots_prefilled_since_decode = set()
