@@ -22,8 +22,20 @@ on:
 
 jobs:
   fabric-cpu-unit-tests:
-    name: ${{ inputs.arch }} fabric cpu unit tests
-    runs-on: tt-ubuntu-2204-large-stable
+    name: ${{ inputs.arch }} fabric cpu unit tests (${{ matrix.shard.name }})
+    runs-on: tt-ubuntu-2204-medium-stable
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          # Shard A (~6m20s): unit + phys-grouping + control-plane + t3k + wh-galaxy
+          - name: "unit-phys-ctrl-t3k-wh"
+            groups: "unit phys-grouping control-plane t3k wh-galaxy"
+          # Shard B (~5m): BH galaxy (split by topology / cluster mock)
+          - name: "bh-slices"
+            groups: "bh-6u bh-single-galaxy bh-dual-galaxy bh-pod-pipeline bh-misc"
+          - name: "bh-clusters"
+            groups: "bh-subtorus bh-subtorus-sc16 bh-sp4-glx bh-110c"
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
