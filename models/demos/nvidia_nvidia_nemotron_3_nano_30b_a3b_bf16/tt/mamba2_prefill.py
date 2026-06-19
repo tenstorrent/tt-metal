@@ -579,10 +579,15 @@ def mamba2_prefill_layer_forward(
 
     y_chunks = []
     h_prev = ssm_state  # None → zero initial state (handled in _mamba2_ssd_chunk)
+    h_before_last_chunk = None  # saved for SSM state correction when pad_S > 0
 
     for c in range(num_chunks):
         t0 = c * CHUNK_SIZE
         t1 = t0 + CHUNK_SIZE
+
+        # Save state before the last chunk so we can undo zero-padding contamination.
+        if pad_S > 0 and c == num_chunks - 1:
+            h_before_last_chunk = h_prev
 
         decay_c = ttnn.slice(decay_pad, [0, t0, 0], [B, t1, NUM_HEADS])
         x_dt_c = ttnn.slice(x_dt_pad, [0, t0, 0, 0], [B, t1, NUM_HEADS, HEAD_DIM])
@@ -595,7 +600,25 @@ def mamba2_prefill_layer_forward(
         y_c, h_prev = _mamba2_ssd_chunk(decay_c, x_dt_c, B_c, C_c, D_tt, x_c, h_prev, mesh_device)
         y_chunks.append(y_c)
 
-    ssm_state_new = h_prev  # [B, H, D, N]
+    ssm_state_new = h_prev  # [B, H, D, N] — contaminated by pad_S zero tokens if pad_S > 0
+
+    # ---- 11b. SSM state correction (undo zero-padding contamination) ----
+    # The zero-pad in the last chunk applies pad_S spurious decay steps driven by
+    # zero activations.  For ISL=65536 (pad_S=61, n_real=3) the slow SSM modes
+    # (A_log≈-7, decay≈0.958 per step) lose 4.2% of their state vs 2.2% for
+    # ISL=32K (pad_S=30) — enough to cause garbage decode output.
+    # Fix: re-run the SSM recurrence h[t] = α[t]·h + x_dt[t] ⊗ B[t] for the
+    # n_real real tokens in the last chunk, starting from h_before_last_chunk.
+    # The corrected state replaces the contaminated one; output tensors are unaffected.
+    if pad_S > 0:
+        n_real_last = CHUNK_SIZE - pad_S
+        last_t0 = S - n_real_last  # == (num_chunks - 1) * CHUNK_SIZE
+        # Slice SSM inputs for the n_real real tokens (before freeing *_pad arrays).
+        _dc = ttnn.slice(decay_pad, [0, last_t0, 0], [B, S, NUM_HEADS])
+        _xdc = ttnn.slice(x_dt_pad, [0, last_t0, 0, 0], [B, S, NUM_HEADS, HEAD_DIM])
+        _Bgc = ttnn.slice(B_pad, [0, last_t0, 0, 0], [B, S, N_GROUPS, SSM_STATE_SIZE])
+        _Bc = _expand_groups(_Bgc)  # [B, n_real, H, N]
+        _Bgc.deallocate(True)
 
     # Free SSM input arrays — no longer needed after the scan loop.
     # B_pad/C_pad are now [B, S_pad, N_GROUPS, N] (8x smaller than the old B_exp/C_exp).
@@ -603,6 +626,48 @@ def mamba2_prefill_layer_forward(
     # during pad creation above — only the _pad tensors remain here.
     for _t in [B_pad, C_pad, x_dt_pad, x_pad, decay_pad]:
         _t.deallocate(True)
+
+    if pad_S > 0:
+        if h_before_last_chunk is None:
+            # Initial state was zero — start correction from zeros tensor.
+            _h_c = ttnn.zeros(
+                [B, NUM_HEADS, HEAD_DIM, SSM_STATE_SIZE],
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=_TL,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            _c_is_new = True  # we own _h_c, safe to free it in the loop
+        else:
+            _h_c = h_before_last_chunk
+            _c_is_new = False  # external tensor, don't free on first iteration
+
+        for _i in range(n_real_last):
+            _d = ttnn.slice(_dc, [0, _i, 0], [B, _i + 1, NUM_HEADS])
+            _d4 = _rr(_d, [B, NUM_HEADS, 1, 1])  # [B, H, 1, 1]
+            _xd = ttnn.slice(_xdc, [0, _i, 0, 0], [B, _i + 1, NUM_HEADS, HEAD_DIM])
+            _xd4 = _rr(ttnn.permute(_xd, [0, 2, 3, 1]), [B, NUM_HEADS, HEAD_DIM, 1])  # [B, H, D, 1]
+            _Bi = ttnn.slice(_Bc, [0, _i, 0, 0], [B, _i + 1, NUM_HEADS, SSM_STATE_SIZE])
+            _Bi4 = _rr(ttnn.permute(_Bi, [0, 2, 1, 3]), [B, NUM_HEADS, 1, SSM_STATE_SIZE])  # [B, H, 1, N]
+            _out = ttnn.matmul(_xd4, _Bi4)  # outer product → [B, H, D, N]
+            _h_n = ttnn.add(ttnn.mul(_h_c, _d4), _out)  # h = decay·h + x_dt⊗B
+
+            if _c_is_new:
+                _h_c.deallocate(True)
+            _c_is_new = True  # every subsequent _h_c is a newly allocated intermediate
+            _h_c = _h_n
+            for _t in [_d, _d4, _xd, _xd4, _Bi, _Bi4, _out]:
+                _t.deallocate(True)
+
+        ssm_state_new.deallocate(True)  # free contaminated state
+        # Only free h_before_last_chunk when num_chunks > 1: for num_chunks==1 it
+        # aliases the caller's ssm_state input tensor (which the caller may still need).
+        if h_before_last_chunk is not None and num_chunks > 1:
+            h_before_last_chunk.deallocate(True)
+        ssm_state_new = _h_c  # corrected state
+
+        for _t in [_dc, _xdc, _Bc]:
+            _t.deallocate(True)
 
     # ---- 12. Concatenate chunk outputs --------------------------------
     y_full = ttnn.concat(y_chunks, dim=1)  # [B, S_pad, H, D]
