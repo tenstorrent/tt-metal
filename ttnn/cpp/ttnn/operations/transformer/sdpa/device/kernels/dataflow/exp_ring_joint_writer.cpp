@@ -144,7 +144,6 @@ void kernel_main() {
     const uint32_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(argidx++);
     const uint8_t fabric_mux_channel_id = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
     const uint32_t termination_sync_sem_id = get_arg_val<uint32_t>(argidx++);
-    const uint32_t termination_sync_sem_addr = get_semaphore(termination_sync_sem_id);
     const uint32_t local_fabric_mux_status_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
     const uint32_t local_flow_control_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
     const uint32_t local_teardown_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
@@ -487,17 +486,12 @@ void kernel_main() {
     if (mux_connection_valid) {
         noc.async_atomic_barrier();
         tt::tt_fabric::fabric_client_disconnect(mux_conn);
+        Semaphore<> termination_sync_sem(termination_sync_sem_id);
         if (is_termination_master) {
-            Semaphore<> termination_sync_sem(termination_sync_sem_id);
             termination_sync_sem.wait(num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
-            // noc_semaphore_inc cannot be migrated to Device 2.0 because we need
-            // to increment a semaphore at a specific address on the remote core, not the same
-            // semaphore ID.
-            const uint64_t dest_addr = get_noc_addr(
-                termination_master_noc_x, termination_master_noc_y, termination_sync_sem_addr, noc.get_noc_id());
-            noc_semaphore_inc(dest_addr, 1, noc.get_noc_id());
+            termination_sync_sem.up(noc, termination_master_noc_x, termination_master_noc_y, 1);
             noc.async_atomic_barrier();
         }
     }
