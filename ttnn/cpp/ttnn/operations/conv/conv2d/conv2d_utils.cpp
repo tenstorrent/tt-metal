@@ -888,16 +888,26 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 input_tensor = resharded_input_tensor;
             }
         } else {
+            auto pad_tensor = [&]() {
+                if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
+                    input_tensor = ttnn::pad(
+                        input_tensor,
+                        tt::tt_metal::Array4D(
+                            {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
+                        tt::tt_metal::Array4D({0, 0, 0, 0}),
+                        0);
+                }
+            };
+
+            if (input_tensor_sharded_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+                pad_tensor();
+            }
+
             input_tensor = ttnn::to_device(
                 input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
 
-            if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
-                input_tensor = ttnn::pad(
-                    input_tensor,
-                    tt::tt_metal::Array4D(
-                        {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    0);
+            if (input_tensor_sharded_memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+                pad_tensor();
             }
         }
     }
