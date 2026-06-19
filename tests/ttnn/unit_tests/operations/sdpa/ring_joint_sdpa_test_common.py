@@ -14,6 +14,8 @@ right way (model-level tests consume the op-level helpers, not the reverse).
 """
 
 import math
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 import torch
@@ -284,32 +286,9 @@ def run_ring_joint_sdpa_model_config(
     assert passing
 
 
-def run_ring_joint_sdpa(
-    submesh,
-    b,
-    nh,
-    base_seq_len,
-    padded_seq_len,
-    joint_seq_len,
-    d,
-    q_chunk_size,
-    k_chunk_size,
-    dtype,
-    n_iters,
-    trace_enabled,
-    num_links,
-    rp_axis,
-    up_axis,
-    all_gather_topology,
-    skip_check,
-    pcc_threshold,
-    max_mse=None,
-):
+def _setup_ring_joint_sub_device(submesh):
+    """Create the worker sub-device + CCL core-range-set shared by both ring-joint ops."""
     full_compute_grid = submesh.compute_with_storage_grid_size()
-    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
-    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
-
-    # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
     )
@@ -324,10 +303,55 @@ def run_ring_joint_sdpa(
     sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
     submesh.load_sub_device_manager(sub_device_manager)
     submesh.set_sub_device_stall_group(sub_device_stall_group)
+    return ccl_sub_device_crs, worker_sub_device_id
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0) for _ in range(n_iters)]
 
+@dataclass
+class RingJointSdpaInputs:
+    """Torch reference tensors, device tensors, persistent buffers and program/compute
+    configs shared by ``run_ring_joint_sdpa`` and ``run_exp_ring_joint_sdpa``."""
+
+    Q: Any
+    K: Any
+    V: Any
+    joint_Q: Any
+    joint_K: Any
+    joint_V: Any
+    tt_Q: Any
+    tt_K: Any
+    tt_V: Any
+    tt_joint_Q: Any
+    tt_joint_K: Any
+    tt_joint_V: Any
+    persistent_output_buffers: Any
+    program_config: Any
+    compute_kernel_config: Any
+    sdpa_input_shard_dims: Any
+
+
+def _make_ring_joint_sdpa_inputs(
+    submesh,
+    b,
+    nh,
+    base_seq_len,
+    padded_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    n_iters,
+    rp_axis,
+    up_axis,
+    sdpa_compute_grid,
+    quantize_base_inputs=False,
+):
+    """Build the device inputs, persistent buffers and configs common to both ring-joint ops.
+
+    ``quantize_base_inputs`` rounds the spatial Q/K/V through bf16 before use, matching the
+    exp op test (which compares against a bf16-rounded reference). The (possibly rounded)
+    Q/K/V are returned so the verifier compares against the same reference inputs.
+    """
     kv_shard_dims = [None, None]
     kv_shard_dims[rp_axis] = None  # Output of AllGather is not sharded on RP axis
     kv_shard_dims[up_axis] = 1  # UP shards on heads dim1
@@ -368,6 +392,10 @@ def run_ring_joint_sdpa(
     Q = fa_rand(b, nh, base_seq_len, d)
     K = fa_rand(b, nh, base_seq_len, d)
     V = fa_rand(b, nh, base_seq_len, d)
+    if quantize_base_inputs:
+        Q = Q.bfloat16().float()
+        K = K.bfloat16().float()
+        V = V.bfloat16().float()
 
     padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
     padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
@@ -439,6 +467,139 @@ def run_ring_joint_sdpa(
     logger.debug(f"tt_Q: {tt_Q.shape}")
     logger.debug(f"tt_joint_Q: {tt_joint_Q.shape}")
 
+    return RingJointSdpaInputs(
+        Q=Q,
+        K=K,
+        V=V,
+        joint_Q=joint_Q,
+        joint_K=joint_K,
+        joint_V=joint_V,
+        tt_Q=tt_Q,
+        tt_K=tt_K,
+        tt_V=tt_V,
+        tt_joint_Q=tt_joint_Q,
+        tt_joint_K=tt_joint_K,
+        tt_joint_V=tt_joint_V,
+        persistent_output_buffers=persistent_output_buffers,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        sdpa_input_shard_dims=sdpa_input_shard_dims,
+    )
+
+
+def _verify_ring_joint_sdpa_outputs(
+    submesh,
+    inputs,
+    tt_out_list,
+    tt_joint_out_list,
+    base_seq_len,
+    joint_seq_len,
+    n_iters,
+    rp_axis,
+    up_axis,
+    pcc_threshold,
+    max_mse=None,
+):
+    """Compare device outputs against a torch SDPA reference (shared by both ring-joint ops)."""
+    pt_Q = torch.cat([inputs.Q, inputs.joint_Q], dim=2)
+    pt_K = torch.cat([inputs.K, inputs.joint_K], dim=2)
+    pt_V = torch.cat([inputs.V, inputs.joint_V], dim=2)
+    gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
+    gt_out = gt[:, :, :base_seq_len, :]
+    gt_joint_out = gt[:, :, base_seq_len:, :]
+
+    for i in range(n_iters):
+        tt_out = ttnn.to_torch(
+            tt_out_list[i],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                submesh, mesh_shape=tuple(submesh.shape), dims=inputs.sdpa_input_shard_dims
+            ),
+        )
+        joint_shard_dims = [None, None]
+        joint_shard_dims[up_axis] = 1
+        joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
+        tt_joint_out = ttnn.to_torch(
+            tt_joint_out_list[i],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims),
+        )
+        # Slice out any tile-padding
+        tt_out = tt_out[:, :, :base_seq_len, :]
+        tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
+        logger.debug(f"tt_out: {tt_out.shape}")
+        logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
+
+        passing = True
+        out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
+        logger.debug("spatial")
+        logger.debug(f"{out_pcc}")
+        mse = ((gt_out - tt_out) ** 2).mean()
+        logger.debug(f"mse: {mse}")
+        if max_mse is not None and mse > max_mse:
+            passing = False
+        passing = passing and out_pass
+
+        if joint_seq_len > 0:
+            logger.debug("prompt")
+            for joint_replica_id in range(tt_joint_out.shape[0]):
+                joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
+                out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
+                logger.debug(f"{out_pcc}")
+                mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
+                logger.debug(f"mse: {mse}")
+                if max_mse is not None and mse > max_mse:
+                    passing = False
+                passing = passing and out_pass
+
+        assert passing
+
+
+def run_ring_joint_sdpa(
+    submesh,
+    b,
+    nh,
+    base_seq_len,
+    padded_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    n_iters,
+    trace_enabled,
+    num_links,
+    rp_axis,
+    up_axis,
+    all_gather_topology,
+    skip_check,
+    pcc_threshold,
+    max_mse=None,
+):
+    full_compute_grid = submesh.compute_with_storage_grid_size()
+    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
+    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+
+    ccl_sub_device_crs, worker_sub_device_id = _setup_ring_joint_sub_device(submesh)
+
+    # create global semaphore handles
+    ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0) for _ in range(n_iters)]
+
+    inputs = _make_ring_joint_sdpa_inputs(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        rp_axis,
+        up_axis,
+        sdpa_compute_grid,
+    )
+
     tt_out_list = []
     tt_joint_out_list = []
 
@@ -446,18 +607,18 @@ def run_ring_joint_sdpa(
         with submesh.cache_entries_counter.measure():
             for i in range(n_iters):
                 tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                    tt_Q,
-                    tt_K,
-                    tt_V,
-                    tt_joint_Q,
-                    tt_joint_K,
-                    tt_joint_V,
-                    persistent_output_buffer_k=persistent_output_buffers[i][0],
-                    persistent_output_buffer_v=persistent_output_buffers[i][1],
+                    inputs.tt_Q,
+                    inputs.tt_K,
+                    inputs.tt_V,
+                    inputs.tt_joint_Q,
+                    inputs.tt_joint_K,
+                    inputs.tt_joint_V,
+                    persistent_output_buffer_k=inputs.persistent_output_buffers[i][0],
+                    persistent_output_buffer_v=inputs.persistent_output_buffers[i][1],
                     joint_strategy="rear",
                     logical_n=base_seq_len,
-                    program_config=program_config,
-                    compute_kernel_config=compute_kernel_config,
+                    program_config=inputs.program_config,
+                    compute_kernel_config=inputs.compute_kernel_config,
                     dim=2,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     num_links=num_links,
@@ -488,58 +649,19 @@ def run_ring_joint_sdpa(
         run_iters(tt_out_list, tt_joint_out_list)
 
     if not skip_check:
-        pt_Q = torch.cat([Q, joint_Q], dim=2)
-        pt_K = torch.cat([K, joint_K], dim=2)
-        pt_V = torch.cat([V, joint_V], dim=2)
-        gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
-        gt_out = gt[:, :, :base_seq_len, :]
-        gt_joint_out = gt[:, :, base_seq_len:, :]
-
-        for i in range(n_iters):
-            tt_out = ttnn.to_torch(
-                tt_out_list[i],
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
-                ),
-            )
-            joint_shard_dims = [None, None]
-            joint_shard_dims[up_axis] = 1
-            joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
-            tt_joint_out = ttnn.to_torch(
-                tt_joint_out_list[i],
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims
-                ),
-            )
-            # Slice out any tile-padding
-            tt_out = tt_out[:, :, :base_seq_len, :]
-            tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
-            logger.debug(f"tt_out: {tt_out.shape}")
-            logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
-
-            passing = True
-            out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
-            logger.debug("spatial")
-            logger.debug(f"{out_pcc}")
-            mse = ((gt_out - tt_out) ** 2).mean()
-            logger.debug(f"mse: {mse}")
-            if max_mse is not None and mse > max_mse:
-                passing = False
-            passing = passing and out_pass
-
-            if joint_seq_len > 0:
-                logger.debug("prompt")
-                for joint_replica_id in range(tt_joint_out.shape[0]):
-                    joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
-                    out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
-                    logger.debug(f"{out_pcc}")
-                    mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
-                    logger.debug(f"mse: {mse}")
-                    if max_mse is not None and mse > max_mse:
-                        passing = False
-                    passing = passing and out_pass
-
-            assert passing
+        _verify_ring_joint_sdpa_outputs(
+            submesh,
+            inputs,
+            tt_out_list,
+            tt_joint_out_list,
+            base_seq_len,
+            joint_seq_len,
+            n_iters,
+            rp_axis,
+            up_axis,
+            pcc_threshold,
+            max_mse=max_mse,
+        )
 
 
 def run_test_ring_joint_sdpa(
@@ -598,6 +720,182 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+    )
+
+
+def run_exp_ring_joint_sdpa(
+    submesh,
+    b,
+    nh,
+    base_seq_len,
+    padded_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    n_iters,
+    trace_enabled,
+    num_links,
+    rp_axis,
+    up_axis,
+    all_gather_topology,
+    skip_check,
+    pcc_threshold,
+    max_mse=None,
+    num_workers_per_link=5,
+    num_buffers_per_channel=32,
+):
+    full_compute_grid = submesh.compute_with_storage_grid_size()
+    sdpa_compute_grid = (full_compute_grid.x - 1, full_compute_grid.y)
+
+    ccl_sub_device_crs, worker_sub_device_id = _setup_ring_joint_sub_device(submesh)
+
+    # create global semaphore handles: one per link for per-chunk sync
+    ccl_semaphore_handles = [
+        [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(num_links)] for _ in range(n_iters)
+    ]
+
+    inputs = _make_ring_joint_sdpa_inputs(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        rp_axis,
+        up_axis,
+        sdpa_compute_grid,
+        quantize_base_inputs=True,
+    )
+
+    tt_out_list = []
+    tt_joint_out_list = []
+
+    def run_iters(tt_out_list, tt_joint_out_list):
+        for i in range(n_iters):
+            if not trace_enabled:
+                ttnn.synchronize_device(submesh)
+            tt_out, tt_joint_out, tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
+                inputs.tt_Q,
+                inputs.tt_K,
+                inputs.tt_V,
+                inputs.tt_joint_Q,
+                inputs.tt_joint_K,
+                inputs.tt_joint_V,
+                persistent_output_buffer_k=inputs.persistent_output_buffers[i][0],
+                persistent_output_buffer_v=inputs.persistent_output_buffers[i][1],
+                joint_strategy="rear",
+                logical_n=base_seq_len,
+                program_config=inputs.program_config,
+                compute_kernel_config=inputs.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                num_links=num_links,
+                cluster_axis=rp_axis,
+                mesh_device=submesh,
+                topology=all_gather_topology,
+                subdevice_id=worker_sub_device_id,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+            )
+            tt_out_list.append(tt_out)
+            tt_joint_out_list.append(tt_joint_out)
+
+    if trace_enabled:
+        logger.info("Compile run")
+        run_iters([], [])
+        logger.info("Capture trace")
+        trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+        run_iters(tt_out_list, tt_joint_out_list)
+        ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+        ttnn.synchronize_device(submesh)
+        logger.info("Execute trace")
+        ttnn.execute_trace(submesh, trace_id, blocking=False)
+        ttnn.release_trace(submesh, trace_id)
+        ttnn.synchronize_device(submesh)
+
+    else:
+        logger.info("Run without trace")
+        run_iters(tt_out_list, tt_joint_out_list)
+
+    if not skip_check:
+        _verify_ring_joint_sdpa_outputs(
+            submesh,
+            inputs,
+            tt_out_list,
+            tt_joint_out_list,
+            base_seq_len,
+            joint_seq_len,
+            n_iters,
+            rp_axis,
+            up_axis,
+            pcc_threshold,
+            max_mse=max_mse,
+        )
+
+
+def run_test_exp_ring_joint_sdpa(
+    mesh_device,
+    model_input_shape,
+    parallel_config,
+    q_chunk_size,
+    k_chunk_size,
+    n_iters,
+    trace_enabled,
+    num_links,
+    all_gather_topology,
+    skip_check,
+    dtype,
+    pcc_threshold=0.994,
+    max_mse=None,
+    num_workers_per_link=5,
+    num_buffers_per_channel=48,
+):
+    b, nh, base_seq_len, joint_seq_len, d = model_input_shape
+    rp_axis, rp_factor, up_axis, up_factor = parallel_config
+
+    if nh % up_factor != 0:
+        orig_nh = nh
+        nh = math.ceil(nh / up_factor) * up_factor
+        logger.info(f"Rounding up nh from {orig_nh} to {nh} so that it divides evenly by up_factor={up_factor}.")
+    mesh_device_shape = list(mesh_device.shape)
+    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
+
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
+
+    run_exp_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        pcc_threshold,
+        max_mse=max_mse,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
 
 
