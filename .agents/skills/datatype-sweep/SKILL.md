@@ -1,15 +1,17 @@
 ---
 name: datatype-sweep
-description: Sweep and select TTNN model weight, activation, KV-cache, and CCL datatypes for the fastest configuration that satisfies minimum full-model top-1 and top-5 accuracy. Use after optimized-full-model and before vLLM, or whenever a runnable TTNN full model needs evidence-backed precision selection.
+description: Sweep and select TTNN model weight, activation, KV-cache, CCL datatype, and compute-fidelity policies for the fastest configuration that satisfies minimum full-model top-1 and top-5 accuracy. Use after optimized-full-model and before vLLM, or whenever a runnable TTNN full model needs evidence-backed precision selection.
 ---
 
 # Datatype Sweep
 
 ## Mission Context
 
-This skill starts from a working optimized TTNN full model and chooses the fastest practical precision configuration that still meets a stated full-model accuracy bar. It is normally used after optimized full model and before vLLM so the serving adapter inherits a settled weight, activation, CCL, and KV-cache dtype policy.
+This skill starts from a working optimized TTNN full model and chooses the fastest practical precision configuration that still meets a stated full-model accuracy bar. It is normally used after optimized full model and before vLLM so the serving adapter inherits a settled weight, activation, CCL, KV-cache dtype, and compute-fidelity policy.
 
 The selected precision artifact must be complete enough for later stages to consume mechanically. Include weight dtype groups, layer exceptions, compute fidelities, activation/residual dtype, CCL communication dtype, KV-cache dtype, logits/sampling dtype assumptions, and any loader/runtime flags needed to construct that exact policy. A selected config that only says "BFP8 weights" is incomplete.
+
+Recorded policy is not enough. The runtime construction path must actually consume every selected dtype and compute-fidelity field. Prove this with a model summary, config propagation check, or profiler/perf-report rows from the measured candidate. If a field appears in `selected_precision_config.json` but the code path ignores it or hard-codes a different value, the sweep is incomplete.
 
 The expensive source of truth is full-model top-1/top-5 accuracy. Decoder-layer PCC and component timing are useful only for ordering candidates and debugging surprises.
 
@@ -73,6 +75,8 @@ This order is a heuristic, not a law, with the typically most-sensitive parts of
 
 When backing out a failed BFP4 trial, restore to BFP8 first unless BFP8 itself is known to be the failing precision for that tensor group.
 
+For every material matmul group tested with BFP4 weights, include a LoFi compute-fidelity candidate for that same group. BFP4 with HiFi2 is allowed as a comparison or fallback, but it is not enough by itself. If a BFP4+LoFi candidate cannot be run, record the exact TTNN/runtime blocker and keep the stage open until the blocker is fixed or `$autofix` fails.
+
 Note sometimes different datatypes require small semantic changes to the code. KV cache is a common example of this - `paged_fill_cache` requires tensors that are the same datatype as the cache but `paged_update_cache` requires update tensors in BF16/FLOAT32 even when the destination cache is e.g. BFP8. So when changing datatypes first run a quick one-decoder smoketest to check it works correctly and get that right before using it or rejecting it in a full model pareto sweep.
 
 ## MoE Policy
@@ -97,6 +101,7 @@ Every kept candidate must be validated with full-model accuracy. For each evalua
 - activation, residual, CCL, logits/sampling, and KV-cache dtype choices;
 - top-1, top-5, top-100, token count, and reference path;
 - TTFT, trace-verified decode t/s/u, and the evidence that the teacher-forcing decode path was traced;
+- compute fidelities used by each material matmul group and evidence that the measured runtime used them;
 - whether this config passed the user-specified accuracy bar;
 - exact command, branch/commit, hardware, mesh, and environment notes.
 
@@ -117,7 +122,18 @@ Plot every evaluated full-model config as a point. Fit or draw the non-dominated
 
 ## Compute Fidelity
 
-Once the datatype frontier has been selected, select appropriate compute fidelities for the operations with reduced-precision datatypes. This is a separate decision from datatype selection and should be made after the datatype frontier has been selected. Use the `tt-perf-report` output from individual decoder runs and your own good judgement to guide this decision. BFP4 weights are usually ok with LoFi, BFP8 weights are usually ok with HiFi2, HiFi4 is usually reserved for accuracy-sensitive operations with BF16 weights, fp32 dest accumulation is also an option. You can find examples elsewhere in the repo.
+Compute fidelity is part of the selected precision policy, not only documentation.
+
+For reduced-precision matmuls, sweep legal compute fidelities in the same candidate matrix as datatypes once the promising dtype groups are known. Use the `tt-perf-report` output from individual decoder or reduced full-model runs and full-model accuracy to guide this decision. BFP4 weights are expected to use LoFi unless measured evidence says otherwise. BFP8 weights usually start with HiFi2. HiFi4 is usually reserved for accuracy-sensitive operations with BF16 weights. FP32 destination accumulation is also an option.
+
+Before selecting a config:
+
+- prove the model code can construct the requested fidelity policy without hard-coded overrides;
+- include at least one BFP4+LoFi candidate for every selected or seriously considered BFP4 matmul group;
+- compare BFP4+LoFi against BFP4+HiFi2 when both are legal and the group is a meaningful decode cost;
+- record a short table for each material matmul group: weight dtype, compute fidelity, traced decode speed, accuracy result, kept/rejected decision, and reason.
+
+If the runtime does not currently expose fidelity as a policy field, add that plumbing before ranking candidates. Do not satisfy this requirement by writing `compute_fidelities` into JSON that the measured model ignores.
 
 ## Final Selection
 
@@ -129,7 +145,7 @@ Before finishing:
 - keep a simple config change or override to return to the safe baseline setting;
 - run a post-selection token-out no-readback performance check with the selected config and record the workload shape, trace status, TTFT, decode t/s/u, and runtime counters;
 - run qualitative generation if the dtype changes are large or top-1 is close to the threshold - if this is bad then back off more changes until it is good;
-- add a short propagation check proving `build_generator` and the vLLM adapter load the same selected weight/activation/CCL/KV policy used by the winning sweep result.
+- add a short propagation check proving `build_generator` and the vLLM adapter load the same selected weight/activation/CCL/KV/fidelity policy used by the winning sweep result.
 - update the context contract for the selected KV-cache dtype and prove later construction paths use a matching max context.
 
 If no lower-precision config passes, keep the baseline and leave evidence that the sweep actually tested the likely wins.
