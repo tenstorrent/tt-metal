@@ -166,7 +166,10 @@ def _regime_a_descriptor(
     ]
     if has_gamma:
         cbs.append(cb(CB_GAMMA, dt, Wt))
-        cbs.append(cb(CB_NORMALIZED, dt, Wt))
+        # cb_normalized is the pass-2 Col->Row streaming intermediate, sized to one
+        # REDUCE_BLOCK (constant) — NOT Wt — so the resident L1 footprint does not scale
+        # with the row width (compute streams pass-2 per block).
+        cbs.append(cb(CB_NORMALIZED, dt, reduce_block))
 
     # ---------- reader ----------
     reader_ct = [CB_INPUT_RESIDENT, CB_GAMMA, CB_SCALER, Wt, int(has_gamma)]
@@ -309,7 +312,8 @@ def _regime_b_descriptor(
     ]
     if has_gamma:
         cbs.append(cb(CB_GAMMA, Wt_s))
-        cbs.append(cb(CB_NORMALIZED, Wt_s))
+        # Constant-sized pass-2 streaming intermediate (one REDUCE_BLOCK), not Wt_s.
+        cbs.append(cb(CB_NORMALIZED, reduce_block))
 
     # Semaphores on the full union of used cores (disjoint groups reuse the same IDs).
     semaphores = [

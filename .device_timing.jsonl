@@ -43,3 +43,13 @@
 {"source":"tt-probe","pid":2923124,"started_at_ms":1781887488191,"wait_ms":251,"run_ms":27749,"test_path":"rms_norm","exit_code":0}
 {"source":"run_safe_pytest","pid":2924057,"started_at_ms":1781887527391,"wait_ms":2,"run_ms":26605,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0}
 {"source":"run_safe_pytest","pid":2924991,"started_at_ms":1781887586834,"wait_ms":2,"run_ms":33559,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_regime_b.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2926851,"started_at_ms":1781887644350,"wait_ms":2,"run_ms":86212,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2927823,"started_at_ms":1781887779213,"wait_ms":3,"run_ms":14133,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_baseline.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2928317,"started_at_ms":1781887793353,"wait_ms":3,"run_ms":19061,"test_path":"eval/golden_tests/rms_norm/test_regression.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2928986,"started_at_ms":1781887819661,"wait_ms":3,"run_ms":15986,"test_path":"eval/golden_tests/rms_norm/test_regression.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2929545,"started_at_ms":1781887835655,"wait_ms":3,"run_ms":16151,"test_path":"eval/golden_tests/rms_norm/test_regression.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2930169,"started_at_ms":1781887857385,"wait_ms":3,"run_ms":16040,"test_path":"eval/golden_tests/rms_norm/test_regression.py","exit_code":1}
+{"source":"tt-probe","pid":2931847,"started_at_ms":1781888126063,"wait_ms":281,"run_ms":25926,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":2932622,"started_at_ms":1781888168441,"wait_ms":3,"run_ms":44920,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2934024,"started_at_ms":1781888213369,"wait_ms":3,"run_ms":75098,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":143}
+{"source":"run_safe_pytest","pid":2934820,"started_at_ms":1781888293868,"wait_ms":3,"run_ms":88989,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}

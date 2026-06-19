@@ -139,28 +139,54 @@ void kernel_main() {
 
         // ---------- PASS 2: normalize ----------
         if constexpr (has_gamma) {
-            // x * recip (Col bcast) -> cb_normalized   (pops resident, pops recip at end)
-            ckl::mul<
-                cb_input_resident,
-                cb_recip_rms,
-                cb_normalized,
-                BroadcastDim::Col,
-                InputLifecycle::Streaming,
-                InputLifecycle::Bulk>(EltwiseShape::tiles(Wt));
+            // Streaming fused Col->Row multiply, chunked by REDUCE_BLOCK. cb_normalized is
+            // sized to ONE block (not Wt), so the per-core L1 footprint no longer scales
+            // with the shard width — the sanctioned pass-2 optimization (op_design.md
+            // "Helpers considered", verification_report.md deferred item). Per chunk:
+            //   x[next block] * recip (Col bcast) -> cb_normalized
+            //   cb_normalized * gamma[block] (Row bcast) -> cb_output
+            // Lifecycles: cb_input_resident streams in shard order (this is its single
+            // PASS-2 pop, cw per chunk summing to Wt); cb_recip_rms is held across chunks
+            // and freed once at the end of the row; cb_gamma is held resident (indexed by
+            // an explicit per-chunk TileOffset) and reused across this core's rows.
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                const uint32_t base = c * reduce_block;
+                const uint32_t cw = (base + reduce_block <= Wt) ? reduce_block : (Wt - base);
 
-            // normalized * gamma (Row bcast) -> cb_output  (gamma held, indexed by Block)
-            ckl::mul<
-                cb_normalized,
-                cb_gamma,
-                cb_output,
-                BroadcastDim::Row,
-                InputLifecycle::Streaming,
-                InputLifecycle::HeldBulk,
-                OutputLifecycle::Streaming,
-                BinaryDataFormatReconfig::Input,
-                PackTileReconfig::Output,
-                OperandKind::Scalar,
-                OperandKind::Block>(EltwiseShape::tiles(Wt));
+                ckl::eltwise_chain(
+                    EltwiseShape::tiles(cw),
+                    BinaryFpu<
+                        cb_input_resident,
+                        cb_recip_rms,
+                        BinaryFpuOp::Mul,
+                        BroadcastDim::Col,
+                        InputLifecycle::Streaming,  // input streams in order (its PASS-2 pop)
+                        InputLifecycle::HeldBulk,   // recip held across chunks, freed below
+                        BinaryDataFormatReconfig::Input,
+                        Dst::D0,
+                        OperandKind::Scalar,
+                        OperandKind::Scalar>{},
+                    PackTile<cb_normalized, OutputLifecycle::Streaming>{});
+
+                ckl::eltwise_chain(
+                    EltwiseShape::tiles(cw),
+                    BinaryFpu<
+                        cb_normalized,
+                        cb_gamma,
+                        BinaryFpuOp::Mul,
+                        BroadcastDim::Row,
+                        InputLifecycle::Streaming,  // normalized block streams/pops
+                        InputLifecycle::HeldBulk,   // gamma held resident across rows
+                        BinaryDataFormatReconfig::Input,
+                        Dst::D0,
+                        OperandKind::Scalar,
+                        OperandKind::Block,
+                        TileOffset::Unset,
+                        TileOffset::Set>{0, base},
+                    PackTile<cb_output, OutputLifecycle::Streaming>{});
+            }
+            // recip was held across the chunk loop; free this row's tile.
+            cb_pop_front(cb_recip_rms, 1);
         } else {
             ckl::mul<
                 cb_input_resident,
