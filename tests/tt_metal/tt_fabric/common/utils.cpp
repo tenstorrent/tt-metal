@@ -14,10 +14,16 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <filesystem>
+#include <algorithm>
 #include <map>
+#include <set>
 #include <string>
 #include <sstream>
 #include <vector>
@@ -465,6 +471,93 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     if (!comparison_result) {
         FAIL() << "ASIC mapping file mismatch detected on rank " << rank
                << ". Test must fail when mappings don't match golden reference.";
+    }
+}
+
+namespace {
+
+// Host rank for this MPI process as set by tt-run via TT_MESH_HOST_RANK (rank bindings YAML).
+// Mirrors ControlPlane::initialize_local_mesh_binding(): unset env defaults to host rank 0
+// (single-host / mock runs without tt-run).
+MeshHostRankId rank_binding_host_rank_for_local_process() {
+    const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
+    if (host_rank_str != nullptr) {
+        return MeshHostRankId{static_cast<unsigned int>(std::stoi(host_rank_str))};
+    }
+    return MeshHostRankId{0};
+}
+
+size_t mesh_graph_total_host_rank_count(const tt::tt_fabric::MeshGraph& mesh_graph) {
+    size_t total = 0;
+    for (const MeshId mesh_id : mesh_graph.get_mesh_ids()) {
+        total += mesh_graph.get_host_ranks(mesh_id).size();
+    }
+    return total;
+}
+
+}  // namespace
+
+void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control_plane) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    const size_t mpi_size =
+        static_cast<size_t>(*tt::tt_metal::MetalContext::instance().full_world_distributed_context().size());
+    const size_t mpi_rank =
+        static_cast<size_t>(*tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank());
+
+    const auto mesh_ids = mesh_graph.get_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "MGD must define at least one mesh";
+
+    const size_t expected_mpi_ranks = mesh_graph_total_host_rank_count(mesh_graph);
+    EXPECT_EQ(mpi_size, expected_mpi_ranks)
+        << "MPI world size must match total MGD host rank count (sum of host_topology dims over all mesh instances)";
+
+    // Three independent inputs are cross-checked here:
+    //  - mesh_id list: tt-run rank bindings -> TT_MESH_ID -> ControlPlane::local_mesh_binding_
+    //  - expected per-host slice: MGD textproto host_topology -> MeshGraph::get_mesh_shape(mesh, host_rank)
+    //  - runtime slice: PSD/PGD discovery + topology mapping -> TopologyMapper coord ranges / chip mapping
+    for (const MeshId mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        const MeshHostRankId rank_binding_host_rank = rank_binding_host_rank_for_local_process();
+        const MeshHostRankId discovered_host_rank = control_plane.get_local_host_rank_id_binding();
+        EXPECT_EQ(discovered_host_rank, rank_binding_host_rank)
+            << "rank " << mpi_rank << " mesh " << *mesh_id
+            << " topology-mapper host rank must match tt-run rank binding (TT_MESH_HOST_RANK)";
+
+        const MeshShape expected_local_shape = mesh_graph.get_mesh_shape(mesh_id, rank_binding_host_rank);
+        ASSERT_GT(expected_local_shape.mesh_size(), 0u)
+            << "rank " << mpi_rank << " mesh " << *mesh_id << " MGD per-host slice must be non-empty";
+
+        const MeshCoordinateRange local_coord_range = control_plane.get_coord_range(mesh_id, MeshScope::LOCAL);
+        EXPECT_EQ(local_coord_range.shape(), expected_local_shape)
+            << "rank " << mpi_rank << " mesh " << *mesh_id
+            << " local coord range shape must match MGD slice for "
+               "mesh_host_rank "
+            << *rank_binding_host_rank;
+
+        const MeshShape local_physical_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::LOCAL);
+        EXPECT_EQ(local_physical_shape, expected_local_shape)
+            << "rank " << mpi_rank << " mesh " << *mesh_id << " local physical mesh shape must match MGD slice";
+
+        const auto& local_chip_mapping = topology_mapper.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
+        size_t mapped_chips_on_mesh = 0;
+        for (const auto& [fabric_node_id, physical_chip_id] : local_chip_mapping) {
+            (void)physical_chip_id;
+            if (fabric_node_id.mesh_id == mesh_id) {
+                ++mapped_chips_on_mesh;
+            }
+        }
+        EXPECT_EQ(mapped_chips_on_mesh, expected_local_shape.mesh_size())
+            << "rank " << mpi_rank << " mesh " << *mesh_id
+            << " mapped device count must match MGD per-host chip "
+               "count ("
+            << expected_local_shape.mesh_size() << ")";
+
+        const MeshShape full_mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        EXPECT_EQ(full_mesh_shape.dims(), expected_local_shape.dims())
+            << "rank " << mpi_rank << " mesh " << *mesh_id << " MGD device topology dimensionality mismatch";
+        EXPECT_EQ(full_mesh_shape.mesh_size() % expected_local_shape.mesh_size(), 0u)
+            << "rank " << mpi_rank << " mesh " << *mesh_id
+            << " full MGD mesh chip count must divide evenly by per-host slice";
     }
 }
 

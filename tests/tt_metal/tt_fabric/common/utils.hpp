@@ -49,4 +49,9 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
 // chips (row-major first/last) must map to tray_ids 1–4 and asic_location 1 in the physical system descriptor.
 void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 
+// Cross-checks three independent inputs: tt-run rank bindings (TT_MESH_ID / TT_MESH_HOST_RANK),
+// MGD host_topology slices (MeshGraph), and topology-mapper runtime state (discovery/mapping).
+// Rank binding order is not checked here (verify visually vs MGD when adding tests).
+void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control_plane);
+
 }  // namespace tt::tt_fabric::fabric_router_tests
