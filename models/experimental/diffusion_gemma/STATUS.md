@@ -27,7 +27,8 @@ and marked `TODO(env)`.
 | Causal backbone bring-up (gemma4 reuse) | #47461 | ⛔ blocked: ckpt + transformers 5.x + HW |
 | KV-cache phase state machine | #47474 | ⬜ not started |
 | Bidirectional canvas attention | #47462 | ⬜ not started |
-| Discrete-diffusion decode loop (device) | #47463 | ⬜ not started (reference logic first) |
+| Reference denoise trajectory (pure torch) | #47463/#47468 | ✅ done — `reference/denoise_loop.py`, 4 tests pass |
+| Discrete-diffusion decode loop (device) | #47463 | ⬜ not started (reference logic done) |
 | On-device canvas sampling | #47472 | ⬜ not started |
 | Functional e2e / perf / vLLM / batched / multimodal / quant / CI | #47464+ | ⬜ not started |
 
@@ -39,8 +40,8 @@ Legend: ✅ done · 🚧 in progress · ⛔ blocked on environment · ⬜ not st
 2. ✅ **Reference sampling primitives** (`reference/sampling.py`) + tests — the
    `#47463` acceptance spike reference and the `#47468` oracle's sampling core.
    Pure torch, CPU-testable, no checkpoint.
-3. 🚧 Reference denoise loop (assembling the primitives into the per-block
-   trajectory) + tests.
+3. ✅ Reference denoise loop (assembling the primitives into the per-block
+   trajectory) + tests (`reference/denoise_loop.py`).
 4. ⛔ Vendored HF reference + PCC harness — unblocks once `diffusion_gemma` is
    installable.
 5. ⛔ Device (`tt/`) implementation — unblocks on HW.
